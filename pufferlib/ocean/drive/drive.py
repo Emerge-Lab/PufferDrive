@@ -296,20 +296,29 @@ def process_all_maps():
     import os
     from pathlib import Path
 
+    # Handle potential symlink conflict
+    resources_path = Path("resources")
+    if resources_path.is_symlink():
+        print("Removing conflicting symlink at 'resources'")
+        resources_path.unlink()
+    
     # Create the binaries directory if it doesn't exist
     binary_dir = Path("resources/drive/binaries")
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed_big/training")
+    data_dir = Path("data/processed/training")
     
-    # Get all JSON files in the training directory
+    # Get all JSON files in data directory
     json_files = sorted(data_dir.glob("*.json"))
     
     print(f"Found {len(json_files)} JSON files")
     
-    # Process each JSON file
-    for i, map_path in enumerate(json_files[:10000]):
+    total_maps = 1000
+    num_json_files = len(json_files)
+    # Repeat files if there are fewer than required maps
+    for i in range(total_maps):
+        map_path = json_files[i % num_json_files]
         binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
         binary_path = binary_dir / binary_file
         
@@ -321,8 +330,9 @@ def process_all_maps():
 
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
-
+    print("Initializing Drive environment for performance test...")
     env = Drive(num_agents=num_agents)
+    print("Resetting environment...")
     env.reset()
     tick = 0
     num_agents = 1024
@@ -330,7 +340,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         np.random.randint(0, space.n + 1, (atn_cache, num_agents))
         for space in env.single_action_space
     ], axis=-1)
-
+    print("Starting performance test...")
     start = time.time()
     while time.time() - start < timeout:
         atn = actions[tick % atn_cache]         
