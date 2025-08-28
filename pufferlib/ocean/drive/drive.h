@@ -34,6 +34,7 @@
 #define INVERTIBLE_BICYLE 1
 #define DELTA_LOCAL 2
 #define STATE_DYNAMICS 3
+#define GIGAFLOW 4
 
 // collision state
 #define NO_COLLISION 0
@@ -63,11 +64,15 @@
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
 
-// Acceleration Values
+// Classic Dynamics - Acceleration Values
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f,  1.3330f,  2.6670f,  4.0000f};
-// static const float STEERING_VALUES[13] = {-3.1420f, -2.6180f, -2.0940f, -1.5710f, -1.0470f, -0.5240f,  0.0000f,  0.5240f,
-//          1.0470f,  1.5710f,  2.0940f,  2.6180f,  3.1420f};
+// Classic Dynamics - Steering Values
 static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f, 0.833f, 1.000f};
+
+// GIGAFLOW Dynamics - Jerk Values
+static const float GIGAFLOW_LONG_JERK[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
+static const float GIGAFLOW_LAT_JERK[3] = {-4.0f, 0.0f, 4.0f};
+
 static const float offsets[4][2] = {
         {-1, 1},  // top-left
         {1, 1},   // top-right
@@ -137,6 +142,24 @@ struct Entity {
     int collided_before_goal;
     int reached_goal_this_episode;
     int active_agent;
+
+    // GIGAFLOW stateful variables
+    float a_long;      // Current longitudinal acceleration
+    float prev_a_long; // Previous longitudinal acceleration
+
+    float a_lat;       // Current lateral acceleration
+    float prev_a_lat;  // Previous lateral acceleration
+
+    float phi;         // Current steering angle
+    float prev_phi;    // Previous steering angle
+
+    float prev_v;      // Previous velocity
+
+    // GIGAFLOW randomization coefficients
+    float c_throttle;  // Throttle responsiveness
+    float c_steer;     // Steering responsiveness
+    float c_acc;       // Acceleration limits multiplier
+    float c_vel;       // Velocity limits multiplier
 };
 
 void free_entity(Entity* entity){
@@ -202,7 +225,40 @@ struct Drive {
     int spawn_immunity_timer;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
+    float dt;
 };
+
+// Helper function for mixed uniform distribution
+// X(a) = 0.5 * U(1/a, 1) + 0.5 * U(1, a) for a > 1
+float sample_mixed_uniform(float a) {
+    float r = (float)rand() / RAND_MAX;
+    if (r < 0.5f) {
+        // Sample from U(1/a, 1)
+        float u = (float)rand() / RAND_MAX;
+        return (1.0f / a) + u * (1.0f - 1.0f / a);
+    } else {
+        // Sample from U(1, a)
+        float u = (float)rand() / RAND_MAX;
+        return 1.0f + u * (a - 1.0f);
+    }
+}
+
+// Initialize GIGAFLOW dynamics coefficients
+void init_gigaflow_coefficients(Entity* entity) {
+    entity->c_throttle = sample_mixed_uniform(1.25f);
+    entity->c_steer = sample_mixed_uniform(1.25f);
+    entity->c_acc = sample_mixed_uniform(1.5f);
+    entity->c_vel = sample_mixed_uniform(1.5f);
+
+    // Initialize stateful variables
+    entity->a_long = 0;
+    entity->prev_a_long = 0;
+    entity->a_lat = 0;
+    entity->prev_a_lat = 0;
+    entity->phi = 0;
+    entity->prev_phi = 0;
+    entity->prev_v = 0;
+}
 
 void add_log(Drive* env) {
     for(int i = 0; i < env->active_agent_count; i++){
@@ -279,6 +335,21 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].goal_position_y, sizeof(float), 1, file);
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
+
+        // Initialize GIGAFLOW variables to 0
+        entities[i].a_long = 0;
+        entities[i].prev_a_long = 0;
+        entities[i].a_lat = 0;
+        entities[i].prev_a_lat = 0;
+        entities[i].phi = 0;
+        entities[i].prev_phi = 0;
+        entities[i].prev_v = 0;
+
+        // Initialize GIGAFLOW multipliers to 1
+        entities[i].c_throttle = 1;
+        entities[i].c_steer = 1;
+        entities[i].c_acc = 1;
+        entities[i].c_vel = 1;
     }
     fclose(file);
     return entities;
@@ -323,11 +394,15 @@ void set_start_position(Drive* env){
         e->valid = e->traj_valid[0];
         e->collision_state = 0;
         e->respawn_timestep = -1;
+          // Initialize GIGAFLOW stateful variables if using GIGAFLOW dynamics
+        if (env->dynamics_model == GIGAFLOW && is_active) {
+            init_gigaflow_coefficients(e);
+            // Set initial velocity magnitude
+            e->prev_v = sqrtf(e->vx * e->vx + e->vy * e->vy);
+        }
     }
     //EndDrawing();
-    int x = 0;
-
-
+    // int x = 0;
 }
 
 int getGridIndex(Drive* env, float x1, float y1) {
@@ -889,11 +964,13 @@ void remove_bad_trajectories(Drive* env){
     }
     env->timestep = 0;
 }
+
 void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
     env->entities = load_map_binary(env->map_name, env);
-    env->dynamics_model = CLASSIC;
+    env->dynamics_model = GIGAFLOW;
+    env->dt = 0.1f; // Set timestep
     set_means(env);
     init_grid_map(env);
     env->vision_range = 21;
@@ -925,13 +1002,17 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    // 3 additional state variables per agent in GIGAFLOW
+    int obs_size = (env->dynamics_model == GIGAFLOW) ? 10 : 7;
+    int max_obs = obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("max obs: %d\n", max_obs*env->active_agent_count);
     // printf("num cars: %d\n", env->num_cars);
     // printf("num static cars: %d\n", env->static_car_count);
     // printf("active agent count: %d\n", env->active_agent_count);
     // printf("num objects: %d\n", env->num_objects);
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
+
+    // For GIGAFLOW dynamics we have (4x3 grid)12 discrete actions
     env->actions = (int*)calloc(env->active_agent_count*2, sizeof(int));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
     env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
@@ -959,9 +1040,117 @@ float normalize_heading(float heading){
     return heading;
 }
 
+void move_gigaflow_dynamics(Drive* env, int action_idx, int agent_idx){
+    Entity* agent = &env->entities[agent_idx];
+
+    // GIGAFLOW uses [4, 3] action space
+    int (*action_array)[2] = (int(*)[2])env->actions;
+    int long_jerk_idx = action_array[action_idx][0];
+    int lat_jerk_idx = action_array[action_idx][1];
+
+    float a_dot_long = GIGAFLOW_LONG_JERK[long_jerk_idx];
+    float a_dot_lat = GIGAFLOW_LAT_JERK[lat_jerk_idx];
+
+    // Store previous values
+    agent->prev_a_long = agent->a_long;
+    agent->prev_a_lat = agent->a_lat;
+    agent->prev_phi = agent->phi;
+
+    // Update accelerations using jerk with randomized coefficients
+    agent->a_long = agent->prev_a_long + agent->c_throttle * a_dot_long * env->dt;
+    agent->a_lat = agent->prev_a_lat + agent->c_steer * a_dot_lat * env->dt;
+
+    // Set to exactly 0 when acceleration changes sign
+    if (agent->prev_a_long * agent->a_long < 0) {
+        agent->a_long = 0.0f;
+    }
+    if (agent->prev_a_lat * agent->a_lat < 0) {
+        agent->a_lat = 0.0f;
+    }
+
+    // Clip accelerations
+    agent->a_long = fmaxf(-5.0f, fminf(agent->a_long, 2.5f * agent->c_acc));
+    agent->a_lat = fmaxf(-4.0f, fminf(agent->a_lat, 4.0f));
+
+    // Calculate current speed
+    float speed = sqrtf(agent->vx * agent->vx + agent->vy * agent->vy);
+    agent->prev_v = speed;
+
+    // Update velocity using trapezoidal rule
+    speed = speed + 0.5f * (agent->a_long + agent->prev_a_long) * env->dt;
+
+    // Set to 0 when sign changes
+    if (agent->prev_v * speed < 0) {
+        speed = 0.0f;
+    }
+
+    // Clip velocity
+    speed = fmaxf(-2.0f, fminf(speed, 20.0f * agent->c_vel));
+
+    // Calculate steering from lateral acceleration
+    float epsilon = 1e-5f;
+    float v_squared = fmaxf(speed * speed, epsilon);
+    // GIGAFLOW uses 60% of length for wheelbase
+    float wheelbase = agent->length * 0.6f;
+
+    // Calculate curvature and steering angle
+    float rho_inv = agent->a_lat / v_squared;
+    rho_inv = (rho_inv >= 0 ? 1 : -1) * fmaxf(fabsf(rho_inv), epsilon);
+    float phi_target = atanf(rho_inv * wheelbase);
+
+    // Limit steering angle change rate (delta max = 0.6 rad/s)
+    float delta_phi_max = 0.6f * env->dt;
+    float delta_phi = fmaxf(-delta_phi_max, fminf(phi_target - agent->prev_phi, delta_phi_max));
+
+    // Update steering angle with limits (phi max = 0.55 rad)
+    agent->phi = fmaxf(-0.55f, fminf(agent->prev_phi + delta_phi, 0.55f));
+
+    // Update effective curvature and lateral acceleration based on limited steering
+    rho_inv = tanf(agent->phi) / wheelbase;
+    agent->a_lat = speed * speed * rho_inv;
+
+    // Calculate movement using bicycle dynamics
+    float d = 0.5f * (speed + agent->prev_v) * env->dt;
+    float theta = d * rho_inv;
+
+    float rho = (fabsf(rho_inv) > epsilon) ? 1.0f / rho_inv : 1.0f / epsilon;
+    float dx, dy;
+
+    if (fabsf(rho_inv) < epsilon) {
+        // Nearly straight movement
+        dx = d * cosf(agent->heading);
+        dy = d * sinf(agent->heading);
+    } else {
+        // Arc movement
+        dx = rho * sinf(theta);
+        dy = rho * (1.0f - cosf(theta));
+
+        // Rotate to world frame
+        float temp_x = dx;
+        dx = temp_x * cosf(agent->heading) - dy * sinf(agent->heading);
+        dy = temp_x * sinf(agent->heading) + dy * cosf(agent->heading);
+    }
+
+    // Update position
+    agent->x += dx;
+    agent->y += dy;
+
+    // Update heading
+    agent->heading += theta;
+    agent->heading = normalize_heading(agent->heading);
+    agent->heading_x = cosf(agent->heading);
+    agent->heading_y = sinf(agent->heading);
+
+    // Update velocity components
+    agent->vx = speed * cosf(agent->heading);
+    agent->vy = speed * sinf(agent->heading);
+}
+
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
-    if(env->dynamics_model == CLASSIC){
-        // clip acceleration & steering
+    if(env->dynamics_model == GIGAFLOW){
+        move_gigaflow_dynamics(env, action_idx, agent_idx);
+    } else if(env->dynamics_model == CLASSIC){
+        // Original classic dynamics code
         Entity* agent = &env->entities[agent_idx];
         // Extract action components directly from the multi-discrete action array
         int (*action_array)[2] = (int(*)[2])env->actions;
@@ -1019,9 +1208,11 @@ float reverse_normalize_value(float value, float min, float max){
 }
 
 void compute_observations(Drive* env) {
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int obs_size = (env->dynamics_model == GIGAFLOW) ? 10 : 7;
+    // 3 additional state variables per agent in GIGAFLOW
+    int max_obs = obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
-    float (*observations)[max_obs] = (float(*)[max_obs])env->observations; 
+    float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
         float* obs = &observations[i][0];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];
@@ -1042,16 +1233,25 @@ void compute_observations(Drive* env) {
         float rel_goal_y = -goal_x*sin_heading + goal_y*cos_heading;
         //obs[0] = normalize_value(rel_goal_x, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
         //obs[1] = normalize_value(rel_goal_y, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
-        obs[0] = rel_goal_x* 0.005f;
-        obs[1] = rel_goal_y* 0.005f;
+        obs[0] = rel_goal_x * 0.005f;
+        obs[1] = rel_goal_y * 0.005f;
         //obs[2] = ego_speed / MAX_SPEED;
         obs[2] = ego_speed * 0.01f;
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1 : 0;
-        
-        // Relative Pos of other cars
-        int obs_idx = 7;  // Start after goal distances
+        // obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+
+        int obs_idx = 7;   // Start after goal distances
+        if (env->dynamics_model == GIGAFLOW) {
+            // GIGAFLOW: normalize current accelerations and steering angle
+            obs[7] = ego_entity->a_long * 0.1f;
+            obs[8] = ego_entity->a_lat * 0.1f;
+            obs[9] = ego_entity->phi / 0.55f;
+
+            obs_idx = 10; // +GIGAFLOW additions
+        }
+
         int cars_seen = 0;
         for(int j = 0; j < MAX_CARS; j++) {
             int index = -1;
@@ -1156,6 +1356,12 @@ void c_reset(Drive* env){
         env->entities[agent_idx].reached_goal = 0;
         env->entities[agent_idx].collided_before_goal = 0;
         env->entities[agent_idx].reached_goal_this_episode = 0;
+
+        // Reset GIGAFLOW dynamics coefficients for new episode
+        if (env->dynamics_model == GIGAFLOW) {
+            init_gigaflow_coefficients(&env->entities[agent_idx]);
+        }
+
         collision_check(env, agent_idx);
     }
     compute_observations(env);
@@ -1171,6 +1377,18 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].vy = env->entities[agent_idx].traj_vy[0];
     env->entities[agent_idx].reached_goal = 0;
     env->entities[agent_idx].respawn_timestep = env->timestep;
+
+    // Reset GIGAFLOW state variables on respawn
+    if (env->dynamics_model == GIGAFLOW) {
+        env->entities[agent_idx].a_long = 0.0f;
+        env->entities[agent_idx].a_lat = 0.0f;
+        env->entities[agent_idx].phi = 0.0f;
+        env->entities[agent_idx].prev_a_long = 0.0f;
+        env->entities[agent_idx].prev_a_lat = 0.0f;
+        env->entities[agent_idx].prev_v = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
+                                                  env->entities[agent_idx].vy * env->entities[agent_idx].vy);
+        env->entities[agent_idx].prev_phi = 0.0f;
+    }
 }
 
 void c_step(Drive* env){

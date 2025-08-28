@@ -1,5 +1,5 @@
 import numpy as np
-import gymnasium
+import gymnasium as gym
 import json
 import struct
 import os
@@ -19,6 +19,7 @@ class Drive(pufferlib.PufferEnv):
             resample_frequency = 91,
             num_maps=100,
             num_agents=512,
+            dynamics_model="gigaflow",
             buf = None,
             seed=1):
 
@@ -33,11 +34,23 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63*7 + 200*7
-        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
+        self.dynamics_model = dynamics_model
+
+        if dynamics_model == "classic":
+            self.dynamics_model_value = 0
+            self.num_obs = 7 + 63*7 + 200*7
+            self.single_action_space = gym.spaces.MultiDiscrete([7, 13])
+        elif dynamics_model == "gigaflow":
+            self.dynamics_model_value = 4
+            self.num_obs = 10 + 63*7 + 200*7
+            self.single_action_space = gym.spaces.MultiDiscrete([4, 3])
+        else:
+            raise ValueError(f"Unknown dynamics model: {dynamics_model}. Use 'classic' or 'gigaflow'")
+
+        self.single_observation_space = gym.spaces.Box(low=-1, high=1,
             shape=(self.num_obs,), dtype=np.float32)
-        self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
-        # self.single_action_space = gymnasium.spaces.Box(
+        self.single_action_space = gym.spaces.MultiDiscrete([7, 13])
+        # self.single_action_space = gym.spaces.Box(
         #     low=-1, high=1, shape=(2,), dtype=np.float32
         # )
         # Check if resources directory exists
@@ -67,6 +80,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
                 spawn_immunity_timer=spawn_immunity_timer,
+                dynamics_model=self.dynamics_model_value,
                 map_id=map_ids[i],
                 max_agents = nxt-cur
             )
@@ -114,6 +128,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
                         spawn_immunity_timer=self.spawn_immunity_timer,
+                        dynamics_model=self.dynamics_model_value,
                         map_id=map_ids[i],
                         max_agents = nxt-cur
                     )
@@ -319,6 +334,7 @@ def process_all_maps():
         # except Exception as e:
         #     print(f"Error processing {map_path.name}: {e}")
 
+# TODO: Update test_performance
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
 
