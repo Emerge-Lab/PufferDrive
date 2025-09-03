@@ -143,6 +143,14 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal_post_respawn = unpack(kwargs, "reward_goal_post_respawn");
     env->reward_vehicle_collision_post_respawn = unpack(kwargs, "reward_vehicle_collision_post_respawn");
     env->spawn_immunity_timer = unpack(kwargs, "spawn_immunity_timer");
+
+    PyObject* dynamics_model_obj = PyDict_GetItemString(kwargs, "dynamics_model");
+    if (dynamics_model_obj != NULL) {
+        env->dynamics_model = PyLong_AsLong(dynamics_model_obj);
+    } else {
+        env->dynamics_model = 0; // Default to Classic
+    }
+
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 
@@ -150,6 +158,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
     env->num_agents = max_agents;
     env->map_name = strdup(map_file);
+    env->dt = 0.1f;
+
     init(env);
     return 0;
 }

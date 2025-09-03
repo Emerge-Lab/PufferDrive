@@ -159,3 +159,19 @@ pufferlib/ocean/impulse_wars/*-release/
 pufferlib/ocean/impulse_wars/debug-*/
 pufferlib/ocean/impulse_wars/release-*/
 pufferlib/ocean/impulse_wars/benchmark/
+
+.idea/
+__pycache__/
+*.pyc
+venv/
+.venv/
+env/
+.env/
+
+# macOS Build Artifacts
+*.dSYM/
+test_gigaflow_dynamics
+
+# Binary Data Files
+pufferlib/resources/drive/binaries/*.bin
+/drive
