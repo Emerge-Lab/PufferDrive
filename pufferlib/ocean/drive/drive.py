@@ -314,8 +314,10 @@ def process_all_maps():
     
     print(f"Found {len(json_files)} JSON files")
     
-    total_maps = 1000
+    total_maps = 100
     num_json_files = len(json_files)
+    if num_json_files < total_maps:
+        print(f"Warning: Only {num_json_files} JSON files found, but {total_maps} maps are required. Files will be repeated.")
     # Repeat files if there are fewer than required maps
     for i in range(total_maps):
         map_path = json_files[i % num_json_files]

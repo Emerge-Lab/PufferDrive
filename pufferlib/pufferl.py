@@ -74,12 +74,15 @@ class PuffeRL:
             raise pufferlib.APIUsageError('Must specify batch_size or bptt_horizon')
         elif config['batch_size'] == 'auto':
             config['batch_size'] = total_agents * config['bptt_horizon']
+            print(f'Auto batch_size: {config["batch_size"]}')
         elif config['bptt_horizon'] == 'auto':
             config['bptt_horizon'] = config['batch_size'] // total_agents
+            print(f'Auto bptt_horizon: {config["bptt_horizon"]}')
 
         batch_size = config['batch_size']
         horizon = config['bptt_horizon']
         segments = batch_size // horizon
+        print(f'Segments: {segments}')
         self.segments = segments
         if total_agents > segments:
             raise pufferlib.APIUsageError(
@@ -187,6 +190,10 @@ class PuffeRL:
         self.vecenv = vecenv
         self.epoch = 0
         self.global_step = 0
+        self.env_sps = 0  # Environment-only SPS tracking
+        self.eval_sps = 0  # Evaluate, examples generation tracking
+        self.env_time_elapsed = 0
+        self.eval_forward_time_elapsed = 0
         self.last_log_step = 0
         self.last_log_time = time.time()
         self.start_time = time.time()
@@ -225,14 +232,18 @@ class PuffeRL:
                 self.lstm_h[k] = torch.zeros(self.lstm_h[k].shape, device=device)
                 self.lstm_c[k] = torch.zeros(self.lstm_c[k].shape, device=device)
 
+        # Track environment-only SPS
+        eval_start_time = time.time()
         self.full_rows = 0
         while self.full_rows < self.segments:
+            # print(f'Full rows:{self.full_rows}, Segments:{self.segments}')
             profile('env', epoch)
+            # batch_start_time = time.time()
             o, r, d, t, info, env_id, mask = self.vecenv.recv()
-
+            # env_time_elapsed += time.time() - batch_start_time
             profile('eval_misc', epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
-
+            # print(f'Received examples for: {env_id}')
             done_mask = d + t # TODO: Handle truncations separately
             self.global_step += int(mask.sum())
 
@@ -243,6 +254,7 @@ class PuffeRL:
             d = torch.as_tensor(d).to(device)#, non_blocking=True)
 
             profile('eval_forward', epoch)
+            forward_start = time.time()
             with torch.no_grad(), self.amp_context:
                 state = dict(
                     reward=r,
@@ -258,6 +270,7 @@ class PuffeRL:
                 logits, value = self.policy.forward_eval(o_device, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 r = torch.clamp(r, -1, 1)
+            self.eval_forward_time_elapsed += time.time() - forward_start
 
             profile('eval_copy', epoch)
             with torch.no_grad():
@@ -283,6 +296,7 @@ class PuffeRL:
                 # Note: We are not yet handling masks in this version
                 self.ep_lengths[env_id] += 1
                 if l+1 >= config['bptt_horizon']:
+                    # print(f'Stop: {env_id.stop}, start: {env_id.start}')
                     num_full = env_id.stop - env_id.start
                     self.ep_indices[env_id] = self.free_idx + torch.arange(num_full, device=config['device']).int()
                     self.ep_lengths[env_id] = 0
@@ -310,6 +324,20 @@ class PuffeRL:
         self.free_idx = self.total_agents
         self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
         self.ep_lengths.zero_()
+        
+        # Calculate environment-only SPS
+        eval_time_elapsed = time.time() - eval_start_time
+        self.env_time_elapsed += eval_time_elapsed
+        env_steps_collected = self.global_step
+        # print(f'Eval time:{self.env_time_elapsed}, Steps:{self.global_step}')
+        # with open("profile_32_workers_32_envs.txt", "a") as f:
+        #     f.write(f'Eval time:{self.env_time_elapsed}, Steps:{self.global_step}\n')
+        if self.env_time_elapsed > 0:
+            self.eval_sps = env_steps_collected / self.env_time_elapsed
+            self.env_sps = env_steps_collected / (self.env_time_elapsed - self.eval_forward_time_elapsed)
+        else:
+            self.eval_sps = 0
+            self.env_sps = 0
         profile.end()
         return self.stats
 
@@ -438,7 +466,7 @@ class PuffeRL:
         profile.end()
         logs = None
         self.epoch += 1
-        done_training = self.global_step >= config['total_timesteps']
+        done_training = dist_sum(self.global_step, device) >= config['total_timesteps']
         if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
             logs = self.mean_and_log()
             self.losses = losses
@@ -534,6 +562,8 @@ class PuffeRL:
             c1='[cyan]', c2='[white]', b1='[bright_cyan]', b2='[bright_white]'):
         config = self.config
         sps = dist_sum(self.sps, config['device'])
+        eval_sps = dist_sum(self.eval_sps, config['device'])
+        env_sps = dist_sum(self.env_sps, config['device'])
         agent_steps = dist_sum(self.global_step, config['device'])
         if torch.distributed.is_initialized():
            if torch.distributed.get_rank() != 0:
@@ -572,6 +602,8 @@ class PuffeRL:
         s.add_row(f'{c2}Params', abbreviate(self.model_size, b2, c2))
         s.add_row(f'{c2}Steps', abbreviate(agent_steps, b2, c2))
         s.add_row(f'{c2}SPS', abbreviate(sps, b2, c2))
+        s.add_row(f'{c2}Evaluate SPS', abbreviate(eval_sps, b2, c2))
+        s.add_row(f'{c2}Env SPS', abbreviate(env_sps, b2, c2))
         s.add_row(f'{c2}Epoch', f'{b2}{self.epoch}')
         s.add_row(f'{c2}Uptime', duration(self.uptime, b2, c2))
         s.add_row(f'{c2}Remaining', remaining)
@@ -908,7 +940,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     all_logs = []
-    while pufferl.global_step < train_config['total_timesteps']:
+    while dist_sum(pufferl.global_step, device=train_config['device']) < train_config['total_timesteps']:
         if train_config['device'] == 'cuda':
             torch.compiler.cudagraph_mark_step_begin()
         pufferl.evaluate()

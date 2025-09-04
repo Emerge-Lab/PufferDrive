@@ -893,6 +893,11 @@ void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
     env->entities = load_map_binary(env->map_name, env);
+    if (env->entities == NULL) {
+        printf("ERROR: Failed to load map: %s\n", env->map_name);
+        printf("Binary map file does not exist!\n");
+        exit(1);  // Or handle gracefully
+    }
     env->dynamics_model = CLASSIC;
     set_means(env);
     init_grid_map(env);
