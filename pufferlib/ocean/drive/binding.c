@@ -67,73 +67,98 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
     return 0;
 }
 
+
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
+    
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
+    
+    // Create one world per agent (each agent gets their own world as ego)
+    int num_worlds = num_agents;
+    
+    PyObject* agent_offsets = PyList_New(num_worlds + 1);
+    PyObject* map_ids = PyList_New(num_worlds);
+    PyObject* ego_agent_ids = PyList_New(num_worlds);  // Track which agent is ego in each world
+    PyObject* coplayer_offsets = PyList_New(num_worlds);  // Track co-players for each world
+    
     int total_agent_count = 0;
-    int env_count = 0;
-    int max_envs = num_agents;
-    PyObject* agent_offsets = PyList_New(max_envs+1);
-    PyObject* map_ids = PyList_New(max_envs);
-    // getting env count
-    while(total_agent_count < num_agents && env_count < max_envs){
+    
+    for(int world_idx = 0; world_idx < num_worlds; world_idx++) {
         char map_file[100];
         int map_id = rand() % num_maps;
+        
         Drive* env = calloc(1, sizeof(Drive));
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
-        // Store map_id
+        
+        // Store map_id for this world
         PyObject* map_id_obj = PyLong_FromLong(map_id);
-        PyList_SetItem(map_ids, env_count, map_id_obj);
-        // Store agent offset
+        PyList_SetItem(map_ids, world_idx, map_id_obj);
+        
+        // Store agent offset for this world
         PyObject* offset = PyLong_FromLong(total_agent_count);
-        PyList_SetItem(agent_offsets, env_count, offset);
-        total_agent_count += env->active_agent_count;
-        env_count++;
-        for(int j=0;j<env->num_entities;j++) {
-            free_entity(&env->entities[j]);
+        PyList_SetItem(agent_offsets, world_idx, offset);
+        
+        // Randomly choose which agent position will be the ego (0 to active_agent_count-1)
+        int ego_position = rand() % env->active_agent_count;
+        
+        // Create lists for ego and co-players
+        PyObject* coplayers = PyList_New(env->active_agent_count - 1);
+        int ego_agent_id = -1;
+        int coplayer_idx = 0;
+        
+        // Assign agent IDs, with one randomly chosen as ego
+        for(int agent_pos = 0; agent_pos < env->active_agent_count; agent_pos++) {
+            if(agent_pos == ego_position) {
+                // This agent is the ego
+                ego_agent_id = total_agent_count;
+            } else {
+                // This agent is a co-player
+                PyObject* coplayer_id = PyLong_FromLong(total_agent_count);
+                PyList_SetItem(coplayers, coplayer_idx, coplayer_id);
+                coplayer_idx++;
+            }
+            total_agent_count++;
         }
-        free(env->entities);
-        free(env->active_agent_indices);
-        free(env->static_car_indices);
-        free(env->expert_static_car_indices);
+        
+        // Store the ego agent ID for this world
+        PyObject* ego_id = PyLong_FromLong(ego_agent_id);
+        PyList_SetItem(ego_agent_ids, world_idx, ego_id);
+        
+        // Store co-players for this world
+        PyList_SetItem(coplayer_offsets, world_idx, coplayers);
+        
+        // Cleanup
+        if (env->entities) {
+            for(int j = 0; j < env->num_entities; j++) {
+                free_entity(&env->entities[j]);
+            }
+            free(env->entities);
+        }
+        if (env->active_agent_indices) free(env->active_agent_indices);
+        if (env->static_car_indices) free(env->static_car_indices);
+        if (env->expert_static_car_indices) free(env->expert_static_car_indices);
         free(env);
-    }
-    if(total_agent_count >= num_agents){
-        total_agent_count = num_agents;
-    }
-    PyObject* final_total_agent_count = PyLong_FromLong(total_agent_count);
-    PyList_SetItem(agent_offsets, env_count, final_total_agent_count);
-    PyObject* final_env_count = PyLong_FromLong(env_count);
-    // resize lists
-    PyObject* resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
-    PyObject* resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-    //
-    //Py_DECREF(agent_offsets);
-    //Py_DECREF(map_ids);
-    // create a tuple
-    PyObject* tuple = PyTuple_New(3);
-    PyTuple_SetItem(tuple, 0, resized_agent_offsets);
-    PyTuple_SetItem(tuple, 1, resized_map_ids);
-    PyTuple_SetItem(tuple, 2, final_env_count);
-    return tuple;
-
-    //Py_DECREF(num);
-    /*
-    for(int i = 0;i<num_envs; i++) {
-        for(int j=0;j<temp_envs[i].num_entities;j++) {
-            free_entity(&temp_envs[i].entities[j]);
         }
-        free(temp_envs[i].entities);
-        free(temp_envs[i].active_agent_indices);
-        free(temp_envs[i].static_car_indices);
-    }
-    free(temp_envs);
-    */
-    // return agent_offsets;
+    
+    // Store final total agent count
+    PyObject* final_total_agent_count = PyLong_FromLong(total_agent_count);
+    PyList_SetItem(agent_offsets, num_worlds, final_total_agent_count);
+    
+    PyObject* final_world_count = PyLong_FromLong(num_worlds);
+    
+    // Create return tuple with all the information
+    PyObject* tuple = PyTuple_New(5);
+    PyTuple_SetItem(tuple, 0, agent_offsets);      // Agent offsets for each world
+    PyTuple_SetItem(tuple, 1, map_ids);            // Map ID for each world
+    PyTuple_SetItem(tuple, 2, final_world_count);  // Number of worlds
+    PyTuple_SetItem(tuple, 3, ego_agent_ids);      // Ego agent ID for each world
+    PyTuple_SetItem(tuple, 4, coplayer_offsets);   // Co-player agent IDs for each world
+    
+    return tuple;
 }
 
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
