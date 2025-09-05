@@ -1,0 +1,4 @@
+[submodule "external/pyxodr"]
+	path = external/pyxodr
+	url = https://github.com/mpragnay/pyxodr.git
+	branch = develop
