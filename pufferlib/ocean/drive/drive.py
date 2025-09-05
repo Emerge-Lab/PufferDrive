@@ -314,13 +314,8 @@ def process_all_maps():
     
     print(f"Found {len(json_files)} JSON files")
     
-    total_maps = 100
-    num_json_files = len(json_files)
-    if num_json_files < total_maps:
-        print(f"Warning: Only {num_json_files} JSON files found, but {total_maps} maps are required. Files will be repeated.")
-    # Repeat files if there are fewer than required maps
-    for i in range(total_maps):
-        map_path = json_files[i % num_json_files]
+    # Process each JSON file
+    for i, map_path in enumerate(json_files[:10000]):
         binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
         binary_path = binary_dir / binary_file
         
@@ -334,7 +329,6 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
     print("Initializing Drive environment for performance test...")
     env = Drive(num_agents=num_agents)
-    print("Resetting environment...")
     env.reset()
     tick = 0
     num_agents = 1024

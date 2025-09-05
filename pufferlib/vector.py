@@ -246,7 +246,6 @@ class Multiprocessing:
 
         import psutil
         cpu_cores = psutil.cpu_count(logical=False)
-        print(f'CPU cores: {cpu_cores}')
         if num_workers > cpu_cores and not overwork:
             raise pufferlib.APIUsageError(' '.join([
                 f'num_workers ({num_workers}) > hardware cores ({cpu_cores}) is disallowed by default.',
@@ -365,7 +364,6 @@ class Multiprocessing:
             # Log RAM usage periodically
             self.log_worker_ram_usage()
 
-        # print(f'Recv started')
         recv_precheck(self)
         while True:
             # Bandaid patch for new experience buffer desync

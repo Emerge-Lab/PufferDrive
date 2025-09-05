@@ -82,7 +82,6 @@ class PuffeRL:
         batch_size = config['batch_size']
         horizon = config['bptt_horizon']
         segments = batch_size // horizon
-        print(f'Segments: {segments}')
         self.segments = segments
         if total_agents > segments:
             raise pufferlib.APIUsageError(
@@ -236,14 +235,11 @@ class PuffeRL:
         eval_start_time = time.time()
         self.full_rows = 0
         while self.full_rows < self.segments:
-            # print(f'Full rows:{self.full_rows}, Segments:{self.segments}')
             profile('env', epoch)
-            # batch_start_time = time.time()
             o, r, d, t, info, env_id, mask = self.vecenv.recv()
-            # env_time_elapsed += time.time() - batch_start_time
+            
             profile('eval_misc', epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
-            # print(f'Received examples for: {env_id}')
             done_mask = d + t # TODO: Handle truncations separately
             self.global_step += int(mask.sum())
 
@@ -296,7 +292,6 @@ class PuffeRL:
                 # Note: We are not yet handling masks in this version
                 self.ep_lengths[env_id] += 1
                 if l+1 >= config['bptt_horizon']:
-                    # print(f'Stop: {env_id.stop}, start: {env_id.start}')
                     num_full = env_id.stop - env_id.start
                     self.ep_indices[env_id] = self.free_idx + torch.arange(num_full, device=config['device']).int()
                     self.ep_lengths[env_id] = 0
@@ -329,9 +324,7 @@ class PuffeRL:
         eval_time_elapsed = time.time() - eval_start_time
         self.env_time_elapsed += eval_time_elapsed
         env_steps_collected = self.global_step
-        # print(f'Eval time:{self.env_time_elapsed}, Steps:{self.global_step}')
-        # with open("profile_32_workers_32_envs.txt", "a") as f:
-        #     f.write(f'Eval time:{self.env_time_elapsed}, Steps:{self.global_step}\n')
+        
         if self.env_time_elapsed > 0:
             self.eval_sps = env_steps_collected / self.env_time_elapsed
             self.env_sps = env_steps_collected / (self.env_time_elapsed - self.eval_forward_time_elapsed)
@@ -940,7 +933,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     all_logs = []
-    while dist_sum(pufferl.global_step, device=train_config['device']) < train_config['total_timesteps']:
+    while pufferl.global_step < train_config['total_timesteps']:
         if train_config['device'] == 'cuda':
             torch.compiler.cudagraph_mark_step_begin()
         pufferl.evaluate()

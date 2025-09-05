@@ -94,10 +94,7 @@ def test_performance(num_maps=1000, num_agents=1024, num_steps=1000, print_flag=
 if __name__ == '__main__':
     # BATCH_SIZE_LIST = [2, 4, 8, 16, 32, 64, 128, 256, 512]
     BATCH_SIZE_LIST = [2]
-    # For WOMD train
-    # num_agents_list = [512, 1024, 2048, 4096, 8192]
-    # For Carla Maps
-    num_agents_list = [512, 4096, 16384, 32768]
+    num_agents_list = [512]    # [512, 4096, 16384, 32768]
 
     # create a DataFrame to store results
     results_df = pd.DataFrame(columns=['num_steps', 'num_agents', 'num_maps', 'num_envs', 'cpu_mem_MB', 'elapsed_time_s'])
