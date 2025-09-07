@@ -194,9 +194,9 @@ def save_map_binary(map_data, output_file):
             if(obj_type =='vehicle'):
                 obj_type = 1
             elif(obj_type == 'pedestrian'):
-                obj_type = 2;
+                obj_type = 2
             elif(obj_type == 'cyclist'):
-                obj_type = 3;
+                obj_type = 3
             f.write(struct.pack('i', obj_type))  # type
             # f.write(struct.pack('i', obj.get('id', 0)))   # id  
             f.write(struct.pack('i', trajectory_length))                  # array_size
@@ -273,15 +273,6 @@ def save_map_binary(map_data, output_file):
             for coord in ['x', 'y', 'z']:
                 for point in geometry:
                     f.write(struct.pack('f', float(point.get(coord, 0.0))))
-            # Write scalar fields
-            f.write(struct.pack('f', float(road.get('width', 0.0))))
-            f.write(struct.pack('f', float(road.get('length', 0.0))))
-            f.write(struct.pack('f', float(road.get('height', 0.0))))
-            goal_pos = road.get('goalPosition', {'x': 0, 'y': 0, 'z': 0})  # Get goalPosition object with default
-            f.write(struct.pack('f', float(goal_pos.get('x', 0.0))))  # Get x value
-            f.write(struct.pack('f', float(goal_pos.get('y', 0.0))))  # Get y value
-            f.write(struct.pack('f', float(goal_pos.get('z', 0.0))))  # Get z value
-            f.write(struct.pack('i', road.get('mark_as_expert', 0)))
 
 def load_map(map_name, binary_output=None):
     """Loads a JSON map and optionally saves it as binary"""
@@ -307,7 +298,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed/training")
+    data_dir = Path("data/carla")
     
     # Get all JSON files in data directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -325,13 +316,12 @@ def process_all_maps():
         # except Exception as e:
         #     print(f"Error processing {map_path.name}: {e}")
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=10, atn_cache=1024, num_agents=1024, num_maps=8):
     import time
     print("Initializing Drive environment for performance test...")
-    env = Drive(num_agents=num_agents)
+    env = Drive(num_agents=num_agents, num_maps=num_maps)
     env.reset()
     tick = 0
-    num_agents = 1024
     actions = np.stack([
         np.random.randint(0, space.n + 1, (atn_cache, num_agents))
         for space in env.single_action_space
@@ -346,5 +336,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     print(f'SPS: {num_agents * tick / (time.time() - start)}')
     env.close()
 if __name__ == '__main__':
-    # test_performance()
-    process_all_maps()
+    test_performance(num_agents=32)
+    # process_all_maps()

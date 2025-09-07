@@ -83,7 +83,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-        env->entities = load_map_binary(map_file, env);
+        load_map_binary(map_file, env);
         set_active_agents(env);
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);

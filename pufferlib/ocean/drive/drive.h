@@ -10,18 +10,7 @@
 #include "raymath.h"
 #include "rlgl.h"
 #include <time.h>
-// Entity Types
-#define NONE 0
-#define VEHICLE 1
-#define PEDESTRIAN 2
-#define CYCLIST 3
-#define ROAD_LANE 4
-#define ROAD_LINE 5
-#define ROAD_EDGE 6
-#define STOP_SIGN 7
-#define CROSSWALK 8
-#define SPEED_BUMP 9
-#define DRIVEWAY 10
+
 
 // Trajectory Length
 #define TRAJECTORY_LENGTH 91
@@ -139,6 +128,34 @@ struct Entity {
     int active_agent;
 };
 
+// Based on the original GPUDrive MapType(WOMD)
+typedef enum MapEntityType MapEntityType;
+enum MapEntityType{
+    NONE = 0,
+    VEHICLE = 1,
+    PEDESTRIAN = 2,
+    CYCLIST = 3,
+    ROAD_LANE = 4,
+    ROAD_LINE = 5,
+    ROAD_EDGE = 6,
+    STOP_SIGN = 7,
+    CROSSWALK = 8,
+    SPEED_BUMP = 9,
+    DRIVEWAY = 10,
+    NUM_TYPES = 11,
+};
+
+typedef struct MapEntity MapEntity;
+struct MapEntity {
+    int id;
+    int type;
+    MapEntityType map_type;
+    int array_size;
+    float* traj_x;
+    float* traj_y;
+    float* traj_z;
+};
+
 void free_entity(Entity* entity){
     // free trajectory arrays
     free(entity->traj_x);
@@ -176,6 +193,7 @@ struct Drive {
     int* active_agent_indices;
     int human_agent_idx;
     Entity* entities;
+    MapEntity* map_entities;
     int num_entities;
     int num_cars;
     int num_objects;
@@ -229,14 +247,14 @@ void add_log(Drive* env) {
     }
 }
 
-Entity* load_map_binary(const char* filename, Drive* env) {
+void load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
     fread(&env->num_objects, sizeof(int), 1, file);
     fread(&env->num_roads, sizeof(int), 1, file);
     env->num_entities = env->num_objects + env->num_roads; 
     Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
-    for (int i = 0; i < env->num_entities; i++) {
+    for (int i = 0; i < env->num_objects; i++) {
 	// Read base entity data
         fread(&entities[i].type, sizeof(int), 1, file);
         fread(&entities[i].array_size, sizeof(int), 1, file);
@@ -245,26 +263,24 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         entities[i].traj_x = (float*)malloc(size * sizeof(float));
         entities[i].traj_y = (float*)malloc(size * sizeof(float));
         entities[i].traj_z = (float*)malloc(size * sizeof(float));
-        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {  // Object type
-            // Allocate arrays for object-specific data
+        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {
             entities[i].traj_vx = (float*)malloc(size * sizeof(float));
             entities[i].traj_vy = (float*)malloc(size * sizeof(float));
             entities[i].traj_vz = (float*)malloc(size * sizeof(float));
             entities[i].traj_heading = (float*)malloc(size * sizeof(float));
             entities[i].traj_valid = (int*)malloc(size * sizeof(int));
         } else {
-            // Roads don't use these arrays
-            entities[i].traj_vx = NULL;
-            entities[i].traj_vy = NULL;
-            entities[i].traj_vz = NULL;
-            entities[i].traj_heading = NULL;
-            entities[i].traj_valid = NULL;
+            // Error handling for unsupported types
+            fprintf(stderr, "Error: Unsupported entity type %d\n", entities[i].type);
+            free(entities);
+            fclose(file);
+            return NULL;
         }
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
         fread(entities[i].traj_y, sizeof(float), size, file);
         fread(entities[i].traj_z, sizeof(float), size, file);
-        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {  // Object type
+        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {
             fread(entities[i].traj_vx, sizeof(float), size, file);
             fread(entities[i].traj_vy, sizeof(float), size, file);
             fread(entities[i].traj_vz, sizeof(float), size, file);
@@ -280,14 +296,40 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
     }
+    
+    MapEntity* map_entities = (MapEntity*)malloc(env->num_roads * sizeof(MapEntity));
+    // Read road entities
+    for (int i = 0; i < env->num_roads; i++) {
+	    // Read base entity data
+        fread(&map_entities[i].type, sizeof(int), 1, file);
+        fread(&map_entities[i].array_size, sizeof(int), 1, file);
+
+        // Type Handling
+        if (map_entities[i].type < 4 || map_entities[i].type > (int)(MapEntityType::NUM_TYPES)) {
+            map_entities[i].map_type = (MapEntityType)(map_entities[i].type);
+        }
+        map_entities[i].type = (int)(map_entities[i].map_type);
+
+        // Allocate arrays based on type
+        int size = map_entities[i].array_size;
+        map_entities[i].traj_x = (float*)malloc(size * sizeof(float));
+        map_entities[i].traj_y = (float*)malloc(size * sizeof(float));
+        map_entities[i].traj_z = (float*)malloc(size * sizeof(float));
+        // Read array data
+        fread(map_entities[i].traj_x, sizeof(float), size, file);
+        fread(map_entities[i].traj_y, sizeof(float), size, file);
+        fread(map_entities[i].traj_z, sizeof(float), size, file);
+    }
+    
     fclose(file);
-    return entities;
+    env->entities = entities;
+    env->map_entities = map_entities;
 }
 
 void set_start_position(Drive* env){
     //InitWindow(800, 600, "GPU Drive");
     //BeginDrawing();
-    for(int i = 0; i < env->num_entities; i++){
+    for(int i = 0; i < env->num_objects; i++){
         int is_active = 0;
         for(int j = 0; j < env->active_agent_count; j++){
             if(env->active_agent_indices[j] == i){
@@ -370,10 +412,10 @@ void init_grid_map(Drive* env){
     float bottom_right_x;
     float bottom_right_y;
     int first_valid_point = 0;
-    for(int i = 0; i < env->num_entities; i++){
-        if(env->entities[i].type > 3 && env->entities[i].type < 7){
+    for(int i = 0; i < env->num_roads; i++){
+        if(env->map_entities[i].type > 3 && env->map_entities[i].type < 7){
             // Check all points in the trajectory for road elements
-            Entity* e = &env->entities[i];
+            MapEntity* e = &env->map_entities[i];
             for(int j = 0; j < e->array_size; j++){
                 if(e->traj_x[j] == -10000) continue;
                 if(e->traj_y[j] == -10000) continue;
@@ -405,11 +447,11 @@ void init_grid_map(Drive* env){
     int grid_cell_count = env->grid_cols*env->grid_rows;
     env->grid_cells = (int*)calloc(grid_cell_count*SLOTS_PER_CELL, sizeof(int));
     // Populate grid cells
-    for(int i = 0; i < env->num_entities; i++){
-        if(env->entities[i].type > 3 && env->entities[i].type < 7){
-            for(int j = 0; j < env->entities[i].array_size - 1; j++){
-                float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
-                float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
+    for(int i = 0; i < env->num_roads; i++){
+        if(env->map_entities[i].type > 3 && env->map_entities[i].type < 7){
+            for(int j = 0; j < env->map_entities[i].array_size - 1; j++){
+                float x_center = (env->map_entities[i].traj_x[j] + env->map_entities[i].traj_x[j+1]) / 2;
+                float y_center = (env->map_entities[i].traj_y[j] + env->map_entities[i].traj_y[j+1]) / 2;
                 int grid_index = getGridIndex(env, x_center, y_center);
                 add_entity_to_grid(env, grid_index, i, j);
             }
@@ -525,7 +567,7 @@ void set_means(Drive* env) {
     int64_t point_count = 0;
 
     // Compute single mean for all entities (vehicles and roads)
-    for (int i = 0; i < env->num_entities; i++) {
+    for (int i = 0; i < env->num_objects; i++) {
         if (env->entities[i].type == VEHICLE) {
             for (int j = 0; j < env->entities[i].array_size; j++) {
                 // Assume a validity flag exists (e.g., valid[j]); adjust if not available
@@ -535,18 +577,20 @@ void set_means(Drive* env) {
                     mean_y += (env->entities[i].traj_y[j] - mean_y) / point_count;
                 }
             }
-        } else if (env->entities[i].type >= 4) {
-            for (int j = 0; j < env->entities[i].array_size; j++) {
-                point_count++;
-                mean_x += (env->entities[i].traj_x[j] - mean_x) / point_count;
-                mean_y += (env->entities[i].traj_y[j] - mean_y) / point_count;
-            }
+        }
+    }
+    for (int i = 0; i < env->num_roads; i++) {
+        for (int j = 0; j < env->map_entities[i].array_size; j++) {
+            point_count++;
+            mean_x += (env->map_entities[i].traj_x[j] - mean_x) / point_count;
+            mean_y += (env->map_entities[i].traj_y[j] - mean_y) / point_count;
         }
     }
     env->world_mean_x = mean_x;
     env->world_mean_y = mean_y;
-    for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type == VEHICLE || env->entities[i].type >= 4) {
+
+    for (int i = 0; i < env->num_objects; i++) {
+        if (env->entities[i].type == VEHICLE) {
             for (int j = 0; j < env->entities[i].array_size; j++) {
                 if(env->entities[i].traj_x[j] == -10000) continue;
                 env->entities[i].traj_x[j] -= mean_x;
@@ -556,7 +600,13 @@ void set_means(Drive* env) {
             env->entities[i].goal_position_y -= mean_y;
         }
     }
-    
+    for (int i = 0; i < env->num_roads; i++) {
+        for (int j = 0; j < env->map_entities[i].array_size; j++) {
+            if(env->map_entities[i].traj_x[j] == -10000) continue;
+            env->map_entities[i].traj_x[j] -= mean_x;
+            env->map_entities[i].traj_y[j] -= mean_y;
+        }
+    }
 }
 
 void move_expert(Drive* env, int* actions, int agent_idx){
@@ -713,7 +763,7 @@ int collision_check(Drive* env, int agent_idx) {
         if(entity_list[i] == -1) continue;
         if(entity_list[i] == agent_idx) continue;
         Entity* entity;
-        entity = &env->entities[entity_list[i]];
+        entity = &env->map_entities[entity_list[i]];
         if(entity->type != ROAD_EDGE) continue;
         int geometry_idx = entity_list[i + 1];
         float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
@@ -892,10 +942,9 @@ void remove_bad_trajectories(Drive* env){
 void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
-    env->entities = load_map_binary(env->map_name, env);
-    if (env->entities == NULL) {
+    load_map_binary(env->map_name, env);
+    if (env->entities == NULL || env->map_entities == NULL) {
         printf("ERROR: Failed to load map: %s\n", env->map_name);
-        printf("Binary map file does not exist!\n");
         exit(1);  // Or handle gracefully
     }
     env->dynamics_model = CLASSIC;
@@ -916,6 +965,10 @@ void c_close(Drive* env){
         free_entity(&env->entities[i]);
     }
     free(env->entities);
+    for(int i = 0; i < env->num_roads; i++){
+        free_entity(&env->map_entities[i]);
+    }
+    free(env->map_entities);
     free(env->active_agent_indices);
     free(env->logs);
     free(env->map_corners);
@@ -1110,7 +1163,7 @@ void compute_observations(Drive* env) {
         for(int k = 0; k < list_size; k++){
             int entity_idx = entity_list[k*2];
             int geometry_idx = entity_list[k*2+1];
-            Entity* entity = &env->entities[entity_idx];
+            MapEntity* entity = &env->map_entities[entity_idx];
             float start_x = entity->traj_x[geometry_idx];
             float start_y = entity->traj_y[geometry_idx];
             float end_x = entity->traj_x[geometry_idx+1];
