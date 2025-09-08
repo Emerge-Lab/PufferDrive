@@ -197,6 +197,8 @@ def save_map_binary(map_data, output_file):
                 obj_type = 2
             elif(obj_type == 'cyclist'):
                 obj_type = 3
+            if(obj_type == 0):
+                print("Warning: Object with type 0 found")
             f.write(struct.pack('i', obj_type))  # type
             # f.write(struct.pack('i', obj.get('id', 0)))   # id  
             f.write(struct.pack('i', trajectory_length))                  # array_size

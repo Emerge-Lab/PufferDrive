@@ -93,10 +93,14 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         PyList_SetItem(agent_offsets, env_count, offset);
         total_agent_count += env->active_agent_count;
         env_count++;
-        for(int j=0;j<env->num_entities;j++) {
-            free_entity(&env->entities[j]);
+        for(int i = 0; i < env->num_objects; i++){
+            free_entity(&env->entities[i]);
         }
         free(env->entities);
+        for(int i = 0; i < env->num_roads; i++){
+            free_map_entity(&env->map_entities[i]);
+        }
+        free(env->map_entities);
         free(env->active_agent_indices);
         free(env->static_car_indices);
         free(env->expert_static_car_indices);

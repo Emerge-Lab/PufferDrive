@@ -156,16 +156,23 @@ struct MapEntity {
     float* traj_z;
 };
 
-void free_entity(Entity* entity){
+void free_map_entity(MapEntity* map_entity){
     // free trajectory arrays
-    free(entity->traj_x);
-    free(entity->traj_y);
-    free(entity->traj_z);
-    free(entity->traj_vx);
-    free(entity->traj_vy);
-    free(entity->traj_vz);
-    free(entity->traj_heading);
-    free(entity->traj_valid);
+    if(map_entity->traj_x) free(map_entity->traj_x);
+    if(map_entity->traj_y) free(map_entity->traj_y);
+    if(map_entity->traj_z) free(map_entity->traj_z);
+}
+
+void free_entity(Entity* entity){
+    // free trajectory arrays only if they're not NULL
+    if (entity->traj_x) free(entity->traj_x);
+    if (entity->traj_y) free(entity->traj_y);
+    if (entity->traj_z) free(entity->traj_z);
+    if (entity->traj_vx) free(entity->traj_vx);
+    if (entity->traj_vy) free(entity->traj_vy);
+    if (entity->traj_vz) free(entity->traj_vz);
+    if (entity->traj_heading) free(entity->traj_heading);
+    if (entity->traj_valid) free(entity->traj_valid);
 }
 
 float relative_distance(float a, float b){
@@ -249,15 +256,19 @@ void add_log(Drive* env) {
 
 void load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
-    if (!file) return NULL;
+    if (!file) return;
     fread(&env->num_objects, sizeof(int), 1, file);
     fread(&env->num_roads, sizeof(int), 1, file);
     env->num_entities = env->num_objects + env->num_roads; 
-    Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
+    Entity* entities = (Entity*)malloc(env->num_objects * sizeof(Entity));
     for (int i = 0; i < env->num_objects; i++) {
-	// Read base entity data
+	    // Read base entity data
         fread(&entities[i].type, sizeof(int), 1, file);
         fread(&entities[i].array_size, sizeof(int), 1, file);
+        if(entities[i].type == 0)
+        {
+            printf("Warning: Entity %d has type 0 (NONE)\n", i);
+        }
         // Allocate arrays based on type
         int size = entities[i].array_size;
         entities[i].traj_x = (float*)malloc(size * sizeof(float));
@@ -269,12 +280,6 @@ void load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_vz = (float*)malloc(size * sizeof(float));
             entities[i].traj_heading = (float*)malloc(size * sizeof(float));
             entities[i].traj_valid = (int*)malloc(size * sizeof(int));
-        } else {
-            // Error handling for unsupported types
-            fprintf(stderr, "Error: Unsupported entity type %d\n", entities[i].type);
-            free(entities);
-            fclose(file);
-            return NULL;
         }
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
@@ -303,12 +308,14 @@ void load_map_binary(const char* filename, Drive* env) {
 	    // Read base entity data
         fread(&map_entities[i].type, sizeof(int), 1, file);
         fread(&map_entities[i].array_size, sizeof(int), 1, file);
-
+        if(map_entities[i].type == 0)
+        {
+            printf("Warning: Map Entity %d has type 0 (NONE)\n", i);
+        }
         // Type Handling
-        if (map_entities[i].type < 4 || map_entities[i].type > (int)(MapEntityType::NUM_TYPES)) {
+        if (map_entities[i].type < 4 || map_entities[i].type > (int)NUM_TYPES) {
             map_entities[i].map_type = (MapEntityType)(map_entities[i].type);
         }
-        map_entities[i].type = (int)(map_entities[i].map_type);
 
         // Allocate arrays based on type
         int size = map_entities[i].array_size;
@@ -366,10 +373,6 @@ void set_start_position(Drive* env){
         e->collision_state = 0;
         e->respawn_timestep = -1;
     }
-    //EndDrawing();
-    int x = 0;
-
-
 }
 
 int getGridIndex(Drive* env, float x1, float y1) {
@@ -762,12 +765,11 @@ int collision_check(Drive* env, int agent_idx) {
     for (int i = 0; i < list_size ; i+=2) {
         if(entity_list[i] == -1) continue;
         if(entity_list[i] == agent_idx) continue;
-        Entity* entity;
-        entity = &env->map_entities[entity_list[i]];
-        if(entity->type != ROAD_EDGE) continue;
+        MapEntity* map_entity = &env->map_entities[entity_list[i]];
+        if(map_entity->type != ROAD_EDGE) continue;
         int geometry_idx = entity_list[i + 1];
-        float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
-        float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
+        float start[2] = {map_entity->traj_x[geometry_idx], map_entity->traj_y[geometry_idx]};
+        float end[2] = {map_entity->traj_x[geometry_idx + 1], map_entity->traj_y[geometry_idx + 1]};
         for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
             int next = (k + 1) % 4;
             if (check_line_intersection(corners[k], corners[next], start, end)) {
@@ -899,8 +901,6 @@ void set_active_agents(Drive* env){
 
 void remove_bad_trajectories(Drive* env){
     set_start_position(env);
-    int legal_agent_count = 0;
-    int legal_trajectories[env->active_agent_count];
     int collided_agents[env->active_agent_count];
     int collided_with_indices[env->active_agent_count];
     memset(collided_agents, 0, env->active_agent_count * sizeof(int));
@@ -961,12 +961,12 @@ void init(Drive* env){
 }
 
 void c_close(Drive* env){
-    for(int i = 0; i < env->num_entities; i++){
+    for(int i = 0; i < env->num_objects; i++){
         free_entity(&env->entities[i]);
     }
     free(env->entities);
     for(int i = 0; i < env->num_roads; i++){
-        free_entity(&env->map_entities[i]);
+        free_map_entity(&env->map_entities[i]);
     }
     free(env->map_entities);
     free(env->active_agent_indices);
@@ -1088,7 +1088,6 @@ void compute_observations(Drive* env) {
             obs[6] = 1;
             //continue;
         }
-        float ego_heading = ego_entity->heading;
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
         float ego_speed = sqrtf(ego_entity->vx*ego_entity->vx + ego_entity->vy*ego_entity->vy);
