@@ -36,7 +36,7 @@ class Drive(pufferlib.PufferEnv):
             num_agents=512,
             buf = None,
             seed=1, 
-            population_play = False):
+            population_play = True):
 
         # env
         self.render_mode = render_mode
@@ -110,10 +110,11 @@ class Drive(pufferlib.PufferEnv):
 
         if self.population_play:
             self.num_agents = self.num_ego_agents
-
+        
 
 
     def set_buffers(self):
+        "Number of co players is non-stationary, resets env variable shape to account for this "
 
         obs_space = self.single_observation_space
         self.observations = np.zeros((self.total_agents, *obs_space.shape), dtype=obs_space.dtype)
@@ -142,7 +143,6 @@ class Drive(pufferlib.PufferEnv):
 
     def step(self, ego_actions):
         self.terminals[:] = 0
-        self.num_agents = self.total_agents
         self.actions[self.ego_ids] = ego_actions
 
         if self.population_play:
@@ -163,14 +163,17 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
+                binding_tuple =  binding.shared(num_agents=self.num_agents_const, num_maps=self.num_maps, population_play = self.population_play)
                 if self.population_play:
-                    agent_offsets, map_ids, num_envs, self.ego_ids, co_player_ids = binding.shared(num_agents=self.num_agents_const, num_maps=self.num_maps)
+                    agent_offsets, map_ids, num_envs, self.ego_ids, co_player_ids = binding_tuple
                     self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
                     self.num_ego_agents = len(self.ego_ids)
                     self.num_co_players = len(self.co_player_ids)
                     self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
+                    self.co_player_policy = load_drivenet("/home/charliemolony/adaptive_driving_agent/PufferLib/pufferlib/resources/drive/puffer_drive_weights.bin", self.num_co_players )
+                    self.set_buffers() 
                 else:
-                    agent_offsets, map_ids, num_envs = binding.shared(num_agents=self.num_agents_const, num_maps=self.num_maps)
+                    agent_offsets, map_ids, num_envs = binding_tuple
                     self.num_agents = self.num_agents_const
                     self.ego_ids = [i for i in range(agent_offsets[-1])]
 
@@ -179,7 +182,7 @@ class Drive(pufferlib.PufferEnv):
                 self.agent_offsets = agent_offsets
                 self.map_ids = map_ids
                 self.num_envs = num_envs
-                self.set_buffers()
+                
                 env_ids = []
                 seed = np.random.randint(0, 2**32-1)
                 for i in range(num_envs):
@@ -207,8 +210,7 @@ class Drive(pufferlib.PufferEnv):
 
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
-                self.num_co_players = len(self.co_player_ids)
-                self.co_player_policy = load_drivenet("/home/charliemolony/adaptive_driving_agent/PufferLib/pufferlib/resources/drive/puffer_drive_weights.bin", self.num_co_players )
+
 
         try:
             return (self.observations[self.ego_ids], self.rewards[self.ego_ids],
