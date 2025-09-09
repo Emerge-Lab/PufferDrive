@@ -35,7 +35,8 @@ class Drive(pufferlib.PufferEnv):
             num_maps=100,
             num_agents=512,
             buf = None,
-            seed=1):
+            seed=1, 
+            population_play = False):
 
         # env
         self.render_mode = render_mode
@@ -51,7 +52,10 @@ class Drive(pufferlib.PufferEnv):
         self.num_obs = 7 + 63*7 + 200*7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
             shape=(self.num_obs,), dtype=np.float32)
+        self.num_agents_const = num_agents
         self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+
+        self.population_play = population_play
         # self.single_action_space = gymnasium.spaces.Box(
         #     low=-1, high=1, shape=(2,), dtype=np.float32
         # )
@@ -59,13 +63,23 @@ class Drive(pufferlib.PufferEnv):
         binary_path = "resources/drive/binaries/map_000.bin"
         if not os.path.exists(binary_path):
             raise FileNotFoundError(f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs.")
-        agent_offsets, map_ids, num_envs, self.ego_ids, co_player_ids = binding.shared(num_agents=num_agents, num_maps=num_maps)
-
-        self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
         
-        self.num_ego_agents = num_agents
-        self.num_co_players = len(self.co_player_ids)
-        self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
+        binding_tuple =  binding.shared(num_agents=num_agents, num_maps=num_maps, population_play = population_play)
+        
+        if self.population_play:
+            agent_offsets, map_ids, num_envs, self.ego_ids, co_player_ids = binding_tuple
+            self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
+            self.num_ego_agents = num_agents
+            self.num_co_players = len(self.co_player_ids)
+            self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
+            self.co_player_policy = load_drivenet("/home/charliemolony/adaptive_driving_agent/PufferLib/pufferlib/resources/drive/puffer_drive_weights.bin", self.num_co_players )
+        else:
+            agent_offsets, map_ids, num_envs = binding_tuple
+            self.num_agents = self.num_agents_const
+            self.ego_ids = [i for i in range(agent_offsets[-1])]
+
+                      
+       
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -94,8 +108,8 @@ class Drive(pufferlib.PufferEnv):
 
         self.c_envs = binding.vectorize(*env_ids)
 
-        self.co_player_policy = load_drivenet("/home/charliemolony/adaptive_driving_agent/PufferLib/pufferlib/resources/drive/puffer_drive_weights.bin", self.num_co_players )
-        self.num_agents = self.num_ego_agents
+        if self.population_play:
+            self.num_agents = self.num_ego_agents
 
 
 
@@ -131,10 +145,9 @@ class Drive(pufferlib.PufferEnv):
         self.num_agents = self.total_agents
         self.actions[self.ego_ids] = ego_actions
 
-        
-        co_player_actions = self.get_co_player_actions()
-
-        self.actions[self.co_player_ids] = co_player_actions
+        if self.population_play:
+            co_player_actions = self.get_co_player_actions()
+            self.actions[self.co_player_ids] = co_player_actions
         
         binding.vec_step(self.c_envs)
 
@@ -150,13 +163,19 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs, self.ego_ids, co_player_ids = binding.shared(num_agents=self.num_ego_agents, num_maps=self.num_maps)
+                if self.population_play:
+                    agent_offsets, map_ids, num_envs, self.ego_ids, co_player_ids = binding.shared(num_agents=self.num_agents_const, num_maps=self.num_maps)
+                    self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
+                    self.num_ego_agents = len(self.ego_ids)
+                    self.num_co_players = len(self.co_player_ids)
+                    self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
+                else:
+                    agent_offsets, map_ids, num_envs = binding.shared(num_agents=self.num_agents_const, num_maps=self.num_maps)
+                    self.num_agents = self.num_agents_const
+                    self.ego_ids = [i for i in range(agent_offsets[-1])]
 
-                self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
+
                 
-                self.num_ego_agents = len(self.ego_ids)
-                self.num_co_players = len(self.co_player_ids)
-                self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
                 self.agent_offsets = agent_offsets
                 self.map_ids = map_ids
                 self.num_envs = num_envs
