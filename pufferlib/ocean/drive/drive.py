@@ -338,5 +338,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024, num_maps=8):
     print(f'SPS: {num_agents * tick / (time.time() - start)}')
     env.close()
 if __name__ == '__main__':
-    test_performance(num_agents=32)
-    # process_all_maps()
+    # test_performance(num_agents=32)
+    process_all_maps()

@@ -74,11 +74,9 @@ class PuffeRL:
             raise pufferlib.APIUsageError('Must specify batch_size or bptt_horizon')
         elif config['batch_size'] == 'auto':
             config['batch_size'] = total_agents * config['bptt_horizon']
-            print(f'Auto batch_size: {config["batch_size"]}')
         elif config['bptt_horizon'] == 'auto':
             config['bptt_horizon'] = config['batch_size'] // total_agents
-            print(f'Auto bptt_horizon: {config["bptt_horizon"]}')
-
+            
         batch_size = config['batch_size']
         horizon = config['bptt_horizon']
         segments = batch_size // horizon

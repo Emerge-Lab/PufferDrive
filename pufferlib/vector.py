@@ -668,12 +668,6 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
         raise pufferlib.APIUsageError('num_envs must be at least 1')
     if num_envs != int(num_envs):
         raise pufferlib.APIUsageError('num_envs must be an integer')
-    print(f'Backend: {backend}')
-    print(f'Type: {type(backend)}')
-    print(f'Num envs: {num_envs}')
-    print(f'Env creators: {env_creator_or_creators}')
-    print(f'Env args: {type(env_args)}')
-    print(f'Env kwargs: {type(env_kwargs)}')
 
     if isinstance(backend, str):
         try:
