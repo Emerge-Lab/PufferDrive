@@ -310,16 +310,13 @@ def load_map(map_name, binary_output=None):
         save_map_binary(map_data, binary_output)
 
 
-def process_all_maps():
+def process_all_maps(data_dir: Path):
     """Process all maps and save them as binaries"""
     from pathlib import Path
 
     # Create the binaries directory if it doesn't exist
     binary_dir = Path("resources/drive/binaries")
     binary_dir.mkdir(parents=True, exist_ok=True)
-
-    # Path to the training data
-    data_dir = Path("data/train")
     
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -361,4 +358,9 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 if __name__ == "__main__":
     # test_performance()
-    process_all_maps()
+    parser = argparse.ArgumentParser(description="Process maps for PufferDrive.")
+    parser.add_argument("--data_dir", type=str, default="data/train",
+                        help="Path to the directory containing JSON map files.")
+    args = parser.parse_args()
+    process_all_maps(Path(args.data_dir))
+    
