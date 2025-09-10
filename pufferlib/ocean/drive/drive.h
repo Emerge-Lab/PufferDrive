@@ -1201,6 +1201,124 @@ void c_step(Drive* env){
     }
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
+
+        // Get agent object
+        Entity* agent = &env->entities[agent_idx];
+
+        // Compute guidance reward
+
+        // Static arrays to track guidance points hit (simplified version)
+        static int guidance_points_hit[MAX_CARS][TRAJECTORY_LENGTH] = {0};
+        static int initialized = 0;
+
+        if (!initialized) {
+            memset(guidance_points_hit, 0, sizeof(guidance_points_hit));
+            initialized = 1;
+        }
+
+        // 1. Route guidance
+        float route_reward = 0.0f;
+        int new_hits_count = 0;
+
+        // Check for guidance points within reach
+        float reach_threshold = 5.0f;
+
+        if (env->timestep == 1) {
+            // First step: check initial guidance points within reach
+            for (int t = 0; t < TRAJECTORY_LENGTH && t < agent->array_size; t++) {
+                if (agent->traj_valid && agent->traj_valid[t]) {
+                    float dx = agent->traj_x[t] - agent->x;
+                    float dy = agent->traj_y[t] - agent->y;
+                    float distance = sqrtf(dx*dx + dy*dy);
+
+                    if (distance <= reach_threshold && guidance_points_hit[i][t] == 0) {
+                        guidance_points_hit[i][t] = 1;
+                        new_hits_count++;
+                    }
+                }
+            }
+        } else {
+            // Find closest waypoint within reach that hasn't been hit
+            float min_distance = 1e10f;
+            int closest_idx = -1;
+
+            for (int t = 0; t < TRAJECTORY_LENGTH && t < agent->array_size; t++) {
+                if (agent->traj_valid && agent->traj_valid[t] && guidance_points_hit[i][t] == 0) {
+                    float dx = agent->traj_x[t] - agent->x;
+                    float dy = agent->traj_y[t] - agent->y;
+                    float distance = sqrtf(dx*dx + dy*dy);
+
+                    if (distance <= reach_threshold && distance < min_distance) {
+                        min_distance = distance;
+                        closest_idx = t;
+                    }
+                }
+            }
+
+            if (closest_idx >= 0) {
+                guidance_points_hit[i][closest_idx] = 1;
+                new_hits_count = 1;
+            }
+        }
+
+        // Calculate route reward with normalization
+        int total_valid_points = 0;
+        for (int t = 0; t < TRAJECTORY_LENGTH && t < agent->array_size; t++) {
+            if (agent->traj_valid && agent->traj_valid[t]) {
+                total_valid_points++;
+            }
+        }
+
+        if (total_valid_points > 0) {
+            route_reward = fminf((float)new_hits_count / (total_valid_points + 1e-5f), 0.1f);
+        }
+
+        // Check route progress for end-of-route jerk penalty
+        int valid_hits_so_far = 0;
+        for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
+            valid_hits_so_far += guidance_points_hit[i][t];
+        }
+
+        float route_progress = (total_valid_points > 0) ?
+            (float)valid_hits_so_far / (total_valid_points + 1e-5f) : 1.0f;
+
+        float guidance_reward = route_reward;
+
+        // 2. Speed and heading targets
+        float speed_heading_reward = 0.0f;
+        if (env->timestep < TRAJECTORY_LENGTH && env->timestep < agent->array_size) {
+            if (agent->traj_valid && agent->traj_valid[env->timestep]) {
+                float suggested_speed = sqrtf(agent->traj_vx[env->timestep] * agent->traj_vx[env->timestep] +
+                                             agent->traj_vy[env->timestep] * agent->traj_vy[env->timestep]);
+                float suggested_heading = agent->traj_heading[env->timestep];
+
+                float actual_agent_speed = sqrtf(agent->vx * agent->vx + agent->vy * agent->vy);
+                float actual_agent_heading = agent->heading;
+
+                float guidance_speed_error = (suggested_speed - actual_agent_speed) *
+                                           (suggested_speed - actual_agent_speed);
+                float guidance_heading_error = (suggested_heading - actual_agent_heading) *
+                                             (suggested_heading - actual_agent_heading);
+
+                float guidance_speed_penalty = 1.0f - expf(-guidance_speed_error + 1e-8f);
+                float guidance_heading_penalty = 1.0f - expf(-guidance_heading_error + 1e-8f);
+
+                float guidance_speed_weight = 0.1f;
+                float guidance_heading_weight = 0.1f;
+
+                speed_heading_reward = -guidance_speed_weight * guidance_speed_penalty -
+                                     guidance_heading_weight * guidance_heading_penalty;
+            }
+        }
+
+        guidance_reward += speed_heading_reward;
+
+        // TODO: Add jerk penalty
+
+        // Add guidance reward to the existing reward
+        env->rewards[i] += guidance_reward;
+
+        // Collision rewards
         env->entities[agent_idx].collision_state = 0;
         //if(env->entities[agent_idx].respawn_timestep != -1) continue;
         collision_check(env, agent_idx);
