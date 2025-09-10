@@ -5,6 +5,7 @@ from pdb import set_trace as T
 import numpy as np
 import time
 import psutil
+import os
 
 from pufferlib.emulation import GymnasiumPufferEnv, PettingZooPufferEnv
 from pufferlib import PufferEnv, set_buffers
@@ -345,6 +346,11 @@ class Multiprocessing:
             p.start()
             self.processes.append(p)
 
+        # Initialize RAM tracking
+        self.ram_tracking = kwargs.get('ram_tracking', None)
+        self.last_ram_log = time.time()
+        self.ram_log_interval = 5.0  # Log RAM every 5 seconds
+        
         self.flag = RESET
         self.initialized = False
         self.zero_copy = zero_copy
@@ -354,6 +360,10 @@ class Multiprocessing:
         self.waiting_workers = []
 
     def recv(self):
+        if self.ram_tracking:
+            # Log RAM usage periodically
+            self.log_worker_ram_usage()
+
         recv_precheck(self)
         while True:
             # Bandaid patch for new experience buffer desync
@@ -481,6 +491,44 @@ class Multiprocessing:
 
     def notify(self):
         self.buf['notify'][:] = True
+
+    def log_worker_ram_usage(self):
+        """Log RAM usage of all worker processes"""
+        if not hasattr(self, 'ram_tracking') or not self.ram_tracking:
+            return
+            
+        current_time = time.time()
+        if current_time - self.last_ram_log < self.ram_log_interval:
+            return
+            
+        self.last_ram_log = current_time
+        
+        try:
+            total_ram_mb = 0
+            worker_rams = []
+            
+            for i, process in enumerate(self.processes):
+                if process.is_alive():
+                    try:
+                        p = psutil.Process(process.pid)
+                        memory_info = p.memory_info()
+                        ram_mb = memory_info.rss / (1024 * 1024)  # Convert bytes to MB
+                        worker_rams.append(f"Worker_{i}: {ram_mb:.1f}MB")
+                        total_ram_mb += ram_mb
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        worker_rams.append(f"Worker_{i}: N/A")
+                else:
+                    worker_rams.append(f"Worker_{i}: DEAD")
+            
+            # Also get main process RAM
+            main_process = psutil.Process(os.getpid())
+            main_ram_mb = main_process.memory_info().rss / (1024 * 1024)
+            
+            print(f"RAM Usage - Main: {main_ram_mb:.1f}MB, Workers: {total_ram_mb:.1f}MB, Total: {main_ram_mb + total_ram_mb:.1f}MB")
+            print(f"Per-worker: {', '.join(worker_rams)}")
+            
+        except Exception as e:
+            print(f"Error logging RAM usage: {e}")
 
     def close(self):
         self.driver_env.close()
@@ -700,7 +748,7 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
     # Sanity check args
     for k in kwargs:
-        if k not in ['num_workers', 'batch_size', 'zero_copy', 'overwork', 'backend']:
+        if k not in ['num_workers', 'batch_size', 'zero_copy', 'overwork', 'backend', 'ram_tracking']:
             raise pufferlib.APIUsageError(f'Invalid argument: {k}')
 
     # TODO: First step action space check
