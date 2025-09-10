@@ -99,6 +99,9 @@ struct Log {
     float clean_collision_rate;
     float completion_rate;
     float dnf_rate;
+    float route_reward;
+    float speed_heading_reward;
+    float guidance_reward;
     float n;
 };
 
@@ -226,6 +229,9 @@ void add_log(Drive* env) {
         }
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        env->log.route_reward += env->logs[i].route_reward;
+        env->log.speed_heading_reward += env->logs[i].speed_heading_reward;
+        env->log.guidance_reward += env->logs[i].guidance_reward;
         env->log.n += 1;
     }
 }
@@ -1314,6 +1320,11 @@ void c_step(Drive* env){
         guidance_reward += speed_heading_reward;
 
         // TODO: Add jerk penalty
+
+        // Add guidance reward accumulation to agent's log
+        env->logs[i].route_reward += route_reward;
+        env->logs[i].speed_heading_reward += speed_heading_reward;
+        env->logs[i].guidance_reward += guidance_reward;
 
         // Add guidance reward to the existing reward
         env->rewards[i] += guidance_reward;
