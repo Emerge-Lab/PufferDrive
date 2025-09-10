@@ -185,6 +185,7 @@ struct Drive {
     int expert_static_car_count;
     int* expert_static_car_indices;
     int timestep;
+    int init_steps;
     int dynamics_model;
     float* map_corners;
     int* grid_cells;  // holds entity ids and geometry index per cell
@@ -296,9 +297,9 @@ void set_start_position(Drive* env){
             }
         }
         Entity* e = &env->entities[i];
-        e->x = e->traj_x[0];
-        e->y = e->traj_y[0];
-        e->z = e->traj_z[0];
+        e->x = e->traj_x[env->init_steps];
+        e->y = e->traj_y[env->init_steps];
+        e->z = e->traj_z[env->init_steps];
         //printf("Entity %d is at (%f, %f, %f)\n", i, e->x, e->y, e->z);
         //if (e->type < 4) {
         //    DrawRectangle(200+2*e->x, 200+2*e->y, 2.0, 2.0, RED);
@@ -313,14 +314,14 @@ void set_start_position(Drive* env){
             e->reached_goal = 0;
             e->collided_before_goal = 0;
         } else{
-            e->vx = e->traj_vx[0];
-            e->vy = e->traj_vy[0];
-            e->vz = e->traj_vz[0];
+            e->vx = e->traj_vx[env->init_steps];
+            e->vy = e->traj_vy[env->init_steps];
+            e->vz = e->traj_vz[env->init_steps];
         }
-        e->heading = e->traj_heading[0];
+        e->heading = e->traj_heading[env->init_steps];
         e->heading_x = cosf(e->heading);
         e->heading_y = sinf(e->heading);
-        e->valid = e->traj_valid[0];
+        e->valid = e->traj_valid[env->init_steps];
         e->collision_state = 0;
         e->respawn_timestep = -1;
     }
@@ -900,8 +901,8 @@ void init(Drive* env){
     init_neighbor_offsets(env);
     env->neighbor_cache_indices = (int*)calloc((env->grid_cols*env->grid_rows) + 1, sizeof(int));
     cache_neighbor_offsets(env);
-    set_active_agents(env);
-    remove_bad_trajectories(env);
+    set_active_agents(env); //TODO not filter for static vehicles
+    //remove_bad_trajectories(env);
     set_start_position(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
 }
@@ -1147,7 +1148,7 @@ void compute_observations(Drive* env) {
 }
 
 void c_reset(Drive* env){
-    env->timestep = 0;
+    env->timestep = env->init_steps;
     set_start_position(env);
     for(int x = 0;x<env->active_agent_count; x++){
         env->logs[x] = (Log){0};
