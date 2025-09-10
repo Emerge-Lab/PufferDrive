@@ -1252,12 +1252,12 @@ void c_step(Drive* env){
         int agent_idx = env->active_agent_indices[i];
         int reached_goal = env->entities[agent_idx].reached_goal;
         int collision_state = env->entities[agent_idx].collision_state;
-        if(reached_goal){
-            respawn_agent(env, agent_idx);
-            //env->entities[agent_idx].x = -10000;
-            //env->entities[agent_idx].y = -10000;
-            //env->entities[agent_idx].respawn_timestep = env->timestep;
-        }
+        // if(reached_goal){
+        //     respawn_agent(env, agent_idx);
+        //     //env->entities[agent_idx].x = -10000;
+        //     //env->entities[agent_idx].y = -10000;
+        //     //env->entities[agent_idx].respawn_timestep = env->timestep;
+        // }
     }
     compute_observations(env);
 }
