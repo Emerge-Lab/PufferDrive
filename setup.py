@@ -11,8 +11,6 @@ import zipfile
 import tarfile
 import platform
 import shutil
-import subprocess
-import sys
 
 from setuptools.command.build_ext import build_ext
 from torch.utils import cpp_extension
@@ -158,13 +156,6 @@ if not NO_OCEAN:
 # Extensions 
 class BuildExt(build_ext):
     def run(self):
-        # Ensure external/pyxodr is installed before building extensions
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", "external/pyxodr"])
-        except subprocess.CalledProcessError as e:
-            print("Failed to install external/pyxodr:", e)
-            sys.exit(1)
-
         # Propagate any build_ext options (e.g., --inplace, --force) to subcommands
         build_ext_opts = self.distribution.command_options.get('build_ext', {})
         if build_ext_opts:
