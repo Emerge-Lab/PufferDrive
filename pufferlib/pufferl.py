@@ -32,6 +32,9 @@ import pufferlib
 import pufferlib.sweep
 import pufferlib.vector
 import pufferlib.pytorch
+import pufferlib.viz
+
+import mediapy
 
 try:
     from pufferlib import _C
@@ -987,18 +990,17 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     return all_logs
 
 
-def eval(env_name, args=None, vecenv=None, policy=None):
+def eval(env_name, args=None, vecenv=None, policy=None, puffer_render=False):
     args = args or load_config(env_name)
     backend = args["vec"]["backend"]
+
     if backend != "PufferEnv":
         backend = "Serial"
 
     args["vec"] = dict(backend=backend, num_envs=1)
     vecenv = vecenv or load_env(env_name, args)
-
     policy = policy or load_policy(args, vecenv, env_name)
-    ob, info = vecenv.reset()
-    driver = vecenv.driver_env
+
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
@@ -1009,40 +1011,82 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
         )
 
-    frames = []
-    while True:
-        render = driver.render()
-        if len(frames) < args["save_frames"]:
-            frames.append(render)
+    if args["render_mode"] == "matplotlib":
+        os.makedirs(args["video_path"], exist_ok=True)
 
-        # Screenshot Ocean envs with F12, gifs with control + F12
-        if driver.render_mode == "ansi":
-            print("\033[0;0H" + render + "\n")
-            time.sleep(1 / args["fps"])
-        elif driver.render_mode == "rgb_array":
-            pass
-            # import cv2
-            # render = cv2.cvtColor(render, cv2.COLOR_RGB2BGR)
-            # cv2.imshow('frame', render)
-            # cv2.waitKey(1)
-            # time.sleep(1/args['fps'])
+        for i in range(args["num_scenarios"]):
+            ob, _ = vecenv.reset()
+            # sim_frames, frames_obs = [], []
+            sim_frames = []
 
-        with torch.no_grad():
-            ob = torch.as_tensor(ob).to(device)
-            logits, value = policy.forward_eval(ob, state)
-            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-            action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+            scenario = vecenv.get_state()[0]
+            map_name = scenario["map_name"].split("/")[-1].split(".")[0]
 
-        if isinstance(logits, torch.distributions.Normal):
-            action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+            sim_video_path = f"{args['video_path']}/sim_{i}_{map_name}.mp4"
+            # video_path_obs = f"videos/obs_{i}_{map_name}.mp4"
 
-        ob = vecenv.step(action)[0]
+            print(f"Rendering episode {i} - map {map_name} to {sim_video_path}")
 
-        if len(frames) > 0 and len(frames) == args["save_frames"]:
-            import imageio
+            for _ in range(91):  # TODO add env length
+                scenario = vecenv.get_state()[0]  # TODO make env_indices configurable
 
-            imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
-            frames.append("Done")
+                sim_img = pufferlib.viz.plot_simulator_state(scenario)
+                # obs_img = pufferlib.viz.plot_observation(ob)
+
+                with torch.no_grad():
+                    ob = torch.as_tensor(ob).to(device)
+                    logits, value = policy.forward_eval(ob, state)
+                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                    action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+                if isinstance(logits, torch.distributions.Normal):
+                    action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+                ob = vecenv.step(action)[0]
+
+                sim_frames.append(sim_img)
+                # frames_obs.append(obs_img)
+
+            mediapy.write_video(sim_video_path, np.array(sim_frames), fps=10)
+            # mediapy.write_video(video_path_obs, np.array(frames_obs), fps=10)
+    else:
+        frames = []
+        driver = vecenv.driver_env
+        ob, _ = vecenv.reset()
+
+        while True:
+            render = driver.render()
+            if len(frames) < args["save_frames"]:
+                frames.append(render)
+
+            # Screenshot Ocean envs with F12, gifs with control + F12
+            if driver.render_mode == "ansi":
+                print("\033[0;0H" + render + "\n")
+                time.sleep(1 / args["fps"])
+            elif driver.render_mode == "rgb_array":
+                pass
+                # import cv2
+                # render = cv2.cvtColor(render, cv2.COLOR_RGB2BGR)
+                # cv2.imshow('frame', render)
+                # cv2.waitKey(1)
+                # time.sleep(1/args['fps'])
+
+            with torch.no_grad():
+                ob = torch.as_tensor(ob).to(device)
+                logits, value = policy.forward_eval(ob, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+            if isinstance(logits, torch.distributions.Normal):
+                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+            ob = vecenv.step(action)[0]
+
+            if len(frames) > 0 and len(frames) == args["save_frames"]:
+                import imageio
+
+                imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
+                frames.append("Done")
 
 
 def sweep(args=None, env_name=None):
@@ -1188,8 +1232,13 @@ def load_config(env_name):
         "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
     )
     parser.add_argument(
-        "--render-mode", type=str, default="auto", choices=["auto", "human", "ansi", "rgb_array", "raylib", "None"]
+        "--render-mode",
+        type=str,
+        default="auto",
+        choices=["auto", "human", "ansi", "rgb_array", "raylib", "matplotlib", "None"],
     )
+    parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
+    parser.add_argument("--num_scenarios", type=int, default="10", help="Number of scenarios to eval")
     parser.add_argument("--save-frames", type=int, default=0)
     parser.add_argument("--gif-path", type=str, default="eval.gif")
     parser.add_argument("--fps", type=float, default=15)
