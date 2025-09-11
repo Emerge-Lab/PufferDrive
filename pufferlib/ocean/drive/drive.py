@@ -50,6 +50,13 @@ class Drive(pufferlib.PufferEnv):
             raise FileNotFoundError(
                 f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
             )
+
+        # Check maps availability
+        available_maps = len([name for name in os.listdir("resources/drive/binaries") if name.endswith(".bin")])
+        if num_maps > available_maps:
+            raise ValueError(
+                f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
+            )
         agent_offsets, map_ids, num_envs = binding.shared(num_agents=num_agents, num_maps=num_maps)
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
