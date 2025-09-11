@@ -99,9 +99,6 @@ struct Log {
     float clean_collision_rate;
     float completion_rate;
     float dnf_rate;
-    float route_reward;
-    float speed_heading_reward;
-    float guidance_reward;
     float n;
 };
 
@@ -229,9 +226,6 @@ void add_log(Drive* env) {
         }
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
-        env->log.route_reward += env->logs[i].route_reward;
-        env->log.speed_heading_reward += env->logs[i].speed_heading_reward;
-        env->log.guidance_reward += env->logs[i].guidance_reward;
         env->log.n += 1;
     }
 }
