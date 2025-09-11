@@ -202,6 +202,17 @@ struct Drive {
     int spawn_immunity_timer;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
+    // this is for reward conditioned learning
+    bool use_rc;
+    float collision_weight_lb;
+    float collision_weight_ub;
+    float offroad_weight_lb;
+    float offroad_weight_ub;
+    float goal_weight_lb;
+    float goal_weight_ub;
+    float* collision_weights;
+    float* offroad_weights;
+    float* goal_weights;
 };
 
 void add_log(Drive* env) {
@@ -904,6 +915,22 @@ void init(Drive* env){
     remove_bad_trajectories(env);
     set_start_position(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
+    if (env->use_rc) {// randomly assign weights to each agent for reward components between their lb and ub
+        env->collision_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+        env->offroad_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+        env->goal_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+        srand((unsigned int)time(NULL)); // seed random number generator
+        for (int i = 0; i < env->active_agent_count; i++) {
+            // print the ub and lb of collison, offroad, and goal weights
+
+            // assign random weight between lb and ub   
+            env->collision_weights[i] = ((float)rand() / RAND_MAX) * (env->collision_weight_ub - env->collision_weight_lb) + env->collision_weight_lb;
+            env->offroad_weights[i] = ((float)rand() / RAND_MAX) * (env->offroad_weight_ub - env->offroad_weight_lb) + env->offroad_weight_lb;
+            env->goal_weights[i] = ((float)rand() / RAND_MAX) * (env->goal_weight_ub - env->goal_weight_lb) + env->goal_weight_lb;
+            printf("Agent %d - Collision Weight: %f, Offroad Weight: %f, Goal Weight: %f\n", i, env->collision_weights[i], env->offroad_weights[i], env->goal_weights[i]);
+        }
+    }
+
 }
 
 void c_close(Drive* env){
@@ -931,11 +958,17 @@ void allocate(Drive* env){
     // printf("num static cars: %d\n", env->static_car_count);
     // printf("active agent count: %d\n", env->active_agent_count);
     // printf("num objects: %d\n", env->num_objects);
+
+
+    if (env->use_rc){
+        max_obs += 3;
+    }
+
+
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
     env->actions = (int*)calloc(env->active_agent_count*2, sizeof(int));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
     env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
-    // printf("allocated\n");
 }
 
 void free_allocated(Drive* env){
@@ -1019,9 +1052,11 @@ float reverse_normalize_value(float value, float min, float max){
 }
 
 void compute_observations(Drive* env) {
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int base_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = base_obs + (env->use_rc ? 3 : 0);
+    
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
-    float (*observations)[max_obs] = (float(*)[max_obs])env->observations; 
+    float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
         float* obs = &observations[i][0];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];
@@ -1050,8 +1085,22 @@ void compute_observations(Drive* env) {
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1 : 0;
         
+        // Determine starting index for other car observations
+        int obs_idx = 7;  // Default start after basic observations
+        
+        if (env->use_rc){
+
+            obs[6] = env->collision_weights[i]; 
+            obs[7] = env->offroad_weights[i];
+            obs[8] = env->goal_weights[i];
+
+            
+            obs_idx = 10;
+        }
+
+
+        
         // Relative Pos of other cars
-        int obs_idx = 7;  // Start after goal distances
         int cars_seen = 0;
         for(int j = 0; j < MAX_CARS; j++) {
             int index = -1;
@@ -1148,7 +1197,9 @@ void compute_observations(Drive* env) {
 
 void c_reset(Drive* env){
     env->timestep = 0;
+    
     set_start_position(env);
+   
     for(int x = 0;x<env->active_agent_count; x++){
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];
@@ -1211,16 +1262,29 @@ void c_step(Drive* env){
                     env->rewards[i] = env->reward_vehicle_collision_post_respawn;
                     env->logs[i].episode_return += env->reward_vehicle_collision_post_respawn;
                 } else {
-                    env->rewards[i] = env->reward_vehicle_collision;
-                    env->logs[i].episode_return += env->reward_vehicle_collision;
+                    if (env->use_rc) {
+                        env->rewards[i] = env->collision_weights[i];
+                        env->logs[i].episode_return += env->collision_weights[i];
+
+                    } else {
+                        env->rewards[i] = env->reward_vehicle_collision;
+                        env->logs[i].episode_return += env->reward_vehicle_collision;
+                    }
+                    
+                    
                     env->logs[i].clean_collision_rate = 1.0f;
                 }
                 env->logs[i].collision_rate = 1.0f;
             }
             else if(collision_state == OFFROAD){
-                env->rewards[i] = env->reward_offroad_collision;
+                if (env->use_rc) {
+                    env->rewards[i] = env->offroad_weights[i];
+                    env->logs[i].episode_return += env->offroad_weights[i];
+                } else {
+                    env->rewards[i] = env->reward_offroad_collision;
+                    env->logs[i].episode_return += env->reward_offroad_collision;
+                }
                 env->logs[i].offroad_rate = 1.0f;
-                env->logs[i].episode_return += env->reward_offroad_collision;
             }
             if(!env->entities[agent_idx].reached_goal_this_episode){
                 env->entities[agent_idx].collided_before_goal = 1;
@@ -1238,8 +1302,13 @@ void c_step(Drive* env){
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
             } else { 
+                if (env->use_rc) {
+                env->rewards[i] += env->goal_weights[i];
+                env->logs[i].episode_return += env->goal_weights[i];
+                } else {
                 env->rewards[i] += 1.0f;
                 env->logs[i].episode_return += 1.0f;
+                }
                 //env->terminals[i] = 1;
             }
 	        env->entities[agent_idx].reached_goal = 1;

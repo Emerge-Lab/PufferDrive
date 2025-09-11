@@ -252,6 +252,15 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal_post_respawn = unpack(kwargs, "reward_goal_post_respawn");
     env->reward_vehicle_collision_post_respawn = unpack(kwargs, "reward_vehicle_collision_post_respawn");
     env->spawn_immunity_timer = unpack(kwargs, "spawn_immunity_timer");
+    env->use_rc = unpack(kwargs, "use_rc");
+    if (env->use_rc){
+        env->collision_weight_lb = unpack(kwargs, "collision_weight_lb");
+        env->collision_weight_ub = unpack(kwargs, "collision_weight_ub");
+        env->offroad_weight_lb = unpack(kwargs, "offroad_weight_lb");
+        env->offroad_weight_ub = unpack(kwargs, "offroad_weight_ub");
+        env->goal_weight_lb = unpack(kwargs, "goal_weight_lb");
+        env->goal_weight_ub = unpack(kwargs, "goal_weight_ub");
+    }
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 

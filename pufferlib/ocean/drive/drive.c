@@ -37,13 +37,16 @@ struct DriveNet {
     Multidiscrete* multidiscrete;
 };
 
-DriveNet* init_drivenet(Weights* weights, int num_agents) {
+DriveNet* init_drivenet(Weights* weights, int num_agents, bool use_rc) {
     DriveNet* net = calloc(1, sizeof(DriveNet));
     int hidden_size = 256;
     int input_size = 64;
 
     net->num_agents = num_agents;
     net->obs_self = calloc(num_agents*7, sizeof(float)); // 7 features
+    if (use_rc){
+        net->obs_self = calloc(num_agents*10, sizeof(float)); // 10 features
+    }
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
     net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
@@ -238,7 +241,7 @@ void demo() {
     c_reset(&env);
     c_render(&env);
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, false);
     //Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;
