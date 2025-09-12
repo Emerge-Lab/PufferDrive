@@ -1,27 +1,35 @@
 #!/bin/bash
 #
 # This script runs the training process for PufferDrive.
-# It first prepares the dataset by converting JSON maps to a binary format,
-# and then starts the reinforcement learning training.
+# It first prepares the dataset by converting JSON maps to a binary format and
+# then starts the reinforcement learning training.
 #
 # Usage:
 #   ./run_training.sh [DATASET_PATH]
 #
 # Arguments:
 #   DATASET_PATH (optional): The path to the directory containing the training
-#                            dataset (JSON map files). If not provided, the
-#                            script will use the default path specified in
-#                            the drive.py script (e.g., 'data/train').
+#                            dataset (JSON map files). This can be a local path
+#                            (e.g., /path/to/data) or a GCS bucket path
+#                            (e.g., gs://my-bucket/data/train). If not provided,
+#                            the script will use the default path specified in
+#                            the drive.py script.
+
+set -e # Exit on error
+
+# Prepare arguments for the data processing script
+ARGS=()
+if [ -n "$1" ]; then
+  # If a dataset path is provided, add it to the arguments
+  echo "Using dataset from: $1"
+  ARGS+=(--data_dir "$1")
+else
+  # If no path is provided, the Python script will use its default
+  echo "No dataset path provided. The default path inside drive.py will be used."
+fi
 
 # Prepare Jsons by converting them to the binary format required for training.
-if [ -z "$1" ]; then
-  echo "No dataset path provided. The default path inside drive.py will be used."
-  python /puffertank/pufferlib/ocean/drive/drive.py
-else
-  DATA_DIR=$1
-  echo "Using dataset from: $DATA_DIR"
-  python /puffertank/pufferlib/ocean/drive/drive.py --data_dir "$DATA_DIR"
-fi
+python /puffertank/pufferlib/ocean/drive/drive.py "${ARGS[@]}"
 
 # Run the PufferLib training command for the 'puffer_drive' environment.
 echo "Starting PufferDrive training..."
