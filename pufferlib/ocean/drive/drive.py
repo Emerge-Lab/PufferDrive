@@ -26,6 +26,7 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         buf=None,
         seed=1,
+        init_steps=0,
     ):
         # env
         self.render_mode = render_mode
@@ -68,6 +69,7 @@ class Drive(pufferlib.PufferEnv):
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
+        self.init_steps = init_steps
         super().__init__(buf=buf)
         env_ids = []
         for i in range(num_envs):
@@ -89,6 +91,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_immunity_timer=spawn_immunity_timer,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
+                init_steps=init_steps,
             )
             env_ids.append(env_id)
 
@@ -137,6 +140,7 @@ class Drive(pufferlib.PufferEnv):
                         spawn_immunity_timer=self.spawn_immunity_timer,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
+                        init_steps=self.init_steps,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -199,6 +203,7 @@ def simplify_polyline(geometry, polyline_reduction_threshold):
 
 def save_map_binary(map_data, output_file):
     trajectory_length = 91
+    # Todo: Read the metadata first and read the order of agents based on wosac flag
     """Saves map data in a binary format readable by C"""
     with open(output_file, "wb") as f:
         # Count total entities
