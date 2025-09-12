@@ -135,7 +135,6 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     }
     // env->truncations = PyArray_DATA(truncations);
 
-
     PyObject* seed_arg = PyTuple_GetItem(args, 5);
     if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "seed must be an integer");

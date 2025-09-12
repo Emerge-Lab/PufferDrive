@@ -399,6 +399,62 @@ static PyObject* my_get(PyObject* dict, Env* env) {
         if (PyDict_SetItemString(dict, "agent_observations", Py_None) < 0) return NULL;
     }
 
+    /* Topology graph data */
+    if (env->topology_graph && env->num_entities > 0) {
+        PyObject* graph_dict = PyDict_New();
+        if (!graph_dict) return NULL;
+
+        // Add graph vertex count
+        PyObject* vertex_count = PyLong_FromLong(env->topology_graph->V);
+        if (!vertex_count) { Py_DECREF(graph_dict); return NULL; }
+        PyDict_SetItemString(graph_dict, "vertex_count", vertex_count);
+        Py_DECREF(vertex_count);
+
+        // Create adjacency list representation
+        PyObject* adjacency_list = PyDict_New();
+        if (!adjacency_list) { Py_DECREF(graph_dict); return NULL; }
+
+        for (int i = 0; i < env->num_entities; i++) {
+            // Only add ROAD_LANE entities (type == 4) to the adjacency list
+            if (env->entities[i].type != 4) continue;
+
+            PyObject* neighbors = PyList_New(0);
+            if (!neighbors) { Py_DECREF(adjacency_list); Py_DECREF(graph_dict); return NULL; }
+
+            struct AdjListNode* node = env->topology_graph->array[i];
+            while (node) {
+                PyObject* neighbor_idx = PyLong_FromLong(node->dest);
+                if (!neighbor_idx) {
+                    Py_DECREF(neighbors); Py_DECREF(adjacency_list); Py_DECREF(graph_dict);
+                    return NULL;
+                }
+                PyList_Append(neighbors, neighbor_idx);
+                Py_DECREF(neighbor_idx);
+                node = node->next;
+            }
+
+            PyObject* entity_idx = PyLong_FromLong(i);
+            if (!entity_idx) {
+                Py_DECREF(neighbors); Py_DECREF(adjacency_list); Py_DECREF(graph_dict);
+                return NULL;
+            }
+            PyDict_SetItem(adjacency_list, entity_idx, neighbors);
+            Py_DECREF(entity_idx);
+            Py_DECREF(neighbors);
+        }
+
+        PyDict_SetItemString(graph_dict, "adjacency_list", adjacency_list);
+        Py_DECREF(adjacency_list);
+
+        if (PyDict_SetItemString(dict, "topology_graph", graph_dict) < 0) {
+            Py_DECREF(graph_dict);
+            return NULL;
+        }
+        Py_DECREF(graph_dict);
+    } else {
+        if (PyDict_SetItemString(dict, "topology_graph", Py_None) < 0) return NULL;
+    }
+
     return dict;
 }
 
@@ -476,9 +532,6 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
     env->reward_vehicle_collision = unpack(kwargs, "reward_vehicle_collision");
     env->reward_offroad_collision = unpack(kwargs, "reward_offroad_collision");
-    env->reward_goal_post_respawn = unpack(kwargs, "reward_goal_post_respawn");
-    env->reward_vehicle_collision_post_respawn = unpack(kwargs, "reward_vehicle_collision_post_respawn");
-    env->spawn_immunity_timer = unpack(kwargs, "spawn_immunity_timer");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 
@@ -491,15 +544,15 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
 }
 
 static int my_log(PyObject* dict, Log* log) {
-    assign_to_dict(dict, "perf", log->perf);
-    assign_to_dict(dict, "score", log->score);
-    assign_to_dict(dict, "episode_return", log->episode_return);
-    assign_to_dict(dict, "episode_length", log->episode_length);
-    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
-    assign_to_dict(dict, "collision_rate", log->collision_rate);
-    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "n", log->n);
+    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
+    assign_to_dict(dict, "episode_length", log->episode_length);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
-    assign_to_dict(dict, "clean_collision_rate", log->clean_collision_rate);
+    assign_to_dict(dict, "episode_return", log->episode_return);
+    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
+    assign_to_dict(dict, "perf", log->perf);
+    assign_to_dict(dict, "collision_rate", log->collision_rate);
+    assign_to_dict(dict, "score", log->score);
+    assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
     return 0;
 }
