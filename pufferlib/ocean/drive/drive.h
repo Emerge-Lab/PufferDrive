@@ -10,6 +10,9 @@
 #include "raymath.h"
 #include "rlgl.h"
 #include <time.h>
+#ifndef M_PI
+#define M_PI 3.1415926
+#endif
 // Entity Types
 #define NONE 0
 #define VEHICLE 1
@@ -122,6 +125,8 @@ struct Entity {
     float goal_position_z;
     int mark_as_expert;
     int collision_state;
+    float status_state[3]; // status_state: [collision, offroad, reached_goal]
+    int collided_with_index;
     float x;
     float y;
     float z;
@@ -323,6 +328,10 @@ void set_start_position(Drive* env){
         e->heading_y = sinf(e->heading);
         e->valid = e->traj_valid[0];
         e->collision_state = 0;
+        e->status_state[0] = 0.0f; // vehicle collision
+        e->status_state[1] = 0.0f; // offroad
+        e->status_state[2] = 0.0f; // reached goal
+        e->collided_with_index = -1;
         e->respawn_timestep = -1;
     }
     //EndDrawing();
@@ -694,9 +703,12 @@ int check_aabb_collision(Entity* car1, Entity* car2) {
     return 1;  // Collision
 }
 
-int collision_check(Drive* env, int agent_idx) {
+float* update_agent_status(Drive* env, int agent_idx) {
     Entity* agent = &env->entities[agent_idx];
-    if(agent->x == -10000.0f ) return -1;
+
+    // Always mirror current reached_goal into status_state[2]
+    agent->status_state[2] = (agent->reached_goal || agent->reached_goal_this_episode) ? 1.0f : 0.0f;
+    if(agent->x == -10000.0f ) return agent->status_state;
     float half_length = agent->length/2.0f;
     float half_width = agent->width/2.0f;
     float cos_heading = cosf(agent->heading);
@@ -758,8 +770,20 @@ int collision_check(Drive* env, int agent_idx) {
     }
 
     // spawn immunity for collisions with other cars who just respawned
-    if(collided == OFFROAD) return -1;
-    if(car_collided_with_index ==-1) return -1;
+    if(collided == OFFROAD) {
+        agent->status_state[0] = 0.0f;
+        agent->status_state[1] = 1.0f;
+        agent->status_state[2] = (agent->reached_goal || agent->reached_goal_this_episode) ? 1.0f : 0.0f;
+        agent->collided_with_index = -1;
+        return agent->status_state;
+    }
+    if(car_collided_with_index == -1){
+        agent->status_state[0] = 0.0f;
+        agent->status_state[1] = 0.0f;
+        agent->status_state[2] = (agent->reached_goal || agent->reached_goal_this_episode) ? 1.0f : 0.0f;
+        agent->collided_with_index = -1;
+        return agent->status_state;
+    }
 
     int respawned_collided_with_car = env->entities[car_collided_with_index].respawn_timestep != -1;
     int exceeded_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) >= env->spawn_immunity_timer;
@@ -767,8 +791,13 @@ int collision_check(Drive* env, int agent_idx) {
     if (respawned_collided_with_car) {
         agent->collision_state = 0;
     }
+    // Populate status_state considering spawn immunity adjustments
+    agent->status_state[0] = (agent->collision_state == VEHICLE_COLLISION) ? 1.0f : 0.0f;
+    agent->status_state[1] = 0.0f; // not offroad (would have returned earlier)
+    agent->status_state[2] = (agent->reached_goal || agent->reached_goal_this_episode) ? 1.0f : 0.0f;
+    agent->collided_with_index = (agent->collision_state == VEHICLE_COLLISION) ? car_collided_with_index : -1;
 
-    return car_collided_with_index;
+    return agent->status_state;
 }
 
 int valid_active_agent(Drive* env, int agent_idx){
@@ -870,8 +899,9 @@ void remove_bad_trajectories(Drive* env){
         for(int i = 0; i < env->active_agent_count; i++){
             int agent_idx = env->active_agent_indices[i];
             env->entities[agent_idx].collision_state = 0;
-            int collided_with_index = collision_check(env, agent_idx);
-            if(env->entities[agent_idx].collision_state > 0 && collided_agents[i] == 0){
+            update_agent_status(env, agent_idx);
+            int collided_with_index = env->entities[agent_idx].collided_with_index;
+            if((env->entities[agent_idx].collision_state > 0 || env->entities[agent_idx].status_state[1] == 1.0f) && collided_agents[i] == 0){
                 collided_agents[i] = 1;
                 collided_with_indices[i] = collided_with_index;
             }
@@ -1057,7 +1087,8 @@ void compute_observations(Drive* env) {
         obs[2] = ego_speed * 0.01f;
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
-        obs[5] = (ego_entity->collision_state > 0) ? 1 : 0;
+        // Collision/offroad indicator (1 if any status active)
+        obs[5] = (ego_entity->status_state[0] > 0.0f || ego_entity->status_state[1] > 0.0f) ? 1.0f : 0.0f;
 
         // Relative Pos of other cars
         int obs_idx = 7;  // Start after goal distances
@@ -1165,7 +1196,7 @@ void c_reset(Drive* env){
         env->entities[agent_idx].reached_goal = 0;
         env->entities[agent_idx].collided_before_goal = 0;
         env->entities[agent_idx].reached_goal_this_episode = 0;
-        collision_check(env, agent_idx);
+        update_agent_status(env, agent_idx);
     }
     compute_observations(env);
 }
@@ -1179,6 +1210,10 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].vx = env->entities[agent_idx].traj_vx[0];
     env->entities[agent_idx].vy = env->entities[agent_idx].traj_vy[0];
     env->entities[agent_idx].reached_goal = 0;
+    env->entities[agent_idx].status_state[0] = 0.0f;
+    env->entities[agent_idx].status_state[1] = 0.0f;
+    env->entities[agent_idx].status_state[2] = 0.0f;
+    env->entities[agent_idx].collided_with_index = -1;
     env->entities[agent_idx].respawn_timestep = env->timestep;
 }
 
@@ -1211,7 +1246,7 @@ void c_step(Drive* env){
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
         //if(env->entities[agent_idx].respawn_timestep != -1) continue;
-        collision_check(env, agent_idx);
+        update_agent_status(env, agent_idx);
         int collision_state = env->entities[agent_idx].collision_state;
 
         if(collision_state > 0){
@@ -1253,6 +1288,7 @@ void c_step(Drive* env){
             }
 	        env->entities[agent_idx].reached_goal = 1;
             env->entities[agent_idx].reached_goal_this_episode = 1;
+            env->entities[agent_idx].status_state[2] = 1.0f;
 	    }
     }
 
@@ -1412,7 +1448,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawTriangle3D(top_point, right_point, back_point, PUFF_CYAN);     // Back-right face
         DrawTriangle3D(top_point, back_point, left_point, PUFF_CYAN);      // Back-left face
         DrawTriangle3D(top_point, left_point, front_point, PUFF_CYAN);     // Front-left face
-        
+
         // Bottom pyramid
         DrawTriangle3D(bottom_point, right_point, front_point, PUFF_CYAN); // Front-right face
         DrawTriangle3D(bottom_point, back_point, right_point, PUFF_CYAN);  // Back-right face
@@ -1422,11 +1458,11 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
     if(!IsKeyDown(KEY_LEFT_CONTROL) && obs_only==0){
         return;
     }
-     
+
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
-    // self 
+    // self
     int active_idx = env->active_agent_indices[agent_index];
     float heading_self_x = env->entities[active_idx].heading_x;
     float heading_self_y = env->entities[active_idx].heading_y;
@@ -1438,7 +1474,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
     if(mode == 0 ){
         DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, GREEN);
     }
-    
+
     if (mode == 1){
         float goal_x_world = px + (goal_x * heading_self_x - goal_y*heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y*heading_self_x);
@@ -1457,8 +1493,8 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         float y = agent_obs[obs_idx + 1] * 50;
         if(lasers && mode == 0){
             DrawLine3D(
-                (Vector3){0, 0, 0}, 
-                (Vector3){x, y, 1}, 
+                (Vector3){0, 0, 0},
+                (Vector3){x, y, 1},
                 ORANGE
             );
         }
@@ -1495,12 +1531,12 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
                 x + (-half_len * cos_heading + half_width * sin_heading),
                 y + (-half_len * sin_heading - half_width * cos_heading),
                 1
-            },  
+            },
            (Vector3){
                 x + (-half_len * cos_heading - half_width * sin_heading),
                 y + (-half_len * sin_heading + half_width * cos_heading),
                 1
-            }, 
+            },
         };
 
         if(mode ==0){
@@ -1518,12 +1554,12 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
                 world_corners[j].x = px + (lx * heading_self_x - ly * heading_self_y);
                 world_corners[j].y = py + (lx * heading_self_y + ly * heading_self_x);
                 world_corners[j].z = 1;
-            } 
+            }
             for (int j = 0; j < 4; j++) {
                 DrawLine3D(world_corners[j], world_corners[(j+1)%4], ORANGE);
             }
         }
-     
+
         // draw an arrow above the car pointing in the direction that the partner is going
         float arrow_length = 7.5f;
         float arrow_x = x + arrow_length*cosf(partner_angle);
@@ -1557,7 +1593,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
             float arrow_y_end1 = arrow_y - dy*arrow_size + perp_y;
             float arrow_x_end2 = arrow_x - dx*arrow_size - perp_x;
             float arrow_y_end2 = arrow_y - dy*arrow_size - perp_y;
-            
+
             // Draw the two lines forming the arrow head
             if(mode ==0){
                 DrawLine3D(
@@ -1587,10 +1623,10 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
                     (Vector3){arrow_x_end2_world, arrow_y_end2_world, 1},
                     PUFF_WHITE
                 );
- 
+
             }
         }
-        
+
         obs_idx += 7;  // Move to next agent observation (7 values per agent)
     }
     // Then draw map observations
@@ -1621,11 +1657,11 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         float x_end = x_middle + segment_length*cosf(rel_angle);
         float y_end = y_middle + segment_length*sinf(rel_angle);
 
-        
+
         if(lasers && mode ==0){
-            DrawLine3D((Vector3){0,0,0}, (Vector3){x_middle, y_middle, 1}, lineColor); 
+            DrawLine3D((Vector3){0,0,0}, (Vector3){x_middle, y_middle, 1}, lineColor);
         }
-        
+
         if(mode ==1){
             float x_middle_world = px + (x_middle*heading_self_x - y_middle*heading_self_y);
             float y_middle_world = py + (x_middle*heading_self_y + y_middle*heading_self_x);
@@ -1767,16 +1803,16 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers){
                 env->entities[i].width,
                 env->entities[i].height
             };
-            
+
             // Save current transform
             if(mode==1){
                 float cos_heading = env->entities[i].heading_x;
                 float sin_heading = env->entities[i].heading_y;
-                
+
                 // Calculate half dimensions
                 float half_len = env->entities[i].length * 0.5f;
                 float half_width = env->entities[i].width * 0.5f;
-                
+
                 // Calculate the four corners of the collision box
                 Vector3 corners[4] = {
                     (Vector3){
@@ -1784,8 +1820,8 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers){
                         position.y + (half_len * sin_heading + half_width * cos_heading),
                         position.z
                     },
-                   
-                    
+
+
                     (Vector3){
                         position.x + (half_len * cos_heading + half_width * sin_heading),
                         position.y + (half_len * sin_heading - half_width * cos_heading),
@@ -1795,14 +1831,14 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers){
                         position.x + (-half_len * cos_heading + half_width * sin_heading),
                         position.y + (-half_len * sin_heading - half_width * cos_heading),
                         position.z
-                    },  
+                    },
                    (Vector3){
                         position.x + (-half_len * cos_heading - half_width * sin_heading),
                         position.y + (-half_len * sin_heading + half_width * cos_heading),
                         position.z
-                    }, 
+                    },
 
-                    
+
                 };
 
                 if(agent_index == env->human_agent_idx && !env->entities[agent_index].reached_goal) {
@@ -1810,10 +1846,10 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers){
                 }
                 if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
                     continue;
-                } 
-  
+                }
+
                 // --- Draw the car  ---
-                
+
                 Vector3 carPos = { position.x, position.y, position.z };
                 Color car_color = GRAY;
                 if(is_active_agent){
@@ -1825,7 +1861,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers){
                 rlSetLineWidth(3.0f);
                 for (int j = 0; j < 4; j++) {
                     DrawLine3D(corners[j], corners[(j+1)%4], car_color);
-                } 
+                }
                 // --- Draw a heading arrow pointing forward ---
                 Vector3 arrowStart = position;
                 Vector3 arrowEnd = {
@@ -1835,8 +1871,8 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers){
                 };
 
                 DrawLine3D(arrowStart, arrowEnd, car_color);
-                DrawSphere(arrowEnd, 0.2f, car_color);  // arrow tip 
-                
+                DrawSphere(arrowEnd, 0.2f, car_color);  // arrow tip
+
             }
             else {
                 rlPushMatrix();
@@ -1863,7 +1899,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers){
                 }
                 // Draw cube for cars static and active
                 // Calculate scale factors based on desired size and model dimensions
-                
+
                 BoundingBox bounds = GetModelBoundingBox(car_model);
                 Vector3 model_size = {
                     bounds.max.x - bounds.min.x,
@@ -1879,11 +1915,11 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers){
                     rlPopMatrix();
                     continue;
                 }
-             
+
                 DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, WHITE);
                 rlPopMatrix();
-            }     
-            
+            }
+
             // FPV Camera Control
             if(IsKeyDown(KEY_SPACE) && env->human_agent_idx== agent_index){
                 if(env->entities[agent_index].reached_goal){
@@ -1964,19 +2000,19 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers){
         }
     }
     EndMode3D();
- 
+
 }
 
-void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTexture2D target, int map_height, int obs, int lasers){ 
+void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTexture2D target, int map_height, int obs, int lasers){
     // Top-down orthographic camera
     Camera3D camera = {0};
     camera.position = (Vector3){ 0.0f, 0.0f, 500.0f };  // above the scene
     camera.target   = (Vector3){ 0.0f, 0.0f, 0.0f };  // look at origin
-    camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f }; 
+    camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
     camera.fovy     = map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
     Color road = (Color){35, 35, 37, 255};
- 
+
     BeginTextureMode(target);
         ClearBackground(road);
         BeginMode3D(camera);
