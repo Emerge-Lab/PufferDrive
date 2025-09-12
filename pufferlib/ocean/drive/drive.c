@@ -282,7 +282,7 @@ void demo() {
             }
         }
         c_step(&env);
-        c_render(&env);
+       c_render(&env);
     }
 
     close_client(env.client);
@@ -290,6 +290,94 @@ void demo() {
     free_drivenet(net);
     free(weights);
 }
+
+
+static int run_cmd(const char *cmd) {
+    int rc = system(cmd);
+    if (rc != 0) {
+        fprintf(stderr, "[ffmpeg] command failed (%d): %s\n", rc, cmd);
+    }
+    return rc;
+}
+
+// Make a high-quality GIF from numbered PNG frames like frame_000.png
+static int make_gif_from_frames(const char *pattern, int fps,
+                                const char *palette_path,
+                                const char *out_gif) {
+    char cmd[1024];
+
+    // 1) Generate palette (no quotes needed for simple filter)
+    //    NOTE: if your frames start at 000, you don't need -start_number.
+    snprintf(cmd, sizeof(cmd),
+             "ffmpeg -y -framerate %d -i %s -vf palettegen %s",
+             fps, pattern, palette_path);
+    if (run_cmd(cmd) != 0) return -1;
+
+    // 2) Use palette to encode the GIF
+    snprintf(cmd, sizeof(cmd),
+             "ffmpeg -y -framerate %d -i %s -i %s -lavfi paletteuse -loop 0 %s",
+             fps, pattern, palette_path, out_gif);
+    if (run_cmd(cmd) != 0) return -1;
+
+    return 0;
+}
+
+void eval_gif(){
+   Drive env = {
+        .dynamics_model = CLASSIC,
+        .reward_vehicle_collision = -0.1f,
+        .reward_offroad_collision = -0.1f,
+	    .map_name = "resources/drive/binaries/map_942.bin",
+        .spawn_immunity_timer = 50
+    };
+    allocate(&env);
+    // set which vehicle to focus on for obs mode
+    env.human_agent_idx = 0;
+    c_reset(&env);
+    if (env.client == NULL) {
+        env.client = make_client(&env);
+    }
+    Client* client = env.client;
+
+    SetConfigFlags(FLAG_WINDOW_HIDDEN);
+    InitWindow(1280, 704, "headless");
+    float map_width = env.map_corners[2] - env.map_corners[0];
+    float map_height = env.map_corners[3] - env.map_corners[1];
+    float scale = 6.0f;
+    float img_width = (int)(map_width * scale);
+    float img_height = (int)(map_height * scale);
+    RenderTexture2D target = LoadRenderTexture(img_width, img_height);
+
+    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+
+    int frame_count = 91;
+    char filename[256];
+    int obs_only = 0;
+    int lasers = 0;
+    for(int i = 0; i < frame_count; i++){
+        snprintf(filename, sizeof(filename), "resources/drive/frame_%03d.png", i);
+        saveTopDownImage(&env, client, filename, target, map_height, obs_only, lasers);
+        int (*actions)[2] = (int(*)[2])env.actions;
+        forward(net, env.observations, env.actions);
+        c_step(&env);
+    }
+
+    // generate gif
+    int gif_success = make_gif_from_frames("resources/drive/frame_%03d.png",
+                         30, // fps
+                         "resources/drive/palette.png",
+                         "resources/drive/output.gif");
+    if(gif_success == 0){
+        run_cmd("rm -f resources/drive/frame_*.png resources/drive/palette.png");
+    }
+    close_client(env.client);
+    free_allocated(&env);
+    free_drivenet(net);
+    free(weights);
+
+}
+
 
 void performance_test() {
     long test_time = 10;
@@ -329,7 +417,8 @@ void performance_test() {
 }
 
 int main() {
-    demo();
+    // demo();
     // performance_test();
+    eval_gif();
     return 0;
 }

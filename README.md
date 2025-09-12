@@ -65,3 +65,37 @@ You can download the WOMD data from Hugging Face in two versions:
 ### Additional Data Sources
 
 For more training data compatible with PufferDrive, see [ScenarioMax](https://github.com/valeoai/ScenarioMax). The GPUDrive data format is fully compatible with PufferDrive.
+
+## Visualizer
+
+## Headless server setup
+
+Run the Raylib visualizer on a headless server and export as GIF.
+
+### Install dependencies
+
+```bash
+sudo apt update
+sudo apt install ffmpeg xvfb
+```
+
+- `ffmpeg`: Video processing and conversion
+- `xvfb`: Virtual display for headless environments
+
+### Build and run
+
+1. Build the application:
+```bash
+bash scripts/build_ocean.sh drive local
+```
+
+2. Run with virtual display:
+```bash
+xvfb-run -s "-screen 0 1280x720x24" ./drive
+```
+
+The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color depth.
+
+### Output
+
+The visualizer will automatically generate a GIF file from the rendered frames.

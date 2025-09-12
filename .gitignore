@@ -167,3 +167,11 @@ pufferlib/ocean/impulse_wars/benchmark/
 # Ignore data files
 data/
 pufferlib/resources/drive/binaries/
+
+# Compiled drive binary in root
+/drive
+# But allow drive directories
+!*/drive/
+*.exe
+*.out
+*.app
