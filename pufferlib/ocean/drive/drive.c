@@ -337,7 +337,6 @@ void eval_gif(const char* map_name){
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
 	    .map_name = map_name,
-	    .map_name = map_name,
         .spawn_immunity_timer = 50
     };
     allocate(&env);
@@ -487,7 +486,6 @@ void performance_test() {
 int main() {
     // demo();
     // performance_test();
-    eval_gif(NULL);
     eval_gif(NULL);
     return 0;
 }
