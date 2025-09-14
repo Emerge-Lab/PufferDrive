@@ -324,12 +324,19 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-void eval_gif(){
-   Drive env = {
+void eval_gif(const char* map_name){
+
+    // Use default if no map provided
+    if (map_name == NULL) {
+        map_name = "resources/drive/binaries/map_942.bin";
+    }
+
+    // Make env
+    Drive env = {
         .dynamics_model = CLASSIC,
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
-	    .map_name = "resources/drive/binaries/map_942.bin",
+	    .map_name = map_name,
         .spawn_immunity_timer = 50
     };
     allocate(&env);
