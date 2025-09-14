@@ -333,9 +333,19 @@ void eval_gif(const char* map_name){
 
     // Make env
     Drive env = {
+void eval_gif(const char* map_name){
+
+    // Use default if no map provided
+    if (map_name == NULL) {
+        map_name = "resources/drive/binaries/map_942.bin";
+    }
+
+    // Make env
+    Drive env = {
         .dynamics_model = CLASSIC,
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
+	    .map_name = map_name,
 	    .map_name = map_name,
         .spawn_immunity_timer = 50
     };
@@ -356,6 +366,7 @@ void eval_gif(const char* map_name){
 
     float map_width = env.map_corners[2] - env.map_corners[0];
     float map_height = env.map_corners[3] - env.map_corners[1];
+    float scale = 8.0f;
     float scale = 8.0f;
     float img_width = (int)(map_width * scale);
     float img_height = (int)(map_height * scale);
@@ -485,6 +496,7 @@ void performance_test() {
 int main() {
     // demo();
     // performance_test();
+    eval_gif(NULL);
     eval_gif(NULL);
     return 0;
 }
