@@ -1276,6 +1276,7 @@ const Color PUFF_CYAN = (Color){0, 187, 187, 255};
 const Color PUFF_WHITE = (Color){241, 241, 241, 241};
 const Color PUFF_BACKGROUND = (Color){6, 24, 24, 255};
 const Color PUFF_BACKGROUND2 = (Color){18, 72, 72, 255};
+const Color LIGHTGREEN = (Color){152, 255, 152, 255};
 
 typedef struct Client Client;
 struct Client {
@@ -1436,13 +1437,13 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
     float goal_x = agent_obs[0] * 200;
     float goal_y = agent_obs[1] * 200;
     if(mode == 0 ){
-        DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, GREEN);
+        DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
     }
 
     if (mode == 1){
         float goal_x_world = px + (goal_x * heading_self_x - goal_y*heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y*heading_self_x);
-        DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, GREEN);
+        DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
 
     }
     // First draw other agent observations
@@ -1997,7 +1998,7 @@ void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTe
                         float y = env->entities[idx].traj_y[j];
                         float valid = env->entities[idx].traj_valid[j];
                         if(!valid) continue;
-                        DrawSphere((Vector3){x,y,1}, 0.3f, RED);
+                        DrawSphere((Vector3){x,y,1}, 0.3f, Fade(LIGHTGREEN, 0.6f));
                     }
                 }
             }

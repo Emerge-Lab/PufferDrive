@@ -405,9 +405,10 @@ void eval_gif(const char* map_name){
 
         int gif_success_agent = make_gif_from_frames(
             "resources/drive/frame_agent_%03d.png",
-                             15, // fps
-                             "resources/drive/palette_agent.png",
-                             "resources/drive/output_agent.gif");
+            15, // fps
+            "resources/drive/palette_agent.png",
+            "resources/drive/output_agent.gif"
+        );
 
         if(gif_success_topdown == 0) {
             run_cmd("rm -f resources/drive/frame_topdown_*.png resources/drive/palette_topdown.png");
