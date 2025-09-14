@@ -539,20 +539,30 @@ class PuffeRL:
                         )
 
                         if result.returncode == 1:
-                            # Move generated GIF to the model directory
-                            source_gif = "resources/drive/output.gif"
-                            if os.path.exists(source_gif):
-                                target_gif = os.path.join(gif_output_dir, f"epoch_{self.epoch:06d}.gif")
-                                shutil.move(source_gif, target_gif)
+                            # Move both generated GIFs to the model directory
+                            gifs = [
+                                ("resources/drive/output_topdown.gif", f"epoch_{self.epoch:06d}_topdown.gif"),
+                                ("resources/drive/output_agent.gif", f"epoch_{self.epoch:06d}_agent.gif"),
+                            ]
 
-                                # Log to wandb if available
-                                if hasattr(self.logger, "wandb") and self.logger.wandb:
-                                    import wandb
+                            for source_gif, target_filename in gifs:
+                                if os.path.exists(source_gif):
+                                    target_gif = os.path.join(gif_output_dir, target_filename)
+                                    shutil.move(source_gif, target_gif)
 
-                                    self.logger.wandb.log(
-                                        {"render/gif": wandb.Video(target_gif, format="gif")},
-                                        step=self.global_step,
-                                    )
+                                    # Log to wandb if available
+                                    if hasattr(self.logger, "wandb") and self.logger.wandb:
+                                        import wandb
+
+                                        view_type = "world_state" if "topdown" in target_filename else "agent_view"
+                                        self.logger.wandb.log(
+                                            {f"render/{view_type}": wandb.Video(target_gif, format="gif")},
+                                            step=self.global_step,
+                                        )
+
+                                else:
+                                    print(f"GIF generation completed but {source_gif} not found")
+
                             else:
                                 print("GIF generation completed but file not found")
                         else:

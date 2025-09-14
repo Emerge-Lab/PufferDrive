@@ -356,7 +356,7 @@ void eval_gif(const char* map_name){
 
     float map_width = env.map_corners[2] - env.map_corners[0];
     float map_height = env.map_corners[3] - env.map_corners[1];
-    float scale = 6.0f;
+    float scale = 8.0f;
     float img_width = (int)(map_width * scale);
     float img_height = (int)(map_height * scale);
     RenderTexture2D target = LoadRenderTexture(img_width, img_height);
@@ -371,23 +371,49 @@ void eval_gif(const char* map_name){
     int rollout = 1;
     int rollout_trajectory_snapshot = 0;
     int log_trajectory = 1;
-    if (rollout){
-        for(int i = 0; i < frame_count; i++){
-            float* path_taken=NULL;
-            snprintf(filename, sizeof(filename), "resources/drive/frame_%03d.png", i);
+        if (rollout) {
+        // Generate top-down view frames
+        for(int i = 0; i < frame_count; i++) {
+            float* path_taken = NULL;
+            snprintf(filename, sizeof(filename), "resources/drive/frame_topdown_%03d.png", i);
             saveTopDownImage(&env, client, filename, target, map_height, obs_only, lasers, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory);
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
         }
 
-        // generate gif
-        int gif_success = make_gif_from_frames("resources/drive/frame_%03d.png",
-                             30, // fps
-                             "resources/drive/palette.png",
-                             "resources/drive/output.gif");
-        if(gif_success == 0){
-            run_cmd("rm -f resources/drive/frame_*.png resources/drive/palette.png");
+        // Reset environment to initial state
+        c_reset(&env);
+
+        // Generate agent view frames
+        for(int i = 0; i < frame_count; i++) {
+            float* path_taken = NULL;
+            snprintf(filename, sizeof(filename), "resources/drive/frame_agent_%03d.png", i);
+            saveAgentViewImage(&env, client, filename, target, map_height, 1, 0); // obs_only=1, lasers=0
+            int (*actions)[2] = (int(*)[2])env.actions;
+            forward(net, env.observations, env.actions);
+            c_step(&env);
+        }
+
+        // Generate both GIFs
+        int gif_success_topdown = make_gif_from_frames(
+            "resources/drive/frame_topdown_%03d.png",
+            30, // fps
+            "resources/drive/palette_topdown.png",
+            "resources/drive/output_topdown.gif"
+        );
+
+        int gif_success_agent = make_gif_from_frames(
+            "resources/drive/frame_agent_%03d.png",
+                             15, // fps
+                             "resources/drive/palette_agent.png",
+                             "resources/drive/output_agent.gif");
+
+        if(gif_success_topdown == 0) {
+            run_cmd("rm -f resources/drive/frame_topdown_*.png resources/drive/palette_topdown.png");
+        }
+        if(gif_success_agent == 0) {
+            run_cmd("rm -f resources/drive/frame_agent_*.png resources/drive/palette_agent.png");
         }
     }
     if (rollout_trajectory_snapshot){
@@ -458,6 +484,6 @@ void performance_test() {
 int main() {
     // demo();
     // performance_test();
-    eval_gif();
+    eval_gif(NULL);
     return 0;
 }
