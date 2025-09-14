@@ -1652,6 +1652,7 @@ void draw_road_edge(Drive* env, float start_x, float start_y, float end_x, float
                     // Calculate curb dimensions
     float curb_height = 0.5f;  // Height of the curb
     float curb_width = 0.3f;   // Width/thickness of the curb
+    float road_z = 0.2f;       // Ensure z-level for roads is below agents
 
     // Calculate direction vector between start and end
     Vector3 direction = {
@@ -1681,22 +1682,22 @@ void draw_road_edge(Drive* env, float start_x, float start_y, float end_x, float
     Vector3 b1 = {
         start_x - perpendicular.x * curb_width/2,
         start_y - perpendicular.y * curb_width/2,
-        1.0f
+        road_z
     };
     Vector3 b2 = {
         start_x + perpendicular.x * curb_width/2,
         start_y + perpendicular.y * curb_width/2,
-        1.0f
+        road_z
     };
     Vector3 b3 = {
         end_x + perpendicular.x * curb_width/2,
         end_y + perpendicular.y * curb_width/2,
-        1.0f
+        road_z
     };
     Vector3 b4 = {
         end_x - perpendicular.x * curb_width/2,
         end_y - perpendicular.y * curb_width/2,
-        1.0f
+        road_z
     };
 
     // Draw the curb faces
@@ -1984,12 +1985,8 @@ void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTe
         ClearBackground(road);
         BeginMode3D(camera);
             rlEnableDepthTest();
-            if(trajectories){
-                for(int i=0; i<frame_count; i++){
-                    DrawSphere((Vector3){path[i*2], path[i*2 +1], 1}, 0.5f, YELLOW);
-                }
 
-            }
+            // Draw log trajectories FIRST (in background at lower Z-level)
             if(log_trajectories){
                 for(int i=0; i<env->active_agent_count;i++){
                     int idx = env->active_agent_indices[i];
@@ -1998,12 +1995,22 @@ void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTe
                         float y = env->entities[idx].traj_y[j];
                         float valid = env->entities[idx].traj_valid[j];
                         if(!valid) continue;
-                        DrawSphere((Vector3){x,y,1}, 0.3f, Fade(LIGHTGREEN, 0.6f));
+                        DrawSphere((Vector3){x,y,0.5f}, 0.3f, Fade(LIGHTGREEN, 0.6f));
                     }
                 }
             }
+
+            // Draw current path trajectories SECOND (slightly higher than log trajectories)
+            if(trajectories){
+                for(int i=0; i<frame_count; i++){
+                    DrawSphere((Vector3){path[i*2], path[i*2 +1], 0.8f}, 0.5f, YELLOW);
+                }
+            }
+
+            // Draw main scene LAST (on top)
             draw_scene(env, client, 1, obs, lasers, show_grid);
-            EndMode3D();
+
+        EndMode3D();
     EndTextureMode();
 
     // save to file
@@ -2011,7 +2018,6 @@ void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTe
     ImageFlipVertical(&img);
     ExportImage(img, filename);
     UnloadImage(img);
-
 }
 
 void saveAgentViewImage(Drive* env, Client* client, const char *filename, RenderTexture2D target, int map_height, int obs_only, int lasers, int show_grid) {
