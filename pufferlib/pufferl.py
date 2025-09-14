@@ -529,9 +529,21 @@ class PuffeRL:
                         os.makedirs(os.path.dirname(expected_weights_path), exist_ok=True)
                         shutil.copy2(bin_path, expected_weights_path)
 
+                        cmd = ["xvfb-run", "-s", "-screen 0 1280x720x24", "./drive"]
+
+                        # Add render configurations
+                        if config["show_grid"]:
+                            cmd.append("--show-grid")
+                        if config["obs_only"]:
+                            cmd.append("--obs-only")
+                        if config["show_lasers"]:
+                            cmd.append("--lasers")
+                        if config["show_human_logs"]:
+                            cmd.append("--log-trajectories")
+
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
-                            ["xvfb-run", "-s", "-screen 0 1280x720x24", "./drive"],
+                            cmd,
                             cwd=os.getcwd(),
                             capture_output=True,
                             text=True,

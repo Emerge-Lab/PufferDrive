@@ -324,8 +324,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-void eval_gif(const char* map_name){
-
+void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories) {
     // Use default if no map provided
     if (map_name == NULL) {
         map_name = "resources/drive/binaries/map_942.bin";
@@ -357,7 +356,6 @@ void eval_gif(const char* map_name){
     float map_width = env.map_corners[2] - env.map_corners[0];
     float map_height = env.map_corners[3] - env.map_corners[1];
     float scale = 8.0f;
-    float scale = 8.0f;
     float img_width = (int)(map_width * scale);
     float img_height = (int)(map_height * scale);
     RenderTexture2D target = LoadRenderTexture(img_width, img_height);
@@ -367,17 +365,16 @@ void eval_gif(const char* map_name){
 
     int frame_count = 91;
     char filename[256];
-    int obs_only = 0;
-    int lasers = 0;
     int rollout = 1;
     int rollout_trajectory_snapshot = 0;
-    int log_trajectory = 1;
-        if (rollout) {
+    int log_trajectory = log_trajectories;
+
+    if (rollout) {
         // Generate top-down view frames
         for(int i = 0; i < frame_count; i++) {
             float* path_taken = NULL;
             snprintf(filename, sizeof(filename), "resources/drive/frame_topdown_%03d.png", i);
-            saveTopDownImage(&env, client, filename, target, map_height, obs_only, lasers, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory, 0);
+            saveTopDownImage(&env, client, filename, target, map_height, obs_only, lasers, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory, show_grid);
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
@@ -390,7 +387,7 @@ void eval_gif(const char* map_name){
         for(int i = 0; i < frame_count; i++) {
             float* path_taken = NULL;
             snprintf(filename, sizeof(filename), "resources/drive/frame_agent_%03d.png", i);
-            saveAgentViewImage(&env, client, filename, target, map_height, 1, 0, 0); // obs_only=1, lasers=0, show_grid=0
+            saveAgentViewImage(&env, client, filename, target, map_height, obs_only, lasers, show_grid); // obs_only=1, lasers=0, show_grid=0
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
@@ -483,9 +480,26 @@ void performance_test() {
     free_allocated(&env);
 }
 
-int main() {
-    // demo();
-    // performance_test();
-    eval_gif(NULL);
+int main(int argc, char* argv[]) {
+    int show_grid = 0;
+    int obs_only = 0;
+    int lasers = 0;
+    int log_trajectories = 1;
+
+    // Parse command line arguments
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--show-grid") == 0) {
+            show_grid = 1;
+        } else if (strcmp(argv[i], "--obs-only") == 0) {
+            obs_only = 1;
+        } else if (strcmp(argv[i], "--lasers") == 0) {
+            lasers = 1;
+        } else if (strcmp(argv[i], "--log_trajectories") == 0) {
+            log_trajectories = 0;
+        }
+    }
+    eval_gif(NULL, show_grid, obs_only, lasers, log_trajectories);
+    //demo();
+    //performance_test();
     return 0;
 }
