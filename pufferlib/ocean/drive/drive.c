@@ -376,7 +376,7 @@ void eval_gif(const char* map_name){
         for(int i = 0; i < frame_count; i++) {
             float* path_taken = NULL;
             snprintf(filename, sizeof(filename), "resources/drive/frame_topdown_%03d.png", i);
-            saveTopDownImage(&env, client, filename, target, map_height, obs_only, lasers, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory);
+            saveTopDownImage(&env, client, filename, target, map_height, obs_only, lasers, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory, 0);
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
@@ -389,7 +389,7 @@ void eval_gif(const char* map_name){
         for(int i = 0; i < frame_count; i++) {
             float* path_taken = NULL;
             snprintf(filename, sizeof(filename), "resources/drive/frame_agent_%03d.png", i);
-            saveAgentViewImage(&env, client, filename, target, map_height, 1, 0); // obs_only=1, lasers=0
+            saveAgentViewImage(&env, client, filename, target, map_height, 1, 0, 0); // obs_only=1, lasers=0, show_grid=0
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
@@ -433,7 +433,7 @@ void eval_gif(const char* map_name){
             c_step(&env);
         }
         c_reset(&env);
-        saveTopDownImage(&env, client, filename, target, map_height, obs_only, lasers, rollout_trajectory_snapshot, goal_frame, path_taken, log_trajectory);
+        saveTopDownImage(&env, client, filename, target, map_height, obs_only, lasers, rollout_trajectory_snapshot, goal_frame, path_taken, log_trajectory, 0);
     }
     UnloadRenderTexture(target);
     CloseWindow();
