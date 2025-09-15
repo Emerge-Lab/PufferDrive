@@ -200,7 +200,7 @@ static PyObject* env_step(PyObject* self, PyObject* args) {
     if (!env){
         return NULL;
     }
-    c_step(env);
+    c_step(env, NULL);
     Py_RETURN_NONE;
 }
 
@@ -518,7 +518,7 @@ static PyObject* vec_step(PyObject* self, PyObject* arg) {
     }
 
     for (int i = 0; i < vec->num_envs; i++) {
-        c_step(vec->envs[i]);
+        c_step(vec->envs[i], NULL);
     }
     Py_RETURN_NONE;
 }

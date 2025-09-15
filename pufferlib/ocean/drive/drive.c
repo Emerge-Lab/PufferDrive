@@ -283,7 +283,7 @@ void demo() {
                 env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
             }
         }
-        c_step(&env);
+        c_step(&env, net->actor->output);
        c_render(&env);
     }
 
@@ -378,7 +378,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
             saveTopDownImage(&env, client, filename, target, map_height, 0, 0, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory, show_grid);
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
-            c_step(&env);
+            c_step(&env, net->actor->output);
         }
 
         // Reset environment to initial state
@@ -391,7 +391,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
             saveAgentViewImage(&env, client, filename, target, map_height, obs_only, lasers, show_grid); // obs_only=1, lasers=0, show_grid=0
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
-            c_step(&env);
+            c_step(&env, net->actor->output);
         }
 
         // Generate both GIFs
@@ -430,7 +430,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
             }
             printf("x: %f, y: %f \n", path_taken[i*2], path_taken[i*2+1]);
             forward(net, env.observations, env.actions);
-            c_step(&env);
+            c_step(&env, net->actor->output);
         }
         c_reset(&env);
         saveTopDownImage(&env, client, filename, target, map_height, obs_only, lasers, rollout_trajectory_snapshot, goal_frame, path_taken, log_trajectory, 0);
@@ -473,7 +473,7 @@ void performance_test() {
             actions[j][1] = steer;  // Random steering
         }
 
-        c_step(&env);
+        c_step(&env, NULL);
         i++;
     }
     long end = time(NULL);
