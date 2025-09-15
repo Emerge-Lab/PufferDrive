@@ -89,6 +89,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_offroad_collision=reward_offroad_collision,
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
+                human_log_likelihood_coef=human_log_likelihood_coef,
                 spawn_immunity_timer=spawn_immunity_timer,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,

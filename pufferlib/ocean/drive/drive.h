@@ -112,6 +112,7 @@ struct Log {
     float dnf_rate;
     float n;
     float lane_alignment_rate;
+    float human_log_likelihood;
 };
 
 typedef struct Entity Entity;
@@ -247,6 +248,7 @@ void add_log(Drive* env) {
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         env->log.n += 1;
+        env->log.human_log_likelihood += env->logs[i].human_log_likelihood;
     }
 }
 
@@ -1498,6 +1500,9 @@ void c_step(Drive* env, float* policy_logits){
         //     env->logs[i].episode_return += 0.01f;
             env->logs[i].lane_alignment_rate = 1.0f;
         }
+
+        env->logs[i].human_log_likelihood += env->entities[agent_idx].metrics_array[LOG_LIKELIHOOD_IDX];
+        // TODO: Add to reward here?
     }
 
     for(int i = 0; i < env->active_agent_count; i++){
