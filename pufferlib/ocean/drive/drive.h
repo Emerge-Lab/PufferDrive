@@ -1688,6 +1688,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawTriangle3D(top_point, back_point, left_point, PUFF_CYAN);      // Back-left face
         DrawTriangle3D(top_point, left_point, front_point, PUFF_CYAN);     // Front-left face
 
+
         // Bottom pyramid
         DrawTriangle3D(bottom_point, right_point, front_point, PUFF_CYAN); // Front-right face
         DrawTriangle3D(bottom_point, back_point, right_point, PUFF_CYAN);  // Back-right face
@@ -1698,9 +1699,11 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
+
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
+    // self
     // self
     int active_idx = env->active_agent_indices[agent_index];
     float heading_self_x = env->entities[active_idx].heading_x;
@@ -2253,17 +2256,73 @@ void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTe
         ClearBackground(road);
         BeginMode3D(camera);
             rlEnableDepthTest();
+            if(trajectories){
+                for(int i=0; i<frame_count; i++){
+                    DrawSphere((Vector3){path[i*2], path[i*2 +1], 1}, 0.5f, YELLOW);
+                }
+
+            }
+            if(log_trajectories){
+                for(int i=0; i<env->active_agent_count;i++){
+                    int idx = env->active_agent_indices[i];
+                    for(int j=0; j<TRAJECTORY_LENGTH;j++){
+                        float x = env->entities[idx].traj_x[j];
+                        float y = env->entities[idx].traj_y[j];
+                        float valid = env->entities[idx].traj_valid[j];
+                        if(!valid) continue;
+                        DrawSphere((Vector3){x,y,1}, 0.3f, RED);
+                    }
+                }
+            }
             draw_scene(env, client, 1, obs, lasers);
-        EndMode3D();
+            EndMode3D();
     EndTextureMode();
 
     // save to file
     Image img = LoadImageFromTexture(target.texture);
     ImageFlipVertical(&img);
     ExportImage(img, filename);
+    UnloadImage(img);
 
 }
 
+void saveAgentViewImage(Drive* env, Client* client, const char *filename, RenderTexture2D target, int map_height, int obs_only, int lasers) {
+    // Agent perspective camera following the human agent
+    int agent_idx = env->active_agent_indices[env->human_agent_idx];
+    Entity* agent = &env->entities[agent_idx];
+
+    Camera3D camera = {0};
+    // Position camera behind and above the agent
+    camera.position = (Vector3){
+        agent->x - (25.0f * cosf(agent->heading)),
+        agent->y - (25.0f * sinf(agent->heading)),
+        15.0f
+    };
+    camera.target = (Vector3){
+        agent->x + 40.0f * cosf(agent->heading),
+        agent->y + 40.0f * sinf(agent->heading),
+        1.0f
+    };
+    camera.up = (Vector3){ 0.0f, 0.0f, 1.0f };
+    camera.fovy = 45.0f;
+    camera.projection = CAMERA_PERSPECTIVE;
+
+    Color road = (Color){35, 35, 37, 255};
+
+    BeginTextureMode(target);
+        ClearBackground(road);
+        BeginMode3D(camera);
+            rlEnableDepthTest();
+            draw_scene(env, client, 0, obs_only, lasers); // mode=0 for agent view
+        EndMode3D();
+    EndTextureMode();
+
+    // Save to file
+    Image img = LoadImageFromTexture(target.texture);
+    ImageFlipVertical(&img);
+    ExportImage(img, filename);
+    UnloadImage(img);
+}
 
 void c_render(Drive* env) {
     if (env->client == NULL) {
