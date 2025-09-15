@@ -1,0 +1,34 @@
+# Git
+.git
+.gitignore
+
+# Github
+.github/
+
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts from local development
+build/
+dist/
+*.egg-info/
+*.so
+
+# IDE and editor configuration
+.vscode/
+.idea/
+
+# Downloaded dependencies from setup.py (should be downloaded inside the container)
+raylib-*/
+box2d-*/
+
+# Documentation and local config files
+README.md
+.pre-commit-config.yaml
