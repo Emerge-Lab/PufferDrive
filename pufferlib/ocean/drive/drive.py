@@ -336,15 +336,12 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
 
-
-        try:
-            return (self.observations[self.ego_ids], self.rewards[self.ego_ids],
+        if self.rewards.sum() !=0:
+            pass
+        return (self.observations[self.ego_ids], self.rewards[self.ego_ids],
                 self.terminals[self.ego_ids], self.truncations[self.ego_ids], info)
         
-        except Exception as e:
-            print(f"observations: {self.observations.shape}")
-            print(f"ego ids: {self.ego_ids}")
-            raise e
+   
 
     def render(self):
         binding.vec_render(self.c_envs, 0)
