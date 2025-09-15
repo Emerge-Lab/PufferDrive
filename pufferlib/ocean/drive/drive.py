@@ -54,7 +54,7 @@ class Drive(pufferlib.PufferEnv):
         if self.reward_conditioned:
             self.num_obs = 10 + 63*7 + 200*7
         else:
-            self.num_obs = 7 + 63*7 + 200*13
+            self.num_obs = 7 + 63*7 + 200*7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
             shape=(self.num_obs,), dtype=np.float32)
         self.num_agents_const = num_agents
@@ -63,8 +63,6 @@ class Drive(pufferlib.PufferEnv):
         if population_play and reward_conditioned:
             raise ValueError("Population play with reward conditioning is not supported.")
         
-       
-
         self.population_play = population_play
         # self.single_action_space = gymnasium.spaces.Box(
         #     low=-1, high=1, shape=(2,), dtype=np.float32
@@ -80,15 +78,25 @@ class Drive(pufferlib.PufferEnv):
             agent_offsets, map_ids, num_envs, self.ego_ids, co_player_ids = binding_tuple
             self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
             self.num_ego_agents = num_agents
+
+            env_co_player_ids = [[id - next(agent_offsets[i] for i in range(len(agent_offsets)-1) 
+                                if agent_offsets[i] <= id < agent_offsets[i+1]) 
+                     for id in subset] for subset in co_player_ids]
+            
+            env_ego_ids = [
+                min(set(range(agent_offsets[i+1] - agent_offsets[i])) - set(subset)) 
+                if subset and set(range(agent_offsets[i+1] - agent_offsets[i])) - set(subset)
+                else 0
+                for i, subset in enumerate(env_co_player_ids)
+            ]
+            
             self.num_co_players = len(self.co_player_ids)
-            self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
-            self.co_player_policy = load_drivenet("resources/drive/puffer_drive_weights.bin", self.num_co_players )
+            self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents
+            self.co_player_policy = load_drivenet("resources/drive/puffer_drive_weights.bin", self.num_co_players       )
         else:
             agent_offsets, map_ids, num_envs = binding_tuple
             self.num_agents = self.num_agents_const
             self.ego_ids = [i for i in range(agent_offsets[-1])]
-
-                      
        
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -99,6 +107,7 @@ class Drive(pufferlib.PufferEnv):
             cur = agent_offsets[i]
             nxt = agent_offsets[i+1]
             if not self.reward_conditioned:
+                print(f"co player ids {env_co_player_ids[i]} for env {i}")
                 env_id = binding.env_init(
                     self.observations[cur:nxt],
                     self.actions[cur:nxt],
@@ -121,6 +130,10 @@ class Drive(pufferlib.PufferEnv):
                     offroad_weight_ub = reward_offroad_collision,
                     goal_weight_lb = 1.0,
                     goal_weight_ub = 1.0,
+                    population_play = population_play,
+                    num_co_players = len(env_co_player_ids[i]),
+                    co_player_ids = env_co_player_ids[i],
+                    ego_agent_id = env_ego_ids[i],
                 )
             else:
                 env_id = binding.env_init(
@@ -152,9 +165,28 @@ class Drive(pufferlib.PufferEnv):
         self.c_envs = binding.vectorize(*env_ids)
 
         if self.population_play:
-            self.num_agents = self.num_ego_agents ##Make sure only the ego agents get trained
-        
+            self.num_agents = self.num_ego_agents
 
+    # def map_to_local_indices(self, co_player_ids, agent_offsets):
+    #     """
+    #     Map global co_player_ids to local 0-indexed positions within their agent groups
+    #     """
+    #     env_co_player_ids = []
+        
+    #     for subset in co_player_ids:
+    #         local_subset = []
+    #         for global_id in subset:
+    #             # Find which agent group this global_id belongs to
+    #             for i in range(len(agent_offsets) - 1):
+    #                 if agent_offsets[i] <= global_id < agent_offsets[i + 1]:
+    #                     # Convert to local index within this agent group
+    #                     local_id = global_id - agent_offsets[i]
+    #                     local_subset.append(local_id)
+    #                     break
+    #         env_co_player_ids.append(local_subset)
+        
+    #     return env_co_player_ids
+            
 
     def set_buffers(self):
         "Number of co players is non-stationary, resets env variable shape to account for this "
@@ -214,6 +246,17 @@ class Drive(pufferlib.PufferEnv):
                     self.num_co_players = len(self.co_player_ids)
                     self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
                     self.co_player_policy = load_drivenet("resources/drive/puffer_drive_weights.bin", self.num_co_players )
+                     
+                    env_co_player_ids = [[id - next(agent_offsets[i] for i in range(len(agent_offsets)-1) 
+                                        if agent_offsets[i] <= id < agent_offsets[i+1]) 
+                            for id in subset] for subset in co_player_ids]
+                    
+                    env_ego_ids = [
+                        min(set(range(agent_offsets[i+1] - agent_offsets[i])) - set(subset)) 
+                        if subset and set(range(agent_offsets[i+1] - agent_offsets[i])) - set(subset)
+                        else 0
+                        for i, subset in enumerate(env_co_player_ids)
+                    ]
 
                     self.set_buffers() 
                 else:
@@ -233,28 +276,33 @@ class Drive(pufferlib.PufferEnv):
                     cur = agent_offsets[i]
                     nxt = agent_offsets[i+1]
                     if not self.reward_conditioned:
+
                         env_id = binding.env_init(
-                    self.observations[cur:nxt],
-                    self.actions[cur:nxt],
-                    self.rewards[cur:nxt],
-                    self.terminals[cur:nxt],
-                    self.truncations[cur:nxt],
-                    seed,
-                    human_agent_idx=self.human_agent_idx,
-                    reward_vehicle_collision=self.reward_vehicle_collision,
-                    reward_offroad_collision=self.reward_offroad_collision,
-                    reward_goal_post_respawn=self.reward_goal_post_respawn,
-                    reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
-                    spawn_immunity_timer=self.spawn_immunity_timer,
-                    map_id=map_ids[i],
-                    use_rc = False,
-                    max_agents = nxt-cur,
-                    collision_weight_lb = self.reward_vehicle_collision,
-                    collision_weight_ub = self.reward_vehicle_collision,
-                    offroad_weight_lb = self.reward_offroad_collision,
-                    offroad_weight_ub = self.reward_offroad_collision,
-                    goal_weight_lb = 1.0,
-                    goal_weight_ub = 1.0,
+                            self.observations[cur:nxt],
+                            self.actions[cur:nxt],
+                            self.rewards[cur:nxt],
+                            self.terminals[cur:nxt],
+                            self.truncations[cur:nxt],
+                            seed,
+                            human_agent_idx=self.human_agent_idx,
+                            reward_vehicle_collision=self.reward_vehicle_collision,
+                            reward_offroad_collision=self.reward_offroad_collision,
+                            reward_goal_post_respawn=self.reward_goal_post_respawn,
+                            reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
+                            spawn_immunity_timer=self.spawn_immunity_timer,
+                            map_id=map_ids[i],
+                            use_rc = False,
+                            max_agents = nxt-cur,
+                            collision_weight_lb = self.reward_vehicle_collision,
+                            collision_weight_ub = self.reward_vehicle_collision,
+                            offroad_weight_lb = self.reward_offroad_collision,
+                            offroad_weight_ub = self.reward_offroad_collision,
+                            goal_weight_lb = 1.0,
+                            goal_weight_ub = 1.0,
+                            population_play = self.population_play,
+                            num_co_players = len(env_co_player_ids[i]),
+                            co_player_ids = env_co_player_ids[i],
+                            ego_agent_id = env_ego_ids[i],
                         )
                     else:
                         env_id = binding.env_init(
