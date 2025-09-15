@@ -505,20 +505,25 @@ static PyObject* vec_reset(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
-static PyObject* vec_step(PyObject* self, PyObject* arg) {
-    int num_args = PyTuple_Size(arg);
-    if (num_args != 1) {
-        PyErr_SetString(PyExc_TypeError, "vec_step requires 1 argument");
-        return NULL;
-    }
+static PyObject* vec_step(PyObject* self, PyObject* arg, PyObject* kwargs) {
 
     VecEnv* vec = unpack_vecenv(arg);
     if (!vec) {
         return NULL;
     }
 
+    // For policy logits
+    float* policy_logits = NULL;
+    if (kwargs != NULL) {
+        PyObject* logits_obj = PyDict_GetItemString(kwargs, "policy_logits");
+        if (logits_obj && logits_obj != Py_None) {
+            policy_logits = (float*)PyArray_DATA((PyArrayObject*)logits_obj);
+        }
+    }
+
     for (int i = 0; i < vec->num_envs; i++) {
-        c_step(vec->envs[i], NULL);
+        float* env_logits = policy_logits ? &policy_logits[i * 20] : NULL;
+        c_step(vec->envs[i], env_logits);
     }
     Py_RETURN_NONE;
 }
@@ -652,7 +657,7 @@ static PyMethodDef methods[] = {
     {"vectorize", vectorize, METH_VARARGS, "Make a vector of environment handles"},
     {"vec_init", (PyCFunction)vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
     {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
-    {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
+    {"vec_step", (PyCFunction)vec_step, METH_VARARGS | METH_KEYWORDS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},

@@ -805,85 +805,15 @@ void reset_agent_metrics(Drive* env, int agent_idx){
     agent->collision_state = 0;
 }
 
-float compute_log_likelihood(float* policy_logits, float expert_accel, float expert_steering) {
+float compute_log_likelihood(float* policy_logits) {
     if (!policy_logits) {
         return 0.0f;  // No policy logits available
     }
-
-    // Convert continuous expert actions to discrete indices
-    // Find closest acceleration value
-    int accel_idx = 3; // default to no acceleration (index 3)
-    float min_accel_diff = fabsf(expert_accel - ACCELERATION_VALUES[3]);
-    for (int i = 0; i < 7; i++) {
-        float diff = fabsf(expert_accel - ACCELERATION_VALUES[i]);
-        if (diff < min_accel_diff) {
-            min_accel_diff = diff;
-            accel_idx = i;
-        }
+    else {
+        // pass for now
+        return 0.0f;
     }
 
-    // Find closest steering value
-    int steer_idx = 6; // default to no steering (index 6)
-    float min_steer_diff = fabsf(expert_steering - STEERING_VALUES[6]);
-    for (int i = 0; i < 13; i++) {
-        float diff = fabsf(expert_steering - STEERING_VALUES[i]);
-        if (diff < min_steer_diff) {
-            min_steer_diff = diff;
-            steer_idx = i;
-        }
-    }
-
-    // Convert logits to log probabilities using log-softmax
-    // For acceleration (first 7 logits)
-    float accel_logits[7];
-    for (int i = 0; i < 7; i++) {
-        accel_logits[i] = policy_logits[i];
-    }
-
-    // Find max for numerical stability
-    float max_accel_logit = accel_logits[0];
-    for (int i = 1; i < 7; i++) {
-        if (accel_logits[i] > max_accel_logit) {
-            max_accel_logit = accel_logits[i];
-        }
-    }
-
-    // Compute log-sum-exp for normalization
-    float sum_exp_accel = 0.0f;
-    for (int i = 0; i < 7; i++) {
-        sum_exp_accel += expf(accel_logits[i] - max_accel_logit);
-    }
-    float log_sum_exp_accel = max_accel_logit + logf(sum_exp_accel);
-
-    // Log probability of expert acceleration
-    float log_prob_accel = accel_logits[accel_idx] - log_sum_exp_accel;
-
-    // For steering (next 13 logits)
-    float steer_logits[13];
-    for (int i = 0; i < 13; i++) {
-        steer_logits[i] = policy_logits[7 + i];
-    }
-
-    // Find max for numerical stability
-    float max_steer_logit = steer_logits[0];
-    for (int i = 1; i < 13; i++) {
-        if (steer_logits[i] > max_steer_logit) {
-            max_steer_logit = steer_logits[i];
-        }
-    }
-
-    // Compute log-sum-exp for normalization
-    float sum_exp_steer = 0.0f;
-    for (int i = 0; i < 13; i++) {
-        sum_exp_steer += expf(steer_logits[i] - max_steer_logit);
-    }
-    float log_sum_exp_steer = max_steer_logit + logf(sum_exp_steer);
-
-    // Log probability of expert steering
-    float log_prob_steer = steer_logits[steer_idx] - log_sum_exp_steer;
-
-    // Return joint log probability
-    return log_prob_accel + log_prob_steer;
 }
 
 void compute_agent_metrics(Drive* env, int agent_idx, float* policy_logits) {
@@ -1437,7 +1367,7 @@ void c_step(Drive* env, float* policy_logits){
 	    env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
-        // Pass policy logits for this agent
+        // Pass logits (prob. of human actions under policy)
         float* agent_logits = policy_logits ? &policy_logits[i * 20] : NULL;
 
         // Compute pi( human_action | observation )

@@ -106,7 +106,11 @@ class Drive(pufferlib.PufferEnv):
     def step(self, actions):
         self.terminals[:] = 0
         self.actions[:] = actions
-        binding.vec_step(self.c_envs)
+        # TODO(dc): Pass policy logits for human agent
+        # Create dummy logits (uniform distribution)
+        policy_logits = np.ones((self.actions.shape[0], 20), dtype=np.float32) * 0.1
+        # policy_logits = np.zeros_like(self.actions, shape=(self.actions.shape[0], 20), dtype=np.float32)
+        binding.vec_step(self.c_envs, policy_logits=policy_logits)
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
