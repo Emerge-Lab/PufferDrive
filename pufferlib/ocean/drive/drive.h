@@ -916,7 +916,7 @@ void compute_agent_metrics(Drive* env, int agent_idx, float* policy_logits) {
     if (policy_logits && env->timestep < TRAJECTORY_LENGTH && agent->human_acceleration && agent->human_steering) {
         float expert_accel = agent->human_acceleration[env->timestep];
         float expert_steer = agent->human_steering[env->timestep];
-        agent->metrics_array[LOG_LIKELIHOOD_IDX] = compute_log_likelihood(policy_logits, expert_accel, expert_steer);
+        agent->metrics_array[LOG_LIKELIHOOD_IDX] = compute_log_likelihood(policy_logits);
     } else {
         agent->metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f;
     }
