@@ -326,32 +326,79 @@ def load_map(map_name, binary_output=None):
         save_map_binary(map_data, binary_output)
 
 
-def process_all_maps(data_dir: Path):
-    """Process all maps and save them as binaries"""
-    from pathlib import Path
-
+def process_all_maps(dataset_path: str):
+    """Process all maps from a local path (or GCS) and save them as binaries."""
     # Create the binaries directory if it doesn't exist
     binary_dir = Path("resources/drive/binaries")
     binary_dir.mkdir(parents=True, exist_ok=True)
 
-    # Path to the training data
-    data_dir = Path("data/train")
+    # --- Method 1: GCS FUSE ---
+    if dataset_path.startswith("gs://") and os.path.exists("/gcs/"):
+        print("Vertex AI GCS FUSE mount detected. Translating GCS URI to local path.")
+        dataset_path = dataset_path.replace("gs://", "/gcs/")
+        print(f"Using mounted dataset path: {dataset_path}")
 
-    # Get all JSON files in the training directory
-    json_files = sorted(data_dir.glob("*.json"))
+    file_iterator = None
+    is_gcs_stream = False
 
-    print(f"Found {len(json_files)} JSON files")
+    if dataset_path.startswith("gs://"):
+        # --- Method 2: GCS Streaming (Recommended Fallback) ---
+        is_gcs_stream = True
+        try:
+            import gcsfs
+            from torchdata.datapipes.iter import FSSpecFileLister
+        except ImportError:
+            print("Error: 'torchdata' and 'gcsfs' are required for efficient GCS streaming.")
+            print("Please add them to your dependencies (e.g., in gcp.dockerfile: uv pip install torchdata gcsfs)")
+            print("Aborting, as streaming is the required fallback for GCS access.")
+            exit(1)
 
-    # Process each JSON file
-    for i, map_path in enumerate(json_files[:10000]):
-        binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
-        binary_path = binary_dir / binary_file
+        print(f"Streaming data from GCS path: {dataset_path}")
+        # Create a datapipe to list all files, filter for JSON, and open them.
+        datapipe = FSSpecFileLister(dataset_path)
+        datapipe = datapipe.filter(filter_fn=lambda path: path.endswith(".json"))
+        file_iterator = datapipe.open_files(mode="rt", encoding="utf-8")
 
-        print(f"Processing {map_path.name} -> {binary_file}")
-        # try:
-        load_map(str(map_path), str(binary_path))
-        # except Exception as e:
-        #     print(f"Error processing {map_path.name}: {e}")
+    else:
+        # --- Method 3: Local Filesystem ---
+        path = Path(dataset_path)
+        print(f"Searching for JSON map files in local path: {path.resolve()}")
+        file_iterator = sorted(path.glob("*.json"))
+
+    print("Processing maps...")
+    file_count = 0
+    # Process each JSON file from the appropriate source
+    for i, item in enumerate(file_iterator):
+        if i >= 10000:  # Keep the limit for safety
+            print("Reached file limit of 10000.")
+            break
+
+        map_path_str = ""
+        try:
+            if is_gcs_stream:
+                # For streaming, item is a (path, stream) tuple
+                map_path_str, stream = item
+                map_data = json.load(stream)
+                stream.close()  # Ensure stream is closed
+            else:
+                # For local files, item is a Path object
+                map_path_str = str(item)
+                with open(map_path_str, "r") as f:
+                    map_data = json.load(f)
+
+            map_name = Path(map_path_str).name
+            binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
+            binary_path = binary_dir / binary_file
+
+            print(f"Processing {map_name} -> {binary_file}")
+            save_map_binary(map_data, str(binary_path))
+            file_count += 1
+
+        except Exception as e:
+            print(f"Error processing {map_path_str}: {e}")
+            continue
+
+    print(f"Found and processed {file_count} JSON files.")
 
 
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
