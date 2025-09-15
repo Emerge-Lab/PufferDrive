@@ -213,6 +213,7 @@ struct Drive {
     int* neighbor_cache_indices;
     float reward_vehicle_collision;
     float reward_offroad_collision;
+    float human_log_likelihood_coef;
     char* map_name;
     float world_mean_x;
     float world_mean_y;
