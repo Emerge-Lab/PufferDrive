@@ -3,6 +3,7 @@ import gymnasium
 import json
 import struct
 import os
+import math
 import pufferlib
 from pufferlib.ocean.drive import binding
 
@@ -152,6 +153,98 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_close(self.c_envs)
 
 
+def infer_human_actions(obj):
+    """Infer expert actions (steer, accel) using inverse bicycle model."""
+    trajectory_length = 91
+
+    # Initialize expert actions arrays
+    expert_acceleration = []
+    expert_steering = []
+
+    positions = obj.get("position", [])
+    velocities = obj.get("velocity", [])
+    headings = obj.get("heading", [])
+    valids = obj.get("valid", [])
+
+    if len(positions) < 2 or len(velocities) < 2 or len(headings) < 2:
+        return [0.0] * trajectory_length, [0.0] * trajectory_length
+
+    dt = 0.1  # Time step
+    vehicle_length = obj.get("length", 4.5)  # Default vehicle length
+
+    for t in range(trajectory_length - 1):
+        if (
+            t >= len(positions)
+            or t >= len(velocities)
+            or t >= len(headings)
+            or t >= len(valids)
+            or not valids[t]
+            or not valids[t + 1]
+            or t + 1 >= len(positions)
+            or t + 1 >= len(velocities)
+            or t + 1 >= len(headings)
+        ):
+            expert_acceleration.append(0.0)
+            expert_steering.append(0.0)
+            continue
+
+        # Current state
+        vel_t = velocities[t]
+        heading_t = headings[t]
+        speed_t = math.sqrt(vel_t.get("x", 0.0) ** 2 + vel_t.get("y", 0.0) ** 2)
+
+        # Next state
+        vel_t1 = velocities[t + 1]
+        heading_t1 = headings[t + 1]
+        speed_t1 = math.sqrt(vel_t1.get("x", 0.0) ** 2 + vel_t1.get("y", 0.0) ** 2)
+
+        # Compute acceleration
+        acceleration = (speed_t1 - speed_t) / dt
+
+        # Normalize heading difference
+        heading_diff = heading_t1 - heading_t
+        while heading_diff > math.pi:
+            heading_diff -= 2 * math.pi
+        while heading_diff < -math.pi:
+            heading_diff += 2 * math.pi
+
+        # Compute yaw rate
+        yaw_rate = heading_diff / dt
+
+        # Compute steering using inverse bicycle model
+        steering = 0.0
+        if speed_t > 0.1:  # Avoid division by zero
+            # From bicycle model: yaw_rate = (v * cos(beta) * tan(delta)) / L
+            # Assuming beta ≈ 0: yaw_rate ≈ (v * tan(delta)) / L
+            tan_steering = (yaw_rate * vehicle_length) / speed_t
+            # Clamp tan_steering to avoid extreme values
+            tan_steering = max(-10.0, min(10.0, tan_steering))
+            steering = math.atan(tan_steering)
+
+        # Clamp values to reasonable ranges
+        acceleration = max(-4.0, min(4.0, acceleration))
+        steering = max(-1.0, min(1.0, steering))
+
+        expert_acceleration.append(acceleration)
+        expert_steering.append(steering)
+
+    # Handle last timestep
+    expert_acceleration.append(0.0)
+    expert_steering.append(0.0)
+
+    # Ensure arrays are exactly trajectory_length
+    expert_acceleration = expert_acceleration[:trajectory_length]
+    expert_steering = expert_steering[:trajectory_length]
+
+    # Pad if necessary
+    while len(expert_acceleration) < trajectory_length:
+        expert_acceleration.append(0.0)
+    while len(expert_steering) < trajectory_length:
+        expert_steering.append(0.0)
+
+    return expert_acceleration, expert_steering
+
+
 def calculate_area(p1, p2, p3):
     # Calculate the area of the triangle using the determinant method
     return 0.5 * abs((p1["x"] - p3["x"]) * (p2["y"] - p1["y"]) - (p1["x"] - p2["x"]) * (p3["y"] - p1["y"]))
@@ -259,6 +352,18 @@ def save_map_binary(map_data, output_file):
                 )
             )
 
+            # Infer and write human actions
+            if obj_type == 1:  # Only for vehicles
+                human_accel, human_steering = infer_human_actions(obj)
+
+                f.write(struct.pack(f"{trajectory_length}f", *human_accel))
+
+                f.write(struct.pack(f"{trajectory_length}f", *human_steering))
+            else:
+                # Write zeros for non-vehicles
+                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
+                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
+
             # Write scalar fields
             f.write(struct.pack("f", float(obj.get("width", 0.0))))
             f.write(struct.pack("f", float(obj.get("length", 0.0))))
@@ -335,7 +440,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/train")
+    data_dir = Path("data/processed/training")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
