@@ -22,14 +22,14 @@ ARGS=()
 if [ -n "$1" ]; then
   # If a dataset path is provided, add it to the arguments
   echo "Using dataset from: $1"
-  ARGS+=(--data_dir "$1")
+  ARGS+=(--dataset-path "$1")
 else
   # If no path is provided, the Python script will use its default
   echo "No dataset path provided. The default path inside drive.py will be used."
 fi
 
 # Prepare Jsons by converting them to the binary format required for training.
-python /puffertank/pufferlib/ocean/drive/drive.py "${ARGS[@]}"
+python /pufferdrive/pufferlib/ocean/drive/drive.py "${ARGS[@]}"
 
 # Run the PufferLib training command for the 'puffer_drive' environment.
 echo "Starting PufferDrive training..."
