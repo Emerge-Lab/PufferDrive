@@ -374,6 +374,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         for(int i = 0; i < frame_count; i++) {
             float* path_taken = NULL;
             snprintf(filename, sizeof(filename), "resources/drive/frame_topdown_%03d.png", i);
+            // Always set obs_only=0, lasers=0 for top-down view (full world state)
             saveTopDownImage(&env, client, filename, target, map_height, 0, 0, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory, show_grid);
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
