@@ -374,6 +374,7 @@ void set_start_position(Drive* env){
         e->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
         e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
         e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+        e->metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f; // log-likelihood
         e->respawn_timestep = -1;
     }
     //EndDrawing();
@@ -797,6 +798,7 @@ void reset_agent_metrics(Drive* env, int agent_idx){
     agent->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
     agent->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+    agent->metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f; // log-likelihood
     agent->collision_state = 0;
 }
 
@@ -1387,6 +1389,7 @@ void c_reset(Drive* env){
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+        env->entities[agent_idx].metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f;
         compute_agent_metrics(env, agent_idx, NULL);
     }
     compute_observations(env);
@@ -1404,6 +1407,7 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+    env->entities[agent_idx].metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f;
     env->entities[agent_idx].respawn_timestep = env->timestep;
 }
 
