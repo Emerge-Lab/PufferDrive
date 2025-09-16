@@ -12,7 +12,10 @@
 #include <time.h>
 
 // Global Constants
-#define M_PI 3.14159
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 
 // Entity Types
 #define NONE 0
@@ -740,21 +743,35 @@ int collision_check(Drive* env, int agent_idx) {
     return car_collided_with_index;
 }
 
-int check_lane_aligned(Entity* car, Entity* lane) {
-    float car_to_lane_x = lane->x - car->x;
-    float car_to_lane_y = lane->y - car->y;
-    float car_heading_x = cosf(car->heading);
-    float car_heading_y = sinf(car->heading);
-    float lane_heading_x = cosf(lane->heading);
-    float lane_heading_y = sinf(lane->heading);
-    float dot_product = car_heading_x * lane_heading_x + car_heading_y * lane_heading_y;
-    float magnitude_car = sqrtf(car_heading_x * car_heading_x + car_heading_y * car_heading_y);
-    float magnitude_lane = sqrtf(lane_heading_x * lane_heading_x + lane_heading_y * lane_heading_y);
-    if (magnitude_car == 0 || magnitude_lane == 0) return 0; // Prevent division by zero
-    float angle = acosf(dot_product / (magnitude_car * magnitude_lane));
-    angle = fabsf(angle); // Ensure angle is positive
-    if (angle > M_PI) angle = 2 * M_PI - angle; // Normalize angle to [0, π]
-    return angle < (M_PI / 4); // Consider aligned if within 45 degrees
+int check_lane_aligned(Entity* car, Entity* lane, int geometry_idx) {
+    // Validate lane geometry length
+    if (!lane || lane->array_size < 2) return 0;
+
+    // Clamp geometry index to valid segment range [0, array_size-2]
+    if (geometry_idx < 0) geometry_idx = 0;
+    if (geometry_idx >= lane->array_size - 1) geometry_idx = lane->array_size - 2;
+
+    // Compute local lane segment heading
+    float heading_x1 = lane->traj_x[geometry_idx] - lane->traj_x[geometry_idx - 1];
+    float heading_y1 = lane->traj_y[geometry_idx] - lane->traj_y[geometry_idx - 1];
+    float heading_x2 = lane->traj_x[geometry_idx + 1] - lane->traj_x[geometry_idx];
+    float heading_y2 = lane->traj_y[geometry_idx + 1] - lane->traj_y[geometry_idx];
+
+    float heading_1 = atan2f(heading_y1, heading_x1);
+    float heading_2 = atan2f(heading_y2, heading_x2);
+    float heading = (heading_1 + heading_2) / 2.0f;
+
+    // Normalize to [-pi, pi]
+    if (heading > M_PI) heading -= 2.0f * M_PI;
+    if (heading < -M_PI) heading += 2.0f * M_PI;
+
+    // Compute heading difference
+    float car_heading = car->heading; // radians
+    float heading_diff = fabsf(car_heading - heading);
+
+    if (heading_diff > M_PI) heading_diff = 2.0f * M_PI - heading_diff;
+
+    return (heading_diff < (M_PI / 6.0f)) ? 1 : 0; // within 30 degrees
 }
 
 void reset_agent_metrics(Drive* env, int agent_idx){
@@ -778,7 +795,9 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     float cos_heading = cosf(agent->heading);
     float sin_heading = sinf(agent->heading);
     float min_distance = 100.0f;
-    int closest_lane_idx = -1;
+
+    int closest_lane_entity_idx = -1;
+    int closest_lane_geometry_idx = -1;
 
     float corners[4][2];
     for (int i = 0; i < 4; i++) {
@@ -813,6 +832,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
         // Find closest point on the road centerline to the agent
         if(entity->type == ROAD_LANE) {
+            int entity_idx = entity_list[i];
             int geometry_idx = entity_list[i + 1];
 
             float lane_x = entity->traj_x[geometry_idx];
@@ -820,15 +840,20 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
             float dist = ((lane_x - agent->x)*(lane_x - agent->x) + (lane_y - agent->y)*(lane_y - agent->y));
             if(dist < min_distance){
                 min_distance = dist;
-                closest_lane_idx = geometry_idx;
+                closest_lane_entity_idx = entity_idx;
+                closest_lane_geometry_idx = geometry_idx;
             }
-
         }
     }
 
     // check if aligned with closest lane
-    int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_idx]);
-    agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
+    if (min_distance > 4.0f) {
+        agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+    } else {
+        int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
+        agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
+    }
+
 
     // Check for vehicle collisions
     int car_collided_with_index = collision_check(env, agent_idx);
