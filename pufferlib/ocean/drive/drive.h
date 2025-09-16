@@ -281,14 +281,9 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_heading = (float*)malloc(size * sizeof(float));
             entities[i].traj_valid = (int*)malloc(size * sizeof(int));
 
-            // Allocate human action arrays for vehicles
-            if (entities[i].type == 1) {  // Only for vehicles
-                entities[i].human_acceleration = (float*)malloc(size * sizeof(float));
-                entities[i].human_steering = (float*)malloc(size * sizeof(float));
-            } else {
-                entities[i].human_acceleration = NULL;
-                entities[i].human_steering = NULL;
-            }
+            // Allocate human action arrays for all object types
+            entities[i].human_acceleration = (float*)malloc(size * sizeof(float));
+            entities[i].human_steering = (float*)malloc(size * sizeof(float));
         } else {
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
@@ -312,14 +307,9 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             fread(entities[i].traj_heading, sizeof(float), size, file);
             fread(entities[i].traj_valid, sizeof(int), size, file);
 
-            // Read human actions for vehicles
-            if (entities[i].type == 1) {  // Only for vehicles
-                fread(entities[i].human_acceleration, sizeof(float), size, file);
-                fread(entities[i].human_steering, sizeof(float), size, file);
-            } else {
-                // Skip human action data for non-vehicles
-                fseek(file, 2 * size * sizeof(float), SEEK_CUR);
-            }
+            // Read human actions for agents
+            fread(entities[i].human_acceleration, sizeof(float), size, file);
+            fread(entities[i].human_steering, sizeof(float), size, file);
         }
 
         // Read remaining scalar fields

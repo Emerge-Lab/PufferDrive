@@ -108,8 +108,7 @@ class Drive(pufferlib.PufferEnv):
         self.actions[:] = actions
         # TODO(dc): Pass policy logits for human agent
         # Create dummy logits (uniform distribution)
-        policy_logits = np.ones((self.actions.shape[0], 20), dtype=np.float32) * 0.1
-        # policy_logits = np.zeros_like(self.actions, shape=(self.actions.shape[0], 20), dtype=np.float32)
+        policy_logits = np.zeros_like(self.actions, shape=(self.actions.shape[0], 20), dtype=np.float32)
         binding.vec_step(self.c_envs, policy_logits=policy_logits)
         self.tick += 1
         info = []
@@ -153,6 +152,11 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+    def get_human_actions(self):
+        """Get human acceleration and steering for current timestep for all active agents."""
+        # import pdb; pdb.set_trace()
+        return binding.get_human_actions_current(self.c_envs)
 
     def render(self):
         binding.vec_render(self.c_envs, 0)
@@ -338,6 +342,7 @@ def save_map_binary(map_data, output_file):
 
             # Write velocity arrays
             velocities = obj.get("velocity", [])
+
             for arr, key in [(velocities, "x"), (velocities, "y"), (velocities, "z")]:
                 for i in range(trajectory_length):
                     vel = arr[i] if i < len(arr) else {"x": 0.0, "y": 0.0, "z": 0.0}
@@ -364,8 +369,10 @@ def save_map_binary(map_data, output_file):
             if obj_type == 1:  # Only for vehicles
                 human_accel, human_steering = infer_human_actions(obj)
 
-                f.write(struct.pack(f"{trajectory_length}f", *human_accel))
+                print(f"Human Acceleration: {human_accel}")
+                print(f"Human Steering: {human_steering}")
 
+                f.write(struct.pack(f"{trajectory_length}f", *human_accel))
                 f.write(struct.pack(f"{trajectory_length}f", *human_steering))
             else:
                 # Write zeros for non-vehicles
@@ -456,7 +463,7 @@ def process_all_maps():
     print(f"Found {len(json_files)} JSON files")
 
     # Process each JSON file
-    for i, map_path in enumerate(json_files[:10000]):
+    for i, map_path in enumerate(json_files[:2]):
         binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
         binary_path = binary_dir / binary_file
 
@@ -486,8 +493,10 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
     env.close()
+    env.get_human_actions()
+    # import pdb; pdb.set_trace()
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()
