@@ -193,7 +193,7 @@ class PuffeRL:
             self.logger = NoLogger(config)
 
         # Learning rate scheduler
-        epochs = config["total_timesteps"] // config["batch_size"]
+        epochs = max(1, config["total_timesteps"] // config["batch_size"])
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
         self.total_epochs = epochs
 
