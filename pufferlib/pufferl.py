@@ -218,6 +218,7 @@ class PuffeRL:
         self.stats = defaultdict(list)
         self.last_stats = defaultdict(list)
         self.losses = {}
+        self.extra_logs = {}
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -352,6 +353,12 @@ class PuffeRL:
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
 
+        # Collect per-minibatch entropy values for histogram logging
+        _entropy_samples = []
+        # Running mean of policy entropy across minibatches in this update
+        ent_running_mean = 0.0
+        ent_seen = 0
+
         for mb in range(self.total_minibatches):
             profile("train_misc", epoch, nest=True)
             self.amp_context.__enter__()
@@ -435,9 +442,41 @@ class PuffeRL:
             v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
-            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+            v_raw = torch.max(v_loss_unclipped, v_loss_clipped)
+
+            if config.get("uncertainty_aware_value_function_learning", False):
+                try:
+                    ent_matrix = entropy.reshape(mb_logprobs.shape)
+                except Exception:
+                    ent_matrix = entropy.mean().expand_as(mb_logprobs)
+
+                # Update running mean with current minibatch mean entropy
+                ent_mb = float(ent_matrix.mean().detach().cpu().item())
+                ent_seen += 1
+                ent_running_mean += (ent_mb - ent_running_mean) / max(1, ent_seen)
+
+                # 1 - lambda * sigmoid(entropy - mean_entropy_so_far)
+                # lambda is the hyper paramter we're adding for this
+                u_lambda = float(config.get("uncertainty_lambda", 0.0))
+                if u_lambda != 0.0:
+                    weight = (1.0 - u_lambda * torch.sigmoid(ent_matrix - ent_running_mean)).detach()
+                    weight = torch.clamp(weight, min=0.0)
+                    v_raw = v_raw * weight
+                    losses["uncertainty_weight_mean"] = losses.get("uncertainty_weight_mean", 0.0) + (
+                        float(weight.mean().detach().cpu().item()) / self.total_minibatches
+                    )
+
+            v_loss = 0.5 * v_raw.mean()
 
             entropy_loss = entropy.mean()
+            try:
+                _entropy_samples.append(entropy.detach().reshape(-1))
+            except Exception:
+                pass
+            try:
+                _entropy_samples.append(entropy.detach().reshape(-1))
+            except Exception:
+                pass
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
@@ -450,6 +489,7 @@ class PuffeRL:
             losses["policy_loss"] += pg_loss.item() / self.total_minibatches
             losses["value_loss"] += v_loss.item() / self.total_minibatches
             losses["entropy"] += entropy_loss.item() / self.total_minibatches
+            losses["mean_policy_entropy"] += entropy_loss.item() / self.total_minibatches
             losses["old_approx_kl"] += old_approx_kl.item() / self.total_minibatches
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
@@ -473,6 +513,22 @@ class PuffeRL:
         var_y = y_true.var()
         explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
         losses["explained_variance"] = explained_var.item()
+
+        # Prepare histogram logs for WandB (arrays converted in WandbLogger)
+        if _entropy_samples:
+            try:
+                ent_vals = torch.cat(_entropy_samples).detach().float().cpu().numpy()
+                self.extra_logs["losses/entropy_hist"] = ent_vals
+            except Exception:
+                pass
+
+        # Prepare histogram logs for WandB (arrays converted in WandbLogger)
+        if _entropy_samples:
+            try:
+                ent_vals = torch.cat(_entropy_samples).detach().float().cpu().numpy()
+                self.extra_logs["losses/entropy_hist"] = ent_vals
+            except Exception:
+                pass
 
         profile.end()
         logs = None
@@ -596,6 +652,10 @@ class PuffeRL:
             # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
+
+        if hasattr(self.logger, "wandb") and getattr(self, "extra_logs", None):
+            logs.update(self.extra_logs)
+            self.extra_logs = {}
 
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:
@@ -986,7 +1046,17 @@ class WandbLogger:
         self.run_id = wandb.run.id
 
     def log(self, logs, step):
-        self.wandb.log(logs, step=step)
+        out = {}
+        for k, v in logs.items():
+            try:
+                is_hist_key = k.endswith("_hist") or k.startswith("hist/")
+                if is_hist_key and (hasattr(v, "__array__") or hasattr(v, "shape") or isinstance(v, (list, tuple))):
+                    out[k] = self.wandb.Histogram(v)
+                else:
+                    out[k] = v
+            except Exception:
+                out[k] = v
+        self.wandb.log(out, step=step)
 
     def close(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
