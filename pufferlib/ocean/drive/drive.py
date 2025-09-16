@@ -430,5 +430,5 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, default="data/train",
                         help="Path to the directory containing JSON map files.")
     args = parser.parse_args()
-    process_all_maps(Path(args.data_dir))
+    process_all_maps(args.data_dir)
     
