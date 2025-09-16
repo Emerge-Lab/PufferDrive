@@ -32,3 +32,6 @@ box2d-*/
 # Documentation and local config files
 README.md
 .pre-commit-config.yaml
+
+# Client side files
+automation/gcp_run_job.py
