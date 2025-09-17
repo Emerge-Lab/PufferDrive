@@ -251,6 +251,7 @@ class PuffeRL:
         self.full_rows = 0
         while self.full_rows < self.segments:
             profile("env", epoch)
+            # TODO(dc): Receive new actions
             o, r, d, t, info, env_id, mask = self.vecenv.recv()
 
             profile("eval_misc", epoch)
@@ -327,6 +328,10 @@ class PuffeRL:
                         self.stats[k].append(v)
 
             profile("env", epoch)
+
+            # TODO(dc): Compute human log prob given action
+            # TODO(dc): Send the log probabilies to the env
+
             self.vecenv.send(action)
 
         profile("eval_misc", epoch)

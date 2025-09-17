@@ -3,6 +3,7 @@ import gymnasium
 import json
 import struct
 import os
+import math
 import pufferlib
 from pufferlib.ocean.drive import binding
 
@@ -19,6 +20,7 @@ class Drive(pufferlib.PufferEnv):
         reward_offroad_collision=-0.1,
         reward_goal_post_respawn=0.5,
         reward_vehicle_collision_post_respawn=-0.25,
+        human_log_likelihood_coef=0.0,
         spawn_immunity_timer=30,
         resample_frequency=91,
         num_maps=100,
@@ -34,6 +36,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_vehicle_collision = reward_vehicle_collision
         self.reward_offroad_collision = reward_offroad_collision
         self.reward_goal_post_respawn = reward_goal_post_respawn
+        self.human_log_likelihood_coef = human_log_likelihood_coef
         self.reward_vehicle_collision_post_respawn = reward_vehicle_collision_post_respawn
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
@@ -86,6 +89,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_offroad_collision=reward_offroad_collision,
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
+                human_log_likelihood_coef=human_log_likelihood_coef,
                 spawn_immunity_timer=spawn_immunity_timer,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
@@ -102,9 +106,13 @@ class Drive(pufferlib.PufferEnv):
     def step(self, actions):
         self.terminals[:] = 0
         self.actions[:] = actions
-        binding.vec_step(self.c_envs)
+        # TODO(dc): Pass policy logits for human agent
+        # Create dummy logits (uniform distribution)
+        policy_logits = np.zeros_like(self.actions, shape=(self.actions.shape[0], 20), dtype=np.float32)
+        binding.vec_step(self.c_envs, policy_logits=policy_logits)
         self.tick += 1
         info = []
+        # TODO(dc): Add human action info to info dict
         if self.tick % self.report_interval == 0:
             log = binding.vec_log(self.c_envs)
             if log:
@@ -134,6 +142,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_offroad_collision=self.reward_offroad_collision,
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
+                        human_log_likelihood_coef=self.human_log_likelihood_coef,
                         spawn_immunity_timer=self.spawn_immunity_timer,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
@@ -143,13 +152,116 @@ class Drive(pufferlib.PufferEnv):
 
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
+
+        # Get human actions and store them - MODIFICATION
+        accel, steer = self.get_human_actions()
+        # Store human actions in the buffer for recv()
+        self.human_actions[:, 0] = accel  # acceleration
+        self.human_actions[:, 1] = steer  # steering
+
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+    def get_human_actions(self):
+        """Get human acceleration and steering for current timestep for all active agents."""
+        return binding.get_human_actions_current(self.c_envs)
 
     def render(self):
         binding.vec_render(self.c_envs, 0)
 
     def close(self):
         binding.vec_close(self.c_envs)
+
+
+def infer_human_actions(obj):
+    """Infer expert actions (steer, accel) using inverse bicycle model."""
+    trajectory_length = 91
+
+    # Initialize expert actions arrays
+    expert_acceleration = []
+    expert_steering = []
+
+    positions = obj.get("position", [])
+    velocities = obj.get("velocity", [])
+    headings = obj.get("heading", [])
+    valids = obj.get("valid", [])
+
+    if len(positions) < 2 or len(velocities) < 2 or len(headings) < 2:
+        return [0.0] * trajectory_length, [0.0] * trajectory_length
+
+    dt = 0.1  # Time step
+    vehicle_length = obj.get("length", 4.5)  # Default vehicle length
+
+    for t in range(trajectory_length - 1):
+        if (
+            t >= len(positions)
+            or t >= len(velocities)
+            or t >= len(headings)
+            or t >= len(valids)
+            or not valids[t]
+            or not valids[t + 1]
+            or t + 1 >= len(positions)
+            or t + 1 >= len(velocities)
+            or t + 1 >= len(headings)
+        ):
+            expert_acceleration.append(0.0)
+            expert_steering.append(0.0)
+            continue
+
+        # Current state
+        vel_t = velocities[t]
+        heading_t = headings[t]
+        speed_t = math.sqrt(vel_t.get("x", 0.0) ** 2 + vel_t.get("y", 0.0) ** 2)
+
+        # Next state
+        vel_t1 = velocities[t + 1]
+        heading_t1 = headings[t + 1]
+        speed_t1 = math.sqrt(vel_t1.get("x", 0.0) ** 2 + vel_t1.get("y", 0.0) ** 2)
+
+        # Compute acceleration
+        acceleration = (speed_t1 - speed_t) / dt
+
+        # Normalize heading difference
+        heading_diff = heading_t1 - heading_t
+        while heading_diff > math.pi:
+            heading_diff -= 2 * math.pi
+        while heading_diff < -math.pi:
+            heading_diff += 2 * math.pi
+
+        # Compute yaw rate
+        yaw_rate = heading_diff / dt
+
+        # Compute steering using inverse bicycle model
+        steering = 0.0
+        if speed_t > 0.1:  # Avoid division by zero
+            # From bicycle model: yaw_rate = (v * cos(beta) * tan(delta)) / L
+            # Assuming beta ≈ 0: yaw_rate ≈ (v * tan(delta)) / L
+            tan_steering = (yaw_rate * vehicle_length) / speed_t
+            # Clamp tan_steering to avoid extreme values
+            tan_steering = max(-10.0, min(10.0, tan_steering))
+            steering = math.atan(tan_steering)
+
+        # Clamp values to reasonable ranges
+        acceleration = max(-4.0, min(4.0, acceleration))
+        steering = max(-1.0, min(1.0, steering))
+
+        expert_acceleration.append(acceleration)
+        expert_steering.append(steering)
+
+    # Handle last timestep
+    expert_acceleration.append(0.0)
+    expert_steering.append(0.0)
+
+    # Ensure arrays are exactly trajectory_length
+    expert_acceleration = expert_acceleration[:trajectory_length]
+    expert_steering = expert_steering[:trajectory_length]
+
+    # Pad if necessary
+    while len(expert_acceleration) < trajectory_length:
+        expert_acceleration.append(0.0)
+    while len(expert_steering) < trajectory_length:
+        expert_steering.append(0.0)
+
+    return expert_acceleration, expert_steering
 
 
 def calculate_area(p1, p2, p3):
@@ -237,6 +349,7 @@ def save_map_binary(map_data, output_file):
 
             # Write velocity arrays
             velocities = obj.get("velocity", [])
+
             for arr, key in [(velocities, "x"), (velocities, "y"), (velocities, "z")]:
                 for i in range(trajectory_length):
                     vel = arr[i] if i < len(arr) else {"x": 0.0, "y": 0.0, "z": 0.0}
@@ -258,6 +371,20 @@ def save_map_binary(map_data, output_file):
                     *[int(valids[i]) if i < len(valids) else 0 for i in range(trajectory_length)],
                 )
             )
+
+            # Infer and write human actions
+            if obj_type == 1:  # Only for vehicles
+                human_accel, human_steering = infer_human_actions(obj)
+
+                print(f"Human Acceleration: {human_accel}")
+                print(f"Human Steering: {human_steering}")
+
+                f.write(struct.pack(f"{trajectory_length}f", *human_accel))
+                f.write(struct.pack(f"{trajectory_length}f", *human_steering))
+            else:
+                # Write zeros for non-vehicles
+                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
+                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
 
             # Write scalar fields
             f.write(struct.pack("f", float(obj.get("width", 0.0))))
@@ -335,7 +462,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/train")
+    data_dir = Path("data/processed/training")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -343,7 +470,7 @@ def process_all_maps():
     print(f"Found {len(json_files)} JSON files")
 
     # Process each JSON file
-    for i, map_path in enumerate(json_files[:10000]):
+    for i, map_path in enumerate(json_files[:2]):
         binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
         binary_path = binary_dir / binary_file
 
@@ -372,9 +499,12 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         tick += 1
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
+
+    env.get_human_actions()
     env.close()
+    # import pdb; pdb.set_trace()
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()

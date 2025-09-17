@@ -49,6 +49,7 @@
 #define OFFROAD_IDX 1
 #define REACHED_GOAL_IDX 2
 #define LANE_ALIGNED_IDX 3
+#define LOG_LIKELIHOOD_IDX 4
 
 // grid cell size
 #define GRID_CELL_SIZE 5.0f
@@ -111,6 +112,7 @@ struct Log {
     float dnf_rate;
     float n;
     float lane_alignment_rate;
+    float human_log_likelihood;
 };
 
 typedef struct Entity Entity;
@@ -125,6 +127,8 @@ struct Entity {
     float* traj_vz;
     float* traj_heading;
     int* traj_valid;
+    float* human_acceleration;
+    float* human_steering;
     float width;
     float length;
     float height;
@@ -133,7 +137,7 @@ struct Entity {
     float goal_position_z;
     int mark_as_expert;
     int collision_state;
-    float metrics_array[4]; // metrics_array: [collision, offroad, reached_goal, lane_aligned]
+    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, log-likelihood]
     float x;
     float y;
     float z;
@@ -160,6 +164,8 @@ void free_entity(Entity* entity){
     free(entity->traj_vz);
     free(entity->traj_heading);
     free(entity->traj_valid);
+    free(entity->human_acceleration);
+    free(entity->human_steering);
 }
 
 float relative_distance(float a, float b){
@@ -208,12 +214,14 @@ struct Drive {
     int* neighbor_cache_indices;
     float reward_vehicle_collision;
     float reward_offroad_collision;
+    float human_log_likelihood_coef;
     char* map_name;
     float world_mean_x;
     float world_mean_y;
     int spawn_immunity_timer;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
+    float* policy_logits;
 };
 
 void add_log(Drive* env) {
@@ -240,25 +248,31 @@ void add_log(Drive* env) {
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         env->log.n += 1;
+        env->log.human_log_likelihood += env->logs[i].human_log_likelihood;
     }
 }
 
 Entity* load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
+
     fread(&env->num_objects, sizeof(int), 1, file);
     fread(&env->num_roads, sizeof(int), 1, file);
     env->num_entities = env->num_objects + env->num_roads;
+
     Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
+
     for (int i = 0; i < env->num_entities; i++) {
-	// Read base entity data
+        // Read base entity data
         fread(&entities[i].type, sizeof(int), 1, file);
         fread(&entities[i].array_size, sizeof(int), 1, file);
+
         // Allocate arrays based on type
         int size = entities[i].array_size;
         entities[i].traj_x = (float*)malloc(size * sizeof(float));
         entities[i].traj_y = (float*)malloc(size * sizeof(float));
         entities[i].traj_z = (float*)malloc(size * sizeof(float));
+
         if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {  // Object type
             // Allocate arrays for object-specific data
             entities[i].traj_vx = (float*)malloc(size * sizeof(float));
@@ -266,6 +280,10 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_vz = (float*)malloc(size * sizeof(float));
             entities[i].traj_heading = (float*)malloc(size * sizeof(float));
             entities[i].traj_valid = (int*)malloc(size * sizeof(int));
+
+            // Allocate human action arrays for all object types
+            entities[i].human_acceleration = (float*)malloc(size * sizeof(float));
+            entities[i].human_steering = (float*)malloc(size * sizeof(float));
         } else {
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
@@ -273,18 +291,27 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_vz = NULL;
             entities[i].traj_heading = NULL;
             entities[i].traj_valid = NULL;
+            entities[i].human_acceleration = NULL;
+            entities[i].human_steering = NULL;
         }
+
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
         fread(entities[i].traj_y, sizeof(float), size, file);
         fread(entities[i].traj_z, sizeof(float), size, file);
+
         if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {  // Object type
             fread(entities[i].traj_vx, sizeof(float), size, file);
             fread(entities[i].traj_vy, sizeof(float), size, file);
             fread(entities[i].traj_vz, sizeof(float), size, file);
             fread(entities[i].traj_heading, sizeof(float), size, file);
             fread(entities[i].traj_valid, sizeof(int), size, file);
+
+            // Read human actions for agents
+            fread(entities[i].human_acceleration, sizeof(float), size, file);
+            fread(entities[i].human_steering, sizeof(float), size, file);
         }
+
         // Read remaining scalar fields
         fread(&entities[i].width, sizeof(float), 1, file);
         fread(&entities[i].length, sizeof(float), 1, file);
@@ -294,6 +321,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
     }
+
     fclose(file);
     return entities;
 }
@@ -339,6 +367,7 @@ void set_start_position(Drive* env){
         e->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
         e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
         e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+        e->metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f; // log-likelihood
         e->respawn_timestep = -1;
     }
     //EndDrawing();
@@ -762,10 +791,22 @@ void reset_agent_metrics(Drive* env, int agent_idx){
     agent->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
     agent->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+    agent->metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f; // log-likelihood
     agent->collision_state = 0;
 }
 
-void compute_agent_metrics(Drive* env, int agent_idx) {
+float compute_log_likelihood(float* policy_logits) {
+    if (!policy_logits) {
+        return 0.0f;  // No policy logits available
+    }
+    else {
+        // pass for now
+        return 0.0f;
+    }
+
+}
+
+void compute_agent_metrics(Drive* env, int agent_idx, float* policy_logits) {
     Entity* agent = &env->entities[agent_idx];
 
     reset_agent_metrics(env, agent_idx);
@@ -861,6 +902,14 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         agent->metrics_array[COLLISION_IDX] = 0.0f;
     }
 
+    // Compute log likelihood of expert actions under the policy
+    if (policy_logits && env->timestep < TRAJECTORY_LENGTH && agent->human_acceleration && agent->human_steering) {
+        float expert_accel = agent->human_acceleration[env->timestep];
+        float expert_steer = agent->human_steering[env->timestep];
+        agent->metrics_array[LOG_LIKELIHOOD_IDX] = compute_log_likelihood(policy_logits);
+    } else {
+        agent->metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f;
+    }
 
     return;
 }
@@ -1263,7 +1312,8 @@ void c_reset(Drive* env){
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-        compute_agent_metrics(env, agent_idx);
+        env->entities[agent_idx].metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f;
+        compute_agent_metrics(env, agent_idx, NULL);
     }
     compute_observations(env);
 }
@@ -1280,10 +1330,12 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+    env->entities[agent_idx].metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f;
     env->entities[agent_idx].respawn_timestep = env->timestep;
 }
 
-void c_step(Drive* env){
+void c_step(Drive* env, float* policy_logits){
+    env->policy_logits = policy_logits;
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
@@ -1305,6 +1357,12 @@ void c_step(Drive* env){
 	    env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
+        // Pass logits (prob. of human actions under policy)
+        float* agent_logits = policy_logits ? &policy_logits[i * 20] : NULL;
+
+        // Compute pi( human_action | observation )
+        compute_agent_metrics(env, agent_idx, agent_logits);
+
         move_dynamics(env, i, agent_idx);
         // move_expert(env, env->actions, agent_idx);
     }
@@ -1312,7 +1370,7 @@ void c_step(Drive* env){
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
         //if(env->entities[agent_idx].respawn_timestep != -1) continue;
-        compute_agent_metrics(env, agent_idx);
+        compute_agent_metrics(env, agent_idx, NULL);
         int collision_state = env->entities[agent_idx].collision_state;
 
         if(collision_state > 0){
@@ -1362,6 +1420,9 @@ void c_step(Drive* env){
         //     env->logs[i].episode_return += 0.01f;
             env->logs[i].lane_alignment_rate = 1.0f;
         }
+
+        env->logs[i].human_log_likelihood += env->entities[agent_idx].metrics_array[LOG_LIKELIHOOD_IDX];
+        // TODO: Add to reward here?
     }
 
     for(int i = 0; i < env->active_agent_count; i++){

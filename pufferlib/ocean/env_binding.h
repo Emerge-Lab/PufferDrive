@@ -200,7 +200,7 @@ static PyObject* env_step(PyObject* self, PyObject* args) {
     if (!env){
         return NULL;
     }
-    c_step(env);
+    c_step(env, NULL);
     Py_RETURN_NONE;
 }
 
@@ -505,20 +505,25 @@ static PyObject* vec_reset(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
-static PyObject* vec_step(PyObject* self, PyObject* arg) {
-    int num_args = PyTuple_Size(arg);
-    if (num_args != 1) {
-        PyErr_SetString(PyExc_TypeError, "vec_step requires 1 argument");
-        return NULL;
-    }
+static PyObject* vec_step(PyObject* self, PyObject* arg, PyObject* kwargs) {
 
     VecEnv* vec = unpack_vecenv(arg);
     if (!vec) {
         return NULL;
     }
 
+    // For policy logits
+    float* policy_logits = NULL;
+    if (kwargs != NULL) {
+        PyObject* logits_obj = PyDict_GetItemString(kwargs, "policy_logits");
+        if (logits_obj && logits_obj != Py_None) {
+            policy_logits = (float*)PyArray_DATA((PyArrayObject*)logits_obj);
+        }
+    }
+
     for (int i = 0; i < vec->num_envs; i++) {
-        c_step(vec->envs[i]);
+        float* env_logits = policy_logits ? &policy_logits[i * 20] : NULL;
+        c_step(vec->envs[i], env_logits);
     }
     Py_RETURN_NONE;
 }
@@ -612,6 +617,102 @@ static PyObject* vec_close(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
+static PyObject* get_human_actions_current(PyObject* self, PyObject* args) {
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    // Count total active agents across all environments
+    int total_agents = 0;
+    for (int env_idx = 0; env_idx < vec->num_envs; env_idx++) {
+        Env* env = vec->envs[env_idx];
+        if (!env) continue; // Safety check
+
+        // Cast safely - make sure this is actually a Drive struct
+        Drive* drive_env = (Drive*)env;
+        if (!drive_env) continue;
+
+        total_agents += drive_env->active_agent_count;
+    }
+
+    if (total_agents == 0) {
+        // Return empty arrays if no active agents
+        npy_intp dims[1] = {0};
+        PyArrayObject* accel_array = (PyArrayObject*)PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+        PyArrayObject* steer_array = (PyArrayObject*)PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+
+        PyObject* result = PyTuple_New(2);
+        PyTuple_SetItem(result, 0, (PyObject*)accel_array);
+        PyTuple_SetItem(result, 1, (PyObject*)steer_array);
+        return result;
+    }
+
+    npy_intp dims[1] = {total_agents};
+    PyArrayObject* accel_array = (PyArrayObject*)PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+    PyArrayObject* steer_array = (PyArrayObject*)PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+
+    if (!accel_array || !steer_array) {
+        Py_XDECREF(accel_array);
+        Py_XDECREF(steer_array);
+        PyErr_SetString(PyExc_MemoryError, "Failed to create arrays");
+        return NULL;
+    }
+
+    float* accel_data = (float*)PyArray_DATA(accel_array);
+    float* steer_data = (float*)PyArray_DATA(steer_array);
+
+    printf("Total active agents: %d\n", total_agents);
+
+    int agent_offset = 0;
+    for (int env_idx = 0; env_idx < vec->num_envs; env_idx++) {
+        Env* env = vec->envs[env_idx];
+        if (!env) continue;
+
+        Drive* drive_env = (Drive*)env;
+        if (!drive_env || !drive_env->entities || !drive_env->active_agent_indices) {
+            continue;
+        }
+
+        for (int i = 0; i < drive_env->active_agent_count; i++) {
+            if (agent_offset >= total_agents) break; // Safety check
+
+            int agent_idx = drive_env->active_agent_indices[i];
+            if (agent_idx < 0 || agent_idx >= drive_env->num_entities) {
+                // Invalid agent index, use defaults
+                accel_data[agent_offset] = 0.0f;
+                steer_data[agent_offset] = 0.0f;
+            } else {
+                Entity* agent = &drive_env->entities[agent_idx];
+
+                if (drive_env->timestep < TRAJECTORY_LENGTH &&
+                    agent->human_acceleration &&
+                    agent->human_steering &&
+                    drive_env->timestep >= 0) {
+                    accel_data[agent_offset] = agent->human_acceleration[drive_env->timestep];
+                    steer_data[agent_offset] = agent->human_steering[drive_env->timestep];
+                } else {
+                    accel_data[agent_offset] = 0.0f;
+                    steer_data[agent_offset] = 0.0f;
+                }
+            }
+            agent_offset++;
+        }
+    }
+
+    PyObject* result = PyTuple_New(2);
+    if (!result) {
+        Py_DECREF(accel_array);
+        Py_DECREF(steer_array);
+        return NULL;
+    }
+
+    PyTuple_SetItem(result, 0, (PyObject*)accel_array);
+    PyTuple_SetItem(result, 1, (PyObject*)steer_array);
+
+    return result;
+}
+
 static double unpack(PyObject* kwargs, char* key) {
     PyObject* val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
@@ -652,11 +753,12 @@ static PyMethodDef methods[] = {
     {"vectorize", vectorize, METH_VARARGS, "Make a vector of environment handles"},
     {"vec_init", (PyCFunction)vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
     {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
-    {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
+    {"vec_step", (PyCFunction)vec_step, METH_VARARGS | METH_KEYWORDS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
+    {"get_human_actions_current", get_human_actions_current, METH_VARARGS, "Get current human actions for all agents"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}
 };
