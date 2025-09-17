@@ -239,6 +239,7 @@ struct Drive {
     int* neighbor_cache_indices;
     float reward_vehicle_collision;
     float reward_offroad_collision;
+    float reward_ade;
     char* map_name;
     float world_mean_x;
     float world_mean_y;
@@ -1419,7 +1420,14 @@ void c_step(Drive* env){
             env->logs[i].lane_alignment_rate = 1.0f;
         }
 
-        env->logs[i].avg_displacement_error = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
+        // Apply ADE reward
+        float current_ade = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
+        if(current_ade > 0.0f && env->reward_ade != 0.0f) {
+            float ade_reward = env->reward_ade * current_ade;
+            env->rewards[i] += ade_reward;
+            env->logs[i].episode_return += ade_reward;
+        }
+        env->logs[i].avg_displacement_error = current_ade;
     }
 
     for(int i = 0; i < env->active_agent_count; i++){

@@ -233,8 +233,9 @@ void demo() {
         .human_agent_idx = 0,
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
+        .reward_ade = -0.0f,
 	    .map_name = "resources/drive/binaries/map_942.bin",
-        .spawn_immunity_timer = 50
+        .spawn_immunity_timer = 50,
     };
     allocate(&env);
     c_reset(&env);
@@ -335,6 +336,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         .dynamics_model = CLASSIC,
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
+        .reward_ade = -0.0f,
 	    .map_name = map_name,
         .spawn_immunity_timer = 50
     };
