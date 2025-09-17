@@ -877,8 +877,9 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     }
 
     // check if aligned with closest lane
-    int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_idx]);
-    agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
+    // This causes a bug in rendering, temporarily disabling it
+    //int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_idx]);
+    agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
 
     // Check for vehicle collisions
     int car_collided_with_index = collision_check(env, agent_idx);
