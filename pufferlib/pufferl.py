@@ -251,6 +251,7 @@ class PuffeRL:
         self.full_rows = 0
         while self.full_rows < self.segments:
             profile("env", epoch)
+            # TODO(dc): Receive new actions
             o, r, d, t, info, env_id, mask = self.vecenv.recv()
 
             profile("eval_misc", epoch)
@@ -327,9 +328,6 @@ class PuffeRL:
                         self.stats[k].append(v)
 
             profile("env", epoch)
-
-            # TODO(dc): Access expert actions here
-            # human_accel, human_steer = self.vecenv.get_human_actions()
 
             # TODO(dc): Compute human log prob given action
             # TODO(dc): Send the log probabilies to the env

@@ -112,6 +112,7 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_step(self.c_envs, policy_logits=policy_logits)
         self.tick += 1
         info = []
+        # TODO(dc): Add human action info to info dict
         if self.tick % self.report_interval == 0:
             log = binding.vec_log(self.c_envs)
             if log:
@@ -151,11 +152,17 @@ class Drive(pufferlib.PufferEnv):
 
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
+
+        # Get human actions and store them - MODIFICATION
+        accel, steer = self.get_human_actions()
+        # Store human actions in the buffer for recv()
+        self.human_actions[:, 0] = accel  # acceleration
+        self.human_actions[:, 1] = steer  # steering
+
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_human_actions(self):
         """Get human acceleration and steering for current timestep for all active agents."""
-        # import pdb; pdb.set_trace()
         return binding.get_human_actions_current(self.c_envs)
 
     def render(self):
@@ -492,8 +499,9 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         tick += 1
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
-    env.close()
+
     env.get_human_actions()
+    env.close()
     # import pdb; pdb.set_trace()
 
 

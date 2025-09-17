@@ -662,6 +662,8 @@ static PyObject* get_human_actions_current(PyObject* self, PyObject* args) {
     float* accel_data = (float*)PyArray_DATA(accel_array);
     float* steer_data = (float*)PyArray_DATA(steer_array);
 
+    printf("Total active agents: %d\n", total_agents);
+
     int agent_offset = 0;
     for (int env_idx = 0; env_idx < vec->num_envs; env_idx++) {
         Env* env = vec->envs[env_idx];
