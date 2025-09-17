@@ -203,6 +203,8 @@ struct Drive {
     int spawn_immunity_timer;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
+    int observation_noise;
+    float observation_noise_std;
 };
 
 void add_log(Drive* env) {
@@ -1027,6 +1029,36 @@ float reverse_normalize_value(float value, float min, float max){
     return value*50.0f;
 }
 
+static inline float randn_cached() {
+    static int has_spare = 0;
+    static float spare;
+    if (has_spare) {
+        has_spare = 0;
+        return spare;
+    }
+
+    float u, v, s;
+    do {
+        u = (float)rand() / (float)RAND_MAX;
+        v = (float)rand() / (float)RAND_MAX;
+        // Map to (0,1], avoid log(0)
+        if (u <= 0.0f) u = 1e-7f;
+        if (v <= 0.0f) v = 1e-7f;
+    } while (u <= 0.0f || v <= 0.0f);
+
+    float mag = sqrtf(-2.0f * logf(u));
+    float z0 = mag * cosf(2.0f * (float)M_PI * v);
+    float z1 = mag * sinf(2.0f * (float)M_PI * v);
+    spare = z1;
+    has_spare = 1;
+    return z0;
+}
+
+static inline float maybe_noisy(Drive* env, float value) {
+    if (!env->observation_noise) return value;
+    return value + env->observation_noise_std * randn_cached();
+}
+
 void compute_observations(Drive* env) {
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
@@ -1037,7 +1069,6 @@ void compute_observations(Drive* env) {
         if(ego_entity->type > 3) break;
         if(ego_entity->respawn_timestep != -1) {
             obs[6] = 1;
-            //continue;
         }
         float ego_heading = ego_entity->heading;
         float cos_heading = ego_entity->heading_x;
@@ -1051,13 +1082,13 @@ void compute_observations(Drive* env) {
         float rel_goal_y = -goal_x*sin_heading + goal_y*cos_heading;
         //obs[0] = normalize_value(rel_goal_x, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
         //obs[1] = normalize_value(rel_goal_y, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
-        obs[0] = rel_goal_x* 0.005f;
-        obs[1] = rel_goal_y* 0.005f;
+        obs[0] = rel_goal_x * 0.005f;
+        obs[1] = rel_goal_y * 0.005f;
         //obs[2] = ego_speed / MAX_SPEED;
-        obs[2] = ego_speed * 0.01f;
-        obs[3] = ego_entity->width / MAX_VEH_WIDTH;
-        obs[4] = ego_entity->length / MAX_VEH_LEN;
-        obs[5] = (ego_entity->collision_state > 0) ? 1 : 0;
+        obs[2] = maybe_noisy(env, ego_speed * 0.01f);
+        obs[3] = maybe_noisy(env, ego_entity->width / MAX_VEH_WIDTH);
+        obs[4] = maybe_noisy(env, ego_entity->length / MAX_VEH_LEN);
+        obs[5] = maybe_noisy(env, (ego_entity->collision_state > 0) ? 1.0f : 0.0f);
 
         // Relative Pos of other cars
         int obs_idx = 7;  // Start after goal distances
@@ -1084,23 +1115,23 @@ void compute_observations(Drive* env) {
             float rel_x = dx*cos_heading + dy*sin_heading;
             float rel_y = -dx*sin_heading + dy*cos_heading;
             // Store observations with correct indexing
-            obs[obs_idx] = rel_x * 0.02f;
-            obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH;
-            obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN;
+            obs[obs_idx] = maybe_noisy(env, rel_x * 0.02f);
+            obs[obs_idx + 1] = maybe_noisy(env, rel_y * 0.02f);
+            obs[obs_idx + 2] = maybe_noisy(env, other_entity->width / MAX_VEH_WIDTH);
+            obs[obs_idx + 3] = maybe_noisy(env, other_entity->length / MAX_VEH_LEN);
             // relative heading
             float rel_heading_x = other_entity->heading_x * ego_entity->heading_x +
                      other_entity->heading_y * ego_entity->heading_y;  // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
             float rel_heading_y = other_entity->heading_y * ego_entity->heading_x -
                                 other_entity->heading_x * ego_entity->heading_y;  // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
 
-            obs[obs_idx + 4] = rel_heading_x;
-            obs[obs_idx + 5] = rel_heading_y;
+            obs[obs_idx + 4] = maybe_noisy(env, rel_heading_x);
+            obs[obs_idx + 5] = maybe_noisy(env, rel_heading_y);
             // obs[obs_idx + 4] = cosf(rel_heading) / MAX_ORIENTATION_RAD;
             // obs[obs_idx + 5] = sinf(rel_heading) / MAX_ORIENTATION_RAD;
             // // relative speed
             float other_speed = sqrtf(other_entity->vx*other_entity->vx + other_entity->vy*other_entity->vy);
-            obs[obs_idx + 6] = other_speed / MAX_SPEED;
+            obs[obs_idx + 6] = maybe_noisy(env, other_speed / MAX_SPEED);
             cars_seen++;
             obs_idx += 7;  // Move to next observation slot
         }
@@ -1140,12 +1171,13 @@ void compute_observations(Drive* env) {
             // Compute sin and cos of relative angle directly without atan2f
             float cos_angle = dx_norm*cos_heading + dy_norm*sin_heading;
             float sin_angle = -dx_norm*sin_heading + dy_norm*cos_heading;
-            obs[obs_idx] = x_obs * 0.02f;
-            obs[obs_idx + 1] = y_obs * 0.02f;
-            obs[obs_idx + 2] = length / MAX_ROAD_SEGMENT_LENGTH;
-            obs[obs_idx + 3] = width / MAX_ROAD_SCALE;
-            obs[obs_idx + 4] = cos_angle;
-            obs[obs_idx + 5] = sin_angle;
+            obs[obs_idx] = maybe_noisy(env, x_obs * 0.02f);
+            obs[obs_idx + 1] = maybe_noisy(env, y_obs * 0.02f);
+            obs[obs_idx + 2] = maybe_noisy(env, length / MAX_ROAD_SEGMENT_LENGTH);
+            obs[obs_idx + 3] = maybe_noisy(env, width / MAX_ROAD_SCALE);
+            obs[obs_idx + 4] = maybe_noisy(env, cos_angle);
+            obs[obs_idx + 5] = maybe_noisy(env, sin_angle);
+            // Keep the categorical type id exact: used for one-hot expansion downstream
             obs[obs_idx + 6] = entity->type - 4.0f;
             obs_idx += 7;
         }

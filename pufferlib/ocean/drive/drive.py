@@ -24,6 +24,8 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
+        observation_noise=False,
+        observation_noise_std=0.0,
         buf=None,
         seed=1,
     ):
@@ -38,6 +40,8 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
+        self.observation_noise = int(observation_noise)
+        self.observation_noise_std = observation_noise_std
         self.num_obs = 7 + 63 * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
@@ -87,6 +91,8 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
                 spawn_immunity_timer=spawn_immunity_timer,
+                observation_noise=self.observation_noise,
+                observation_noise_std=self.observation_noise_std,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
             )
@@ -135,6 +141,8 @@ class Drive(pufferlib.PufferEnv):
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
                         spawn_immunity_timer=self.spawn_immunity_timer,
+                        observation_noise=self.observation_noise,
+                        observation_noise_std=self.observation_noise_std,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                     )

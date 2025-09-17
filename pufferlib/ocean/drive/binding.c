@@ -144,6 +144,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal_post_respawn = unpack(kwargs, "reward_goal_post_respawn");
     env->reward_vehicle_collision_post_respawn = unpack(kwargs, "reward_vehicle_collision_post_respawn");
     env->spawn_immunity_timer = unpack(kwargs, "spawn_immunity_timer");
+    env->observation_noise = unpack(kwargs, "observation_noise");
+    env->observation_noise_std = unpack(kwargs, "observation_noise_std");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 
