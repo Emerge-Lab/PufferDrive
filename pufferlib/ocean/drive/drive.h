@@ -49,6 +49,7 @@
 #define OFFROAD_IDX 1
 #define REACHED_GOAL_IDX 2
 #define LANE_ALIGNED_IDX 3
+#define AVG_DISPLACEMENT_ERROR_IDX 4
 
 // grid cell size
 #define GRID_CELL_SIZE 5.0f
@@ -111,6 +112,7 @@ struct Log {
     float dnf_rate;
     float n;
     float lane_alignment_rate;
+    float avg_displacement_error;
 };
 
 typedef struct Entity Entity;
@@ -133,7 +135,7 @@ struct Entity {
     float goal_position_z;
     int mark_as_expert;
     int collision_state;
-    float metrics_array[4]; // metrics_array: [collision, offroad, reached_goal, lane_aligned]
+    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, avg_displacement_error]
     float x;
     float y;
     float z;
@@ -148,6 +150,8 @@ struct Entity {
     int collided_before_goal;
     int reached_goal_this_episode;
     int active_agent;
+    float cumulative_displacement;
+    int displacement_sample_count;
 };
 
 void free_entity(Entity* entity){
@@ -172,6 +176,33 @@ float relative_distance_2d(float x1, float y1, float x2, float y2){
     float dy = y2 - y1;
     float distance = sqrtf(dx*dx + dy*dy);
     return distance;
+}
+
+float compute_displacement_error(Entity* agent, int timestep) {
+    // Check if timestep is within valid range
+    if (timestep < 0 || timestep >= agent->array_size) {
+        return 0.0f;
+    }
+
+    // Check if reference trajectory is valid at this timestep
+    if (!agent->traj_valid[timestep]) {
+        return 0.0f;
+    }
+
+    // Get reference position at current timestep, skip invalid ones
+    float ref_x = agent->traj_x[timestep];
+    float ref_y = agent->traj_y[timestep];
+
+    if (ref_x == -10000.0f || ref_y == -10000.0f) {
+        return 0.0f;
+    }
+
+    // Compute deltas: Euclidean distance between actual and reference position
+    float dx = agent->x - ref_x;
+    float dy = agent->y - ref_y;
+    float displacement = sqrtf(dx*dx + dy*dy);
+
+    return displacement;
 }
 
 struct Drive {
@@ -237,6 +268,8 @@ void add_log(Drive* env) {
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
         env->log.lane_alignment_rate += lane_aligned;
+        float displacement_error = env->logs[i].avg_displacement_error;
+        env->log.avg_displacement_error += displacement_error;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         env->log.n += 1;
@@ -339,6 +372,9 @@ void set_start_position(Drive* env){
         e->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
         e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
         e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+        e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
+        e->cumulative_displacement = 0.0f;
+        e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
     }
     //EndDrawing();
@@ -762,6 +798,7 @@ void reset_agent_metrics(Drive* env, int agent_idx){
     agent->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
     agent->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+    agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
     agent->collision_state = 0;
 }
 
@@ -771,6 +808,18 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     reset_agent_metrics(env, agent_idx);
 
     if(agent->x == -10000.0f ) return; // invalid agent position
+
+    // Compute displacement error
+    float displacement_error = compute_displacement_error(agent, env->timestep);
+
+    if (displacement_error > 0.0f) { // Only count valid displacements
+        agent->cumulative_displacement += displacement_error;
+        agent->displacement_sample_count++;
+
+        // Compute running average
+        agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] =
+            agent->cumulative_displacement / agent->displacement_sample_count;
+    }
 
     int collided = 0;
     float half_length = agent->length/2.0f;
@@ -1263,6 +1312,10 @@ void c_reset(Drive* env){
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+        env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
+        env->entities[agent_idx].cumulative_displacement = 0.0f;
+        env->entities[agent_idx].displacement_sample_count = 0;
+
         compute_agent_metrics(env, agent_idx);
     }
     compute_observations(env);
@@ -1280,6 +1333,9 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+    env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
+    env->entities[agent_idx].cumulative_displacement = 0.0f;
+    env->entities[agent_idx].displacement_sample_count = 0;
     env->entities[agent_idx].respawn_timestep = env->timestep;
 }
 
@@ -1362,6 +1418,8 @@ void c_step(Drive* env){
         //     env->logs[i].episode_return += 0.01f;
             env->logs[i].lane_alignment_rate = 1.0f;
         }
+
+        env->logs[i].avg_displacement_error = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
     }
 
     for(int i = 0; i < env->active_agent_count; i++){
