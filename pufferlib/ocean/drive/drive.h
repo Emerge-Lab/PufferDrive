@@ -833,8 +833,21 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
             float lane_x = entity->traj_x[geometry_idx];
             float lane_y = entity->traj_y[geometry_idx];
+
+            int lane_size = entity->array_size;
+            if(geometry_idx == lane_size - 1) continue;
+
+            float lane_x_next = entity->traj_x[geometry_idx + 1];
+            float lane_y_next = entity->traj_y[geometry_idx + 1];
+
+            float dx_lane = lane_x_next - lane_x;
+            float dy_lane = lane_y_next - lane_y;
+
+            float lane_heading = atan2f(dy_lane, dx_lane);
+
             float dist = ((lane_x - agent->x)*(lane_x - agent->x) + (lane_y - agent->y)*(lane_y - agent->y));
-            if(dist < min_distance){
+            float angle_diff = fabsf(agent->heading - lane_heading);
+            if(dist < min_distance && angle_diff < (M_PI / 2.0f)) {
                 min_distance = dist;
                 closest_lane_entity_idx = entity_idx;
                 closest_lane_geometry_idx = geometry_idx;
