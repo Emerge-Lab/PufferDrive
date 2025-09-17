@@ -1,4 +1,4 @@
-# Descr: Image goal is minimum size and to be trained with cloud
+# Descr: Image goal is to build all the necessary element to run PufferDrive release
 ARG BASE_IMAGE_NAME=nvcr.io/nvidia/cuda
 ARG BUILD_IMAGE_TAG=12.8.1-cudnn-devel-ubuntu24.04
 ARG RUNTIME_IMAGE_TAG=12.8.1-cudnn-runtime-ubuntu24.04
@@ -37,6 +37,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && uv pip install -e ./carbs \
     && uv pip install gcsfs
 
+# Descr: Image goal is minimum size and to be trained with cloud computing
 FROM ${BASE_IMAGE_NAME}:${RUNTIME_IMAGE_TAG} AS gcp
 
 # Install only essential runtime dependencies, removing the large Google Cloud SDK
