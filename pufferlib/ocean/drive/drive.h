@@ -34,7 +34,7 @@
 #define INVERTIBLE_BICYLE 1
 #define DELTA_LOCAL 2
 #define STATE_DYNAMICS 3
-#define GIGAFLOW 4
+#define JERK_BICYCLE 4
 
 // collision state
 #define NO_COLLISION 0
@@ -69,9 +69,9 @@ static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.00
 // Classic Dynamics - Steering Values
 static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f, 0.833f, 1.000f};
 
-// GIGAFLOW Dynamics - Jerk Values
-static const float GIGAFLOW_LONG_JERK[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
-static const float GIGAFLOW_LAT_JERK[3] = {-4.0f, 0.0f, 4.0f};
+// Jerk Bicycle Dynamics - Jerk Values
+static const float JERK_BICYCLE_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
+static const float JERK_BICYCLE_LAT[3] = {-4.0f, 0.0f, 4.0f};
 
 static const float offsets[4][2] = {
         {-1, 1},  // top-left
@@ -143,23 +143,17 @@ struct Entity {
     int reached_goal_this_episode;
     int active_agent;
 
-    // GIGAFLOW stateful variables
+    // Bicycle Jerk stateful variables
     float a_long;      // Current longitudinal acceleration
     float prev_a_long; // Previous longitudinal acceleration
 
     float a_lat;       // Current lateral acceleration
     float prev_a_lat;  // Previous lateral acceleration
 
-    float phi;         // Current steering angle
-    float prev_phi;    // Previous steering angle
+    float steering_angle;         // Current steering angle
+    float prev_steering_angle;    // Previous steering angle
 
     float prev_v;      // Previous velocity
-
-    // GIGAFLOW randomization coefficients
-    float c_throttle;  // Throttle responsiveness
-    float c_steer;     // Steering responsiveness
-    float c_acc;       // Acceleration limits multiplier
-    float c_vel;       // Velocity limits multiplier
 };
 
 void free_entity(Entity* entity){
@@ -228,35 +222,15 @@ struct Drive {
     float dt;
 };
 
-// Helper function for mixed uniform distribution
-// X(a) = 0.5 * U(1/a, 1) + 0.5 * U(1, a) for a > 1
-float sample_mixed_uniform(float a) {
-    float r = (float)rand() / RAND_MAX;
-    if (r < 0.5f) {
-        // Sample from U(1/a, 1)
-        float u = (float)rand() / RAND_MAX;
-        return (1.0f / a) + u * (1.0f - 1.0f / a);
-    } else {
-        // Sample from U(1, a)
-        float u = (float)rand() / RAND_MAX;
-        return 1.0f + u * (a - 1.0f);
-    }
-}
-
-// Initialize GIGAFLOW dynamics coefficients
-void init_gigaflow_coefficients(Entity* entity) {
-    entity->c_throttle = sample_mixed_uniform(1.25f);
-    entity->c_steer = sample_mixed_uniform(1.25f);
-    entity->c_acc = sample_mixed_uniform(1.5f);
-    entity->c_vel = sample_mixed_uniform(1.5f);
-
+// Initialize Bicycle Jerk dynamics coefficients
+void init_jerk_bicycle_coefficients(Entity* entity) {
     // Initialize stateful variables
     entity->a_long = 0;
     entity->prev_a_long = 0;
     entity->a_lat = 0;
     entity->prev_a_lat = 0;
-    entity->phi = 0;
-    entity->prev_phi = 0;
+    entity->steering_angle = 0;
+    entity->prev_steering_angle = 0;
     entity->prev_v = 0;
 }
 
@@ -336,20 +310,14 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
 
-        // Initialize GIGAFLOW variables to 0
+        // Initialize Bicycle Jerk variables to 0
         entities[i].a_long = 0;
         entities[i].prev_a_long = 0;
         entities[i].a_lat = 0;
         entities[i].prev_a_lat = 0;
-        entities[i].phi = 0;
-        entities[i].prev_phi = 0;
+        entities[i].steering_angle = 0;
+        entities[i].prev_steering_angle = 0;
         entities[i].prev_v = 0;
-
-        // Initialize GIGAFLOW multipliers to 1
-        entities[i].c_throttle = 1;
-        entities[i].c_steer = 1;
-        entities[i].c_acc = 1;
-        entities[i].c_vel = 1;
     }
     fclose(file);
     return entities;
@@ -394,9 +362,9 @@ void set_start_position(Drive* env){
         e->valid = e->traj_valid[0];
         e->collision_state = 0;
         e->respawn_timestep = -1;
-          // Initialize GIGAFLOW stateful variables if using GIGAFLOW dynamics
-        if (env->dynamics_model == GIGAFLOW && is_active) {
-            init_gigaflow_coefficients(e);
+          // Initialize Bicycle Jerk stateful variables if using Bicycle Jerk dynamics
+        if (env->dynamics_model == JERK_BICYCLE && is_active) {
+            init_jerk_bicycle_coefficients(e);
             // Set initial velocity magnitude
             e->prev_v = sqrtf(e->vx * e->vx + e->vy * e->vy);
         }
@@ -969,7 +937,7 @@ void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
     env->entities = load_map_binary(env->map_name, env);
-    env->dynamics_model = GIGAFLOW;
+    env->dynamics_model = JERK_BICYCLE;
     env->dt = 0.1f; // Set timestep
     set_means(env);
     init_grid_map(env);
@@ -1002,9 +970,9 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    // 3 additional state variables per agent in GIGAFLOW
-    int obs_size = (env->dynamics_model == GIGAFLOW) ? 10 : 7;
-    int max_obs = obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    // 3 additional state variables per agent in Bicycle Jerk
+    int ego_obs_size = (env->dynamics_model == JERK_BICYCLE) ? 10 : 7;
+    int max_obs = ego_obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("max obs: %d\n", max_obs*env->active_agent_count);
     // printf("num cars: %d\n", env->num_cars);
     // printf("num static cars: %d\n", env->static_car_count);
@@ -1012,7 +980,7 @@ void allocate(Drive* env){
     // printf("num objects: %d\n", env->num_objects);
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
 
-    // For GIGAFLOW dynamics we have (4x3 grid)12 discrete actions
+    // For Bicycle Jerk dynamics we have (4x3 grid)12 discrete actions
     env->actions = (int*)calloc(env->active_agent_count*2, sizeof(int));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
     env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
@@ -1040,25 +1008,25 @@ float normalize_heading(float heading){
     return heading;
 }
 
-void move_gigaflow_dynamics(Drive* env, int action_idx, int agent_idx){
+void move_jerk_bicycle_dynamics(Drive* env, int action_idx, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
 
-    // GIGAFLOW uses [4, 3] action space
+    // Bicycle Jerk uses [4, 3] action space
     int (*action_array)[2] = (int(*)[2])env->actions;
     int long_jerk_idx = action_array[action_idx][0];
     int lat_jerk_idx = action_array[action_idx][1];
 
-    float a_dot_long = GIGAFLOW_LONG_JERK[long_jerk_idx];
-    float a_dot_lat = GIGAFLOW_LAT_JERK[lat_jerk_idx];
+    float a_dot_long = JERK_BICYCLE_LONG[long_jerk_idx];
+    float a_dot_lat = JERK_BICYCLE_LAT[lat_jerk_idx];
 
     // Store previous values
     agent->prev_a_long = agent->a_long;
     agent->prev_a_lat = agent->a_lat;
-    agent->prev_phi = agent->phi;
+    agent->prev_steering_angle = agent->steering_angle;
 
     // Update accelerations using jerk with randomized coefficients
-    agent->a_long = agent->prev_a_long + agent->c_throttle * a_dot_long * env->dt;
-    agent->a_lat = agent->prev_a_lat + agent->c_steer * a_dot_lat * env->dt;
+    agent->a_long = agent->prev_a_long + a_dot_long * env->dt;
+    agent->a_lat = agent->prev_a_lat + a_dot_lat * env->dt;
 
     // Set to exactly 0 when acceleration changes sign
     if (agent->prev_a_long * agent->a_long < 0) {
@@ -1069,7 +1037,7 @@ void move_gigaflow_dynamics(Drive* env, int action_idx, int agent_idx){
     }
 
     // Clip accelerations
-    agent->a_long = fmaxf(-5.0f, fminf(agent->a_long, 2.5f * agent->c_acc));
+    agent->a_long = fmaxf(-5.0f, fminf(agent->a_long, 2.5f));
     agent->a_lat = fmaxf(-4.0f, fminf(agent->a_lat, 4.0f));
 
     // Calculate current speed
@@ -1085,12 +1053,12 @@ void move_gigaflow_dynamics(Drive* env, int action_idx, int agent_idx){
     }
 
     // Clip velocity
-    speed = fmaxf(-2.0f, fminf(speed, 20.0f * agent->c_vel));
+    speed = fmaxf(-2.0f, fminf(speed, 20.0f));
 
     // Calculate steering from lateral acceleration
     float epsilon = 1e-5f;
     float v_squared = fmaxf(speed * speed, epsilon);
-    // GIGAFLOW uses 60% of length for wheelbase
+    // Bicycle Jerk uses 60% of length for wheelbase
     float wheelbase = agent->length * 0.6f;
 
     // Calculate curvature and steering angle
@@ -1100,13 +1068,13 @@ void move_gigaflow_dynamics(Drive* env, int action_idx, int agent_idx){
 
     // Limit steering angle change rate (delta max = 0.6 rad/s)
     float delta_phi_max = 0.6f * env->dt;
-    float delta_phi = fmaxf(-delta_phi_max, fminf(phi_target - agent->prev_phi, delta_phi_max));
+    float delta_phi = fmaxf(-delta_phi_max, fminf(phi_target - agent->prev_steering_angle, delta_phi_max));
 
-    // Update steering angle with limits (phi max = 0.55 rad)
-    agent->phi = fmaxf(-0.55f, fminf(agent->prev_phi + delta_phi, 0.55f));
+    // Update steering angle with limits (steering_angle max = 0.55 rad)
+    agent->steering_angle = fmaxf(-0.55f, fminf(agent->prev_steering_angle + delta_phi, 0.55f));
 
     // Update effective curvature and lateral acceleration based on limited steering
-    rho_inv = tanf(agent->phi) / wheelbase;
+    rho_inv = tanf(agent->steering_angle) / wheelbase;
     agent->a_lat = speed * speed * rho_inv;
 
     // Calculate movement using bicycle dynamics
@@ -1147,8 +1115,8 @@ void move_gigaflow_dynamics(Drive* env, int action_idx, int agent_idx){
 }
 
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
-    if(env->dynamics_model == GIGAFLOW){
-        move_gigaflow_dynamics(env, action_idx, agent_idx);
+    if(env->dynamics_model == JERK_BICYCLE){
+        move_jerk_bicycle_dynamics(env, action_idx, agent_idx);
     } else if(env->dynamics_model == CLASSIC){
         // Original classic dynamics code
         Entity* agent = &env->entities[agent_idx];
@@ -1208,8 +1176,8 @@ float reverse_normalize_value(float value, float min, float max){
 }
 
 void compute_observations(Drive* env) {
-    int obs_size = (env->dynamics_model == GIGAFLOW) ? 10 : 7;
-    // 3 additional state variables per agent in GIGAFLOW
+    int obs_size = (env->dynamics_model == JERK_BICYCLE) ? 10 : 7;
+    // 3 additional state variables per agent in Bicycle Jerk
     int max_obs = obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
@@ -1243,13 +1211,13 @@ void compute_observations(Drive* env) {
         // obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
 
         int obs_idx = 7;   // Start after goal distances
-        if (env->dynamics_model == GIGAFLOW) {
-            // GIGAFLOW: normalize current accelerations and steering angle
+        if (env->dynamics_model == JERK_BICYCLE) {
+            // Bicycle Jerk: normalize current accelerations and steering angle
             obs[7] = ego_entity->a_long * 0.1f;
             obs[8] = ego_entity->a_lat * 0.1f;
-            obs[9] = ego_entity->phi / 0.55f;
+            obs[9] = ego_entity->steering_angle / 0.55f;
 
-            obs_idx = 10; // +GIGAFLOW additions
+            obs_idx = 10; // +bicycle jerk additions
         }
 
         int cars_seen = 0;
@@ -1357,9 +1325,9 @@ void c_reset(Drive* env){
         env->entities[agent_idx].collided_before_goal = 0;
         env->entities[agent_idx].reached_goal_this_episode = 0;
 
-        // Reset GIGAFLOW dynamics coefficients for new episode
-        if (env->dynamics_model == GIGAFLOW) {
-            init_gigaflow_coefficients(&env->entities[agent_idx]);
+        // Reset Bicycle Jerk dynamics coefficients for new episode
+        if (env->dynamics_model == JERK_BICYCLE) {
+            init_jerk_bicycle_coefficients(&env->entities[agent_idx]);
         }
 
         collision_check(env, agent_idx);
@@ -1378,16 +1346,16 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].reached_goal = 0;
     env->entities[agent_idx].respawn_timestep = env->timestep;
 
-    // Reset GIGAFLOW state variables on respawn
-    if (env->dynamics_model == GIGAFLOW) {
+    // Reset Bicycle Jerk state variables on respawn
+    if (env->dynamics_model == JERK_BICYCLE) {
         env->entities[agent_idx].a_long = 0.0f;
         env->entities[agent_idx].a_lat = 0.0f;
-        env->entities[agent_idx].phi = 0.0f;
+        env->entities[agent_idx].steering_angle = 0.0f;
         env->entities[agent_idx].prev_a_long = 0.0f;
         env->entities[agent_idx].prev_a_lat = 0.0f;
         env->entities[agent_idx].prev_v = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
                                                   env->entities[agent_idx].vy * env->entities[agent_idx].vy);
-        env->entities[agent_idx].prev_phi = 0.0f;
+        env->entities[agent_idx].prev_steering_angle = 0.0f;
     }
 }
 

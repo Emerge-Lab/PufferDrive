@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Usage: ./test_gigaflow_dynamics
+# Usage: ./test_jerk_bicycle_dynamics
 # TODO: Make compatible for Linux
 MODE=${1:-release}
 PLATFORM=$(uname -s)
@@ -9,8 +9,8 @@ PLATFORM=$(uname -s)
 # Config
 RAYLIB_DIR="raylib-5.5_macos"
 BOX2D_DIR="box2d-macos-arm64"
-SRC="tests/test_gigaflow_dynamics.c"
-OUTPUT="test_gigaflow_dynamics"
+SRC="tests/test_jerk_bicycle_dynamics.c"
+OUTPUT="test_jerk_bicycle_dynamics"
 
 # Flags
 FLAGS=(

@@ -170,7 +170,7 @@ env/
 
 # macOS Build Artifacts
 *.dSYM/
-test_gigaflow_dynamics
+test_jerk_bicycle_dynamics
 
 # Binary Data Files
 pufferlib/resources/drive/binaries/*.bin

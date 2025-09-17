@@ -19,7 +19,8 @@ class Drive(pufferlib.PufferEnv):
             resample_frequency = 91,
             num_maps=100,
             num_agents=512,
-            dynamics_model="gigaflow",
+            dynamics_model="jerk_bicycle",
+            dt=0.1,
             buf = None,
             seed=1):
 
@@ -35,17 +36,18 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.dt = dt
 
         if dynamics_model == "classic":
             self.dynamics_model_value = 0
             self.num_obs = 7 + 63*7 + 200*7
             self.single_action_space = gym.spaces.MultiDiscrete([7, 13])
-        elif dynamics_model == "gigaflow":
+        elif dynamics_model == "jerk_bicycle":
             self.dynamics_model_value = 4
             self.num_obs = 10 + 63*7 + 200*7
             self.single_action_space = gym.spaces.MultiDiscrete([4, 3])
         else:
-            raise ValueError(f"Unknown dynamics model: {dynamics_model}. Use 'classic' or 'gigaflow'")
+            raise ValueError(f"Unknown dynamics model: {dynamics_model}. Use 'classic' or 'jerk_bicycle'")
 
         self.single_observation_space = gym.spaces.Box(low=-1, high=1,
             shape=(self.num_obs,), dtype=np.float32)
@@ -81,6 +83,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
                 spawn_immunity_timer=spawn_immunity_timer,
                 dynamics_model=self.dynamics_model_value,
+                dt=self.dt,
                 map_id=map_ids[i],
                 max_agents = nxt-cur
             )
@@ -334,11 +337,10 @@ def process_all_maps():
         # except Exception as e:
         #     print(f"Error processing {map_path.name}: {e}")
 
-# TODO: Update test_performance
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
 
-    env = Drive(num_agents=num_agents)
+    env = Drive(num_agents=num_agents, dynamics_model="jerk_bicycle")
     env.reset()
     tick = 0
     num_agents = 1024
