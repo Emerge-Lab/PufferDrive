@@ -340,14 +340,18 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     
     if (env->population_play) {
         env->num_co_players = unpack(kwargs, "num_co_players");
-        if (env->num_co_players <= 0) {
+        double* co_player_ids_d = unpack_float_array(kwargs, "co_player_ids", &env->num_co_players);
+        if (co_player_ids_d != NULL && env->num_co_players > 0) {
+            env->co_player_ids = (int*)malloc(env->num_co_players * sizeof(int));
+            for (int i = 0; i < env->num_co_players; i++) {
+                env->co_player_ids[i] = (int)co_player_ids_d[i];
+            }
+            free(co_player_ids_d);
+        } else {
             env->co_player_ids = NULL;
+            env->num_co_players = 0;
         }
-        else{
-            env->co_player_ids = (int*)calloc(env->num_co_players, sizeof(int));
-            env->co_player_ids = unpack_float_array(kwargs, "co_player_ids", env->num_co_players);
-        }
-
+        
         env->ego_agent_id = unpack(kwargs, "ego_agent_id");
     }
     
@@ -369,15 +373,18 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
-    assign_to_dict(dict, "co_player_perf", log->co_player_perf);
-    assign_to_dict(dict, "co_player_score", log->co_player_score);
-    assign_to_dict(dict, "co_player_episode_return", log->co_player_episode_return);
-    assign_to_dict(dict, "co_player_collision_rate", log->co_player_collision_rate);
-    assign_to_dict(dict, "co_player_clean_collision_rate", log->co_player_clean_collision_rate);
+    return 0;
+}
+int my_co_player_log(PyObject* dict, Co_Player_Log* log) {
     assign_to_dict(dict, "co_player_completion_rate", log->co_player_completion_rate);
-    assign_to_dict(dict, "co_player_dnf_rate", log->co_player_dnf_rate);
+    assign_to_dict(dict, "co_player_collision_rate", log->co_player_collision_rate);
     assign_to_dict(dict, "co_player_off_road_rate", log->co_player_off_road_rate);
+    assign_to_dict(dict, "co_player_clean_collision_rate", log->co_player_clean_collision_rate);
+    assign_to_dict(dict, "co_player_score", log->co_player_score);
+    assign_to_dict(dict, "co_player_perf", log->co_player_perf);
+    assign_to_dict(dict, "co_player_dnf_rate", log->co_player_dnf_rate);
     assign_to_dict(dict, "co_player_episode_length", log->co_player_episode_length);
+    assign_to_dict(dict, "co_player_episode_return", log->co_player_episode_return);
     assign_to_dict(dict, "co_player_n", log->co_player_n);
     return 0;
 }

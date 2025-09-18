@@ -228,7 +228,6 @@ void forward(DriveNet* net, float* observations, int* actions) {
     softmax_multidiscrete(net->multidiscrete, net->actor->output, actions);
 }
 void demo() {
-
     Drive env = {
         .dynamics_model = CLASSIC,
         .human_agent_idx = 0,

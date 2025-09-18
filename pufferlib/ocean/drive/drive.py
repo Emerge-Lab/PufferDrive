@@ -97,6 +97,8 @@ class Drive(pufferlib.PufferEnv):
             agent_offsets, map_ids, num_envs = binding_tuple
             self.num_agents = self.num_agents_const
             self.ego_ids = [i for i in range(agent_offsets[-1])]
+            env_co_player_ids = [[] for i in range(num_envs)]
+            env_ego_ids = [0 for i in range(num_envs)]
        
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -107,7 +109,6 @@ class Drive(pufferlib.PufferEnv):
             cur = agent_offsets[i]
             nxt = agent_offsets[i+1]
             if not self.reward_conditioned:
-                print(f"co player ids {env_co_player_ids[i]} for env {i}")
                 env_id = binding.env_init(
                     self.observations[cur:nxt],
                     self.actions[cur:nxt],
@@ -122,7 +123,7 @@ class Drive(pufferlib.PufferEnv):
                     reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
                     spawn_immunity_timer=spawn_immunity_timer,
                     map_id=map_ids[i],
-                    use_rc = False,
+                    use_rc = self.population_play,
                     max_agents = nxt-cur,
                     collision_weight_lb = reward_vehicle_collision,
                     collision_weight_ub = reward_vehicle_collision,
@@ -151,7 +152,7 @@ class Drive(pufferlib.PufferEnv):
                     spawn_immunity_timer=spawn_immunity_timer,
                     map_id=map_ids[i],
                     max_agents=nxt-cur,
-                    use_rc = True,
+                    use_rc = False,
                     collision_weight_lb = -1.0,
                     collision_weight_ub = 0.0,
                     offroad_weight_lb = -1.0,
@@ -263,7 +264,8 @@ class Drive(pufferlib.PufferEnv):
                     agent_offsets, map_ids, num_envs = binding_tuple
                     self.num_agents = self.num_agents_const
                     self.ego_ids = [i for i in range(agent_offsets[-1])]
-
+                    env_co_player_ids = [[] for i in range(num_envs)]
+                    env_ego_ids = [0 for i in range(num_envs)]
 
                 
                 self.agent_offsets = agent_offsets
