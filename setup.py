@@ -29,6 +29,9 @@ RAYLIB_URL = "https://github.com/raysan5/raylib/releases/download/5.5/"
 RAYLIB_NAME = "raylib-5.5_macos" if platform.system() == "Darwin" else "raylib-5.5_linux_amd64"
 RLIGHTS_URL = "https://raw.githubusercontent.com/raysan5/raylib/refs/heads/master/examples/shaders/rlights.h"
 
+# Fetch inih library
+INIH_URL = "https://github.com/benhoyt/inih/archive/refs/tags/{tag}.{ext}"
+
 
 def download_raylib(platform, ext):
     if not os.path.exists(platform):
@@ -39,13 +42,44 @@ def download_raylib(platform, ext):
                 zip_ref.extractall()
         else:
             with tarfile.open(platform + ext, "r") as tar_ref:
-                tar_ref.extractall()
+                tar_ref.extractall(filter="data")
 
         os.remove(platform + ext)
         urllib.request.urlretrieve(RLIGHTS_URL, platform + "/include/rlights.h")
 
 
+def download_library(url: str, name: str, tag: str, ext: str = "tar.gz", files_to_extract: list = [None]):
+    library_folder = name + "-" + tag
+    archive_file = library_folder + "." + ext
+    if not os.path.exists(library_folder):
+        filled_url = url.format(tag=tag, ext=ext)
+        print(f"Downloading {name}-{tag}")
+        urllib.request.urlretrieve(filled_url, archive_file)
+        if ext == "zip":
+            with zipfile.ZipFile(archive_file, "r") as zip_ref:
+                if files_to_extract:
+                    members = [
+                        member_info.filename
+                        for member_info in zip_ref.infolist()
+                        if os.path.basename(member_info.filename) in files_to_extract
+                    ]
+                    zip_ref.extractall(members=members)
+                else:
+                    zip_ref.extractall()
+        else:
+            with tarfile.open(archive_file, "r") as tar_ref:
+                if files_to_extract:
+                    members = [
+                        member for member in tar_ref.getmembers() if os.path.basename(member.name) in files_to_extract
+                    ]
+                    tar_ref.extractall(members=members, filter="data")
+                else:
+                    tar_ref.extractall(filter="data")
+        os.remove(archive_file)
+
+
 if not NO_OCEAN:
+    download_library(INIH_URL, "inih", "r62", files_to_extract=["ini.c", "ini.h"])
     download_raylib("raylib-5.5_webassembly", ".zip")
 
 BOX2D_URL = "https://github.com/capnspacehook/box2d/releases/latest/download/"
@@ -59,7 +93,7 @@ def download_box2d(platform):
         print(f"Downloading Box2D {platform}")
         urllib.request.urlretrieve(BOX2D_URL + platform + ext, platform + ext)
         with tarfile.open(platform + ext, "r") as tar_ref:
-            tar_ref.extractall()
+            tar_ref.extractall(filter="data")
 
         os.remove(platform + ext)
 

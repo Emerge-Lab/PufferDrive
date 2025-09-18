@@ -152,6 +152,7 @@ wandb/
 .neptune/
 raylib*/
 box2d*/
+inih*/
 
 # Temp Impulse Wars files
 pufferlib/ocean/impulse_wars/*-debug/
