@@ -876,12 +876,11 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         }
     }
 
-    // check if aligned with closest lane
+    // check if closest lane exists
     if(closest_lane_idx != -1)
     {
-        // This causes a bug in rendering, temporarily disabling it
-        //int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_idx]);
-        agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+        int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_idx]);
+        agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
     }
     else 
     {
