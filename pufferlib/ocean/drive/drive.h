@@ -1071,11 +1071,6 @@ void c_close(Drive* env){
 void allocate(Drive* env){
     init(env);
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    // printf("max obs: %d\n", max_obs*env->active_agent_count);
-    // printf("num cars: %d\n", env->num_cars);
-    // printf("num static cars: %d\n", env->static_car_count);
-    // printf("active agent count: %d\n", env->active_agent_count);
-    // printf("num objects: %d\n", env->num_objects);
 
 
     if (env->use_rc){
@@ -1828,7 +1823,7 @@ void draw_road_edge(Drive* env, float start_x, float start_y, float end_x, float
     DrawTriangle3D(t4, t1, b1, CURB_SIDE);
 }
 
-void c_render(Drive* env) {
+void c_render(Drive* env) { // alter this code so that each agent is a different colour based on whether it is ego or co player
     if (env->client == NULL) {
         env->client = make_client(env);
     }
@@ -1893,7 +1888,13 @@ void c_render(Drive* env) {
             Color outline_color = PUFF_CYAN;
             Model car_model = client->cars[5];
             if(is_active_agent){
-                car_model = client->cars[client->car_assignments[i %64]];
+                if (agent_index == env->ego_agent_id){
+                    car_model = client->cars[client->car_assignments[15]];
+                } 
+                else{
+                    car_model = client->cars[client->car_assignments[30]];
+                }
+                //car_model = client->cars[client->car_assignments[i %64]];
             }
             if(agent_index == env->human_agent_idx){
                 object_color = PUFF_CYAN;
