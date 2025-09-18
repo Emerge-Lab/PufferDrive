@@ -11,6 +11,7 @@ import zipfile
 import tarfile
 import platform
 import shutil
+import sys
 
 from setuptools.command.build_ext import build_ext
 from torch.utils import cpp_extension
@@ -42,7 +43,10 @@ def download_raylib(platform, ext):
                 zip_ref.extractall()
         else:
             with tarfile.open(platform + ext, "r") as tar_ref:
-                tar_ref.extractall(filter="data")
+                if sys.version_info >= (3, 12):  # Use secure call when python version >= 3.12
+                    tar_ref.extractall(filter="data")
+                else:
+                    tar_ref.extractall()
 
         os.remove(platform + ext)
         urllib.request.urlretrieve(RLIGHTS_URL, platform + "/include/rlights.h")
@@ -93,7 +97,10 @@ def download_box2d(platform):
         print(f"Downloading Box2D {platform}")
         urllib.request.urlretrieve(BOX2D_URL + platform + ext, platform + ext)
         with tarfile.open(platform + ext, "r") as tar_ref:
-            tar_ref.extractall(filter="data")
+            if sys.version_info >= (3, 12):
+                tar_ref.extractall(filter="data")
+            else:
+                tar_ref.extractall()
 
         os.remove(platform + ext)
 
