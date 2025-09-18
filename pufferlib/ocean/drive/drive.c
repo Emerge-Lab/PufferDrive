@@ -328,7 +328,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
 void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories) {
     // Use default if no map provided
     if (map_name == NULL) {
-        map_name = "resources/drive/binaries/map_942.bin";
+        map_name = "resources/drive/binaries/map_000.bin";
     }
 
     // Make env
@@ -366,6 +366,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
     int frame_count = 91;
+    int frame_skip = 1;
     char filename[256];
     int rollout = 1;
     int rollout_trajectory_snapshot = 0;
@@ -373,7 +374,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
 
     if (rollout) {
         // Generate top-down view frames
-        for(int i = 0; i < frame_count; i++) {
+        for(int i = 0; i < frame_count; i+=frame_skip) {
             float* path_taken = NULL;
             snprintf(filename, sizeof(filename), "resources/drive/frame_topdown_%03d.png", i);
             // Always set obs_only=0, lasers=0 for top-down view (full world state)
@@ -387,7 +388,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         c_reset(&env);
 
         // Generate agent view frames
-        for(int i = 0; i < frame_count; i++) {
+        for(int i = 0; i < frame_count; i+=frame_skip) {
             float* path_taken = NULL;
             snprintf(filename, sizeof(filename), "resources/drive/frame_agent_%03d.png", i);
             saveAgentViewImage(&env, client, filename, target, map_height, obs_only, lasers, show_grid); // obs_only=1, lasers=0, show_grid=0
@@ -414,8 +415,14 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         if(gif_success_topdown == 0) {
             run_cmd("rm -f resources/drive/frame_topdown_*.png resources/drive/palette_topdown.png");
         }
+        else {
+            printf("Top-down GIF generation failed.\n");
+        }
         if(gif_success_agent == 0) {
             run_cmd("rm -f resources/drive/frame_agent_*.png resources/drive/palette_agent.png");
+        }
+        else {
+            printf("Agent view GIF generation failed.\n");
         }
     }
     if (rollout_trajectory_snapshot){
@@ -451,7 +458,7 @@ void performance_test() {
     Drive env = {
         .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
-	    .map_name = "resources/drive/binaries/map_942.bin"
+	    .map_name = "resources/drive/binaries/map_000.bin"
     };
     clock_t start_time, end_time;
     double cpu_time_used;
