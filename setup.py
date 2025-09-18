@@ -250,6 +250,9 @@ if not NO_OCEAN:
     c_extension_paths = [os.path.join(*path.split("/")[:-1]) for path in c_extension_paths]
 
     for c_ext in c_extensions:
+        if "drive" in c_ext.name:
+            c_ext.sources.append("inih-r62/ini.c")
+
         if "impulse_wars" in c_ext.name:
             print(f"Adding {c_ext.name} to extra objects")
             c_ext.extra_objects.append(f"{BOX2D_NAME}/libbox2d.a")
