@@ -358,13 +358,12 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=10, atn_cache=1024, num_agents=1024, num_maps=8):
     import time
 
-    env = Drive(num_agents=num_agents)
+    env = Drive(num_agents=num_agents, num_maps=num_maps)
     env.reset()
     tick = 0
-    num_agents = 1024
     actions = np.stack(
         [np.random.randint(0, space.n + 1, (atn_cache, num_agents)) for space in env.single_action_space], axis=-1
     )
@@ -380,5 +379,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance(num_agents=256)
+    # process_all_maps()

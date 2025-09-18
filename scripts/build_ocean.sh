@@ -64,6 +64,17 @@ if [ "$MODE" = "web" ]; then
     exit 0
 fi
 
+# Detect available compiler and set compiler-specific flags
+if command -v clang >/dev/null 2>&1; then
+    COMPILER="clang"
+    ERROR_LIMIT_FLAG="-ferror-limit=3"
+    echo "Using clang compiler"
+else
+    COMPILER="gcc"
+    ERROR_LIMIT_FLAG="-fmax-errors=3"
+    echo "Using gcc compiler (clang not found)"
+fi
+
 FLAGS=(
     -Wall
     -I./$RAYLIB_NAME/include
@@ -74,7 +85,7 @@ FLAGS=(
     $LINK_ARCHIVES
     -lm
     -lpthread
-    -ferror-limit=3
+    $ERROR_LIMIT_FLAG
     -DPLATFORM_DESKTOP
 )
 
@@ -98,10 +109,10 @@ if [ "$MODE" = "local" ]; then
             -fno-omit-frame-pointer
         )
     fi
-    clang -g -O0 ${FLAGS[@]}
+    $COMPILER -g -O0 ${FLAGS[@]}
 elif [ "$MODE" = "fast" ]; then
     echo "Building optimized $ENV for local testing..."
-    clang -pg -O2 -DNDEBUG ${FLAGS[@]}
+    $COMPILER -pg -O2 -DNDEBUG ${FLAGS[@]}
     echo "Built to: $ENV"
 else
     echo "Invalid mode specified: local|fast|web"
