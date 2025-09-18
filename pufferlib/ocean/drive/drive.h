@@ -882,7 +882,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_idx]);
         agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
     }
-    else 
+    else
     {
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
     }
