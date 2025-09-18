@@ -264,9 +264,9 @@ struct Drive {
     int* neighbor_cache_indices;
     float reward_vehicle_collision;
     float reward_offroad_collision;
-    float reward_ade;
-    float reward_speed;
-    float reward_heading;
+    float reward_log_ade;
+    float reward_log_speed;
+    float reward_log_heading;
     char* map_name;
     float world_mean_x;
     float world_mean_y;
@@ -1468,20 +1468,20 @@ void c_step(Drive* env){
         float current_heading_error = env->entities[agent_idx].metrics_array[AVG_HEADING_ERROR_IDX];
         float current_speed_error = env->entities[agent_idx].metrics_array[AVG_SPEED_ERROR_IDX];
 
-        if(current_ade > 0.0f && env->reward_ade != 0.0f) {
-            float ade_reward = env->reward_ade * current_ade;
+        if(current_ade > 0.0f && env->reward_log_ade != 0.0f) {
+            float ade_reward = env->reward_log_ade * current_ade;
             env->rewards[i] += ade_reward;
             env->logs[i].episode_return += ade_reward;
         }
 
-        if(current_heading_error > 0.0f && env->reward_heading != 0.0f) {
-            float heading_reward = env->reward_heading * current_heading_error;
+        if(current_heading_error > 0.0f && env->reward_log_heading != 0.0f) {
+            float heading_reward = env->reward_log_heading * current_heading_error;
             env->rewards[i] += heading_reward;
             env->logs[i].episode_return += heading_reward;
         }
 
-        if(current_speed_error > 0.0f && env->reward_speed != 0.0f) {
-            float speed_reward = env->reward_speed * current_speed_error;
+        if(current_speed_error > 0.0f && env->reward_log_speed != 0.0f) {
+            float speed_reward = env->reward_log_speed * current_speed_error;
             env->rewards[i] += speed_reward;
             env->logs[i].episode_return += speed_reward;
         }

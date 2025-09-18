@@ -47,30 +47,30 @@ Overview of configurable rewards and what they do.
 
 #### **Average displacement error (ade)**
 - **Type**: continuous
-- **Value**: `reward_ade * current_ade` (configurable weight × bounded error)
+- **Value**: `reward_log_ade * current_ade` (configurable weight × bounded error)
 - **Trigger**: applied every timestep when reference trajectory is available
 - **Error range**: `[0.0, 1.0)` (bounded by exponential transform)
 - **Transform**: `1.0 - exp(-squared_displacement_error)`
 - **Description**: penalizes spatial deviation from reference trajectory
-- **Total range**: depends on `reward_ade` weight (typically negative)
+- **Total range**: depends on `reward_log_ade` weight (typically negative)
 
 #### **Heading error**
 - **Type**: continuous
-- **Value**: `reward_heading * current_heading_error` (configurable weight × error)
+- **Value**: `reward_log_heading * current_heading_error` (configurable weight × error)
 - **Trigger**: applied every timestep when reference trajectory is available
 - **Error range**: `[0.0, 1.0)` (bounded by exponential transform)
 - **Transform**: `1.0 - exp(-squared_heading_difference)`
 - **Description**: penalizes angular deviation from reference heading
-- **Total range**: depends on `reward_heading` weight (typically negative)
+- **Total range**: depends on `reward_log_heading` weight (typically negative)
 
 #### **Speed error**
 - **Type**: continuous
-- **Value**: `reward_speed * current_speed_error` (configurable weight × error)
+- **Value**: `reward_log_speed * current_speed_error` (configurable weight × error)
 - **Trigger**: applied every timestep when reference trajectory is available
 - **Error range**: `[0.0, 1.0)` (bounded by exponential transform)
 - **Transform**: `1.0 - exp(-squared_speed_difference)`
 - **Description**: penalizes deviation from reference speed
-- **Total range**: depends on `reward_speed` weight (typically negative)
+- **Total range**: depends on `reward_log_speed` weight (typically negative)
 
 ### Lane alignment
 - **Type**: todo
