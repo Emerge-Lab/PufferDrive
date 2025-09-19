@@ -704,7 +704,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
 
 typedef struct
 {
-    const char* action_type;
+    int action_type;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_goal_post_respawn;
@@ -722,7 +722,11 @@ static int handler(
     env_init_config* env_config = (env_init_config*)config;
     #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
     if (MATCH("env", "action_type")) {
-        env_config->action_type = strdup(value);
+        if(strcmp(value, "\"discrete\"") == 0) {
+            env_config->action_type = 0;
+        } else {
+            env_config->action_type = 1;
+        }
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {
