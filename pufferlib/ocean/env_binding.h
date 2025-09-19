@@ -497,8 +497,6 @@ static PyObject* vec_reset(PyObject* self, PyObject* args) {
     int seed = PyLong_AsLong(seed_arg);
  
     for (int i = 0; i < vec->num_envs; i++) {
-        // Assumes each process has the same number of environments
-        printf("resetting env %d \n", i);
         srand(i + seed*vec->num_envs);
         c_reset(vec->envs[i]);
     }
