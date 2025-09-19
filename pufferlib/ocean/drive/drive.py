@@ -27,6 +27,7 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
+        condition_mode="goal",
         buf=None,
         seed=1,
     ):
@@ -44,7 +45,16 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63 * 7 + 200 * 7
+        self.condition_mode = condition_mode
+        self._condition_mode_flag = 0 if condition_mode == "goal" else 1  # 0=GOAL_XY, 1=GUIDANCE
+        if condition_mode == "guidance":
+            self.num_obs = 10 + 63 * 7 + 200 * 7  # 10 self obs in guidance mode
+        else:
+            self.num_obs = 7 + 63 * 7 + 200 * 7  # 7 self obs in goal mode
+
+        if condition_mode not in ["goal", "guidance"]:
+            raise ValueError(f"condition_mode must be 'goal' or 'guidance'. Got: {condition_mode}")
+
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         if action_type == "discrete":
@@ -98,6 +108,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_immunity_timer=spawn_immunity_timer,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
+                condition_mode=self._condition_mode_flag,
             )
             env_ids.append(env_id)
 
@@ -149,6 +160,7 @@ class Drive(pufferlib.PufferEnv):
                         spawn_immunity_timer=self.spawn_immunity_timer,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
+                        condition_mode=self._condition_mode_flag,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -366,10 +378,10 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=10, atn_cache=1024, num_agents=1024, condition_mode="goal"):
     import time
 
-    env = Drive(num_agents=num_agents)
+    env = Drive(num_agents=num_agents, condition_mode=condition_mode)
     env.reset()
     tick = 0
     num_agents = 1024
