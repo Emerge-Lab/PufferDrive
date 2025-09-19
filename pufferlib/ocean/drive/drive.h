@@ -213,6 +213,11 @@ struct Drive {
     float* collision_weights;
     float* offroad_weights;
     float* goal_weights;
+    // this is for entropy conditioned learning
+    bool use_ec;
+    float entropy_weight_lb;
+    float entropy_weight_ub;
+    float* entropy_weights;
 };
 
 void add_log(Drive* env) {
@@ -930,6 +935,13 @@ void init(Drive* env){
             printf("Agent %d - Collision Weight: %f, Offroad Weight: %f, Goal Weight: %f\n", i, env->collision_weights[i], env->offroad_weights[i], env->goal_weights[i]);
         }
     }
+    if (env->use_ec) {
+        env->entropy_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+        for (int i = 0; i < env->active_agent_count; i++) {
+            env->entropy_weights[i] = ((float)rand() / RAND_MAX) * (env->entropy_weight_ub - env->entropy_weight_lb) + env->entropy_weight_lb;
+            printf("Agent %d - Entropy Weight: %f\n", i, env->entropy_weights[i]);
+        }
+    }
 
 }
 
@@ -947,6 +959,17 @@ void c_close(Drive* env){
     free(env->neighbor_cache_indices);
     free(env->static_car_indices);
     free(env->expert_static_car_indices);
+  
+    if (env->use_rc) {
+        free(env->collision_weights);
+        free(env->offroad_weights);
+        free(env->goal_weights);
+    }
+
+    if (env->use_ec) {
+        free(env->entropy_weights);
+    }
+
     // free(env->map_name);
 }
 
@@ -1053,7 +1076,7 @@ float reverse_normalize_value(float value, float min, float max){
 
 void compute_observations(Drive* env) {
     int base_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    int max_obs = base_obs + (env->use_rc ? 3 : 0);
+    int max_obs = base_obs + (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0);
     
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
@@ -1085,17 +1108,17 @@ void compute_observations(Drive* env) {
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1 : 0;
         
-        // Determine starting index for other car observations
-        int obs_idx = 7;  // Default start after basic observations
-        
+        // Add conditioning weights after base observations
+        int obs_idx = 6;  // Start after base ego observations (indices 0-5)
+
         if (env->use_rc){
+            obs[obs_idx++] = env->collision_weights[i];
+            obs[obs_idx++] = env->offroad_weights[i];
+            obs[obs_idx++] = env->goal_weights[i];
+        }
 
-            obs[6] = env->collision_weights[i]; 
-            obs[7] = env->offroad_weights[i];
-            obs[8] = env->goal_weights[i];
-
-            
-            obs_idx = 10;
+        if (env->use_ec){
+            obs[obs_idx++] = env->entropy_weights[i];
         }
 
 

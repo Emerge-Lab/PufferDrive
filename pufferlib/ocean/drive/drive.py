@@ -37,7 +37,15 @@ class Drive(pufferlib.PufferEnv):
             buf = None,
             seed=1, 
             population_play = False,
-            reward_conditioned = False):
+            condition_type = "none",
+            collision_weight_lb = -1.0,
+            collision_weight_ub = 0.0,
+            offroad_weight_lb = -1.0,
+            offroad_weight_ub = 0.0,
+            goal_weight_lb = 0.0,
+            goal_weight_ub = 1.0,
+            entropy_weight_lb = 0.0,
+            entropy_weight_ub = 1.0):
 
         # env
         self.render_mode = render_mode
@@ -50,18 +58,30 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.reward_conditioned = reward_conditioned
-        if self.reward_conditioned:
-            self.num_obs = 10 + 63*7 + 200*7
-        else:
-            self.num_obs = 7 + 63*7 + 200*13
+
+        self.condition_type = condition_type
+        self.reward_conditioned = condition_type in ("reward", "all")
+        self.entropy_conditioned = condition_type in ("entropy", "all")
+
+        self.collision_weight_lb = collision_weight_lb if self.reward_conditioned else self.reward_vehicle_collision
+        self.collision_weight_ub = collision_weight_ub if self.reward_conditioned else self.reward_vehicle_collision
+        self.offroad_weight_lb = offroad_weight_lb if self.reward_conditioned else self.reward_offroad_collision
+        self.offroad_weight_ub = offroad_weight_ub if self.reward_conditioned else self.reward_offroad_collision
+        self.goal_weight_lb = goal_weight_lb if self.reward_conditioned else 1.0
+        self.goal_weight_ub = goal_weight_ub if self.reward_conditioned else 1.0
+        self.entropy_weight_lb = entropy_weight_lb
+        self.entropy_weight_ub = entropy_weight_ub
+
+        conditioning_dims = (3 if self.reward_conditioned else 0) + (1 if self.entropy_conditioned else 0)
+        self.num_obs = 7 + conditioning_dims + 63*7 + 200*7
+
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
             shape=(self.num_obs,), dtype=np.float32)
         self.num_agents_const = num_agents
         self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
 
-        if population_play and reward_conditioned:
-            raise ValueError("Population play with reward conditioning is not supported.")
+        if population_play and condition_type != "none":
+            raise ValueError("Population play with conditioning is not supported.")
         
        
 
@@ -98,55 +118,33 @@ class Drive(pufferlib.PufferEnv):
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i+1]
-            if not self.reward_conditioned:
-                env_id = binding.env_init(
-                    self.observations[cur:nxt],
-                    self.actions[cur:nxt],
-                    self.rewards[cur:nxt],
-                    self.terminals[cur:nxt],
-                    self.truncations[cur:nxt],
-                    seed,
-                    human_agent_idx=human_agent_idx,
-                    reward_vehicle_collision=reward_vehicle_collision,
-                    reward_offroad_collision=reward_offroad_collision,
-                    reward_goal_post_respawn=reward_goal_post_respawn,
-                    reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
-                    spawn_immunity_timer=spawn_immunity_timer,
-                    map_id=map_ids[i],
-                    use_rc = False,
-                    max_agents = nxt-cur,
-                    collision_weight_lb = reward_vehicle_collision,
-                    collision_weight_ub = reward_vehicle_collision,
-                    offroad_weight_lb = reward_offroad_collision,
-                    offroad_weight_ub = reward_offroad_collision,
-                    goal_weight_lb = 1.0,
-                    goal_weight_ub = 1.0,
-                )
-            else:
-                env_id = binding.env_init(
-                    self.observations[cur:nxt],
-                    self.actions[cur:nxt],
-                    self.rewards[cur:nxt],
-                    self.terminals[cur:nxt],
-                    self.truncations[cur:nxt],
-                    seed,
-                    human_agent_idx=human_agent_idx,
-                    reward_vehicle_collision=reward_vehicle_collision,
-                    reward_offroad_collision=reward_offroad_collision,
-                    reward_goal_post_respawn=reward_goal_post_respawn,
-                    reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
-                    spawn_immunity_timer=spawn_immunity_timer,
-                    map_id=map_ids[i],
-                    max_agents=nxt-cur,
-                    use_rc = True,
-                    collision_weight_lb = -1.0,
-                    collision_weight_ub = 0.0,
-                    offroad_weight_lb = -1.0,
-                    offroad_weight_ub = 0.0,
-                    goal_weight_lb = 0.0,
-                    goal_weight_ub = 1.0,
 
-                )
+            env_id = binding.env_init(
+                self.observations[cur:nxt],
+                self.actions[cur:nxt],
+                self.rewards[cur:nxt],
+                self.terminals[cur:nxt],
+                self.truncations[cur:nxt],
+                seed,
+                human_agent_idx=self.human_agent_idx,
+                reward_vehicle_collision=self.reward_vehicle_collision,
+                reward_offroad_collision=self.reward_offroad_collision,
+                reward_goal_post_respawn=self.reward_goal_post_respawn,
+                reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
+                spawn_immunity_timer=self.spawn_immunity_timer,
+                map_id=map_ids[i],
+                use_rc=self.reward_conditioned,
+                use_ec=self.entropy_conditioned,
+                max_agents=nxt-cur,
+                collision_weight_lb=self.collision_weight_lb,
+                collision_weight_ub=self.collision_weight_ub,
+                offroad_weight_lb=self.offroad_weight_lb,
+                offroad_weight_ub=self.offroad_weight_ub,
+                goal_weight_lb=self.goal_weight_lb,
+                goal_weight_ub=self.goal_weight_ub,
+                entropy_weight_lb=self.entropy_weight_lb,
+                entropy_weight_ub=self.entropy_weight_ub,
+            )
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
@@ -232,55 +230,33 @@ class Drive(pufferlib.PufferEnv):
                 for i in range(num_envs):
                     cur = agent_offsets[i]
                     nxt = agent_offsets[i+1]
-                    if not self.reward_conditioned:
-                        env_id = binding.env_init(
-                    self.observations[cur:nxt],
-                    self.actions[cur:nxt],
-                    self.rewards[cur:nxt],
-                    self.terminals[cur:nxt],
-                    self.truncations[cur:nxt],
-                    seed,
-                    human_agent_idx=self.human_agent_idx,
-                    reward_vehicle_collision=self.reward_vehicle_collision,
-                    reward_offroad_collision=self.reward_offroad_collision,
-                    reward_goal_post_respawn=self.reward_goal_post_respawn,
-                    reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
-                    spawn_immunity_timer=self.spawn_immunity_timer,
-                    map_id=map_ids[i],
-                    use_rc = False,
-                    max_agents = nxt-cur,
-                    collision_weight_lb = self.reward_vehicle_collision,
-                    collision_weight_ub = self.reward_vehicle_collision,
-                    offroad_weight_lb = self.reward_offroad_collision,
-                    offroad_weight_ub = self.reward_offroad_collision,
-                    goal_weight_lb = 1.0,
-                    goal_weight_ub = 1.0,
-                        )
-                    else:
-                        env_id = binding.env_init(
-                            self.observations[cur:nxt],
-                            self.actions[cur:nxt],
-                            self.rewards[cur:nxt],
-                            self.terminals[cur:nxt],
-                            self.truncations[cur:nxt],
-                            seed,
-                            human_agent_idx=self.human_agent_idx,
-                            reward_vehicle_collision=self.reward_vehicle_collision,
-                            reward_offroad_collision=self.reward_offroad_collision,
-                            reward_goal_post_respawn=self.reward_goal_post_respawn,
-                            reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
-                            spawn_immunity_timer=self.spawn_immunity_timer,
-                            map_id=map_ids[i],
-                            max_agents=nxt-cur,
-                            use_rc = True,
-                            collision_weight_lb = -1.0,
-                            collision_weight_ub = 0.0,
-                            offroad_weight_lb = -1.0,
-                            offroad_weight_ub = 0.0,
-                            goal_weight_lb = 0.0,
-                            goal_weight_ub = 1.0,
 
-                        )
+                    env_id = binding.env_init(
+                        self.observations[cur:nxt],
+                        self.actions[cur:nxt],
+                        self.rewards[cur:nxt],
+                        self.terminals[cur:nxt],
+                        self.truncations[cur:nxt],
+                        seed,
+                        human_agent_idx=self.human_agent_idx,
+                        reward_vehicle_collision=self.reward_vehicle_collision,
+                        reward_offroad_collision=self.reward_offroad_collision,
+                        reward_goal_post_respawn=self.reward_goal_post_respawn,
+                        reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
+                        spawn_immunity_timer=self.spawn_immunity_timer,
+                        map_id=map_ids[i],
+                        use_rc=self.reward_conditioned,
+                        use_ec=self.entropy_conditioned,
+                        max_agents=nxt-cur,
+                        collision_weight_lb=self.collision_weight_lb,
+                        collision_weight_ub=self.collision_weight_ub,
+                        offroad_weight_lb=self.offroad_weight_lb,
+                        offroad_weight_ub=self.offroad_weight_ub,
+                        goal_weight_lb=self.goal_weight_lb,
+                        goal_weight_ub=self.goal_weight_ub,
+                        entropy_weight_lb=self.entropy_weight_lb,
+                        entropy_weight_ub=self.entropy_weight_ub,
+                    )
                     env_ids.append(env_id)
 
                 self.c_envs = binding.vectorize(*env_ids)
@@ -474,7 +450,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed_big/training")
+    data_dir = Path("/n/netscratch/pehlevan_lab/Lab/mkulkarni/data/data/processed/training")
     
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))

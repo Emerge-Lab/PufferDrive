@@ -261,6 +261,11 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
         env->goal_weight_lb = unpack(kwargs, "goal_weight_lb");
         env->goal_weight_ub = unpack(kwargs, "goal_weight_ub");
     }
+    env->use_ec = unpack(kwargs, "use_ec");
+    if (env->use_ec){
+        env->entropy_weight_lb = unpack(kwargs, "entropy_weight_lb");
+        env->entropy_weight_ub = unpack(kwargs, "entropy_weight_ub");
+    }
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 
