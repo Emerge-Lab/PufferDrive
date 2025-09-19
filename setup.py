@@ -52,7 +52,7 @@ def download_raylib(platform, ext):
         urllib.request.urlretrieve(RLIGHTS_URL, platform + "/include/rlights.h")
 
 
-def download_library(url: str, name: str, tag: str, ext: str = "tar.gz", files_to_extract: list = [None]):
+def download_library(url: str, name: str, tag: str, ext: str = "tar.gz", files_to_extract: list = None):
     library_folder = name + "-" + tag
     archive_file = library_folder + "." + ext
     if not os.path.exists(library_folder):
@@ -72,13 +72,14 @@ def download_library(url: str, name: str, tag: str, ext: str = "tar.gz", files_t
                     zip_ref.extractall()
         else:
             with tarfile.open(archive_file, "r") as tar_ref:
+                kwargs = {}
+                if sys.version_info >= (3, 12):
+                    kwargs["filter"] = "data"
                 if files_to_extract:
-                    members = [
+                    kwargs["members"] = [
                         member for member in tar_ref.getmembers() if os.path.basename(member.name) in files_to_extract
                     ]
-                    tar_ref.extractall(members=members, filter="data")
-                else:
-                    tar_ref.extractall(filter="data")
+                tar_ref.extractall(**kwargs)
         os.remove(archive_file)
 
 
