@@ -475,7 +475,6 @@ static PyObject* vectorize(PyObject* self, PyObject* args) {
         }
         vec->envs[i] = (Env*)PyLong_AsVoidPtr(handle_obj);
     }
-
     return PyLong_FromVoidPtr(vec);
 }
 
@@ -499,6 +498,7 @@ static PyObject* vec_reset(PyObject* self, PyObject* args) {
  
     for (int i = 0; i < vec->num_envs; i++) {
         // Assumes each process has the same number of environments
+        printf("resetting env %d \n", i);
         srand(i + seed*vec->num_envs);
         c_reset(vec->envs[i]);
     }

@@ -1823,7 +1823,7 @@ void draw_road_edge(Drive* env, float start_x, float start_y, float end_x, float
     DrawTriangle3D(t4, t1, b1, CURB_SIDE);
 }
 
-void c_render(Drive* env) { // alter this code so that each agent is a different colour based on whether it is ego or co player
+void c_render(Drive* env) { 
     if (env->client == NULL) {
         env->client = make_client(env);
     }

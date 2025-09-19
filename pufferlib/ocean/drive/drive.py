@@ -20,6 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import struct
+import importlib
 
 
 class Drive(pufferlib.PufferEnv):
@@ -37,7 +38,12 @@ class Drive(pufferlib.PufferEnv):
             buf = None,
             seed=1, 
             population_play = False,
-            reward_conditioned = False):
+            reward_conditioned = False,
+            co_player_policy_name = None,
+            co_player_rnn_name = None, 
+            co_player_policy = None,
+            co_player_rnn = None, 
+            ):
 
         # env
         self.render_mode = render_mode
@@ -59,10 +65,13 @@ class Drive(pufferlib.PufferEnv):
             shape=(self.num_obs,), dtype=np.float32)
         self.num_agents_const = num_agents
         self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
-
+        
         if population_play and reward_conditioned:
             raise ValueError("Population play with reward conditioning is not supported.")
-        
+
+
+
+
         self.population_play = population_play
         # self.single_action_space = gymnasium.spaces.Box(
         #     low=-1, high=1, shape=(2,), dtype=np.float32
@@ -92,7 +101,13 @@ class Drive(pufferlib.PufferEnv):
             
             self.num_co_players = len(self.co_player_ids)
             self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents
-            self.co_player_policy = load_drivenet("resources/drive/puffer_drive_weights.bin", self.num_co_players       )
+            co_player_atn_space = pufferlib.spaces.joint_space(self.single_action_space, self.num_co_players)
+            if isinstance(self.single_action_space, pufferlib.spaces.Box):
+                self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=co_player_atn_space.dtype)
+            else:
+                self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=np.int32)
+            self.co_player_policy = co_player_policy
+            self.set_co_player_state()
         else:
             agent_offsets, map_ids, num_envs = binding_tuple
             self.num_agents = self.num_agents_const
@@ -123,7 +138,7 @@ class Drive(pufferlib.PufferEnv):
                     reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
                     spawn_immunity_timer=spawn_immunity_timer,
                     map_id=map_ids[i],
-                    use_rc = self.population_play,
+                    use_rc = self.reward_conditioned,
                     max_agents = nxt-cur,
                     collision_weight_lb = reward_vehicle_collision,
                     collision_weight_ub = reward_vehicle_collision,
@@ -152,7 +167,7 @@ class Drive(pufferlib.PufferEnv):
                     spawn_immunity_timer=spawn_immunity_timer,
                     map_id=map_ids[i],
                     max_agents=nxt-cur,
-                    use_rc = False,
+                    use_rc = self.reward_conditioned,
                     collision_weight_lb = -1.0,
                     collision_weight_ub = 0.0,
                     offroad_weight_lb = -1.0,
@@ -205,17 +220,80 @@ class Drive(pufferlib.PufferEnv):
         else:
             self.actions = np.zeros(atn_space.shape, dtype=np.int32)
 
+        co_player_atn_space = pufferlib.spaces.joint_space(self.single_action_space, self.num_co_players)
+        if isinstance(self.single_action_space, pufferlib.spaces.Box):
+            self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=co_player_atn_space.dtype)
+        else:
+            self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=np.int32)
+
+    # def load_co_player_policy(self):
+    #     import struct
+    #     import torch
+
+        
+    #     def load_weights(filename):
+    #         """Load weights from binary file"""
+    #         with open(filename, 'rb') as f:
+    #             data = f.read()
+            
+    #         # Assuming weights are stored as float32
+    #         num_floats = len(data) // 4
+    #         weights = struct.unpack(f'{num_floats}f', data)
+    #         return torch.tensor(weights, dtype=torch.float32)
+        
+    #     def assign_flat_weights_to_model(model, flat_weights):
+    #         """Assign flat weights to model parameters"""
+    #         state_dict = {}
+    #         offset = 0
+            
+    #         for name, param in model.named_parameters():
+    #             param_size = param.numel()
+    #             param_data = flat_weights[offset:offset + param_size]
+    #             state_dict[name] = param_data.view(param.shape)
+    #             offset += param_size
+            
+    #         return state_dict
+
+        
+    #     flat_weights = load_weights("resources/drive/puffer_drive_weights.bin")
+
+    #     expected_params = sum(p.numel() for p in self.co_player_policy.parameters())
+    #     print(f"Model expects: {expected_params} parameters")
+    #     print(f"Binary file has: {len(flat_weights)} values")
+
+    #     state_dict = assign_flat_weights_to_model(self.co_player_policy, flat_weights)
+
+    #     state_dict["cell.weight_ih"] = state_dict["lstm.weight_ih_l0"]
+    #     state_dict["cell.weight_hh"] = state_dict["lstm.weight_hh_l0"]
+    #     state_dict["cell.bias_ih"]   = state_dict["lstm.bias_ih_l0"]
+    #     state_dict["cell.bias_hh"]   = state_dict["lstm.bias_hh_l0"]
+
+    #     self.co_player_policy.load_state_dict(state_dict)
+
+
+    #     self.set_co_player_state()
+
+    def set_co_player_state(self):
+        self.state = dict(
+            lstm_h=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
+            lstm_c=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
+        )
+    
+    def get_co_player_actions(self):
+        co_player_obs = self.observations[self.co_player_ids]
+        co_player_obs = torch.as_tensor(co_player_obs)
+        logits, value = self.co_player_policy.forward_eval(co_player_obs, self.state) 
+        co_player_action, logprob, _ = pufferlib.pytorch.sample_logits(logits) 
+        co_player_action = co_player_action.cpu().numpy().reshape(self.co_player_actions.shape)
+        return co_player_action
+        
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
         return self.observations, []
     
-    def get_co_player_actions(self):
-        co_player_obs = self.observations[self.co_player_ids]
-        co_player_actions, co_player_values = self.co_player_policy.get_actions(torch.from_numpy(co_player_obs))
-        return co_player_actions
-
+    
 
     def step(self, ego_actions):
         self.terminals[:] = 0
@@ -246,8 +324,8 @@ class Drive(pufferlib.PufferEnv):
                     self.num_ego_agents = len(self.ego_ids)
                     self.num_co_players = len(self.co_player_ids)
                     self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
-                    self.co_player_policy = load_drivenet("resources/drive/puffer_drive_weights.bin", self.num_co_players )
-                     
+                    # self.co_player_policy = load_drivenet("resources/drive/puffer_drive_weights.bin", self.num_co_players )
+                    self.set_co_player_state()
                     env_co_player_ids = [[id - next(agent_offsets[i] for i in range(len(agent_offsets)-1) 
                                         if agent_offsets[i] <= id < agent_offsets[i+1]) 
                             for id in subset] for subset in co_player_ids]
