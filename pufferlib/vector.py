@@ -767,7 +767,7 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
         state_dict["cell.bias_ih"]   = state_dict["lstm.bias_ih_l0"]
         state_dict["cell.bias_hh"]   = state_dict["lstm.bias_hh_l0"]
 
-        torch.set_num_threads(1)
+        torch.set_num_threads(1) # NOTE this is a bit whack, but I genuinely dont know how else to get it working
         torch.set_num_interop_threads(1)
         import  os
         # Set environment variables as backup
