@@ -27,9 +27,17 @@ def test_drive_render():
             print(f"Build error: {e}")
             return False
 
+    # Backup existing weights file if it exists
+    weights_path = "resources/drive/puffer_drive_weights.bin"
+    backup_path = "resources/drive/puffer_drive_weights.bin.backup"
+    weights_existed = False
+
+    if os.path.exists(weights_path):
+        weights_existed = True
+        os.rename(weights_path, backup_path)
+
     # Create dummy weights file
     os.makedirs("resources/drive", exist_ok=True)
-    weights_path = "resources/drive/puffer_drive_weights.bin"
     dummy_weights = np.random.randn(10000).astype(np.float32)
     dummy_weights.tofile(weights_path)
 
@@ -65,10 +73,17 @@ def test_drive_render():
         print(f"Render test failed: {e}")
         return False
     finally:
-        # Cleanup
-        for path in [weights_path, "resources/drive/output_topdown.gif", "resources/drive/output_agent.gif"]:
-            if os.path.exists(path):
-                os.remove(path)
+        # Cleanup: remove test outputs and restore original weights if they existed
+        if os.path.exists(weights_path):
+            os.remove(weights_path)
+
+        if weights_existed and os.path.exists(backup_path):
+            os.rename(backup_path, weights_path)
+
+        # Clean up generated outputs
+        for output_file in ["resources/drive/output_topdown.gif", "resources/drive/output_agent.gif"]:
+            if os.path.exists(output_file):
+                os.remove(output_file)
 
 
 if __name__ == "__main__":
