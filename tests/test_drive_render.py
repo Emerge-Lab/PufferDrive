@@ -18,7 +18,7 @@ def test_drive_render():
         print("Drive binary not found, attempting to build...")
         try:
             result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=400
+                ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=600
             )
             if result.returncode != 0 or not os.path.exists("./drive"):
                 print(f"Build failed: {result.stderr}")
