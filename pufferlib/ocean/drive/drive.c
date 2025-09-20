@@ -488,6 +488,7 @@ int main(int argc, char* argv[]) {
     int obs_only = 0;
     int lasers = 0;
     int log_trajectories = 1;
+    const char* map_name = NULL;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -497,11 +498,21 @@ int main(int argc, char* argv[]) {
             obs_only = 1;
         } else if (strcmp(argv[i], "--lasers") == 0) {
             lasers = 1;
-        } else if (strcmp(argv[i], "--log_trajectories") == 0) {
+        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
             log_trajectories = 0;
+        } else if (strcmp(argv[i], "--map-name") == 0) {
+            // Check if there's a next argument for the map path
+            if (i + 1 < argc) {
+                map_name = argv[i + 1];
+                i++; // Skip the next argument since we used it as map path
+            } else {
+                fprintf(stderr, "Error: --map-name option requires a map file path\n");
+                return 1;
+            }
         }
     }
-    eval_gif(NULL, show_grid, obs_only, lasers, log_trajectories);
+
+    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories);
     //demo();
     //performance_test();
     return 0;
