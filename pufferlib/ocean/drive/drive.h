@@ -785,8 +785,16 @@ int check_lane_aligned(Entity* car, Entity* lane, int geometry_idx) {
     if (geometry_idx >= lane->array_size - 1) geometry_idx = lane->array_size - 2;
 
     // Compute local lane segment heading
-    float heading_x1 = lane->traj_x[geometry_idx] - lane->traj_x[geometry_idx - 1];
-    float heading_y1 = lane->traj_y[geometry_idx] - lane->traj_y[geometry_idx - 1];
+    float heading_x1, heading_y1;
+    if (geometry_idx > 0) {
+        heading_x1 = lane->traj_x[geometry_idx] - lane->traj_x[geometry_idx - 1];
+        heading_y1 = lane->traj_y[geometry_idx] - lane->traj_y[geometry_idx - 1];
+    } else {
+        // For first segment, just use the forward direction
+        heading_x1 = lane->traj_x[geometry_idx + 1] - lane->traj_x[geometry_idx];
+        heading_y1 = lane->traj_y[geometry_idx + 1] - lane->traj_y[geometry_idx];
+    }
+
     float heading_x2 = lane->traj_x[geometry_idx + 1] - lane->traj_x[geometry_idx];
     float heading_y2 = lane->traj_y[geometry_idx + 1] - lane->traj_y[geometry_idx];
 
