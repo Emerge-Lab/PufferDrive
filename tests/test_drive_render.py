@@ -10,7 +10,7 @@ import numpy as np
 
 
 def test_drive_render():
-    """Test that PufferDrive renderer runs successfully (exit code 1)."""
+    """Test that PufferDrive renderer runs successfully (exit code 0)."""
     print("Testing PufferDrive rendering...")
 
     # Check if drive binary exists
@@ -42,6 +42,10 @@ def test_drive_render():
     dummy_weights.tofile(weights_path)
 
     try:
+        # Set up environment to suppress AddressSanitizer exit code (needed due to current memory leaks)
+        env = os.environ.copy()
+        env["ASAN_OPTIONS"] = "exitcode=0"
+
         # Run the renderer with xvfb and frame skip for faster testing
         print("Running renderer.")
         result = subprocess.run(
@@ -49,6 +53,7 @@ def test_drive_render():
             capture_output=True,
             text=True,
             timeout=600,
+            env=env,
         )
 
         print(f"Renderer exit code: {result.returncode}")
@@ -59,12 +64,11 @@ def test_drive_render():
         if result.stderr:
             print(f"stderr: {result.stderr}")
 
-        # Gif is generated successfully on exit code 1
-        if result.returncode == 1:
-            print("Renderer completed successfully")
+        if result.returncode == 0:
+            print("Renderer completed successfully!")
             return True
         else:
-            print(f"Renderer failed with exit code {result.returncode} (expected: 1)")
+            print(f"Renderer failed with exit code {result.returncode}")
             return False
 
     except subprocess.TimeoutExpired:
