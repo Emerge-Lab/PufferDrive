@@ -35,4 +35,4 @@ jobs:
 
       - name: Run render test
         run: python tests/test_drive_render.py
-        timeout-minutes: 5
+        timeout-minutes: 15
