@@ -325,10 +325,14 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories) {
+void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip) {
     // Use default if no map provided
     if (map_name == NULL) {
         map_name = "resources/drive/binaries/map_942.bin";
+    }
+
+    if (frame_skip <= 0) {
+        frame_skip = 1;  // Default: render every frame
     }
 
     // Make env
@@ -373,11 +377,16 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
 
     if (rollout) {
         // Generate top-down view frames
+        int rendered_frames = 0;
         for(int i = 0; i < frame_count; i++) {
-            float* path_taken = NULL;
-            snprintf(filename, sizeof(filename), "resources/drive/frame_topdown_%03d.png", i);
-            // Always set obs_only=0, lasers=0 for top-down view (full world state)
-            saveTopDownImage(&env, client, filename, target, map_height, 0, 0, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory, show_grid);
+            // Only render every frame_skip frames
+            if (i % frame_skip == 0) {
+                float* path_taken = NULL;
+                snprintf(filename, sizeof(filename), "resources/drive/frame_topdown_%03d.png", rendered_frames);
+                saveTopDownImage(&env, client, filename, target, map_height, 0, 0, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory, show_grid);
+                rendered_frames++;
+            }
+
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
@@ -387,10 +396,16 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         c_reset(&env);
 
         // Generate agent view frames
+        rendered_frames = 0;
         for(int i = 0; i < frame_count; i++) {
-            float* path_taken = NULL;
-            snprintf(filename, sizeof(filename), "resources/drive/frame_agent_%03d.png", i);
-            saveAgentViewImage(&env, client, filename, target, map_height, obs_only, lasers, show_grid); // obs_only=1, lasers=0, show_grid=0
+            // Only render every frame_skip frames
+            if (i % frame_skip == 0) {
+                float* path_taken = NULL;
+                snprintf(filename, sizeof(filename), "resources/drive/frame_agent_%03d.png", rendered_frames);
+                saveAgentViewImage(&env, client, filename, target, map_height, obs_only, lasers, show_grid);
+                rendered_frames++;
+            }
+
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
@@ -488,6 +503,7 @@ int main(int argc, char* argv[]) {
     int obs_only = 0;
     int lasers = 0;
     int log_trajectories = 1;
+    int frame_skip = 1;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -497,11 +513,20 @@ int main(int argc, char* argv[]) {
             obs_only = 1;
         } else if (strcmp(argv[i], "--lasers") == 0) {
             lasers = 1;
-        } else if (strcmp(argv[i], "--log_trajectories") == 0) {
+        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
             log_trajectories = 0;
+        } else if (strcmp(argv[i], "--frame-skip") == 0) {
+            if (i + 1 < argc) {
+                frame_skip = atoi(argv[i + 1]);
+                i++; // Skip the next argument since we consumed it
+                if (frame_skip <= 0) {
+                    frame_skip = 1; // Ensure valid value
+                }
+            }
         }
     }
-    eval_gif(NULL, show_grid, obs_only, lasers, log_trajectories);
+
+    eval_gif(NULL, show_grid, obs_only, lasers, log_trajectories, frame_skip);
     //demo();
     //performance_test();
     return 0;

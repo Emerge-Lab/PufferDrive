@@ -1,0 +1,38 @@
+name: render-ci
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  test-render:
+    name: test-render - ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies for headless rendering
+        run: |
+          sudo apt update
+          sudo apt install -y ffmpeg xvfb build-essential
+
+      - name: Upgrade pip
+        run: python -m pip install -U pip
+
+      - name: Install pufferlib
+        run: pip install -e .
+
+      - name: Compile C extensions
+        run: python setup.py build_ext --inplace --force
+
+      - name: Run render test
+        run: python tests/test_drive_render.py
+        timeout-minutes: 15
