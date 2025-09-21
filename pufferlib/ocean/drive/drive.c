@@ -524,7 +524,7 @@ int main(int argc, char* argv[]) {
                     frame_skip = 1; // Ensure valid value
                 }
             }
-         } else if (strcmp(argv[i], "--map-name") == 0) {
+        } else if (strcmp(argv[i], "--map-name") == 0) {
             // Check if there's a next argument for the map path
             if (i + 1 < argc) {
                 map_name = argv[i + 1];
