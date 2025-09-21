@@ -414,14 +414,14 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         // Generate both GIFs
         int gif_success_topdown = make_gif_from_frames(
             "resources/drive/frame_topdown_%03d.png",
-            30, // fps
+            30 / frame_skip, // fps
             "resources/drive/palette_topdown.png",
             "resources/drive/output_topdown.gif"
         );
 
         int gif_success_agent = make_gif_from_frames(
             "resources/drive/frame_agent_%03d.png",
-            15, // fps
+            15 / frame_skip, // fps
             "resources/drive/palette_agent.png",
             "resources/drive/output_agent.gif"
         );
@@ -503,7 +503,7 @@ int main(int argc, char* argv[]) {
     int obs_only = 0;
     int lasers = 0;
     int log_trajectories = 1;
-    int frame_skip = 1;
+    int frame_skip = 3;
     const char* map_name = NULL;
 
     // Parse command line arguments
@@ -536,7 +536,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(NULL, show_grid, obs_only, lasers, log_trajectories, frame_skip);
+    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip);
     //demo();
     //performance_test();
     return 0;
