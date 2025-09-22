@@ -79,10 +79,8 @@ class Drive(pufferlib.PufferEnv):
         self.entropy_weight_lb = entropy_weight_lb
         self.entropy_weight_ub = entropy_weight_ub
 
-        if self.reward_conditioned:
-            self.num_obs = 10 + 63*7 + 200*7
-        else:
-            self.num_obs = 7 + 63*7 + 200*7
+        conditioning_dims = (3 if self.reward_conditioned else 0) + (1 if self.entropy_conditioned else 0)
+        self.num_obs = 7 + conditioning_dims + 63*7 + 200*7
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
             shape=(self.num_obs,), dtype=np.float32)
