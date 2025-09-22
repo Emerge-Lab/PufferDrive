@@ -57,6 +57,7 @@
 
 // Max road segment observation entities
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 200
+#define MAX_SELF_OBSERVATIONS 8
 #define MAX_CARS 64
 // Observation Space Constants
 #define MAX_SPEED 100.0f
@@ -144,6 +145,7 @@ struct Entity {
     float heading;
     float heading_x;
     float heading_y;
+    float angular_velocity_z;
     int valid;
     int respawn_timestep;
     int collided_before_goal;
@@ -164,6 +166,13 @@ void free_entity(Entity* entity){
     free(entity->traj_heading);
     free(entity->traj_valid);
 }
+
+float normalize_angle(float angle) {
+    while (angle > M_PI) angle -= 2.0f * M_PI;
+    while (angle < -M_PI) angle += 2.0f * M_PI;
+    return angle;
+}
+
 
 float relative_distance(float a, float b){
     float distance = sqrtf(powf(a - b, 2));
@@ -367,6 +376,7 @@ void set_start_position(Drive* env){
         e->heading = e->traj_heading[0];
         e->heading_x = cosf(e->heading);
         e->heading_y = sinf(e->heading);
+        e->angular_velocity_z = 0.0f;
         e->valid = e->traj_valid[0];
         e->collision_state = 0;
         e->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
@@ -1115,7 +1125,7 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = MAX_SELF_OBSERVATIONS + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("max obs: %d\n", max_obs*env->active_agent_count);
     // printf("num cars: %d\n", env->num_cars);
     // printf("num static cars: %d\n", env->static_car_count);
@@ -1171,39 +1181,44 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         // Current state
         float x = agent->x;
         float y = agent->y;
-        float heading = agent->heading;
-        float vx = agent->vx;
-        float vy = agent->vy;
+        float yaw = agent->heading;
+        float speed = sqrtf(agent->vx * agent->vx + agent->vy * agent->vy);
+        float angular_vel_z = agent->angular_velocity_z;
 
-        // Calculate current speed
-        float speed = sqrtf(vx*vx + vy*vy);
-
-        // Time step (adjust as needed)
+        // Time step
         const float dt = 0.1f;
+
+        // Calculate derivatives
+        float x_dot = speed * cosf(yaw);
+        float y_dot = speed * sinf(yaw);
+        float theta_dot = speed * tanf(angular_vel_z) / (0.8f * agent->length);
+        float delta_dot = steering;  // steering rate change
+
+        // Update yaw
+        float new_yaw = normalize_angle(yaw + theta_dot * dt);
+
         // Update speed with acceleration
-        speed = speed + 0.5f*acceleration*dt;
-        // if (speed < 0) speed = 0;  // Prevent going backward
-        speed = clipSpeed(speed);
-        // compute yaw rate
-        float beta = tanh(.5*tanf(steering));
-        // new heading
-        float yaw_rate = (speed*cosf(beta)*tanf(steering)) / agent->length;
-        // new velocity
-        float new_vx = speed*cosf(heading + beta);
-        float new_vy = speed*sinf(heading + beta);
+        float new_speed = speed + acceleration * dt;
+        new_speed = clipSpeed(new_speed);
+
+        // Update velocity components
+        agent->vx = new_speed * cosf(new_yaw);
+        agent->vy = new_speed * sinf(new_yaw);
+
         // Update position
-        x = x + (new_vx*dt);
-        y = y + (new_vy*dt);
-        heading = heading + yaw_rate*dt;
-        // heading = normalize_heading(heading);
-        // Apply updates to the agent's state
-        agent->x = x;
-        agent->y = y;
-        agent->heading = heading;
-        agent->heading_x = cosf(heading);
-        agent->heading_y = sinf(heading);
-        agent->vx = new_vx;
-        agent->vy = new_vy;
+        agent->x = x + x_dot * dt;
+        agent->y = y + y_dot * dt;
+
+        // Update heading
+        agent->heading = new_yaw;
+        agent->heading_x = cosf(new_yaw);
+        agent->heading_y = sinf(new_yaw);
+
+        // Update angular velocity (steering wheel angle)
+        agent->angular_velocity_z = normalize_angle(angular_vel_z + delta_dot * dt);
+
+        // Clip angular velocity between -pi/3 and pi/3 (steering limits)
+        agent->angular_velocity_z = fmaxf(-M_PI / 3.0f, fminf(agent->angular_velocity_z, M_PI / 3.0f));
     }
     return;
 }
@@ -1217,7 +1232,7 @@ float reverse_normalize_value(float value, float min, float max){
 }
 
 void compute_observations(Drive* env) {
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = MAX_SELF_OBSERVATIONS + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
@@ -1247,9 +1262,10 @@ void compute_observations(Drive* env) {
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
+        obs[7] = ego_entity->angular_velocity_z / (M_PI / 3.0f);
 
         // Relative Pos of other cars
-        int obs_idx = 7;  // Start after goal distances
+        int obs_idx = MAX_SELF_OBSERVATIONS;
         int cars_seen = 0;
         for(int j = 0; j < MAX_CARS; j++) {
             int index = -1;
@@ -1374,6 +1390,7 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].heading_y = sinf(env->entities[agent_idx].heading);
     env->entities[agent_idx].vx = env->entities[agent_idx].traj_vx[0];
     env->entities[agent_idx].vy = env->entities[agent_idx].traj_vy[0];
+    env->entities[agent_idx].angular_velocity_z = 0.0f;
     env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
@@ -1642,7 +1659,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = MAX_SELF_OBSERVATIONS+ 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
@@ -1665,7 +1682,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
 
     }
     // First draw other agent observations
-    int obs_idx = 7;  // Start after goal distances
+    int obs_idx = MAX_SELF_OBSERVATIONS;  // Start after goal distances
     for(int j = 0; j < MAX_CARS - 1; j++) {
         if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 7;  // Move to next agent observation
@@ -1813,7 +1830,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         obs_idx += 7;  // Move to next agent observation (7 values per agent)
     }
     // Then draw map observations
-    int map_start_idx = 7 + 7*(MAX_CARS - 1);  // Start after agent observations
+    int map_start_idx = MAX_SELF_OBSERVATIONS + 7*(MAX_CARS - 1);  // Start after agent observations
     for(int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {  // Loop through potential map entities
         int entity_idx = map_start_idx + k*7;
         if(agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0){
