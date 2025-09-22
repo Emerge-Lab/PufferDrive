@@ -22,5 +22,5 @@ jobs:
           python setup.py build_ext --inplace --force
 
       - name: Test training
-        run: python tests/test_drive_training.py
+        run: python tests/test_drive_train.py
         timeout-minutes: 8
