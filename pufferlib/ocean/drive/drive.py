@@ -6,6 +6,13 @@ import os
 import pufferlib
 from pufferlib.ocean.drive import binding
 
+SELF_OBSERVATIONS = 8
+MAX_PARTNER_OBJECTS = 63
+PARTNER_FEATURES_PER_OBJECT = 7
+MAX_ROAD_OBJECTS = 200
+ROAD_FEATURES_PER_OBJECT = 13
+ROAD_ONEHOT_CLASSES = 7
+
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
@@ -40,7 +47,11 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63 * 7 + 200 * 7
+        self.num_obs = (
+            SELF_OBSERVATIONS
+            + MAX_PARTNER_OBJECTS * PARTNER_FEATURES_PER_OBJECT
+            + MAX_ROAD_OBJECTS * ROAD_ONEHOT_CLASSES
+        )
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         if action_type == "discrete":
