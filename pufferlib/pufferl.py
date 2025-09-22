@@ -529,7 +529,12 @@ class PuffeRL:
                         os.makedirs(os.path.dirname(expected_weights_path), exist_ok=True)
                         shutil.copy2(bin_path, expected_weights_path)
 
-                        cmd = ["xvfb-run", "-s", "-screen 0 1280x720x24", "./drive"]
+                        # TODO: Fix memory leaks so that this is not needed
+                        # Suppress AddressSanitizer exit code (temp)
+                        env = os.environ.copy()
+                        env["ASAN_OPTIONS"] = "exitcode=0"
+
+                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive"]
 
                         # Add render configurations
                         if config["show_grid"]:
@@ -540,17 +545,21 @@ class PuffeRL:
                             cmd.append("--lasers")
                         if config["show_human_logs"]:
                             cmd.append("--log-trajectories")
-
+                        if config["render_map"] is not None:
+                            map_path = config["render_map"]
+                            if os.path.exists(map_path):
+                                cmd.extend(["--map-name", map_path])
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
-                            cmd,
-                            cwd=os.getcwd(),
-                            capture_output=True,
-                            text=True,
-                            timeout=120,
+                            cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env
                         )
 
-                        if result.returncode == 1:
+                        # Check if GIFs were generated successfully
+                        gifs_exist = os.path.exists("resources/drive/output_topdown.gif") and os.path.exists(
+                            "resources/drive/output_agent.gif"
+                        )
+
+                        if result.returncode == 0 or (result.returncode == 1 and gifs_exist):
                             # Move both generated GIFs to the model directory
                             gifs = [
                                 ("resources/drive/output_topdown.gif", f"epoch_{self.epoch:06d}_topdown.gif"),
@@ -575,10 +584,8 @@ class PuffeRL:
                                 else:
                                     print(f"GIF generation completed but {source_gif} not found")
 
-                            else:
-                                print("GIF generation completed but file not found")
                         else:
-                            print(f"C rendering failed: {result.stderr}")
+                            print(f"C rendering failed with exit code {result.returncode}: {result.stderr}")
 
                     except subprocess.TimeoutExpired:
                         print("C rendering timed out")

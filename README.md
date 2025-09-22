@@ -79,6 +79,12 @@ sudo apt update
 sudo apt install ffmpeg xvfb
 ```
 
+For HPC(There are no root privileges), so install into the conda environment
+```bash
+conda install -c conda-forge xorg-x11-server-xvfb-cos6-x86_64
+conda install -c conda-forge ffmpeg
+```
+
 - `ffmpeg`: Video processing and conversion
 - `xvfb`: Virtual display for headless environments
 
