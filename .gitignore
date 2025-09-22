@@ -166,6 +166,9 @@ pufferlib/ocean/impulse_wars/benchmark/
 data/
 pufferlib/resources/drive/binaries/
 
+# But keep map_000.bin for the training test
+!pufferlib/resources/drive/binaries/map_000.bin
+
 # Compiled drive binary in root
 /drive
 # But allow drive directories
