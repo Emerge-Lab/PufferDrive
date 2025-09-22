@@ -23,4 +23,4 @@ jobs:
 
       - name: Test training
         run: python tests/test_drive_training.py
-        timeout-minutes: 10
+        timeout-minutes: 8
