@@ -244,6 +244,77 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 
 }
 
+static double* unpack_float_array(PyObject* kwargs, char* key, Py_ssize_t* out_size) {
+    PyObject* val = PyDict_GetItemString(kwargs, key);
+    if (val == NULL) {
+        char error_msg[100];
+        snprintf(error_msg, sizeof(error_msg), "Missing required keyword argument '%s'", key);
+        PyErr_SetString(PyExc_TypeError, error_msg);
+        return NULL;
+    }
+    
+    if (!PySequence_Check(val)) {
+        char error_msg[100];
+        snprintf(error_msg, sizeof(error_msg), "Argument '%s' must be a sequence", key);
+        PyErr_SetString(PyExc_TypeError, error_msg);
+        return NULL;
+    }
+    
+    Py_ssize_t size = PySequence_Size(val);
+    if (size < 0) {
+        return NULL;
+    }
+    
+    if (size == 0) {
+        *out_size = 0;
+        return NULL; 
+    }
+    
+    double* array = (double*)malloc(size * sizeof(double));
+    if (array == NULL) {
+        PyErr_SetString(PyExc_MemoryError, "Failed to allocate memory for float array");
+        return NULL;
+    }
+    
+    
+    for (Py_ssize_t i = 0; i < size; i++) {
+        PyObject* item = PySequence_GetItem(val, i);
+        if (item == NULL) {
+            free(array);
+            return NULL;  
+        }
+        
+        double value;
+        if (PyLong_Check(item)) {
+            long long_val = PyLong_AsLong(item);
+            if (long_val == -1 && PyErr_Occurred()) {
+                Py_DECREF(item);
+                free(array);
+                return NULL;
+            }
+            value = (double)long_val;
+        } else if (PyFloat_Check(item)) {
+            value = PyFloat_AsDouble(item);
+            if (value == -1.0 && PyErr_Occurred()) {
+                Py_DECREF(item);
+                free(array);
+                return NULL;
+            }
+        } else {
+            char error_msg[100];
+            snprintf(error_msg, sizeof(error_msg), "Element %zd in '%s' is not a number", i, key);
+            PyErr_SetString(PyExc_TypeError, error_msg);
+            Py_DECREF(item);
+            free(array);
+            return NULL;
+        }
+        
+        array[i] = value;
+        Py_DECREF(item);
+    }
+    
+    return array;
+}
 
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
@@ -268,7 +339,27 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     }
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
+    int population_play = unpack(kwargs, "population_play");
 
+    env->population_play = population_play;
+    
+    if (env->population_play) {
+        env->num_co_players = unpack(kwargs, "num_co_players");
+        double* co_player_ids_d = unpack_float_array(kwargs, "co_player_ids", &env->num_co_players);
+        if (co_player_ids_d != NULL && env->num_co_players > 0) {
+            env->co_player_ids = (int*)malloc(env->num_co_players * sizeof(int));
+            for (int i = 0; i < env->num_co_players; i++) {
+                env->co_player_ids[i] = (int)co_player_ids_d[i];
+            }
+            free(co_player_ids_d);
+        } else {
+            env->co_player_ids = NULL;
+            env->num_co_players = 0;
+        }
+        
+        env->ego_agent_id = unpack(kwargs, "ego_agent_id");
+    }
+    
     char map_file[100];
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
     env->num_agents = max_agents;
@@ -287,6 +378,18 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
-    assign_to_dict(dict, "clean_collision_rate", log->clean_collision_rate);
+    return 0;
+}
+int my_co_player_log(PyObject* dict, Co_Player_Log* log) {
+    assign_to_dict(dict, "co_player_completion_rate", log->co_player_completion_rate);
+    assign_to_dict(dict, "co_player_collision_rate", log->co_player_collision_rate);
+    assign_to_dict(dict, "co_player_off_road_rate", log->co_player_off_road_rate);
+    assign_to_dict(dict, "co_player_clean_collision_rate", log->co_player_clean_collision_rate);
+    assign_to_dict(dict, "co_player_score", log->co_player_score);
+    assign_to_dict(dict, "co_player_perf", log->co_player_perf);
+    assign_to_dict(dict, "co_player_dnf_rate", log->co_player_dnf_rate);
+    assign_to_dict(dict, "co_player_episode_length", log->co_player_episode_length);
+    assign_to_dict(dict, "co_player_episode_return", log->co_player_episode_return);
+    assign_to_dict(dict, "co_player_n", log->co_player_n);
     return 0;
 }

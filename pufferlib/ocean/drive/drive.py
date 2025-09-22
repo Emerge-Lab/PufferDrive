@@ -20,6 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import struct
+import importlib
 
 
 class Drive(pufferlib.PufferEnv):
@@ -45,7 +46,12 @@ class Drive(pufferlib.PufferEnv):
             goal_weight_lb = 0.0,
             goal_weight_ub = 1.0,
             entropy_weight_lb = 0.0,
-            entropy_weight_ub = 1.0):
+            entropy_weight_ub = 1.0,
+            co_player_policy_name = None,
+            co_player_rnn_name = None, 
+            co_player_policy = None,
+            co_player_rnn = None, 
+            ):
 
         # env
         self.render_mode = render_mode
@@ -58,6 +64,7 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
+        self.population_play = population_play
 
         self.condition_type = condition_type
         self.reward_conditioned = condition_type in ("reward", "all")
@@ -72,20 +79,20 @@ class Drive(pufferlib.PufferEnv):
         self.entropy_weight_lb = entropy_weight_lb
         self.entropy_weight_ub = entropy_weight_ub
 
-        conditioning_dims = (3 if self.reward_conditioned else 0) + (1 if self.entropy_conditioned else 0)
-        self.num_obs = 7 + conditioning_dims + 63*7 + 200*7
+        if self.reward_conditioned:
+            self.num_obs = 10 + 63*7 + 200*7
+        else:
+            self.num_obs = 7 + 63*7 + 200*7
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
             shape=(self.num_obs,), dtype=np.float32)
         self.num_agents_const = num_agents
         self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
-
-        if population_play and condition_type != "none":
-            raise ValueError("Population play with conditioning is not supported.")
         
-       
+        if self.population_play:
+            if self.reward_conditioned or self.entropy_conditioned:
+                raise ValueError("Population play with reward conditioning is not supported.")
 
-        self.population_play = population_play
         # self.single_action_space = gymnasium.spaces.Box(
         #     low=-1, high=1, shape=(2,), dtype=np.float32
         # )
@@ -96,19 +103,38 @@ class Drive(pufferlib.PufferEnv):
         
         binding_tuple =  binding.shared(num_agents=num_agents, num_maps=num_maps, population_play = population_play)
         
+        
         if self.population_play:
             agent_offsets, map_ids, num_envs, self.ego_ids, co_player_ids = binding_tuple
             self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
             self.num_ego_agents = num_agents
+
+            env_co_player_ids = [[id - next(agent_offsets[i] for i in range(len(agent_offsets)-1) 
+                                if agent_offsets[i] <= id < agent_offsets[i+1]) 
+                     for id in subset] for subset in co_player_ids]
+            
+            env_ego_ids = [
+                min(set(range(agent_offsets[i+1] - agent_offsets[i])) - set(subset)) 
+                if subset and set(range(agent_offsets[i+1] - agent_offsets[i])) - set(subset)
+                else 0
+                for i, subset in enumerate(env_co_player_ids)
+            ]
+            
             self.num_co_players = len(self.co_player_ids)
-            self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
-            self.co_player_policy = load_drivenet("resources/drive/puffer_drive_weights.bin", self.num_co_players )
+            self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents
+            co_player_atn_space = pufferlib.spaces.joint_space(self.single_action_space, self.num_co_players)
+            if isinstance(self.single_action_space, pufferlib.spaces.Box):
+                self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=co_player_atn_space.dtype)
+            else:
+                self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=np.int32)
+            self.co_player_policy = co_player_policy
+            self.set_co_player_state()
         else:
             agent_offsets, map_ids, num_envs = binding_tuple
             self.num_agents = self.num_agents_const
             self.ego_ids = [i for i in range(agent_offsets[-1])]
-
-                      
+            env_co_player_ids = [[] for i in range(num_envs)]
+            env_ego_ids = [0 for i in range(num_envs)]
        
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -144,15 +170,38 @@ class Drive(pufferlib.PufferEnv):
                 goal_weight_ub=self.goal_weight_ub,
                 entropy_weight_lb=self.entropy_weight_lb,
                 entropy_weight_ub=self.entropy_weight_ub,
+                population_play = population_play,
+                num_co_players = len(env_co_player_ids[i]),
+                co_player_ids = env_co_player_ids[i],
+                ego_agent_id = env_ego_ids[i],
             )
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
 
         if self.population_play:
-            self.num_agents = self.num_ego_agents ##Make sure only the ego agents get trained
-        
+            self.num_agents = self.num_ego_agents
 
+    # def map_to_local_indices(self, co_player_ids, agent_offsets):
+    #     """
+    #     Map global co_player_ids to local 0-indexed positions within their agent groups
+    #     """
+    #     env_co_player_ids = []
+        
+    #     for subset in co_player_ids:
+    #         local_subset = []
+    #         for global_id in subset:
+    #             # Find which agent group this global_id belongs to
+    #             for i in range(len(agent_offsets) - 1):
+    #                 if agent_offsets[i] <= global_id < agent_offsets[i + 1]:
+    #                     # Convert to local index within this agent group
+    #                     local_id = global_id - agent_offsets[i]
+    #                     local_subset.append(local_id)
+    #                     break
+    #         env_co_player_ids.append(local_subset)
+        
+    #     return env_co_player_ids
+            
 
     def set_buffers(self):
         "Number of co players is non-stationary, resets env variable shape to account for this "
@@ -170,17 +219,33 @@ class Drive(pufferlib.PufferEnv):
         else:
             self.actions = np.zeros(atn_space.shape, dtype=np.int32)
 
+        co_player_atn_space = pufferlib.spaces.joint_space(self.single_action_space, self.num_co_players)
+        if isinstance(self.single_action_space, pufferlib.spaces.Box):
+            self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=co_player_atn_space.dtype)
+        else:
+            self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=np.int32)
+
+    def set_co_player_state(self):
+        self.state = dict(
+            lstm_h=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
+            lstm_c=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
+        )
+    
+    def get_co_player_actions(self):
+        co_player_obs = self.observations[self.co_player_ids]
+        co_player_obs = torch.as_tensor(co_player_obs)
+        logits, value = self.co_player_policy.forward_eval(co_player_obs, self.state) 
+        co_player_action, logprob, _ = pufferlib.pytorch.sample_logits(logits) 
+        co_player_action = co_player_action.cpu().numpy().reshape(self.co_player_actions.shape)
+        return co_player_action
+        
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
         return self.observations, []
     
-    def get_co_player_actions(self):
-        co_player_obs = self.observations[self.co_player_ids]
-        co_player_actions, co_player_values = self.co_player_policy.get_actions(torch.from_numpy(co_player_obs))
-        return co_player_actions
-
+    
 
     def step(self, ego_actions):
         self.terminals[:] = 0
@@ -211,14 +276,26 @@ class Drive(pufferlib.PufferEnv):
                     self.num_ego_agents = len(self.ego_ids)
                     self.num_co_players = len(self.co_player_ids)
                     self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents 
-                    self.co_player_policy = load_drivenet("resources/drive/puffer_drive_weights.bin", self.num_co_players )
+                    # self.co_player_policy = load_drivenet("resources/drive/puffer_drive_weights.bin", self.num_co_players )
+                    self.set_co_player_state()
+                    env_co_player_ids = [[id - next(agent_offsets[i] for i in range(len(agent_offsets)-1) 
+                                        if agent_offsets[i] <= id < agent_offsets[i+1]) 
+                            for id in subset] for subset in co_player_ids]
+                    
+                    env_ego_ids = [
+                        min(set(range(agent_offsets[i+1] - agent_offsets[i])) - set(subset)) 
+                        if subset and set(range(agent_offsets[i+1] - agent_offsets[i])) - set(subset)
+                        else 0
+                        for i, subset in enumerate(env_co_player_ids)
+                    ]
 
                     self.set_buffers() 
                 else:
                     agent_offsets, map_ids, num_envs = binding_tuple
                     self.num_agents = self.num_agents_const
                     self.ego_ids = [i for i in range(agent_offsets[-1])]
-
+                    env_co_player_ids = [[] for i in range(num_envs)]
+                    env_ego_ids = [0 for i in range(num_envs)]
 
                 
                 self.agent_offsets = agent_offsets
@@ -256,6 +333,10 @@ class Drive(pufferlib.PufferEnv):
                         goal_weight_ub=self.goal_weight_ub,
                         entropy_weight_lb=self.entropy_weight_lb,
                         entropy_weight_ub=self.entropy_weight_ub,
+                        population_play = population_play,
+                        num_co_players = len(env_co_player_ids[i]),
+                        co_player_ids = env_co_player_ids[i],
+                        ego_agent_id = env_ego_ids[i],
                     )
                     env_ids.append(env_id)
 
@@ -264,15 +345,12 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
 
-
-        try:
-            return (self.observations[self.ego_ids], self.rewards[self.ego_ids],
+        if self.rewards.sum() !=0:
+            pass
+        return (self.observations[self.ego_ids], self.rewards[self.ego_ids],
                 self.terminals[self.ego_ids], self.truncations[self.ego_ids], info)
         
-        except Exception as e:
-            print(f"observations: {self.observations.shape}")
-            print(f"ego ids: {self.ego_ids}")
-            raise e
+   
 
     def render(self):
         binding.vec_render(self.c_envs, 0)
@@ -488,220 +566,6 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
     print(f'SPS: {num_agents * tick / (time.time() - start)}')
     env.close()
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
-import struct
-
-class DriveNet(nn.Module):
-    def __init__(self, weights_path, num_agents=1):
-        super(DriveNet, self).__init__()
-        self.num_agents = num_agents
-        self.hidden_size = 256
-        self.input_size = 64
-        
-        # Load weights from binary file
-        self.weights_data = self.load_weights(weights_path)
-        self.weight_idx = 0
-        
-        # Initialize layers
-        self.ego_encoder = self._make_linear(7, self.input_size)
-        self.ego_layernorm = self._make_layernorm(self.input_size)
-        self.ego_encoder_two = self._make_linear(self.input_size, self.input_size)
-        
-        self.road_encoder = self._make_linear(13, self.input_size)
-        self.road_layernorm = self._make_layernorm(self.input_size)
-        self.road_encoder_two = self._make_linear(self.input_size, self.input_size)
-        
-        self.partner_encoder = self._make_linear(7, self.input_size)
-        self.partner_layernorm = self._make_layernorm(self.input_size)
-        self.partner_encoder_two = self._make_linear(self.input_size, self.input_size)
-        
-        self.shared_embedding = self._make_linear(self.input_size * 3, self.hidden_size)
-        self.actor = self._make_linear(self.hidden_size, 20)
-        self.value_fn = self._make_linear(self.hidden_size, 1)
-        
-        # LSTM layer
-        self.lstm = self._make_lstm(self.hidden_size, 256)
-        
-        # Initialize LSTM hidden states
-        self.register_buffer('lstm_h', torch.zeros(num_agents, 256))
-        self.register_buffer('lstm_c', torch.zeros(num_agents, 256))
-        
-        # Multidiscrete action sizes
-        self.action_sizes = [7, 13]
-    
-    def load_weights(self, filename):
-        """Load weights from binary file"""
-        with open(filename, 'rb') as f:
-            data = f.read()
-        
-        # Assuming weights are stored as float32
-        num_floats = len(data) // 4
-        weights = struct.unpack(f'{num_floats}f', data)
-        return torch.tensor(weights, dtype=torch.float32)
-    
-    def _get_weights(self, size):
-        """Get next chunk of weights"""
-        start_idx = self.weight_idx
-        end_idx = start_idx + size
-        weights = self.weights_data[start_idx:end_idx]
-        self.weight_idx = end_idx
-        return weights
-    
-    def _make_linear(self, in_features, out_features):
-        """Create linear layer with loaded weights"""
-        layer = nn.Linear(in_features, out_features, bias=True)
-        
-        # Load weights and bias
-        weight_size = in_features * out_features
-        bias_size = out_features
-        
-        weights = self._get_weights(weight_size).reshape(out_features, in_features)
-        bias = self._get_weights(bias_size)
-        
-        layer.weight.data = weights
-        layer.bias.data = bias
-        
-        return layer
-    
-    def _make_layernorm(self, normalized_shape):
-        """Create layer norm with loaded weights"""
-        layer = nn.LayerNorm(normalized_shape)
-        
-        # Load weight and bias
-        weight = self._get_weights(normalized_shape)
-        bias = self._get_weights(normalized_shape)
-        
-        layer.weight.data = weight
-        layer.bias.data = bias
-        
-        return layer
-    
-    def _make_lstm(self, input_size, hidden_size):
-        """Create LSTM with loaded weights"""
-        lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
-        
-        # LSTM has 4 gates: input, forget, cell, output
-        # Each gate has input-to-hidden and hidden-to-hidden weights
-        for name, param in lstm.named_parameters():
-            if 'weight_ih' in name:  # input to hidden weights
-                weight_size = param.numel()
-                weights = self._get_weights(weight_size).reshape(param.shape)
-                param.data = weights
-            elif 'weight_hh' in name:  # hidden to hidden weights  
-                weight_size = param.numel()
-                weights = self._get_weights(weight_size).reshape(param.shape)
-                param.data = weights
-            elif 'bias' in name:  # bias
-                bias_size = param.numel()
-                bias = self._get_weights(bias_size)
-                param.data = bias
-        
-        return lstm
-    
-    def forward(self, observations):
-        """
-        Forward pass
-        observations: tensor of shape [num_agents, obs_size] where obs_size = 7 + 63*7 + 200*7
-        """
-        batch_size = observations.shape[0]
-        
-        # Parse observations
-        obs_self = observations[:, :7]  # [batch, 7]
-        obs_partner = observations[:, 7:7+63*7].reshape(batch_size, 63, 7)  # [batch, 63, 7]
-        obs_road_raw = observations[:, 7+63*7:].reshape(batch_size, 200, 7)  # [batch, 200, 7]
-        
-        # Process road observations - add one-hot encoding for last feature
-        obs_road = torch.zeros(batch_size, 200, 13, device=observations.device)
-        obs_road[:, :, :7] = obs_road_raw
-        
-        # One-hot encode the 7th feature (index 6) into positions 7-13
-        road_categories = obs_road_raw[:, :, 6].long()  # [batch, 200]
-        road_categories = torch.clamp(road_categories, 0, 6)  # Ensure valid range
-        obs_road.scatter_(2, road_categories.unsqueeze(2) + 6, 1.0)
-        
-        # Process ego vehicle
-        ego_encoded = self.ego_encoder(obs_self)  # [batch, 64]
-        ego_encoded = self.ego_layernorm(ego_encoded)
-        ego_encoded = self.ego_encoder_two(ego_encoded)  # [batch, 64]
-        
-        # Process partner vehicles
-        partner_encoded = self.partner_encoder(obs_partner.reshape(-1, 7))  # [batch*63, 64]
-        partner_encoded = partner_encoded.reshape(batch_size, 63, -1)  # [batch, 63, 64]
-        partner_encoded = self.partner_layernorm(partner_encoded.reshape(-1, 64)).reshape(batch_size, 63, -1)
-        partner_encoded = self.partner_encoder_two(partner_encoded.reshape(-1, 64))  # [batch*63, 64]
-        partner_encoded = partner_encoded.reshape(batch_size, 63, -1)  # [batch, 63, 64]
-        
-        # Max pool over partner vehicles
-        partner_max, _ = torch.max(partner_encoded, dim=1)  # [batch, 64]
-        
-        # Process road objects
-        road_encoded = self.road_encoder(obs_road.reshape(-1, 13))  # [batch*200, 64]
-        road_encoded = road_encoded.reshape(batch_size, 200, -1)  # [batch, 200, 64]
-        road_encoded = self.road_layernorm(road_encoded.reshape(-1, 64)).reshape(batch_size, 200, -1)
-        road_encoded = self.road_encoder_two(road_encoded.reshape(-1, 64))  # [batch*200, 64]
-        road_encoded = road_encoded.reshape(batch_size, 200, -1)  # [batch, 200, 64]
-        
-        # Max pool over road objects
-        road_max, _ = torch.max(road_encoded, dim=1)  # [batch, 64]
-        
-        # Concatenate all features
-        combined = torch.cat([ego_encoded, road_max, partner_max], dim=1)  # [batch, 192]
-        
-        # Apply GELU activation
-        combined = F.gelu(combined)
-        
-        # Shared embedding
-        shared = self.shared_embedding(combined)  # [batch, 256]
-        shared = F.relu(shared)
-        
-        # LSTM
-        lstm_input = shared.unsqueeze(1)  # [batch, 1, 256]
-        lstm_out, (h_new, c_new) = self.lstm(lstm_input, (self.lstm_h.unsqueeze(0), self.lstm_c.unsqueeze(0)))
-        
-        # Update hidden states
-        self.lstm_h = h_new.squeeze(0)
-        self.lstm_c = c_new.squeeze(0)
-        
-        # Actor and value outputs
-        actor_logits = self.actor(self.lstm_h)  # [batch, 20]
-        values = self.value_fn(self.lstm_h)  # [batch, 1]
-        
-        return actor_logits, values
-    
-    def get_actions(self, observations):
-        """Get discrete actions using multidiscrete sampling"""
-        with torch.no_grad():
-            actor_logits, values = self.forward(observations)
-            
-            # Split logits for multidiscrete actions
-            logit_splits = [7, 13]  # action_sizes
-            action_logits = torch.split(actor_logits, logit_splits, dim=1)
-            
-            actions = []
-            for logits in action_logits:
-                # Sample from categorical distribution
-                probs = F.softmax(logits, dim=1)
-                action = torch.multinomial(probs, 1).squeeze(1)
-                actions.append(action)
-            
-            return torch.stack(actions, dim=1), values
-    
-    def reset_lstm_state(self):
-        """Reset LSTM hidden states"""
-        self.lstm_h.zero_()
-        self.lstm_c.zero_()
-
-# Usage example
-def load_drivenet(weights_path, num_agents=1):
-    """Load DriveNet model"""
-    model = DriveNet(weights_path, num_agents)
-    model.eval()  # Set to evaluation mode
-    return model
-
 
 
 if __name__ == '__main__':
