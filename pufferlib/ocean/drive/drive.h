@@ -336,7 +336,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_vz = (float*)malloc(size * sizeof(float));
             entities[i].traj_heading = (float*)malloc(size * sizeof(float));
             entities[i].traj_valid = (int*)malloc(size * sizeof(int));
-            entities[i].valid_guidance_lookup = (int*)malloc(size * sizeof(int)); 
+            entities[i].valid_guidance_lookup = (int*)malloc(size * sizeof(int));
         } else {
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
@@ -356,7 +356,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             fread(entities[i].traj_vz, sizeof(float), size, file);
             fread(entities[i].traj_heading, sizeof(float), size, file);
             fread(entities[i].traj_valid, sizeof(int), size, file);
-            fread(entities[i].valid_guidance_lookup, sizeof(int), size, file); 
+            fread(entities[i].valid_guidance_lookup, sizeof(int), size, file);
         }
         // Read remaining scalar fields
         fread(&entities[i].width, sizeof(float), 1, file);
@@ -1302,7 +1302,7 @@ void compute_observations(Drive* env) {
         if (env->condition_mode == GUIDANCE) {
             // Use the last timestep in the trajectory
             int guidance_timestep = TRAJECTORY_LENGTH - 1;
-            
+
             if (guidance_timestep < ego_entity->array_size && ego_entity->valid_guidance_lookup[guidance_timestep]) {
                 // Get guidance trajectory data
                 float guidance_x = ego_entity->traj_x[guidance_timestep];
@@ -1310,27 +1310,27 @@ void compute_observations(Drive* env) {
                 float guidance_vx = ego_entity->traj_vx[guidance_timestep];
                 float guidance_vy = ego_entity->traj_vy[guidance_timestep];
                 float guidance_heading = ego_entity->traj_heading[guidance_timestep];
-                
+
                 // Transform guidance position to ego vehicle's coordinate frame
                 float rel_guidance_x = (guidance_x - ego_entity->x) * cos_heading + (guidance_y - ego_entity->y) * sin_heading;
                 float rel_guidance_y = -(guidance_x - ego_entity->x) * sin_heading + (guidance_y - ego_entity->y) * cos_heading;
-                
+
                 // Transform guidance velocity to ego vehicle's coordinate frame
                 float rel_guidance_vx = guidance_vx * cos_heading + guidance_vy * sin_heading;
                 float rel_guidance_vy = -guidance_vx * sin_heading + guidance_vy * cos_heading;
-                
+
                 // Transform guidance heading to relative heading
                 float rel_guidance_heading = guidance_heading - ego_heading;
-                
+
                 // Normalize heading to [-pi, pi]
                 while (rel_guidance_heading > M_PI) rel_guidance_heading -= 2 * M_PI;
                 while (rel_guidance_heading < -M_PI) rel_guidance_heading += 2 * M_PI;
-                
+
                 // Replace goal observations with guidance observations (indices 0, 1, 7, 8, 9)
                 obs[0] = rel_guidance_x * 0.005f;  // Replace goal_x with guidance_x
                 obs[1] = rel_guidance_y * 0.005f;  // Replace goal_y with guidance_y
                 obs[7] = rel_guidance_vx * 0.01f;  // Same scaling as ego speed
-                obs[8] = rel_guidance_vy * 0.01f;  // guidance velocity y  
+                obs[8] = rel_guidance_vy * 0.01f;  // guidance velocity y
                 obs[9] = rel_guidance_heading;     // guidance heading
             } else {
                 // No valid guidance available, set to zero
@@ -1559,15 +1559,15 @@ void c_step(Drive* env){
         } else if (env->condition_mode == GUIDANCE) {
             // In GUIDANCE mode, reward agents for being close to trajectory points
             float current_ade = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
-            
+
             // Check if we have valid trajectory data for current timestep
-            if (env->timestep < env->entities[agent_idx].array_size && 
+            if (env->timestep < env->entities[agent_idx].array_size &&
                 env->entities[agent_idx].valid_guidance_lookup[env->timestep]) {
-                
+
                 // Compute current displacement error for this timestep
                 float displacement_error, heading_error, speed_error;
                 compute_distance_to_logs(&env->entities[agent_idx], env->timestep, &displacement_error, &heading_error, &speed_error);
-                
+
                 if (displacement_error >= 0.0f) {
                     // Reward is 1 - displacement_error (bounded between 0 and 1)
                     float guidance_reward = 0.5f - displacement_error;
@@ -1575,7 +1575,7 @@ void c_step(Drive* env){
                     env->logs[i].episode_return += guidance_reward;
                 }
             }
-            
+
             // In GUIDANCE mode, we never set reached_goal_this_episode to true
             // and we never respawn the agent at the goal
         }
@@ -1628,9 +1628,9 @@ void c_step(Drive* env){
             }
         }
     }
-    
+
     // In GUIDANCE mode, we never respawn agents at goals - they continue through the entire trajectory
-    
+
     compute_observations(env);
 }
 

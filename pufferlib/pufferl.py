@@ -551,7 +551,7 @@ class PuffeRL:
                                 cmd.extend(["--map-name", map_path])
                         if config.get("condition_mode", 0) == 1:
                             cmd.append("--condition-mode")
-                            
+
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
                             cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env

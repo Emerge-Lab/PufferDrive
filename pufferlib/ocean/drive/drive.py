@@ -222,20 +222,22 @@ def simplify_polyline(geometry, polyline_reduction_threshold):
 
     return [geometry[i] for i in range(num_points) if not skip[i]]
 
+
 def precompute_valid_guidance_lookup(entity):
     """Precompute lookup table for last valid guidance point for each timestep"""
-    trajectory_length = len(entity.get('position', []))
+    trajectory_length = len(entity.get("position", []))
     lookup = [-1] * trajectory_length
     last_valid_idx = -1
-    
-    valid_array = entity.get('valid', [])
-    
+
+    valid_array = entity.get("valid", [])
+
     for t in range(trajectory_length):
         if t < len(valid_array) and valid_array[t]:
             last_valid_idx = t
         lookup[t] = last_valid_idx
-    
+
     return lookup
+
 
 def save_map_binary(map_data, output_file):
     trajectory_length = 91
@@ -298,7 +300,7 @@ def save_map_binary(map_data, output_file):
                     *[int(valids[i]) if i < len(valids) else 0 for i in range(trajectory_length)],
                 )
             )
-            
+
             valid_guidance_lookup = precompute_valid_guidance_lookup(obj)
             f.write(
                 struct.pack(
