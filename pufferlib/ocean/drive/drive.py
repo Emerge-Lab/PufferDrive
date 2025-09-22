@@ -108,6 +108,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_immunity_timer=spawn_immunity_timer,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
+                ini_file="pufferlib/config/ocean/drive.ini",
                 condition_mode=self._condition_mode_flag,
             )
             env_ids.append(env_id)

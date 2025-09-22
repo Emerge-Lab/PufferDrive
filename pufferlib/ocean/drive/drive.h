@@ -272,6 +272,7 @@ struct Drive {
     int spawn_immunity_timer;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
+    char* ini_file;
 };
 
 void add_log(Drive* env) {
@@ -1148,6 +1149,7 @@ void c_close(Drive* env){
     free(env->static_car_indices);
     free(env->expert_static_car_indices);
     // free(env->map_name);
+    free(env->ini_file);
 }
 
 void allocate(Drive* env){
