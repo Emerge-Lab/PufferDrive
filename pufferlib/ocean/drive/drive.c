@@ -37,13 +37,14 @@ struct DriveNet {
     Multidiscrete* multidiscrete;
 };
 
-DriveNet* init_drivenet(Weights* weights, int num_agents) {
+DriveNet* init_drivenet(Weights* weights, int num_agents, int condition_mode) {
     DriveNet* net = calloc(1, sizeof(DriveNet));
     int hidden_size = 256;
     int input_size = 64;
+    int self_obs_size = (condition_mode == GUIDANCE) ? 10 : 7;
 
     net->num_agents = num_agents;
-    net->obs_self = calloc(num_agents*7, sizeof(float)); // 7 features
+    net->obs_self = calloc(num_agents*self_obs_size, sizeof(float));
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
     net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
@@ -52,7 +53,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     net->road_linear_output_two = calloc(num_agents*200*input_size, sizeof(float));
     net->partner_layernorm_output = calloc(num_agents*63*input_size, sizeof(float));
     net->road_layernorm_output = calloc(num_agents*200*input_size, sizeof(float));
-    net->ego_encoder = make_linear(weights, num_agents, 7, input_size);
+    net->ego_encoder = make_linear(weights, num_agents, self_obs_size, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->road_encoder = make_linear(weights, num_agents, 13, input_size);
@@ -111,23 +112,27 @@ void free_drivenet(DriveNet* net) {
     free(net);
 }
 
-void forward(DriveNet* net, float* observations, int* actions) {
+void forward(DriveNet* net, float* observations, int* actions, int condition_mode) {
+    int self_obs_size = (condition_mode == GUIDANCE) ? 10 : 7;
+    int total_obs_per_agent = self_obs_size + 63*7 + 200*7; // Match the actual observation space from Drive environment
+
     // Clear previous observations
-    memset(net->obs_self, 0, net->num_agents * 7 * sizeof(float));
+    memset(net->obs_self, 0, net->num_agents * self_obs_size * sizeof(float));
     memset(net->obs_partner, 0, net->num_agents * 63 * 7 * sizeof(float));
     memset(net->obs_road, 0, net->num_agents * 200 * 13 * sizeof(float));
 
     // Reshape observations into 2D boards and additional features
-    float (*obs_self)[7] = (float (*)[7])net->obs_self;
+    float (*obs_self)[self_obs_size] = (float (*)[self_obs_size])net->obs_self;
     float (*obs_partner)[63][7] = (float (*)[63][7])net->obs_partner;
     float (*obs_road)[200][13] = (float (*)[200][13])net->obs_road;
 
     for (int b = 0; b < net->num_agents; b++) {
-        int b_offset = b * (7 + 63*7 + 200*7);  // offset for each batch
-        int partner_offset = b_offset + 7;
-        int road_offset = b_offset + 7 + 63*7;
+        int b_offset = b * total_obs_per_agent;
+        int partner_offset = b_offset + self_obs_size;
+        int road_offset = b_offset + self_obs_size + 63*7;
+
         // Process self observation
-        for(int i = 0; i < 7; i++) {
+        for(int i = 0; i < self_obs_size; i++) {
             obs_self[b][i] = observations[b_offset + i];
         }
 
@@ -238,19 +243,20 @@ void demo() {
         .reward_log_heading = -0.0f,
 	    .map_name = "resources/drive/binaries/map_942.bin",
         .spawn_immunity_timer = 50,
+        .condition_mode = GUIDANCE,
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.condition_mode);
     //Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {
         // Handle camera controls
         int (*actions)[2] = (int(*)[2])env.actions;
-        forward(net, env.observations, env.actions);
+        forward(net, env.observations, env.actions, env.condition_mode);
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
             actions[env.human_agent_idx][0] = 3;
             actions[env.human_agent_idx][1] = 6;
@@ -327,7 +333,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip) {
+void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int condition_mode, int frame_skip) {
     // Use default if no map provided
     if (map_name == NULL) {
         map_name = "resources/drive/binaries/map_942.bin";
@@ -346,7 +352,8 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         .reward_log_speed = -0.0f,
         .reward_log_heading = -0.0f,
 	    .map_name = map_name,
-        .spawn_immunity_timer = 50
+        .spawn_immunity_timer = 50,
+        .condition_mode = condition_mode,
     };
     allocate(&env);
     // set which vehicle to focus on for obs mode
@@ -371,7 +378,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
     RenderTexture2D target = LoadRenderTexture(img_width, img_height);
 
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.condition_mode);
 
     int frame_count = 91;
     char filename[256];
@@ -392,7 +399,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
             }
 
             int (*actions)[2] = (int(*)[2])env.actions;
-            forward(net, env.observations, env.actions);
+            forward(net, env.observations, env.actions, env.condition_mode);
             c_step(&env);
         }
 
@@ -411,7 +418,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
             }
 
             int (*actions)[2] = (int(*)[2])env.actions;
-            forward(net, env.observations, env.actions);
+            forward(net, env.observations, env.actions, env.condition_mode);
             c_step(&env);
         }
 
@@ -450,7 +457,7 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
                 break;
             }
             printf("x: %f, y: %f \n", path_taken[i*2], path_taken[i*2+1]);
-            forward(net, env.observations, env.actions);
+            forward(net, env.observations, env.actions, env.condition_mode);
             c_step(&env);
         }
         c_reset(&env);
@@ -508,6 +515,7 @@ int main(int argc, char* argv[]) {
     int lasers = 0;
     int log_trajectories = 1;
     int frame_skip = 3;
+    int condition_mode = 0;
     const char* map_name = NULL;
 
     // Parse command line arguments
@@ -537,10 +545,12 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Error: --map-name option requires a map file path\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--condition-mode") == 0) {
+            condition_mode = 1;
         }
     }
 
-    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip);
+    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, condition_mode, frame_skip);
     //demo();
     //performance_test();
     return 0;
