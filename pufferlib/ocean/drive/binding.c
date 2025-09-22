@@ -137,8 +137,6 @@ static PyObject* my_shared_self_play(PyObject* self, PyObject* args, PyObject* k
 
 }
 
-
-
 static PyObject* my_shared_population_play(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
@@ -151,8 +149,8 @@ static PyObject* my_shared_population_play(PyObject* self, PyObject* args, PyObj
     
     PyObject* agent_offsets = PyList_New(num_worlds + 1);
     PyObject* map_ids = PyList_New(num_worlds);
-    PyObject* ego_agent_ids = PyList_New(num_worlds);  // Track which agent is ego in each world
-    PyObject* coplayer_offsets = PyList_New(num_worlds);  // Track co-players for each world
+    PyObject* ego_agent_ids = PyList_New(num_worlds);
+    PyObject* coplayer_offsets = PyList_New(num_worlds);
     
     int total_agent_count = 0;
     
@@ -164,6 +162,27 @@ static PyObject* my_shared_population_play(PyObject* self, PyObject* args, PyObj
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
+        
+        // Skip maps with 0 active agents
+        if (env->active_agent_count <= 0) {
+            printf("Warning: Map %d has 0 active agents, skipping\n", map_id);
+            
+            // Cleanup
+            if (env->entities) {
+                for(int j = 0; j < env->num_entities; j++) {
+                    free_entity(&env->entities[j]);
+                }
+                free(env->entities);
+            }
+            if (env->active_agent_indices) free(env->active_agent_indices);
+            if (env->static_car_indices) free(env->static_car_indices);
+            if (env->expert_static_car_indices) free(env->expert_static_car_indices);
+            free(env);
+            
+            // Try again with a different map
+            world_idx--; // Decrement to retry this world slot
+            continue;
+        }
         
         // Store map_id for this world
         PyObject* map_id_obj = PyLong_FromLong(map_id);
@@ -213,7 +232,7 @@ static PyObject* my_shared_population_play(PyObject* self, PyObject* args, PyObj
         if (env->static_car_indices) free(env->static_car_indices);
         if (env->expert_static_car_indices) free(env->expert_static_car_indices);
         free(env);
-        }
+    }
     
     // Store final total agent count
     PyObject* final_total_agent_count = PyLong_FromLong(total_agent_count);
@@ -223,14 +242,15 @@ static PyObject* my_shared_population_play(PyObject* self, PyObject* args, PyObj
     
     // Create return tuple with all the information
     PyObject* tuple = PyTuple_New(5);
-    PyTuple_SetItem(tuple, 0, agent_offsets);      // Agent offsets for each world
-    PyTuple_SetItem(tuple, 1, map_ids);            // Map ID for each world
-    PyTuple_SetItem(tuple, 2, final_world_count);  // Number of worlds
-    PyTuple_SetItem(tuple, 3, ego_agent_ids);      // Ego agent ID for each world
-    PyTuple_SetItem(tuple, 4, coplayer_offsets);   // Co-player agent IDs for each world
+    PyTuple_SetItem(tuple, 0, agent_offsets);
+    PyTuple_SetItem(tuple, 1, map_ids);
+    PyTuple_SetItem(tuple, 2, final_world_count);
+    PyTuple_SetItem(tuple, 3, ego_agent_ids);
+    PyTuple_SetItem(tuple, 4, coplayer_offsets);
     
     return tuple;
 }
+
 
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 

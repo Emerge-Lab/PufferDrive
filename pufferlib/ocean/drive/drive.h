@@ -1005,6 +1005,7 @@ void remove_bad_trajectories(Drive* env){
     }
     env->timestep = 0;
 }
+
 void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
@@ -1033,22 +1034,23 @@ void init(Drive* env){
         }
     }
     if (env->population_play) {
-        if (env->num_co_players + 1 != env->active_agent_count) {
-            printf("Warning: num_co_players + 1 != active_agent_count. This may lead to unexpected behavior.\n");
+            if (env->num_co_players + 1 != env->active_agent_count) {
+                printf("Warning: num_co_players + 1 != active_agent_count. This may lead to unexpected behavior.\n");
+            }
+
+            if (env->co_player_logs) {
+                free(env->co_player_logs);
+                env->co_player_logs = NULL;
+            }
+            
+            if (env->num_co_players > 0) {
+                env->co_player_logs = (Co_Player_Log*)calloc(env->num_co_players, sizeof(Co_Player_Log));
+            } else {
+                env->co_player_logs = NULL; 
+            }
+            
+            memset(&env->co_player_log, 0, sizeof(Co_Player_Log));
         }
-        
-        // Free existing allocation if it exists
-        if (env->co_player_logs) {
-            free(env->co_player_logs);
-            env->co_player_logs = NULL;
-        }
-        
-        // Allocate new memory
-        env->co_player_logs = (Co_Player_Log*)calloc(env->num_co_players, sizeof(Co_Player_Log));
-        
-        // Initialize the aggregate log
-        memset(&env->co_player_log, 0, sizeof(Co_Player_Log));
-    }
     }
 
 void c_close(Drive* env){
@@ -1439,13 +1441,11 @@ void c_step(Drive* env) {
         move_expert(env, env->actions, expert_idx);
     }
 
-    // --- Main agent loop ---
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         env->logs[i].score = 0.0f;
         env->entities[agent_idx].collision_state = 0;
 
-        // Move agent dynamics
         move_dynamics(env, i, agent_idx);
 
         // Update episode length
