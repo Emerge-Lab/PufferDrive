@@ -99,7 +99,7 @@ class Drive(pufferlib.PufferEnv):
         if not os.path.exists(binary_path):
             raise FileNotFoundError(f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs.")
         
-        binding_tuple =  binding.shared(num_agents=num_agents, num_maps=num_maps, population_play = population_play)
+        binding_tuple =  binding.shared(num_agents=num_agents, num_maps=num_maps, population_play = self.population_play)
         
         
         if self.population_play:
@@ -168,7 +168,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_weight_ub=self.goal_weight_ub,
                 entropy_weight_lb=self.entropy_weight_lb,
                 entropy_weight_ub=self.entropy_weight_ub,
-                population_play = population_play,
+                population_play = self.population_play,
                 num_co_players = len(env_co_player_ids[i]),
                 co_player_ids = env_co_player_ids[i],
                 ego_agent_id = env_ego_ids[i],
@@ -331,7 +331,7 @@ class Drive(pufferlib.PufferEnv):
                         goal_weight_ub=self.goal_weight_ub,
                         entropy_weight_lb=self.entropy_weight_lb,
                         entropy_weight_ub=self.entropy_weight_ub,
-                        population_play = population_play,
+                        population_play = self.population_play,
                         num_co_players = len(env_co_player_ids[i]),
                         co_player_ids = env_co_player_ids[i],
                         ego_agent_id = env_ego_ids[i],

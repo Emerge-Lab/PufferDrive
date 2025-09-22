@@ -783,8 +783,8 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
         policy.load_state_dict(state_dict)
 
-    for i in range(len(env_kwargs)):
-        env_kwargs[i]['co_player_policy'] = policy
+        for i in range(len(env_kwargs)):
+            env_kwargs[i]['co_player_policy'] = policy
 
     return backend(env_creators, env_args, env_kwargs, num_envs, **kwargs)
 

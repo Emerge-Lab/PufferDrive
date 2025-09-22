@@ -1024,7 +1024,7 @@ void init(Drive* env){
     remove_bad_trajectories(env);
     set_start_position(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
-    if (env->use_rc) {// randomly assign weights to each agent for reward components between their lb and ub
+    if (env->use_rc) { // randomly assign weights to each agent for reward components between their lb and ub
         env->collision_weights = (float*)calloc(env->active_agent_count, sizeof(float));
         env->offroad_weights = (float*)calloc(env->active_agent_count, sizeof(float));
         env->goal_weights = (float*)calloc(env->active_agent_count, sizeof(float));
