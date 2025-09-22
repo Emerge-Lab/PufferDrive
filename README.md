@@ -18,6 +18,12 @@ Activate the venv
 source .venv/bin/activate
 ```
 
+Install `inih`
+
+```
+wget https://github.com/benhoyt/inih/archive/r62.tar.gz
+```
+
 Inside the venv, install the dependencies
 ```
 uv pip install -e .
