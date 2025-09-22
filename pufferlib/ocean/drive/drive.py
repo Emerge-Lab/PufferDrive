@@ -528,7 +528,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("/n/netscratch/pehlevan_lab/Lab/mkulkarni/data/data/processed/training")
+    data_dir = Path("data/processed_big/training")
     
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
