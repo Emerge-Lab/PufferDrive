@@ -1183,7 +1183,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         float y = agent->y;
         float yaw = agent->heading;
         float speed = sqrtf(agent->vx * agent->vx + agent->vy * agent->vy);
-        float steering_wheel_angle = steering; // store current steering angle
+        float current_steering_wheel_angle = agent->steering_wheel_angle;
 
         // Time step
         const float dt = 0.1f;
@@ -1191,7 +1191,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         // Calculate derivatives
         float x_dot = speed * cosf(yaw);
         float y_dot = speed * sinf(yaw);
-        float theta_dot = speed * tanf(steering_wheel_angle) / (0.8f * agent->length);
+        float theta_dot = speed * tanf(current_steering_wheel_angle) / (0.8f * agent->length);
         float delta_dot = steering;  // steering rate change
 
         // Update yaw
@@ -1213,6 +1213,11 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         agent->heading = new_yaw;
         agent->heading_x = cosf(new_yaw);
         agent->heading_y = sinf(new_yaw);
+
+        // Update steering wheel angle state variable
+        float steering_wheel_angle = current_steering_wheel_angle + delta_dot * dt;
+        steering_wheel_angle = fmaxf(fminf(steering_wheel_angle, M_PI / 3.0f), -M_PI / 3.0f);
+        agent->steering_wheel_angle = steering_wheel_angle;
     }
     return;
 }
