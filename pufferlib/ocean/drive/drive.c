@@ -367,7 +367,22 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
     float img_height = (int)(map_height * scale);
     RenderTexture2D target = LoadRenderTexture(img_width, img_height);
 
+    // Load weights from stored cpt
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+
+    // Uncomment below to use random weights for testing
+    // Weights* weights = calloc(1, sizeof(Weights));
+    // weights->size = 2000000; // Large buffer
+    // weights->data = calloc(weights->size, sizeof(float));
+    // weights->idx = 0;
+    // // Fill with random small values for testing
+    // srand(42);
+    // for (int i = 0; i < weights->size; i++) {
+    //     weights->data[i] = ((float)rand() / RAND_MAX) * 0.1f - 0.05f;
+    // }
+    // printf("Using random weights for testing. Active agents: %d\n", env.active_agent_count);
+
+
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
     int frame_count = 91;
