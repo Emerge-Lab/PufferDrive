@@ -145,7 +145,7 @@ struct Entity {
     float heading;
     float heading_x;
     float heading_y;
-    float angular_velocity_z;
+    float steering_wheel_angle;
     int valid;
     int respawn_timestep;
     int collided_before_goal;
@@ -376,7 +376,7 @@ void set_start_position(Drive* env){
         e->heading = e->traj_heading[0];
         e->heading_x = cosf(e->heading);
         e->heading_y = sinf(e->heading);
-        e->angular_velocity_z = 0.0f;
+        e->steering_wheel_angle = 0.0f;
         e->valid = e->traj_valid[0];
         e->collision_state = 0;
         e->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
@@ -1183,7 +1183,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         float y = agent->y;
         float yaw = agent->heading;
         float speed = sqrtf(agent->vx * agent->vx + agent->vy * agent->vy);
-        float angular_vel_z = agent->angular_velocity_z;
+        float steering_wheel_angle = steering; // store current steering angle
 
         // Time step
         const float dt = 0.1f;
@@ -1191,7 +1191,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         // Calculate derivatives
         float x_dot = speed * cosf(yaw);
         float y_dot = speed * sinf(yaw);
-        float theta_dot = speed * tanf(angular_vel_z) / (0.8f * agent->length);
+        float theta_dot = speed * tanf(steering_wheel_angle) / (0.8f * agent->length);
         float delta_dot = steering;  // steering rate change
 
         // Update yaw
@@ -1213,12 +1213,6 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         agent->heading = new_yaw;
         agent->heading_x = cosf(new_yaw);
         agent->heading_y = sinf(new_yaw);
-
-        // Update angular velocity (steering wheel angle)
-        agent->angular_velocity_z = normalize_angle(angular_vel_z + delta_dot * dt);
-
-        // Clip angular velocity between -pi/3 and pi/3 (steering limits)
-        agent->angular_velocity_z = fmaxf(-M_PI / 3.0f, fminf(agent->angular_velocity_z, M_PI / 3.0f));
     }
     return;
 }
@@ -1262,7 +1256,7 @@ void compute_observations(Drive* env) {
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
-        obs[7] = ego_entity->angular_velocity_z / (M_PI / 3.0f);
+        obs[7] = ego_entity->steering_wheel_angle / (M_PI / 3.0f);
 
         // Relative Pos of other cars
         int obs_idx = MAX_SELF_OBSERVATIONS;
@@ -1390,7 +1384,7 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].heading_y = sinf(env->entities[agent_idx].heading);
     env->entities[agent_idx].vx = env->entities[agent_idx].traj_vx[0];
     env->entities[agent_idx].vy = env->entities[agent_idx].traj_vy[0];
-    env->entities[agent_idx].angular_velocity_z = 0.0f;
+    env->entities[agent_idx].steering_wheel_angle = 0.0f;
     env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
