@@ -234,7 +234,7 @@ void demo() {
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
         .reward_ade = -0.0f,
-	    .map_name = "resources/drive/binaries/map_942.bin",
+	    .map_name = "resources/drive/binaries/map_000.bin",
         .spawn_immunity_timer = 50,
     };
     allocate(&env);
@@ -328,7 +328,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
 void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip) {
     // Use default if no map provided
     if (map_name == NULL) {
-        map_name = "resources/drive/binaries/map_942.bin";
+        map_name = "resources/drive/binaries/map_000.bin";
     }
 
     if (frame_skip <= 0) {
@@ -466,7 +466,7 @@ void performance_test() {
     Drive env = {
         .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
-	    .map_name = "resources/drive/binaries/map_942.bin"
+	    .map_name = "resources/drive/binaries/map_000.bin"
     };
     clock_t start_time, end_time;
     double cpu_time_used;
@@ -503,7 +503,7 @@ int main(int argc, char* argv[]) {
     int obs_only = 0;
     int lasers = 0;
     int log_trajectories = 1;
-    int frame_skip = 3;
+    int frame_skip = 10;
     const char* map_name = NULL;
 
     // Parse command line arguments
