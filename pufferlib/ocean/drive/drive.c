@@ -43,7 +43,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     int input_size = 64;
 
     net->num_agents = num_agents;
-    net->obs_self = calloc(num_agents*7, sizeof(float)); // 7 features
+    net->obs_self = calloc(num_agents*MAX_SELF_OBSERVATIONS, sizeof(float));
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
     net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
@@ -52,7 +52,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     net->road_linear_output_two = calloc(num_agents*200*input_size, sizeof(float));
     net->partner_layernorm_output = calloc(num_agents*63*input_size, sizeof(float));
     net->road_layernorm_output = calloc(num_agents*200*input_size, sizeof(float));
-    net->ego_encoder = make_linear(weights, num_agents, 7, input_size);
+    net->ego_encoder = make_linear(weights, num_agents, MAX_SELF_OBSERVATIONS, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->road_encoder = make_linear(weights, num_agents, 13, input_size);
@@ -113,21 +113,22 @@ void free_drivenet(DriveNet* net) {
 
 void forward(DriveNet* net, float* observations, int* actions) {
     // Clear previous observations
-    memset(net->obs_self, 0, net->num_agents * 7 * sizeof(float));
+    memset(net->obs_self, 0, net->num_agents * MAX_SELF_OBSERVATIONS * sizeof(float));
     memset(net->obs_partner, 0, net->num_agents * 63 * 7 * sizeof(float));
     memset(net->obs_road, 0, net->num_agents * 200 * 13 * sizeof(float));
 
     // Reshape observations into 2D boards and additional features
-    float (*obs_self)[7] = (float (*)[7])net->obs_self;
+    float (*obs_self)[MAX_SELF_OBSERVATIONS] = (float (*)[MAX_SELF_OBSERVATIONS])net->obs_self;
     float (*obs_partner)[63][7] = (float (*)[63][7])net->obs_partner;
     float (*obs_road)[200][13] = (float (*)[200][13])net->obs_road;
 
     for (int b = 0; b < net->num_agents; b++) {
-        int b_offset = b * (7 + 63*7 + 200*7);  // offset for each batch
-        int partner_offset = b_offset + 7;
-        int road_offset = b_offset + 7 + 63*7;
+        int b_offset = b * (MAX_SELF_OBSERVATIONS + 63*7 + 200*7);  // offset for each batch
+        int partner_offset = b_offset + MAX_SELF_OBSERVATIONS;
+        int road_offset = b_offset + MAX_SELF_OBSERVATIONS + 63*7;
+
         // Process self observation
-        for(int i = 0; i < 7; i++) {
+        for(int i = 0; i < MAX_SELF_OBSERVATIONS; i++) {
             obs_self[b][i] = observations[b_offset + i];
         }
 
@@ -366,7 +367,22 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
     float img_height = (int)(map_height * scale);
     RenderTexture2D target = LoadRenderTexture(img_width, img_height);
 
+    // Load weights from stored cpt
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+
+    // Uncomment below to use random weights for testing
+    // Weights* weights = calloc(1, sizeof(Weights));
+    // weights->size = 2000000; // Large buffer
+    // weights->data = calloc(weights->size, sizeof(float));
+    // weights->idx = 0;
+    // // Fill with random small values for testing
+    // srand(42);
+    // for (int i = 0; i < weights->size; i++) {
+    //     weights->data[i] = ((float)rand() / RAND_MAX) * 0.1f - 0.05f;
+    // }
+    // printf("Using random weights for testing. Active agents: %d\n", env.active_agent_count);
+
+
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
     int frame_count = 91;

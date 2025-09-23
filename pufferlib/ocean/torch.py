@@ -11,13 +11,19 @@ from pufferlib.models import Convolutional as Conv  # noqa: F401
 
 Recurrent = pufferlib.models.LSTMWrapper
 
+MAX_SELF_OBSERVATIONS = 8
+MAX_PARTNER_OBJECTS = 63
+PARTNER_FEATURES_PER_OBJECT = 7
+MAX_ROAD_OBJECTS = 200
+ROAD_ONEHOT_CLASSES = 7
+
 
 class Drive(nn.Module):
     def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
         super().__init__()
         self.hidden_size = hidden_size
         self.ego_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(7, input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(MAX_SELF_OBSERVATIONS, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
@@ -29,9 +35,8 @@ class Drive(nn.Module):
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
-        max_partner_objects = 7
         self.partner_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(max_partner_objects, input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(PARTNER_FEATURES_PER_OBJECT, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
@@ -60,7 +65,7 @@ class Drive(nn.Module):
         return self.forward(x, state)
 
     def encode_observations(self, observations, state=None):
-        ego_dim = 7
+        ego_dim = MAX_SELF_OBSERVATIONS
         partner_dim = 63 * 7
         road_dim = 200 * 7
         ego_obs = observations[:, :ego_dim]
