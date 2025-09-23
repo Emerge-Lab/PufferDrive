@@ -702,7 +702,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     return PyModule_Create(&module);
 }
 
-typedef struct
+typedef struct s_env_init_config
 {
     int action_type;
     float reward_vehicle_collision;
@@ -714,6 +714,14 @@ typedef struct
     int spawn_immunity_timer;
 } env_init_config;
 
+static inline int match_pair(
+    const char* current_s1, const char* expected_s1,
+    const char* current_s2, const char* expected_s2
+) {
+    return strcmp(current_s1, expected_s1) == 0 &&
+     strcmp(current_s2, expected_s2) == 0;
+}
+
 static int handler(
     void* config,
     const char* section,
@@ -721,26 +729,25 @@ static int handler(
     const char* value
 ) {
     env_init_config* env_config = (env_init_config*)config;
-    #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
-    if (MATCH("env", "action_type")) {
+    if (match_pair(section, "env", name, "action_type")) {
         if(strcmp(value, "\"discrete\"") == 0) {
             env_config->action_type = 0;
         } else {
             env_config->action_type = 1;
         }
-    } else if (MATCH("env", "reward_vehicle_collision")) {
+    } else if (match_pair(section, "env", name, "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
-    } else if (MATCH("env", "reward_offroad_collision")) {
+    } else if (match_pair(section, "env", name, "reward_offroad_collision")) {
         env_config->reward_offroad_collision = atof(value);
-    } else if (MATCH("env", "reward_goal_post_respawn")) {
+    } else if (match_pair(section, "env", name, "reward_goal_post_respawn")) {
         env_config->reward_goal_post_respawn = atof(value);
-    } else if (MATCH("env", "reward_vehicle_collision_post_respawn")) {
+    } else if (match_pair(section, "env", name, "reward_vehicle_collision_post_respawn")) {
         env_config->reward_vehicle_collision_post_respawn = atof(value);
-    } else if (MATCH("env", "reward_ade")) {
+    } else if (match_pair(section, "env", name, "reward_ade")) {
         env_config->reward_ade = atof(value);
-    } else if (MATCH("env", "spawn_immunity_timer")) {
+    } else if (match_pair(section, "env", name, "spawn_immunity_timer")) {
         env_config->spawn_immunity_timer = atoi(value);
-    } else if (MATCH("env", "goal_radius")) {
+    } else if (match_pair(section, "env", name, "goal_radius")) {
         env_config->goal_radius = atof(value);
     } else {
         return 0;
