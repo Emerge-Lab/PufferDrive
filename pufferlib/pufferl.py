@@ -120,6 +120,7 @@ class PuffeRL:
         self.free_idx = total_agents
         self.render = config["render"]
         self.render_interval = config["render_interval"]
+        self.driver_env = getattr(vecenv, "driver_env", None)
 
         if self.render:
             ensure_drive_binary()
@@ -545,6 +546,37 @@ class PuffeRL:
                             cmd.append("--lasers")
                         if config["show_human_logs"]:
                             cmd.append("--log-trajectories")
+                        env_cfg = getattr(self, "driver_env", None)
+
+                        control_all_agents = (
+                            bool(getattr(env_cfg, "control_all_agents", False))
+                            if env_cfg is not None
+                            else bool(config.get("control_all_agents", False))
+                        )
+                        if control_all_agents:
+                            cmd.append("--pure-self-play")
+
+                        n_policy = None
+                        if env_cfg is not None and hasattr(env_cfg, "num_policy_controlled_agents"):
+                            n_policy = getattr(env_cfg, "num_policy_controlled_agents")
+                        elif "num_policy_controlled_agents" in config:
+                            n_policy = config.get("num_policy_controlled_agents")
+
+                        try:
+                            n_policy = int(n_policy)
+                        except (TypeError, ValueError):
+                            n_policy = -1
+
+                        if n_policy > 0:
+                            cmd += ["--num-policy-controlled-agents", str(n_policy)]
+
+                        deterministic = (
+                            bool(getattr(env_cfg, "deterministic_agent_selection", False))
+                            if env_cfg is not None
+                            else bool(config.get("deterministic_agent_selection", False))
+                        )
+                        if deterministic:
+                            cmd.append("--deterministic-selection")
                         if config["render_map"] is not None:
                             map_path = config["render_map"]
                             if os.path.exists(map_path):

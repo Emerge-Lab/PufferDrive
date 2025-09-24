@@ -25,6 +25,9 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
+        control_all_agents=False,
+        num_policy_controlled_agents=-1,
+        deterministic_agent_selection=False,
         buf=None,
         seed=1,
     ):
@@ -65,7 +68,17 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
             )
-        agent_offsets, map_ids, num_envs = binding.shared(num_agents=num_agents, num_maps=num_maps)
+        self.control_all_agents = bool(control_all_agents)
+        self.num_policy_controlled_agents = int(num_policy_controlled_agents)
+        self.deterministic_agent_selection = bool(deterministic_agent_selection)
+
+        agent_offsets, map_ids, num_envs = binding.shared(
+            num_agents=num_agents,
+            num_maps=num_maps,
+            num_policy_controlled_agents=self.num_policy_controlled_agents,
+            control_all_agents=1 if self.control_all_agents else 0,
+            deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
+        )
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -90,6 +103,9 @@ class Drive(pufferlib.PufferEnv):
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
                 reward_ade=reward_ade,
                 spawn_immunity_timer=spawn_immunity_timer,
+                control_all_agents=1 if self.control_all_agents else 0,
+                num_policy_controlled_agents=self.num_policy_controlled_agents,
+                deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
@@ -119,7 +135,13 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(num_agents=self.num_agents, num_maps=self.num_maps)
+                agent_offsets, map_ids, num_envs = binding.shared(
+                    num_agents=self.num_agents,
+                    num_maps=self.num_maps,
+                    num_policy_controlled_agents=self.num_policy_controlled_agents,
+                    control_all_agents=1 if self.control_all_agents else 0,
+                    deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
+                )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):
@@ -140,6 +162,9 @@ class Drive(pufferlib.PufferEnv):
                         reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
                         reward_ade=self.reward_ade,
                         spawn_immunity_timer=self.spawn_immunity_timer,
+                        control_all_agents=1 if self.control_all_agents else 0,
+                        num_policy_controlled_agents=self.num_policy_controlled_agents,
+                        deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                         ini_file="pufferlib/config/ocean/drive.ini",
