@@ -454,7 +454,6 @@ void set_start_position(Drive* env){
         e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
-        e->respawn_timestep = -1;
     }
     //EndDrawing();
     int x = 0;
