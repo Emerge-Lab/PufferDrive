@@ -20,6 +20,7 @@ class Drive(pufferlib.PufferEnv):
         reward_goal_post_respawn=0.5,
         reward_vehicle_collision_post_respawn=-0.25,
         reward_ade=0.0,
+        goal_radius=2.0,
         spawn_immunity_timer=30,
         resample_frequency=91,
         num_maps=100,
@@ -36,6 +37,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_offroad_collision = reward_offroad_collision
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.reward_vehicle_collision_post_respawn = reward_vehicle_collision_post_respawn
+        self.goal_radius = goal_radius
         self.reward_ade = reward_ade
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
@@ -89,6 +91,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
                 reward_ade=reward_ade,
+                goal_radius=goal_radius,
                 spawn_immunity_timer=spawn_immunity_timer,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
@@ -139,6 +142,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
                         reward_ade=self.reward_ade,
+                        goal_radius=self.goal_radius,
                         spawn_immunity_timer=self.spawn_immunity_timer,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
