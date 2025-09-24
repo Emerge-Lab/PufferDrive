@@ -73,6 +73,9 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
     int control_all_agents = unpack(kwargs, "control_all_agents");
     int deterministic_selection = unpack(kwargs, "deterministic_agent_selection");
+    (void)policy_agents_per_env;  // scratch env stays unconstrained; init applies flag later
+    (void)control_all_agents;     // same logic—real envs see the actual value
+    (void)deterministic_selection;
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
@@ -87,9 +90,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         Drive* env = calloc(1, sizeof(Drive));
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
-        env->policy_agents_per_env = policy_agents_per_env;
-        env->control_all_agents = control_all_agents;
-        env->deterministic_agent_selection = deterministic_selection;
+        // Leave selection flags at defaults so scratch envs use full rosters.
         int remaining_capacity = num_agents - total_agent_count;
         if (remaining_capacity < 0) {
             remaining_capacity = 0;
@@ -99,11 +100,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         int next_total = total_agent_count + env->active_agent_count;
         if (next_total > num_agents) {
             int remaining = num_agents - total_agent_count;
-            fprintf(stderr,
-                    "[shared] ERROR oversubscribed agents: requested=%d remaining=%d map=%d\n",
-                    env->active_agent_count,
-                    remaining,
-                    map_id);
+            int last_active = env->active_agent_count; // capture before free
             for(int j=0;j<env->num_entities;j++) {
                 free_entity(&env->entities[j]);
             }
@@ -119,7 +116,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
                          next_total,
                          num_agents,
                          map_id,
-                         env->active_agent_count);
+                         last_active);
             return NULL;
         }
         // Store map_id
