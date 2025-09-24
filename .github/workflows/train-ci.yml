@@ -1,0 +1,26 @@
+name: train-ci
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  test-training:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt install -y build-essential
+          pip install -e .
+          python setup.py build_ext --inplace --force
+
+      - name: Test training
+        run: python tests/test_drive_train.py
+        timeout-minutes: 8

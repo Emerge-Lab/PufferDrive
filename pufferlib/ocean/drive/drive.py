@@ -19,6 +19,7 @@ class Drive(pufferlib.PufferEnv):
         reward_offroad_collision=-0.1,
         reward_goal_post_respawn=0.5,
         reward_vehicle_collision_post_respawn=-0.25,
+        reward_ade=0.0,
         spawn_immunity_timer=30,
         resample_frequency=91,
         num_maps=100,
@@ -35,6 +36,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_offroad_collision = reward_offroad_collision
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.reward_vehicle_collision_post_respawn = reward_vehicle_collision_post_respawn
+        self.reward_ade = reward_ade
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
@@ -86,9 +88,11 @@ class Drive(pufferlib.PufferEnv):
                 reward_offroad_collision=reward_offroad_collision,
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
+                reward_ade=reward_ade,
                 spawn_immunity_timer=spawn_immunity_timer,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
+                ini_file="pufferlib/config/ocean/drive.ini",
             )
             env_ids.append(env_id)
 
@@ -134,9 +138,11 @@ class Drive(pufferlib.PufferEnv):
                         reward_offroad_collision=self.reward_offroad_collision,
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
+                        reward_ade=self.reward_ade,
                         spawn_immunity_timer=self.spawn_immunity_timer,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
+                        ini_file="pufferlib/config/ocean/drive.ini",
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -341,7 +347,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/train")
+    data_dir = Path("data/processed/training")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
