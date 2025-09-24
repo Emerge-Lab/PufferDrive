@@ -83,7 +83,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-        env->entities = load_map_binary(map_file, env);
+        load_map_binary(map_file, env);
         set_active_agents(env);
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);
@@ -93,10 +93,14 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         PyList_SetItem(agent_offsets, env_count, offset);
         total_agent_count += env->active_agent_count;
         env_count++;
-        for(int j=0;j<env->num_entities;j++) {
-            free_entity(&env->entities[j]);
+        for(int i = 0; i < env->num_objects; i++){
+            free_entity(&env->entities[i]);
         }
         free(env->entities);
+        for(int i = 0; i < env->num_roads; i++){
+            free_map_entity(&env->map_entities[i]);
+        }
+        free(env->map_entities);
         free(env->active_agent_indices);
         free(env->static_car_indices);
         free(env->expert_static_car_indices);
@@ -150,6 +154,20 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_vehicle_collision_post_respawn = conf.reward_vehicle_collision_post_respawn;
     env->reward_ade = conf.reward_ade;
     env->spawn_immunity_timer = conf.spawn_immunity_timer;
+    
+    PyObject* dynamics_model_obj = PyDict_GetItemString(kwargs, "dynamics_model");
+    if (dynamics_model_obj != NULL) {
+        env->dynamics_model = PyLong_AsLong(dynamics_model_obj);
+    } else {
+        env->dynamics_model = 4; // Default to Bicycle Jerk
+    }
+
+    PyObject* dt_obj = PyDict_GetItemString(kwargs, "dt");
+    if (dt_obj != NULL) {
+        env->dt = (float)PyFloat_AsDouble(dt_obj);
+    } else {
+        env->dt = 0.1f; // Default value
+    }
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 
@@ -157,6 +175,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
     env->num_agents = max_agents;
     env->map_name = strdup(map_file);
+
     init(env);
     return 0;
 }

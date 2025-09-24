@@ -37,6 +37,7 @@
 #define INVERTIBLE_BICYLE 1
 #define DELTA_LOCAL 2
 #define STATE_DYNAMICS 3
+#define JERK_BICYCLE 4
 
 // collision state
 #define NO_COLLISION 0
@@ -73,11 +74,15 @@
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
 
-// Acceleration Values
+// Classic Dynamics - Acceleration Values
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f,  1.3330f,  2.6670f,  4.0000f};
-// static const float STEERING_VALUES[13] = {-3.1420f, -2.6180f, -2.0940f, -1.5710f, -1.0470f, -0.5240f,  0.0000f,  0.5240f,
-//          1.0470f,  1.5710f,  2.0940f,  2.6180f,  3.1420f};
+// Classic Dynamics - Steering Values
 static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f, 0.833f, 1.000f};
+
+// Jerk Bicycle Dynamics - Jerk Values
+static const float JERK_BICYCLE_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
+static const float JERK_BICYCLE_LAT[3] = {-4.0f, 0.0f, 4.0f};
+
 static const float offsets[4][2] = {
         {-1, 1},  // top-left
         {1, 1},   // top-right
@@ -149,20 +154,64 @@ struct Entity {
     int collided_before_goal;
     int reached_goal_this_episode;
     int active_agent;
+    // Bicycle Jerk stateful variables
+    float a_long;      // Current longitudinal acceleration
+    float prev_a_long; // Previous longitudinal acceleration
+    float a_lat;       // Current lateral acceleration
+    float prev_a_lat;  // Previous lateral acceleration
+    float steering_angle;         // Current steering angle
+    float prev_steering_angle;    // Previous steering angle
+    float prev_v;      // Previous velocity
+    // Distance from logs
     float cumulative_displacement;
     int displacement_sample_count;
 };
 
-void free_entity(Entity* entity){
+// Based on the original GPUDrive MapType(WOMD)
+typedef enum MapEntityType MapEntityType;
+enum MapEntityType{
+    NONE = 0,
+    VEHICLE = 1,
+    PEDESTRIAN = 2,
+    CYCLIST = 3,
+    ROAD_LANE = 4,
+    ROAD_LINE = 5,
+    ROAD_EDGE = 6,
+    STOP_SIGN = 7,
+    CROSSWALK = 8,
+    SPEED_BUMP = 9,
+    DRIVEWAY = 10,
+    NUM_TYPES = 11,
+};
+
+typedef struct MapEntity MapEntity;
+struct MapEntity {
+    int id;
+    int type;
+    MapEntityType map_type;
+    int array_size;
+    float* traj_x;
+    float* traj_y;
+    float* traj_z;
+};
+
+void free_map_entity(MapEntity* map_entity){
     // free trajectory arrays
-    free(entity->traj_x);
-    free(entity->traj_y);
-    free(entity->traj_z);
-    free(entity->traj_vx);
-    free(entity->traj_vy);
-    free(entity->traj_vz);
-    free(entity->traj_heading);
-    free(entity->traj_valid);
+    if(map_entity->traj_x) free(map_entity->traj_x);
+    if(map_entity->traj_y) free(map_entity->traj_y);
+    if(map_entity->traj_z) free(map_entity->traj_z);
+}
+
+void free_entity(Entity* entity){
+    // free trajectory arrays only if they're not NULL
+    if (entity->traj_x) free(entity->traj_x);
+    if (entity->traj_y) free(entity->traj_y);
+    if (entity->traj_z) free(entity->traj_z);
+    if (entity->traj_vx) free(entity->traj_vx);
+    if (entity->traj_vy) free(entity->traj_vy);
+    if (entity->traj_vz) free(entity->traj_vz);
+    if (entity->traj_heading) free(entity->traj_heading);
+    if (entity->traj_valid) free(entity->traj_valid);
 }
 
 float relative_distance(float a, float b){
@@ -218,6 +267,7 @@ struct Drive {
     int action_type;
     int human_agent_idx;
     Entity* entities;
+    MapEntity* map_entities;
     int num_entities;
     int num_cars;
     int num_objects;
@@ -245,8 +295,21 @@ struct Drive {
     int spawn_immunity_timer;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
+    float dt;
     char* ini_file;
 };
+
+// Initialize Bicycle Jerk dynamics coefficients
+void init_jerk_bicycle_coefficients(Entity* entity) {
+    // Initialize stateful variables
+    entity->a_long = 0;
+    entity->prev_a_long = 0;
+    entity->a_lat = 0;
+    entity->prev_a_lat = 0;
+    entity->steering_angle = 0;
+    entity->prev_steering_angle = 0;
+    entity->prev_v = 0;
+}
 
 void add_log(Drive* env) {
     for(int i = 0; i < env->active_agent_count; i++){
@@ -277,42 +340,38 @@ void add_log(Drive* env) {
     }
 }
 
-Entity* load_map_binary(const char* filename, Drive* env) {
+void load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
-    if (!file) return NULL;
+    if (!file) return;
     fread(&env->num_objects, sizeof(int), 1, file);
     fread(&env->num_roads, sizeof(int), 1, file);
-    env->num_entities = env->num_objects + env->num_roads;
-    Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
-    for (int i = 0; i < env->num_entities; i++) {
-	// Read base entity data
+    env->num_entities = env->num_objects + env->num_roads; 
+    Entity* entities = (Entity*)malloc(env->num_objects * sizeof(Entity));
+    for (int i = 0; i < env->num_objects; i++) {
+	    // Read base entity data
         fread(&entities[i].type, sizeof(int), 1, file);
         fread(&entities[i].array_size, sizeof(int), 1, file);
+        if(entities[i].type == 0)
+        {
+            printf("Warning: Entity %d has type 0 (NONE)\n", i);
+        }
         // Allocate arrays based on type
         int size = entities[i].array_size;
         entities[i].traj_x = (float*)malloc(size * sizeof(float));
         entities[i].traj_y = (float*)malloc(size * sizeof(float));
         entities[i].traj_z = (float*)malloc(size * sizeof(float));
-        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {  // Object type
-            // Allocate arrays for object-specific data
+        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {
             entities[i].traj_vx = (float*)malloc(size * sizeof(float));
             entities[i].traj_vy = (float*)malloc(size * sizeof(float));
             entities[i].traj_vz = (float*)malloc(size * sizeof(float));
             entities[i].traj_heading = (float*)malloc(size * sizeof(float));
             entities[i].traj_valid = (int*)malloc(size * sizeof(int));
-        } else {
-            // Roads don't use these arrays
-            entities[i].traj_vx = NULL;
-            entities[i].traj_vy = NULL;
-            entities[i].traj_vz = NULL;
-            entities[i].traj_heading = NULL;
-            entities[i].traj_valid = NULL;
         }
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
         fread(entities[i].traj_y, sizeof(float), size, file);
         fread(entities[i].traj_z, sizeof(float), size, file);
-        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {  // Object type
+        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {
             fread(entities[i].traj_vx, sizeof(float), size, file);
             fread(entities[i].traj_vy, sizeof(float), size, file);
             fread(entities[i].traj_vz, sizeof(float), size, file);
@@ -327,15 +386,52 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].goal_position_y, sizeof(float), 1, file);
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
+
+        // Initialize Bicycle Jerk variables to 0
+        entities[i].a_long = 0;
+        entities[i].prev_a_long = 0;
+        entities[i].a_lat = 0;
+        entities[i].prev_a_lat = 0;
+        entities[i].steering_angle = 0;
+        entities[i].prev_steering_angle = 0;
+        entities[i].prev_v = 0;
     }
+
+    MapEntity* map_entities = (MapEntity*)malloc(env->num_roads * sizeof(MapEntity));
+    // Read road entities
+    for (int i = 0; i < env->num_roads; i++) {
+	    // Read base entity data
+        fread(&map_entities[i].type, sizeof(int), 1, file);
+        fread(&map_entities[i].array_size, sizeof(int), 1, file);
+        if(map_entities[i].type == 0)
+        {
+            printf("Warning: Map Entity %d has type 0 (NONE)\n", i);
+        }
+        // Type Handling
+        if (map_entities[i].type < 4 || map_entities[i].type > (int)NUM_TYPES) {
+            map_entities[i].map_type = (MapEntityType)(map_entities[i].type);
+        }
+
+        // Allocate arrays based on type
+        int size = map_entities[i].array_size;
+        map_entities[i].traj_x = (float*)malloc(size * sizeof(float));
+        map_entities[i].traj_y = (float*)malloc(size * sizeof(float));
+        map_entities[i].traj_z = (float*)malloc(size * sizeof(float));
+        // Read array data
+        fread(map_entities[i].traj_x, sizeof(float), size, file);
+        fread(map_entities[i].traj_y, sizeof(float), size, file);
+        fread(map_entities[i].traj_z, sizeof(float), size, file);
+    }
+
     fclose(file);
-    return entities;
+    env->entities = entities;
+    env->map_entities = map_entities;
 }
 
 void set_start_position(Drive* env){
     //InitWindow(800, 600, "GPU Drive");
     //BeginDrawing();
-    for(int i = 0; i < env->num_entities; i++){
+    for(int i = 0; i < env->num_objects; i++){
         int is_active = 0;
         for(int j = 0; j < env->active_agent_count; j++){
             if(env->active_agent_indices[j] == i){
@@ -377,11 +473,13 @@ void set_start_position(Drive* env){
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
+          // Initialize Bicycle Jerk stateful variables if using Bicycle Jerk dynamics
+        if (env->dynamics_model == JERK_BICYCLE && is_active) {
+            init_jerk_bicycle_coefficients(e);
+            // Set initial velocity magnitude
+            e->prev_v = sqrtf(e->vx * e->vx + e->vy * e->vy);
+        }
     }
-    //EndDrawing();
-    int x = 0;
-
-
 }
 
 int getGridIndex(Drive* env, float x1, float y1) {
@@ -424,10 +522,10 @@ void init_grid_map(Drive* env){
     float bottom_right_x;
     float bottom_right_y;
     int first_valid_point = 0;
-    for(int i = 0; i < env->num_entities; i++){
-        if(env->entities[i].type > 3 && env->entities[i].type < 7){
+    for(int i = 0; i < env->num_roads; i++){
+        if(env->map_entities[i].type > 3 && env->map_entities[i].type < 7){
             // Check all points in the trajectory for road elements
-            Entity* e = &env->entities[i];
+            MapEntity* e = &env->map_entities[i];
             for(int j = 0; j < e->array_size; j++){
                 if(e->traj_x[j] == -10000) continue;
                 if(e->traj_y[j] == -10000) continue;
@@ -459,11 +557,11 @@ void init_grid_map(Drive* env){
     int grid_cell_count = env->grid_cols*env->grid_rows;
     env->grid_cells = (int*)calloc(grid_cell_count*SLOTS_PER_CELL, sizeof(int));
     // Populate grid cells
-    for(int i = 0; i < env->num_entities; i++){
-        if(env->entities[i].type > 3 && env->entities[i].type < 7){
-            for(int j = 0; j < env->entities[i].array_size - 1; j++){
-                float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
-                float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
+    for(int i = 0; i < env->num_roads; i++){
+        if(env->map_entities[i].type > 3 && env->map_entities[i].type < 7){
+            for(int j = 0; j < env->map_entities[i].array_size - 1; j++){
+                float x_center = (env->map_entities[i].traj_x[j] + env->map_entities[i].traj_x[j+1]) / 2;
+                float y_center = (env->map_entities[i].traj_y[j] + env->map_entities[i].traj_y[j+1]) / 2;
                 int grid_index = getGridIndex(env, x_center, y_center);
                 add_entity_to_grid(env, grid_index, i, j);
             }
@@ -579,7 +677,7 @@ void set_means(Drive* env) {
     int64_t point_count = 0;
 
     // Compute single mean for all entities (vehicles and roads)
-    for (int i = 0; i < env->num_entities; i++) {
+    for (int i = 0; i < env->num_objects; i++) {
         if (env->entities[i].type == VEHICLE) {
             for (int j = 0; j < env->entities[i].array_size; j++) {
                 // Assume a validity flag exists (e.g., valid[j]); adjust if not available
@@ -589,18 +687,20 @@ void set_means(Drive* env) {
                     mean_y += (env->entities[i].traj_y[j] - mean_y) / point_count;
                 }
             }
-        } else if (env->entities[i].type >= 4) {
-            for (int j = 0; j < env->entities[i].array_size; j++) {
-                point_count++;
-                mean_x += (env->entities[i].traj_x[j] - mean_x) / point_count;
-                mean_y += (env->entities[i].traj_y[j] - mean_y) / point_count;
-            }
+        }
+    }
+    for (int i = 0; i < env->num_roads; i++) {
+        for (int j = 0; j < env->map_entities[i].array_size; j++) {
+            point_count++;
+            mean_x += (env->map_entities[i].traj_x[j] - mean_x) / point_count;
+            mean_y += (env->map_entities[i].traj_y[j] - mean_y) / point_count;
         }
     }
     env->world_mean_x = mean_x;
     env->world_mean_y = mean_y;
-    for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type == VEHICLE || env->entities[i].type >= 4) {
+
+    for (int i = 0; i < env->num_objects; i++) {
+        if (env->entities[i].type == VEHICLE) {
             for (int j = 0; j < env->entities[i].array_size; j++) {
                 if(env->entities[i].traj_x[j] == -10000) continue;
                 env->entities[i].traj_x[j] -= mean_x;
@@ -610,7 +710,13 @@ void set_means(Drive* env) {
             env->entities[i].goal_position_y -= mean_y;
         }
     }
-
+    for (int i = 0; i < env->num_roads; i++) {
+        for (int j = 0; j < env->map_entities[i].array_size; j++) {
+            if(env->map_entities[i].traj_x[j] == -10000) continue;
+            env->map_entities[i].traj_x[j] -= mean_x;
+            env->map_entities[i].traj_y[j] -= mean_y;
+        }
+    }
 }
 
 void move_expert(Drive* env, float* actions, int agent_idx){
@@ -753,7 +859,6 @@ int collision_check(Drive* env, int agent_idx) {
     if(agent->x == -10000.0f ) return -1;
 
     int car_collided_with_index = -1;
-
     for(int i = 0; i < MAX_CARS; i++){
         int index = -1;
         if(i < env->active_agent_count){
@@ -1037,8 +1142,6 @@ void set_active_agents(Drive* env){
 
 void remove_bad_trajectories(Drive* env){
     set_start_position(env);
-    int legal_agent_count = 0;
-    int legal_trajectories[env->active_agent_count];
     int collided_agents[env->active_agent_count];
     int collided_with_indices[env->active_agent_count];
     memset(collided_agents, 0, env->active_agent_count * sizeof(int));
@@ -1081,8 +1184,13 @@ void remove_bad_trajectories(Drive* env){
 void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
-    env->entities = load_map_binary(env->map_name, env);
-    env->dynamics_model = CLASSIC;
+    load_map_binary(env->map_name, env);
+    if (env->entities == NULL || env->map_entities == NULL) {
+        printf("ERROR: Failed to load map: %s\n", env->map_name);
+        exit(1);  // Or handle gracefully
+    }
+    env->dynamics_model = JERK_BICYCLE;
+    env->dt = 0.1f; // Set timestep
     set_means(env);
     init_grid_map(env);
     env->vision_range = 21;
@@ -1096,10 +1204,14 @@ void init(Drive* env){
 }
 
 void c_close(Drive* env){
-    for(int i = 0; i < env->num_entities; i++){
+    for(int i = 0; i < env->num_objects; i++){
         free_entity(&env->entities[i]);
     }
     free(env->entities);
+    for(int i = 0; i < env->num_roads; i++){
+        free_map_entity(&env->map_entities[i]);
+    }
+    free(env->map_entities);
     free(env->active_agent_indices);
     free(env->logs);
     free(env->map_corners);
@@ -1115,7 +1227,9 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    // 3 additional state variables per agent in Bicycle Jerk
+    int ego_obs_size = (env->dynamics_model == JERK_BICYCLE) ? 10 : 7;
+    int max_obs = ego_obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("max obs: %d\n", max_obs*env->active_agent_count);
     // printf("num cars: %d\n", env->num_cars);
     // printf("num static cars: %d\n", env->static_car_count);
@@ -1149,8 +1263,117 @@ float normalize_heading(float heading){
     return heading;
 }
 
+void move_jerk_bicycle_dynamics(Drive* env, int action_idx, int agent_idx){
+    Entity* agent = &env->entities[agent_idx];
+
+    // Bicycle Jerk uses [4, 3] action space
+    int (*action_array)[2] = (int(*)[2])env->actions;
+    int long_jerk_idx = action_array[action_idx][0];
+    int lat_jerk_idx = action_array[action_idx][1];
+
+    float a_dot_long = JERK_BICYCLE_LONG[long_jerk_idx];
+    float a_dot_lat = JERK_BICYCLE_LAT[lat_jerk_idx];
+
+    // Store previous values
+    agent->prev_a_long = agent->a_long;
+    agent->prev_a_lat = agent->a_lat;
+    agent->prev_steering_angle = agent->steering_angle;
+
+    // Update accelerations using jerk with randomized coefficients
+    agent->a_long = agent->prev_a_long + a_dot_long * env->dt;
+    agent->a_lat = agent->prev_a_lat + a_dot_lat * env->dt;
+
+    // Set to exactly 0 when acceleration changes sign
+    if (agent->prev_a_long * agent->a_long < 0) {
+        agent->a_long = 0.0f;
+    }
+    if (agent->prev_a_lat * agent->a_lat < 0) {
+        agent->a_lat = 0.0f;
+    }
+
+    // Clip accelerations
+    agent->a_long = fmaxf(-5.0f, fminf(agent->a_long, 2.5f));
+    agent->a_lat = fmaxf(-4.0f, fminf(agent->a_lat, 4.0f));
+
+    // Calculate current speed
+    float speed = sqrtf(agent->vx * agent->vx + agent->vy * agent->vy);
+    agent->prev_v = speed;
+
+    // Update velocity using trapezoidal rule
+    speed = speed + 0.5f * (agent->a_long + agent->prev_a_long) * env->dt;
+
+    // Set to 0 when sign changes
+    if (agent->prev_v * speed < 0) {
+        speed = 0.0f;
+    }
+
+    // Clip velocity
+    speed = fmaxf(-2.0f, fminf(speed, 20.0f));
+
+    // Calculate steering from lateral acceleration
+    float epsilon = 1e-5f;
+    float v_squared = fmaxf(speed * speed, epsilon);
+    // Bicycle Jerk uses 60% of length for wheelbase
+    float wheelbase = agent->length * 0.6f;
+
+    // Calculate curvature and steering angle
+    float rho_inv = agent->a_lat / v_squared;
+    rho_inv = (rho_inv >= 0 ? 1 : -1) * fmaxf(fabsf(rho_inv), epsilon);
+    float phi_target = atanf(rho_inv * wheelbase);
+
+    // Limit steering angle change rate (delta max = 0.6 rad/s)
+    float delta_phi_max = 0.6f * env->dt;
+    float delta_phi = fmaxf(-delta_phi_max, fminf(phi_target - agent->prev_steering_angle, delta_phi_max));
+
+    // Update steering angle with limits (steering_angle max = 0.55 rad)
+    agent->steering_angle = fmaxf(-0.55f, fminf(agent->prev_steering_angle + delta_phi, 0.55f));
+
+    // Update effective curvature and lateral acceleration based on limited steering
+    rho_inv = tanf(agent->steering_angle) / wheelbase;
+    agent->a_lat = speed * speed * rho_inv;
+
+    // Calculate movement using bicycle dynamics
+    float d = 0.5f * (speed + agent->prev_v) * env->dt;
+    float theta = d * rho_inv;
+
+    float rho = (fabsf(rho_inv) > epsilon) ? 1.0f / rho_inv : 1.0f / epsilon;
+    float dx, dy;
+
+    if (fabsf(rho_inv) < epsilon) {
+        // Nearly straight movement
+        dx = d * cosf(agent->heading);
+        dy = d * sinf(agent->heading);
+    } else {
+        // Arc movement
+        dx = rho * sinf(theta);
+        dy = rho * (1.0f - cosf(theta));
+
+        // Rotate to world frame
+        float temp_x = dx;
+        dx = temp_x * cosf(agent->heading) - dy * sinf(agent->heading);
+        dy = temp_x * sinf(agent->heading) + dy * cosf(agent->heading);
+    }
+
+    // Update position
+    agent->x += dx;
+    agent->y += dy;
+
+    // Update heading
+    agent->heading += theta;
+    agent->heading = normalize_heading(agent->heading);
+    agent->heading_x = cosf(agent->heading);
+    agent->heading_y = sinf(agent->heading);
+
+    // Update velocity components
+    agent->vx = speed * cosf(agent->heading);
+    agent->vy = speed * sinf(agent->heading);
+}
+
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
-    if(env->dynamics_model == CLASSIC){
+    if(env->dynamics_model == JERK_BICYCLE){
+        move_jerk_bicycle_dynamics(env, action_idx, agent_idx);
+    } else if(env->dynamics_model == CLASSIC){
+        // Original classic dynamics code
         Entity* agent = &env->entities[agent_idx];
         float acceleration = 0.0f;
         float steering = 0.0f;
@@ -1217,18 +1440,15 @@ float reverse_normalize_value(float value, float min, float max){
 }
 
 void compute_observations(Drive* env) {
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int obs_size = (env->dynamics_model == JERK_BICYCLE) ? 10 : 7;
+    // 3 additional state variables per agent in Bicycle Jerk
+    int max_obs = obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
         float* obs = &observations[i][0];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];
         if(ego_entity->type > 3) break;
-        if(ego_entity->respawn_timestep != -1) {
-            obs[6] = 1;
-            //continue;
-        }
-        float ego_heading = ego_entity->heading;
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
         float ego_speed = sqrtf(ego_entity->vx*ego_entity->vx + ego_entity->vy*ego_entity->vy);
@@ -1240,16 +1460,27 @@ void compute_observations(Drive* env) {
         float rel_goal_y = -goal_x*sin_heading + goal_y*cos_heading;
         //obs[0] = normalize_value(rel_goal_x, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
         //obs[1] = normalize_value(rel_goal_y, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
-        obs[0] = rel_goal_x* 0.005f;
-        obs[1] = rel_goal_y* 0.005f;
+        obs[0] = rel_goal_x * 0.005f;
+        obs[1] = rel_goal_y * 0.005f;
         //obs[2] = ego_speed / MAX_SPEED;
         obs[2] = ego_speed * 0.01f;
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
+        if(ego_entity->respawn_timestep != -1) {
+            obs[6] = 1;
+            //continue;
+        }
+        int obs_idx = 7;   // Start after goal distances
+        if (env->dynamics_model == JERK_BICYCLE) {
+            // Bicycle Jerk: normalize current accelerations and steering angle
+            obs[7] = ego_entity->a_long * 0.1f;
+            obs[8] = ego_entity->a_lat * 0.1f;
+            obs[9] = ego_entity->steering_angle / 0.55f;
 
-        // Relative Pos of other cars
-        int obs_idx = 7;  // Start after goal distances
+            obs_idx = 10; // +bicycle jerk additions
+        }
+
         int cars_seen = 0;
         for(int j = 0; j < MAX_CARS; j++) {
             int index = -1;
@@ -1303,7 +1534,7 @@ void compute_observations(Drive* env) {
         for(int k = 0; k < list_size; k++){
             int entity_idx = entity_list[k*2];
             int geometry_idx = entity_list[k*2+1];
-            Entity* entity = &env->entities[entity_idx];
+            MapEntity* entity = &env->map_entities[entity_idx];
             float start_x = entity->traj_x[geometry_idx];
             float start_y = entity->traj_y[geometry_idx];
             float end_x = entity->traj_x[geometry_idx+1];
@@ -1361,6 +1592,11 @@ void c_reset(Drive* env){
         env->entities[agent_idx].cumulative_displacement = 0.0f;
         env->entities[agent_idx].displacement_sample_count = 0;
 
+        // Reset Bicycle Jerk dynamics coefficients for new episode
+        if (env->dynamics_model == JERK_BICYCLE) {
+            init_jerk_bicycle_coefficients(&env->entities[agent_idx]);
+        }
+        
         compute_agent_metrics(env, agent_idx);
     }
     compute_observations(env);
@@ -1382,6 +1618,18 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].cumulative_displacement = 0.0f;
     env->entities[agent_idx].displacement_sample_count = 0;
     env->entities[agent_idx].respawn_timestep = env->timestep;
+
+    // Reset Bicycle Jerk state variables on respawn
+    if (env->dynamics_model == JERK_BICYCLE) {
+        env->entities[agent_idx].a_long = 0.0f;
+        env->entities[agent_idx].a_lat = 0.0f;
+        env->entities[agent_idx].steering_angle = 0.0f;
+        env->entities[agent_idx].prev_a_long = 0.0f;
+        env->entities[agent_idx].prev_a_lat = 0.0f;
+        env->entities[agent_idx].prev_v = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
+                                                  env->entities[agent_idx].vy * env->entities[agent_idx].vy);
+        env->entities[agent_idx].prev_steering_angle = 0.0f;
+    }
 }
 
 void c_step(Drive* env){

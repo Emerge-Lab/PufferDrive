@@ -1,11 +1,10 @@
 import numpy as np
-import gymnasium
+import gymnasium as gym
 import json
 import struct
 import os
 import pufferlib
 from pufferlib.ocean.drive import binding
-
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
@@ -25,6 +24,8 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
+        dynamics_model="jerk_bicycle",
+        dt=0.1,
         buf=None,
         seed=1,
     ):
@@ -40,18 +41,33 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63 * 7 + 200 * 7
-        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+        self.dynamics_model = dynamics_model
+        self.dt = dt
 
-        if action_type == "discrete":
-            self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
-        elif action_type == "continuous":
-            self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+        if dynamics_model == "classic":
+            self.dynamics_model_value = 0
+            self.num_obs = 7 + 63*7 + 200*7
+
+            if action_type == "discrete":
+                self.single_action_space = gym.spaces.MultiDiscrete([7, 13])
+            else:
+                self.single_action_space = gym.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+
+        elif dynamics_model == "jerk_bicycle":
+            self.dynamics_model_value = 4
+            self.num_obs = 10 + 63*7 + 200*7
+            
+            if action_type == "discrete":
+                self.single_action_space = gym.spaces.MultiDiscrete([4, 3])
+            else:
+                self.single_action_space = gym.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         else:
-            raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")
+            raise ValueError(f"Unknown dynamics model: {dynamics_model}. Use 'classic' or 'jerk_bicycle'")
+
+        self.single_observation_space = gym.spaces.Box(low=-1, high=1,
+            shape=(self.num_obs,), dtype=np.float32)
 
         self._action_type_flag = 0 if action_type == "discrete" else 1
-
         # Check if resources directory exists
         binary_path = "resources/drive/binaries/map_000.bin"
         if not os.path.exists(binary_path):
@@ -90,6 +106,8 @@ class Drive(pufferlib.PufferEnv):
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
                 reward_ade=reward_ade,
                 spawn_immunity_timer=spawn_immunity_timer,
+                dynamics_model=self.dynamics_model_value,
+                dt=self.dt,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
@@ -140,6 +158,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
                         reward_ade=self.reward_ade,
                         spawn_immunity_timer=self.spawn_immunity_timer,
+                        dynamics_model=self.dynamics_model_value,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                         ini_file="pufferlib/config/ocean/drive.ini",
@@ -336,6 +355,12 @@ def process_all_maps():
     """Process all maps and save them as binaries"""
     from pathlib import Path
 
+    # Handle potential symlink conflict
+    resources_path = Path("resources")
+    if resources_path.is_symlink():
+        print("Removing conflicting symlink at 'resources'")
+        resources_path.unlink()
+
     # Create the binaries directory if it doesn't exist
     binary_dir = Path("resources/drive/binaries")
     binary_dir.mkdir(parents=True, exist_ok=True)
@@ -362,15 +387,15 @@ def process_all_maps():
 
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
-
+    print("Initializing Drive environment for performance test...")
     env = Drive(num_agents=num_agents)
     env.reset()
     tick = 0
-    num_agents = 1024
-    actions = np.stack(
-        [np.random.randint(0, space.n + 1, (atn_cache, num_agents)) for space in env.single_action_space], axis=-1
-    )
-
+    actions = np.stack([
+        np.random.randint(0, space.n + 1, (atn_cache, num_agents))
+        for space in env.single_action_space
+    ], axis=-1)
+    print("Starting performance test...")
     start = time.time()
     while time.time() - start < timeout:
         atn = actions[tick % atn_cache]
