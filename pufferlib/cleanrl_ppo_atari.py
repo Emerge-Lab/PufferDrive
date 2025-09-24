@@ -1,5 +1,4 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_ataripy
-import os
 import random
 import time
 from dataclasses import dataclass
@@ -21,9 +20,10 @@ from stable_baselines3.common.atari_wrappers import (  # isort:skip
     NoopResetEnv,
 )
 
+
 @dataclass
 class Args:
-    exp_name: str = 'cleanrl_ppo_atari'
+    exp_name: str = "cleanrl_ppo_atari"
     """the name of this experiment"""
     seed: int = 1
     """seed of the experiment"""
@@ -182,6 +182,7 @@ if __name__ == "__main__":
     # PufferLib vectorization makes CleanRL ~65% faster!
     import pufferlib.vector
     import pufferlib.environments.atari
+
     envs = pufferlib.vector.make(
         pufferlib.environments.atari.env_creator(args.env_id),
         env_kwargs=dict(framestack=4),

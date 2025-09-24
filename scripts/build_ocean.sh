@@ -56,7 +56,7 @@ if [ "$MODE" = "web" ]; then
         -DPLATFORM_WEB \
         -DGRAPHICS_API_OPENGL_ES3 \
         --preload-file pufferlib/resources/$1@resources/$1 \
-        --preload-file pufferlib/resources/shared@resources/shared 
+        --preload-file pufferlib/resources/shared@resources/shared
     echo "Web build completed: $WEB_OUTPUT_DIR/game.html"
     echo "Preloaded files:"
     echo "  pufferlib/resources/$1@resources$1"
@@ -97,7 +97,7 @@ if [ "$MODE" = "local" ]; then
             -fsanitize=address,undefined,bounds,pointer-overflow,leak
             -fno-omit-frame-pointer
         )
-    fi  
+    fi
     clang -g -O0 ${FLAGS[@]}
 elif [ "$MODE" = "fast" ]; then
     echo "Building optimized $ENV for local testing..."

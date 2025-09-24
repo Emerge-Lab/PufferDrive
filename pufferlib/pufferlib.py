@@ -1,10 +1,7 @@
 import os
-import sys
 import warnings
 
-from contextlib import redirect_stdout, redirect_stderr, contextmanager
-from types import SimpleNamespace
-from collections.abc import Mapping
+from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
 from functools import wraps
 
@@ -13,10 +10,10 @@ import gymnasium
 
 import pufferlib.spaces
 
-ENV_ERROR = '''
+ENV_ERROR = """
 Environment missing required attribute {}. The most common cause is
 calling super() before you have assigned the attribute.
-'''
+"""
 
 
 def set_buffers(env, buf=None):
@@ -35,34 +32,37 @@ def set_buffers(env, buf=None):
         else:
             env.actions = np.zeros(atn_space.shape, dtype=np.int32)
     else:
-        env.observations = buf['observations']
-        env.rewards = buf['rewards']
-        env.terminals = buf['terminals']
-        env.truncations = buf['truncations']
-        env.masks = buf['masks']
-        env.actions = buf['actions']
+        env.observations = buf["observations"]
+        env.rewards = buf["rewards"]
+        env.terminals = buf["terminals"]
+        env.truncations = buf["truncations"]
+        env.masks = buf["masks"]
+        env.actions = buf["actions"]
+
 
 class PufferEnv:
     def __init__(self, buf=None):
-        if not hasattr(self, 'single_observation_space'):
-            raise APIUsageError(ENV_ERROR.format('single_observation_space'))
-        if not hasattr(self, 'single_action_space'):
-            raise APIUsageError(ENV_ERROR.format('single_action_space'))
-        if not hasattr(self, 'num_agents'):
-            raise APIUsageError(ENV_ERROR.format('num_agents'))
+        if not hasattr(self, "single_observation_space"):
+            raise APIUsageError(ENV_ERROR.format("single_observation_space"))
+        if not hasattr(self, "single_action_space"):
+            raise APIUsageError(ENV_ERROR.format("single_action_space"))
+        if not hasattr(self, "num_agents"):
+            raise APIUsageError(ENV_ERROR.format("num_agents"))
         if self.num_agents < 1:
-            raise APIUsageError('num_agents must be >= 1')
+            raise APIUsageError("num_agents must be >= 1")
 
-        if hasattr(self, 'observation_space'):
-            raise APIUsageError('PufferEnvs must define single_observation_space, not observation_space')
-        if hasattr(self, 'action_space'):
-            raise APIUsageError('PufferEnvs must define single_action_space, not action_space')
+        if hasattr(self, "observation_space"):
+            raise APIUsageError("PufferEnvs must define single_observation_space, not observation_space")
+        if hasattr(self, "action_space"):
+            raise APIUsageError("PufferEnvs must define single_action_space, not action_space")
         if not isinstance(self.single_observation_space, pufferlib.spaces.Box):
-            raise APIUsageError('Native observation_space must be a Box')
-        if (not isinstance(self.single_action_space, pufferlib.spaces.Discrete)
-                and not isinstance(self.single_action_space, pufferlib.spaces.MultiDiscrete)
-                and not isinstance(self.single_action_space, pufferlib.spaces.Box)):
-            raise APIUsageError('Native action_space must be a Discrete, MultiDiscrete, or Box')
+            raise APIUsageError("Native observation_space must be a Box")
+        if (
+            not isinstance(self.single_action_space, pufferlib.spaces.Discrete)
+            and not isinstance(self.single_action_space, pufferlib.spaces.MultiDiscrete)
+            and not isinstance(self.single_action_space, pufferlib.spaces.Box)
+        ):
+            raise APIUsageError("Native action_space must be a Discrete, MultiDiscrete, or Box")
 
         set_buffers(self, buf)
 
@@ -76,17 +76,17 @@ class PufferEnv:
 
     @property
     def emulated(self):
-        '''Native envs do not use emulation'''
+        """Native envs do not use emulation"""
         return False
 
     @property
     def done(self):
-        '''Native envs handle resets internally'''
+        """Native envs handle resets internally"""
         return False
 
     @property
     def driver_env(self):
-        '''For compatibility with Multiprocessing'''
+        """For compatibility with Multiprocessing"""
         return self
 
     def reset(self, seed=None):
@@ -100,20 +100,29 @@ class PufferEnv:
 
     def async_reset(self, seed=None):
         _, self.infos = self.reset(seed)
-        assert isinstance(self.infos, list), 'PufferEnvs must return info as a list of dicts'
+        assert isinstance(self.infos, list), "PufferEnvs must return info as a list of dicts"
 
     def send(self, actions):
         _, _, _, _, self.infos = self.step(actions)
-        assert isinstance(self.infos, list), 'PufferEnvs must return info as a list of dicts'
+        assert isinstance(self.infos, list), "PufferEnvs must return info as a list of dicts"
 
     def recv(self):
-        return (self.observations, self.rewards, self.terminals,
-            self.truncations, self.infos, self.agent_ids, self.masks)
+        return (
+            self.observations,
+            self.rewards,
+            self.terminals,
+            self.truncations,
+            self.infos,
+            self.agent_ids,
+            self.masks,
+        )
+
 
 ### Postprocessing
 class ResizeObservation(gymnasium.Wrapper):
-    '''Fixed downscaling wrapper. Do NOT use gym.wrappers.ResizeObservation
-    It uses a laughably slow OpenCV resize. -50% on Atari just from that.'''
+    """Fixed downscaling wrapper. Do NOT use gym.wrappers.ResizeObservation
+    It uses a laughably slow OpenCV resize. -50% on Atari just from that."""
+
     def __init__(self, env, downscale=2):
         super().__init__(env)
         self.downscale = downscale
@@ -121,19 +130,20 @@ class ResizeObservation(gymnasium.Wrapper):
         assert y_size % downscale == 0 and x_size % downscale == 0
         y_size = env.observation_space.shape[0] // downscale
         x_size = env.observation_space.shape[1] // downscale
-        self.observation_space = gymnasium.spaces.Box(
-            low=0, high=255, shape=(y_size, x_size), dtype=np.uint8)
+        self.observation_space = gymnasium.spaces.Box(low=0, high=255, shape=(y_size, x_size), dtype=np.uint8)
 
     def reset(self, seed=None, options=None):
         obs, info = self.env.reset(seed=seed, options=options)
-        return obs[::self.downscale, ::self.downscale], info
+        return obs[:: self.downscale, :: self.downscale], info
 
     def step(self, action):
         obs, reward, terminal, truncated, info = self.env.step(action)
-        return obs[::self.downscale, ::self.downscale], reward, terminal, truncated, info
+        return obs[:: self.downscale, :: self.downscale], reward, terminal, truncated, info
+
 
 class ClipAction(gymnasium.Wrapper):
-    '''Wrapper for Gymnasium environments that clips actions'''
+    """Wrapper for Gymnasium environments that clips actions"""
+
     def __init__(self, env):
         self.env = env
         assert isinstance(env.action_space, gymnasium.spaces.Box)
@@ -153,8 +163,9 @@ class ClipAction(gymnasium.Wrapper):
 
 
 class EpisodeStats(gymnasium.Wrapper):
-    '''Wrapper for Gymnasium environments that stores
-    episodic returns and lengths in infos'''
+    """Wrapper for Gymnasium environments that stores
+    episodic returns and lengths in infos"""
+
     def __init__(self, env):
         self.env = env
         self.observation_space = env.observation_space
@@ -164,7 +175,7 @@ class EpisodeStats(gymnasium.Wrapper):
     def reset(self, seed=None, options=None):
         self.info = dict(episode_return=[], episode_length=0)
         # TODO: options
-        return self.env.reset(seed=seed)#, options=options)
+        return self.env.reset(seed=seed)  # , options=options)
 
     def step(self, action):
         observation, reward, terminated, truncated, info = super().step(action)
@@ -175,8 +186,8 @@ class EpisodeStats(gymnasium.Wrapper):
 
             self.info[k].append(v)
 
-        self.info['episode_return'].append(reward)
-        self.info['episode_length'] += 1
+        self.info["episode_return"].append(reward)
+        self.info["episode_length"] += 1
 
         info = {}
         if terminated or truncated:
@@ -192,7 +203,7 @@ class EpisodeStats(gymnasium.Wrapper):
                     continue
 
                 try:
-                    x = int(v) # probably a value
+                    x = int(v)  # probably a value
                     info[k] = v
                     continue
                 except TypeError:
@@ -200,15 +211,17 @@ class EpisodeStats(gymnasium.Wrapper):
 
         return observation, reward, terminated, truncated, info
 
+
 class PettingZooWrapper:
-    '''PettingZoo does not provide a ParallelEnv wrapper. This code is adapted from
-    their AEC wrapper, to prevent unneeded conversions to/from AEC'''
+    """PettingZoo does not provide a ParallelEnv wrapper. This code is adapted from
+    their AEC wrapper, to prevent unneeded conversions to/from AEC"""
+
     def __init__(self, env):
         self.env = env
 
     def __getattr__(self, name):
-        '''Returns an attribute with ``name``, unless ``name`` starts with an underscore.'''
-        if name.startswith('_') and name != '_cumulative_rewards':
+        """Returns an attribute with ``name``, unless ``name`` starts with an underscore."""
+        if name.startswith("_") and name != "_cumulative_rewards":
             raise AttributeError(f'accessing private attribute "{name}" is prohibited')
         return getattr(self.env, name)
 
@@ -244,11 +257,13 @@ class PettingZooWrapper:
         return self.env.action_space(agent)
 
     def __str__(self) -> str:
-        '''Returns a name which looks like: "max_observation<space_invaders_v1>".'''
-        return f'{type(self).__name__}<{str(self.env)}>'
+        """Returns a name which looks like: "max_observation<space_invaders_v1>"."""
+        return f"{type(self).__name__}<{str(self.env)}>"
+
 
 class MeanOverAgents(PettingZooWrapper):
-    '''Averages over agent infos'''
+    """Averages over agent infos"""
+
     def _mean(self, infos):
         list_infos = {}
         for agent, info in infos.items():
@@ -277,15 +292,14 @@ class MeanOverAgents(PettingZooWrapper):
         infos = self._mean(infos)
         return observations, rewards, terminations, truncations, infos
 
+
 class MultiagentEpisodeStats(PettingZooWrapper):
-    '''Wrapper for PettingZoo environments that stores
-    episodic returns and lengths in infos'''
+    """Wrapper for PettingZoo environments that stores
+    episodic returns and lengths in infos"""
+
     def reset(self, seed=None, options=None):
         observations, infos = super().reset(seed=seed, options=options)
-        self.infos = {
-            agent: dict(episode_return=[], episode_length=0)
-            for agent in self.possible_agents
-        }
+        self.infos = {agent: dict(episode_return=[], episode_length=0) for agent in self.possible_agents}
         return observations, infos
 
     def step(self, actions):
@@ -301,8 +315,8 @@ class MultiagentEpisodeStats(PettingZooWrapper):
                 agent_info[k].append(v)
 
             # Saved to self. TODO: Clean up
-            agent_info['episode_return'].append(rewards[agent])
-            agent_info['episode_length'] += 1
+            agent_info["episode_return"].append(rewards[agent])
+            agent_info["episode_length"] += 1
 
             agent_info = {}
             all_infos[agent] = agent_info
@@ -319,17 +333,20 @@ class MultiagentEpisodeStats(PettingZooWrapper):
                         continue
 
                     try:
-                        x = int(v) # probably a value
+                        x = int(v)  # probably a value
                         agent_info[k] = v
                         continue
                     except TypeError:
                         pass
 
         return observations, rewards, terminations, truncations, all_infos
+
+
 ### Exceptions
 class EnvironmentSetupError(RuntimeError):
     def __init__(self, e, package):
         super().__init__(self.message)
+
 
 class APIUsageError(RuntimeError):
     """Exception raised when the API is used incorrectly."""
@@ -338,15 +355,14 @@ class APIUsageError(RuntimeError):
         self.message = message
         super().__init__(self.message)
 
+
 class InvalidAgentError(ValueError):
     """Exception raised when an invalid agent key is used."""
 
     def __init__(self, agent_id, agents):
-        message = (
-            f'Invalid agent/team ({agent_id}) specified. '
-            f'Valid values:\n{agents}'
-        )
+        message = f"Invalid agent/team ({agent_id}) specified. Valid values:\n{agents}"
         super().__init__(message)
+
 
 class GymToGymnasium:
     def __init__(self, env):
@@ -369,6 +385,7 @@ class GymToGymnasium:
 
     def close(self):
         self.env.close()
+
 
 ### Wrappers
 class PettingZooTruncatedWrapper:
@@ -405,6 +422,7 @@ class PettingZooTruncatedWrapper:
     def close(self):
         self.env.close()
 
+
 ### Misc
 def unroll_nested_dict(d):
     if not isinstance(d, dict):
@@ -417,15 +435,18 @@ def unroll_nested_dict(d):
         else:
             yield k, v
 
+
 def silence_warnings(original_func, category=DeprecationWarning):
     @wraps(original_func)
     def wrapper(*args, **kwargs):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=category)
             return original_func(*args, **kwargs)
+
     return wrapper
 
-class Suppress():
+
+class Suppress:
     def __init__(self):
         self.f = StringIO()
         self.null_1 = os.open(os.devnull, os.O_WRONLY | os.O_TRUNC | os.O_CREAT)

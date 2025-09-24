@@ -3,11 +3,14 @@ import numpy as np
 
 
 import pyximport
+
 pyximport.install(
-    setup_args={"include_dirs": [
-        np.get_include(),
-        'pufferlib/extensions',
-    ]},
+    setup_args={
+        "include_dirs": [
+            np.get_include(),
+            "pufferlib/extensions",
+        ]
+    },
 )
 
 from pufferlib.extensions import puffernet
@@ -15,11 +18,13 @@ from pufferlib.extensions import puffernet
 # TODO: Should probably add a safe mode that type checks input arrays
 # It's user error, but it is a big foot gun
 
+
 def make_dummy_data(*shape, seed=42):
     np.random.seed(seed)
     n = np.prod(shape)
     ary = np.random.rand(*shape).astype(np.float32) - 0.5
     return np.ascontiguousarray(ary)
+
 
 def make_dummy_int_data(num_classes, *shape, seed=42):
     np.random.seed(seed)
@@ -27,20 +32,23 @@ def make_dummy_int_data(num_classes, *shape, seed=42):
     ary = np.random.randint(0, num_classes, shape).astype(np.int32)
     return np.ascontiguousarray(ary)
 
+
 def assert_near(a, b):
     assert a.shape == b.shape
     assert np.all(np.abs(a - b) < 1e-4)
+
 
 def test_puffernet_relu(batch_size=16, input_size=128):
     input_puffer = make_dummy_data(batch_size, input_size)
 
     input_torch = torch.from_numpy(input_puffer)
     output_torch = torch.relu(input_torch).detach()
-    
+
     # PufferNet done second because it is in-place on the input
-    puffernet.puf_relu(input_puffer, input_puffer, batch_size*input_size)
+    puffernet.puf_relu(input_puffer, input_puffer, batch_size * input_size)
 
     assert_near(input_puffer, output_torch.numpy())
+
 
 def test_puffernet_sigmoid(n=1024, epsilon=1e-4):
     input_np = make_dummy_data(n)
@@ -53,13 +61,13 @@ def test_puffernet_sigmoid(n=1024, epsilon=1e-4):
         out_puffer = puffernet.puf_sigmoid(input_np[i])
         assert abs(out_puffer - out_torch) < epsilon
 
+
 def test_puffernet_linear_layer(batch_size=16, input_size=128, hidden_size=128):
     input_np = make_dummy_data(batch_size, input_size, seed=42)
     weights_np = make_dummy_data(hidden_size, input_size, seed=43)
     bias_np = make_dummy_data(hidden_size, seed=44)
     output_puffer = np.zeros((batch_size, hidden_size), dtype=np.float32)
-    puffernet.puf_linear_layer(input_np, weights_np, bias_np, output_puffer,
-        batch_size, input_size, hidden_size)
+    puffernet.puf_linear_layer(input_np, weights_np, bias_np, output_puffer, batch_size, input_size, hidden_size)
 
     input_torch = torch.from_numpy(input_np)
     weights_torch = torch.from_numpy(weights_np)
@@ -71,16 +79,29 @@ def test_puffernet_linear_layer(batch_size=16, input_size=128, hidden_size=128):
 
     assert_near(output_puffer, output_torch.numpy())
 
-def test_puffernet_convolution_layer(batch_size=16, in_width=11, in_height=11,
-        in_channels=19, out_channels=32, kernel_size=5, stride=3):
+
+def test_puffernet_convolution_layer(
+    batch_size=16, in_width=11, in_height=11, in_channels=19, out_channels=32, kernel_size=5, stride=3
+):
     input_np = make_dummy_data(batch_size, in_channels, in_height, in_width)
     weights_np = make_dummy_data(out_channels, in_channels, kernel_size, kernel_size)
     bias_np = make_dummy_data(out_channels)
-    out_height = int((in_height - kernel_size)/stride + 1)
-    out_width = int((in_width - kernel_size)/stride + 1)
+    out_height = int((in_height - kernel_size) / stride + 1)
+    out_width = int((in_width - kernel_size) / stride + 1)
     output_puffer = np.zeros((batch_size, out_channels, out_height, out_width), dtype=np.float32)
-    puffernet.puf_convolution_layer(input_np, weights_np, bias_np, output_puffer,
-        batch_size, in_width, in_height, in_channels, out_channels, kernel_size, stride)
+    puffernet.puf_convolution_layer(
+        input_np,
+        weights_np,
+        bias_np,
+        output_puffer,
+        batch_size,
+        in_width,
+        in_height,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+    )
 
     input_torch = torch.from_numpy(input_np)
     weights_torch = torch.from_numpy(weights_np)
@@ -91,43 +112,55 @@ def test_puffernet_convolution_layer(batch_size=16, in_width=11, in_height=11,
     output_torch = torch_conv(input_torch).detach()
 
     assert_near(output_puffer, output_torch.numpy())
-    
-def test_puffernet_convolution_3d_layer(batch_size=4096, in_width=9, in_height=5, in_depth=5,
-        in_channels=1, out_channels=16, kernel_size=2, stride=1):
+
+
+def test_puffernet_convolution_3d_layer(
+    batch_size=4096, in_width=9, in_height=5, in_depth=5, in_channels=1, out_channels=16, kernel_size=2, stride=1
+):
     input_np = make_dummy_data(batch_size, in_channels, in_depth, in_height, in_width)
     weights_np = make_dummy_data(out_channels, in_channels, kernel_size, kernel_size, kernel_size)
     bias_np = make_dummy_data(out_channels)
-    
-    out_depth = int((in_depth - kernel_size)/stride + 1)
-    out_height = int((in_height - kernel_size)/stride + 1)
-    out_width = int((in_width - kernel_size)/stride + 1)
+
+    out_depth = int((in_depth - kernel_size) / stride + 1)
+    out_height = int((in_height - kernel_size) / stride + 1)
+    out_width = int((in_width - kernel_size) / stride + 1)
     output_puffer = np.zeros((batch_size, out_channels, out_depth, out_height, out_width), dtype=np.float32)
-    
-    puffernet.puf_convolution_3d_layer(input_np, weights_np, bias_np, output_puffer,
-        batch_size, in_width, in_height, in_depth, in_channels, out_channels, kernel_size, stride)
-    
+
+    puffernet.puf_convolution_3d_layer(
+        input_np,
+        weights_np,
+        bias_np,
+        output_puffer,
+        batch_size,
+        in_width,
+        in_height,
+        in_depth,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+    )
+
     input_torch = torch.from_numpy(input_np)
     weights_torch = torch.from_numpy(weights_np)
     bias_torch = torch.from_numpy(bias_np)
-    
+
     torch_conv = torch.nn.Conv3d(in_channels, out_channels, kernel_size, stride)
     torch_conv.weight.data = weights_torch
     torch_conv.bias.data = bias_torch
     output_torch = torch_conv(input_torch).detach()
     assert_near(output_puffer, output_torch.numpy())
-    
-    
-    
+
 
 def test_puffernet_lstm(batch_size=16, input_size=128, hidden_size=128):
     input_np = make_dummy_data(batch_size, input_size, seed=42)
     state_h_np = make_dummy_data(batch_size, hidden_size, seed=43)
     state_c_np = make_dummy_data(batch_size, hidden_size, seed=44)
-    weights_input_np = make_dummy_data(4*hidden_size, input_size, seed=45)
-    weights_state_np = make_dummy_data(4*hidden_size, hidden_size, seed=46)
-    bias_input_np = make_dummy_data(4*hidden_size, seed=47)
-    bias_state_np = make_dummy_data(4*hidden_size, seed=48)
-    buffer_np = make_dummy_data(4*batch_size*hidden_size, seed=49)
+    weights_input_np = make_dummy_data(4 * hidden_size, input_size, seed=45)
+    weights_state_np = make_dummy_data(4 * hidden_size, hidden_size, seed=46)
+    bias_input_np = make_dummy_data(4 * hidden_size, seed=47)
+    bias_state_np = make_dummy_data(4 * hidden_size, seed=48)
+    buffer_np = make_dummy_data(4 * batch_size * hidden_size, seed=49)
 
     input_torch = torch.from_numpy(input_np).view(1, batch_size, input_size)
     state_h_torch = torch.from_numpy(state_h_np).view(1, batch_size, hidden_size)
@@ -146,19 +179,29 @@ def test_puffernet_lstm(batch_size=16, input_size=128, hidden_size=128):
     state_c_torch = state_c_torch.detach()
 
     # PufferNet done second because it is in-place on the state vars
-    puffernet.puf_lstm(input_np, state_h_np, state_c_np, weights_input_np,
-        weights_state_np, bias_input_np, bias_state_np, buffer_np,
-        batch_size, input_size, hidden_size)
+    puffernet.puf_lstm(
+        input_np,
+        state_h_np,
+        state_c_np,
+        weights_input_np,
+        weights_state_np,
+        bias_input_np,
+        bias_state_np,
+        buffer_np,
+        batch_size,
+        input_size,
+        hidden_size,
+    )
 
     assert_near(state_h_np, state_h_torch.numpy()[0])
     assert_near(state_c_np, state_c_torch.numpy()[0])
+
 
 def test_puffernet_embedding(batch_size=16, num_embeddings=128, embedding_dim=32):
     input_np = make_dummy_int_data(num_embeddings, batch_size, seed=42)
     weights_np = make_dummy_data(num_embeddings, embedding_dim, seed=43)
     output_puffer = np.zeros((batch_size, embedding_dim), dtype=np.float32)
-    puffernet.puf_embedding(input_np, weights_np, output_puffer,
-        batch_size, num_embeddings, embedding_dim)
+    puffernet.puf_embedding(input_np, weights_np, output_puffer, batch_size, num_embeddings, embedding_dim)
 
     input_torch = torch.from_numpy(input_np).long()
     weights_torch = torch.from_numpy(weights_np)
@@ -172,13 +215,13 @@ def test_puffernet_embedding(batch_size=16, num_embeddings=128, embedding_dim=32
 
     assert_near(output_puffer, output_torch.numpy())
 
+
 def test_puffernet_layernorm(batch_size=16, input_size=128):
     input_np = make_dummy_data(batch_size, input_size, seed=42)
     weights_np = make_dummy_data(input_size, seed=43)
     bias_np = make_dummy_data(input_size, seed=44)
     output_puffer = np.zeros((batch_size, input_size), dtype=np.float32)
-    puffernet.puf_layernorm(input_np, weights_np, bias_np, output_puffer,
-        batch_size, input_size)
+    puffernet.puf_layernorm(input_np, weights_np, bias_np, output_puffer, batch_size, input_size)
 
     input_torch = torch.from_numpy(input_np)
     weights_torch = torch.from_numpy(weights_np)
@@ -190,6 +233,7 @@ def test_puffernet_layernorm(batch_size=16, input_size=128):
 
     assert_near(output_puffer, output_torch.numpy())
 
+
 def test_puffernet_one_hot(batch_size=16, input_size=128, num_classes=10):
     input_np = make_dummy_int_data(num_classes, batch_size, input_size)
     output_puffer = np.zeros((batch_size, input_size, num_classes), dtype=np.int32)
@@ -199,6 +243,7 @@ def test_puffernet_one_hot(batch_size=16, input_size=128, num_classes=10):
     output_torch = torch.nn.functional.one_hot(input_torch, num_classes).int().detach()
 
     assert_near(output_puffer, output_torch.numpy())
+
 
 def test_puffernet_cat_dim1(batch_size=16, x_size=32, y_size=64):
     x_np = make_dummy_data(batch_size, x_size)
@@ -212,7 +257,8 @@ def test_puffernet_cat_dim1(batch_size=16, x_size=32, y_size=64):
 
     assert_near(output_puffer, output_torch.numpy())
 
-def test_puffernet_argmax_multidiscrete(batch_size=16, logit_sizes=[5,7,2]):
+
+def test_puffernet_argmax_multidiscrete(batch_size=16, logit_sizes=[5, 7, 2]):
     logit_sizes = np.array(logit_sizes).astype(np.int32)
     num_actions = len(logit_sizes)
     input_np = make_dummy_data(batch_size, logit_sizes.sum())
@@ -225,28 +271,31 @@ def test_puffernet_argmax_multidiscrete(batch_size=16, logit_sizes=[5,7,2]):
 
     assert_near(output_puffer, output_torch.numpy())
 
+
 def test_nmmo3(batch_size=1, input_size=512, hidden_size=512):
-    input_torch = torch.arange(11*15*10 + 47 + 10) % 4
+    input_torch = torch.arange(11 * 15 * 10 + 47 + 10) % 4
     input_torch = input_torch.view(1, -1)
 
     from pufferlib.ocean.torch import NMMO3, NMMO3LSTM
     from pufferlib.ocean import env_creator
-    env = env_creator('puffer_nmmo3')()
+
+    env = env_creator("puffer_nmmo3")()
     model = NMMO3(env, hidden_size=hidden_size)
     model = NMMO3LSTM(env, policy=model, input_size=input_size, hidden_size=hidden_size)
-    state_dict = torch.load('nmmo3_642b.pt')
-    state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+    state_dict = torch.load("nmmo3_642b.pt")
+    state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
     model.load_state_dict(state_dict)
 
     state = {
-        'lstm_h': torch.zeros(batch_size, hidden_size),
-        'lstm_c': torch.zeros(batch_size, hidden_size),
+        "lstm_h": torch.zeros(batch_size, hidden_size),
+        "lstm_c": torch.zeros(batch_size, hidden_size),
     }
 
     output = model.forward_eval(input_torch, state)
     pass
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     test_nmmo3()
     exit()
     test_puffernet_relu()

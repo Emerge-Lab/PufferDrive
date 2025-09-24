@@ -42,7 +42,7 @@ int main() {
     //const int num_steps = 4;
     //const int horizon = 3;
     const float r_std = 2.0f;
-    
+
     // Calculate sizes
     const int block_size = NUM_STEPS * HORIZON * sizeof(float);
     const int steps_size = NUM_STEPS * sizeof(float);

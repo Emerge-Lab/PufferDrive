@@ -2,10 +2,11 @@ import gymnasium
 import pettingzoo
 import pufferlib.emulation
 
+
 class SamplePettingzooEnv(pettingzoo.ParallelEnv):
     def __init__(self):
-        self.possible_agents = ['agent_0', 'agent_1']
-        self.agents = ['agent_0', 'agent_1']
+        self.possible_agents = ["agent_0", "agent_1"]
+        self.agents = ["agent_0", "agent_1"]
 
     def observation_space(self, agent):
         return gymnasium.spaces.Box(low=-1, high=1, shape=(1,))
@@ -25,7 +26,8 @@ class SamplePettingzooEnv(pettingzoo.ParallelEnv):
         infos = {agent: {} for agent in self.agents}
         return observations, rewards, terminals, truncations, infos
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     env = SamplePettingzooEnv()
     puffer_env = pufferlib.emulation.PettingZooPufferEnv(env)
     observations, infos = puffer_env.reset()

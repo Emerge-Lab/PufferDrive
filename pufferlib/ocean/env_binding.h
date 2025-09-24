@@ -1,3 +1,4 @@
+#include <../../inih-r62/ini.h>
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
@@ -134,15 +135,15 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         return NULL;
     }
     // env->truncations = PyArray_DATA(truncations);
-    
-    
+
+
     PyObject* seed_arg = PyTuple_GetItem(args, 5);
     if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "seed must be an integer");
         return NULL;
     }
     int seed = PyLong_AsLong(seed_arg);
- 
+
     // Assumes each process has the same number of environments
     srand(seed);
 
@@ -410,10 +411,10 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
             return NULL;
         }
         vec->envs[i] = env;
-        
+
         // // Make sure the log is initialized to 0
         memset(&env->log, 0, sizeof(Log));
-        
+
         env->observations = (void*)((char*)PyArray_DATA(observations) + i*PyArray_STRIDE(observations, 0));
         env->actions = (void*)((char*)PyArray_DATA(actions) + i*PyArray_STRIDE(actions, 0));
         env->rewards = (void*)((char*)PyArray_DATA(rewards) + i*PyArray_STRIDE(rewards, 0));
@@ -423,7 +424,7 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         // Assumes each process has the same number of environments
         int env_seed = i + seed*vec->num_envs;
         srand(env_seed);
- 
+
         // Add the seed to kwargs for this environment
         PyObject* py_seed = PyLong_FromLong(env_seed);
         if (PyDict_SetItemString(kwargs, "seed", py_seed) < 0) {
@@ -496,7 +497,7 @@ static PyObject* vec_reset(PyObject* self, PyObject* args) {
         return NULL;
     }
     int seed = PyLong_AsLong(seed_arg);
- 
+
     for (int i = 0; i < vec->num_envs; i++) {
         // Assumes each process has the same number of environments
         srand(i + seed*vec->num_envs);
@@ -542,7 +543,7 @@ static PyObject* vec_render(PyObject* self, PyObject* args) {
         return NULL;
     }
     int env_id = PyLong_AsLong(env_id_arg);
- 
+
     c_render(vec->envs[env_id]);
     Py_RETURN_NONE;
 }
@@ -640,6 +641,32 @@ static double unpack(PyObject* kwargs, char* key) {
     return 1;
 }
 
+static char* unpack_str(PyObject* kwargs, char* key) {
+    PyObject* val = PyDict_GetItemString(kwargs, key);
+    if (val == NULL) {
+        char error_msg[100];
+        snprintf(error_msg, sizeof(error_msg), "Missing required keyword argument '%s'", key);
+        PyErr_SetString(PyExc_TypeError, error_msg);
+        return NULL;
+    }
+    if (!PyUnicode_Check(val)) {
+        char error_msg[100];
+        snprintf(error_msg, sizeof(error_msg), "Keyword argument '%s' must be a string", key);
+        PyErr_SetString(PyExc_TypeError, error_msg);
+        return NULL;
+    }
+    const char* str_val = PyUnicode_AsUTF8(val);
+    if (str_val == NULL) {
+        // PyUnicode_AsUTF8 sets an error on failure
+        return NULL;
+    }
+    char* ret = strdup(str_val);
+    if (ret == NULL) {
+        PyErr_SetString(PyExc_MemoryError, "strdup failed in unpack_str");
+    }
+    return ret;
+}
+
 // Method table
 static PyMethodDef methods[] = {
     {"env_init", (PyCFunction)env_init, METH_VARARGS | METH_KEYWORDS, "Init environment with observation, action, reward, terminal, truncation arrays"},
@@ -673,4 +700,47 @@ static PyModuleDef module = {
 PyMODINIT_FUNC PyInit_binding(void) {
     import_array();
     return PyModule_Create(&module);
+}
+
+typedef struct
+{
+    int action_type;
+    float reward_vehicle_collision;
+    float reward_offroad_collision;
+    float reward_goal_post_respawn;
+    float reward_vehicle_collision_post_respawn;
+    float reward_ade;
+    int spawn_immunity_timer;
+} env_init_config;
+
+static int handler(
+    void* config,
+    const char* section,
+    const char* name,
+    const char* value
+) {
+    env_init_config* env_config = (env_init_config*)config;
+    #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
+    if (MATCH("env", "action_type")) {
+        if(strcmp(value, "\"discrete\"") == 0) {
+            env_config->action_type = 0;
+        } else {
+            env_config->action_type = 1;
+        }
+    } else if (MATCH("env", "reward_vehicle_collision")) {
+        env_config->reward_vehicle_collision = atof(value);
+    } else if (MATCH("env", "reward_offroad_collision")) {
+        env_config->reward_offroad_collision = atof(value);
+    } else if (MATCH("env", "reward_goal_post_respawn")) {
+        env_config->reward_goal_post_respawn = atof(value);
+    } else if (MATCH("env", "reward_vehicle_collision_post_respawn")) {
+        env_config->reward_vehicle_collision_post_respawn = atof(value);
+    } else if (MATCH("env", "reward_ade")) {
+        env_config->reward_ade = atof(value);
+    } else if (MATCH("env", "spawn_immunity_timer")) {
+        env_config->spawn_immunity_timer = atoi(value);
+    } else {
+        return 0;
+    }
+    return 1;
 }

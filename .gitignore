@@ -161,6 +161,7 @@ wandb/
 .neptune/
 raylib*/
 box2d*/
+inih*/
 
 # Temp Impulse Wars files
 pufferlib/ocean/impulse_wars/*-debug/
@@ -169,18 +170,18 @@ pufferlib/ocean/impulse_wars/debug-*/
 pufferlib/ocean/impulse_wars/release-*/
 pufferlib/ocean/impulse_wars/benchmark/
 
-.idea/
-__pycache__/
-*.pyc
-venv/
-.venv/
-env/
-.env/
 
-# macOS Build Artifacts
-*.dSYM/
-test_jerk_bicycle_dynamics
+# Ignore data files
+data/
+pufferlib/resources/drive/binaries/
 
-# Binary Data Files
-pufferlib/resources/drive/binaries/*.bin
+# But keep map_000.bin for the training test
+!pufferlib/resources/drive/binaries/map_000.bin
+
+# Compiled drive binary in root
 /drive
+# But allow drive directories
+!*/drive/
+*.exe
+*.out
+*.app
