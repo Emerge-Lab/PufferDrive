@@ -318,7 +318,7 @@ if not NO_TRAIN:
     install_requires += [
         "torch",
         "psutil",
-        "pynvml",
+        "nvidia-ml-py",
         "rich",
         "rich_argparse",
         "imageio",
