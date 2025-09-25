@@ -148,9 +148,12 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_vehicle_collision_post_respawn = conf.reward_vehicle_collision_post_respawn;
-    env->reward_ade = conf.reward_ade;
+    env->reward_log_ade = conf.reward_log_ade;
     env->goal_radius = conf.goal_radius;
+    env->reward_log_speed = conf.reward_log_speed;
+    env->reward_log_heading = conf.reward_log_heading;
     env->spawn_immunity_timer = conf.spawn_immunity_timer;
+    env->condition_mode = conf.condition_mode;
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 
@@ -175,5 +178,7 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "completion_rate", log->completion_rate);
     assign_to_dict(dict, "clean_collision_rate", log->clean_collision_rate);
     assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    assign_to_dict(dict, "avg_heading_error", log->avg_heading_error);
+    assign_to_dict(dict, "avg_speed_error", log->avg_speed_error);
     return 0;
 }

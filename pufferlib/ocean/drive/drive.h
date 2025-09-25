@@ -49,6 +49,8 @@
 #define REACHED_GOAL_IDX 2
 #define LANE_ALIGNED_IDX 3
 #define AVG_DISPLACEMENT_ERROR_IDX 4
+#define AVG_HEADING_ERROR_IDX 5
+#define AVG_SPEED_ERROR_IDX 6
 
 // grid cell size
 #define GRID_CELL_SIZE 5.0f
@@ -93,6 +95,10 @@ static const int collision_offsets[25][2] = {
     {-2,  2}, {-1,  2}, {0,  2}, {1,  2}, {2,  2}   // Bottom row
 };
 
+// Modes to condition the agent
+#define GOAL_XY 0
+#define GUIDANCE 1
+
 struct timespec ts;
 
 typedef struct Drive Drive;
@@ -112,6 +118,8 @@ struct Log {
     float n;
     float lane_alignment_rate;
     float avg_displacement_error;
+    float avg_speed_error;
+    float avg_heading_error;
 };
 
 typedef struct Entity Entity;
@@ -126,6 +134,7 @@ struct Entity {
     float* traj_vz;
     float* traj_heading;
     int* traj_valid;
+    int* valid_guidance_lookup;
     float width;
     float length;
     float height;
@@ -134,7 +143,7 @@ struct Entity {
     float goal_position_z;
     int mark_as_expert;
     int collision_state;
-    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, avg_displacement_error]
+    float metrics_array[7]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, avg_displacement_error, avg_heading_error, avg_speed_error]
     float x;
     float y;
     float z;
@@ -150,7 +159,9 @@ struct Entity {
     int reached_goal_this_episode;
     int active_agent;
     float cumulative_displacement;
-    int displacement_sample_count;
+    float cumulative_heading_error;
+    float cumulative_speed_error;
+    int log_sample_count;
     float goal_radius;
 };
 
@@ -164,6 +175,7 @@ void free_entity(Entity* entity){
     free(entity->traj_vz);
     free(entity->traj_heading);
     free(entity->traj_valid);
+    free(entity->valid_guidance_lookup);
 }
 
 float relative_distance(float a, float b){
@@ -178,31 +190,50 @@ float relative_distance_2d(float x1, float y1, float x2, float y2){
     return distance;
 }
 
-float compute_displacement_error(Entity* agent, int timestep) {
-    // Check if timestep is within valid range
-    if (timestep < 0 || timestep >= agent->array_size) {
-        return 0.0f;
+void compute_distance_to_logs(Entity* agent, int timestep, float* displacement_error, float* heading_error, float* speed_error) {
+
+    *displacement_error = 0.0f;
+    *heading_error = 0.0f;
+    *speed_error = 0.0f;
+
+    // Check if log is valid for the current timestep
+    if (timestep < 0 || timestep >= agent->array_size || !agent->traj_valid[timestep]) {
+        return;
     }
 
-    // Check if reference trajectory is valid at this timestep
-    if (!agent->traj_valid[timestep]) {
-        return 0.0f;
-    }
-
-    // Get reference position at current timestep, skip invalid ones
+    // Get reference values
     float ref_x = agent->traj_x[timestep];
     float ref_y = agent->traj_y[timestep];
+    float ref_heading = agent->traj_heading[timestep];
+    float ref_vx = agent->traj_vx[timestep];
+    float ref_vy = agent->traj_vy[timestep];
 
+    // Skip invalid reference positions
     if (ref_x == -10000.0f || ref_y == -10000.0f) {
-        return 0.0f;
+        return;
     }
 
-    // Compute deltas: Euclidean distance between actual and reference position
+    // Compute raw displacement distance
     float dx = agent->x - ref_x;
     float dy = agent->y - ref_y;
-    float displacement = sqrtf(dx*dx + dy*dy);
+    float displacement_raw = dx*dx + dy*dy;
 
-    return displacement;
+    // Compute raw heading distance
+    float heading_diff = agent->heading - ref_heading;
+    while (heading_diff > M_PI) heading_diff -= 2 * M_PI;
+    while (heading_diff < -M_PI) heading_diff += 2 * M_PI;
+    float heading_raw = heading_diff * heading_diff;
+
+    // Compute raw speed distance
+    float ref_speed = sqrtf(ref_vx * ref_vx + ref_vy * ref_vy);
+    float current_speed = sqrtf(agent->vx * agent->vx + agent->vy * agent->vy);
+    float speed_diff = current_speed - ref_speed;
+    float speed_raw = speed_diff * speed_diff;
+
+    // Apply exponential transform to bound errors in [0, 1) range
+    *displacement_error = 1.0f - expf(-displacement_raw + 1e-8f);
+    *heading_error = 1.0f - expf(-heading_raw + 1e-8f);
+    *speed_error = 1.0f - expf(-speed_raw + 1e-8f);
 }
 
 struct Drive {
@@ -239,7 +270,9 @@ struct Drive {
     int* neighbor_cache_indices;
     float reward_vehicle_collision;
     float reward_offroad_collision;
-    float reward_ade;
+    float reward_log_ade;
+    float reward_log_speed;
+    float reward_log_heading;
     char* map_name;
     float world_mean_x;
     float world_mean_y;
@@ -248,6 +281,7 @@ struct Drive {
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
     char* ini_file;
+    int condition_mode;
 };
 
 void add_log(Drive* env) {
@@ -273,6 +307,8 @@ void add_log(Drive* env) {
         env->log.lane_alignment_rate += lane_aligned;
         float displacement_error = env->logs[i].avg_displacement_error;
         env->log.avg_displacement_error += displacement_error;
+        env->log.avg_speed_error += env->logs[i].avg_speed_error;
+        env->log.avg_heading_error += env->logs[i].avg_heading_error;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         env->log.n += 1;
@@ -302,6 +338,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_vz = (float*)malloc(size * sizeof(float));
             entities[i].traj_heading = (float*)malloc(size * sizeof(float));
             entities[i].traj_valid = (int*)malloc(size * sizeof(int));
+            entities[i].valid_guidance_lookup = (int*)malloc(size * sizeof(int));
         } else {
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
@@ -309,6 +346,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_vz = NULL;
             entities[i].traj_heading = NULL;
             entities[i].traj_valid = NULL;
+            entities[i].valid_guidance_lookup = NULL;
         }
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
@@ -320,6 +358,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             fread(entities[i].traj_vz, sizeof(float), size, file);
             fread(entities[i].traj_heading, sizeof(float), size, file);
             fread(entities[i].traj_valid, sizeof(int), size, file);
+            fread(entities[i].valid_guidance_lookup, sizeof(int), size, file);
         }
         // Read remaining scalar fields
         fread(&entities[i].width, sizeof(float), 1, file);
@@ -377,7 +416,9 @@ void set_start_position(Drive* env){
         e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
         e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
         e->cumulative_displacement = 0.0f;
-        e->displacement_sample_count = 0;
+        e->cumulative_heading_error = 0.0f;
+        e->cumulative_speed_error = 0.0f;
+        e->log_sample_count = 0;
         e->respawn_timestep = -1;
     }
     //EndDrawing();
@@ -834,16 +875,24 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
     if(agent->x == -10000.0f ) return; // invalid agent position
 
-    // Compute displacement error
-    float displacement_error = compute_displacement_error(agent, env->timestep);
+    // Compute all metrics that use the log trajectories
+    float displacement_error, heading_error, speed_error;
+    compute_distance_to_logs(agent, env->timestep, &displacement_error, &heading_error, &speed_error);
 
-    if (displacement_error > 0.0f) { // Only count valid displacements
+    // Update if log data is valid at this timestep
+    if (displacement_error > 0.0f || heading_error >= 0.0f || speed_error >= 0.0f) {
         agent->cumulative_displacement += displacement_error;
-        agent->displacement_sample_count++;
+        agent->cumulative_heading_error += heading_error;
+        agent->cumulative_speed_error += speed_error;
+        agent->log_sample_count++;
 
-        // Compute running average
+        // Compute running averages
         agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] =
-            agent->cumulative_displacement / agent->displacement_sample_count;
+            agent->cumulative_displacement / agent->log_sample_count;
+        agent->metrics_array[AVG_HEADING_ERROR_IDX] =
+            agent->cumulative_heading_error / agent->log_sample_count;
+        agent->metrics_array[AVG_SPEED_ERROR_IDX] =
+            agent->cumulative_speed_error / agent->log_sample_count;
     }
 
     int collided = 0;
@@ -1117,7 +1166,8 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int self_obs_size = (env->condition_mode == GUIDANCE) ? 10 : 7;
+    int max_obs = self_obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("max obs: %d\n", max_obs*env->active_agent_count);
     // printf("num cars: %d\n", env->num_cars);
     // printf("num static cars: %d\n", env->static_car_count);
@@ -1219,7 +1269,8 @@ float reverse_normalize_value(float value, float min, float max){
 }
 
 void compute_observations(Drive* env) {
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int self_obs_size = (env->condition_mode == GUIDANCE) ? 10 : 7;
+    int max_obs = self_obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
@@ -1250,8 +1301,51 @@ void compute_observations(Drive* env) {
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
 
+        if (env->condition_mode == GUIDANCE) {
+            // Use the last timestep in the trajectory
+            int guidance_timestep = TRAJECTORY_LENGTH - 1;
+
+            if (guidance_timestep < ego_entity->array_size && ego_entity->valid_guidance_lookup[guidance_timestep]) {
+                // Get guidance trajectory data
+                float guidance_x = ego_entity->traj_x[guidance_timestep];
+                float guidance_y = ego_entity->traj_y[guidance_timestep];
+                float guidance_vx = ego_entity->traj_vx[guidance_timestep];
+                float guidance_vy = ego_entity->traj_vy[guidance_timestep];
+                float guidance_heading = ego_entity->traj_heading[guidance_timestep];
+
+                // Transform guidance position to ego vehicle's coordinate frame
+                float rel_guidance_x = (guidance_x - ego_entity->x) * cos_heading + (guidance_y - ego_entity->y) * sin_heading;
+                float rel_guidance_y = -(guidance_x - ego_entity->x) * sin_heading + (guidance_y - ego_entity->y) * cos_heading;
+
+                // Transform guidance velocity to ego vehicle's coordinate frame
+                float rel_guidance_vx = guidance_vx * cos_heading + guidance_vy * sin_heading;
+                float rel_guidance_vy = -guidance_vx * sin_heading + guidance_vy * cos_heading;
+
+                // Transform guidance heading to relative heading
+                float rel_guidance_heading = guidance_heading - ego_heading;
+
+                // Normalize heading to [-pi, pi]
+                while (rel_guidance_heading > M_PI) rel_guidance_heading -= 2 * M_PI;
+                while (rel_guidance_heading < -M_PI) rel_guidance_heading += 2 * M_PI;
+
+                // Replace goal observations with guidance observations (indices 0, 1, 7, 8, 9)
+                obs[0] = rel_guidance_x * 0.005f;  // Replace goal_x with guidance_x
+                obs[1] = rel_guidance_y * 0.005f;  // Replace goal_y with guidance_y
+                obs[7] = rel_guidance_vx * 0.01f;  // Same scaling as ego speed
+                obs[8] = rel_guidance_vy * 0.01f;  // guidance velocity y
+                obs[9] = rel_guidance_heading;     // guidance heading
+            } else {
+                // No valid guidance available, set to zero
+                obs[0] = -1.0f;
+                obs[1] = -1.0f;
+                obs[7] = -1.0f;
+                obs[8] = -1.0f;
+                obs[9] = -1.0f;
+            }
+        }
+
         // Relative Pos of other cars
-        int obs_idx = 7;  // Start after goal distances
+        int obs_idx = (env->condition_mode == GUIDANCE) ? 10 : 7; // Start after goal distances
         int cars_seen = 0;
         for(int j = 0; j < MAX_CARS; j++) {
             int index = -1;
@@ -1361,7 +1455,9 @@ void c_reset(Drive* env){
         env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
         env->entities[agent_idx].cumulative_displacement = 0.0f;
-        env->entities[agent_idx].displacement_sample_count = 0;
+        env->entities[agent_idx].cumulative_heading_error = 0.0f;
+        env->entities[agent_idx].cumulative_speed_error = 0.0f;
+        env->entities[agent_idx].log_sample_count = 0;
 
         compute_agent_metrics(env, agent_idx);
     }
@@ -1382,7 +1478,9 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
     env->entities[agent_idx].cumulative_displacement = 0.0f;
-    env->entities[agent_idx].displacement_sample_count = 0;
+    env->entities[agent_idx].cumulative_heading_error = 0.0f;
+    env->entities[agent_idx].cumulative_speed_error = 0.0f;
+    env->entities[agent_idx].log_sample_count = 0;
     env->entities[agent_idx].respawn_timestep = env->timestep;
 }
 
@@ -1396,7 +1494,7 @@ void c_step(Drive* env){
         return;
     }
 
-    // Move statix experts
+    // Move static experts
     for (int i = 0; i < env->expert_static_car_count; i++) {
         int expert_idx = env->expert_static_car_indices[i];
         if(env->entities[expert_idx].x == -10000.0f) continue;
@@ -1441,24 +1539,49 @@ void c_step(Drive* env){
             //printf("agent %d collided\n", agent_idx);
         }
 
-        float distance_to_goal = relative_distance_2d(
-                env->entities[agent_idx].x,
-                env->entities[agent_idx].y,
-                env->entities[agent_idx].goal_position_x,
-                env->entities[agent_idx].goal_position_y);
-        // Reward agent if it is within X meters of goal
+        if (env->condition_mode == GOAL_XY) {
+            float distance_to_goal = relative_distance_2d(
+                    env->entities[agent_idx].x,
+                    env->entities[agent_idx].y,
+                    env->entities[agent_idx].goal_position_x,
+                    env->entities[agent_idx].goal_position_y);
+
+            // Reward agent if it is within X meters of goal
         if(distance_to_goal < env->goal_radius){
-            if(env->entities[agent_idx].respawn_timestep != -1){
-                env->rewards[i] += env->reward_goal_post_respawn;
-                env->logs[i].episode_return += env->reward_goal_post_respawn;
-            } else {
-                env->rewards[i] += 1.0f;
-                env->logs[i].episode_return += 1.0f;
-                //env->terminals[i] = 1;
+                if(env->entities[agent_idx].respawn_timestep != -1){
+                    env->rewards[i] += env->reward_goal_post_respawn;
+                    env->logs[i].episode_return += env->reward_goal_post_respawn;
+                } else {
+                    env->rewards[i] += 1.0f;
+                    env->logs[i].episode_return += 1.0f;
+                    //env->terminals[i] = 1;
+                }
+                env->entities[agent_idx].reached_goal_this_episode = 1;
+                env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
             }
-            env->entities[agent_idx].reached_goal_this_episode = 1;
-            env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
-	    }
+        } else if (env->condition_mode == GUIDANCE) {
+            // In GUIDANCE mode, reward agents for being close to trajectory points
+            float current_ade = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
+
+            // Check if we have valid trajectory data for current timestep
+            if (env->timestep < env->entities[agent_idx].array_size &&
+                env->entities[agent_idx].valid_guidance_lookup[env->timestep]) {
+
+                // Compute current displacement error for this timestep
+                float displacement_error, heading_error, speed_error;
+                compute_distance_to_logs(&env->entities[agent_idx], env->timestep, &displacement_error, &heading_error, &speed_error);
+
+                if (displacement_error >= 0.0f) {
+                    // Reward is 1 - displacement_error (bounded between 0 and 1)
+                    float guidance_reward = 0.5f - displacement_error;
+                    env->rewards[i] += guidance_reward;
+                    env->logs[i].episode_return += guidance_reward;
+                }
+            }
+
+            // In GUIDANCE mode, we never set reached_goal_this_episode to true
+            // and we never respawn the agent at the goal
+        }
 
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         if(lane_aligned){
@@ -1467,27 +1590,50 @@ void c_step(Drive* env){
             env->logs[i].lane_alignment_rate = 1.0f;
         }
 
-        // Apply ADE reward
         float current_ade = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
-        if(current_ade > 0.0f && env->reward_ade != 0.0f) {
-            float ade_reward = env->reward_ade * current_ade;
+        float current_heading_error = env->entities[agent_idx].metrics_array[AVG_HEADING_ERROR_IDX];
+        float current_speed_error = env->entities[agent_idx].metrics_array[AVG_SPEED_ERROR_IDX];
+
+        if(current_ade > 0.0f && env->reward_log_ade != 0.0f) {
+            float ade_reward = env->reward_log_ade * current_ade;
             env->rewards[i] += ade_reward;
             env->logs[i].episode_return += ade_reward;
         }
+
+        if(current_heading_error > 0.0f && env->reward_log_heading != 0.0f) {
+            float heading_reward = env->reward_log_heading * current_heading_error;
+            env->rewards[i] += heading_reward;
+            env->logs[i].episode_return += heading_reward;
+        }
+
+        if(current_speed_error > 0.0f && env->reward_log_speed != 0.0f) {
+            float speed_reward = env->reward_log_speed * current_speed_error;
+            env->rewards[i] += speed_reward;
+            env->logs[i].episode_return += speed_reward;
+        }
+
+        // Update logs
         env->logs[i].avg_displacement_error = current_ade;
+        env->logs[i].avg_heading_error = current_heading_error;
+        env->logs[i].avg_speed_error = current_speed_error;
     }
 
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
         int collision_state = env->entities[agent_idx].collision_state;
-        if(reached_goal){
-            respawn_agent(env, agent_idx);
-            //env->entities[agent_idx].x = -10000;
-            //env->entities[agent_idx].y = -10000;
-            //env->entities[agent_idx].respawn_timestep = env->timestep;
+        if (env->condition_mode == GOAL_XY) {
+            if(reached_goal){
+                respawn_agent(env, agent_idx);
+                //env->entities[agent_idx].x = -10000;
+                //env->entities[agent_idx].y = -10000;
+                //env->entities[agent_idx].respawn_timestep = env->timestep;
+            }
         }
     }
+
+    // In GUIDANCE mode, we never respawn agents at goals - they continue through the entire trajectory
+
     compute_observations(env);
 }
 
@@ -1669,7 +1815,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
-    int obs_idx = 7;  // Start after goal distances
+    int obs_idx = (env->condition_mode == GUIDANCE) ? 10 : 7;
     for(int j = 0; j < MAX_CARS - 1; j++) {
         if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 7;  // Move to next agent observation
@@ -1817,7 +1963,8 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         obs_idx += 7;  // Move to next agent observation (7 values per agent)
     }
     // Then draw map observations
-    int map_start_idx = 7 + 7*(MAX_CARS - 1);  // Start after agent observations
+    int self_obs_size = (env->condition_mode == GUIDANCE) ? 10 : 7;
+    int map_start_idx = self_obs_size + 7*(MAX_CARS - 1);
     for(int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {  // Loop through potential map entities
         int entity_idx = map_start_idx + k*7;
         if(agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0){

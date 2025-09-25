@@ -19,13 +19,16 @@ class Drive(pufferlib.PufferEnv):
         reward_offroad_collision=-0.1,
         reward_goal_post_respawn=0.5,
         reward_vehicle_collision_post_respawn=-0.25,
-        reward_ade=0.0,
+        reward_log_ade=0.0,
+        reward_log_speed=0.0,
+        reward_log_heading=0.0,
         goal_radius=2.0,
         spawn_immunity_timer=30,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
         action_type="discrete",
+        condition_mode="goal",
         buf=None,
         seed=1,
     ):
@@ -38,11 +41,22 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.reward_vehicle_collision_post_respawn = reward_vehicle_collision_post_respawn
         self.goal_radius = goal_radius
-        self.reward_ade = reward_ade
+        self.reward_log_ade = reward_log_ade
+        self.reward_log_speed = reward_log_speed
+        self.reward_log_heading = reward_log_heading
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63 * 7 + 200 * 7
+        self.condition_mode = condition_mode
+        self._condition_mode_flag = 0 if condition_mode == "goal" else 1  # 0=GOAL_XY, 1=GUIDANCE
+        if condition_mode == "guidance":
+            self.num_obs = 10 + 63 * 7 + 200 * 7  # 10 self obs in guidance mode
+        else:
+            self.num_obs = 7 + 63 * 7 + 200 * 7  # 7 self obs in goal mode
+
+        if condition_mode not in ["goal", "guidance"]:
+            raise ValueError(f"condition_mode must be 'goal' or 'guidance'. Got: {condition_mode}")
+
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         if action_type == "discrete":
@@ -90,12 +104,15 @@ class Drive(pufferlib.PufferEnv):
                 reward_offroad_collision=reward_offroad_collision,
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
-                reward_ade=reward_ade,
+                reward_log_ade=reward_log_ade,
+                reward_log_speed=reward_log_speed,
+                reward_log_heading=reward_log_heading,
                 goal_radius=goal_radius,
                 spawn_immunity_timer=spawn_immunity_timer,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
+                condition_mode=self._condition_mode_flag,
             )
             env_ids.append(env_id)
 
@@ -141,12 +158,15 @@ class Drive(pufferlib.PufferEnv):
                         reward_offroad_collision=self.reward_offroad_collision,
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
-                        reward_ade=self.reward_ade,
+                        reward_log_ade=self.reward_log_ade,
+                        reward_log_speed=self.reward_log_speed,
+                        reward_log_heading=self.reward_log_heading,
                         goal_radius=self.goal_radius,
                         spawn_immunity_timer=self.spawn_immunity_timer,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                         ini_file="pufferlib/config/ocean/drive.ini",
+                        condition_mode=self._condition_mode_flag,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -205,6 +225,22 @@ def simplify_polyline(geometry, polyline_reduction_threshold):
                 k = k_1
 
     return [geometry[i] for i in range(num_points) if not skip[i]]
+
+
+def precompute_valid_guidance_lookup(entity):
+    """Precompute lookup table for last valid guidance point for each timestep"""
+    trajectory_length = len(entity.get("position", []))
+    lookup = [-1] * trajectory_length
+    last_valid_idx = -1
+
+    valid_array = entity.get("valid", [])
+
+    for t in range(trajectory_length):
+        if t < len(valid_array) and valid_array[t]:
+            last_valid_idx = t
+        lookup[t] = last_valid_idx
+
+    return lookup
 
 
 def save_map_binary(map_data, output_file):
@@ -266,6 +302,14 @@ def save_map_binary(map_data, output_file):
                 struct.pack(
                     f"{trajectory_length}i",
                     *[int(valids[i]) if i < len(valids) else 0 for i in range(trajectory_length)],
+                )
+            )
+
+            valid_guidance_lookup = precompute_valid_guidance_lookup(obj)
+            f.write(
+                struct.pack(
+                    f"{trajectory_length}i",
+                    *[valid_guidance_lookup[i] for i in range(trajectory_length)],
                 )
             )
 
@@ -364,10 +408,10 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=10, atn_cache=1024, num_agents=1024, condition_mode="goal"):
     import time
 
-    env = Drive(num_agents=num_agents)
+    env = Drive(num_agents=num_agents, condition_mode=condition_mode)
     env.reset()
     tick = 0
     num_agents = 1024
