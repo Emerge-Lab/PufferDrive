@@ -70,6 +70,7 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
+    int max_cars = unpack(kwargs, "max_cars");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
@@ -82,6 +83,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         char map_file[100];
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
+        env->max_cars = max_cars;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
@@ -152,6 +154,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->goal_radius = conf.goal_radius;
     env->spawn_immunity_timer = conf.spawn_immunity_timer;
     env->max_road_segment_observations = conf.max_road_segment_observations;
+    env->max_cars = conf.max_cars;
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 

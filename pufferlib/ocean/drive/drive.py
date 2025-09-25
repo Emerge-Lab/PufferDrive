@@ -25,6 +25,7 @@ class Drive(pufferlib.PufferEnv):
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
+        max_cars=64,
         action_type="discrete",
         buf=None,
         seed=1,
@@ -43,7 +44,8 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63 * 7 + 200 * 7
+        self.max_cars = max_cars
+        self.num_obs = 7 + (max_cars - 1) * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         if action_type == "discrete":
@@ -68,7 +70,7 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
             )
-        agent_offsets, map_ids, num_envs = binding.shared(num_agents=num_agents, num_maps=num_maps)
+        agent_offsets, map_ids, num_envs = binding.shared(num_agents=num_agents, num_maps=num_maps, max_cars=max_cars)
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -115,7 +117,9 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(num_agents=self.num_agents, num_maps=self.num_maps)
+                agent_offsets, map_ids, num_envs = binding.shared(
+                    num_agents=self.num_agents, num_maps=self.num_maps, max_cars=self.max_cars
+                )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):
