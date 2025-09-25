@@ -431,8 +431,14 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         if(gif_success_topdown == 0) {
             run_cmd("rm -f resources/drive/frame_topdown_*.png resources/drive/palette_topdown.png");
         }
+        else {
+            printf("Top-down GIF generation failed.\n");
+        }
         if(gif_success_agent == 0) {
             run_cmd("rm -f resources/drive/frame_agent_*.png resources/drive/palette_agent.png");
+        }
+        else {
+            printf("Agent view GIF generation failed.\n");
         }
     }
     if (rollout_trajectory_snapshot){
