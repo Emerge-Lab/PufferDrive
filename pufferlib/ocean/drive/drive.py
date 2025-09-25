@@ -155,6 +155,12 @@ class Drive(pufferlib.PufferEnv):
                 self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
+    def get_state(self):
+        try:
+            return binding.vec_get(self.c_envs)
+        except Exception:
+            return binding.env_get(self.c_envs)
+
     def render(self):
         binding.vec_render(self.c_envs, 0)
 
