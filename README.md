@@ -18,6 +18,12 @@ Activate the venv
 source .venv/bin/activate
 ```
 
+Install `inih`
+
+```
+wget https://github.com/benhoyt/inih/archive/r62.tar.gz
+```
+
 Inside the venv, install the dependencies
 ```
 uv pip install -e .
@@ -77,6 +83,12 @@ Run the Raylib visualizer on a headless server and export as GIF.
 ```bash
 sudo apt update
 sudo apt install ffmpeg xvfb
+```
+
+For HPC(There are no root privileges), so install into the conda environment
+```bash
+conda install -c conda-forge xorg-x11-server-xvfb-cos6-x86_64
+conda install -c conda-forge ffmpeg
 ```
 
 - `ffmpeg`: Video processing and conversion
