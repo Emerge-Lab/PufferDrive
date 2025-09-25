@@ -162,6 +162,7 @@ struct Entity {
     float cumulative_heading_error;
     float cumulative_speed_error;
     int log_sample_count;
+    float goal_radius;
 };
 
 void free_entity(Entity* entity){
@@ -278,6 +279,7 @@ struct Drive {
     int spawn_immunity_timer;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
+    float goal_radius;
     char* ini_file;
     int condition_mode;
 };
@@ -1544,7 +1546,8 @@ void c_step(Drive* env){
                     env->entities[agent_idx].goal_position_x,
                     env->entities[agent_idx].goal_position_y);
 
-            if(distance_to_goal < 2.0f){
+            // Reward agent if it is within X meters of goal
+        if(distance_to_goal < env->goal_radius){
                 if(env->entities[agent_idx].respawn_timestep != -1){
                     env->rewards[i] += env->reward_goal_post_respawn;
                     env->logs[i].episode_return += env->reward_goal_post_respawn;
@@ -1802,13 +1805,14 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
     float goal_y = agent_obs[1] * 200;
     if(mode == 0 ){
         DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
+        DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
 
     if (mode == 1){
         float goal_x_world = px + (goal_x * heading_self_x - goal_y*heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y*heading_self_x);
         DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
-
+        DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
     int obs_idx = (env->condition_mode == GUIDANCE) ? 10 : 7;
@@ -2287,6 +2291,12 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                     env->entities[i].goal_position_y,
                     1
                 }, 0.5f, DARKGREEN);
+
+                DrawCircle3D((Vector3){
+                    env->entities[i].goal_position_x,
+                    env->entities[i].goal_position_y,
+                    0.1f
+                }, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
             }
         }
         // Draw road elements

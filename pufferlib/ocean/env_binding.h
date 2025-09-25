@@ -713,6 +713,7 @@ typedef struct
     float reward_log_speed;
     float reward_log_heading;
     int condition_mode;
+    float goal_radius;
     int spawn_immunity_timer;
 } env_init_config;
 
@@ -746,6 +747,8 @@ static int handler(
         env_config->reward_log_heading = atof(value);
     } else if (MATCH("env", "spawn_immunity_timer")) {
         env_config->spawn_immunity_timer = atoi(value);
+    } else if (MATCH("env", "goal_radius")) {
+        env_config->goal_radius = atof(value);
     } else {
         return 0;
     }

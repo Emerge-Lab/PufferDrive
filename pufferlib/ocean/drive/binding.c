@@ -149,6 +149,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_vehicle_collision_post_respawn = conf.reward_vehicle_collision_post_respawn;
     env->reward_log_ade = conf.reward_log_ade;
+    env->goal_radius = conf.goal_radius;
     env->reward_log_speed = conf.reward_log_speed;
     env->reward_log_heading = conf.reward_log_heading;
     env->spawn_immunity_timer = conf.spawn_immunity_timer;
