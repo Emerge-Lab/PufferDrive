@@ -712,6 +712,7 @@ typedef struct s_env_init_config
     float reward_ade;
     float goal_radius;
     int spawn_immunity_timer;
+    int max_road_segment_observations;
 } env_init_config;
 
 static inline int match_pair(
@@ -749,6 +750,8 @@ static int handler(
         env_config->spawn_immunity_timer = atoi(value);
     } else if (match_pair(section, "env", name, "goal_radius")) {
         env_config->goal_radius = atof(value);
+    } else if (match_pair(section, "core.env", name, "max_road_segment_observations")) {
+        env_config->max_road_segment_observations = atoi(value);
     } else {
         return 0;
     }

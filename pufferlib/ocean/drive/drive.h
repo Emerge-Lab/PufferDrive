@@ -56,7 +56,6 @@
 #define SLOTS_PER_CELL (MAX_ENTITIES_PER_CELL*2 + 1)
 
 // Max road segment observation entities
-#define MAX_ROAD_SEGMENT_OBSERVATIONS 200
 #define MAX_CARS 64
 // Observation Space Constants
 #define MAX_SPEED 100.0f
@@ -248,6 +247,7 @@ struct Drive {
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
     char* ini_file;
+    int max_road_segment_observations;
 };
 
 void add_log(Drive* env) {
@@ -1117,7 +1117,7 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*env->max_road_segment_observations;
     // printf("max obs: %d\n", max_obs*env->active_agent_count);
     // printf("num cars: %d\n", env->num_cars);
     // printf("num static cars: %d\n", env->static_car_count);
@@ -1219,7 +1219,7 @@ float reverse_normalize_value(float value, float min, float max){
 }
 
 void compute_observations(Drive* env) {
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*env->max_road_segment_observations;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
@@ -1299,9 +1299,9 @@ void compute_observations(Drive* env) {
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
         // map observations
-        int entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS*2];  // Array big enough for all neighboring cells
+        int entity_list[env->max_road_segment_observations*2];  // Array big enough for all neighboring cells
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
-        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
+        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, env->max_road_segment_observations);
         for(int k = 0; k < list_size; k++){
             int entity_idx = entity_list[k*2];
             int geometry_idx = entity_list[k*2+1];
@@ -1340,7 +1340,7 @@ void compute_observations(Drive* env) {
             obs[obs_idx + 6] = entity->type - 4.0f;
             obs_idx += 7;
         }
-        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 7;
+        int remaining_obs = (env->max_road_segment_observations - list_size) * 7;
         // Set the entire block to 0 at once
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
     }
@@ -1645,7 +1645,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*env->max_road_segment_observations;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
@@ -1818,7 +1818,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
     }
     // Then draw map observations
     int map_start_idx = 7 + 7*(MAX_CARS - 1);  // Start after agent observations
-    for(int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {  // Loop through potential map entities
+    for(int k = 0; k < env->max_road_segment_observations; k++) {  // Loop through potential map entities
         int entity_idx = map_start_idx + k*7;
         if(agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0){
             continue;
