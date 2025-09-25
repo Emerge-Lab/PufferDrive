@@ -28,6 +28,7 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         buf=None,
         seed=1,
+        **kwargs,
     ):
         # env
         self.render_mode = render_mode
