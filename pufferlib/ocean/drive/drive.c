@@ -372,7 +372,6 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
     int frame_count = 91;
-    int frame_skip = 1;
     char filename[256];
     int rollout = 1;
     int rollout_trajectory_snapshot = 0;
