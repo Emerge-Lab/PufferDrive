@@ -16,8 +16,9 @@ class Drive(nn.Module):
     def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
         super().__init__()
         self.hidden_size = hidden_size
+        self.ego_dim = 7 if env.condition_mode == "fixed_goal" else 10
         self.ego_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(7, input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
@@ -60,7 +61,7 @@ class Drive(nn.Module):
         return self.forward(x, state)
 
     def encode_observations(self, observations, state=None):
-        ego_dim = 7
+        ego_dim = self.ego_dim
         partner_dim = 63 * 7
         road_dim = 200 * 7
         ego_obs = observations[:, :ego_dim]

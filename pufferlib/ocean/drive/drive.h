@@ -26,6 +26,10 @@
 #define SPEED_BUMP 9
 #define DRIVEWAY 10
 
+// Agent condition modes
+#define FIXED_GOAL 0
+#define GUIDANCE 1
+
 // Trajectory Length
 #define TRAJECTORY_LENGTH 91
 
@@ -152,6 +156,7 @@ struct Entity {
     float cumulative_displacement;
     int displacement_sample_count;
     float goal_radius;
+    int last_valid_timestep;
 };
 
 void free_entity(Entity* entity){
@@ -248,7 +253,23 @@ struct Drive {
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
     char* ini_file;
+    int condition_mode;
 };
+
+void precompute_last_valid_timesteps(Drive* env) {
+    for (int i = 0; i < env->num_entities; i++) {
+        Entity* e = &env->entities[i];
+        if (e->type <= 3 && e->traj_valid != NULL) {
+            e->last_valid_timestep = -1;
+            for (int t = TRAJECTORY_LENGTH - 1; t >= 0; t--) {
+                if (e->traj_valid[t] == 1) {
+                    e->last_valid_timestep = t;
+                    break;
+                }
+            }
+        }
+    }
+}
 
 void add_log(Drive* env) {
     for(int i = 0; i < env->active_agent_count; i++){
@@ -329,6 +350,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].goal_position_y, sizeof(float), 1, file);
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
+        entities[i].last_valid_timestep = -1;
     }
     fclose(file);
     return entities;
@@ -1084,6 +1106,7 @@ void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
     env->entities = load_map_binary(env->map_name, env);
+    precompute_last_valid_timesteps(env);
     env->dynamics_model = CLASSIC;
     set_means(env);
     init_grid_map(env);
@@ -1117,6 +1140,7 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
+    int self_obs_size = (env->condition_mode == GUIDANCE) ? 10 : 7;
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("max obs: %d\n", max_obs*env->active_agent_count);
     // printf("num cars: %d\n", env->num_cars);
@@ -1219,7 +1243,8 @@ float reverse_normalize_value(float value, float min, float max){
 }
 
 void compute_observations(Drive* env) {
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int self_obs_size = (env->condition_mode == GUIDANCE) ? 10 : 7;
+    int max_obs = self_obs_size + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
@@ -1250,8 +1275,49 @@ void compute_observations(Drive* env) {
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
 
+        if (env->condition_mode == GUIDANCE) {
+            // Use the last valid timestep in the trajectory
+            int guidance_timestep = ego_entity->last_valid_timestep;
+
+            if (guidance_timestep != -1) {
+                // Get guidance trajectory data
+                float guidance_x = ego_entity->traj_x[guidance_timestep];
+                float guidance_y = ego_entity->traj_y[guidance_timestep];
+                float guidance_vx = ego_entity->traj_vx[guidance_timestep];
+                float guidance_vy = ego_entity->traj_vy[guidance_timestep];
+                float guidance_heading = ego_entity->traj_heading[guidance_timestep];
+
+                // Transform guidance position to ego vehicle's coordinate frame
+                float rel_guidance_x = (guidance_x - ego_entity->x) * cos_heading + (guidance_y - ego_entity->y) * sin_heading;
+                float rel_guidance_y = -(guidance_x - ego_entity->x) * sin_heading + (guidance_y - ego_entity->y) * cos_heading;
+
+                // Transform guidance velocity to ego vehicle's coordinate frame
+                float rel_guidance_vx = guidance_vx * cos_heading + guidance_vy * sin_heading;
+                float rel_guidance_vy = -guidance_vx * sin_heading + guidance_vy * cos_heading;
+
+                // Transform guidance heading to relative heading
+                float rel_guidance_heading = guidance_heading - ego_heading;
+
+                // Normalize heading to [-pi, pi]
+                while (rel_guidance_heading > M_PI) rel_guidance_heading -= 2 * M_PI;
+                while (rel_guidance_heading < -M_PI) rel_guidance_heading += 2 * M_PI;
+
+                // Replace goal observations with guidance observations (indices 0, 1, 7, 8, 9)
+                obs[0] = rel_guidance_x * 0.005f;  // Replace goal_x with guidance_x
+                obs[1] = rel_guidance_y * 0.005f;  // Replace goal_y with guidance_y
+                obs[7] = rel_guidance_vx * 0.01f;  // Same scaling as ego speed
+                obs[8] = rel_guidance_vy * 0.01f;  // guidance velocity y
+                obs[9] = rel_guidance_heading;     // guidance heading
+            } else {
+                // No valid guidance available, set to zero
+                obs[7] = -1.0f;
+                obs[8] = -1.0f;
+                obs[9] = -1.0f;
+            }
+        }
+
         // Relative Pos of other cars
-        int obs_idx = 7;  // Start after goal distances
+        int obs_idx = self_obs_size;
         int cars_seen = 0;
         for(int j = 0; j < MAX_CARS; j++) {
             int index = -1;

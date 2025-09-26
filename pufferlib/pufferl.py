@@ -545,6 +545,8 @@ class PuffeRL:
                             cmd.append("--lasers")
                         if config["show_human_logs"]:
                             cmd.append("--log-trajectories")
+                        if hasattr(self.vecenv.driver_env, "condition_mode"):
+                            cmd.extend(["--condition-mode", str(self.vecenv.driver_env.condition_mode_flag)])
 
                         if self.vecenv.driver_env.goal_radius is not None:
                             cmd.extend(["--goal-radius", str(self.vecenv.driver_env.goal_radius)])

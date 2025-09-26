@@ -26,6 +26,7 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
+        condition_mode="fixed_goal",
         buf=None,
         seed=1,
     ):
@@ -42,7 +43,13 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63 * 7 + 200 * 7
+        self.condition_mode = condition_mode
+        self.condition_mode_flag = 0 if condition_mode == "fixed_goal" else 1 if condition_mode == "guidance" else -1
+        if self.condition_mode_flag == 0:
+            num_self_obs_feat = 7
+        elif self.condition_mode_flag == 1:
+            num_self_obs_feat = 10
+        self.num_obs = num_self_obs_feat + 63 * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         if action_type == "discrete":
@@ -96,6 +103,7 @@ class Drive(pufferlib.PufferEnv):
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
+                condition_mode=self.condition_mode_flag,
             )
             env_ids.append(env_id)
 
@@ -104,6 +112,7 @@ class Drive(pufferlib.PufferEnv):
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
+        print(f"obs shape: {self.observations.shape}, num_agents: {self.num_agents}, num_envs: {self.num_envs}")
         return self.observations, []
 
     def step(self, actions):
@@ -147,6 +156,7 @@ class Drive(pufferlib.PufferEnv):
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                         ini_file="pufferlib/config/ocean/drive.ini",
+                        condition_mode=self.condition_mode_flag,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
