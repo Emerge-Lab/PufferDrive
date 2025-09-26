@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include "drive.h"
 #include "puffernet.h"
+#include "error.h"
 
 typedef struct DriveNet DriveNet;
 struct DriveNet {
@@ -335,6 +336,13 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
     if (frame_skip <= 0) {
         frame_skip = 1;  // Default: render every frame
     }
+
+    // Check if map file exists
+    FILE* map_file = fopen(map_name, "rb");
+    if (map_file == NULL) {
+        RAISE_FILE_ERROR(map_name);
+    }
+    fclose(map_file);
 
     // Make env
     Drive env = {
