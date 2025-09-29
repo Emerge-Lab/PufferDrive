@@ -39,6 +39,7 @@ class Drive(pufferlib.PufferEnv):
             seed=1, 
             population_play = False,
             condition_type = "none",
+            oracle_mode = False,
             collision_weight_lb = -1.0,
             collision_weight_ub = 0.0,
             offroad_weight_lb = -1.0,
@@ -69,6 +70,7 @@ class Drive(pufferlib.PufferEnv):
         self.condition_type = condition_type
         self.reward_conditioned = condition_type in ("reward", "all")
         self.entropy_conditioned = condition_type in ("entropy", "all")
+        self.oracle_mode = oracle_mode
 
         self.collision_weight_lb = collision_weight_lb if self.reward_conditioned else self.reward_vehicle_collision
         self.collision_weight_ub = collision_weight_ub if self.reward_conditioned else self.reward_vehicle_collision
@@ -80,7 +82,9 @@ class Drive(pufferlib.PufferEnv):
         self.entropy_weight_ub = entropy_weight_ub
 
         conditioning_dims = (3 if self.reward_conditioned else 0) + (1 if self.entropy_conditioned else 0)
-        self.num_obs = 7 + conditioning_dims + 63*7 + 200*7
+        self.oracle_dims = num_agents * conditioning_dims if self.oracle_mode else 0
+
+        self.num_obs = 7 + conditioning_dims + 63*7 + 200*7 + self.oracle_dims
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
             shape=(self.num_obs,), dtype=np.float32)
@@ -159,6 +163,7 @@ class Drive(pufferlib.PufferEnv):
                 map_id=map_ids[i],
                 use_rc=self.reward_conditioned,
                 use_ec=self.entropy_conditioned,
+                oracle_mode=self.oracle_mode,
                 max_agents=nxt-cur,
                 collision_weight_lb=self.collision_weight_lb,
                 collision_weight_ub=self.collision_weight_ub,
@@ -236,7 +241,7 @@ class Drive(pufferlib.PufferEnv):
         co_player_action, logprob, _ = pufferlib.pytorch.sample_logits(logits) 
         co_player_action = co_player_action.cpu().numpy().reshape(self.co_player_actions.shape)
         return co_player_action
-        
+
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -322,6 +327,7 @@ class Drive(pufferlib.PufferEnv):
                         map_id=map_ids[i],
                         use_rc=self.reward_conditioned,
                         use_ec=self.entropy_conditioned,
+                        oracle_mode=self.oracle_mode,
                         max_agents=nxt-cur,
                         collision_weight_lb=self.collision_weight_lb,
                         collision_weight_ub=self.collision_weight_ub,

@@ -337,6 +337,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
         env->entropy_weight_lb = unpack(kwargs, "entropy_weight_lb");
         env->entropy_weight_ub = unpack(kwargs, "entropy_weight_ub");
     }
+    env->oracle_mode = unpack(kwargs, "oracle_mode");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int population_play = unpack(kwargs, "population_play");

@@ -6,28 +6,39 @@
 typedef struct DriveNet DriveNet;
 struct DriveNet {
     int num_agents;
+    bool oracle_mode;
+    int conditioning_dims;
     float* obs_self;
     float* obs_partner;
     float* obs_road;
+    float* obs_oracle;
     float* partner_linear_output;
     float* road_linear_output;
+    float* oracle_linear_output;
     float* partner_layernorm_output;
     float* road_layernorm_output;
+    float* oracle_layernorm_output;
     float* partner_linear_output_two;
     float* road_linear_output_two;
+    float* oracle_linear_output_two;
     Linear* ego_encoder;
     Linear* road_encoder;
     Linear* partner_encoder;
+    Linear* oracle_encoder;
     LayerNorm* ego_layernorm;
     LayerNorm* road_layernorm;
     LayerNorm* partner_layernorm;
+    LayerNorm* oracle_layernorm;
     Linear* ego_encoder_two;
     Linear* road_encoder_two;
     Linear* partner_encoder_two;
+    Linear* oracle_encoder_two;
     MaxDim1* partner_max;
     MaxDim1* road_max;
+    MaxDim1* oracle_max;
     CatDim1* cat1;
     CatDim1* cat2;
+    CatDim1* cat3;
     GELU* gelu;
     Linear* shared_embedding;
     ReLU* relu;
@@ -37,40 +48,62 @@ struct DriveNet {
     Multidiscrete* multidiscrete;
 };
 
-DriveNet* init_drivenet(Weights* weights, int num_agents, bool use_rc, bool use_ec) {
+DriveNet* init_drivenet(Weights* weights, int num_agents, bool use_rc, bool use_ec, bool oracle_mode) {
     DriveNet* net = calloc(1, sizeof(DriveNet));
     int hidden_size = 256;
     int input_size = 64;
 
     net->num_agents = num_agents;
-    // Calculate ego observation size based on conditioning types
+    net->oracle_mode = oracle_mode;
+    net->conditioning_dims = (use_rc ? 3 : 0) + (use_ec ? 1 : 0);
+
     int ego_obs_size = 7; // base features
     if (use_rc) ego_obs_size += 3; // reward conditioning
     if (use_ec) ego_obs_size += 1; // entropy conditioning
     net->obs_self = calloc(num_agents*ego_obs_size, sizeof(float));
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
-    net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
-    net->road_linear_output = calloc(num_agents*200*input_size, sizeof(float));
-    net->partner_linear_output_two = calloc(num_agents*63*input_size, sizeof(float));
-    net->road_linear_output_two = calloc(num_agents*200*input_size, sizeof(float));
-    net->partner_layernorm_output = calloc(num_agents*63*input_size, sizeof(float));
-    net->road_layernorm_output = calloc(num_agents*200*input_size, sizeof(float));
+    assert(!(oracle_mode && net-> conditioning_dims == 0)); // oracle mode must have nonzero conditioning dims
+
     net->ego_encoder = make_linear(weights, num_agents, 7, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
-    net->road_encoder = make_linear(weights, num_agents, 13, input_size);
-    net->road_layernorm = make_layernorm(weights, num_agents, input_size);
-    net->road_encoder_two = make_linear(weights, num_agents, input_size, input_size);
+
+    net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
+    net->partner_linear_output_two = calloc(num_agents*63*input_size, sizeof(float));
+    net->partner_layernorm_output = calloc(num_agents*63*input_size, sizeof(float));
     net->partner_encoder = make_linear(weights, num_agents, 7, input_size);
     net->partner_layernorm = make_layernorm(weights, num_agents, input_size);
     net->partner_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->partner_max = make_max_dim1(num_agents, 63, input_size);
+
+    net->road_linear_output = calloc(num_agents*200*input_size, sizeof(float));
+    net->road_linear_output_two = calloc(num_agents*200*input_size, sizeof(float));
+    net->road_layernorm_output = calloc(num_agents*200*input_size, sizeof(float));
+    net->road_encoder = make_linear(weights, num_agents, 13, input_size);
+    net->road_layernorm = make_layernorm(weights, num_agents, input_size);
+    net->road_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->road_max = make_max_dim1(num_agents, 200, input_size);
+
+    if (oracle_mode && net->conditioning_dims > 0) {
+        net->obs_oracle = calloc(num_agents*num_agents*net->conditioning_dims, sizeof(float)); // 64 agents recieve conditioning_dims from all agents.
+        net->oracle_linear_output = calloc(num_agents*num_agents*input_size, sizeof(float));
+        net->oracle_linear_output_two = calloc(num_agents*num_agents*input_size, sizeof(float));
+        net->oracle_layernorm_output = calloc(num_agents*num_agents*input_size, sizeof(float));
+        net->oracle_encoder = make_linear(weights, num_agents, net->conditioning_dims, input_size);
+        net->oracle_layernorm = make_layernorm(weights, num_agents, input_size);
+        net->oracle_encoder_two = make_linear(weights, num_agents, input_size, input_size);
+        net->oracle_max = make_max_dim1(num_agents, num_agents, input_size);
+    }
+
+    int cat_features = oracle_mode ? 4 : 3; // ego, road, partner, (oracle if true)
     net->cat1 = make_cat_dim1(num_agents, input_size, input_size);
-    net->cat2 = make_cat_dim1(num_agents, input_size + input_size, input_size);
-    net->gelu = make_gelu(num_agents, 3*input_size);
-    net->shared_embedding = make_linear(weights, num_agents, input_size*3, hidden_size);
+    net->cat2 = make_cat_dim1(num_agents, 2*input_size, input_size);
+    if (oracle_mode > 0) {
+        net->cat3 = make_cat_dim1(num_agents, 3*input_size, input_size);
+    }
+    net->gelu = make_gelu(num_agents, cat_features*input_size);
+    net->shared_embedding = make_linear(weights, num_agents, cat_features*input_size, hidden_size);
     net->relu = make_relu(num_agents, hidden_size);
     net->actor = make_linear(weights, num_agents, hidden_size, 20); 
     net->value_fn = make_linear(weights, num_agents, hidden_size, 1);
@@ -86,13 +119,24 @@ void free_drivenet(DriveNet* net) {
     free(net->obs_self);
     free(net->obs_partner);
     free(net->obs_road);
+    if (net->oracle_mode) {
+        free(net->obs_oracle);
+        free(net->oracle_linear_output);
+        free(net->oracle_linear_output_two);
+        free(net->oracle_layernorm_output);
+        free(net->oracle_encoder);
+        free(net->oracle_layernorm);
+        free(net->oracle_encoder_two);
+        free(net->oracle_max);
+        free(net->cat3);
+    }
     free(net->partner_linear_output);
     free(net->road_linear_output);
     free(net->partner_linear_output_two);
     free(net->road_linear_output_two);
     free(net->ego_encoder);
     free(net->road_encoder);
-    free(net->partner_encoder); 
+    free(net->partner_encoder);
     free(net->ego_layernorm);
     free(net->road_layernorm);
     free(net->partner_layernorm);
@@ -114,22 +158,31 @@ void free_drivenet(DriveNet* net) {
 }
 
 void forward(DriveNet* net, float* observations, int* actions) {
+    int ego_obs_size = 7 + net->conditioning_dims;
+    int oracle_obs_size = net->oracle_mode ? net->num_agents * net->conditioning_dims : 0;
+    int total_obs_per_agent = ego_obs_size + 63*7 + 200*7 + oracle_obs_size;
+
     // Clear previous observations
-    memset(net->obs_self, 0, net->num_agents * 7 * sizeof(float));
+    memset(net->obs_self, 0, net->num_agents * ego_obs_size * sizeof(float));
     memset(net->obs_partner, 0, net->num_agents * 63 * 7 * sizeof(float));
     memset(net->obs_road, 0, net->num_agents * 200 * 13 * sizeof(float));
-    
+    if (net->oracle_mode && net->conditioning_dims > 0) {
+        memset(net->obs_oracle, 0, net->num_agents * net->num_agents * net->conditioning_dims * sizeof(float));
+    }
+
     // Reshape observations into 2D boards and additional features
-    float (*obs_self)[7] = (float (*)[7])net->obs_self;
+    float (*obs_self)[ego_obs_size] = (float (*)[ego_obs_size])net->obs_self;
     float (*obs_partner)[63][7] = (float (*)[63][7])net->obs_partner;
     float (*obs_road)[200][13] = (float (*)[200][13])net->obs_road;
-    
+    float (*obs_oracle)[net->num_agents][net->conditioning_dims] = net->oracle_mode ? (float (*)[net->num_agents][net->conditioning_dims])net->obs_oracle : NULL;
+
     for (int b = 0; b < net->num_agents; b++) {
-        int b_offset = b * (7 + 63*7 + 200*7);  // offset for each batch
-        int partner_offset = b_offset + 7;
-        int road_offset = b_offset + 7 + 63*7;
-        // Process self observation
-        for(int i = 0; i < 7; i++) {
+        int b_offset = b * total_obs_per_agent;
+        int partner_offset = b_offset + ego_obs_size;
+        int road_offset = b_offset + ego_obs_size + 63*7;
+        int oracle_offset = b_offset + ego_obs_size + 63*7 + 200*7;
+        // Process self observation (ego + conditioning)
+        for(int i = 0; i < ego_obs_size; i++) {
             obs_self[b][i] = observations[b_offset + i];
         }
 
@@ -150,6 +203,14 @@ void forward(DriveNet* net, float* observations, int* actions) {
                     obs_road[b][i][6 + j] = 1.0f;
                 } else {
                     obs_road[b][i][6 + j] = 0.0f;
+                }
+            }
+        }
+
+        if (net->oracle_mode) {
+            for(int i = 0; i < net->num_agents; i++) {
+                for(int j = 0; j < net->conditioning_dims; j++) {
+                    obs_oracle[b][i][j] = observations[oracle_offset + i*net->conditioning_dims + j];
                 }
             }
         }
@@ -213,12 +274,46 @@ void forward(DriveNet* net, float* observations, int* actions) {
                     &net->road_linear_output_two[b*200*64 + obj*64], 1, 64, 64);
         }
     }
-    
+
+    // Process oracle observations if enabled
+    if (net->oracle_mode) {
+        for (int b = 0; b < net->num_agents; b++) {
+            for (int obj = 0; obj < net->num_agents; obj++) {
+                float* obj_features = &net->obs_oracle[b*net->num_agents*net->conditioning_dims + obj*net->conditioning_dims];
+                _linear(obj_features, net->oracle_encoder->weights, net->oracle_encoder->bias,
+                       &net->oracle_linear_output[b*net->num_agents*64 + obj*64], 1, net->conditioning_dims, 64);
+            }
+        }
+
+        for (int b = 0; b < net->num_agents; b++) {
+            for (int obj = 0; obj < net->num_agents; obj++) {
+                float* after_first = &net->oracle_linear_output[b*net->num_agents*64 + obj*64];
+                _layernorm(after_first, net->oracle_layernorm->weights, net->oracle_layernorm->bias,
+                          &net->oracle_layernorm_output[b*net->num_agents*64 + obj*64], 1, 64);
+            }
+        }
+
+        for (int b = 0; b < net->num_agents; b++) {
+            for (int obj = 0; obj < net->num_agents; obj++) {
+                float* after_first = &net->oracle_layernorm_output[b*net->num_agents*64 + obj*64];
+                _linear(after_first, net->oracle_encoder_two->weights, net->oracle_encoder_two->bias,
+                        &net->oracle_linear_output_two[b*net->num_agents*64 + obj*64], 1, 64, 64);
+            }
+        }
+        max_dim1(net->oracle_max, net->oracle_linear_output_two);
+    }
+
     max_dim1(net->partner_max, net->partner_linear_output_two);
     max_dim1(net->road_max, net->road_linear_output_two);
     cat_dim1(net->cat1, net->ego_encoder_two->output, net->road_max->output);
     cat_dim1(net->cat2, net->cat1->output, net->partner_max->output);
-    gelu(net->gelu, net->cat2->output);
+
+    if (net->oracle_mode) {
+        cat_dim1(net->cat3, net->cat2->output, net->oracle_max->output);
+        gelu(net->gelu, net->cat3->output);
+    } else {
+        gelu(net->gelu, net->cat2->output);
+    }
     linear(net->shared_embedding, net->gelu->output);
     relu(net->relu, net->shared_embedding->output);
     lstm(net->lstm, net->relu->output);
@@ -326,10 +421,10 @@ void demo() { // change name to multi policy demo once you get this working
     }
 
     Weights* ego_weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* ego_net = init_drivenet(ego_weights, 1, false);
+    DriveNet* ego_net = init_drivenet(ego_weights, 1, false, false, false);
 
     Weights* co_player_weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* co_player_net = init_drivenet(co_player_weights, num_co_players, false); 
+    DriveNet* co_player_net = init_drivenet(co_player_weights, num_co_players, false, false, false); 
     //Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;

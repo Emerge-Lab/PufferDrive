@@ -239,6 +239,8 @@ struct Drive {
     int num_co_players;
     Co_Player_Log co_player_log;
     Co_Player_Log* co_player_logs;
+    // this is for oracle mode
+    bool oracle_mode;
 };
 
 
@@ -1033,14 +1035,14 @@ void init(Drive* env){
             env->collision_weights[i] = ((float)rand() / RAND_MAX) * (env->collision_weight_ub - env->collision_weight_lb) + env->collision_weight_lb;
             env->offroad_weights[i] = ((float)rand() / RAND_MAX) * (env->offroad_weight_ub - env->offroad_weight_lb) + env->offroad_weight_lb;
             env->goal_weights[i] = ((float)rand() / RAND_MAX) * (env->goal_weight_ub - env->goal_weight_lb) + env->goal_weight_lb;
-            printf("Agent %d - Collision Weight: %f, Offroad Weight: %f, Goal Weight: %f\n", i, env->collision_weights[i], env->offroad_weights[i], env->goal_weights[i]);
+            // printf("Agent %d - Collision Weight: %f, Offroad Weight: %f, Goal Weight: %f\n", i, env->collision_weights[i], env->offroad_weights[i], env->goal_weights[i]);
         }
     }
     if (env->use_ec) {
         env->entropy_weights = (float*)calloc(env->active_agent_count, sizeof(float));
         for (int i = 0; i < env->active_agent_count; i++) {
             env->entropy_weights[i] = ((float)rand() / RAND_MAX) * (env->entropy_weight_ub - env->entropy_weight_lb) + env->entropy_weight_lb;
-            printf("Agent %d - Entropy Weight: %f\n", i, env->entropy_weights[i]);
+            // printf("Agent %d - Entropy Weight: %f\n", i, env->entropy_weights[i]);
         }
     }
 
@@ -1189,7 +1191,12 @@ float reverse_normalize_value(float value, float min, float max){
 
 void compute_observations(Drive* env) {
     int base_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    int max_obs = base_obs + (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0);
+    int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0);
+    int oracle_dims = 0;
+    if (env->oracle_mode) {
+        oracle_dims = env->num_agents * conditioning_dims;
+    }
+    int max_obs = base_obs + conditioning_dims + oracle_dims;
     
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
@@ -1197,10 +1204,6 @@ void compute_observations(Drive* env) {
         float* obs = &observations[i][0];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];
         if(ego_entity->type > 3) break;
-        if(ego_entity->respawn_timestep != -1) {
-            obs[6] = 1;
-            //continue;
-        }
         float ego_heading = ego_entity->heading;
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
@@ -1220,19 +1223,21 @@ void compute_observations(Drive* env) {
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1 : 0;
+        if(ego_entity->respawn_timestep != -1) {
+            obs[6] = 1;
+            //continue;
+        }
         
-        // Add conditioning weights after base observations
-        int obs_idx = 6;  // Start after base ego observations (indices 0-5)
-
+        int obs_idx = 7;
         if (env->use_rc){
             obs[obs_idx++] = env->collision_weights[i];
             obs[obs_idx++] = env->offroad_weights[i];
             obs[obs_idx++] = env->goal_weights[i];
-        }
+        } // its own reward weights
 
         if (env->use_ec){
             obs[obs_idx++] = env->entropy_weights[i];
-        }
+        } // its own entropy_weight
         
         // Relative Pos of other cars
         int cars_seen = 0;
@@ -1326,6 +1331,26 @@ void compute_observations(Drive* env) {
         int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 7;
         // Set the entire block to 0 at once
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
+        obs_idx += remaining_obs;
+
+        if (env->oracle_mode) {
+            for(int j = 0; j < env->active_agent_count; j++) {
+                if (j == i) {
+                    continue;  // Skip self
+                }
+
+                int agent_id = env->active_agent_indices[j];
+                int base_offset = agent_id * conditioning_dims;
+                if (env->use_rc) {
+                    obs[obs_idx + base_offset + 0] = env->collision_weights[j];
+                    obs[obs_idx + base_offset + 1] = env->offroad_weights[j];
+                    obs[obs_idx + base_offset + 2] = env->goal_weights[j];
+                }
+                if (env->use_ec) {
+                    obs[obs_idx + base_offset + (env->use_rc ? 3 : 0)] = env->entropy_weights[j];
+                }
+            }
+        }
     }
 }
 
