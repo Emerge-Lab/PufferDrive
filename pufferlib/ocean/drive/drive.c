@@ -65,7 +65,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, bool use_rc, bool use_
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
     assert(!(oracle_mode && net-> conditioning_dims == 0)); // oracle mode must have nonzero conditioning dims
 
-    net->ego_encoder = make_linear(weights, num_agents, 7, input_size);
+    net->ego_encoder = make_linear(weights, num_agents, ego_obs_size, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
 

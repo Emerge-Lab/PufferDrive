@@ -47,7 +47,7 @@ class Drive(pufferlib.PufferEnv):
             goal_weight_lb = 0.0,
             goal_weight_ub = 1.0,
             entropy_weight_lb = 0.0,
-            entropy_weight_ub = 1.0,
+            entropy_weight_ub = 0.1,
             co_player_policy_name = None,
             co_player_rnn_name = None, 
             co_player_policy = None,

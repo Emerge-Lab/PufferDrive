@@ -399,6 +399,10 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
+    assign_to_dict(dict, "avg_collision_weight", log->avg_collision_weight);
+    assign_to_dict(dict, "avg_offroad_weight", log->avg_offroad_weight);
+    assign_to_dict(dict, "avg_goal_weight", log->avg_goal_weight);
+    assign_to_dict(dict, "avg_entropy_weight", log->avg_entropy_weight);
     return 0;
 }
 int my_co_player_log(PyObject* dict, Co_Player_Log* log) {

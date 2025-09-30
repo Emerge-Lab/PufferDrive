@@ -101,6 +101,10 @@ struct Log {
     float completion_rate;
     float dnf_rate;
     float n;
+    float avg_collision_weight;
+    float avg_offroad_weight;
+    float avg_goal_weight;
+    float avg_entropy_weight;
 };
 
 struct Co_Player_Log {
@@ -285,6 +289,15 @@ void add_log(Drive* env) {
                 env->log.episode_return += env->logs[i].episode_return;
                 env->log.n += 1.0f;
 
+                // Accumulate conditioning weights for logging
+                if (env->use_rc) {
+                    env->log.avg_collision_weight += env->collision_weights[i];
+                    env->log.avg_offroad_weight += env->offroad_weights[i];
+                    env->log.avg_goal_weight += env->goal_weights[i];
+                }
+                if (env->use_ec) {
+                    env->log.avg_entropy_weight += env->entropy_weights[i];
+                }
 
             }
             else if (env->num_co_players > 0) {
@@ -346,7 +359,16 @@ void add_log(Drive* env) {
             env->log.episode_return += env->logs[i].episode_return;
             env->log.n += 1.0f;
 
-            
+            // Accumulate conditioning weights for logging
+            if (env->use_rc) {
+                env->log.avg_collision_weight += env->collision_weights[i];
+                env->log.avg_offroad_weight += env->offroad_weights[i];
+                env->log.avg_goal_weight += env->goal_weights[i];
+            }
+            if (env->use_ec) {
+                env->log.avg_entropy_weight += env->entropy_weights[i];
+            }
+
         }
     }
 }
@@ -1103,6 +1125,9 @@ void allocate(Drive* env){
     if (env->use_rc){
         max_obs += 3;
     }
+    if (env->use_ec){
+        max_obs += 1;
+    }
 
 
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
@@ -1341,8 +1366,7 @@ void compute_observations(Drive* env) {
                     continue;  // Skip self
                 }
 
-                int agent_id = env->active_agent_indices[j];
-                int base_offset = agent_id * conditioning_dims;
+                int base_offset = j * conditioning_dims;
                 if (env->use_rc) {
                     obs[obs_idx + base_offset + 0] = env->collision_weights[j];
                     obs[obs_idx + base_offset + 1] = env->offroad_weights[j];
@@ -1358,8 +1382,22 @@ void compute_observations(Drive* env) {
 
 void c_reset(Drive* env){
     env->timestep = 0;
-    
+
     set_start_position(env);
+
+    if (env->use_rc) {
+        for(int i = 0; i < env->active_agent_count; i++) {
+            env->collision_weights[i] = ((float)rand() / RAND_MAX) * (env->collision_weight_ub - env->collision_weight_lb) + env->collision_weight_lb;
+            env->offroad_weights[i] = ((float)rand() / RAND_MAX) * (env->offroad_weight_ub - env->offroad_weight_lb) + env->offroad_weight_lb;
+            env->goal_weights[i] = ((float)rand() / RAND_MAX) * (env->goal_weight_ub - env->goal_weight_lb) + env->goal_weight_lb;
+        }
+    }
+
+    if (env->use_ec) {
+        for(int i = 0; i < env->active_agent_count; i++) {
+            env->entropy_weights[i] = ((float)rand() / RAND_MAX) * (env->entropy_weight_ub - env->entropy_weight_lb) + env->entropy_weight_lb;
+        }
+    }
 
     for(int x = 0; x < env->active_agent_count; x++){
         env->logs[x] = (Log){0};
@@ -1371,9 +1409,9 @@ void c_reset(Drive* env){
         collision_check(env, agent_idx);
     }
 
-   
+
     if (env->population_play && env->num_co_players > 0) {
-        for (int y = 0; y < env->num_co_players; y++){ 
+        for (int y = 0; y < env->num_co_players; y++){
             env->co_player_logs[y] = (Co_Player_Log){0};
         }
     }
