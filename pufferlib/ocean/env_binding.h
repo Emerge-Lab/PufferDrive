@@ -476,7 +476,6 @@ static PyObject* vectorize(PyObject* self, PyObject* args) {
         }
         vec->envs[i] = (Env*)PyLong_AsVoidPtr(handle_obj);
     }
-
     return PyLong_FromVoidPtr(vec);
 }
 
@@ -497,14 +496,67 @@ static PyObject* vec_reset(PyObject* self, PyObject* args) {
         return NULL;
     }
     int seed = PyLong_AsLong(seed_arg);
-
+ 
     for (int i = 0; i < vec->num_envs; i++) {
-        // Assumes each process has the same number of environments
         srand(i + seed*vec->num_envs);
         c_reset(vec->envs[i]);
     }
     Py_RETURN_NONE;
 }
+
+int check_environment_corruption(void* env_ptr, int env_index) {
+    // printf("DEBUG: Checking environment %d corruption (ptr: %p)\n", env_index, env_ptr);
+    // fflush(stdout);
+    
+
+    if (env_ptr == NULL) {
+        printf("ERROR: Environment %d is NULL\n", env_index);
+        return 1;
+    }
+
+    uintptr_t addr = (uintptr_t)env_ptr;
+    if (addr < 0x1000 || addr > 0x7FFFFFFFFFFF) {
+        printf("ERROR: Environment %d has suspicious address: %p\n", env_index, env_ptr);
+        return 1;
+    }
+    
+    volatile char* test_ptr = (volatile char*)env_ptr;
+    char test_bytes[16];
+    
+    
+    for (int i = 0; i < 16; i++) {
+        test_bytes[i] = test_ptr[i];
+    }
+
+    int all_zero = 1, all_ff = 1, all_same = 1;
+    char first_byte = test_bytes[0];
+    
+    for (int i = 0; i < 16; i++) {
+        if (test_bytes[i] != 0) all_zero = 0;
+        if (test_bytes[i] != (char)0xFF) all_ff = 0;
+        if (test_bytes[i] != first_byte) all_same = 0;
+    }
+    
+    if (all_zero) {
+        printf("WARNING: Environment %d appears to be zero-initialized\n", env_index);
+        return 1;
+    }
+    
+    if (all_ff) {
+        printf("WARNING: Environment %d appears to be filled with 0xFF\n", env_index);
+        return 1;
+    }
+    
+    if (all_same && first_byte != 0) {
+        printf("WARNING: Environment %d has suspicious repeated byte pattern: 0x%02X\n", 
+               env_index, (unsigned char)first_byte);
+        return 1;
+    }
+    
+
+    return 0;
+}
+
 
 static PyObject* vec_step(PyObject* self, PyObject* arg) {
     int num_args = PyTuple_Size(arg);
@@ -523,6 +575,7 @@ static PyObject* vec_step(PyObject* self, PyObject* arg) {
     }
     Py_RETURN_NONE;
 }
+
 
 static PyObject* vec_render(PyObject* self, PyObject* args) {
     int num_args = PyTuple_Size(args);
@@ -562,6 +615,7 @@ static int assign_to_dict(PyObject* dict, char* key, float value) {
     return 0;
 }
 
+
 static PyObject* vec_log(PyObject* self, PyObject* args) {
     VecEnv* vec = unpack_vecenv(args);
     if (!vec) {
@@ -572,31 +626,129 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
     // horribly if Log has non-float data.
     Log aggregate = {0};
     int num_keys = sizeof(Log) / sizeof(float);
+    
+    // Always declare co-player variables for Drive environment
+    // Check at compile time if this environment supports co-players
+    #if defined(DRIVE_ENV) || defined(HAS_CO_PLAYER_SUPPORT)
+    Co_Player_Log co_player_aggregate = {0};
+    int num_co_player_keys = sizeof(Co_Player_Log) / sizeof(float);
+    int has_co_players = 0;  // Flag to check if any env has co-players
+    #endif
+    
     for (int i = 0; i < vec->num_envs; i++) {
         Env* env = vec->envs[i];
+        
+        // Aggregate regular logs
         for (int j = 0; j < num_keys; j++) {
             ((float*)&aggregate)[j] += ((float*)&env->log)[j];
             ((float*)&env->log)[j] = 0.0f;
         }
+        
+        // Runtime check for population play (only if this env type supports it)
+        #if defined(DRIVE_ENV) || defined(HAS_CO_PLAYER_SUPPORT)
+        // Check if this environment instance has population play enabled at runtime
+        if (env->population_play && env->num_co_players > 0 && env->co_player_ids != NULL) {
+            has_co_players = 1;
+            
+            // Aggregate co-player logs
+            for (int j = 0; j < num_co_player_keys; j++) {
+                ((float*)&co_player_aggregate)[j] += ((float*)&env->co_player_log)[j];
+                ((float*)&env->co_player_log)[j] = 0.0f;  // Reset after aggregating
+            }
+        }
+        #endif
     }
 
     PyObject* dict = PyDict_New();
+    
+    #if defined(DRIVE_ENV) || defined(HAS_CO_PLAYER_SUPPORT)
+    if (aggregate.n == 0.0f && (!has_co_players || co_player_aggregate.co_player_n <= 0.0f)) {
+        return dict;
+    }
+    #else
     if (aggregate.n == 0.0f) {
         return dict;
     }
+    #endif
 
-    // Average
-    float n = aggregate.n;
-    for (int i = 0; i < num_keys; i++) {
-        ((float*)&aggregate)[i] /= n;
+    // Average regular logs
+    if (aggregate.n > 0.0f) {
+        float n = aggregate.n;
+        for (int i = 0; i < num_keys; i++) {
+            ((float*)&aggregate)[i] /= n;
+        }
+        
+        // User populates dict with regular metrics
+        my_log(dict, &aggregate);
+        assign_to_dict(dict, "n", n);
     }
 
-    // User populates dict
-    my_log(dict, &aggregate);
-    assign_to_dict(dict, "n", n);
+    #if defined(DRIVE_ENV) || defined(HAS_CO_PLAYER_SUPPORT)
+    // Average and add co-player logs if they exist (runtime check)
+    if (has_co_players && co_player_aggregate.co_player_n > 0.0f) {
+        float co_player_n = co_player_aggregate.co_player_n;
+        // Only divide non-zero values to avoid corruption
+        for (int i = 0; i < num_co_player_keys; i++) {
+            if (((float*)&co_player_aggregate)[i] != 0.0f) {
+                ((float*)&co_player_aggregate)[i] /= co_player_n;
+            }
+        }
+        
+        // Add co-player metrics directly
+        assign_to_dict(dict, "ego_co_player_ratio", aggregate.n /co_player_n);
+        assign_to_dict(dict, "co_player_completion_rate", co_player_aggregate.co_player_completion_rate);
+        assign_to_dict(dict, "co_player_collision_rate", co_player_aggregate.co_player_collision_rate);
+        assign_to_dict(dict, "co_player_off_road_rate", co_player_aggregate.co_player_off_road_rate);
+        assign_to_dict(dict, "co_player_clean_collision_rate", co_player_aggregate.co_player_clean_collision_rate);
+        assign_to_dict(dict, "co_player_score", co_player_aggregate.co_player_score);
+        assign_to_dict(dict, "co_player_perf", co_player_aggregate.co_player_perf);
+        assign_to_dict(dict, "co_player_dnf_rate", co_player_aggregate.co_player_dnf_rate);
+        assign_to_dict(dict, "co_player_episode_length", co_player_aggregate.co_player_episode_length);
+        assign_to_dict(dict, "co_player_episode_return", co_player_aggregate.co_player_episode_return);
+        assign_to_dict(dict, "co_player_n", co_player_n);
+    }
+    #endif
 
     return dict;
 }
+
+
+// static PyObject* vec_log(PyObject* self, PyObject* args) {
+//     VecEnv* vec = unpack_vecenv(args);
+//     if (!vec) {
+//         return NULL;
+//     }
+
+//     // Iterates over logs one float at a time. Will break
+//     // horribly if Log has non-float data.
+//     Log aggregate = {0};
+//     int num_keys = sizeof(Log) / sizeof(float);
+//     for (int i = 0; i < vec->num_envs; i++) {
+//         Env* env = vec->envs[i];
+//         for (int j = 0; j < num_keys; j++) {
+//             ((float*)&aggregate)[j] += ((float*)&env->log)[j];
+//             ((float*)&env->log)[j] = 0.0f;
+//         }
+//     }
+
+//     PyObject* dict = PyDict_New();
+    
+//     if (aggregate.n == 0.0f) {
+//         return dict;
+//     }
+
+//     // Average
+//     float n = aggregate.n;
+//     for (int i = 0; i < num_keys; i++) {
+//         ((float*)&aggregate)[i] /= n;
+//     }
+
+//     // User populates dict
+//     my_log(dict, &aggregate);
+//     assign_to_dict(dict, "n", n);
+    
+//     return dict;
+// }
 
 static PyObject* vec_close(PyObject* self, PyObject* args) {
     VecEnv* vec = unpack_vecenv(args);

@@ -38,13 +38,16 @@ struct DriveNet {
     Multidiscrete* multidiscrete;
 };
 
-DriveNet* init_drivenet(Weights* weights, int num_agents) {
+DriveNet* init_drivenet(Weights* weights, int num_agents, bool use_rc) {
     DriveNet* net = calloc(1, sizeof(DriveNet));
     int hidden_size = 256;
     int input_size = 64;
 
     net->num_agents = num_agents;
     net->obs_self = calloc(num_agents*7, sizeof(float)); // 7 features
+    if (use_rc){
+        net->obs_self = calloc(num_agents*10, sizeof(float)); // 10 features
+    }
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
     net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
@@ -59,7 +62,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     net->road_encoder = make_linear(weights, num_agents, 13, input_size);
     net->road_layernorm = make_layernorm(weights, num_agents, input_size);
     net->road_encoder_two = make_linear(weights, num_agents, input_size, input_size);
-    net->partner_encoder = make_linear(weights, num_agents, 7, input_size);
+    net->partner_encoder = make_linear(weights, num_agents,c_step 7, input_size);
     net->partner_layernorm = make_layernorm(weights, num_agents, input_size);
     net->partner_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->partner_max = make_max_dim1(num_agents, 63, input_size);
@@ -227,8 +230,75 @@ void forward(DriveNet* net, float* observations, int* actions) {
     // Get action by taking argmax of actor output
     softmax_multidiscrete(net->multidiscrete, net->actor->output, actions);
 }
-void demo() {
 
+// void demo() {
+//     Drive env = {
+//         .dynamics_model = CLASSIC,
+//         .human_agent_idx = 0,
+//         .reward_vehicle_collision = -0.1f,
+//         .reward_offroad_collision = -0.1f,
+// 	    .map_name = "resources/drive/binaries/map_942.bin",
+//         .spawn_immunity_timer = 50
+//     };
+//     allocate(&env);
+//     c_reset(&env);
+//     c_render(&env);
+//     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+//     DriveNet* net = init_drivenet(weights, env.active_agent_count, false);
+//     //Client* client = make_client(&env);
+//     int accel_delta = 2;
+//     int steer_delta = 4;
+//     while (!WindowShouldClose()) {
+//         // Handle camera controls
+//         int (*actions)[2] = (int(*)[2])env.actions;
+//         forward(net, env.observations, env.actions);
+//         if (IsKeyDown(KEY_LEFT_SHIFT)) {
+//             actions[env.human_agent_idx][0] = 3;
+//             actions[env.human_agent_idx][1] = 6;
+//             if(IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)){
+//                 actions[env.human_agent_idx][0] += accel_delta;
+//                 // Cap acceleration to maximum of 6
+//                 if(actions[env.human_agent_idx][0] > 6) {
+//                     actions[env.human_agent_idx][0] = 6;
+//                 }
+//             }
+//             if(IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)){
+//                 actions[env.human_agent_idx][0] -= accel_delta;
+//                 // Cap acceleration to minimum of 0
+//                 if(actions[env.human_agent_idx][0] < 0) {
+//                     actions[env.human_agent_idx][0] = 0;
+//                 }
+//             }
+//             if(IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)){
+//                 actions[env.human_agent_idx][1] += steer_delta;
+//                 // Cap steering to minimum of 0
+//                 if(actions[env.human_agent_idx][1] < 0) {
+//                     actions[env.human_agent_idx][1] = 0;
+//                 }
+//             }
+//             if(IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)){
+//                 actions[env.human_agent_idx][1] -= steer_delta;
+//                 // Cap steering to maximum of 12
+//                 if(actions[env.human_agent_idx][1] > 12) {
+//                     actions[env.human_agent_idx][1] = 12;
+//                 }
+//             }   
+//             if(IsKeyPressed(KEY_TAB)){
+//                 env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
+//             }
+//         }
+//         c_step(&env);
+//         c_render(&env);
+//     }
+
+//     close_client(env.client);
+//     free_allocated(&env);
+//     free_drivenet(net);
+//     free(weights);
+// }
+
+
+void demo() { // change name to multi policy demo once you get this working
     Drive env = {
         .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
@@ -242,15 +312,68 @@ void demo() {
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+
+    srand(time(NULL));
+
+    int ego_agent_id = rand() % env.active_agent_count;
+    int num_co_players = env.active_agent_count -1; 
+
+    env.ego_agent_id = ego_agent_id;
+
+    int* co_player_ids = malloc(num_co_players * sizeof(int));
+
+    int co_index = 0;
+    for (int i = 0; i < env.active_agent_count; i++) {
+        if (i != ego_agent_id) {
+            co_player_ids[co_index] = i;
+            co_index++;
+        }
+    }
+
+    Weights* ego_weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+    DriveNet* ego_net = init_drivenet(ego_weights, 1, false);
+
+    Weights* co_player_weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+    DriveNet* co_player_net = init_drivenet(co_player_weights, num_co_players, false); 
     //Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;
+
+    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS; // will have to edit this if co players (or ego are rc)   
+
+    int (*actions)[2] = (int(*)[2])env.actions;    
+    int* co_player_actions = (int*)calloc((env.active_agent_count-1)*2, sizeof(int));
+    int* ego_actions = (int*)calloc((1)*2, sizeof(int));
+
+    float* co_player_obs = (float*)calloc(num_co_players*max_obs, sizeof(float));
+    float* ego_agent_obs = (float*)calloc( 1* max_obs,  sizeof(float));
+
+
     while (!WindowShouldClose()) {
         // Handle camera controls
-        int (*actions)[2] = (int(*)[2])env.actions;
-        forward(net, env.observations, env.actions);
+        memcpy(ego_agent_obs, &env.observations[ego_agent_id * max_obs], max_obs * sizeof(float));
+        int co_obs_offset = 0;
+        for (int i = 0; i < num_co_players; i++) {
+            int agent_id = co_player_ids[i];
+            memcpy(&co_player_obs[co_obs_offset], 
+                &env.observations[agent_id * max_obs], 
+                max_obs * sizeof(float));
+            co_obs_offset += max_obs;
+        }
+             
+        forward(ego_net, ego_agent_obs, ego_actions);
+        forward(co_player_net, co_player_obs, co_player_actions);
+        
+        actions[ego_agent_id][0] = ego_actions[0];  // assuming actions is int[][2]
+        actions[ego_agent_id][1] = ego_actions[1];// then i want to match the corresponding co player to its action
+
+        for (int i = 0; i < num_co_players; i++) {
+        int agent_id = co_player_ids[i];
+        actions[agent_id][0] = co_player_actions[i * 2];      // first action value
+        actions[agent_id][1] = co_player_actions[i * 2 + 1];  // second action value
+        }
+
+
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
             actions[env.human_agent_idx][0] = 3;
             actions[env.human_agent_idx][1] = 6;
@@ -292,8 +415,10 @@ void demo() {
 
     close_client(env.client);
     free_allocated(&env);
-    free_drivenet(net);
-    free(weights);
+    free_drivenet(ego_net);
+    free_drivenet(co_player_net);
+    free(ego_weights);
+    free(co_player_weights);
 }
 
 

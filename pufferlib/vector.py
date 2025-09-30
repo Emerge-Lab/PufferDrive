@@ -8,6 +8,7 @@ import psutil
 from pufferlib.emulation import GymnasiumPufferEnv, PettingZooPufferEnv
 from pufferlib import PufferEnv, set_buffers
 import pufferlib.spaces
+import gymnasium
 
 RESET = 0
 STEP = 1
@@ -211,6 +212,7 @@ def _worker_process(
     buf["masks"][:] = True
 
     if is_native and num_envs == 1:
+        print("in process, creating environment ")
         envs = env_creators[0](*env_args[0], **env_kwargs[0], buf=buf, seed=seed)
     else:
         envs = Serial(env_creators, env_args, env_kwargs, num_envs, buf=buf, seed=seed * num_envs)
@@ -218,6 +220,7 @@ def _worker_process(
     semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
     start = time.time()
+  
     while True:
         if notify[worker_idx]:
             envs.notify()
@@ -369,8 +372,10 @@ class Multiprocessing:
         w_send_pipes, self.recv_pipes = zip(*[Pipe() for _ in range(num_workers)])
         self.recv_pipe_dict = {p: i for i, p in enumerate(self.recv_pipes)}
 
+        print("starting processes")
         self.processes = []
         for i in range(num_workers):
+            print(f"begining process number {i}")
             start = i * envs_per_worker
             end = start + envs_per_worker
             seed_i = seed + i if seed is not None else None
@@ -401,15 +406,22 @@ class Multiprocessing:
         self.flag = RESET
         self.initialized = False
         self.zero_copy = zero_copy
-        self.sync_traj = sync_traj
+        self.sync_traj = sync_traj 
+        # self.sync_traj = False ## temperarily setting this to false to see what happens
+        
 
         self.ready_workers = []
         self.waiting_workers = []
 
     def recv(self):
         recv_precheck(self)
+        iteration = 0
         while True:
-            # Bandaid patch for new experience buffer desync
+            # iteration += 1
+            # if iteration % 100000 == 0:
+            #     print(f"recv() iteration {iteration}, ready_workers: {len(self.ready_workers)}, waiting_workers: {len(self.waiting_workers)}")
+            #     print(f"Semaphore states: {self.buf['semaphores']}")
+                
             if self.sync_traj:
                 worker = self.waiting_workers[0]
                 sem = self.buf["semaphores"][worker]
@@ -756,6 +768,85 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
             raise pufferlib.APIUsageError(f"Invalid argument: {k}")
 
     # TODO: First step action space check
+
+
+    env_k = env_kwargs[0]
+    if env_k["population_play"]:
+        module_name = 'pufferlib.ocean'
+        env_module = importlib.import_module(module_name)
+        policy_cls = getattr(env_module.torch, env_k['co_player_policy_name'])
+        num_obs =  7 + 63*7 + 200*7
+        temp_env = SimpleNamespace(
+        single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
+            shape=(num_obs,), dtype=np.float32),
+        single_action_space=gymnasium.spaces.MultiDiscrete([7, 13]) ## TODO: fix hardcoded puffer_drive value here
+        )
+        
+        policy = policy_cls(temp_env, **env_k['co_player_policy'])
+
+        rnn_name = env_k['co_player_rnn_name']
+        if rnn_name is not None:
+            rnn_cls = getattr(env_module.torch, env_k['co_player_rnn_name'])
+            policy = rnn_cls(temp_env, policy, **env_k['co_player_rnn'])
+
+        
+        import struct
+        import torch 
+        def load_weights(filename):
+            """Load weights from binary file"""
+            with open(filename, 'rb') as f:
+                data = f.read()
+            
+            # Assuming weights are stored as float32
+            num_floats = len(data) // 4
+            weights = struct.unpack(f'{num_floats}f', data)
+            return torch.tensor(weights, dtype=torch.float32)
+        
+        def assign_flat_weights_to_model(model, flat_weights):
+            """Assign flat weights to model parameters"""
+            state_dict = {}
+            offset = 0
+            
+            for name, param in model.named_parameters():
+                param_size = param.numel()
+                param_data = flat_weights[offset:offset + param_size]
+                state_dict[name] = param_data.view(param.shape)
+                offset += param_size
+            
+            return state_dict
+
+        
+        flat_weights = load_weights("resources/drive/puffer_drive_weights.bin")
+
+        expected_params = sum(p.numel() for p in policy.parameters())
+        print(f"Model expects: {expected_params} parameters")
+        print(f"Binary file has: {len(flat_weights)} values")
+
+        state_dict = assign_flat_weights_to_model(policy, flat_weights)
+
+        state_dict["cell.weight_ih"] = state_dict["lstm.weight_ih_l0"]
+        state_dict["cell.weight_hh"] = state_dict["lstm.weight_hh_l0"]
+        state_dict["cell.bias_ih"]   = state_dict["lstm.bias_ih_l0"]
+        state_dict["cell.bias_hh"]   = state_dict["lstm.bias_hh_l0"]
+
+        torch.set_num_threads(1) # NOTE this is a bit whack, but I genuinely dont know how else to get it working
+        torch.set_num_interop_threads(1)
+        import  os
+        # Set environment variables as backup
+        os.environ['OMP_NUM_THREADS'] = '1'
+        os.environ['MKL_NUM_THREADS'] = '1'
+        os.environ['NUMEXPR_NUM_THREADS'] = '1'
+        
+        # Disable MKL if available
+        try:
+            torch.backends.mkl.enabled = False
+        except:
+            pass
+
+        policy.load_state_dict(state_dict)
+
+        for i in range(len(env_kwargs)):
+            env_kwargs[i]['co_player_policy'] = policy
 
     return backend(env_creators, env_args, env_kwargs, num_envs, **kwargs)
 

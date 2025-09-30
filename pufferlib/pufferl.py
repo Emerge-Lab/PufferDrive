@@ -76,7 +76,7 @@ class PuffeRL:
         atn_space = vecenv.single_action_space
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
-
+        print("reseted environemnt")
         # Experience
         if config["batch_size"] == "auto" and config["bptt_horizon"] == "auto":
             raise pufferlib.APIUsageError("Must specify batch_size or bptt_horizon")
@@ -117,6 +117,7 @@ class PuffeRL:
         self.importance = torch.ones(segments, horizon, device=device)
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
+
         self.free_idx = total_agents
         self.render = config["render"]
         self.render_interval = config["render_interval"]
@@ -186,7 +187,7 @@ class PuffeRL:
             raise ValueError(f"Unknown optimizer: {config['optimizer']}")
 
         self.optimizer = optimizer
-
+        print("optimizer set")
         # Logging
         self.logger = logger
         if logger is None:
@@ -218,10 +219,10 @@ class PuffeRL:
         self.stats = defaultdict(list)
         self.last_stats = defaultdict(list)
         self.losses = {}
-
+        print("logging set ")
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
-        self.print_dashboard(clear=True)
+        #self.print_dashboard(clear=True) 
 
     @property
     def uptime(self):
@@ -256,7 +257,7 @@ class PuffeRL:
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
 
-            done_mask = d + t  # TODO: Handle truncations separately
+            done_mask = d + t # TODO: Handle truncations separately
             self.global_step += int(mask.sum())
 
             profile("eval_copy", epoch)
@@ -1047,7 +1048,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         torch.cuda.set_device(local_rank)
         os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
 
+    
     vecenv = vecenv or load_env(env_name, args)
+    print("Env 1 loaded sucessfully")
     policy = policy or load_policy(args, vecenv, env_name)
 
     if "LOCAL_RANK" in os.environ:
@@ -1069,11 +1072,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
     train_config = dict(**args["train"], env=env_name)
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
-
+    print("loaded puffer rl")
     all_logs = []
     while pufferl.global_step < train_config["total_timesteps"]:
         if train_config["device"] == "cuda":
             torch.compiler.cudagraph_mark_step_begin()
+        #print("Made it to evaluation")
         pufferl.evaluate()
         if train_config["device"] == "cuda":
             torch.compiler.cudagraph_mark_step_begin()
@@ -1144,8 +1148,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         with torch.no_grad():
             ob = torch.as_tensor(ob).to(device)
-            logits, value = policy.forward_eval(ob, state)
-            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+            logits, value = policy.forward_eval(ob, state) 
+            action, logprob, _ = pufferlib.pytorch.sample_logits(logits) 
             action = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
         if isinstance(logits, torch.distributions.Normal):
