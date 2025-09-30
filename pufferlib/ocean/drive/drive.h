@@ -1027,36 +1027,86 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
             int entity_idx = entity_list[i];
             int geometry_idx = entity_list[i + 1];
 
-            float lane_x = entity->traj_x[geometry_idx];
-            float lane_y = entity->traj_y[geometry_idx];
+            float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
+            float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
 
-            int lane_size = entity->array_size;
-            if(geometry_idx == lane_size - 1) continue;
+            // Calculate distance from car position to lane line segment
+            float lane_dx = end[0] - start[0];
+            float lane_dy = end[1] - start[1];
+            float lane_length_sq = lane_dx * lane_dx + lane_dy * lane_dy;
 
-            float lane_x_next = entity->traj_x[geometry_idx + 1];
-            float lane_y_next = entity->traj_y[geometry_idx + 1];
+            if (lane_length_sq < 0.001f) continue; // Skip degenerate segments
 
-            float dx_lane = lane_x_next - lane_x;
-            float dy_lane = lane_y_next - lane_y;
+            // Normalize lane direction vector
+            float lane_length = sqrtf(lane_length_sq);
+            float lane_unit_x = lane_dx / lane_length;
+            float lane_unit_y = lane_dy / lane_length;
 
-            float lane_heading = atan2f(dy_lane, dx_lane);
+            // Vector from start to car position
+            float car_dx = agent->x - start[0];
+            float car_dy = agent->y - start[1];
 
-            float dist = ((lane_x - agent->x)*(lane_x - agent->x) + (lane_y - agent->y)*(lane_y - agent->y));
-            float angle_diff = fabsf(agent->heading - lane_heading);
-            if(dist < min_distance && angle_diff < (M_PI / 2.0f)) {
-                min_distance = dist;
+            // Project car position onto lane segment (parameter t along segment)
+            float t = (car_dx * lane_dx + car_dy * lane_dy) / lane_length_sq;
+
+            // Find closest point on segment (unclamped for perpendicular distance)
+            float closest_x = start[0] + t * lane_dx;
+            float closest_y = start[1] + t * lane_dy;
+
+            // Calculate perpendicular distance to lane centerline
+            float distance = relative_distance_2d(agent->x, agent->y, closest_x, closest_y);
+
+            // Only consider lanes within 4 meter radius
+            if (distance > 4.0f) continue;
+
+            // Calculate lane heading and heading difference
+            float lane_heading = atan2f(lane_dy, lane_dx);
+            float heading_diff = fabsf(agent->heading - lane_heading);
+            if (heading_diff > M_PI) heading_diff = 2.0f * M_PI - heading_diff;
+
+            // Only consider lanes with similar heading (within 30 degrees for stricter filtering)
+            if (heading_diff > M_PI / 6.0f) continue;
+
+            // Check if car is actually "on" this lane by verifying it's between lane boundaries
+            // Use cross product to determine which side of the lane the car is on
+            float cross_product = car_dx * lane_unit_y - car_dy * lane_unit_x;
+
+            // For true collinearity, the car should be very close to the lane centerline
+            // and the projection should fall reasonably within the segment bounds
+            float actual_distance = fabsf(cross_product);
+
+            // Strict collinearity check: car must be very close to centerline (< 1.5m typically)
+            if (actual_distance > 2.0f) continue;
+
+            // Additional check: ensure projection is somewhat reasonable relative to segment
+            // (allow some extension but not too far from actual segment)
+            if (t < -0.5f || t > 1.5f) continue;
+
+            // Score prioritizes: 1) actual perpendicular distance, 2) heading alignment, 3) projection position
+            float projection_penalty = 0.0f;
+            if (t < 0.0f) projection_penalty = -t * 0.5f;
+            else if (t > 1.0f) projection_penalty = (t - 1.0f) * 0.5f;
+
+            float score = actual_distance + heading_diff * 2.0f + projection_penalty;
+
+            // Update closest lane if this is the best match so far
+            if (score < min_distance) {
+                min_distance = score;
                 closest_lane_entity_idx = entity_idx;
                 closest_lane_geometry_idx = geometry_idx;
+                agent->current_lane_idx = entity_idx;
             }
         }
     }
 
-    // check if aligned with closest lane
-    if (min_distance > 4.0f) {
+    // check if aligned with closest lane and set current lane
+    if (closest_lane_entity_idx == -1) {
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+        agent->current_lane_idx = -1;
     } else {
         int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
         agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
+        agent->current_lane_idx = closest_lane_entity_idx;
     }
 
 
@@ -1451,186 +1501,58 @@ void compute_observations(Drive* env) {
     }
 }
 
-int find_closest_lane_same_direction(Drive* env, float pos_x, float pos_y, float heading_x, float heading_y) {
-    int best_lane = -1;
-    float best_score = -1.0f;
+void compute_new_goal(Drive* env, int agent_idx) {
+    Entity* agent = &env->entities[agent_idx];
+    int current_lane = agent->current_lane_idx;
+    if (current_lane == -1) return; // No current lane
 
-    for (int i = 0; i < env->num_entities; i++) {
-        Entity* lane = &env->entities[i];
-        if (lane->type != 4 || lane->array_size < 2) continue;
+    float target_distance = 15.0f;
+    float accumulated_distance = 0.0f;
+    int current_entity = current_lane;
+    Entity* lane = &env->entities[current_entity];
 
-        float min_dist = 10000.0f;
-        int closest_point = 0;
-
-        // Find closest point on this lane
-        for (int j = 0; j < lane->array_size; j++) {
-            float dist = relative_distance_2d(pos_x, pos_y, lane->traj_x[j], lane->traj_y[j]);
-            if (dist < min_dist) {
-                min_dist = dist;
-                closest_point = j;
-            }
-        }
-
-        // Check if lane direction matches agent direction at closest point
-        if (closest_point < lane->array_size - 1) {
-            float lane_dir_x = lane->traj_x[closest_point + 1] - lane->traj_x[closest_point];
-            float lane_dir_y = lane->traj_y[closest_point + 1] - lane->traj_y[closest_point];
-            float lane_len = sqrtf(lane_dir_x * lane_dir_x + lane_dir_y * lane_dir_y);
-
-            if (lane_len > 0.001f) {
-                lane_dir_x /= lane_len;
-                lane_dir_y /= lane_len;
-
-                // Dot product for direction similarity
-                float direction_match = heading_x * lane_dir_x + heading_y * lane_dir_y;
-
-                // Score combines direction match and proximity (closer is better)
-                float score = direction_match - min_dist * 0.1f;
-
-                if (direction_match > 0.5f && score > best_score) {
-                    best_score = score;
-                    best_lane = i;
-                }
-            }
-        }
-    }
-
-    return best_lane;
-}
-
-int find_goal_at_distance(Drive* env, int lane_id, float target_distance, float pos_x, float pos_y, float heading_x, float heading_y, float* goal_x, float* goal_y) {
-    if (lane_id < 0 || lane_id >= env->num_entities) return 0;
-
-    Entity* lane = &env->entities[lane_id];
-    if (lane->type != 4 || lane->array_size < 2) return 0;
-
-    // Find closest point on lane to vehicle position
+    // Find the closest point on the current lane to determine where to start
     int start_idx = 0;
-    float min_dist = 10000.0f;
-
+    float min_dist = 1e9f;
     for (int i = 0; i < lane->array_size; i++) {
-        float dist = relative_distance_2d(pos_x, pos_y, lane->traj_x[i], lane->traj_y[i]);
+        float dist = relative_distance_2d(agent->x, agent->y, lane->traj_x[i], lane->traj_y[i]);
         if (dist < min_dist) {
             min_dist = dist;
             start_idx = i;
         }
     }
 
-    // Ensure we start from a point that's in front of the vehicle
-    for (int i = start_idx; i < lane->array_size; i++) {
-        float to_point_x = lane->traj_x[i] - pos_x;
-        float to_point_y = lane->traj_y[i] - pos_y;
-        float forward_projection = to_point_x * heading_x + to_point_y * heading_y;
+    // Traverse the topology graph starting from the vehicle's position forward
+    while (current_entity != -1 && accumulated_distance < target_distance) {
+        lane = &env->entities[current_entity];
 
-        if (forward_projection > 0.0f) {
-            start_idx = i;
-            break;
-        }
-    }
+        // Calculate distance along this lane's points, starting from closest point
+        for (int i = start_idx + 1; i < lane->array_size; i++) {
+            float segment_dist = relative_distance_2d(
+                lane->traj_x[i-1], lane->traj_y[i-1],
+                lane->traj_x[i], lane->traj_y[i]
+            );
 
-    // If no forward point found, lane is behind vehicle
-    if (start_idx >= lane->array_size - 1) return 0;
+            accumulated_distance += segment_dist;
 
-    // Now search from start_idx to end for target distance
-    float accumulated_distance = 0.0f;
-
-    for (int i = start_idx + 1; i < lane->array_size; i++) {
-        float segment_dist = relative_distance_2d(
-            lane->traj_x[i-1], lane->traj_y[i-1],
-            lane->traj_x[i], lane->traj_y[i]
-        );
-
-        if (accumulated_distance + segment_dist >= target_distance) {
-            *goal_x = lane->traj_x[i];
-            *goal_y = lane->traj_y[i];
-            return 1;
+            if (accumulated_distance >= target_distance) {
+                // Found goal at target distance
+                agent->goal_position_x = lane->traj_x[i];
+                agent->goal_position_y = lane->traj_y[i];
+                return;
+            }
         }
 
-        accumulated_distance += segment_dist;
-    }
+        // Get connected lanes from topology graph
+        int connected_lanes[10];
+        int num_connected = getNextLanes(env->topology_graph, current_entity, connected_lanes, 10);
 
-    // If target distance is beyond lane end, return last point if it's far enough
-    if (accumulated_distance > target_distance * 0.5f) {
-        *goal_x = lane->traj_x[lane->array_size - 1];
-        *goal_y = lane->traj_y[lane->array_size - 1];
-        return 1;
-    }
+        if (num_connected == 0) return; // No more connected lanes
 
-    return 0;
-}
-
-int is_lane_safe_ahead(Drive* env, int lane_id, float pos_x, float pos_y, float heading_x, float heading_y) {
-    if (lane_id < 0 || lane_id >= env->num_entities) return 0;
-
-    Entity* lane = &env->entities[lane_id];
-    if (lane->type != 4 || lane->array_size < 2) return 0;
-
-    // Check if lane start is generally in front of vehicle
-    float to_lane_start_x = lane->traj_x[0] - pos_x;
-    float to_lane_start_y = lane->traj_y[0] - pos_y;
-    float forward_projection = to_lane_start_x * heading_x + to_lane_start_y * heading_y;
-
-    // Lane is considered safe if it starts in front of the vehicle
-    return forward_projection > -2.0f;  // Small tolerance for lanes slightly behind
-}
-
-int explore_topology_for_goal(Drive* env, int current_lane, float target_distance, float pos_x, float pos_y, float heading_x, float heading_y, float* goal_x, float* goal_y) {
-    if (!env->topology_graph || current_lane >= env->topology_graph->V) return 0;
-
-    // Try current lane first
-    if (find_goal_at_distance(env, current_lane, target_distance, pos_x, pos_y, heading_x, heading_y, goal_x, goal_y)) {
-        return 1;
-    }
-
-    // Get connected lanes
-    int connected_lanes[10];
-    int num_connected = getNextLanes(env->topology_graph, current_lane, connected_lanes, 10);
-
-    // Randomly try connected lanes that are safe (in front of vehicle)
-    for (int attempts = 0; attempts < 3 && num_connected > 0; attempts++) {
+        // Randomly select next lane
         int random_idx = rand() % num_connected;
-        int lane_id = connected_lanes[random_idx];
-
-        // Only explore lanes that are safe (in front of vehicle)
-        if (!is_lane_safe_ahead(env, lane_id, pos_x, pos_y, heading_x, heading_y)) {
-            continue;
-        }
-
-        if (find_goal_at_distance(env, lane_id, target_distance, pos_x, pos_y, heading_x, heading_y, goal_x, goal_y)) {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-void compute_new_goal(Drive* env, int agent_idx) {
-    float pos_x = env->entities[agent_idx].x;
-    float pos_y = env->entities[agent_idx].y;
-    float heading_x = env->entities[agent_idx].heading_x;
-    float heading_y = env->entities[agent_idx].heading_y;
-
-    float target_distance = 15.0f;  // Goal distance
-    float goal_x, goal_y;
-
-    // Step 1: Find current lane (closest lane in same direction)
-    int current_lane = find_closest_lane_same_direction(env, pos_x, pos_y, heading_x, heading_y);
-
-    if (current_lane == -1) {
-        // Fallback: point ahead in current heading
-        env->entities[agent_idx].goal_position_x = pos_x + heading_x * target_distance;
-        env->entities[agent_idx].goal_position_y = pos_y + heading_y * target_distance;
-        return;
-    }
-
-    // Step 2: Use topology graph to find goal at target distance
-    if (explore_topology_for_goal(env, current_lane, target_distance, pos_x, pos_y, heading_x, heading_y, &goal_x, &goal_y)) {
-        env->entities[agent_idx].goal_position_x = goal_x;
-        env->entities[agent_idx].goal_position_y = goal_y;
-    } else {
-        // Final fallback
-        env->entities[agent_idx].goal_position_x = pos_x + heading_x * target_distance;
-        env->entities[agent_idx].goal_position_y = pos_y + heading_y * target_distance;
+        current_entity = connected_lanes[random_idx];
+        start_idx = 0; // Reset start index for next lane
     }
 }
 
