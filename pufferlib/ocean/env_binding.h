@@ -698,7 +698,7 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
         assign_to_dict(dict, "ego_co_player_ratio", aggregate.n /co_player_n);
         assign_to_dict(dict, "co_player_completion_rate", co_player_aggregate.co_player_completion_rate);
         assign_to_dict(dict, "co_player_collision_rate", co_player_aggregate.co_player_collision_rate);
-        assign_to_dict(dict, "co_player_off_road_rate", co_player_aggregate.co_player_off_road_rate);
+        assign_to_dict(dict, "co_player_offroad_rate", co_player_aggregate.co_player_offroad_rate);
         assign_to_dict(dict, "co_player_clean_collision_rate", co_player_aggregate.co_player_clean_collision_rate);
         assign_to_dict(dict, "co_player_score", co_player_aggregate.co_player_score);
         assign_to_dict(dict, "co_player_perf", co_player_aggregate.co_player_perf);

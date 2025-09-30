@@ -115,7 +115,23 @@ struct Log {
     float clean_collision_rate;
     float completion_rate;
     float dnf_rate;
+    float avg_displacement_error;
+    float lane_alignment_rate;
     float n;
+};
+
+
+struct Co_Player_Log {
+    float co_player_episode_return;
+    float co_player_episode_length;
+    float co_player_perf;
+    float co_player_score;
+    float co_player_offroad_rate;
+    float co_player_collision_rate;
+    float co_player_clean_collision_rate;
+    float co_player_completion_rate;
+    float co_player_dnf_rate;
+    float co_player_n;
 };
 
 typedef struct Entity Entity;
@@ -138,6 +154,7 @@ struct Entity {
     float goal_position_z;
     int mark_as_expert;
     int collision_state;
+    float metrics_array[5];
     float x;
     float y;
     float z;
@@ -157,6 +174,7 @@ struct Entity {
     float goal_radius;
     bool is_ego;
     int is_co_player;
+
 };
 
 
@@ -248,6 +266,7 @@ struct Drive {
     int spawn_immunity_timer;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
+    char* ini_file;
     // this is for reward conditioned learning
     bool use_rc;
     float collision_weight_lb;
@@ -259,7 +278,6 @@ struct Drive {
     float* collision_weights;
     float* offroad_weights;
     float* goal_weights;
-    int action_type;
     float goal_radius;
     // this is for population play
     bool population_play;
@@ -317,8 +335,8 @@ void add_log(Drive* env) {
                     if (e->reached_goal_this_episode)
                         env->co_player_log.co_player_completion_rate += 1.0f;
 
-                    env->co_player_log.co_player_off_road_rate +=
-                        env->co_player_logs[i].co_player_off_road_rate;
+                    env->co_player_log.co_player_offroad_rate +=
+                        env->co_player_logs[i].co_player_offroad_rate;
                     env->co_player_log.co_player_collision_rate +=
                         env->co_player_logs[i].co_player_collision_rate;
                     env->co_player_log.co_player_clean_collision_rate +=
@@ -333,7 +351,7 @@ void add_log(Drive* env) {
                         env->co_player_log.co_player_perf += 1.0f;
                     }
 
-                    if (!env->co_player_logs[i].co_player_off_road_rate &&
+                    if (!env->co_player_logs[i].co_player_offroad_rate &&
                         !env->co_player_logs[i].co_player_collision_rate &&
                         !e->reached_goal_this_episode) {
                         env->co_player_log.co_player_dnf_rate += 1.0f;
@@ -1581,227 +1599,15 @@ float relative_distance(float a, float b){
     return distance;
 }
 
-
-
-int check_lane_aligned(Entity* car, Entity* lane, int geometry_idx) {
-    // Validate lane geometry length
-    if (!lane || lane->array_size < 2) return 0;
-
-    // Clamp geometry index to valid segment range [0, array_size-2]
-    if (geometry_idx < 0) geometry_idx = 0;
-    if (geometry_idx >= lane->array_size - 1) geometry_idx = lane->array_size - 2;
-
-    // Compute local lane segment heading
-    float heading_x1, heading_y1;
-    if (geometry_idx > 0) {
-        heading_x1 = lane->traj_x[geometry_idx] - lane->traj_x[geometry_idx - 1];
-        heading_y1 = lane->traj_y[geometry_idx] - lane->traj_y[geometry_idx - 1];
-    } else {
-        // For first segment, just use the forward direction
-        heading_x1 = lane->traj_x[geometry_idx + 1] - lane->traj_x[geometry_idx];
-        heading_y1 = lane->traj_y[geometry_idx + 1] - lane->traj_y[geometry_idx];
-    }
-
-    float heading_x2 = lane->traj_x[geometry_idx + 1] - lane->traj_x[geometry_idx];
-    float heading_y2 = lane->traj_y[geometry_idx + 1] - lane->traj_y[geometry_idx];
-
-    float heading_1 = atan2f(heading_y1, heading_x1);
-    float heading_2 = atan2f(heading_y2, heading_x2);
-    float heading = (heading_1 + heading_2) / 2.0f;
-
-    // Normalize to [-pi, pi]
-    if (heading > M_PI) heading -= 2.0f * M_PI;
-    if (heading < -M_PI) heading += 2.0f * M_PI;
-
-    // Compute heading difference
-    float car_heading = car->heading; // radians
-    float heading_diff = fabsf(car_heading - heading);
-
-    if (heading_diff > M_PI) heading_diff = 2.0f * M_PI - heading_diff;
-
-    return (heading_diff < (M_PI / 6.0f)) ? 1 : 0; // within 30 degrees
-}
-
-void reset_agent_metrics(Drive* env, int agent_idx){
-    Entity* agent = &env->entities[agent_idx];
-    agent->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
-    agent->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
-    agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
-    agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
-    agent->collision_state = 0;
-}
-
-float compute_displacement_error(Entity* agent, int timestep) {
-    // Check if timestep is within valid range
-    if (timestep < 0 || timestep >= agent->array_size) {
-        return 0.0f;
-    }
-
-    // Check if reference trajectory is valid at this timestep
-    if (!agent->traj_valid[timestep]) {
-        return 0.0f;
-    }
-
-    // Get reference position at current timestep, skip invalid ones
-    float ref_x = agent->traj_x[timestep];
-    float ref_y = agent->traj_y[timestep];
-
-    if (ref_x == -10000.0f || ref_y == -10000.0f) {
-        return 0.0f;
-    }
-
-    // Compute deltas: Euclidean distance between actual and reference position
-    float dx = agent->x - ref_x;
-    float dy = agent->y - ref_y;
-    float displacement = sqrtf(dx*dx + dy*dy);
-
-    return displacement;
-}
-
-
-void compute_agent_metrics(Drive* env, int agent_idx) {
-    Entity* agent = &env->entities[agent_idx];
-
-    reset_agent_metrics(env, agent_idx);
-
-    if(agent->x == -10000.0f ) return; // invalid agent position
-
-    // Compute displacement error
-    float displacement_error = compute_displacement_error(agent, env->timestep);
-
-    if (displacement_error > 0.0f) { // Only count valid displacements
-        agent->cumulative_displacement += displacement_error;
-        agent->displacement_sample_count++;
-
-        // Compute running average
-        agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] =
-            agent->cumulative_displacement / agent->displacement_sample_count;
-    }
-
-    int collided = 0;
-    float half_length = agent->length/2.0f;
-    float half_width = agent->width/2.0f;
-    float cos_heading = cosf(agent->heading);
-    float sin_heading = sinf(agent->heading);
-    float min_distance = 100.0f;
-
-    int closest_lane_entity_idx = -1;
-    int closest_lane_geometry_idx = -1;
-
-    float corners[4][2];
-    for (int i = 0; i < 4; i++) {
-        corners[i][0] = agent->x + (offsets[i][0]*half_length*cos_heading - offsets[i][1]*half_width*sin_heading);
-        corners[i][1] = agent->y + (offsets[i][0]*half_length*sin_heading + offsets[i][1]*half_width*cos_heading);
-    }
-
-    int entity_list[MAX_ENTITIES_PER_CELL*2*25];  // Array big enough for all neighboring cells
-    int list_size = checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL*2*25, collision_offsets, 25);
-    for (int i = 0; i < list_size ; i+=2) {
-        if(entity_list[i] == -1) continue;
-        if(entity_list[i] == agent_idx) continue;
-
-        Entity* entity;
-        entity = &env->entities[entity_list[i]];
-
-        // Check for offroad collision with road edges
-        if(entity->type == ROAD_EDGE) {
-            int geometry_idx = entity_list[i + 1];
-            float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
-            float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
-            for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
-                int next = (k + 1) % 4;
-                if (check_line_intersection(corners[k], corners[next], start, end)) {
-                    collided = OFFROAD;
-                    break;
-                }
-            }
-        }
-
-        if (collided == OFFROAD) break;
-
-        // Find closest point on the road centerline to the agent
-        if(entity->type == ROAD_LANE) {
-            int entity_idx = entity_list[i];
-            int geometry_idx = entity_list[i + 1];
-
-            float lane_x = entity->traj_x[geometry_idx];
-            float lane_y = entity->traj_y[geometry_idx];
-
-            int lane_size = entity->array_size;
-            if(geometry_idx == lane_size - 1) continue;
-
-            float lane_x_next = entity->traj_x[geometry_idx + 1];
-            float lane_y_next = entity->traj_y[geometry_idx + 1];
-
-            float dx_lane = lane_x_next - lane_x;
-            float dy_lane = lane_y_next - lane_y;
-
-            float lane_heading = atan2f(dy_lane, dx_lane);
-
-            float dist = ((lane_x - agent->x)*(lane_x - agent->x) + (lane_y - agent->y)*(lane_y - agent->y));
-            float angle_diff = fabsf(agent->heading - lane_heading);
-            if(dist < min_distance && angle_diff < (M_PI / 2.0f)) {
-                min_distance = dist;
-                closest_lane_entity_idx = entity_idx;
-                closest_lane_geometry_idx = geometry_idx;
-            }
-        }
-    }
-
-    // check if aligned with closest lane
-    if (min_distance > 4.0f) {
-        agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-    } else {
-        int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
-        agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
-    }
-
-
-    // Check for vehicle collisions
-    int car_collided_with_index = collision_check(env, agent_idx);
-    if (car_collided_with_index != -1) collided = VEHICLE_COLLISION;
-
-    agent->collision_state = collided;
-
-    // spawn immunity for collisions with other agent cars as agent_idx respawns
-    int is_active_agent = env->entities[agent_idx].active_agent;
-    int respawned = env->entities[agent_idx].respawn_timestep != -1;
-    int exceeded_spawn_immunity_agent = (env->timestep - env->entities[agent_idx].respawn_timestep) >= env->spawn_immunity_timer;
-
-    if(collided == VEHICLE_COLLISION && is_active_agent == 1 && respawned){
-        agent->collision_state = 0;
-    }
-
-    if(collided == OFFROAD) {
-        agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        return;
-    }
-    if(car_collided_with_index == -1) return;
-
-    // spawn immunity for collisions with other cars who just respawned
-    int respawned_collided_with_car = env->entities[car_collided_with_index].respawn_timestep != -1;
-    int exceeded_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) >= env->spawn_immunity_timer;
-    int within_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) < env->spawn_immunity_timer;
-
-    if (respawned_collided_with_car) {
-        agent->collision_state = 0;
-        agent->metrics_array[COLLISION_IDX] = 0.0f;
-    }
-
-
-    return;
-}
-
 void c_step(Drive* env) {
 
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
 
-
     env->timestep++;
     if(env->timestep == TRAJECTORY_LENGTH){
         add_log(env);
-	    c_reset(env);
+        c_reset(env);
         return;
     }
 
@@ -1822,7 +1628,7 @@ void c_step(Drive* env) {
     
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
-        env->entities[agent_idx].collision_state = 0;
+        env->entities[agent_idx].collision_state = 0; // reset before dynamics
         move_dynamics(env, i, agent_idx);
 
         // Update logs based on agent type
@@ -1840,22 +1646,21 @@ void c_step(Drive* env) {
     // -------------------------------
     // Step 6: Compute metrics and rewards for all active agents
     // -------------------------------
-
-    ego_idx = 0;  // Reset ego counter
-    co_player_idx = 0;  // Reset co-player counter
+    ego_idx = 0;  
+    co_player_idx = 0;  
     
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
-        env->entities[agent_idx].collision_state = 0;
-        //if(env->entities[agent_idx].respawn_timestep != -1) continue;
+
         compute_agent_metrics(env, agent_idx);
         int collision_state = env->entities[agent_idx].collision_state;
         
-        // Determine which log to update
         int is_ego = env->entities[agent_idx].is_ego;
         int is_co_player = env->entities[agent_idx].is_co_player;
         
-        // Handle collisions - rewards go to position i (same for both ego and co-player)
+        // -------------------------------
+        // Handle collisions
+        // -------------------------------
         if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION && env->entities[agent_idx].respawn_timestep == -1) {
                 env->rewards[i] = env->reward_vehicle_collision;
@@ -1877,16 +1682,17 @@ void c_step(Drive* env) {
                     env->logs[ego_idx].offroad_rate = 1.0f;
                 } else if (is_co_player) {
                     env->co_player_logs[co_player_idx].co_player_episode_return += env->reward_offroad_collision;
-                    env->co_player_logs[co_player_idx].co_player_off_road_rate = 1.0f;
+                    env->co_player_logs[co_player_idx].co_player_offroad_rate = 1.0f;
                 }
-                //printf("Agent %d went offroad at timestep %d, receiving penalty %f \n", i, env->timestep, env->rewards[i]);
             }
             if (!env->entities[agent_idx].reached_goal_this_episode) {
                 env->entities[agent_idx].collided_before_goal = 1;
             }
         }
 
+        // -------------------------------
         // Handle goal reward
+        // -------------------------------
         float distance_to_goal = relative_distance_2d(
             env->entities[agent_idx].x,
             env->entities[agent_idx].y,
@@ -1912,17 +1718,20 @@ void c_step(Drive* env) {
                     env->co_player_logs[co_player_idx].co_player_episode_return += 1.0f;
                 }
             }
-                env->logs[i].episode_return += 1.0f;
-                //env->terminals[i] = 1;
-            }
             env->entities[agent_idx].reached_goal_this_episode = 1;
-	    }
+        }
+
+        // bump indices
+        if (is_ego) ego_idx++;
+        else if (is_co_player) co_player_idx++;
     }
 
+    // -------------------------------
+    // Step 7: Respawn if goal reached
+    // -------------------------------
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
-        int collision_state = env->entities[agent_idx].collision_state;
         if(reached_goal){
             respawn_agent(env, agent_idx);
         }
@@ -1933,7 +1742,6 @@ void c_step(Drive* env) {
     // -------------------------------
     compute_observations(env);
 }
-
 const Color STONE_GRAY = (Color){80, 80, 80, 255};
 const Color PUFF_RED = (Color){187, 0, 0, 255};
 const Color PUFF_CYAN = (Color){0, 187, 187, 255};
