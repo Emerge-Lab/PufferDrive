@@ -146,6 +146,7 @@ struct Entity {
     float heading;
     float heading_x;
     float heading_y;
+    int current_lane_idx;
     int valid;
     int collided_before_goal;
     int reached_goal_this_episode;
