@@ -1,15 +1,9 @@
 import sys
-from pdb import set_trace as T
 from typing import Dict, List, Tuple, Union
 
 import numpy as np
 import torch
-from torch import nn
-from torch.distributions import Categorical
 from torch.distributions.utils import logits_to_probs
-
-import pufferlib
-import pufferlib.models
 
 
 numpy_to_torch_dtype_dict = {
@@ -44,27 +38,28 @@ LITTLE_BYTE_ORDER = sys.byteorder == "little"
 NativeDTypeValue = Tuple[torch.dtype, List[int], int, int]
 NativeDType = Union[NativeDTypeValue, Dict[str, Union[NativeDTypeValue, "NativeDType"]]]
 
+
 # TODO: handle discrete obs
 # Spend some time trying to break this fn with differnt obs
 def nativize_dtype(emulated) -> NativeDType:
     # sample dtype - the dtype of what we obtain from the environment (usually bytes)
-    sample_dtype: np.dtype = emulated['observation_dtype']
+    sample_dtype: np.dtype = emulated["observation_dtype"]
     # structured dtype - the gym.Space converted numpy dtype
 
     # the observation represents (could be dict, tuple, box, etc.)
-    structured_dtype: np.dtype = emulated['emulated_observation_dtype']
+    structured_dtype: np.dtype = emulated["emulated_observation_dtype"]
     subviews, dtype, shape, offset, delta = _nativize_dtype(sample_dtype, structured_dtype)
     if subviews is None:
         return (dtype, shape, offset, delta)
     else:
         return subviews
 
-def round_to(x, base):
-    return int(base * np.ceil(x/base))
 
-def _nativize_dtype(sample_dtype: np.dtype,
-        structured_dtype: np.dtype,
-        offset: int = 0) -> NativeDType:
+def round_to(x, base):
+    return int(base * np.ceil(x / base))
+
+
+def _nativize_dtype(sample_dtype: np.dtype, structured_dtype: np.dtype, offset: int = 0) -> NativeDType:
     if structured_dtype.fields is None:
         if structured_dtype.subdtype is not None:
             dtype, shape = structured_dtype.subdtype
@@ -85,8 +80,7 @@ def _nativize_dtype(sample_dtype: np.dtype,
         start_offset = offset
         all_delta = 0
         for name, (dtype, _) in structured_dtype.fields.items():
-            views, dtype, shape, offset, delta = _nativize_dtype(
-                sample_dtype, dtype, offset)
+            views, dtype, shape, offset, delta = _nativize_dtype(sample_dtype, dtype, offset)
 
             if views is not None:
                 subviews[name] = views
@@ -146,12 +140,14 @@ def nativize_observation(observation, emulated):
     # float is natively supported, but only if that is the actual correct type
     return nativize_tensor(
         observation,
-        emulated['observation_dtype'],
-        emulated['emulated_observation_dtype'],
+        emulated["observation_dtype"],
+        emulated["emulated_observation_dtype"],
     )
+
 
 def flattened_tensor_size(native_dtype):
     return _flattened_tensor_size(native_dtype)
+
 
 def _flattened_tensor_size(native_dtype):
     if isinstance(native_dtype, tuple):
@@ -162,11 +158,13 @@ def _flattened_tensor_size(native_dtype):
             res += _flattened_tensor_size(dtype)
         return res
 
+
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     """CleanRL's default layer initialization"""
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
+
 
 # taken from torch.distributions.Categorical
 def log_prob(logits, value):
@@ -175,6 +173,7 @@ def log_prob(logits, value):
     value = value[..., :1]
     return log_pmf.gather(-1, value).squeeze(-1)
 
+
 # taken from torch.distributions.Categorical
 def entropy(logits):
     min_real = torch.finfo(logits.dtype).min
@@ -182,9 +181,11 @@ def entropy(logits):
     p_log_p = logits * logits_to_probs(logits)
     return -p_log_p.sum(-1)
 
+
 def entropy_probs(logits, probs):
     p_log_p = logits * probs
     return -p_log_p.sum(-1)
+
 
 def sample_logits(logits, action=None):
     is_discrete = isinstance(logits, torch.Tensor)
@@ -199,12 +200,10 @@ def sample_logits(logits, action=None):
     elif is_discrete:
         logits = logits.unsqueeze(0)
     # TODO: Double check this
-    else: #multi-discrete
+    else:  # multi-discrete
         logits = torch.nn.utils.rnn.pad_sequence(
-            [l.transpose(0,1) for l in logits], 
-            batch_first=False, 
-            padding_value=-torch.inf
-        ).permute(1,2,0)
+            [l.transpose(0, 1) for l in logits], batch_first=False, padding_value=-torch.inf
+        ).permute(1, 2, 0)
 
     # This can fail on nans etc
     normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)

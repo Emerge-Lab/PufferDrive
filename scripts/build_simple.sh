@@ -34,7 +34,7 @@ if [ "$MODE" = "debug" ]; then
         FLAGS+=(
             -fsanitize=address,undefined,bounds,pointer-overflow,leak -g
         )
-    fi  
+    fi
     clang -g -O0 ${FLAGS[@]}
     echo "Built to: $FILENAME (debug mode)"
 elif [ "$MODE" = "release" ]; then

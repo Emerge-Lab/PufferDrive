@@ -1,7 +1,6 @@
 import numpy as np
 import random
 import math
-import warnings
 
 from copy import deepcopy
 
@@ -10,8 +9,6 @@ import pufferlib
 import torch
 import pyro
 from pyro.contrib import gp as gp
-from pyro.contrib.gp.kernels import Kernel
-from pyro.contrib.gp.models import GPRegression
 
 
 class Space:
@@ -19,134 +16,148 @@ class Space:
         self.min = min
         self.max = max
         self.scale = scale
-        self.mean = mean # TODO: awkward to have just this normalized
+        self.mean = mean  # TODO: awkward to have just this normalized
         self.norm_min = self.normalize(min)
         self.norm_max = self.normalize(max)
         self.norm_mean = self.normalize(mean)
         self.is_integer = is_integer
 
+
 class Linear(Space):
     def __init__(self, min, max, scale, mean, is_integer=False):
-        if scale == 'auto':
+        if scale == "auto":
             scale = 0.5
 
         super().__init__(min, max, scale, mean, is_integer)
 
     def normalize(self, value):
-        #assert isinstance(value, (int, float))
-        zero_one = (value - self.min)/(self.max - self.min)
-        return 2*zero_one - 1
+        # assert isinstance(value, (int, float))
+        zero_one = (value - self.min) / (self.max - self.min)
+        return 2 * zero_one - 1
 
     def unnormalize(self, value):
-        zero_one = (value + 1)/2
+        zero_one = (value + 1) / 2
         value = zero_one * (self.max - self.min) + self.min
         if self.is_integer:
             value = round(value)
         return value
 
+
 class Pow2(Space):
     def __init__(self, min, max, scale, mean, is_integer=False):
-        if scale == 'auto':
+        if scale == "auto":
             scale = 0.5
-            #scale = 2 / (np.log2(max) - np.log2(min))
+            # scale = 2 / (np.log2(max) - np.log2(min))
 
         super().__init__(min, max, scale, mean, is_integer)
 
     def normalize(self, value):
-        #assert isinstance(value, (int, float))
-        #assert value != 0.0
-        zero_one = (math.log(value, 2) - math.log(self.min, 2))/(math.log(self.max, 2) - math.log(self.min, 2))
-        return 2*zero_one - 1
+        # assert isinstance(value, (int, float))
+        # assert value != 0.0
+        zero_one = (math.log(value, 2) - math.log(self.min, 2)) / (math.log(self.max, 2) - math.log(self.min, 2))
+        return 2 * zero_one - 1
 
     def unnormalize(self, value):
-        zero_one = (value + 1)/2
-        log_spaced = zero_one*(math.log(self.max, 2) - math.log(self.min, 2)) + math.log(self.min, 2)
+        zero_one = (value + 1) / 2
+        log_spaced = zero_one * (math.log(self.max, 2) - math.log(self.min, 2)) + math.log(self.min, 2)
         rounded = round(log_spaced)
-        return 2 ** rounded
+        return 2**rounded
+
 
 class Log(Space):
     base: int = 10
 
     def __init__(self, min, max, scale, mean, is_integer=False):
-        if scale == 'time':
+        if scale == "time":
             # TODO: Set scaling param intuitively based on number of jumps from min to max
             scale = 1 / (np.log2(max) - np.log2(min))
-        elif scale == 'auto':
+        elif scale == "auto":
             scale = 0.5
 
         super().__init__(min, max, scale, mean, is_integer)
 
     def normalize(self, value):
-        #assert isinstance(value, (int, float))
-        #assert value != 0.0
-        zero_one = (math.log(value, self.base) - math.log(self.min, self.base))/(math.log(self.max, self.base) - math.log(self.min, self.base))
-        return 2*zero_one - 1
+        # assert isinstance(value, (int, float))
+        # assert value != 0.0
+        zero_one = (math.log(value, self.base) - math.log(self.min, self.base)) / (
+            math.log(self.max, self.base) - math.log(self.min, self.base)
+        )
+        return 2 * zero_one - 1
 
     def unnormalize(self, value):
-        zero_one = (value + 1)/2
-        log_spaced = zero_one*(math.log(self.max, self.base) - math.log(self.min, self.base)) + math.log(self.min, self.base)
-        value = self.base ** log_spaced
+        zero_one = (value + 1) / 2
+        log_spaced = zero_one * (math.log(self.max, self.base) - math.log(self.min, self.base)) + math.log(
+            self.min, self.base
+        )
+        value = self.base**log_spaced
         if self.is_integer:
             value = round(value)
         return value
+
 
 class Logit(Space):
     base: int = 10
 
     def __init__(self, min, max, scale, mean, is_integer=False):
-        if scale == 'auto':
+        if scale == "auto":
             scale = 0.5
 
         super().__init__(min, max, scale, mean, is_integer)
 
     def normalize(self, value):
-        #assert isinstance(value, (int, float))
-        #assert value != 0.0
-        #assert value != 1.0
-        zero_one = (math.log(1-value, self.base) - math.log(1-self.min, self.base))/(math.log(1-self.max, self.base) - math.log(1-self.min, self.base))
-        return 2*zero_one - 1
+        # assert isinstance(value, (int, float))
+        # assert value != 0.0
+        # assert value != 1.0
+        zero_one = (math.log(1 - value, self.base) - math.log(1 - self.min, self.base)) / (
+            math.log(1 - self.max, self.base) - math.log(1 - self.min, self.base)
+        )
+        return 2 * zero_one - 1
 
     def unnormalize(self, value):
-        zero_one = (value + 1)/2
-        log_spaced = zero_one*(math.log(1-self.max, self.base) - math.log(1-self.min, self.base)) + math.log(1-self.min, self.base)
+        zero_one = (value + 1) / 2
+        log_spaced = zero_one * (math.log(1 - self.max, self.base) - math.log(1 - self.min, self.base)) + math.log(
+            1 - self.min, self.base
+        )
         return 1 - self.base**log_spaced
+
 
 def _params_from_puffer_sweep(sweep_config):
     param_spaces = {}
     for name, param in sweep_config.items():
-        if name in ('method', 'metric', 'goal', 'downsample'):
+        if name in ("method", "metric", "goal", "downsample"):
             continue
 
         assert isinstance(param, dict)
         if any(isinstance(param[k], dict) for k in param):
             param_spaces[name] = _params_from_puffer_sweep(param)
             continue
- 
-        assert 'distribution' in param
-        distribution = param['distribution']
-        search_center = param['mean']
+
+        assert "distribution" in param
+        distribution = param["distribution"]
+        search_center = param["mean"]
         kwargs = dict(
-            min=param['min'],
-            max=param['max'],
-            scale=param['scale'],
+            min=param["min"],
+            max=param["max"],
+            scale=param["scale"],
             mean=search_center,
         )
-        if distribution == 'uniform':
+        if distribution == "uniform":
             space = Linear(**kwargs)
-        elif distribution == 'int_uniform':
+        elif distribution == "int_uniform":
             space = Linear(**kwargs, is_integer=True)
-        elif distribution == 'uniform_pow2':
+        elif distribution == "uniform_pow2":
             space = Pow2(**kwargs, is_integer=True)
-        elif distribution == 'log_normal':
+        elif distribution == "log_normal":
             space = Log(**kwargs)
-        elif distribution == 'logit_normal':
+        elif distribution == "logit_normal":
             space = Logit(**kwargs)
         else:
-            raise ValueError(f'Invalid distribution: {distribution}')
+            raise ValueError(f"Invalid distribution: {distribution}")
 
         param_spaces[name] = space
 
     return param_spaces
+
 
 class Hyperparameters:
     def __init__(self, config, verbose=True):
@@ -154,28 +165,24 @@ class Hyperparameters:
         self.flat_spaces = dict(pufferlib.unroll_nested_dict(self.spaces))
         self.num = len(self.flat_spaces)
 
-        self.metric = config['metric']
-        goal = config['goal']
-        assert goal in ('maximize', 'minimize')
-        self.optimize_direction = 1 if goal == 'maximize' else -1
+        self.metric = config["metric"]
+        goal = config["goal"]
+        assert goal in ("maximize", "minimize")
+        self.optimize_direction = 1 if goal == "maximize" else -1
 
-        self.search_centers = np.array([
-            e.norm_mean for e in self.flat_spaces.values()])
-        self.min_bounds = np.array([
-            e.norm_min for e in self.flat_spaces.values()])
-        self.max_bounds = np.array([
-            e.norm_max for e in self.flat_spaces.values()])
-        self.search_scales = np.array([
-            e.scale for e in self.flat_spaces.values()])
+        self.search_centers = np.array([e.norm_mean for e in self.flat_spaces.values()])
+        self.min_bounds = np.array([e.norm_min for e in self.flat_spaces.values()])
+        self.max_bounds = np.array([e.norm_max for e in self.flat_spaces.values()])
+        self.search_scales = np.array([e.scale for e in self.flat_spaces.values()])
 
         if verbose:
-            print('Min random sample:')
+            print("Min random sample:")
             for name, space in self.flat_spaces.items():
-                print(f'\t{name}: {space.unnormalize(max(space.norm_mean - space.scale, space.norm_min))}')
+                print(f"\t{name}: {space.unnormalize(max(space.norm_mean - space.scale, space.norm_min))}")
 
-            print('Max random sample:')
+            print("Max random sample:")
             for name, space in self.flat_spaces.items():
-                print(f'\t{name}: {space.unnormalize(min(space.norm_mean + space.scale, space.norm_max))}')
+                print(f"\t{name}: {space.unnormalize(min(space.norm_mean + space.scale, space.norm_max))}")
 
     def sample(self, n, mu=None, scale=1):
         if mu is None:
@@ -187,14 +194,14 @@ class Hyperparameters:
         n_input, n_dim = mu.shape
         scale = scale * self.search_scales
         mu_idxs = np.random.randint(0, n_input, n)
-        samples = scale*(2*np.random.rand(n, n_dim) - 1) + mu[mu_idxs]
+        samples = scale * (2 * np.random.rand(n, n_dim) - 1) + mu[mu_idxs]
         return np.clip(samples, self.min_bounds, self.max_bounds)
 
     def from_dict(self, params):
         flat_params = dict(pufferlib.unroll_nested_dict(params))
         values = []
         for key, space in self.flat_spaces.items():
-            assert key in flat_params, f'Missing hyperparameter {key}'
+            assert key in flat_params, f"Missing hyperparameter {key}"
             val = flat_params[key]
             normed = space.normalize(val)
             values.append(normed)
@@ -218,8 +225,8 @@ class Hyperparameters:
 
 
 def pareto_points(observations, eps=1e-6):
-    scores = np.array([e['output'] for e in observations])
-    costs = np.array([e['cost'] for e in observations])
+    scores = np.array([e["output"] for e in observations])
+    costs = np.array([e["cost"] for e in observations])
     pareto = []
     idxs = []
     for idx, obs in enumerate(observations):
@@ -233,13 +240,14 @@ def pareto_points(observations, eps=1e-6):
 
     return pareto, idxs
 
-class Random:
-    def __init__(self,
-            sweep_config,
-            global_search_scale = 1,
-            random_suggestions = 1024,
-        ):
 
+class Random:
+    def __init__(
+        self,
+        sweep_config,
+        global_search_scale=1,
+        random_suggestions=1024,
+    ):
         self.hyperparameters = Hyperparameters(sweep_config)
         self.global_search_scale = global_search_scale
         self.random_suggestions = random_suggestions
@@ -252,22 +260,25 @@ class Random:
 
     def observe(self, hypers, score, cost, is_failure=False):
         params = self.hyperparameters.from_dict(hypers)
-        self.success_observations.append(dict(
-            input=hypers,
-            output=score,
-            cost=cost,
-            is_failure=is_failure,
-        ))
+        self.success_observations.append(
+            dict(
+                input=hypers,
+                output=score,
+                cost=cost,
+                is_failure=is_failure,
+            )
+        )
+
 
 class ParetoGenetic:
-    def __init__(self,
-            sweep_config,
-            global_search_scale = 1,
-            suggestions_per_pareto = 1,
-            bias_cost = True,
-            log_bias = False,
-        ):
-
+    def __init__(
+        self,
+        sweep_config,
+        global_search_scale=1,
+        suggestions_per_pareto=1,
+        bias_cost=True,
+        log_bias=False,
+    ):
         self.hyperparameters = Hyperparameters(sweep_config)
         self.global_search_scale = global_search_scale
         self.suggestions_per_pareto = suggestions_per_pareto
@@ -281,7 +292,7 @@ class ParetoGenetic:
             return self.hyperparameters.to_dict(suggestion, fill), {}
 
         candidates, _ = pareto_points(self.success_observations)
-        pareto_costs = np.array([e['cost'] for e in candidates])
+        pareto_costs = np.array([e["cost"] for e in candidates])
 
         if self.bias_cost:
             if self.log_bias:
@@ -289,25 +300,26 @@ class ParetoGenetic:
             else:
                 cost_dists = np.abs(pareto_costs[:, None] - pareto_costs[None, :])
 
-            cost_dists += (np.max(pareto_costs) + 1)*np.eye(len(pareto_costs)) # mask self-distance
+            cost_dists += (np.max(pareto_costs) + 1) * np.eye(len(pareto_costs))  # mask self-distance
             idx = np.argmax(np.min(cost_dists, axis=1))
-            search_centers = candidates[idx]['input']
+            search_centers = candidates[idx]["input"]
         else:
-            search_centers = np.stack([e['input'] for e in candidates])
+            search_centers = np.stack([e["input"] for e in candidates])
 
-        suggestions = self.hyperparameters.sample(
-            len(candidates)*self.suggestions_per_pareto, mu=search_centers)
+        suggestions = self.hyperparameters.sample(len(candidates) * self.suggestions_per_pareto, mu=search_centers)
         suggestion = suggestions[np.random.randint(0, len(suggestions))]
         return self.hyperparameters.to_dict(suggestion, fill), {}
 
     def observe(self, hypers, score, cost, is_failure=False):
         params = self.hyperparameters.from_dict(hypers)
-        self.success_observations.append(dict(
-            input=params,
-            output=score,
-            cost=cost,
-            is_failure=is_failure,
-        ))
+        self.success_observations.append(
+            dict(
+                input=params,
+                output=score,
+                cost=cost,
+                is_failure=is_failure,
+            )
+        )
 
 
 def create_gp(x_dim, scale_length=1.0):
@@ -325,19 +337,21 @@ def create_gp(x_dim, scale_length=1.0):
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     return model, optimizer
 
+
 # TODO: Eval defaults
 class Protein:
-    def __init__(self,
-            sweep_config,
-            max_suggestion_cost = 3600,
-            resample_frequency = 0,
-            num_random_samples = 50,
-            global_search_scale = 1,
-            random_suggestions = 1024,
-            suggestions_per_pareto = 256,
-            seed_with_search_center = True,
-            expansion_rate = 0.25,
-        ):
+    def __init__(
+        self,
+        sweep_config,
+        max_suggestion_cost=3600,
+        resample_frequency=0,
+        num_random_samples=50,
+        global_search_scale=1,
+        random_suggestions=1024,
+        suggestions_per_pareto=256,
+        seed_with_search_center=True,
+        expansion_rate=0.25,
+    ):
         self.hyperparameters = Hyperparameters(sweep_config)
         self.num_random_samples = num_random_samples
         self.global_search_scale = global_search_scale
@@ -368,16 +382,16 @@ class Protein:
             return self.hyperparameters.to_dict(self.suggestion, fill), info
         elif self.resample_frequency and self.suggestion_idx % self.resample_frequency == 0:
             candidates, _ = pareto_points(self.success_observations)
-            suggestions = np.stack([e['input'] for e in candidates])
+            suggestions = np.stack([e["input"] for e in candidates])
             best_idx = np.random.randint(0, len(candidates))
             best = suggestions[best_idx]
             return self.hyperparameters.to_dict(best, fill), info
 
-        params = np.array([e['input'] for e in self.success_observations])
+        params = np.array([e["input"] for e in self.success_observations])
         params = torch.from_numpy(params)
 
         # Scores variable y
-        y = np.array([e['output'] for e in self.success_observations])
+        y = np.array([e["output"] for e in self.success_observations])
 
         # Transformed scores
         min_score = np.min(y)
@@ -390,7 +404,7 @@ class Protein:
         self.gp_score.eval()
 
         # Log costs
-        c = np.array([e['cost'] for e in self.success_observations])
+        c = np.array([e["cost"] for e in self.success_observations])
 
         log_c = np.log(c)
 
@@ -406,12 +420,11 @@ class Protein:
         self.gp_cost.eval()
 
         candidates, pareto_idxs = pareto_points(self.success_observations)
-        pareto_costs = np.array([e['cost'] for e in candidates])
+        pareto_costs = np.array([e["cost"] for e in candidates])
 
         ### Sample suggestions
-        search_centers = np.stack([e['input'] for e in candidates])
-        suggestions = self.hyperparameters.sample(
-            len(candidates)*self.suggestions_per_pareto, mu=search_centers)
+        search_centers = np.stack([e["input"] for e in candidates])
+        suggestions = self.hyperparameters.sample(len(candidates) * self.suggestions_per_pareto, mu=search_centers)
 
         ### Predict scores and costs
         suggestions = torch.from_numpy(suggestions)
@@ -423,9 +436,9 @@ class Protein:
         gp_log_c_norm = gp_log_c_norm.numpy()
 
         # Unlinearize
-        gp_y = gp_y_norm*(max_score - min_score) + min_score
+        gp_y = gp_y_norm * (max_score - min_score) + min_score
 
-        gp_log_c = gp_log_c_norm*(log_c_max - log_c_min) + log_c_min
+        gp_log_c = gp_log_c_norm * (log_c_max - log_c_min) + log_c_min
         gp_c = np.exp(gp_log_c)
 
         gp_c_min = np.min(gp_c)
@@ -441,24 +454,24 @@ class Protein:
 
         max_c_mask = gp_c < self.max_suggestion_cost
 
-        target = (1 + self.expansion_rate)*np.random.rand()
+        target = (1 + self.expansion_rate) * np.random.rand()
         weight = 1 - abs(target - gp_log_c_norm)
 
-        suggestion_scores = self.hyperparameters.optimize_direction * max_c_mask * (
-                gp_y_norm*weight)
+        suggestion_scores = self.hyperparameters.optimize_direction * max_c_mask * (gp_y_norm * weight)
 
         best_idx = np.argmax(suggestion_scores)
         info = dict(
-            cost = gp_c[best_idx].item(),
-            score = gp_y[best_idx].item(),
-            rating = suggestion_scores[best_idx].item(),
+            cost=gp_c[best_idx].item(),
+            score=gp_y[best_idx].item(),
+            rating=suggestion_scores[best_idx].item(),
         )
-        print('Predicted -- ',
-            f'Score: {info["score"]:.3f}',
-            f'Cost: {info["cost"]:.3f}',
-            f'Rating: {info["rating"]:.3f}',
+        print(
+            "Predicted -- ",
+            f"Score: {info['score']:.3f}",
+            f"Cost: {info['cost']:.3f}",
+            f"Rating: {info['rating']:.3f}",
         )
-        '''
+        """
         if info['rating'] < 10:
             from bokeh.models import ColumnDataSource, LinearColorMapper
             from bokeh.plotting import figure, show
@@ -507,16 +520,16 @@ class Protein:
                 y=gp_y_pareto[idxs],
             ))
 
-            p = figure(title='Hyperparam Test', 
-                       x_axis_label='Cost', 
+            p = figure(title='Hyperparam Test',
+                       x_axis_label='Cost',
                        y_axis_label='Score')
 
             # Original data
             p.scatter(
-                x='x', 
-                y='y', 
-                color={'field': 'order', 'transform': mapper}, 
-                size=10, 
+                x='x',
+                y='y',
+                color={'field': 'order', 'transform': mapper},
+                size=10,
                 source=source
             )
 
@@ -526,7 +539,7 @@ class Protein:
             #p.line(x='x', y='y', color='green', source=gp_pareto_source)
 
             show(p)
-        '''
+        """
 
         best = suggestions[best_idx].numpy()
         return self.hyperparameters.to_dict(best, fill), info
@@ -544,13 +557,14 @@ class Protein:
             self.success_observations.append(new_observation)
             return
 
-        success_params = np.stack([e['input'] for e in self.success_observations])
+        success_params = np.stack([e["input"] for e in self.success_observations])
         dist = np.linalg.norm(params - success_params, axis=1)
         same = np.where(dist < 1e-6)[0]
         if len(same) > 0:
             self.success_observations[same[0]] = new_observation
         else:
             self.success_observations.append(new_observation)
+
 
 def _carbs_params_from_puffer_sweep(sweep_config):
     from carbs import (
@@ -562,48 +576,45 @@ def _carbs_params_from_puffer_sweep(sweep_config):
 
     param_spaces = {}
     for name, param in sweep_config.items():
-        if name in ('method', 'name', 'metric', 'max_score'):
+        if name in ("method", "name", "metric", "max_score"):
             continue
 
         assert isinstance(param, dict)
         if any(isinstance(param[k], dict) for k in param):
             param_spaces[name] = _carbs_params_from_puffer_sweep(param)
             continue
- 
-        assert 'distribution' in param
-        distribution = param['distribution']
-        search_center = param['mean']
+
+        assert "distribution" in param
+        distribution = param["distribution"]
+        search_center = param["mean"]
         kwargs = dict(
-            min=param['min'],
-            max=param['max'],
+            min=param["min"],
+            max=param["max"],
         )
-        if distribution == 'uniform':
+        if distribution == "uniform":
             space = LinearSpace(**kwargs)
-        elif distribution in ('int_uniform', 'uniform_pow2'):
+        elif distribution in ("int_uniform", "uniform_pow2"):
             space = LinearSpace(**kwargs, is_integer=True)
-        elif distribution == 'log_normal':
+        elif distribution == "log_normal":
             space = LogSpace(**kwargs)
-        elif distribution == 'logit_normal':
+        elif distribution == "logit_normal":
             space = LogitSpace(**kwargs)
         else:
-            raise ValueError(f'Invalid distribution: {distribution}')
+            raise ValueError(f"Invalid distribution: {distribution}")
 
-        param_spaces[name] = Param(
-            name=name,
-            space=space,
-            search_center=search_center
-        )
+        param_spaces[name] = Param(name=name, space=space, search_center=search_center)
 
     return param_spaces
 
-class Carbs:
-    def __init__(self,
-            sweep_config: dict,
-            max_suggestion_cost: float = 3600,
-            resample_frequency: int = 5,
-            num_random_samples: int = 10,
-        ):
 
+class Carbs:
+    def __init__(
+        self,
+        sweep_config: dict,
+        max_suggestion_cost: float = 3600,
+        resample_frequency: int = 5,
+        num_random_samples: int = 10,
+    ):
         param_spaces = _carbs_params_from_puffer_sweep(sweep_config)
         flat_spaces = [e[1] for e in pufferlib.unroll_nested_dict(param_spaces)]
         for e in flat_spaces:
@@ -626,13 +637,14 @@ class Carbs:
 
     def suggest(self, args):
         self.suggestion = self.carbs.suggest().suggestion
-        for k in ('train', 'env'):
-            for name, param in args['sweep'][k].items():
+        for k in ("train", "env"):
+            for name, param in args["sweep"][k].items():
                 if name in self.suggestion:
                     args[k][name] = self.suggestion[name]
 
     def observe(self, hypers, score, cost, is_failure=False):
         from carbs import ObservationInParam
+
         self.carbs.observe(
             ObservationInParam(
                 input=self.suggestion,

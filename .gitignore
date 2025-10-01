@@ -153,6 +153,7 @@ wandb/
 raylib*/
 box2d*/
 pufferlib/resources/drive/binaries
+inih*/
 
 # Temp Impulse Wars files
 pufferlib/ocean/impulse_wars/*-debug/
@@ -160,3 +161,19 @@ pufferlib/ocean/impulse_wars/*-release/
 pufferlib/ocean/impulse_wars/debug-*/
 pufferlib/ocean/impulse_wars/release-*/
 pufferlib/ocean/impulse_wars/benchmark/
+
+
+# Ignore data files
+data/
+pufferlib/resources/drive/binaries/
+
+# But keep map_000.bin for the training test
+!pufferlib/resources/drive/binaries/map_000.bin
+
+# Compiled drive binary in root
+/drive
+# But allow drive directories
+!*/drive/
+*.exe
+*.out
+*.app

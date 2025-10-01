@@ -120,7 +120,7 @@ void _conv2d(float* input, float* weights, float* bias,
                 for (int w = 0; w < w_out; w++) {
                     int out_adr = (
                         b*out_channels*h_out*w_out
-                        + oc*h_out*w_out+ 
+                        + oc*h_out*w_out+
                         + h*w_out
                         + w
                     );
@@ -516,7 +516,7 @@ struct Conv3D {
 
 Conv3D* make_conv3d(Weights* weights, int batch_size, int in_width, int in_height, int in_depth,
         int in_channels, int out_channels, int kernel_size, int stride) {
-    
+
     size_t buffer_size = batch_size*out_channels*in_depth*in_height*in_width*sizeof(float);
     int num_weights = out_channels*in_channels*kernel_size*kernel_size*kernel_size;
     Conv3D* layer = calloc(1, sizeof(Conv3D) + buffer_size);
@@ -629,7 +629,7 @@ LayerNorm* make_layernorm(Weights* weights, int batch_size, int input_dim) {
     };
     return layer;
 }
-    
+
 void layernorm(LayerNorm* layer, float* input) {
     _layernorm(input, layer->weights, layer->bias, layer->output,
         layer->batch_size, layer->input_dim);
