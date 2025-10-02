@@ -536,9 +536,6 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
-    // You don't need a separate render texture
-    //RenderTexture2D target = LoadRenderTexture(img_width, img_height);
-
     // Load cpt into network
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
