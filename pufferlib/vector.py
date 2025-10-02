@@ -757,6 +757,88 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
     # TODO: First step action space check
 
+    env_k = env_kwargs[0]
+    if env_k["population_play"]:
+        import importlib
+        from types import SimpleNamespace
+        import gymnasium
+        module_name = 'pufferlib.ocean'
+        env_module = importlib.import_module(module_name)
+        policy_cls = getattr(env_module.torch, env_k['co_player_policy_name'])
+        num_obs =  7 + 63*7 + 200*7
+        temp_env = SimpleNamespace(
+        single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
+            shape=(num_obs,), dtype=np.float32),
+        single_action_space=gymnasium.spaces.MultiDiscrete([7, 13]) ## TODO: fix hardcoded puffer_drive value here
+        )
+        
+        policy = policy_cls(temp_env, **env_k['co_player_policy'])
+
+        rnn_name = env_k['co_player_rnn_name']
+        if rnn_name is not None:
+            rnn_cls = getattr(env_module.torch, env_k['co_player_rnn_name'])
+            policy = rnn_cls(temp_env, policy, **env_k['co_player_rnn'])
+
+        
+        import struct
+        import torch 
+        def load_weights(filename):
+            """Load weights from binary file"""
+            with open(filename, 'rb') as f:
+                data = f.read()
+            
+            # Assuming weights are stored as float32
+            num_floats = len(data) // 4
+            weights = struct.unpack(f'{num_floats}f', data)
+            return torch.tensor(weights, dtype=torch.float32)
+        
+        def assign_flat_weights_to_model(model, flat_weights):
+            """Assign flat weights to model parameters"""
+            state_dict = {}
+            offset = 0
+            
+            for name, param in model.named_parameters():
+                param_size = param.numel()
+                param_data = flat_weights[offset:offset + param_size]
+                state_dict[name] = param_data.view(param.shape)
+                offset += param_size
+            
+            return state_dict
+
+        
+        flat_weights = load_weights("resources/drive/puffer_drive_weights.bin")
+
+        expected_params = sum(p.numel() for p in policy.parameters())
+        print(f"Model expects: {expected_params} parameters")
+        print(f"Binary file has: {len(flat_weights)} values")
+
+        state_dict = assign_flat_weights_to_model(policy, flat_weights)
+
+        state_dict["cell.weight_ih"] = state_dict["lstm.weight_ih_l0"]
+        state_dict["cell.weight_hh"] = state_dict["lstm.weight_hh_l0"]
+        state_dict["cell.bias_ih"]   = state_dict["lstm.bias_ih_l0"]
+        state_dict["cell.bias_hh"]   = state_dict["lstm.bias_hh_l0"]
+
+        torch.set_num_threads(1) # NOTE this is a bit whack, but I genuinely dont know how else to get it working
+        torch.set_num_interop_threads(1)
+        import  os
+        # Set environment variables as backup
+        os.environ['OMP_NUM_THREADS'] = '1'
+        os.environ['MKL_NUM_THREADS'] = '1'
+        os.environ['NUMEXPR_NUM_THREADS'] = '1'
+        
+        # Disable MKL if available
+        try:
+            torch.backends.mkl.enabled = False
+        except:
+            pass
+
+        policy.load_state_dict(state_dict)
+
+        for i in range(len(env_kwargs)):
+            env_kwargs[i]['co_player_policy'] = policy
+
+
     return backend(env_creators, env_args, env_kwargs, num_envs, **kwargs)
 
 

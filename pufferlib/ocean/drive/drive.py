@@ -5,6 +5,26 @@ import struct
 import os
 import pufferlib
 from pufferlib.ocean.drive import binding
+import numpy as np
+import gymnasium
+import json
+import struct
+import os
+import random
+import pufferlib
+import torch 
+from pufferlib.ocean.drive import binding
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import struct
+import importlib
+import psutil
+import os
+import signal
+import time
+
 
 
 class Drive(pufferlib.PufferEnv):
@@ -28,7 +48,14 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         buf=None,
         seed=1,
-    ):
+    
+        population_play = False,
+        reward_conditioned = False,
+        co_player_policy_name = None,
+        co_player_rnn_name = None, 
+        co_player_policy = None,
+        co_player_rnn = None, 
+        ):
         # env
         self.render_mode = render_mode
         self.num_maps = num_maps
@@ -42,73 +69,180 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63 * 7 + 200 * 7
-        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
-
-        if action_type == "discrete":
-            self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
-        elif action_type == "continuous":
-            self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+        self.reward_conditioned = reward_conditioned
+        if self.reward_conditioned:
+            self.num_obs = 10 + 63*7 + 200*7
         else:
-            raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")
+            self.num_obs = 7 + 63*7 + 200*7
+        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1,
+            shape=(self.num_obs,), dtype=np.float32)
+        self.num_agents_const = num_agents
+        self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+        
+        if population_play and reward_conditioned:
+            raise ValueError("Population play with reward conditioning is not supported.")
 
-        self._action_type_flag = 0 if action_type == "discrete" else 1
 
+
+
+        self.population_play = population_play
+        # self.single_action_space = gymnasium.spaces.Box(
+        #     low=-1, high=1, shape=(2,), dtype=np.float32
+        # )
         # Check if resources directory exists
         binary_path = "resources/drive/binaries/map_000.bin"
         if not os.path.exists(binary_path):
-            raise FileNotFoundError(
-                f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
-            )
+            raise FileNotFoundError(f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs.")
+        print("Grabbing map-agent info ")
+        binding_tuple =  binding.shared(num_agents=num_agents, num_maps=num_maps, population_play = population_play, ego_probability = .9)
+        
+        if self.population_play:
+            agent_offsets, map_ids, num_envs, ego_ids, co_player_ids = binding_tuple
 
-        # Check maps availability
-        available_maps = len([name for name in os.listdir("resources/drive/binaries") if name.endswith(".bin")])
-        if num_maps > available_maps:
-            raise ValueError(
-                f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
-            )
-        agent_offsets, map_ids, num_envs = binding.shared(num_agents=num_agents, num_maps=num_maps)
-        self.num_agents = num_agents
+            self.ego_ids = [item for sublist in ego_ids for item in sublist]
+            self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
+            
+
+            self.num_ego_agents = len(self.ego_ids)
+            self.num_co_players = len(self.co_player_ids)
+            self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents
+
+            print(f"ego co player ratio {self.num_ego_agents / max(1, self.num_co_players)}")
+            print(f"Num ego agents: {self.num_ego_agents}")
+
+            self.co_player_policy_name = co_player_policy_name
+            self.co_player_rnn_name = co_player_rnn_name
+            self.co_player_policy = co_player_policy
+
+            self.set_co_player_state()
+
+            env_co_player_ids = []
+            for i in range(num_envs):
+                env_start = agent_offsets[i]
+                env_co_player_ids.append([cid - env_start for cid in co_player_ids[i]])
+
+            env_ego_ids = []
+            for i in range(num_envs):
+                env_start = agent_offsets[i]
+                env_ego_ids.append([eid - env_start for eid in ego_ids[i]])
+
+            self.env_co_player_ids = env_co_player_ids
+            self.env_ego_ids = env_ego_ids
+            
+            self.set_buffers()
+        else:
+            agent_offsets, map_ids, num_envs = binding_tuple
+            self.num_agents = self.num_agents_const
+            self.ego_ids = [i for i in range(agent_offsets[-1])]
+            env_co_player_ids = [[] for i in range(num_envs)]
+            env_ego_ids = [[0] for i in range(num_envs)]  # Single ego agent per env as array
+
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
-        super().__init__(buf=buf)
+        super().__init__()
         env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
-            nxt = agent_offsets[i + 1]
-            env_id = binding.env_init(
-                self.observations[cur:nxt],
-                self.actions[cur:nxt],
-                self.rewards[cur:nxt],
-                self.terminals[cur:nxt],
-                self.truncations[cur:nxt],
-                seed,
-                action_type=self._action_type_flag,
-                human_agent_idx=human_agent_idx,
-                reward_vehicle_collision=reward_vehicle_collision,
-                reward_offroad_collision=reward_offroad_collision,
-                reward_goal_post_respawn=reward_goal_post_respawn,
-                reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
-                reward_ade=reward_ade,
-                goal_radius=goal_radius,
-                spawn_immunity_timer=spawn_immunity_timer,
-                map_id=map_ids[i],
-                max_agents=nxt - cur,
-                ini_file="pufferlib/config/ocean/drive.ini",
-            )
+            nxt = agent_offsets[i+1]
+            if not self.reward_conditioned:
+                 env_id = binding.env_init(
+                    self.observations[cur:nxt],
+                    self.actions[cur:nxt],
+                    self.rewards[cur:nxt],
+                    self.terminals[cur:nxt],
+                    self.truncations[cur:nxt],
+                    seed,
+                    human_agent_idx=self.human_agent_idx,
+                    reward_vehicle_collision=self.reward_vehicle_collision,
+                    reward_offroad_collision=self.reward_offroad_collision,
+                    reward_goal_post_respawn=self.reward_goal_post_respawn,
+                    reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
+                    spawn_immunity_timer=self.spawn_immunity_timer,
+                    map_id=map_ids[i],
+                    use_rc=False,
+                    max_agents=nxt-cur,
+                    collision_weight_lb=self.reward_vehicle_collision,
+                    collision_weight_ub=self.reward_vehicle_collision,
+                    offroad_weight_lb=self.reward_offroad_collision,
+                    offroad_weight_ub=self.reward_offroad_collision,
+                    goal_weight_lb=1.0,
+                    goal_weight_ub=1.0,
+                    population_play=self.population_play,
+                    num_co_players=len(env_co_player_ids[i]),
+                    co_player_ids=env_co_player_ids[i],
+                    ego_agent_ids=env_ego_ids[i], 
+                    num_ego_agents=len(env_ego_ids[i]),  
+                    ini_file="pufferlib/config/ocean/drive.ini",
+                )
+
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
+
+        if self.population_play:
+            self.num_agents = self.num_ego_agents
+
+
+
+    def set_buffers(self):
+        "Number of co players is non-stationary, resets env variable shape to account for this "
+
+        obs_space = self.single_observation_space
+        self.observations = np.zeros((self.total_agents, *obs_space.shape), dtype=obs_space.dtype)
+        self.rewards = np.zeros(self.total_agents, dtype=np.float32)
+        self.terminals = np.zeros(self.total_agents, dtype=bool)
+        self.truncations = np.zeros(self.total_agents, dtype=bool)
+        self.masks = np.ones(self.total_agents, dtype=bool)
+
+        atn_space = pufferlib.spaces.joint_space(self.single_action_space, self.total_agents)
+        if isinstance(self.single_action_space, pufferlib.spaces.Box):
+            self.actions = np.zeros(atn_space.shape, dtype=atn_space.dtype)
+        else:
+            self.actions = np.zeros(atn_space.shape, dtype=np.int32)
+
+        co_player_atn_space = pufferlib.spaces.joint_space(self.single_action_space, self.num_co_players)
+        if isinstance(self.single_action_space, pufferlib.spaces.Box):
+            self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=co_player_atn_space.dtype)
+        else:
+            self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=np.int32)
+
+
+
+    def set_co_player_state(self):
+        self.state = dict(
+            lstm_h=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
+            lstm_c=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
+        )
+    
+    def get_co_player_actions(self):
+        with torch.no_grad():
+            co_player_obs = self.observations[self.co_player_ids]
+            co_player_obs = torch.as_tensor(co_player_obs)
+            logits, value = self.co_player_policy.forward_eval(co_player_obs, self.state) 
+            co_player_action, logprob, _ = pufferlib.pytorch.sample_logits(logits) 
+            co_player_action = co_player_action.cpu().numpy().reshape(self.co_player_actions.shape)
+        return co_player_action
+    
+
+
+        
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
         return self.observations, []
-
-    def step(self, actions):
+    
+    
+    def step(self, ego_actions):
         self.terminals[:] = 0
-        self.actions[:] = actions
+        self.actions[self.ego_ids] = ego_actions
+        
+        if self.population_play:
+            # print("DEBUG STEP: Getting co player actions ")
+            co_player_actions = self.get_co_player_actions()
+            self.actions[self.co_player_ids] = co_player_actions
+        # print("DEBUG STEP: attempting vec step")
         binding.vec_step(self.c_envs)
         self.tick += 1
         info = []
@@ -116,44 +250,119 @@ class Drive(pufferlib.PufferEnv):
             log = binding.vec_log(self.c_envs)
             if log:
                 info.append(log)
-                # print(log)
-        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+        #         #print(log)
+        if(self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0):
             self.tick = 0
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(num_agents=self.num_agents, num_maps=self.num_maps)
+                binding_tuple = binding.shared(
+                    num_agents=self.num_agents_const,
+                    num_maps=self.num_maps,
+                    population_play=self.population_play,
+                    ego_probability=.9
+                )
+
+                if self.population_play:
+                    agent_offsets, map_ids, num_envs, ego_ids, co_player_ids = binding_tuple
+
+                    self.ego_ids = [item for sublist in ego_ids for item in sublist]
+                    #print(f"ego ids: {self.ego_ids}")
+
+                    self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
+
+                    self.num_ego_agents = len(self.ego_ids)
+                    #print(f"there are {self.num_ego_agents}")
+                    self.num_co_players = len(self.co_player_ids)
+                    self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents
+
+                    # print(f"ego co player ratio {self.num_ego_agents / max(1, self.num_co_players)}")
+
+                    self.set_co_player_state()
+
+                    env_co_player_ids = []
+                    for i in range(num_envs):
+                        env_start = agent_offsets[i]
+                        env_end = agent_offsets[i + 1]
+                        env_co_player_ids.append(
+                            [cid - env_start for cid in co_player_ids[i] if env_start <= cid < env_end]
+                        )
+
+                    env_ego_ids = []
+                    for i in range(num_envs):
+                        env_start = agent_offsets[i]
+                        env_end = agent_offsets[i + 1]
+                        env_ego_ids.append(
+                            [eid - env_start for eid in ego_ids[i] if env_start <= eid < env_end]
+                        )
+
+                    self.env_co_player_ids = env_co_player_ids
+                    self.env_ego_ids = env_ego_ids
+
+                    # print(f"env_ego_ids: {self.env_ego_ids}")
+                    # print(f"env_co_player_ids: {self.env_co_player_ids}")
+
+                    self.set_buffers()
+                else:
+                    # Non-population play mode stays the same
+                    agent_offsets, map_ids, num_envs = binding_tuple
+                    self.num_agents = self.num_agents_const
+                    self.ego_ids = [i for i in range(agent_offsets[-1])]
+                    env_co_player_ids = [[] for i in range(num_envs)]
+                    env_ego_ids = [[0] for i in range(num_envs)]  # Single ego agent per env
+
+                self.agent_offsets = agent_offsets
+                self.map_ids = map_ids
+                self.num_envs = num_envs
+
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):
                     cur = agent_offsets[i]
-                    nxt = agent_offsets[i + 1]
-                    env_id = binding.env_init(
-                        self.observations[cur:nxt],
-                        self.actions[cur:nxt],
-                        self.rewards[cur:nxt],
-                        self.terminals[cur:nxt],
-                        self.truncations[cur:nxt],
-                        seed,
-                        action_type=self._action_type_flag,
-                        human_agent_idx=self.human_agent_idx,
-                        reward_vehicle_collision=self.reward_vehicle_collision,
-                        reward_offroad_collision=self.reward_offroad_collision,
-                        reward_goal_post_respawn=self.reward_goal_post_respawn,
-                        reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
-                        reward_ade=self.reward_ade,
-                        goal_radius=self.goal_radius,
-                        spawn_immunity_timer=self.spawn_immunity_timer,
-                        map_id=map_ids[i],
-                        max_agents=nxt - cur,
-                        ini_file="pufferlib/config/ocean/drive.ini",
-                    )
+                    nxt = agent_offsets[i+1]
+                    if not self.reward_conditioned:
+                        env_id = binding.env_init(
+                            self.observations[cur:nxt],
+                            self.actions[cur:nxt],
+                            self.rewards[cur:nxt],
+                            self.terminals[cur:nxt],
+                            self.truncations[cur:nxt],
+                            seed,
+                            human_agent_idx=self.human_agent_idx,
+                            reward_vehicle_collision=self.reward_vehicle_collision,
+                            reward_offroad_collision=self.reward_offroad_collision,
+                            reward_goal_post_respawn=self.reward_goal_post_respawn,
+                            reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
+                            spawn_immunity_timer=self.spawn_immunity_timer,
+                            map_id=map_ids[i],
+                            use_rc=False,
+                            max_agents=nxt - cur,
+                            collision_weight_lb=self.reward_vehicle_collision,
+                            collision_weight_ub=self.reward_vehicle_collision,
+                            offroad_weight_lb=self.reward_offroad_collision,
+                            offroad_weight_ub=self.reward_offroad_collision,
+                            goal_weight_lb=1.0,
+                            goal_weight_ub=1.0,
+                            population_play=self.population_play,
+                            num_co_players=len(env_co_player_ids[i]),
+                            co_player_ids=env_co_player_ids[i],
+                            ego_agent_ids=env_ego_ids[i],  
+                            num_ego_agents=len(env_ego_ids[i]),
+                            ini_file="pufferlib/config/ocean/drive.ini",
+                        )
+                    
                     env_ids.append(env_id)
+
                 self.c_envs = binding.vectorize(*env_ids)
 
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
-        return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+  
+        return (self.observations[self.ego_ids], self.rewards[self.ego_ids],
+                self.terminals[self.ego_ids], self.truncations[self.ego_ids], info)
+        
+   
 
     def render(self):
         binding.vec_render(self.c_envs, 0)
@@ -345,7 +554,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed/training")
+    data_dir = Path("/scratch/kj2676/gpudrive/data/processed/training")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -385,6 +594,6 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     env.close()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     # test_performance()
     process_all_maps()

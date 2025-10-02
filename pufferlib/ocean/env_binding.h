@@ -561,7 +561,6 @@ static int assign_to_dict(PyObject* dict, char* key, float value) {
     Py_DECREF(v);
     return 0;
 }
-
 static PyObject* vec_log(PyObject* self, PyObject* args) {
     VecEnv* vec = unpack_vecenv(args);
     if (!vec) {
@@ -572,28 +571,88 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
     // horribly if Log has non-float data.
     Log aggregate = {0};
     int num_keys = sizeof(Log) / sizeof(float);
+    
+    // Always declare co-player variables for Drive environment
+    // Check at compile time if this environment supports co-players
+    #if defined(DRIVE_ENV) || defined(HAS_CO_PLAYER_SUPPORT)
+    Co_Player_Log co_player_aggregate = {0};
+    int num_co_player_keys = sizeof(Co_Player_Log) / sizeof(float);
+    int has_co_players = 0;  // Flag to check if any env has co-players
+    #endif
+    
     for (int i = 0; i < vec->num_envs; i++) {
         Env* env = vec->envs[i];
+        
+        // Aggregate regular logs
         for (int j = 0; j < num_keys; j++) {
             ((float*)&aggregate)[j] += ((float*)&env->log)[j];
             ((float*)&env->log)[j] = 0.0f;
         }
+        
+        // Runtime check for population play (only if this env type supports it)
+        #if defined(DRIVE_ENV) || defined(HAS_CO_PLAYER_SUPPORT)
+        // Check if this environment instance has population play enabled at runtime
+        if (env->population_play && env->num_co_players > 0 && env->co_player_ids != NULL) {
+            has_co_players = 1;
+            
+            // Aggregate co-player logs
+            for (int j = 0; j < num_co_player_keys; j++) {
+                ((float*)&co_player_aggregate)[j] += ((float*)&env->co_player_log)[j];
+                ((float*)&env->co_player_log)[j] = 0.0f;  // Reset after aggregating
+            }
+        }
+        #endif
     }
 
     PyObject* dict = PyDict_New();
+    
+    #if defined(DRIVE_ENV) || defined(HAS_CO_PLAYER_SUPPORT)
+    if (aggregate.n == 0.0f && (!has_co_players || co_player_aggregate.co_player_n <= 0.0f)) {
+        return dict;
+    }
+    #else
     if (aggregate.n == 0.0f) {
         return dict;
     }
+    #endif
 
-    // Average
-    float n = aggregate.n;
-    for (int i = 0; i < num_keys; i++) {
-        ((float*)&aggregate)[i] /= n;
+    // Average regular logs
+    if (aggregate.n > 0.0f) {
+        float n = aggregate.n;
+        for (int i = 0; i < num_keys; i++) {
+            ((float*)&aggregate)[i] /= n;
+        }
+        
+        // User populates dict with regular metrics
+        my_log(dict, &aggregate);
+        assign_to_dict(dict, "n", n);
     }
 
-    // User populates dict
-    my_log(dict, &aggregate);
-    assign_to_dict(dict, "n", n);
+    #if defined(DRIVE_ENV) || defined(HAS_CO_PLAYER_SUPPORT)
+    // Average and add co-player logs if they exist (runtime check)
+    if (has_co_players && co_player_aggregate.co_player_n > 0.0f) {
+        float co_player_n = co_player_aggregate.co_player_n;
+        // Only divide non-zero values to avoid corruption
+        for (int i = 0; i < num_co_player_keys; i++) {
+            if (((float*)&co_player_aggregate)[i] != 0.0f) {
+                ((float*)&co_player_aggregate)[i] /= co_player_n;
+            }
+        }
+        
+        // Add co-player metrics directly
+        assign_to_dict(dict, "ego_co_player_ratio", aggregate.n /co_player_n);
+        assign_to_dict(dict, "co_player_completion_rate", co_player_aggregate.co_player_completion_rate);
+        assign_to_dict(dict, "co_player_collision_rate", co_player_aggregate.co_player_collision_rate);
+        assign_to_dict(dict, "co_player_offroad_rate", co_player_aggregate.co_player_offroad_rate);
+        assign_to_dict(dict, "co_player_clean_collision_rate", co_player_aggregate.co_player_clean_collision_rate);
+        assign_to_dict(dict, "co_player_score", co_player_aggregate.co_player_score);
+        assign_to_dict(dict, "co_player_perf", co_player_aggregate.co_player_perf);
+        assign_to_dict(dict, "co_player_dnf_rate", co_player_aggregate.co_player_dnf_rate);
+        assign_to_dict(dict, "co_player_episode_length", co_player_aggregate.co_player_episode_length);
+        assign_to_dict(dict, "co_player_episode_return", co_player_aggregate.co_player_episode_return);
+        assign_to_dict(dict, "co_player_n", co_player_n);
+    }
+    #endif
 
     return dict;
 }
