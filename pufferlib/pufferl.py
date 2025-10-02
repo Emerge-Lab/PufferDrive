@@ -12,14 +12,18 @@ import sys
 import glob
 import ast
 import time
+import math
+import copy
 import random
 import shutil
+import numbers
 import subprocess
 import argparse
 import importlib
 import configparser
 from threading import Thread
 from collections import defaultdict, deque
+from pathlib import Path
 
 import numpy as np
 import psutil
@@ -120,7 +124,6 @@ class PuffeRL:
         self.free_idx = total_agents
         self.render = config["render"]
         self.render_interval = config["render_interval"]
-        self.driver_env = getattr(vecenv, "driver_env", None)
 
         if self.render:
             ensure_drive_binary()
@@ -530,12 +533,7 @@ class PuffeRL:
                         os.makedirs(os.path.dirname(expected_weights_path), exist_ok=True)
                         shutil.copy2(bin_path, expected_weights_path)
 
-                        # TODO: Fix memory leaks so that this is not needed
-                        # Suppress AddressSanitizer exit code (temp)
-                        env = os.environ.copy()
-                        env["ASAN_OPTIONS"] = "exitcode=0"
-
-                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive"]
+                        cmd = ["xvfb-run", "-s", "-screen 0 1280x720x24", "./drive"]
 
                         # Add render configurations
                         if config["show_grid"]:
@@ -546,52 +544,17 @@ class PuffeRL:
                             cmd.append("--lasers")
                         if config["show_human_logs"]:
                             cmd.append("--log-trajectories")
-                        env_cfg = getattr(self, "driver_env", None)
 
-                        control_all_agents = (
-                            bool(getattr(env_cfg, "control_all_agents", False))
-                            if env_cfg is not None
-                            else bool(config.get("control_all_agents", False))
-                        )
-                        if control_all_agents:
-                            cmd.append("--pure-self-play")
-
-                        n_policy = None
-                        if env_cfg is not None and hasattr(env_cfg, "num_policy_controlled_agents"):
-                            n_policy = getattr(env_cfg, "num_policy_controlled_agents")
-                        elif "num_policy_controlled_agents" in config:
-                            n_policy = config.get("num_policy_controlled_agents")
-
-                        try:
-                            n_policy = int(n_policy)
-                        except (TypeError, ValueError):
-                            n_policy = -1
-
-                        if n_policy > 0:
-                            cmd += ["--num-policy-controlled-agents", str(n_policy)]
-
-                        deterministic = (
-                            bool(getattr(env_cfg, "deterministic_agent_selection", False))
-                            if env_cfg is not None
-                            else bool(config.get("deterministic_agent_selection", False))
-                        )
-                        if deterministic:
-                            cmd.append("--deterministic-selection")
-                        if config["render_map"] is not None:
-                            map_path = config["render_map"]
-                            if os.path.exists(map_path):
-                                cmd.extend(["--map-name", map_path])
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
-                            cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env
+                            cmd,
+                            cwd=os.getcwd(),
+                            capture_output=True,
+                            text=True,
+                            timeout=120,
                         )
 
-                        # Check if GIFs were generated successfully
-                        gifs_exist = os.path.exists("resources/drive/output_topdown.gif") and os.path.exists(
-                            "resources/drive/output_agent.gif"
-                        )
-
-                        if result.returncode == 0 or (result.returncode == 1 and gifs_exist):
+                        if result.returncode == 1:
                             # Move both generated GIFs to the model directory
                             gifs = [
                                 ("resources/drive/output_topdown.gif", f"epoch_{self.epoch:06d}_topdown.gif"),
@@ -616,8 +579,10 @@ class PuffeRL:
                                 else:
                                     print(f"GIF generation completed but {source_gif} not found")
 
+                            else:
+                                print("GIF generation completed but file not found")
                         else:
-                            print(f"C rendering failed with exit code {result.returncode}: {result.stderr}")
+                            print(f"C rendering failed: {result.stderr}")
 
                     except subprocess.TimeoutExpired:
                         print("C rendering timed out")
@@ -1062,6 +1027,240 @@ class WandbLogger:
         return f"{data_dir}/{model_file}"
 
 
+class ReportAggregator:
+    """Tracks weighted statistics emitted by Drive logs across evaluation rollouts."""
+
+    def __init__(self):
+        self.sums = defaultdict(float)
+        self.sums_sq = defaultdict(float)
+        self.weights = defaultdict(float)
+        self.total_weight = 0.0
+        self.history = []
+
+    @staticmethod
+    def _to_float(value):
+        if isinstance(value, numbers.Real):
+            return float(value)
+        if isinstance(value, np.ndarray) and value.size == 1:
+            return float(value.item())
+        return None
+
+    def update(self, metrics):
+        weight = self._to_float(metrics.get("n", 1.0))
+        if weight is None or weight <= 0:
+            return
+
+        numeric = {}
+        for key, value in metrics.items():
+            if key == "n":
+                continue
+            scalar = self._to_float(value)
+            if scalar is None:
+                continue
+            self.sums[key] += scalar * weight
+            self.sums_sq[key] += (scalar ** 2) * weight
+            self.weights[key] += weight
+            numeric[key] = scalar
+
+        self.total_weight += weight
+        numeric["n"] = weight
+        numeric["episodes"] = self.total_weight
+        self.history.append(numeric)
+
+    def mean(self):
+        means = {}
+        for key, total in self.sums.items():
+            weight = self.weights.get(key, 0.0)
+            if weight > 0:
+                means[key] = total / weight
+        return means
+
+    def std(self):
+        stds = {}
+        means = self.mean()
+        for key, total_sq in self.sums_sq.items():
+            weight = self.weights.get(key, 0.0)
+            if weight > 0:
+                mean_val = means.get(key, 0.0)
+                variance = max(total_sq / weight - mean_val ** 2, 0.0)
+                stds[key] = variance ** 0.5
+        return stds
+
+    def to_table(self, keys=None):
+        if keys is None:
+            keys = sorted({k for entry in self.history for k in entry.keys() if k not in {"n"}})
+        rows = []
+        for entry in self.history:
+            row = [entry.get("episodes", 0.0)]
+            for key in keys:
+                row.append(entry.get(key))
+            rows.append(row)
+        return keys, rows
+
+
+def save_policy_weights(policy, path):
+    """Write the flattened policy parameters to a binary file for the renderer."""
+
+    weights = []
+    for _, param in policy.named_parameters():
+        weights.append(param.data.detach().cpu().numpy().ravel())
+
+    if not weights:
+        raise RuntimeError("Policy has no parameters to export")
+
+    flat = np.concatenate(weights)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flat.tofile(path)
+    return path
+
+
+def log_wandb_report(
+    wandb_logger,
+    means,
+    stds,
+    avg_entropy,
+    collisions_total,
+    runtime,
+    aggregator,
+    collisions_cumulative,
+    gif_assets,
+):
+    import wandb
+
+    run = wandb_logger.wandb.run
+    prev_step = int(run.summary.get("report/step_index", 0) or 0)
+    report_step = prev_step + 1
+
+    # Define a unified step metric for scalar history and
+    # a dedicated axis for the cumulative collisions series
+    wandb_logger.wandb.define_metric("report/step")
+    # Explicitly map known scalars to report/step to avoid glob conflicts
+    meta_scalar_keys = [
+        "report/episodes",
+        "report/collisions_total",
+        "report/runtime_seconds",
+        "report/policy_entropy",
+    ]
+    for k in meta_scalar_keys:
+        wandb_logger.wandb.define_metric(k, step_metric="report/step")
+
+    # The metric names depend on what was observed; map per-key
+    metric_keys = sorted(means.keys())
+    for k in metric_keys:
+        wandb_logger.wandb.define_metric(f"report/{k}_mean", step_metric="report/step")
+        wandb_logger.wandb.define_metric(f"report/{k}_std", step_metric="report/step")
+
+    # Cumulative collisions use episode count as the x-axis. Support a fresh key
+    # to avoid legacy step mappings on resumed runs.
+    wandb_logger.wandb.define_metric(
+        "report/cumulative_collisions", step_metric="report/collision_episode"
+    )
+    wandb_logger.wandb.define_metric(
+        "report/cumulative_collisions_by_episode", step_metric="report/collision_episode"
+    )
+
+    log_payload = {
+        "report/step": report_step,
+        "report/episodes": aggregator.total_weight,
+        "report/collisions_total": collisions_total,
+        "report/runtime_seconds": runtime,
+    }
+
+    log_payload.update({f"report/{k}_mean": v for k, v in means.items()})
+    log_payload.update({f"report/{k}_std": v for k, v in stds.items()})
+
+    if avg_entropy is not None:
+        log_payload["report/policy_entropy"] = avg_entropy
+
+    # Build a compact metrics table to browse per-episode stats
+    metric_keys = sorted(means.keys())
+    metrics_table = wandb.Table(columns=["episodes"] + [f"report/{k}" for k in metric_keys])
+    for entry in aggregator.history:
+        row = [entry.get("episodes", 0.0)]
+        for key in metric_keys:
+            row.append(entry.get(key))
+        metrics_table.add_data(*row)
+
+    log_payload["report/metrics_table"] = metrics_table
+    log_payload["report/tables/metrics"] = metrics_table
+
+    # Summary table with metrics vertically (read top-to-bottom)
+    summary_cols = ["metric", "mean", "std"]
+    summary_table = wandb.Table(columns=summary_cols)
+    for key in metric_keys:
+        summary_table.add_data(key, means.get(key), stds.get(key))
+    if avg_entropy is not None:
+        summary_table.add_data("policy_entropy", avg_entropy, None)
+    log_payload["report/summary_table"] = summary_table
+    log_payload["report/tables/summary"] = summary_table
+
+    if collisions_cumulative:
+        # Also push as scalar time-series for easy default line charts
+        for episode_count, total in collisions_cumulative:
+            wandb_logger.wandb.log(
+                {
+                    "report/cumulative_collisions": total,
+                    "report/cumulative_collisions_by_episode": total,
+                    "report/collision_episode": episode_count,
+                }
+            )
+
+        collision_table = wandb.Table(columns=["episodes", "cumulative_collisions"])
+        for episode_count, total in collisions_cumulative:
+            collision_table.add_data(episode_count, total)
+
+        log_payload["report/collision_table"] = collision_table
+        log_payload["report/tables/collisions"] = collision_table
+        log_payload["report/collision_chart"] = wandb.plot.line(
+            table=collision_table,
+            x="episodes",
+            y="cumulative_collisions",
+            title="Cumulative Collisions",
+        )
+
+    wandb_logger.wandb.log(log_payload)
+
+    # Keep summary strictly JSON-serializable (numbers/strings/lists of strings)
+    summary_updates = {
+        "report/latest_step": report_step,
+        "report/episodes": aggregator.total_weight,
+        "report/collisions_total": collisions_total,
+        "report/runtime_seconds": runtime,
+    }
+
+    summary_updates.update({f"report/{k}_mean": v for k, v in means.items()})
+    summary_updates.update({f"report/{k}_std": v for k, v in stds.items()})
+
+    if avg_entropy is not None:
+        summary_updates["report/policy_entropy"] = avg_entropy
+
+    # Log GIFs as per-view sliders under stable keys. Expect gif_assets to contain lists.
+    if gif_assets:
+        topdown_list = gif_assets.get("topdown", [])
+        agent_list = gif_assets.get("agent", [])
+        gif_log = {"report/step": report_step}
+        if topdown_list:
+            gif_log["report/gifs/topdown"] = topdown_list
+        if agent_list:
+            gif_log["report/gifs/agent"] = agent_list
+        wandb_logger.wandb.log(gif_log)
+
+        # Summary metadata for quick browsing in workspace
+        summary_updates["report/gif_count_topdown"] = len(topdown_list)
+        summary_updates["report/gif_count_agent"] = len(agent_list)
+        summary_updates["report/gif_total"] = len(topdown_list) + len(agent_list)
+        # Capture simple labels if present
+        labels = gif_assets.get("labels", [])
+        if labels:
+            # Ensure labels is JSON-serializable (list of strings)
+            summary_updates["report/gif_labels"] = [str(x) for x in labels]
+
+    run.summary.update(summary_updates)
+    run.summary["report/step_index"] = report_step
+    wandb_logger.wandb.finish()
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     args = args or load_config(env_name)
 
@@ -1189,6 +1388,337 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             frames.append("Done")
 
 
+def report(env_name, args=None, vecenv=None, policy=None):
+    start_time = time.time()
+    args = args or load_config(env_name)
+
+    report_cfg = dict(args.get("report", {}))
+    target_episodes = int(report_cfg.get("num_episodes", 0))
+    if target_episodes <= 0:
+        raise pufferlib.APIUsageError("report.num_episodes must be greater than 0")
+
+    # Vector configuration overrides for evaluation
+    eval_vec_cfg = dict(args["vec"])
+    backend = report_cfg.get("backend", eval_vec_cfg.get("backend", "Serial"))
+    if backend != "PufferEnv":
+        eval_vec_cfg["backend"] = backend
+    else:
+        eval_vec_cfg["backend"] = "Serial"
+
+    eval_vec_cfg["num_envs"] = int(report_cfg.get("num_envs", eval_vec_cfg.get("num_envs", 1)))
+    if "num_workers" in eval_vec_cfg:
+        eval_vec_cfg["num_workers"] = int(report_cfg.get("num_workers", min(eval_vec_cfg["num_workers"], eval_vec_cfg["num_envs"])))
+    eval_vec_cfg["batch_size"] = eval_vec_cfg["num_envs"]
+
+    args_for_env = copy.deepcopy(args)
+    args_for_env["vec"] = eval_vec_cfg
+
+    external_vecenv = vecenv is not None
+    vecenv = vecenv or load_env(env_name, args_for_env)
+
+    wandb_logger = None
+    if args["wandb"]:
+        load_id = args.get("load_id")
+        if load_id is None:
+            raise pufferlib.APIUsageError("report mode with wandb enabled requires --load-id to resume the run")
+        wandb_logger = WandbLogger(args, load_id, resume="allow")
+
+    policy = policy or load_policy(args, vecenv, env_name, logger=wandb_logger)
+    policy.eval()
+
+    device = args["train"]["device"]
+    use_rnn = args["train"].get("use_rnn", False)
+    num_agents = vecenv.observation_space.shape[0]
+    state = None
+    if use_rnn:
+        hidden_size = getattr(policy, "hidden_size", args["rnn"].get("hidden_size", 256))
+        state = dict(
+            lstm_h=torch.zeros(num_agents, hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, hidden_size, device=device),
+        )
+
+    entropy_enabled = bool(report_cfg.get("entropy_metric", True))
+    entropy_sum = 0.0
+    entropy_count = 0.0
+    max_steps = int(report_cfg.get("max_steps", 0))
+    steps = 0
+    runtime = 0.0
+
+    aggregator = ReportAggregator()
+    collisions_cumulative = []
+    collisions_total = 0.0
+
+    seed_value = report_cfg.get("seed", None)
+    if seed_value in (None, -1):
+        observations, _ = pufferlib.vector.reset(vecenv)
+    else:
+        observations, _ = pufferlib.vector.reset(vecenv, seed=int(seed_value))
+
+    try:
+        while aggregator.total_weight < target_episodes:
+            obs_tensor = torch.as_tensor(observations, device=device)
+
+            with torch.no_grad():
+                logits, values = policy.forward_eval(obs_tensor, state)
+                actions, _, entropy = pufferlib.pytorch.sample_logits(logits)
+                if entropy_enabled and entropy is not None:
+                    entropy_sum += entropy.sum().item()
+                    entropy_count += float(entropy.numel())
+
+            actions_np = actions.detach().cpu().numpy().reshape(vecenv.action_space.shape)
+            if isinstance(logits, torch.distributions.Normal):
+                actions_np = np.clip(actions_np, vecenv.action_space.low, vecenv.action_space.high)
+
+            observations, rewards, terminals, truncations, infos = pufferlib.vector.step(vecenv, actions_np)
+            steps += 1
+
+            if use_rnn:
+                done = np.logical_or(terminals, truncations).astype(np.float32)
+                if done.any():
+                    keep = torch.as_tensor(1.0 - done, device=device).unsqueeze(1)
+                    state["lstm_h"] = state["lstm_h"] * keep
+                    state["lstm_c"] = state["lstm_c"] * keep
+
+            for log in infos or []:
+                if not log:
+                    continue
+                aggregator.update(log)
+                weight = ReportAggregator._to_float(log.get("n", 1.0)) or 1.0
+                collisions = ReportAggregator._to_float(log.get("collision_rate"))
+                # Expand aggregated logs into per-episode increments for chart readability
+                episodes_n = int(round(weight)) if weight is not None else 0
+                per_ep = float(collisions) if collisions is not None else 0.0
+                for _ in range(max(episodes_n, 0)):
+                    collisions_total += per_ep
+                    episode_axis = len(collisions_cumulative) + 1
+                    collisions_cumulative.append((episode_axis, collisions_total))
+
+            if max_steps > 0 and steps >= max_steps:
+                break
+
+    finally:
+        runtime = time.time() - start_time
+        if not external_vecenv:
+            vecenv.close()
+
+    if aggregator.total_weight < target_episodes:
+        print(
+            f"[report] Collected {aggregator.total_weight:.0f} agent episodes (< target {target_episodes})."
+            " Increase report.max_steps or episodes if you need more coverage."
+        )
+
+    means = aggregator.mean()
+    stds = aggregator.std()
+    avg_entropy = entropy_sum / entropy_count if entropy_count > 0 else None
+
+    interesting_keys = [
+        "score",
+        "episode_return",
+        "collision_rate",
+        "clean_collision_rate",
+        "offroad_rate",
+        "completion_rate",
+        "dnf_rate",
+        "lane_alignment_rate",
+        "avg_displacement_error",
+        "episode_length",
+        "perf",
+    ]
+
+    summary_lines = [
+        f"Report completed in {runtime:.1f}s",
+        f"Agent episodes: {aggregator.total_weight:.0f}",
+        f"Cumulative collisions: {collisions_total:.2f}",
+    ]
+
+    if avg_entropy is not None:
+        summary_lines.append(f"Average policy entropy: {avg_entropy:.4f}")
+
+    for key in interesting_keys:
+        if key in means:
+            mean_val = means[key]
+            std_val = stds.get(key)
+            if std_val is not None:
+                summary_lines.append(f"{key}: {mean_val:.4f} ± {std_val:.4f}")
+            else:
+                summary_lines.append(f"{key}: {mean_val:.4f}")
+
+    print("\n".join(summary_lines))
+
+    if wandb_logger is not None:
+        gif_assets = generate_report_gifs(env_name, args, policy, wandb_logger, report_cfg)
+        log_wandb_report(
+            wandb_logger,
+            means,
+            stds,
+            avg_entropy,
+            collisions_total,
+            runtime,
+            aggregator,
+            collisions_cumulative,
+            gif_assets,
+        )
+
+    return dict(
+        mean=means,
+        std=stds,
+        entropy=avg_entropy,
+        episodes=aggregator.total_weight,
+        collisions_total=collisions_total,
+        runtime=runtime,
+    )
+
+
+def generate_report_gifs(env_name, args, policy, wandb_logger, report_cfg):
+    if wandb_logger is None:
+        return {}
+
+    ensure_drive_binary()
+
+    import wandb
+
+    train_cfg = args.get("train", {})
+    env_cfg = args.get("env", {})
+
+    gif_root = report_cfg.get("gif_output_dir") or Path(train_cfg.get("data_dir", "experiments")) / "report_gifs"
+    gif_root = Path(gif_root)
+    if not gif_root.is_absolute():
+        gif_root = Path.cwd() / gif_root
+
+    output_dir = gif_root / env_name / wandb_logger.run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    weights_path = output_dir / f"{env_name}_{wandb_logger.run_id}.bin"
+    save_policy_weights(policy, weights_path)
+
+    expected_weights_path = Path("resources/drive/puffer_drive_weights.bin")
+    expected_weights_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(weights_path, expected_weights_path)
+
+    available_maps = sorted(glob.glob("resources/drive/binaries/map_*.bin"))
+    map_count = max(int(report_cfg.get("gif_map_count", 0)), 0)
+    if map_count == 0 or not available_maps:
+        expected_weights_path.unlink(missing_ok=True)
+        return {}
+
+    rng_seed = report_cfg.get("seed", None)
+    rng = random.Random(rng_seed if rng_seed not in (None, -1) else time.time())
+    # Randomize selection order always; cap to requested count
+    shuffled = list(available_maps)
+    rng.shuffle(shuffled)
+    selected_maps = shuffled[: min(map_count, len(shuffled))]
+
+    variants = max(int(report_cfg.get("gif_variants_per_map", 1)), 1)
+    timeout = int(report_cfg.get("gif_timeout", 180))
+
+    render_opts = {
+        "show_grid": bool(train_cfg.get("show_grid", False)),
+        "obs_only": bool(train_cfg.get("obs_only", True)),
+        "show_lasers": bool(train_cfg.get("show_lasers", False)),
+        "show_human_logs": bool(train_cfg.get("show_human_logs", True)),
+    }
+
+    control_all = bool(env_cfg.get("control_all_agents", False))
+    try:
+        n_policy = int(env_cfg.get("num_policy_controlled_agents", -1))
+    except (TypeError, ValueError):
+        n_policy = -1
+    deterministic = bool(env_cfg.get("deterministic_agent_selection", False))
+
+    # Build lists for a per-view slider; also capture human-readable labels
+    gif_topdown = []
+    gif_agent = []
+    gif_labels = []
+
+    try:
+        for map_path in selected_maps:
+            map_name = Path(map_path).stem
+            for variant in range(variants):
+                topdown_out = Path("resources/drive/output_topdown.gif")
+                agent_out = Path("resources/drive/output_agent.gif")
+                if topdown_out.exists():
+                    topdown_out.unlink()
+                if agent_out.exists():
+                    agent_out.unlink()
+
+                cmd = [
+                    "xvfb-run",
+                    "-a",
+                    "-s",
+                    "-screen 0 1280x720x24",
+                    "./drive",
+                ]
+
+                if render_opts["show_grid"]:
+                    cmd.append("--show-grid")
+                if render_opts["obs_only"]:
+                    cmd.append("--obs-only")
+                if render_opts["show_lasers"]:
+                    cmd.append("--lasers")
+                if render_opts["show_human_logs"]:
+                    cmd.append("--log-trajectories")
+                if control_all:
+                    cmd.append("--pure-self-play")
+                if n_policy > 0:
+                    cmd += ["--num-policy-controlled-agents", str(n_policy)]
+                if deterministic:
+                    cmd.append("--deterministic-selection")
+
+                cmd.extend(["--map-name", map_path])
+
+                env_vars = os.environ.copy()
+                env_vars["ASAN_OPTIONS"] = "exitcode=0"
+
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        cwd=os.getcwd(),
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        env=env_vars,
+                    )
+                except subprocess.TimeoutExpired:
+                    print(f"[report] GIF generation timed out for {map_name} variant {variant}")
+                    continue
+
+                gifs_exist = topdown_out.exists() or agent_out.exists()
+                if result.returncode not in (0, 1) and not gifs_exist:
+                    print(
+                        f"[report] Renderer failed for {map_name} variant {variant}: returncode={result.returncode}\n{result.stderr}"
+                    )
+                    continue
+
+                dest_files = []
+                if topdown_out.exists():
+                    dest = output_dir / f"{map_name}_variant{variant}_topdown.gif"
+                    if dest.exists():
+                        dest.unlink()
+                    shutil.move(str(topdown_out), dest)
+                    dest_files.append((dest, "topdown"))
+
+                if agent_out.exists():
+                    dest = output_dir / f"{map_name}_variant{variant}_agent.gif"
+                    if dest.exists():
+                        dest.unlink()
+                    shutil.move(str(agent_out), dest)
+                    dest_files.append((dest, "agent"))
+
+                for dest, view in dest_files:
+                    label = f"{map_name}/variant{variant} - {view}"
+                    # Use Image for consistent slider captions; GIFs animate in UI
+                    img = wandb.Image(str(dest), caption=label)
+                    if view == "topdown":
+                        gif_topdown.append(img)
+                    elif view == "agent":
+                        gif_agent.append(img)
+                    gif_labels.append(label)
+    finally:
+        expected_weights_path.unlink(missing_ok=True)
+
+    return {"topdown": gif_topdown, "agent": gif_agent, "labels": gif_labels}
+
+
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)
     if not args["wandb"] and not args["neptune"]:
@@ -1303,7 +1833,7 @@ def load_env(env_name, args):
     return pufferlib.vector.make(make_env, env_kwargs=args["env"], **args["vec"])
 
 
-def load_policy(args, vecenv, env_name=""):
+def load_policy(args, vecenv, env_name="", logger=None):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
@@ -1324,7 +1854,10 @@ def load_policy(args, vecenv, env_name=""):
         if args["neptune"]:
             path = NeptuneLogger(args, load_id, mode="read-only").download()
         elif args["wandb"]:
-            path = WandbLogger(args, load_id).download()
+            if logger is not None:
+                path = logger.download()
+            else:
+                path = WandbLogger(args, load_id).download()
         else:
             raise pufferlib.APIUsageError("No run id provided for eval")
 
@@ -1424,7 +1957,8 @@ def load_config(env_name):
 
 def main():
     err = (
-        "Usage: puffer [train, eval, sweep, autotune, profile, export] [env_name] [optional args]. --help for more info"
+        "Usage: puffer [train, eval, report, sweep, autotune, profile, export] [env_name] "
+        "[optional args]. --help for more info"
     )
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
@@ -1435,6 +1969,8 @@ def main():
         train(env_name=env_name)
     elif mode == "eval":
         eval(env_name=env_name)
+    elif mode == "report":
+        report(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "autotune":
