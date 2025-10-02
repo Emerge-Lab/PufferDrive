@@ -140,7 +140,7 @@ static PyObject* my_shared_self_play(PyObject* self, PyObject* args, PyObject* k
 static PyObject* my_shared_population_play(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
-    
+
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     

@@ -3,7 +3,7 @@
 #SBATCH --account=kempner_pehlevan_lab
 #SBATCH --output=/n/netscratch/pehlevan_lab/Everyone/mkulkarni/pufferdrive/logs/%A_%a_%x.out
 #SBATCH --error=/n/netscratch/pehlevan_lab/Everyone/mkulkarni/pufferdrive/logs/%A_%a_%x.err
-#SBATCH --array=0-4
+#SBATCH --array=0-3
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
@@ -23,21 +23,23 @@ source ~/.bashrc
 source .venv/bin/activate
 python setup.py build_ext --inplace --force
 
-case ${SLURM_ARRAY_TASK_ID} in
-    0)
-        puffer train puffer_drive --wandb --env.oracle-mode False --env.condition-type "none"
-        ;;
-    1)
-        puffer train puffer_drive --wandb --env.oracle-mode False --env.condition-type "reward"
-        ;;
-    2)
-        puffer train puffer_drive --wandb --env.oracle-mode True --env.condition-type "reward"
-        ;;
-    3)
-        puffer train puffer_drive --wandb --env.oracle-mode False --env.condition-type "all"
-        ;;
-    4)
-        puffer train puffer_drive --wandb --env.oracle-mode True --env.condition-type "all"
-        ;;
-esac
+puffer train puffer_drive --wandb
+
+# case ${SLURM_ARRAY_TASK_ID} in
+#     0)
+#         puffer train puffer_drive --wandb --env.oracle-mode False --env.condition-type "none"
+#         ;;
+#     1)
+#         puffer train puffer_drive --wandb --env.oracle-mode False --env.condition-type "reward"
+#         ;;
+#     2)
+#         puffer train puffer_drive --wandb --env.oracle-mode True --env.condition-type "reward"
+#         ;;
+#     3)
+#         puffer train puffer_drive --wandb --env.oracle-mode False --env.condition-type "all"
+#         ;;
+#     4)
+#         puffer train puffer_drive --wandb --env.oracle-mode True --env.condition-type "all"
+#         ;;
+# esac
 
