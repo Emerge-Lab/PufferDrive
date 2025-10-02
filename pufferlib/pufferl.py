@@ -462,7 +462,7 @@ class PuffeRL:
                 pg_loss
                 + config["vf_coef"] * v_loss
                 - config["ent_coef"] * entropy_loss
-                + self.config["human_ll_coef"] * human_loss
+                - self.config["human_ll_coef"] * human_loss  # minimize negative log likelihood
             )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
