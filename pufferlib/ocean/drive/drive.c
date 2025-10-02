@@ -85,21 +85,33 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     rlEnableDepthTest();
 
     // Draw human replay trajectories if enabled
-    /* This is what is slowing down recording. I don't see the spheres, but if
-     * you want something faster, do Line3D from j-1 to j
     if(log_trajectories){
-        for(int i=0; i<env->active_agent_count;i++){
-            int idx = env->active_agent_indices[i];
-            for(int j=0; j<TRAJECTORY_LENGTH;j++){
-                float x = env->entities[idx].traj_x[j];
-                float y = env->entities[idx].traj_y[j];
-                float valid = env->entities[idx].traj_valid[j];
-                if(!valid) continue;
-                DrawSphere((Vector3){x,y,0.5f}, 0.3f, Fade(LIGHTGREEN, 0.6f));
+    for(int i=0; i<env->active_agent_count; i++){
+        int idx = env->active_agent_indices[i];
+        Vector3 prev_point = {0};
+        bool has_prev = false;
+
+        for(int j=0; j<TRAJECTORY_LENGTH; j++){
+            float x = env->entities[idx].traj_x[j];
+            float y = env->entities[idx].traj_y[j];
+            float valid = env->entities[idx].traj_valid[j];
+
+            if(!valid) {
+                has_prev = false;
+                continue;
             }
+
+            Vector3 curr_point = {x, y, 0.5f};
+
+            if(has_prev) {
+                DrawLine3D(prev_point, curr_point, Fade(LIGHTGREEN, 0.6f));
+            }
+
+            prev_point = curr_point;
+            has_prev = true;
         }
     }
-    */
+}
 
     // Draw agent trajs
     if(trajectories){
@@ -565,7 +577,6 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     // Reset environment for agent view
     c_reset(&env);
-
     CloseVideo(&topdown_recorder);
 
     VideoRecorder agent_recorder;
@@ -593,13 +604,9 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     printf("Wrote %d frames in %.2f seconds (%.2f FPS)\n",
            rendered_frames, elapsedTime, writeFPS);
-    printf("Output videos saved to:\n");
-    printf("  - resources/drive/output_topdown.mp4\n");
-    printf("  - resources/drive/output_agent.mp4\n");
 
     // Close video recorders
     CloseVideo(&agent_recorder);
-    //UnloadRenderTexture(target);
     CloseWindow();
 
     // Clean up resources
@@ -665,7 +672,7 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--lasers") == 0) {
             lasers = 1;
         } else if (strcmp(argv[i], "--log-trajectories") == 0) {
-            log_trajectories = 0;
+            log_trajectories = 1;
         } else if (strcmp(argv[i], "--frame-skip") == 0) {
             if (i + 1 < argc) {
                 frame_skip = atoi(argv[i + 1]);
