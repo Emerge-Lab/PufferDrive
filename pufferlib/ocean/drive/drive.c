@@ -114,6 +114,39 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     EndDrawing();
 }
 
+void renderAgentView(Drive* env, Client* client, int map_height, int obs_only, int lasers, int show_grid) {
+    // Agent perspective camera following the selected agent
+    int agent_idx = env->active_agent_indices[env->human_agent_idx];
+    Entity* agent = &env->entities[agent_idx];
+
+    BeginDrawing();
+
+    Camera3D camera = {0};
+    // Position camera behind and above the agent
+    camera.position = (Vector3){
+        agent->x - (25.0f * cosf(agent->heading)),
+        agent->y - (25.0f * sinf(agent->heading)),
+        15.0f
+    };
+    camera.target = (Vector3){
+        agent->x + 40.0f * cosf(agent->heading),
+        agent->y + 40.0f * sinf(agent->heading),
+        1.0f
+    };
+    camera.up = (Vector3){ 0.0f, 0.0f, 1.0f };
+    camera.fovy = 45.0f;
+    camera.projection = CAMERA_PERSPECTIVE;
+
+    Color road = (Color){35, 35, 37, 255};
+
+    ClearBackground(road);
+    BeginMode3D(camera);
+    rlEnableDepthTest();
+    draw_scene(env, client, 0, obs_only, lasers, show_grid); // mode=0 for agent view
+    EndMode3D();
+    EndDrawing();
+}
+
 typedef struct DriveNet DriveNet;
 struct DriveNet {
     int num_agents;
@@ -511,6 +544,12 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
         return -1;
     }
 
+    VideoRecorder agent_recorder;
+    if (!OpenVideo(&agent_recorder, "resources/drive/output_agent.mp4", img_width, img_height)) {
+        CloseWindow();
+        return -1;
+    }
+
     int rendered_frames = 0;
     double startTime = GetTime();
 
@@ -530,24 +569,21 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
             c_step(&env);
     }
 
-    // // Reset environment for agent view
-    // c_reset(&env);
+    // Reset environment for agent view
+    c_reset(&env);
 
-    // TODO(dc): Do the same for agent view video
-    // printf("Recording agent view...\n");
-    // for(int i = 0; i < frame_count; i++) {
-    //     if (i % frame_skip == 0) {
+    for(int i = 0; i < frame_count; i++) {
 
-    //         renderAgentView(&env, client, obs_only, lasers, show_grid);
+        if (i % frame_skip == 0) {
+            renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
+            WriteFrame(&agent_recorder, img_width, img_height);
+            rendered_frames++;
+        }
 
-    //         // Write frame directly to video
-    //         WriteFrame(&agent_recorder, target);
-    //         rendered_frames++;
-    //     }
-
-    //     forward(net, env.observations, env.actions);
-    //     c_step(&env);
-    // }
+            int (*actions)[2] = (int(*)[2])env.actions;
+            forward(net, env.observations, env.actions);
+            c_step(&env);
+    }
 
     double endTime = GetTime();
     double elapsedTime = endTime - startTime;
@@ -561,6 +597,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     // Close video recorders
     CloseVideo(&topdown_recorder);
+    CloseVideo(&agent_recorder);
     //UnloadRenderTexture(target);
     CloseWindow();
 
