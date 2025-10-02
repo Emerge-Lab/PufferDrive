@@ -137,14 +137,21 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 }
 
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
-    env->action_type = unpack(kwargs, "action_type");
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
-    env->reward_vehicle_collision = unpack(kwargs, "reward_vehicle_collision");
-    env->reward_offroad_collision = unpack(kwargs, "reward_offroad_collision");
-    env->reward_goal_post_respawn = unpack(kwargs, "reward_goal_post_respawn");
-    env->reward_vehicle_collision_post_respawn = unpack(kwargs, "reward_vehicle_collision_post_respawn");
-    env->spawn_immunity_timer = unpack(kwargs, "spawn_immunity_timer");
-    env->human_log_likelihood_coef = unpack(kwargs, "human_log_likelihood_coef");
+    env->ini_file = unpack_str(kwargs, "ini_file");
+    env_init_config conf;
+    if(ini_parse(env->ini_file, handler, &conf) < 0) {
+        printf("Error while loading %s", env->ini_file);
+    }
+    env->action_type = conf.action_type;
+    env->reward_vehicle_collision = conf.reward_vehicle_collision;
+    env->reward_offroad_collision = conf.reward_offroad_collision;
+    env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
+    env->reward_vehicle_collision_post_respawn = conf.reward_vehicle_collision_post_respawn;
+    env->reward_ade = conf.reward_ade;
+    env->goal_radius = conf.goal_radius;
+    env->spawn_immunity_timer = conf.spawn_immunity_timer;
+    env->human_log_likelihood_coef = conf.human_log_likelihood_coef;
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 
@@ -169,5 +176,6 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "completion_rate", log->completion_rate);
     assign_to_dict(dict, "clean_collision_rate", log->clean_collision_rate);
     assign_to_dict(dict, "human_log_likelihood", log->human_log_likelihood);
+    assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }

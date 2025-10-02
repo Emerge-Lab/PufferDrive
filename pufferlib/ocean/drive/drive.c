@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include "drive.h"
 #include "puffernet.h"
+#include "error.h"
 
 typedef struct DriveNet DriveNet;
 struct DriveNet {
@@ -234,7 +235,9 @@ void demo() {
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
         .human_log_likelihood_coef = 0.0f,
-	    .map_name = "resources/drive/binaries/map_942.bin",
+        .reward_ade = -0.0f,
+        .goal_radius = 2.0f,
+	    .map_name = "resources/drive/binaries/map_000.bin",
         .spawn_immunity_timer = 50,
     };
     allocate(&env);
@@ -325,17 +328,30 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories) {
+void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius) {
     // Use default if no map provided
     if (map_name == NULL) {
-        map_name = "resources/drive/binaries/map_942.bin";
+        map_name = "resources/drive/binaries/map_000.bin";
     }
+
+    if (frame_skip <= 0) {
+        frame_skip = 1;  // Default: render every frame
+    }
+
+    // Check if map file exists
+    FILE* map_file = fopen(map_name, "rb");
+    if (map_file == NULL) {
+        RAISE_FILE_ERROR(map_name);
+    }
+    fclose(map_file);
 
     // Make env
     Drive env = {
         .dynamics_model = CLASSIC,
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
+        .reward_ade = -0.0f,
+        .goal_radius = goal_radius,
         .human_log_likelihood_coef = 0.0f,
 	    .map_name = map_name,
         .spawn_immunity_timer = 50,
@@ -373,11 +389,16 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
 
     if (rollout) {
         // Generate top-down view frames
+        int rendered_frames = 0;
         for(int i = 0; i < frame_count; i++) {
-            float* path_taken = NULL;
-            snprintf(filename, sizeof(filename), "resources/drive/frame_topdown_%03d.png", i);
-            // Always set obs_only=0, lasers=0 for top-down view (full world state)
-            saveTopDownImage(&env, client, filename, target, map_height, 0, 0, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory, show_grid);
+            // Only render every frame_skip frames
+            if (i % frame_skip == 0) {
+                float* path_taken = NULL;
+                snprintf(filename, sizeof(filename), "resources/drive/frame_topdown_%03d.png", rendered_frames);
+                saveTopDownImage(&env, client, filename, target, map_height, 0, 0, rollout_trajectory_snapshot, frame_count, path_taken, log_trajectory, show_grid);
+                rendered_frames++;
+            }
+
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env, net->actor->output);
@@ -387,10 +408,16 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         c_reset(&env);
 
         // Generate agent view frames
+        rendered_frames = 0;
         for(int i = 0; i < frame_count; i++) {
-            float* path_taken = NULL;
-            snprintf(filename, sizeof(filename), "resources/drive/frame_agent_%03d.png", i);
-            saveAgentViewImage(&env, client, filename, target, map_height, obs_only, lasers, show_grid); // obs_only=1, lasers=0, show_grid=0
+            // Only render every frame_skip frames
+            if (i % frame_skip == 0) {
+                float* path_taken = NULL;
+                snprintf(filename, sizeof(filename), "resources/drive/frame_agent_%03d.png", rendered_frames);
+                saveAgentViewImage(&env, client, filename, target, map_height, obs_only, lasers, show_grid);
+                rendered_frames++;
+            }
+
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env, net->actor->output);
@@ -399,14 +426,14 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         // Generate both GIFs
         int gif_success_topdown = make_gif_from_frames(
             "resources/drive/frame_topdown_%03d.png",
-            30, // fps
+            30 / frame_skip, // fps
             "resources/drive/palette_topdown.png",
             "resources/drive/output_topdown.gif"
         );
 
         int gif_success_agent = make_gif_from_frames(
             "resources/drive/frame_agent_%03d.png",
-            15, // fps
+            15 / frame_skip, // fps
             "resources/drive/palette_agent.png",
             "resources/drive/output_agent.gif"
         );
@@ -451,7 +478,7 @@ void performance_test() {
     Drive env = {
         .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
-	    .map_name = "resources/drive/binaries/map_942.bin"
+	    .map_name = "resources/drive/binaries/map_000.bin"
     };
     clock_t start_time, end_time;
     double cpu_time_used;
@@ -488,6 +515,9 @@ int main(int argc, char* argv[]) {
     int obs_only = 0;
     int lasers = 0;
     int log_trajectories = 1;
+    int frame_skip = 10;
+    float goal_radius = 2.0f;
+    const char* map_name = NULL;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -497,11 +527,37 @@ int main(int argc, char* argv[]) {
             obs_only = 1;
         } else if (strcmp(argv[i], "--lasers") == 0) {
             lasers = 1;
-        } else if (strcmp(argv[i], "--log_trajectories") == 0) {
+        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
             log_trajectories = 0;
+        } else if (strcmp(argv[i], "--frame-skip") == 0) {
+            if (i + 1 < argc) {
+                frame_skip = atoi(argv[i + 1]);
+                i++; // Skip the next argument since we consumed it
+                if (frame_skip <= 0) {
+                    frame_skip = 1; // Ensure valid value
+                }
+            }
+        } else if (strcmp(argv[i], "--goal-radius") == 0) {
+            if (i + 1 < argc) {
+                goal_radius = atof(argv[i + 1]);
+                i++;
+                if (goal_radius <= 0) {
+                    goal_radius = 2.0f; // Ensure valid value
+                }
+            }
+        } else if (strcmp(argv[i], "--map-name") == 0) {
+            // Check if there's a next argument for the map path
+            if (i + 1 < argc) {
+                map_name = argv[i + 1];
+                i++; // Skip the next argument since we used it as map path
+            } else {
+                fprintf(stderr, "Error: --map-name option requires a map file path\n");
+                return 1;
+            }
         }
     }
-    eval_gif(NULL, show_grid, obs_only, lasers, log_trajectories);
+
+    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius);
     //demo();
     //performance_test();
     return 0;

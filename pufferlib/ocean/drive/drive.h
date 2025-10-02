@@ -10,9 +10,9 @@
 #include "raymath.h"
 #include "rlgl.h"
 #include <time.h>
+#include "error.h"
 
-// Global Constants
-#define M_PI 3.14159
+
 
 // Entity Types
 #define NONE 0
@@ -49,7 +49,8 @@
 #define OFFROAD_IDX 1
 #define REACHED_GOAL_IDX 2
 #define LANE_ALIGNED_IDX 3
-#define LOG_LIKELIHOOD_IDX 4
+#define AVG_DISPLACEMENT_ERROR_IDX 4
+#define LOG_LIKELIHOOD_IDX 5
 
 // grid cell size
 #define GRID_CELL_SIZE 5.0f
@@ -113,6 +114,7 @@ struct Log {
     float n;
     float lane_alignment_rate;
     float human_log_likelihood;
+    float avg_displacement_error;
 };
 
 typedef struct Entity Entity;
@@ -137,7 +139,7 @@ struct Entity {
     float goal_position_z;
     int mark_as_expert;
     int collision_state;
-    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, log-likelihood]
+    float metrics_array[6]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, avg_displacement_error, log_likelihood]
     float x;
     float y;
     float z;
@@ -152,6 +154,9 @@ struct Entity {
     int collided_before_goal;
     int reached_goal_this_episode;
     int active_agent;
+    float cumulative_displacement;
+    int displacement_sample_count;
+    float goal_radius;
 };
 
 void free_entity(Entity* entity){
@@ -178,6 +183,33 @@ float relative_distance_2d(float x1, float y1, float x2, float y2){
     float dy = y2 - y1;
     float distance = sqrtf(dx*dx + dy*dy);
     return distance;
+}
+
+float compute_displacement_error(Entity* agent, int timestep) {
+    // Check if timestep is within valid range
+    if (timestep < 0 || timestep >= agent->array_size) {
+        return 0.0f;
+    }
+
+    // Check if reference trajectory is valid at this timestep
+    if (!agent->traj_valid[timestep]) {
+        return 0.0f;
+    }
+
+    // Get reference position at current timestep, skip invalid ones
+    float ref_x = agent->traj_x[timestep];
+    float ref_y = agent->traj_y[timestep];
+
+    if (ref_x == -10000.0f || ref_y == -10000.0f) {
+        return 0.0f;
+    }
+
+    // Compute deltas: Euclidean distance between actual and reference position
+    float dx = agent->x - ref_x;
+    float dy = agent->y - ref_y;
+    float displacement = sqrtf(dx*dx + dy*dy);
+
+    return displacement;
 }
 
 struct Drive {
@@ -214,6 +246,7 @@ struct Drive {
     int* neighbor_cache_indices;
     float reward_vehicle_collision;
     float reward_offroad_collision;
+    float reward_ade;
     float human_log_likelihood_coef;
     char* map_name;
     float world_mean_x;
@@ -221,6 +254,8 @@ struct Drive {
     int spawn_immunity_timer;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
+    float goal_radius;
+    char* ini_file;
     float* policy_logits;
 };
 
@@ -245,6 +280,8 @@ void add_log(Drive* env) {
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
         env->log.lane_alignment_rate += lane_aligned;
+        float displacement_error = env->logs[i].avg_displacement_error;
+        env->log.avg_displacement_error += displacement_error;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         env->log.n += 1;
@@ -367,7 +404,10 @@ void set_start_position(Drive* env){
         e->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
         e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
         e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+        e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
         e->metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f; // log-likelihood
+        e->cumulative_displacement = 0.0f;
+        e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
     }
     //EndDrawing();
@@ -769,21 +809,43 @@ int collision_check(Drive* env, int agent_idx) {
     return car_collided_with_index;
 }
 
-int check_lane_aligned(Entity* car, Entity* lane) {
-    float car_to_lane_x = lane->x - car->x;
-    float car_to_lane_y = lane->y - car->y;
-    float car_heading_x = cosf(car->heading);
-    float car_heading_y = sinf(car->heading);
-    float lane_heading_x = cosf(lane->heading);
-    float lane_heading_y = sinf(lane->heading);
-    float dot_product = car_heading_x * lane_heading_x + car_heading_y * lane_heading_y;
-    float magnitude_car = sqrtf(car_heading_x * car_heading_x + car_heading_y * car_heading_y);
-    float magnitude_lane = sqrtf(lane_heading_x * lane_heading_x + lane_heading_y * lane_heading_y);
-    if (magnitude_car == 0 || magnitude_lane == 0) return 0; // Prevent division by zero
-    float angle = acosf(dot_product / (magnitude_car * magnitude_lane));
-    angle = fabsf(angle); // Ensure angle is positive
-    if (angle > M_PI) angle = 2 * M_PI - angle; // Normalize angle to [0, π]
-    return angle < (M_PI / 4); // Consider aligned if within 45 degrees
+int check_lane_aligned(Entity* car, Entity* lane, int geometry_idx) {
+    // Validate lane geometry length
+    if (!lane || lane->array_size < 2) return 0;
+
+    // Clamp geometry index to valid segment range [0, array_size-2]
+    if (geometry_idx < 0) geometry_idx = 0;
+    if (geometry_idx >= lane->array_size - 1) geometry_idx = lane->array_size - 2;
+
+    // Compute local lane segment heading
+    float heading_x1, heading_y1;
+    if (geometry_idx > 0) {
+        heading_x1 = lane->traj_x[geometry_idx] - lane->traj_x[geometry_idx - 1];
+        heading_y1 = lane->traj_y[geometry_idx] - lane->traj_y[geometry_idx - 1];
+    } else {
+        // For first segment, just use the forward direction
+        heading_x1 = lane->traj_x[geometry_idx + 1] - lane->traj_x[geometry_idx];
+        heading_y1 = lane->traj_y[geometry_idx + 1] - lane->traj_y[geometry_idx];
+    }
+
+    float heading_x2 = lane->traj_x[geometry_idx + 1] - lane->traj_x[geometry_idx];
+    float heading_y2 = lane->traj_y[geometry_idx + 1] - lane->traj_y[geometry_idx];
+
+    float heading_1 = atan2f(heading_y1, heading_x1);
+    float heading_2 = atan2f(heading_y2, heading_x2);
+    float heading = (heading_1 + heading_2) / 2.0f;
+
+    // Normalize to [-pi, pi]
+    if (heading > M_PI) heading -= 2.0f * M_PI;
+    if (heading < -M_PI) heading += 2.0f * M_PI;
+
+    // Compute heading difference
+    float car_heading = car->heading; // radians
+    float heading_diff = fabsf(car_heading - heading);
+
+    if (heading_diff > M_PI) heading_diff = 2.0f * M_PI - heading_diff;
+
+    return (heading_diff < (M_PI / 6.0f)) ? 1 : 0; // within 30 degrees
 }
 
 void reset_agent_metrics(Drive* env, int agent_idx){
@@ -791,6 +853,7 @@ void reset_agent_metrics(Drive* env, int agent_idx){
     agent->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
     agent->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+    agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
     agent->metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f; // log-likelihood
     agent->collision_state = 0;
 }
@@ -813,13 +876,27 @@ void compute_agent_metrics(Drive* env, int agent_idx, float* policy_logits) {
 
     if(agent->x == -10000.0f ) return; // invalid agent position
 
+    // Compute displacement error
+    float displacement_error = compute_displacement_error(agent, env->timestep);
+
+    if (displacement_error > 0.0f) { // Only count valid displacements
+        agent->cumulative_displacement += displacement_error;
+        agent->displacement_sample_count++;
+
+        // Compute running average
+        agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] =
+            agent->cumulative_displacement / agent->displacement_sample_count;
+    }
+
     int collided = 0;
     float half_length = agent->length/2.0f;
     float half_width = agent->width/2.0f;
     float cos_heading = cosf(agent->heading);
     float sin_heading = sinf(agent->heading);
     float min_distance = 100.0f;
-    int closest_lane_idx = -1;
+
+    int closest_lane_entity_idx = -1;
+    int closest_lane_geometry_idx = -1;
 
     float corners[4][2];
     for (int i = 0; i < 4; i++) {
@@ -854,22 +931,41 @@ void compute_agent_metrics(Drive* env, int agent_idx, float* policy_logits) {
 
         // Find closest point on the road centerline to the agent
         if(entity->type == ROAD_LANE) {
+            int entity_idx = entity_list[i];
             int geometry_idx = entity_list[i + 1];
 
             float lane_x = entity->traj_x[geometry_idx];
             float lane_y = entity->traj_y[geometry_idx];
-            float dist = ((lane_x - agent->x)*(lane_x - agent->x) + (lane_y - agent->y)*(lane_y - agent->y));
-            if(dist < min_distance){
-                min_distance = dist;
-                closest_lane_idx = geometry_idx;
-            }
 
+            int lane_size = entity->array_size;
+            if(geometry_idx == lane_size - 1) continue;
+
+            float lane_x_next = entity->traj_x[geometry_idx + 1];
+            float lane_y_next = entity->traj_y[geometry_idx + 1];
+
+            float dx_lane = lane_x_next - lane_x;
+            float dy_lane = lane_y_next - lane_y;
+
+            float lane_heading = atan2f(dy_lane, dx_lane);
+
+            float dist = ((lane_x - agent->x)*(lane_x - agent->x) + (lane_y - agent->y)*(lane_y - agent->y));
+            float angle_diff = fabsf(agent->heading - lane_heading);
+            if(dist < min_distance && angle_diff < (M_PI / 2.0f)) {
+                min_distance = dist;
+                closest_lane_entity_idx = entity_idx;
+                closest_lane_geometry_idx = geometry_idx;
+            }
         }
     }
 
     // check if aligned with closest lane
-    int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_idx]);
-    agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
+    if (min_distance > 4.0f) {
+        agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+    } else {
+        int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
+        agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
+    }
+
 
     // Check for vehicle collisions
     int car_collided_with_index = collision_check(env, agent_idx);
@@ -1066,6 +1162,7 @@ void c_close(Drive* env){
     free(env->static_car_indices);
     free(env->expert_static_car_indices);
     // free(env->map_name);
+    free(env->ini_file);
 }
 
 void allocate(Drive* env){
@@ -1312,7 +1409,11 @@ void c_reset(Drive* env){
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+        env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f;
+        env->entities[agent_idx].cumulative_displacement = 0.0f;
+        env->entities[agent_idx].displacement_sample_count = 0;
+
         compute_agent_metrics(env, agent_idx, NULL);
     }
     compute_observations(env);
@@ -1330,7 +1431,10 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+    env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[LOG_LIKELIHOOD_IDX] = 0.0f;
+    env->entities[agent_idx].cumulative_displacement = 0.0f;
+    env->entities[agent_idx].displacement_sample_count = 0;
     env->entities[agent_idx].respawn_timestep = env->timestep;
 }
 
@@ -1401,7 +1505,8 @@ void c_step(Drive* env, float* policy_logits){
                 env->entities[agent_idx].y,
                 env->entities[agent_idx].goal_position_x,
                 env->entities[agent_idx].goal_position_y);
-        if(distance_to_goal < 2.0f){
+        // Reward agent if it is within X meters of goal
+        if(distance_to_goal < env->goal_radius){
             if(env->entities[agent_idx].respawn_timestep != -1){
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
@@ -1420,6 +1525,15 @@ void c_step(Drive* env, float* policy_logits){
         //     env->logs[i].episode_return += 0.01f;
             env->logs[i].lane_alignment_rate = 1.0f;
         }
+
+        // Apply ADE reward
+        float current_ade = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
+        if(current_ade > 0.0f && env->reward_ade != 0.0f) {
+            float ade_reward = env->reward_ade * current_ade;
+            env->rewards[i] += ade_reward;
+            env->logs[i].episode_return += ade_reward;
+        }
+        env->logs[i].avg_displacement_error = current_ade;
 
         env->logs[i].human_log_likelihood += env->entities[agent_idx].metrics_array[LOG_LIKELIHOOD_IDX];
         // TODO: Add to reward here?
@@ -1607,13 +1721,14 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
     float goal_y = agent_obs[1] * 200;
     if(mode == 0 ){
         DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
+        DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
 
     if (mode == 1){
         float goal_x_world = px + (goal_x * heading_self_x - goal_y*heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y*heading_self_x);
         DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
-
+        DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
     int obs_idx = 7;  // Start after goal distances
@@ -2091,6 +2206,12 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                     env->entities[i].goal_position_y,
                     1
                 }, 0.5f, DARKGREEN);
+
+                DrawCircle3D((Vector3){
+                    env->entities[i].goal_position_x,
+                    env->entities[i].goal_position_y,
+                    0.1f
+                }, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
             }
         }
         // Draw road elements
