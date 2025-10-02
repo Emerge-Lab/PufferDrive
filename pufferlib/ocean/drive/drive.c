@@ -38,7 +38,7 @@ bool OpenVideo(VideoRecorder *recorder, const char *output_filename, int width, 
                "-f", "rawvideo",
                "-pix_fmt", "rgba",
                "-s", size_str,
-               "-r", "60",
+               "-r", "30",
                "-i", "-",
                "-c:v", "libx264",
                "-pix_fmt", "yuv420p",
@@ -55,7 +55,7 @@ bool OpenVideo(VideoRecorder *recorder, const char *output_filename, int width, 
     return true;
 }
 
-void WriteFrame(VideoRecorder *recorder, RenderTexture2D target, int width, int height) {
+void WriteFrame(VideoRecorder *recorder, int width, int height) {
     unsigned char *screen_data = rlReadScreenPixels(width, height);
     write(recorder->pipefd[1], screen_data, width * height * 4 * sizeof(*screen_data));
     RL_FREE(screen_data);
@@ -72,11 +72,11 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
 
     // Top-down orthographic camera
     Camera3D camera = {0};
-    camera.position = (Vector3){ 0.0f, 0.0f, 500.0f };  // above the scene
+    camera.position = (Vector3){ 0.0f, 0.0f, 1000.0f };  // above the scene
     camera.target   = (Vector3){ 0.0f, 0.0f, 0.0f };  // look at origin
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
     camera.fovy     = map_height;
-    camera.projection = CAMERA_ORTHOGRAPHIC;
+    camera.projection = CAMERA_PERSPECTIVE;
 
     Color road = (Color){35, 35, 37, 255};
     ClearBackground(road);
@@ -84,6 +84,8 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     rlEnableDepthTest();
 
     // Draw human replay trajectories if enabled
+    /* This is what is slowing down recording. I don't see the spheres, but if
+     * you want something faster, do Line3D from j-1 to j
     if(log_trajectories){
         for(int i=0; i<env->active_agent_count;i++){
             int idx = env->active_agent_indices[i];
@@ -96,6 +98,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
             }
         }
     }
+    */
 
     // Draw agent trajs
     if(trajectories){
@@ -472,14 +475,16 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     float map_height = env.map_corners[3] - env.map_corners[1];
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 8.0f; // Can be used to increase the video quality
+    float scale = 3.0f; // Can be used to increase the video quality
 
     // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
     int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
+    InitWindow(img_width, img_height, "Puffer Drive");
+    SetConfigFlags(FLAG_MSAA_4X_HINT);
 
-    InitWindow(img_width, img_height, "headless");
-    RenderTexture2D target = LoadRenderTexture(img_width, img_height);
+    // You don't need a separate render texture
+    //RenderTexture2D target = LoadRenderTexture(img_width, img_height);
 
     // Load cpt into network
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
@@ -508,7 +513,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
         // Only render every frame_skip frames
         if (i % frame_skip == 0) {
             renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid);
-            WriteFrame(&topdown_recorder, target, img_width, img_height);
+            WriteFrame(&topdown_recorder, img_width, img_height);
             rendered_frames++;
         }
 
@@ -548,7 +553,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     // Close video recorders
     CloseVideo(&topdown_recorder);
-    UnloadRenderTexture(target);
+    //UnloadRenderTexture(target);
     CloseWindow();
 
     // Clean up resources
@@ -601,7 +606,7 @@ int main(int argc, char* argv[]) {
     int obs_only = 0;
     int lasers = 0;
     int log_trajectories = 1;
-    int frame_skip = 10;
+    int frame_skip = 1;
     float goal_radius = 2.0f;
     const char* map_name = NULL;
 
