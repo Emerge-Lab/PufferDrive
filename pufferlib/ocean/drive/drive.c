@@ -72,11 +72,11 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
 
     // Top-down orthographic camera
     Camera3D camera = {0};
-    camera.position = (Vector3){ 0.0f, 0.0f, 1000.0f };  // above the scene
+    camera.position = (Vector3){ 0.0f, 0.0f, 500.0f };  // above the scene
     camera.target   = (Vector3){ 0.0f, 0.0f, 0.0f };  // look at origin
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
     camera.fovy     = map_height;
-    camera.projection = CAMERA_PERSPECTIVE;
+    camera.projection = CAMERA_ORTHOGRAPHIC;
 
     Color road = (Color){35, 35, 37, 255};
     ClearBackground(road);
@@ -475,7 +475,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     float map_height = env.map_corners[3] - env.map_corners[1];
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 3.0f; // Can be used to increase the video quality
+    float scale = 6.0f; // Can be used to increase the video quality
 
     // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
