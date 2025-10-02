@@ -437,9 +437,18 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
-            entropy_loss = entropy.mean()
-
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            if hasattr(self.vecenv.driver_env, 'entropy_conditioned') and self.vecenv.driver_env.entropy_conditioned:
+                mb_obs_flat = mb_obs.reshape(-1, mb_obs.shape[-1])
+                if self.vecenv.driver_env.reward_conditioned:
+                    ent_weights = mb_obs_flat[:, 10]  # Position 10: after ego(7) + RC(3)
+                else:
+                    ent_weights = mb_obs_flat[:, 7]   # Position 7: after ego(7)
+                ent_weights = ent_weights.reshape(entropy.shape)
+                entropy_loss = -(entropy * ent_weights).mean()
+                loss = pg_loss + config["vf_coef"] * v_loss + entropy_loss
+            else:
+                entropy_loss = entropy.mean()
+                loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -449,7 +458,12 @@ class PuffeRL:
             profile("train_misc", epoch)
             losses["policy_loss"] += pg_loss.item() / self.total_minibatches
             losses["value_loss"] += v_loss.item() / self.total_minibatches
-            losses["entropy"] += entropy_loss.item() / self.total_minibatches
+            # Log entropy properly - if EC is enabled, this is weighted entropy
+            if hasattr(self.vecenv.driver_env, 'entropy_conditioned') and self.vecenv.driver_env.entropy_conditioned:
+                losses["entropy_weighted"] += entropy_loss.item() / self.total_minibatches
+                losses["entropy_unweighted"] += entropy.mean().item() / self.total_minibatches
+            else:
+                losses["entropy"] += entropy_loss.item() / self.total_minibatches
             losses["old_approx_kl"] += old_approx_kl.item() / self.total_minibatches
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
@@ -1290,6 +1304,7 @@ def load_policy(args, vecenv, env_name=""):
         policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"])
 
     policy = policy.to(device)
+    print(policy)
 
     load_id = args["load_id"]
     if load_id is not None:

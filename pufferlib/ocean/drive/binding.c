@@ -351,9 +351,9 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_ade = conf.reward_ade;
     env->goal_radius = conf.goal_radius;
     env->spawn_immunity_timer = conf.spawn_immunity_timer;
-    env->oracle_mode = conf.oracle_mode;
 
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
+    env->oracle_mode = unpack(kwargs, "oracle_mode");
     env->use_rc = unpack(kwargs, "use_rc");
     env->use_ec = unpack(kwargs, "use_ec");
     if (env->use_rc){
@@ -377,7 +377,9 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     
     if (env->population_play) {
         env->num_co_players = unpack(kwargs, "num_co_players");
-        double* co_player_ids_d = unpack_float_array(kwargs, "co_player_ids", &env->num_co_players);
+        Py_ssize_t num_co_players_ssize = 0;
+        double* co_player_ids_d = unpack_float_array(kwargs, "co_player_ids", &num_co_players_ssize);
+        env->num_co_players = (int)num_co_players_ssize;
         if (co_player_ids_d != NULL && env->num_co_players > 0) {
             env->co_player_ids = (int*)malloc(env->num_co_players * sizeof(int));
             for (int i = 0; i < env->num_co_players; i++) {
@@ -417,6 +419,25 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "avg_offroad_weight", log->avg_offroad_weight);
     assign_to_dict(dict, "avg_goal_weight", log->avg_goal_weight);
     assign_to_dict(dict, "avg_entropy_weight", log->avg_entropy_weight);
+    
+    // Reward conditioning debug metrics
+    assign_to_dict(dict, "min_collision_weight", log->min_collision_weight);
+    assign_to_dict(dict, "max_collision_weight", log->max_collision_weight);
+    assign_to_dict(dict, "min_offroad_weight", log->min_offroad_weight);
+    assign_to_dict(dict, "max_offroad_weight", log->max_offroad_weight);
+    assign_to_dict(dict, "min_goal_weight", log->min_goal_weight);
+    assign_to_dict(dict, "max_goal_weight", log->max_goal_weight);
+    assign_to_dict(dict, "collision_weighted_reward_total", log->collision_weighted_reward_total);
+    assign_to_dict(dict, "offroad_weighted_reward_total", log->offroad_weighted_reward_total);
+    assign_to_dict(dict, "goal_weighted_reward_total", log->goal_weighted_reward_total);
+    assign_to_dict(dict, "num_collision_events", log->num_collision_events);
+    assign_to_dict(dict, "num_offroad_events", log->num_offroad_events);
+    assign_to_dict(dict, "num_goal_events", log->num_goal_events);
+    
+    // Entropy conditioning debug metrics
+    assign_to_dict(dict, "min_entropy_weight", log->min_entropy_weight);
+    assign_to_dict(dict, "max_entropy_weight", log->max_entropy_weight);
+    
     return 0;
 }
 int my_co_player_log(PyObject* dict, Co_Player_Log* log) {

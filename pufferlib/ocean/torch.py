@@ -16,8 +16,15 @@ class Drive(nn.Module):
     def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
         super().__init__()
         self.hidden_size = hidden_size
+        
+        self.use_rc = env.reward_conditioned
+        self.use_ec = env.entropy_conditioned
+        self.oracle_mode = env.oracle_mode
+        self.conditioning_dims = (3 if self.use_rc else 0) + (1 if self.use_ec else 0)
+        
+        ego_dim = 7 + self.conditioning_dims
         self.ego_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(7, input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(ego_dim, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
@@ -37,10 +44,25 @@ class Drive(nn.Module):
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
+        if self.oracle_mode:
+            self.oracle_encoder = nn.Sequential(
+                pufferlib.pytorch.layer_init(nn.Linear(self.conditioning_dims, input_size)),
+                nn.LayerNorm(input_size),
+                # nn.ReLU(),
+                pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+            )
+            cat_features = 4  # ego + road + partner + oracle
+        else:
+            self.oracle_encoder = None
+            cat_features = 3  # ego + road + partner
+
+        self.cat_features = cat_features
+
         self.shared_embedding = nn.Sequential(
             nn.GELU(),
-            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, hidden_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(cat_features * input_size, hidden_size)),
         )
+        
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
 
         if self.is_continuous:
@@ -60,7 +82,7 @@ class Drive(nn.Module):
         return self.forward(x, state)
 
     def encode_observations(self, observations, state=None):
-        ego_dim = 7
+        ego_dim = 7 + self.conditioning_dims
         partner_dim = 63 * 7
         road_dim = 200 * 7
         ego_obs = observations[:, :ego_dim]
@@ -77,7 +99,13 @@ class Drive(nn.Module):
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
         road_features, _ = self.road_encoder(road_objects).max(dim=1)
 
-        concat_features = torch.cat([ego_features, road_features, partner_features], dim=1)
+        if self.oracle_mode:
+            oracle_obs = observations[:, ego_dim + partner_dim + road_dim: ]
+            oracle_objects = oracle_obs.view(-1, 64, self.conditioning_dims)
+            oracle_features, _ = self.oracle_encoder(oracle_objects).max(dim=1)
+            concat_features = torch.cat([ego_features, road_features, partner_features, oracle_features], dim=1)
+        else:
+            concat_features = torch.cat([ego_features, road_features, partner_features], dim=1)
 
         # Pass through shared embedding
         embedding = F.relu(self.shared_embedding(concat_features))

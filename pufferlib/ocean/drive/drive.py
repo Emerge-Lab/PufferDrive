@@ -1,8 +1,10 @@
+import time
 import numpy as np
 import gymnasium
 import json
 import struct
 import os
+import random
 import pufferlib
 from pufferlib.ocean.drive import binding
 import numpy as np
@@ -90,7 +92,8 @@ class Drive(pufferlib.PufferEnv):
         self.entropy_weight_ub = entropy_weight_ub
 
         conditioning_dims = (3 if self.reward_conditioned else 0) + (1 if self.entropy_conditioned else 0)
-        self.oracle_dims = num_agents * conditioning_dims if self.oracle_mode else 0
+        # TODO: Fix hardcoded 64
+        self.oracle_dims = 64 * conditioning_dims if self.oracle_mode else 0 
 
         self.num_obs = 7 + conditioning_dims + 63*7 + 200*7 + self.oracle_dims
 
@@ -161,11 +164,12 @@ class Drive(pufferlib.PufferEnv):
             self.ego_ids = [i for i in range(agent_offsets[-1])]
             env_co_player_ids = [[] for i in range(num_envs)]
             env_ego_ids = [0 for i in range(num_envs)]
+            self.co_player_policy = None
        
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
-        super().__init__()
+        super().__init__(buf=buf)
         env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
@@ -256,12 +260,17 @@ class Drive(pufferlib.PufferEnv):
             self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=np.int32)
 
     def set_co_player_state(self):
+        if self.co_player_policy is None:
+            self.state = None
+            return
         self.state = dict(
             lstm_h=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
             lstm_c=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
         )
     
     def get_co_player_actions(self):
+        if self.co_player_policy is None:
+            return None
         co_player_obs = self.observations[self.co_player_ids]
         co_player_obs = torch.as_tensor(co_player_obs)
         logits, value = self.co_player_policy.forward_eval(co_player_obs, self.state) 
@@ -283,7 +292,8 @@ class Drive(pufferlib.PufferEnv):
 
         if self.population_play:
             co_player_actions = self.get_co_player_actions()
-            self.actions[self.co_player_ids] = co_player_actions
+            if co_player_actions is not None:
+                self.actions[self.co_player_ids] = co_player_actions
         
         binding.vec_step(self.c_envs)
         self.tick += 1
@@ -326,6 +336,7 @@ class Drive(pufferlib.PufferEnv):
                     self.ego_ids = [i for i in range(agent_offsets[-1])]
                     env_co_player_ids = [[] for i in range(num_envs)]
                     env_ego_ids = [0 for i in range(num_envs)]
+                    self.co_player_policy = None
 
                 
                 self.agent_offsets = agent_offsets
@@ -380,10 +391,13 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
 
-        if self.rewards.sum() !=0:
-            pass
-        return (self.observations[self.ego_ids], self.rewards[self.ego_ids],
-                self.terminals[self.ego_ids], self.truncations[self.ego_ids], info)
+        if self.population_play:
+            if self.rewards.sum() !=0:
+                pass
+            return (self.observations[self.ego_ids], self.rewards[self.ego_ids],
+                    self.terminals[self.ego_ids], self.truncations[self.ego_ids], info)
+
+        return self.observations, self.rewards, self.terminals, self.truncations, info
         
 
     def render(self):

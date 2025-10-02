@@ -1,6 +1,6 @@
 """Test that the network can be initialized and run with different conditioning configs."""
 from pufferlib.ocean.drive.drive import Drive
-from pufferlib.networks.ocean.drive import Recurrent
+from pufferlib.ocean.torch import Recurrent, Drive as DriveNet
 import numpy as np
 import torch
 
@@ -9,32 +9,34 @@ def test_baseline_network():
     print("\n=== Testing baseline (none, False) ===")
     env = Drive(num_agents=64, condition_type="none", oracle_mode=False, num_maps=1)
 
-    policy = Recurrent(
-        env=env,
-        input_size=64,
-        hidden_size=256,
-        num_layers=1
-    )
+    encoder_size = 64
+    base_policy = DriveNet(env, input_size=encoder_size, hidden_size=256)
+    policy = Recurrent(env, base_policy, input_size=base_policy.input_size, hidden_size=256)
 
     obs, _ = env.reset()
-    obs_tensor = torch.from_numpy(obs).float()
+    obs_tensor = torch.from_numpy(obs).float().unsqueeze(0)
 
     # Initialize hidden state
-    hidden = policy.get_initial_state(batch_size=64)
+    state = {"lstm_h": None, "lstm_c": None}
 
     # Forward pass
-    logits, value, hidden = policy(obs_tensor, hidden)
+    logits, value = policy(obs_tensor, state)
 
     print(f"Obs shape: {obs.shape}")
-    print(f"Logits shape: {logits.shape}")
+    if isinstance(logits, tuple):
+        print(f"Logits: tuple of {len(logits)} tensors, shapes: {[l.shape for l in logits]}")
+        logits_tensor = torch.cat(logits, dim=-1)
+    else:
+        logits_tensor = logits
+        print(f"Logits shape: {logits.shape}")
+    
     print(f"Value shape: {value.shape}")
     print(f"Value mean: {value.mean().item():.4f}, std: {value.std().item():.4f}")
-    print(f"Logits mean: {logits.mean().item():.4f}, std: {logits.std().item():.4f}")
 
     # Check for NaN/Inf
-    assert not torch.isnan(logits).any(), "Logits contain NaN"
+    assert not torch.isnan(logits_tensor).any(), "Logits contain NaN"
     assert not torch.isnan(value).any(), "Value contains NaN"
-    assert not torch.isinf(logits).any(), "Logits contain Inf"
+    assert not torch.isinf(logits_tensor).any(), "Logits contain Inf"
     assert not torch.isinf(value).any(), "Value contains Inf"
 
     env.close()
@@ -56,26 +58,27 @@ def test_reward_conditioning_network():
         num_maps=1
     )
 
-    policy = Recurrent(
-        env=env,
-        input_size=64,
-        hidden_size=256,
-        num_layers=1
-    )
+    encoder_size = 64
+    base_policy = DriveNet(env, input_size=encoder_size, hidden_size=256)
+    policy = Recurrent(env, base_policy, input_size=base_policy.input_size, hidden_size=256)
 
     obs, _ = env.reset()
-    obs_tensor = torch.from_numpy(obs).float()
-    hidden = policy.get_initial_state(batch_size=64)
+    obs_tensor = torch.from_numpy(obs).float().unsqueeze(0)
+    state = {"lstm_h": None, "lstm_c": None}
 
-    logits, value, hidden = policy(obs_tensor, hidden)
+    logits, value = policy(obs_tensor, state)
 
     print(f"Obs shape: {obs.shape}")
     print(f"Expected obs shape: (64, {7 + 3 + 63*7 + 200*7})")
-    print(f"Logits shape: {logits.shape}")
+    if isinstance(logits, tuple):
+        print(f"Logits: tuple of {len(logits)} tensors")
+        logits_tensor = torch.cat(logits, dim=-1)
+    else:
+        logits_tensor = logits
     print(f"Value shape: {value.shape}")
     print(f"Value mean: {value.mean().item():.4f}, std: {value.std().item():.4f}")
 
-    assert not torch.isnan(logits).any(), "Logits contain NaN"
+    assert not torch.isnan(logits_tensor).any(), "Logits contain NaN"
     assert not torch.isnan(value).any(), "Value contains NaN"
 
     env.close()
@@ -99,18 +102,15 @@ def test_oracle_mode_network():
         num_maps=1
     )
 
-    policy = Recurrent(
-        env=env,
-        input_size=64,
-        hidden_size=256,
-        num_layers=1
-    )
+    encoder_size = 64
+    base_policy = DriveNet(env, input_size=encoder_size, hidden_size=256)
+    policy = Recurrent(env, base_policy, input_size=base_policy.input_size, hidden_size=256)
 
     obs, _ = env.reset()
-    obs_tensor = torch.from_numpy(obs).float()
-    hidden = policy.get_initial_state(batch_size=64)
+    obs_tensor = torch.from_numpy(obs).float().unsqueeze(0)
+    state = {"lstm_h": None, "lstm_c": None}
 
-    logits, value, hidden = policy(obs_tensor, hidden)
+    logits, value = policy(obs_tensor, state)
 
     conditioning_dims = 4  # 3 reward + 1 entropy
     oracle_dims = 64 * conditioning_dims
@@ -119,9 +119,14 @@ def test_oracle_mode_network():
     print(f"Obs shape: {obs.shape}")
     print(f"Expected obs shape: (64, {expected_obs_size})")
     print(f"Oracle dims: {oracle_dims}")
+    if isinstance(logits, tuple):
+        print(f"Logits: tuple of {len(logits)} tensors")
+        logits_tensor = torch.cat(logits, dim=-1)
+    else:
+        logits_tensor = logits
     print(f"Value mean: {value.mean().item():.4f}, std: {value.std().item():.4f}")
 
-    assert not torch.isnan(logits).any(), "Logits contain NaN"
+    assert not torch.isnan(logits_tensor).any(), "Logits contain NaN"
     assert not torch.isnan(value).any(), "Value contains NaN"
 
     env.close()
