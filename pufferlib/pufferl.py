@@ -349,6 +349,7 @@ class PuffeRL:
         a = config["prio_alpha"]
         clip_coef = config["clip_coef"]
         vf_clip = config["vf_clip_coef"]
+        human_clip = config["human_clip_coef"]
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
 
@@ -411,6 +412,21 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
+            # Compute log likelihood loss of human actions under current policy. Steps:
+            # 1: Sample a batch of human actions and observations from dataset
+            # 2: Compute log likelihood of human actions under current policy
+            # 3: Add negative log likelihood to total loss, weighted by self.human_ll_coef
+
+            # placeholder: Get random human actions
+            # TODO(dc): Replace these with actual human actions from map binary
+            # TODO(dc): Replace with actual human observations from map binary
+            human_actions = torch.randint_like(actions, low=0, high=12)
+            human_logits, _ = self.policy(mb_obs, state)
+
+            # Shape: [mb_size, bptt_horizon]
+            # Bug: Some of these are inf, why?
+            _, human_log_prob, entropy = pufferlib.pytorch.sample_logits(logits=human_logits, action=human_actions)
+
             adv = advantages[idx]
             adv = compute_puff_advantage(
                 mb_values,
@@ -437,9 +453,17 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
+            human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
+            human_loss = human_loss_clipped.mean()
+
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            loss = (
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - config["ent_coef"] * entropy_loss
+                + self.config["human_ll_coef"] * human_loss
+            )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -454,6 +478,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["human_loss"] += human_loss / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
@@ -472,7 +497,9 @@ class PuffeRL:
         y_true = advantages.flatten() + self.values.flatten()
         var_y = y_true.var()
         explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
-        losses["explained_variance"] = explained_var.item()
+        losses["explained_variance"] = (
+            explained_var.item() if isinstance(explained_var, torch.Tensor) else explained_var
+        )
 
         profile.end()
         logs = None
