@@ -544,12 +544,6 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
         return -1;
     }
 
-    VideoRecorder agent_recorder;
-    if (!OpenVideo(&agent_recorder, "resources/drive/output_agent.mp4", img_width, img_height)) {
-        CloseWindow();
-        return -1;
-    }
-
     int rendered_frames = 0;
     double startTime = GetTime();
 
@@ -571,6 +565,14 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     // Reset environment for agent view
     c_reset(&env);
+
+    CloseVideo(&topdown_recorder);
+
+    VideoRecorder agent_recorder;
+    if (!OpenVideo(&agent_recorder, "resources/drive/output_agent.mp4", img_width, img_height)) {
+        CloseWindow();
+        return -1;
+    }
 
     for(int i = 0; i < frame_count; i++) {
 
@@ -596,7 +598,6 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     printf("  - resources/drive/output_agent.mp4\n");
 
     // Close video recorders
-    CloseVideo(&topdown_recorder);
     CloseVideo(&agent_recorder);
     //UnloadRenderTexture(target);
     CloseWindow();
@@ -606,7 +607,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     free_allocated(&env);
     free_drivenet(net);
     free(weights);
-
+    return 0;
 }
 
 void performance_test() {
