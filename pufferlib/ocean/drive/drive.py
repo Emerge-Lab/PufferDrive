@@ -56,6 +56,8 @@ class Drive(pufferlib.PufferEnv):
             goal_weight_ub = 1.0,
             entropy_weight_lb = 0.0,
             entropy_weight_ub = 0.1,
+            discount_weight_lb = 0.9,
+            discount_weight_ub = 0.99,
             co_player_policy_name = None,
             co_player_rnn_name = None, 
             co_player_policy = None,
@@ -80,6 +82,7 @@ class Drive(pufferlib.PufferEnv):
         self.condition_type = condition_type
         self.reward_conditioned = condition_type in ("reward", "all")
         self.entropy_conditioned = condition_type in ("entropy", "all")
+        self.discount_conditioned = condition_type in ("discount", "all")
         self.oracle_mode = oracle_mode
 
         self.collision_weight_lb = collision_weight_lb if self.reward_conditioned else self.reward_vehicle_collision
@@ -90,8 +93,10 @@ class Drive(pufferlib.PufferEnv):
         self.goal_weight_ub = goal_weight_ub if self.reward_conditioned else 1.0
         self.entropy_weight_lb = entropy_weight_lb
         self.entropy_weight_ub = entropy_weight_ub
+        self.discount_weight_lb = discount_weight_lb
+        self.discount_weight_ub = discount_weight_ub
 
-        conditioning_dims = (3 if self.reward_conditioned else 0) + (1 if self.entropy_conditioned else 0)
+        conditioning_dims = (3 if self.reward_conditioned else 0) + (1 if self.entropy_conditioned else 0) + (1 if self.discount_conditioned else 0)
         # TODO: Fix hardcoded 64
         self.oracle_dims = 64 * conditioning_dims if self.oracle_mode else 0 
 
@@ -112,8 +117,8 @@ class Drive(pufferlib.PufferEnv):
         self._action_type_flag = 0 if action_type == "discrete" else 1
         
         if self.population_play:
-            if self.reward_conditioned or self.entropy_conditioned:
-                raise ValueError("Population play with reward conditioning is not supported.")
+            if self.reward_conditioned or self.entropy_conditioned or self.discount_conditioned:
+                raise ValueError("Population play with conditioning is not supported.")
 
         # self.single_action_space = gymnasium.spaces.Box(
         #     low=-1, high=1, shape=(2,), dtype=np.float32
@@ -193,6 +198,7 @@ class Drive(pufferlib.PufferEnv):
                 map_id=map_ids[i],
                 use_rc=self.reward_conditioned,
                 use_ec=self.entropy_conditioned,
+                use_dc=self.discount_conditioned,
                 oracle_mode=self.oracle_mode,
                 max_agents=nxt-cur,
                 collision_weight_lb=self.collision_weight_lb,
@@ -203,6 +209,8 @@ class Drive(pufferlib.PufferEnv):
                 goal_weight_ub=self.goal_weight_ub,
                 entropy_weight_lb=self.entropy_weight_lb,
                 entropy_weight_ub=self.entropy_weight_ub,
+                discount_weight_lb=self.discount_weight_lb,
+                discount_weight_ub=self.discount_weight_ub,
                 population_play = self.population_play,
                 num_co_players = len(env_co_player_ids[i]),
                 co_player_ids = env_co_player_ids[i],
@@ -368,6 +376,7 @@ class Drive(pufferlib.PufferEnv):
                         map_id=map_ids[i],
                         use_rc=self.reward_conditioned,
                         use_ec=self.entropy_conditioned,
+                        use_dc=self.discount_conditioned,
                         oracle_mode=self.oracle_mode,
                         max_agents=nxt-cur,
                         collision_weight_lb=self.collision_weight_lb,
@@ -378,6 +387,8 @@ class Drive(pufferlib.PufferEnv):
                         goal_weight_ub=self.goal_weight_ub,
                         entropy_weight_lb=self.entropy_weight_lb,
                         entropy_weight_ub=self.entropy_weight_ub,
+                        discount_weight_lb=self.discount_weight_lb,
+                        discount_weight_ub=self.discount_weight_ub,
                         population_play = self.population_play,
                         num_co_players = len(env_co_player_ids[i]),
                         co_player_ids = env_co_player_ids[i],

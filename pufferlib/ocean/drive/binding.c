@@ -356,6 +356,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->oracle_mode = unpack(kwargs, "oracle_mode");
     env->use_rc = unpack(kwargs, "use_rc");
     env->use_ec = unpack(kwargs, "use_ec");
+    env->use_dc = unpack(kwargs, "use_dc");
     if (env->use_rc){
         env->collision_weight_lb = unpack(kwargs, "collision_weight_lb");
         env->collision_weight_ub = unpack(kwargs, "collision_weight_ub");
@@ -367,6 +368,10 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     if (env->use_ec){
         env->entropy_weight_lb = unpack(kwargs, "entropy_weight_lb");
         env->entropy_weight_ub = unpack(kwargs, "entropy_weight_ub");
+    }
+    if (env->use_dc){
+        env->discount_weight_lb = unpack(kwargs, "discount_weight_lb");
+        env->discount_weight_ub = unpack(kwargs, "discount_weight_ub");
     }
 
     int map_id = unpack(kwargs, "map_id");
@@ -437,7 +442,12 @@ static int my_log(PyObject* dict, Log* log) {
     // Entropy conditioning debug metrics
     assign_to_dict(dict, "min_entropy_weight", log->min_entropy_weight);
     assign_to_dict(dict, "max_entropy_weight", log->max_entropy_weight);
-    
+
+    // Discount conditioning debug metrics
+    assign_to_dict(dict, "avg_discount_weight", log->avg_discount_weight);
+    assign_to_dict(dict, "min_discount_weight", log->min_discount_weight);
+    assign_to_dict(dict, "max_discount_weight", log->max_discount_weight);
+
     return 0;
 }
 int my_co_player_log(PyObject* dict, Co_Player_Log* log) {

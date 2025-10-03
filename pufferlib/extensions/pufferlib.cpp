@@ -61,12 +61,13 @@ void vtrace_check(torch::Tensor values, torch::Tensor rewards,
 
 // [num_steps, horizon]
 void puff_advantage(float* values, float* rewards, float* dones, float* importance,
-        float* advantages, float gamma, float lambda, float rho_clip, float c_clip,
+        float* advantages, float* gammas, float lambda, float rho_clip, float c_clip,
         int num_steps, const int horizon){
-    for (int offset = 0; offset < num_steps*horizon; offset+=horizon) {
+    for (int i = 0; i < num_steps; i++) {
+        int offset = i * horizon;
         puff_advantage_row(values + offset, rewards + offset,
             dones + offset, importance + offset, advantages + offset,
-            gamma, lambda, rho_clip, c_clip, horizon
+            gammas[i], lambda, rho_clip, c_clip, horizon
         );
     }
 }
@@ -74,18 +75,25 @@ void puff_advantage(float* values, float* rewards, float* dones, float* importan
 
 void compute_puff_advantage_cpu(torch::Tensor values, torch::Tensor rewards,
         torch::Tensor dones, torch::Tensor importance, torch::Tensor advantages,
-        double gamma, double lambda, double rho_clip, double c_clip) {
+        torch::Tensor gammas, double lambda, double rho_clip, double c_clip) {
     int num_steps = values.size(0);
     int horizon = values.size(1);
     vtrace_check(values, rewards, dones, importance, advantages, num_steps, horizon);
+
+    // Validate gammas tensor
+    TORCH_CHECK(gammas.dim() == 1, "Gammas must be 1D");
+    TORCH_CHECK(gammas.size(0) == num_steps, "Gammas size must match num_steps");
+    TORCH_CHECK(gammas.dtype() == torch::kFloat32, "Gammas must be float32");
+    TORCH_CHECK(gammas.is_contiguous(), "Gammas must be contiguous");
+
     puff_advantage(values.data_ptr<float>(), rewards.data_ptr<float>(),
         dones.data_ptr<float>(), importance.data_ptr<float>(), advantages.data_ptr<float>(),
-        gamma, lambda, rho_clip, c_clip, num_steps, horizon
+        gammas.data_ptr<float>(), lambda, rho_clip, c_clip, num_steps, horizon
     );
 }
 
 TORCH_LIBRARY(pufferlib, m) {
-   m.def("compute_puff_advantage(Tensor(a!) values, Tensor(b!) rewards, Tensor(c!) dones, Tensor(d!) importance, Tensor(e!) advantages, float gamma, float lambda, float rho_clip, float c_clip) -> ()");
+   m.def("compute_puff_advantage(Tensor(a!) values, Tensor(b!) rewards, Tensor(c!) dones, Tensor(d!) importance, Tensor(e!) advantages, Tensor gammas, float lambda, float rho_clip, float c_clip) -> ()");
  }
 
 TORCH_LIBRARY_IMPL(pufferlib, CPU, m) {

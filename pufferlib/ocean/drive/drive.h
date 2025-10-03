@@ -133,6 +133,10 @@ struct Log {
     // Entropy conditioning debug metrics
     float min_entropy_weight;
     float max_entropy_weight;
+    // Discount conditioning debug metrics
+    float min_discount_weight;
+    float max_discount_weight;
+    float avg_discount_weight;
 };
 
 struct Co_Player_Log {
@@ -297,6 +301,11 @@ struct Drive {
     float entropy_weight_lb;
     float entropy_weight_ub;
     float* entropy_weights;
+    // this is for discount conditioned learning
+    bool use_dc;
+    float discount_weight_lb;
+    float discount_weight_ub;
+    float* discount_weights;
     // this is for population play
     bool population_play;
     int* co_player_ids;
@@ -359,6 +368,9 @@ void add_log(Drive* env) {
                 }
                 if (env->use_ec) {
                     env->log.avg_entropy_weight += env->entropy_weights[i];
+                }
+                if (env->use_dc) {
+                    env->log.avg_discount_weight += env->discount_weights[i];
                 }
 
             }
@@ -442,9 +454,15 @@ void add_log(Drive* env) {
             }
             if (env->use_ec) {
                 env->log.avg_entropy_weight += env->entropy_weights[i];
-                
+
                 if (env->entropy_weights[i] < env->log.min_entropy_weight) env->log.min_entropy_weight = env->entropy_weights[i];
                 if (env->entropy_weights[i] > env->log.max_entropy_weight) env->log.max_entropy_weight = env->entropy_weights[i];
+            }
+            if (env->use_dc) {
+                env->log.avg_discount_weight += env->discount_weights[i];
+
+                if (env->discount_weights[i] < env->log.min_discount_weight) env->log.min_discount_weight = env->discount_weights[i];
+                if (env->discount_weights[i] > env->log.max_discount_weight) env->log.max_discount_weight = env->discount_weights[i];
             }
 
         }
@@ -1285,6 +1303,13 @@ void init(Drive* env){
             // printf("Agent %d/%d - Entropy Weight: %f\n", i, env->active_agent_count, env->entropy_weights[i]);
         }
     }
+    if (env->use_dc) {
+        env->discount_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+        for (int i = 0; i < env->active_agent_count; i++) {
+            env->discount_weights[i] = ((float)rand() / RAND_MAX) * (env->discount_weight_ub - env->discount_weight_lb) + env->discount_weight_lb;
+            // printf("Agent %d/%d - Discount Weight: %f\n", i, env->active_agent_count, env->discount_weights[i]);
+        }
+    }
 
     if (env->population_play) {
             if (env->num_co_players + 1 != env->active_agent_count) {
@@ -1329,6 +1354,10 @@ void c_close(Drive* env){
 
     if (env->use_ec) {
         free(env->entropy_weights);
+    }
+
+    if (env->use_dc) {
+        free(env->discount_weights);
     }
 
     // free(env->map_name);
@@ -1444,7 +1473,7 @@ float reverse_normalize_value(float value, float min, float max){
 
 void compute_observations(Drive* env) {
     int base_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0);
+    int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0) + (env->use_dc ? 1 : 0);
     int oracle_dims = 0;
     if (env->oracle_mode) {
         // TODO: Fix hardcoded 64
@@ -1492,7 +1521,11 @@ void compute_observations(Drive* env) {
         if (env->use_ec){
             obs[obs_idx++] = env->entropy_weights[i];
         } // its own entropy_weight
-        
+
+        if (env->use_dc){
+            obs[obs_idx++] = env->discount_weights[i];
+        } // its own discount_weight
+
         // Relative Pos of other cars
         int cars_seen = 0;
         for(int j = 0; j < MAX_CARS; j++) {
@@ -1602,6 +1635,10 @@ void compute_observations(Drive* env) {
                 if (env->use_ec) {
                     obs[obs_idx + base_offset + (env->use_rc ? 3 : 0)] = env->entropy_weights[j];
                 }
+                if (env->use_dc) {
+                    int dc_offset = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0);
+                    obs[obs_idx + base_offset + dc_offset] = env->discount_weights[j];
+                }
             }
         }
     }
@@ -1623,6 +1660,12 @@ void c_reset(Drive* env){
     if (env->use_ec) {
         for(int i = 0; i < env->active_agent_count; i++) {
             env->entropy_weights[i] = ((float)rand() / RAND_MAX) * (env->entropy_weight_ub - env->entropy_weight_lb) + env->entropy_weight_lb;
+        }
+    }
+
+    if (env->use_dc) {
+        for(int i = 0; i < env->active_agent_count; i++) {
+            env->discount_weights[i] = ((float)rand() / RAND_MAX) * (env->discount_weight_ub - env->discount_weight_lb) + env->discount_weight_lb;
         }
     }
 

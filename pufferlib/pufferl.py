@@ -358,13 +358,27 @@ class PuffeRL:
 
             shape = self.values.shape
             advantages = torch.zeros(shape, device=device)
+
+            # Create gamma tensor (per-agent or constant)
+            if hasattr(self.vecenv.driver_env, 'discount_conditioned') and self.vecenv.driver_env.discount_conditioned:
+                # Extract discount weights from observations (first timestep of each segment)
+                disc_idx = 7  # base ego obs
+                if self.vecenv.driver_env.reward_conditioned:
+                    disc_idx += 3
+                if self.vecenv.driver_env.entropy_conditioned:
+                    disc_idx += 1
+                gammas = self.observations[:, 0, disc_idx].to(device).contiguous()
+            else:
+                # Use global gamma for all agents
+                gammas = torch.full((self.segments,), config["gamma"], device=device, dtype=torch.float32)
+
             advantages = compute_puff_advantage(
                 self.values,
                 self.rewards,
                 self.terminals,
                 self.ratio,
                 advantages,
-                config["gamma"],
+                gammas,
                 config["gae_lambda"],
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
@@ -412,13 +426,15 @@ class PuffeRL:
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
             adv = advantages[idx]
+            # Use corresponding gammas for selected minibatch indices
+            mb_gammas = gammas[idx]
             adv = compute_puff_advantage(
                 mb_values,
                 mb_rewards,
                 mb_terminals,
                 ratio,
                 adv,
-                config["gamma"],
+                mb_gammas,
                 config["gae_lambda"],
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
@@ -801,11 +817,15 @@ class PuffeRL:
 
 
 def compute_puff_advantage(
-    values, rewards, terminals, ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip
+    values, rewards, terminals, ratio, advantages, gammas, gae_lambda, vtrace_rho_clip, vtrace_c_clip
 ):
     """CUDA kernel for puffer advantage with automatic CPU fallback. You need
     nvcc (in cuda-dev-tools or in a cuda-dev docker base) for PufferLib to
-    compile the fast version."""
+    compile the fast version.
+
+    Args:
+        gammas: Tensor of shape [num_steps] with per-agent discount factors
+    """
 
     device = values.device
     if not ADVANTAGE_CUDA:
@@ -814,9 +834,10 @@ def compute_puff_advantage(
         terminals = terminals.cpu()
         ratio = ratio.cpu()
         advantages = advantages.cpu()
+        gammas = gammas.cpu()
 
     torch.ops.pufferlib.compute_puff_advantage(
-        values, rewards, terminals, ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip
+        values, rewards, terminals, ratio, advantages, gammas, gae_lambda, vtrace_rho_clip, vtrace_c_clip
     )
 
     if not ADVANTAGE_CUDA:
@@ -1353,7 +1374,7 @@ def load_config(env_name):
     parser.add_argument("--fps", type=float, default=15)
     parser.add_argument("--max-runs", type=int, default=200, help="Max number of sweep runs")
     parser.add_argument("--wandb", action="store_true", help="Use wandb for logging")
-    parser.add_argument("--wandb-project", type=str, default="pufferlib")
+    parser.add_argument("--wandb-project", type=str, default="adaptive")
     parser.add_argument("--wandb-group", type=str, default="debug")
     parser.add_argument("--neptune", action="store_true", help="Use neptune for logging")
     parser.add_argument("--neptune-name", type=str, default="pufferai")

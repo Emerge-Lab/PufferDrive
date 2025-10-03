@@ -3,12 +3,12 @@
 #SBATCH --account=kempner_pehlevan_lab
 #SBATCH --output=/n/netscratch/pehlevan_lab/Everyone/mkulkarni/pufferdrive/logs/%A_%a_%x.out
 #SBATCH --error=/n/netscratch/pehlevan_lab/Everyone/mkulkarni/pufferdrive/logs/%A_%a_%x.err
-#SBATCH --array=0-3
+#SBATCH --array=0-5
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=12:00:00
+#SBATCH --time=2:00:00
 #SBATCH --mem=64GB
 #SBATCH --partition=kempner_h100
 
@@ -23,23 +23,24 @@ source ~/.bashrc
 source .venv/bin/activate
 python setup.py build_ext --inplace --force
 
-puffer train puffer_drive --wandb
+# Define array of command arguments
+COMMANDS=(
+    # ""
+    " --env.entropy-weight-ub 0.001"
+    " --env.entropy-weight-ub 0.01"
+    " --env.entropy-weight-ub 0.05"
+    " --env.entropy-weight-ub 0.1"
+    " --env.entropy-weight-ub 0.5"
+    " --env.entropy-weight-ub 1"
+    # "--env.oracle-mode False --env.condition-type none"
+    # "--env.oracle-mode False --env.condition-type reward"
+    # "--env.oracle-mode True --env.condition-type reward"
+    # "--env.oracle-mode False --env.condition-type all"
+    # "--env.oracle-mode True --env.condition-type all"
+)
 
-# case ${SLURM_ARRAY_TASK_ID} in
-#     0)
-#         puffer train puffer_drive --wandb --env.oracle-mode False --env.condition-type "none"
-#         ;;
-#     1)
-#         puffer train puffer_drive --wandb --env.oracle-mode False --env.condition-type "reward"
-#         ;;
-#     2)
-#         puffer train puffer_drive --wandb --env.oracle-mode True --env.condition-type "reward"
-#         ;;
-#     3)
-#         puffer train puffer_drive --wandb --env.oracle-mode False --env.condition-type "all"
-#         ;;
-#     4)
-#         puffer train puffer_drive --wandb --env.oracle-mode True --env.condition-type "all"
-#         ;;
-# esac
+# Get the command args for this array task
+ARGS="${COMMANDS[${SLURM_ARRAY_TASK_ID}]}"
 
+# Run the command
+puffer train puffer_drive --wandb ${ARGS}

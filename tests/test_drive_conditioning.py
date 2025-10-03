@@ -51,8 +51,25 @@ def test_entropy_conditioning():
     assert np.all((ec_weight >= 0.0) & (ec_weight <= 0.1))
     env.close()
 
+def test_discount_conditioning():
+    """Test that DC adds 1 dimension and weight is in range."""
+    env = Drive(
+        num_agents=4,
+        condition_type="discount",
+        oracle_mode=False,
+        discount_weight_lb=0.9,
+        discount_weight_ub=0.99,
+        num_maps=1
+    )
+    assert env.single_observation_space.shape[0] == 7 + 1 + 63*7 + 200*7  # base + 1
+    assert env.discount_conditioned
+    obs, _ = env.reset()
+    dc_weight = obs[:, 7]
+    assert np.all((dc_weight >= 0.9) & (dc_weight <= 0.99))
+    env.close()
+
 def test_combined_conditioning():
-    """Test that RC + EC work together."""
+    """Test that RC + EC + DC work together."""
     env = Drive(
         num_agents=4,
         condition_type="all",
@@ -65,19 +82,24 @@ def test_combined_conditioning():
         goal_weight_ub=1.0,
         entropy_weight_lb=0.0,
         entropy_weight_ub=0.1,
+        discount_weight_lb=0.9,
+        discount_weight_ub=0.99,
         num_maps=1
     )
-    assert env.single_observation_space.shape[0] == 7 + 4 + 63*7 + 200*7  # base + 3 + 1
+    assert env.single_observation_space.shape[0] == 7 + 5 + 63*7 + 200*7  # base + 3 + 1 + 1
     assert env.reward_conditioned
     assert env.entropy_conditioned
+    assert env.discount_conditioned
     obs, _ = env.reset()
-    weights = obs[:, 7:11]
-    assert np.all((weights[:, 0] >= -1.0) & (weights[:, 0] <= 0.0))
-    assert np.all((weights[:, 3] >= 0.0) & (weights[:, 3] <= 0.1))
+    weights = obs[:, 7:12]
+    assert np.all((weights[:, 0] >= -1.0) & (weights[:, 0] <= 0.0))  # collision
+    assert np.all((weights[:, 3] >= 0.0) & (weights[:, 3] <= 0.1))   # entropy
+    assert np.all((weights[:, 4] >= 0.9) & (weights[:, 4] <= 0.99))  # discount
     env.close()
 
 if __name__ == '__main__':
     test_no_compatibility()
     test_reward_conditioning()
     test_entropy_conditioning()
+    test_discount_conditioning()
     test_combined_conditioning()
