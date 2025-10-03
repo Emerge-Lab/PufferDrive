@@ -3,7 +3,7 @@
 #SBATCH --account=kempner_pehlevan_lab
 #SBATCH --output=/n/netscratch/pehlevan_lab/Everyone/mkulkarni/pufferdrive/logs/%A_%a_%x.out
 #SBATCH --error=/n/netscratch/pehlevan_lab/Everyone/mkulkarni/pufferdrive/logs/%A_%a_%x.err
-#SBATCH --array=0-5
+#SBATCH --array=0-11
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
@@ -26,12 +26,20 @@ python setup.py build_ext --inplace --force
 # Define array of command arguments
 COMMANDS=(
     # ""
-    " --env.entropy-weight-ub 0.001"
-    " --env.entropy-weight-ub 0.01"
-    " --env.entropy-weight-ub 0.05"
-    " --env.entropy-weight-ub 0.1"
-    " --env.entropy-weight-ub 0.5"
-    " --env.entropy-weight-ub 1"
+    # blind agents
+    " --env.entropy-weight-ub 0.001 --env.condition-type all --env.oracle-mode False"
+    " --env.entropy-weight-ub 0.01 --env.condition-type all --env.oracle-mode False"
+    " --env.entropy-weight-ub 0.05 --env.condition-type all --env.oracle-mode False"
+    " --env.entropy-weight-ub 0.1 --env.condition-type all --env.oracle-mode False"
+    " --env.entropy-weight-ub 0.5 --env.condition-type all --env.oracle-mode False"
+    " --env.entropy-weight-ub 1 --env.condition-type all --env.oracle-mode False"
+    # oracle agents
+    " --env.entropy-weight-ub 0.001 --env.condition-type all --env.oracle-mode True"
+    " --env.entropy-weight-ub 0.01 --env.condition-type all --env.oracle-mode True"
+    " --env.entropy-weight-ub 0.05 --env.condition-type all --env.oracle-mode True"
+    " --env.entropy-weight-ub 0.1 --env.condition-type all --env.oracle-mode True"
+    " --env.entropy-weight-ub 0.5 --env.condition-type all --env.oracle-mode True"
+    " --env.entropy-weight-ub 1 --env.condition-type all --env.oracle-mode True"
     # "--env.oracle-mode False --env.condition-type none"
     # "--env.oracle-mode False --env.condition-type reward"
     # "--env.oracle-mode True --env.condition-type reward"

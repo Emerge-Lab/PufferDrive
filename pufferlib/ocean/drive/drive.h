@@ -1375,6 +1375,9 @@ void allocate(Drive* env){
     if (env->use_ec){
         max_obs += 1;
     }
+    if (env->use_dc){
+        max_obs += 1;
+    }
 
 
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));

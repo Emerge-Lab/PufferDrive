@@ -19,8 +19,10 @@ class Drive(nn.Module):
         
         self.use_rc = env.reward_conditioned
         self.use_ec = env.entropy_conditioned
+        self.use_dc = env.discount_conditioned
         self.oracle_mode = env.oracle_mode
-        self.conditioning_dims = (3 if self.use_rc else 0) + (1 if self.use_ec else 0)
+        self.conditioning_dims = (3 if self.use_rc else 0) + (1 if self.use_ec else 0) + (1 if self.use_dc else 0)
+        assert not (self.oracle_mode and self.conditioning_dims == 0), "Oracle mode requires nonzero conditioning dimensions"
         
         ego_dim = 7 + self.conditioning_dims
         self.ego_encoder = nn.Sequential(

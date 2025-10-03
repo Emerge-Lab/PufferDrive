@@ -49,18 +49,19 @@ struct DriveNet {
     Multidiscrete* multidiscrete;
 };
 
-DriveNet* init_drivenet(Weights* weights, int num_agents, bool use_rc, bool use_ec, bool oracle_mode) {
+DriveNet* init_drivenet(Weights* weights, int num_agents, bool use_rc, bool use_ec, bool use_dc, bool oracle_mode) {
     DriveNet* net = calloc(1, sizeof(DriveNet));
     int hidden_size = 256;
     int input_size = 64;
 
     net->num_agents = num_agents;
     net->oracle_mode = oracle_mode;
-    net->conditioning_dims = (use_rc ? 3 : 0) + (use_ec ? 1 : 0);
+    net->conditioning_dims = (use_rc ? 3 : 0) + (use_ec ? 1 : 0) + (use_dc ? 1 : 0);
 
     int ego_obs_size = 7; // base features
     if (use_rc) ego_obs_size += 3; // reward conditioning
     if (use_ec) ego_obs_size += 1; // entropy conditioning
+    if (use_dc) ego_obs_size += 1; // discount conditioning
     net->obs_self = calloc(num_agents*ego_obs_size, sizeof(float));
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
