@@ -1013,7 +1013,8 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     int respawned = env->entities[agent_idx].respawn_timestep != -1;
     int exceeded_spawn_immunity_agent = (env->timestep - env->entities[agent_idx].respawn_timestep) >= env->spawn_immunity_timer;
 
-    if(collided == VEHICLE_COLLISION && is_active_agent == 1 && respawned){
+    // Only suppress collisions within the configured spawn immunity window
+    if (collided == VEHICLE_COLLISION && is_active_agent == 1 && respawned && !exceeded_spawn_immunity_agent) {
         agent->collision_state = 0;
     }
 
@@ -1028,7 +1029,8 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     int exceeded_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) >= env->spawn_immunity_timer;
     int within_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) < env->spawn_immunity_timer;
 
-    if (respawned_collided_with_car) {
+    // Suppress collisions only if the other car is still within its spawn immunity window
+    if (respawned_collided_with_car && !exceeded_spawn_immunity_collided_with_car) {
         agent->collision_state = 0;
         agent->metrics_array[COLLISION_IDX] = 0.0f;
     }
