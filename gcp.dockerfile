@@ -36,7 +36,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && uv pip install glfw==2.7 \
     && git clone https://github.com/pufferai/carbs \
     && uv pip install -e ./carbs \
-    && uv pip install gcsfs
+    && uv pip install gcsfs google-cloud-monitoring
 
 # Descr: Image goal is minimum size and to be trained with cloud computing
 FROM ${BASE_IMAGE_NAME}:${RUNTIME_IMAGE_TAG} AS gcp

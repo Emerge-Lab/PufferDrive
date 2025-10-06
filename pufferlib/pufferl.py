@@ -1033,6 +1033,63 @@ class WandbLogger:
         return f"{data_dir}/{model_file}"
 
 
+class GCPLogger:
+    def __init__(self, args):
+        try:
+            from google.cloud import monitoring_v3
+            from google.api import metric_pb2 as ga_metric
+            from google.api import monitored_resource_pb2 as ga_resource
+            from google.protobuf.timestamp_pb2 import Timestamp
+        except ImportError:
+            raise ImportError("GCPLogger requires google-cloud-monitoring. pip install google-cloud-monitoring")
+
+        self.project_id = args["gcp_project_id"]
+        if not self.project_id:
+            raise ValueError("gcp_project_id must be set when using GCPLogger")
+
+        self.client = monitoring_v3.MetricServiceClient()
+        self.project_name = f"projects/{self.project_id}"
+        self.run_id = args.get("run_id") or str(int(time.time()))
+        self.job_name = args.get("gcp_job_name", "pufferdrive-run")
+
+    def log(self, logs, step):
+        if not logs:
+            return
+
+        now = Timestamp()
+        now.FromDatetime(time.time())
+
+        series = []
+        for key, value in logs.items():
+            if not isinstance(value, (int, float)):
+                continue
+
+            metric_path = key.replace("/", "_")  # e.g. environment/total_reward -> environment_total_reward
+
+            time_series = monitoring_v3.TimeSeries()
+            time_series.metric.type = f"custom.googleapis.com/pufferdrive/{metric_path}"
+            time_series.metric.labels["run_id"] = self.run_id
+
+            # Identify the resource being monitored. Using 'generic_task' is flexible.
+            time_series.resource.type = "generic_task"
+            time_series.resource.labels["project_id"] = self.project_id
+            time_series.resource.labels["job"] = self.job_name
+            time_series.resource.labels["task_id"] = self.run_id
+
+            point = monitoring_v3.Point()
+            point.value.double_value = value
+            point.interval.end_time = now
+            time_series.points.append(point)
+            series.append(time_series)
+
+        if series:
+            self.client.create_time_series(name=self.project_name, time_series=series)
+
+    def close(self, model_path):
+        # GCP logging is stateless per call, so no explicit close needed.
+        pass
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     args = args or load_config(env_name)
 
@@ -1066,6 +1123,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         logger = NeptuneLogger(args)
     elif args["wandb"]:
         logger = WandbLogger(args)
+    elif args["gcp"]:
+        logger = GCPLogger(args)
 
     train_config = dict(**args["train"], env=env_name)
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
@@ -1341,6 +1400,16 @@ def load_config(env_name):
     parser.add_argument("--wandb-group", type=str, default="debug")
     parser.add_argument("--neptune", action="store_true", help="Use neptune for logging")
     parser.add_argument("--neptune-name", type=str, default="pufferai")
+    parser.add_argument("--gcp", action="store_true", help="Use GCP Cloud Monitoring for logging")
+    parser.add_argument(
+        "--gcp-project-id", type=str, default=os.environ.get("GCP_PROJECT_ID"), help="GCP Project ID for logging"
+    )
+    parser.add_argument(
+        "--gcp-job-name",
+        type=str,
+        default=os.environ.get("CLOUD_ML_JOB_ID", "pufferdrive-local"),
+        help="GCP Job name for resource labeling",
+    )
     parser.add_argument("--neptune-project", type=str, default="ablations")
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")

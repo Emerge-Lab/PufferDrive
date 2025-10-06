@@ -27,6 +27,10 @@ resources/*.bin
 .vscode/
 .idea/
 
+# 3rd parties
+box2d-*
+build*
+
 # Downloaded dependencies from setup.py (should be downloaded inside the container)
 raylib-*/
 box2d-*/
@@ -39,3 +43,4 @@ config/default.ini
 # Client side files
 automation/gcp_run_job.py
 *.dockerfile
+Dockerfile

@@ -36,10 +36,20 @@ echo "Local training outputs will be saved to: $LOCAL_OUTPUT_DIR"
 # Prepare JSONs by converting them to the binary format required for training.
 python /pufferdrive/pufferlib/ocean/drive/drive.py "${DATA_PROCESSING_ARGS[@]}"
 
+# Prepare arguments for the training command.
+TRAINING_ARGS=("$@")
+
+# If running in a GCP environment (detected by AIP_MODEL_DIR), enable GCP logging.
+# The GCPLogger in pufferl.py will automatically pick up project and job IDs from env vars.
+if [ -n "$AIP_MODEL_DIR" ]; then
+  echo "GCP environment detected. Enabling GCP Cloud Monitoring logger."
+  TRAINING_ARGS+=(--gcp)
+fi
+
 # Run the PufferLib training command for the 'puffer_drive' environment.
 # PufferLib saves checkpoints to the directory specified by --train.data-dir.
 echo "Starting PufferDrive training..."
-python -m pufferlib.pufferl train puffer_drive --train.data-dir "$LOCAL_OUTPUT_DIR" "$@"
+python -m pufferlib.pufferl train puffer_drive --train.data-dir "$LOCAL_OUTPUT_DIR" "${TRAINING_ARGS[@]}"
 
 # After training, if running on Vertex AI, copy the artifacts to the GCS bucket
 # provided by the AIP_MODEL_DIR environment variable. This makes the model
