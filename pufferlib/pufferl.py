@@ -412,20 +412,27 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
-            # Compute log likelihood loss of human actions under current policy. Steps:
+            # Add log likelihood loss of human actions under current policy.
             # 1: Sample a batch of human actions and observations from dataset
-            # 2: Compute log likelihood of human actions under current policy
-            # 3: Add negative log likelihood to total loss, weighted by self.human_ll_coef
+            human_actions, human_observations = self.vecenv.driver_env.sample_expert_data(n_samples=mb_actions.shape[0])
+            human_actions = torch.as_tensor(human_actions, device=device)
+            human_observations = torch.as_tensor(human_observations, device=device)
 
-            # placeholder: Get random human actions
-            # TODO(dc): Replace these with actual human actions from map binary
-            # TODO(dc): Replace with actual human observations from map binary
-            human_actions = torch.randint_like(actions, low=0, high=12)
-            human_logits, _ = self.policy(mb_obs, state)
+            if self.config["human_ll_coef"] > 0:
+                # 2: Compute the log-likelihood of human actions under the current policy,
+                # given the corresponding human observations. A higher likelihood indicates
+                # that the policy behaves more like a human under the same observations.
+                human_state = dict(
+                    action=human_actions,
+                    lstm_h=None,
+                    lstm_c=None,
+                )
 
-            # Shape: [mb_size, bptt_horizon]
-            # Bug: Some of these are inf, why?
-            _, human_log_prob, entropy = pufferlib.pytorch.sample_logits(logits=human_logits, action=human_actions)
+                human_logits, _ = self.policy(human_observations, human_state)
+
+                _, human_log_prob, entropy = pufferlib.pytorch.sample_logits(logits=human_logits, action=human_actions)
+            else:
+                human_log_prob = torch.zeros(1, device=device)
 
             adv = advantages[idx]
             adv = compute_puff_advantage(

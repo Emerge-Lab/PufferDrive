@@ -3,6 +3,8 @@ import gymnasium
 import json
 import struct
 import os
+import math
+import torch
 import pufferlib
 from pufferlib.ocean.drive import binding
 
@@ -28,6 +30,8 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         buf=None,
         seed=1,
+        expert_cache_size=1000,
+        bptt_horizon=32,
     ):
         # env
         self.render_mode = render_mode
@@ -53,6 +57,7 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")
 
         self._action_type_flag = 0 if action_type == "discrete" else 1
+        self.bptt_horizon = bptt_horizon
 
         # Check if resources directory exists
         binary_path = "resources/drive/binaries/map_000.bin"
@@ -100,6 +105,8 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
+        self.expert_cache_size = expert_cache_size
+        self._cache_expert_data(self.bptt_horizon)
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -155,11 +162,169 @@ class Drive(pufferlib.PufferEnv):
                 self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
+    def _cache_expert_data(self, bptt_horizon=32):
+        """Collect and cache expert trajectories with bptt_horizon length sequences."""
+        trajectory_length = 91
+
+        # Calculate how many complete sequences we can extract per trajectory
+        sequences_per_trajectory = trajectory_length - bptt_horizon + 1
+        total_sequences = sequences_per_trajectory * self.num_agents
+        cache_size = min(self.expert_cache_size, total_sequences)
+
+        # Collect full expert trajectories
+        expert_actions_full = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
+        expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
+
+        binding.vec_collect_expert_data(self.c_envs, expert_actions_full, expert_observations_full)
+
+        # Preallocate arrays for all sequences
+        # Shape: (num_agents * sequences_per_trajectory, bptt_horizon, feature_dim)
+        all_action_sequences = np.zeros((total_sequences, bptt_horizon, 2), dtype=np.float32)
+        all_obs_sequences = np.zeros((total_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
+
+        # Create sliding windows using vectorized indexing
+        idx = 0
+        for agent_idx in range(self.num_agents):
+            for start_idx in range(sequences_per_trajectory):
+                end_idx = start_idx + bptt_horizon
+                all_action_sequences[idx] = expert_actions_full[start_idx:end_idx, agent_idx, :]
+                all_obs_sequences[idx] = expert_observations_full[start_idx:end_idx, agent_idx, :]
+                idx += 1
+
+        # Sample random subset if needed
+        if cache_size < total_sequences:
+            indices = np.random.choice(total_sequences, size=cache_size, replace=False)
+            self._expert_actions_cache = all_action_sequences[indices]
+            self._expert_observations_cache = all_obs_sequences[indices]
+        else:
+            self._expert_actions_cache = all_action_sequences
+            self._expert_observations_cache = all_obs_sequences
+
+        self._cache_size = self._expert_actions_cache.shape[0]
+        self._bptt_horizon = bptt_horizon
+
+        # Free memory
+        del expert_actions_full, expert_observations_full, all_action_sequences, all_obs_sequences
+
+        cache_size_mb = (self._expert_actions_cache.nbytes + self._expert_observations_cache.nbytes) / (1024**2)
+        print(f"Cached {self._cache_size} expert sequences of length {bptt_horizon} ({cache_size_mb:.1f} MB)")
+
+    def sample_expert_data(self, n_samples=512):
+        """Sample a random batch of expert sequences from cache.
+
+        Args:
+            n_samples: Number of sequences to randomly sample (should match minibatch_segments)
+
+        Returns:
+            expert_actions: Tensor of shape (n_samples, bptt_horizon, 2)
+            expert_observations: Tensor of shape (n_samples, bptt_horizon, num_obs)
+        """
+        # Sample with replacement
+        indices = torch.randint(0, self._cache_size, (n_samples,))
+
+        # Convert to torch tensors - shapes are already correct
+        actions = torch.from_numpy(self._expert_actions_cache[indices])
+        observations = torch.from_numpy(self._expert_observations_cache[indices])
+
+        return actions, observations
+
     def render(self):
         binding.vec_render(self.c_envs, 0)
 
     def close(self):
         binding.vec_close(self.c_envs)
+
+
+def infer_human_actions(obj):
+    """Infer expert actions (steer, accel) using inverse bicycle model."""
+    trajectory_length = 91
+
+    # Initialize expert actions arrays
+    expert_acceleration = []
+    expert_steering = []
+
+    positions = obj.get("position", [])
+    velocities = obj.get("velocity", [])
+    headings = obj.get("heading", [])
+    valids = obj.get("valid", [])
+
+    if len(positions) < 2 or len(velocities) < 2 or len(headings) < 2:
+        return [0.0] * trajectory_length, [0.0] * trajectory_length
+
+    dt = 0.1  # Discretization
+    vehicle_length = obj.get("length", 4.5)  # Default vehicle length
+
+    for t in range(trajectory_length - 1):
+        if (
+            t >= len(positions)
+            or t >= len(velocities)
+            or t >= len(headings)
+            or t >= len(valids)
+            or not valids[t]
+            or not valids[t + 1]
+            or t + 1 >= len(positions)
+            or t + 1 >= len(velocities)
+            or t + 1 >= len(headings)
+        ):
+            expert_acceleration.append(0.0)
+            expert_steering.append(0.0)
+            continue
+
+        # Current state
+        vel_t = velocities[t]
+        heading_t = headings[t]
+        speed_t = math.sqrt(vel_t.get("x", 0.0) ** 2 + vel_t.get("y", 0.0) ** 2)
+
+        # Next state
+        vel_t1 = velocities[t + 1]
+        heading_t1 = headings[t + 1]
+        speed_t1 = math.sqrt(vel_t1.get("x", 0.0) ** 2 + vel_t1.get("y", 0.0) ** 2)
+
+        # Compute acceleration
+        acceleration = (speed_t1 - speed_t) / dt
+
+        # Normalize heading difference
+        heading_diff = heading_t1 - heading_t
+        while heading_diff > math.pi:
+            heading_diff -= 2 * math.pi
+        while heading_diff < -math.pi:
+            heading_diff += 2 * math.pi
+
+        # Compute yaw rate
+        yaw_rate = heading_diff / dt
+
+        # Compute steering using inverse bicycle model
+        steering = 0.0
+        if speed_t > 0.1:  # Avoid division by zero
+            # From bicycle model: yaw_rate = (v * cos(beta) * tan(delta)) / L
+            # Assuming beta ≈ 0: yaw_rate ≈ (v * tan(delta)) / L
+            tan_steering = (yaw_rate * vehicle_length) / speed_t
+            # Clamp tan_steering to avoid extreme values
+            tan_steering = max(-10.0, min(10.0, tan_steering))
+            steering = math.atan(tan_steering)
+
+        # Clamp values to reasonable ranges
+        acceleration = max(-4.0, min(4.0, acceleration))
+        steering = max(-1.0, min(1.0, steering))
+
+        expert_acceleration.append(acceleration)
+        expert_steering.append(steering)
+
+    # Handle last timestep
+    expert_acceleration.append(0.0)
+    expert_steering.append(0.0)
+
+    # Ensure arrays are exactly trajectory_length
+    expert_acceleration = expert_acceleration[:trajectory_length]
+    expert_steering = expert_steering[:trajectory_length]
+
+    # Pad if necessary
+    while len(expert_acceleration) < trajectory_length:
+        expert_acceleration.append(0.0)
+    while len(expert_steering) < trajectory_length:
+        expert_steering.append(0.0)
+
+    return expert_acceleration, expert_steering
 
 
 def calculate_area(p1, p2, p3):
@@ -268,6 +433,20 @@ def save_map_binary(map_data, output_file):
                     *[int(valids[i]) if i < len(valids) else 0 for i in range(trajectory_length)],
                 )
             )
+
+            # Infer and write human actions
+            if obj_type == 1:  # Only for vehicles
+                human_accel, human_steering = infer_human_actions(obj)
+
+                print(f"Human Acceleration: {human_accel}")
+                print(f"Human Steering: {human_steering}")
+
+                f.write(struct.pack(f"{trajectory_length}f", *human_accel))
+                f.write(struct.pack(f"{trajectory_length}f", *human_steering))
+            else:
+                # Write zeros for non-vehicles
+                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
+                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
 
             # Write scalar fields
             f.write(struct.pack("f", float(obj.get("width", 0.0))))
