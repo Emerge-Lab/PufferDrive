@@ -1139,8 +1139,17 @@ void c_close(Drive* env){
     free(env->active_agent_indices);
     free(env->logs);
     // GridMap cleanup
+    int grid_cell_count = env->grid_map->grid_cols*env->grid_map->grid_rows;
+    for(int grid_index = 0; grid_index < grid_cell_count; grid_index++){
+        free(env->grid_map->cells[grid_index]);
+    }
     free(env->grid_map->cells);
     free(env->grid_map->cell_entities_count);
+    free(env->neighbor_offsets);
+
+    for(int i = 0; i < grid_cell_count; i++){
+        free(env->grid_map->neighbor_cache_entities[i]);
+    }
     free(env->grid_map->neighbor_cache_entities);
     free(env->grid_map->neighbor_cache_count);
     free(env->grid_map);
