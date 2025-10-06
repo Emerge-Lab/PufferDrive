@@ -512,6 +512,7 @@ class PuffeRL:
                             vecenv=self.vecenv,
                             policy=self.uncompiled_policy,
                             path=bin_path,
+                            silent=True,
                         )
 
                     except Exception as e:
@@ -520,9 +521,9 @@ class PuffeRL:
 
                     # Now call the C rendering function
                     try:
-                        # Create output directory for GIFs
-                        gif_output_dir = os.path.join(model_dir, "gifs")
-                        os.makedirs(gif_output_dir, exist_ok=True)
+                        # Create output directory for videos
+                        video_output_dir = os.path.join(model_dir, "videos")
+                        os.makedirs(video_output_dir, exist_ok=True)
 
                         # Copy the binary weights to the expected location
                         expected_weights_path = "resources/drive/puffer_drive_weights.bin"
@@ -557,22 +558,21 @@ class PuffeRL:
                             cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env
                         )
 
-                        # Check if GIFs were generated successfully
-                        gifs_exist = os.path.exists("resources/drive/output_topdown.gif") and os.path.exists(
-                            "resources/drive/output_agent.gif"
+                        vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
+                            "resources/drive/output_agent.mp4"
                         )
 
-                        if result.returncode == 0 or (result.returncode == 1 and gifs_exist):
-                            # Move both generated GIFs to the model directory
-                            gifs = [
-                                ("resources/drive/output_topdown.gif", f"epoch_{self.epoch:06d}_topdown.gif"),
-                                ("resources/drive/output_agent.gif", f"epoch_{self.epoch:06d}_agent.gif"),
+                        if result.returncode == 0 or (result.returncode == 1 and vids_exist):
+                            # Move both generated videos to the model directory
+                            videos = [
+                                ("resources/drive/output_topdown.mp4", f"epoch_{self.epoch:06d}_topdown.mp4"),
+                                ("resources/drive/output_agent.mp4", f"epoch_{self.epoch:06d}_agent.mp4"),
                             ]
 
-                            for source_gif, target_filename in gifs:
-                                if os.path.exists(source_gif):
-                                    target_gif = os.path.join(gif_output_dir, target_filename)
-                                    shutil.move(source_gif, target_gif)
+                            for source_vid, target_filename in videos:
+                                if os.path.exists(source_vid):
+                                    target_gif = os.path.join(video_output_dir, target_filename)
+                                    shutil.move(source_vid, target_gif)
 
                                     # Log to wandb if available
                                     if hasattr(self.logger, "wandb") and self.logger.wandb:
@@ -580,12 +580,12 @@ class PuffeRL:
 
                                         view_type = "world_state" if "topdown" in target_filename else "agent_view"
                                         self.logger.wandb.log(
-                                            {f"render/{view_type}": wandb.Video(target_gif, format="gif")},
+                                            {f"render/{view_type}": wandb.Video(target_gif, format="mp4")},
                                             step=self.global_step,
                                         )
 
                                 else:
-                                    print(f"GIF generation completed but {source_gif} not found")
+                                    print(f"Video generation completed but {source_vid} not found")
 
                         else:
                             print(f"C rendering failed with exit code {result.returncode}: {result.stderr}")
@@ -1214,7 +1214,7 @@ def profile(args=None, env_name=None, vecenv=None, policy=None):
     prof.export_chrome_trace("trace.json")
 
 
-def export(args=None, env_name=None, vecenv=None, policy=None, path=None):
+def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent=False):
     args = args or load_config(env_name)
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv)
@@ -1222,7 +1222,8 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None):
     weights = []
     for name, param in policy.named_parameters():
         weights.append(param.data.cpu().numpy().flatten())
-        print(name, param.shape, param.data.cpu().numpy().ravel()[0])
+        if not silent:
+            print(name, param.shape, param.data.cpu().numpy().ravel()[0])
 
     weights = np.concatenate(weights)
     if path is None:
@@ -1230,7 +1231,8 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None):
 
     weights.tofile(path)
 
-    print(f"Saved {len(weights)} weights to {path}")
+    if not silent:
+        print(f"Saved {len(weights)} weights to {path}")
 
 
 def ensure_drive_binary():
