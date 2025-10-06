@@ -524,8 +524,8 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     SetTargetFPS(6000);
 
-    float map_width = env.map_corners[2] - env.map_corners[0];
-    float map_height = env.map_corners[3] - env.map_corners[1];
+    float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
+    float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
     float scale = 6.0f; // Can be used to increase the video quality

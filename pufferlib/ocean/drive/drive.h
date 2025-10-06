@@ -578,6 +578,12 @@ void cache_neighbor_offsets(Drive* env){
             int grid_index = env->grid_map->grid_cols*y + x;
             if(x < 0 || x >= env->grid_map->grid_cols || y < 0 || y >= env->grid_map->grid_rows) continue;
             int grid_count = env->grid_map->cell_entities_count[grid_index];
+
+            // Skip if no entities or source is NULL
+            if(grid_count == 0 || env->grid_map->cells[grid_index] == NULL) {
+                continue;
+            }
+
             int src_idx = grid_index;
             int dst_idx = base_index;
             // Copy grid_count pairs (entity_idx, geometry_idx) at once
