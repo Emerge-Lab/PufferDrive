@@ -1,6 +1,7 @@
 import sys
 import gcsfs
 
+
 def sync_to_gcs(local_path: str, gcs_path: str):
     """Recursively copies a local directory to a GCS path using gcsfs."""
     print(f"Syncing local directory '{local_path}' to GCS path '{gcs_path}'...")
@@ -12,6 +13,7 @@ def sync_to_gcs(local_path: str, gcs_path: str):
     except Exception as e:
         print(f"❌ Failed to sync to GCS: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:

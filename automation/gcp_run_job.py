@@ -9,6 +9,7 @@ from typing import Optional
 from google.cloud import aiplatform
 from google.api_core import exceptions
 
+
 def run_command(command: list[str], error_message: str, icon: str, verbose: bool = False):
     """Runs a command, checks for errors, and prints helpful output."""
     print(f"{icon} Running command: {' '.join(command)}")
@@ -27,6 +28,7 @@ def run_command(command: list[str], error_message: str, icon: str, verbose: bool
         exit(1)
     print("✅ Command successful.")
 
+
 def parse_hyperparameters_from_ini(file_path: str) -> dict:
     """
     Parses a PufferLib-style INI file and returns a flattened dictionary of parameters.
@@ -42,12 +44,12 @@ def parse_hyperparameters_from_ini(file_path: str) -> dict:
     params = {}
     for section in config.sections():
         # Sweep definitions are for hyperparameter tuning, not a single run's config
-        if section.startswith('sweep.'):
+        if section.startswith("sweep."):
             continue
         for key, value in config.items(section):
             # Create a flattened key like 'train.learning_rate' for clarity in the UI
             param_key = f"{section}.{key.replace('-', '_')}"
-            
+
             if value is None:
                 params[param_key] = True
                 continue
@@ -63,6 +65,7 @@ def parse_hyperparameters_from_ini(file_path: str) -> dict:
                 # Keep as string if conversion fails
                 params[param_key] = value
     return params
+
 
 def create_custom_job(
     project: str,
@@ -138,11 +141,13 @@ def create_custom_job(
         timeout=timeout_seconds,
         experiment=experiment,
         experiment_run=experiment_run,
-        sync=True
+        sync=True,
     )
 
     print(f"✅ Custom job '{display_name}' submitted successfully.")
-    print(f"   View job: https://console.cloud.google.com/ai/platform/jobs/{job.resource_name.split('/')[-1]}?project={project}")
+    print(
+        f"   View job: https://console.cloud.google.com/ai/platform/jobs/{job.resource_name.split('/')[-1]}?project={project}"
+    )
 
     # If the job is part of an experiment, log the hyperparameters to its run
     if experiment and hyperparameters:
@@ -159,23 +164,38 @@ def create_custom_job(
         except Exception as e:
             print(f"⚠️ Could not log hyperparameters to Vertex AI Experiment: {e}")
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build, push, and run a PufferDrive training job on Vertex AI.")
     parser.add_argument("--project", required=True, help="Your Google Cloud project ID.")
     parser.add_argument("--location", required=True, help="The GCP region for the job (e.g., 'us-central1').")
-    parser.add_argument("--staging-bucket", required=True, help="GCS bucket for staging artifacts (e.g., 'gs://my-bucket').")
+    parser.add_argument(
+        "--staging-bucket", required=True, help="GCS bucket for staging artifacts (e.g., 'gs://my-bucket')."
+    )
     parser.add_argument("--display-name", required=True, help="Display name for the custom job.")
-    parser.add_argument("--container-uri", required=True, help="URI for the Docker image (e.g., 'us-central1-docker.pkg.dev/my-project/repo/image:$USER:tag').")
+    parser.add_argument(
+        "--container-uri",
+        required=True,
+        help="URI for the Docker image (e.g., 'us-central1-docker.pkg.dev/my-project/repo/image:$USER:tag').",
+    )
     parser.add_argument("--service-account", required=True, help="Service account for the job.")
     parser.add_argument("--machine-type", default="g2-standard-16", help="The type of machine to use for training.")
     parser.add_argument("--accelerator-type", default="NVIDIA_L4", help="The type of accelerator to use.")
     parser.add_argument("--accelerator-count", type=int, default=1, help="The number of accelerators.")
-    parser.add_argument("--dataset-path", help="Optional: GCS path to the raw dataset for pre-processing (e.g., gs://bucket/data).")
+    parser.add_argument(
+        "--dataset-path", help="Optional: GCS path to the raw dataset for pre-processing (e.g., gs://bucket/data)."
+    )
     parser.add_argument("--experiment", help="Optional: Name of the Vertex AI experiment.")
     parser.add_argument("--experiment-run", type=str, default=None, help="Optional: Name of the experiment run.")
     parser.add_argument("--config-file", help="Path to the .ini configuration file for logging hyperparameters.")
-    parser.add_argument("--labels", nargs='*', help="Labels for the job in key=value format (e.g., user=name env=prod).")
-    parser.add_argument("--verbose-subprocess", action="store_true", help="If set, shows the live output of subprocesses like docker build/push.")
+    parser.add_argument(
+        "--labels", nargs="*", help="Labels for the job in key=value format (e.g., user=name env=prod)."
+    )
+    parser.add_argument(
+        "--verbose-subprocess",
+        action="store_true",
+        help="If set, shows the live output of subprocesses like docker build/push.",
+    )
 
     # All unknown arguments will be passed to the container's entrypoint script.
     args, unknown_args = parser.parse_known_args()
@@ -195,7 +215,7 @@ if __name__ == "__main__":
 
     # 1.2 Expand environment variables in container URI (e.g., $DOMAIN)
     container_uri = os.path.expandvars(args.container_uri)
-    
+
     # 1.3 If an experiment is specified but no run name, create a default one
     experiment_run = args.experiment_run
     if args.experiment and not experiment_run:
@@ -206,7 +226,7 @@ if __name__ == "__main__":
     if args.labels:
         for label in args.labels:
             try:
-                key, value = label.split('=', 1)
+                key, value = label.split("=", 1)
                 labels[key] = value
             except ValueError:
                 print(f"❌ Invalid label format: {label}. Must be key=value.")
@@ -218,7 +238,12 @@ if __name__ == "__main__":
 
     # 3. Push the image to Artifact Registry
     push_command = ["docker", "push", container_uri]
-    run_command(push_command, "Docker push failed. Ensure you are authenticated with `gcloud auth configure-docker`.", icon="🚀", verbose=args.verbose_subprocess)
+    run_command(
+        push_command,
+        "Docker push failed. Ensure you are authenticated with `gcloud auth configure-docker`.",
+        icon="🚀",
+        verbose=args.verbose_subprocess,
+    )
 
     # 4. Submit the training job to Vertex AI
     create_custom_job(
