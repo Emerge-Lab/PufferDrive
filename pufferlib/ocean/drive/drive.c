@@ -234,7 +234,9 @@ void demo() {
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
         .reward_ade = -0.0f,
-	    .map_name = "resources/drive/binaries/map_942.bin",
+        .goal_radius = 2.0f,
+	    .map_name = "resources/drive/binaries/map_000.bin",
+        .spawn_immunity_timer = 50,
     };
     allocate(&env);
     c_reset(&env);
@@ -324,10 +326,10 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip) {
+void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius) {
     // Use default if no map provided
     if (map_name == NULL) {
-        map_name = "resources/drive/binaries/map_942.bin";
+        map_name = "resources/drive/binaries/map_000.bin";
     }
 
     if (frame_skip <= 0) {
@@ -340,7 +342,9 @@ void eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
         .reward_ade = -0.0f,
+        .goal_radius = goal_radius,
 	    .map_name = map_name,
+        .spawn_immunity_timer = 50
     };
     allocate(&env);
     // set which vehicle to focus on for obs mode
@@ -464,7 +468,7 @@ void performance_test() {
     Drive env = {
         .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
-	    .map_name = "resources/drive/binaries/map_942.bin"
+	    .map_name = "resources/drive/binaries/map_000.bin"
     };
     clock_t start_time, end_time;
     double cpu_time_used;
@@ -501,7 +505,8 @@ int main(int argc, char* argv[]) {
     int obs_only = 0;
     int lasers = 0;
     int log_trajectories = 1;
-    int frame_skip = 3;
+    int frame_skip = 10;
+    float goal_radius = 2.0f;
     const char* map_name = NULL;
 
     // Parse command line arguments
@@ -522,6 +527,14 @@ int main(int argc, char* argv[]) {
                     frame_skip = 1; // Ensure valid value
                 }
             }
+        } else if (strcmp(argv[i], "--goal-radius") == 0) {
+            if (i + 1 < argc) {
+                goal_radius = atof(argv[i + 1]);
+                i++;
+                if (goal_radius <= 0) {
+                    goal_radius = 2.0f; // Ensure valid value
+                }
+            }
         } else if (strcmp(argv[i], "--map-name") == 0) {
             // Check if there's a next argument for the map path
             if (i + 1 < argc) {
@@ -534,7 +547,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip);
+    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius);
     //demo();
     //performance_test();
     return 0;

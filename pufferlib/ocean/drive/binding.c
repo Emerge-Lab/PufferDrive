@@ -537,7 +537,12 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->action_type = conf.action_type;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;
+    env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
+    env->reward_vehicle_collision_post_respawn = conf.reward_vehicle_collision_post_respawn;
     env->reward_ade = conf.reward_ade;
+    env->goal_radius = conf.goal_radius;
+    env->use_respawn = conf.use_respawn;
+    env->spawn_immunity_timer = conf.spawn_immunity_timer;
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 
