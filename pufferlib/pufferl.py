@@ -359,9 +359,8 @@ class PuffeRL:
             shape = self.values.shape
             advantages = torch.zeros(shape, device=device)
 
-            # Create gamma tensor (per-agent or constant)
             if hasattr(self.vecenv.driver_env, 'discount_conditioned') and self.vecenv.driver_env.discount_conditioned:
-                # Extract discount weights from observations (first timestep of each segment)
+                # Extract discount weights from observations
                 disc_idx = 7  # base ego obs
                 if self.vecenv.driver_env.reward_conditioned:
                     disc_idx += 3
@@ -426,7 +425,6 @@ class PuffeRL:
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
             adv = advantages[idx]
-            # Use corresponding gammas for selected minibatch indices
             mb_gammas = gammas[idx]
             adv = compute_puff_advantage(
                 mb_values,
@@ -474,7 +472,6 @@ class PuffeRL:
             profile("train_misc", epoch)
             losses["policy_loss"] += pg_loss.item() / self.total_minibatches
             losses["value_loss"] += v_loss.item() / self.total_minibatches
-            # Log entropy properly - if EC is enabled, this is weighted entropy
             if hasattr(self.vecenv.driver_env, 'entropy_conditioned') and self.vecenv.driver_env.entropy_conditioned:
                 losses["entropy_weighted"] += entropy_loss.item() / self.total_minibatches
                 losses["entropy_unweighted"] += entropy.mean().item() / self.total_minibatches
@@ -821,11 +818,7 @@ def compute_puff_advantage(
 ):
     """CUDA kernel for puffer advantage with automatic CPU fallback. You need
     nvcc (in cuda-dev-tools or in a cuda-dev docker base) for PufferLib to
-    compile the fast version.
-
-    Args:
-        gammas: Tensor of shape [num_steps] with per-agent discount factors
-    """
+    compile the fast version."""
 
     device = values.device
     if not ADVANTAGE_CUDA:
