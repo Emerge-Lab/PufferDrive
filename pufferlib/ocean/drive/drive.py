@@ -42,11 +42,19 @@ class Drive(pufferlib.PufferEnv):
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63 * 7 + 200 * 7
+
+        # Observation space calculation
+        ego_features = 10  
+        partner_features = 7
+        road_features = 7
+        max_partner_objects = 63
+        max_road_objects = 200
+        self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
+        
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         if action_type == "discrete":
-            self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+            self.single_action_space = gymnasium.spaces.MultiDiscrete([4, 3])
         elif action_type == "continuous":
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         else:

@@ -385,7 +385,6 @@ void forward(DriveNet* net, float* observations, int* actions) {
 void demo() {
 
     Drive env = {
-        .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
