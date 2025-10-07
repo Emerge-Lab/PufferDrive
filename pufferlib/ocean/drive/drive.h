@@ -73,6 +73,10 @@
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
 
+// Define Post Collision Behaviour
+#define STOP_AGENT 1
+#define REMOVE_AGENT 2
+
 // Acceleration Values
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f,  1.3330f,  2.6670f,  4.0000f};
 // static const float STEERING_VALUES[13] = {-3.1420f, -2.6180f, -2.0940f, -1.5710f, -1.0470f, -0.5240f,  0.0000f,  0.5240f,
@@ -943,73 +947,52 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     int respawned = env->entities[agent_idx].respawn_timestep != -1;
     int exceeded_spawn_immunity_agent = (env->timestep - env->entities[agent_idx].respawn_timestep) >= env->spawn_immunity_timer;
     
-    if(collided == VEHICLE_COLLISION && is_active_agent == 1 && respawned){
-        if(env->post_collision_action==1 ){ //Stop
+    if(collided == VEHICLE_COLLISION){
+        if(env->post_collision_action==STOP_AGENT && !agent->stopped){ //Stop
             agent->stopped = 1;
             agent->vx=agent->vy = 0.0f;
-            agent->collision_state = 0;
         }
-        else if(env->post_collision_action==2){
+        else if(env->post_collision_action==REMOVE_AGENT && !agent->removed){
+            Entity* car_collided = &env->entities[car_collided_with_index];
+
             agent->removed = 1;
+            car_collided->removed = 1;
+
             agent->x = agent->y = -10000.0f;
+            car_collided->x = car_collided->y = -10000.0f;
+            
             agent->valid = 0;
+            car_collided->valid = 0;
 
-        } //Remove
-        else{
-            agent->collision_state = 0;
         }
-
-        if(car_collided_with_index == -1) return;
-
-        // spawn immunity for collisions with other cars who just respawned
-        int respawned_collided_with_car = env->entities[car_collided_with_index].respawn_timestep != -1;
-        int exceeded_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) >= env->spawn_immunity_timer;
-        int within_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) < env->spawn_immunity_timer;
-
-        if (respawned_collided_with_car) {
-            if(env->post_collision_action==1 ){ //Stop
-                env->entities[car_collided_with_index].stopped = 1;
-                env->entities[car_collided_with_index].vx=env->entities[car_collided_with_index].vy = 0.0f;
-            }
-            else if(env->post_collision_action==2){
-                env->entities[car_collided_with_index].removed = 1;
-                env->entities[car_collided_with_index].x = env->entities[car_collided_with_index].y = -10000.0f;
-                env->entities[car_collided_with_index].valid = 0;
-
-            }
-            else{
-                agent->collision_state = 0;
-                agent->metrics_array[COLLISION_IDX] = 0.0f;
-            }
-            // What does the else contain ??
+        if(is_active_agent ==1 && respawned){
+            agent->collision_state = 0;
         }
     }
-    
-
-    
-
     if(collided == OFFROAD){
-        if(env->post_offroad_action==1 ){ //Stop
+        if(env->post_offroad_action==STOP_AGENT  && !agent->stopped){ //Stop
             agent->stopped = 1;
             agent->vx=agent->vy = 0.0f;
         }
-        else if(env->post_offroad_action==2){
+        else if(env->post_offroad_action==REMOVE_AGENT && !agent->removed){
             agent->removed = 1;
             agent->x = agent->y = -10000.0f;
             agent->valid = 0;
 
         } //Remove
-        else{
-            agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        }
-        
-        return;
     }
+    if(car_collided_with_index == -1) return;
+
+    // spawn immunity for collisions with other cars who just respawned
+    int respawned_collided_with_car = env->entities[car_collided_with_index].respawn_timestep != -1;
+    int exceeded_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) >= env->spawn_immunity_timer;
+    int within_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) < env->spawn_immunity_timer;
 
 
-    
-
-
+    if (respawned_collided_with_car) {
+            agent->collision_state = 0;
+            agent->metrics_array[COLLISION_IDX] = 0.0f;
+    }
     return;
 }
 
