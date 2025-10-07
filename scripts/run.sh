@@ -20,6 +20,7 @@ singularity exec --nv \
 
     source ~/.bashrc
     cd /scratch/mmk9418/projects/PufferDrive
+    git checkout mohit/ada
     source .venv/bin/activate
 
     echo '=== Building extensions ==='

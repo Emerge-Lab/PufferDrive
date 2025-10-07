@@ -260,6 +260,9 @@ if not NO_OCEAN:
                 ]
             )
 
+        if "diplomacy" in c_ext.name:
+            c_ext.sources.append("pufferlib/ocean/diplomacy/diplomacy.c")
+
         if "impulse_wars" in c_ext.name:
             print(f"Adding {c_ext.name} to extra objects")
             c_ext.extra_objects.append(f"{BOX2D_NAME}/libbox2d.a")
