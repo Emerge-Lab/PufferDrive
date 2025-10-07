@@ -265,6 +265,9 @@ static PyObject* my_get(PyObject* dict, Env* env) {
             tmp = PyLong_FromLong(e->collision_state);
             PyDict_SetItemString(ent, "collision_state", tmp); Py_DECREF(tmp);
 
+            tmp = PyLong_FromLong(e->current_lane_idx);
+            PyDict_SetItemString(ent, "current_lane_idx", tmp); Py_DECREF(tmp);
+
             pf = PyFloat_FromDouble((double)e->x); PyDict_SetItemString(ent, "x", pf); Py_DECREF(pf);
             pf = PyFloat_FromDouble((double)e->y); PyDict_SetItemString(ent, "y", pf); Py_DECREF(pf);
             pf = PyFloat_FromDouble((double)e->z); PyDict_SetItemString(ent, "z", pf); Py_DECREF(pf);

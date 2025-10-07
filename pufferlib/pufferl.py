@@ -1378,11 +1378,11 @@ def load_config(env_name):
     parser.add_argument(
         "--render-mode",
         type=str,
-        default="auto",
+        default="matplotlib",
         choices=["auto", "human", "ansi", "rgb_array", "raylib", "matplotlib", "None"],
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
-    parser.add_argument("--num_scenarios", type=int, default="10", help="Number of scenarios to eval")
+    parser.add_argument("--num_scenarios", type=int, default="20", help="Number of scenarios to eval")
     parser.add_argument("--save-frames", type=int, default=0)
     parser.add_argument("--gif-path", type=str, default="eval.gif")
     parser.add_argument("--fps", type=float, default=15)

@@ -27,10 +27,10 @@ AGENT_COLOR = {
 class VizConfig:
     """Config for visualization."""
 
-    front_x: float = 75.0
-    back_x: float = 75.0
-    front_y: float = 75.0
-    back_y: float = 75.0
+    front_x: float = 100.0
+    back_x: float = 100.0
+    front_y: float = 100.0
+    back_y: float = 100.0
     px_per_meter: float = 10.0
     show_agent_id: bool = True
     center_agent_idx: int = -1
@@ -147,11 +147,29 @@ def plot_entity(ax, entity, idx, active_agent_indices, static_car_indices):
         heading = np.array(entity["heading"])
         goal_x = np.array(entity["goal_position_x"])
         goal_y = np.array(entity["goal_position_y"])
+        current_lane_idx = entity.get("current_lane_idx", -1)
 
         if idx in active_agent_indices:
             obj_color = AGENT_COLOR["ok"]
             ax.scatter(goal_x, goal_y, s=20, color=obj_color, marker="o")
             ax.add_patch(Circle((goal_x, goal_y), radius=2.0, color=obj_color, fill=False, linestyle="--"))
+            ax.text(
+                goal_x,
+                goal_y,
+                f"G{idx}",
+                color="black",
+                fontsize=12,
+                zorder=5,
+            )
+
+            ax.text(
+                x,
+                y,
+                f"{idx},{current_lane_idx}",
+                color="black",
+                fontsize=16,
+                zorder=5,
+            )
         elif idx in static_car_indices:
             obj_color = AGENT_COLOR["static"]
         else:
@@ -190,6 +208,53 @@ def plot_entity(ax, entity, idx, active_agent_indices, static_car_indices):
     # Road lane
     if entity_type == 4:
         ax.plot(entity["traj_x"], entity["traj_y"], color=obj_color, linewidth=1, zorder=1)
+        # if len(entity["traj_x"]) <= 2:
+        #     ax.text(
+        #         entity["traj_x"][len(entity["traj_x"]) - 1],
+        #         entity["traj_y"][len(entity["traj_y"]) - 1],
+        #         str(idx),
+        #         color="red",
+        #         fontsize=16,
+        #         zorder=5,
+        #     )
+        # else:
+        ax.text(
+            entity["traj_x"][len(entity["traj_x"]) - 1],
+            entity["traj_y"][len(entity["traj_y"]) - 1],
+            str(idx),
+            color="black",
+            fontsize=16,
+            zorder=5,
+        )
+        # for i in range(len(entity["traj_x"]) - 1):
+            # ax.arrow(
+            #     entity["traj_x"][i],
+            #     entity["traj_y"][i],
+            #     entity["traj_x"][i + 1] - entity["traj_x"][i],
+            #     entity["traj_y"][i + 1] - entity["traj_y"][i],
+            #     head_width=0.3,
+            #     head_length=0.5,
+            #     # length_includes_head=True,
+            #     color=obj_color,
+            #     linewidth=1,
+            #     zorder=1,
+            # )
+            # ax.scatter(
+            #     entity["traj_x"][i],
+            #     entity["traj_y"][i],
+            #     color=obj_color,
+            #     s=4,
+            #     zorder=1,
+            # )
+            # if idx == 122:
+            #     ax.text(
+            #         entity["traj_x"][i],
+            #         entity["traj_y"][i],
+            #         f"{idx}/{i}",
+            #         color="black",
+            #         fontsize=12,
+            #         zorder=5,
+            #     )
 
     # Road line
     if entity_type == 5:
@@ -199,46 +264,46 @@ def plot_entity(ax, entity, idx, active_agent_indices, static_car_indices):
     if entity_type == 6:
         ax.plot(entity["traj_x"], entity["traj_y"], color=obj_color, linewidth=2, zorder=1)
 
-    # Stop sign
-    if entity_type == 7:
-        ax.scatter(entity["traj_x"], entity["traj_y"], color=obj_color, s=150, marker="H", zorder=2)
+    # # Stop sign
+    # if entity_type == 7:
+    #     ax.scatter(entity["traj_x"], entity["traj_y"], color=obj_color, s=150, marker="H", zorder=2)
 
-    # Crosswalk
-    if entity_type == 8:
-        points = np.vstack((entity["traj_x"], entity["traj_y"])).T
-        ax.add_patch(
-            Polygon(
-                xy=points,
-                facecolor="none",
-                edgecolor="xkcd:bluish grey",
-                linewidth=2,
-                alpha=0.4,
-                hatch=r"//",
-                zorder=2,
-            )
-        )
+    # # Crosswalk
+    # if entity_type == 8:
+    #     points = np.vstack((entity["traj_x"], entity["traj_y"])).T
+    #     ax.add_patch(
+    #         Polygon(
+    #             xy=points,
+    #             facecolor="none",
+    #             edgecolor="xkcd:bluish grey",
+    #             linewidth=2,
+    #             alpha=0.4,
+    #             hatch=r"//",
+    #             zorder=2,
+    #         )
+    #     )
 
-    # Speed bump
-    if entity_type == 9:
-        points = np.vstack((entity["traj_x"], entity["traj_y"])).T
-        ax.add_patch(
-            Polygon(
-                xy=points,
-                facecolor="xkcd:goldenrod",
-                edgecolor="xkcd:black",
-                linewidth=0,
-                alpha=0.5,
-                hatch=r"//",
-                zorder=2,
-            )
-        )
+    # # Speed bump
+    # if entity_type == 9:
+    #     points = np.vstack((entity["traj_x"], entity["traj_y"])).T
+    #     ax.add_patch(
+    #         Polygon(
+    #             xy=points,
+    #             facecolor="xkcd:goldenrod",
+    #             edgecolor="xkcd:black",
+    #             linewidth=0,
+    #             alpha=0.5,
+    #             hatch=r"//",
+    #             zorder=2,
+    #         )
+    #     )
 
 
 def plot_simulator_state(scenario, viz_config: dict | None = None) -> np.ndarray:
     viz_config = VizConfig() if viz_config is None else VizConfig(**viz_config)
     # fig, ax = init_fig_ax(viz_config)
 
-    fig, ax = plt.subplots(figsize=(20, 20))
+    fig, ax = plt.subplots(figsize=(25, 25))
 
     for idx, entity in enumerate(scenario["entities"]):
         plot_entity(ax, entity, idx, scenario["active_agent_indices"], scenario["static_car_indices"])
@@ -277,7 +342,7 @@ def unpack_obs(obs_flat):
 
 
 def plot_observation(obs) -> np.ndarray:
-    fig, ax = plt.subplots(figsize=(20, 20))
+    fig, ax = plt.subplots(figsize=(25, 25))
 
     obs = unpack_obs(obs)
 
