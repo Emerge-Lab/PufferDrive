@@ -1,44 +1,32 @@
 #!/bin/bash
-#SBATCH --job-name=rerun
-#SBATCH --account=kempner_pehlevan_lab
-#SBATCH --output=/n/netscratch/pehlevan_lab/Everyone/mkulkarni/pufferdrive/logs/%A_%a_%x.out
-#SBATCH --error=/n/netscratch/pehlevan_lab/Everyone/mkulkarni/pufferdrive/logs/%A_%a_%x.err
-#SBATCH --array=0-14
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=16
+#SBATCH --job-name=puffer_drive
+#SBATCH --output=/scratch/mmk9418/logs/%A_%a_%x.out
+#SBATCH --error=/scratch/mmk9418/logs/%A_%a_%x.err
+#SBATCH --mem=128GB
 #SBATCH --time=6:00:00
-#SBATCH --mem=64GB
-#SBATCH --partition=kempner_h100
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:1
 
-module load cuda cudnn gcc/12.2.0-fasrc01
-cd /n/home01/mkulkarni/projects/PufferDrive
-source ~/.bashrc
-source .venv/bin/activate
-python setup.py build_ext --inplace --force
+echo "=== SLURM job $SLURM_JOB_ID on node $SLURM_NODELIST ==="
 
-ENTROPY_VALUES=(0.0 0.0 0.0 0.0 0.001 0.001 0.01 0.01 0.01 0.1 0.1 0.1 0.5 0.5 0.5)
-DISCOUNT_VALUES=(0.8 0.9 0.95 0.98 0.9 0.95 0.8 0.9 0.9 0.8 0.9 0.9 0.8 0.9 0.9)
-ORACLE_MODES=(False False True False False True False False True False False True False False True)
-SEEDS_MISSING=("42 69 420" "42 69 420" "42 69" "42 69 420" "42 69 420" "42 69 420" "42 69 420" "42 69 420" "42 69" "42 69 420" "42 69 420" "42 69" "42 69 420" "42 69 420" "42 69 420")
+# Run inside singularity container
+singularity exec --nv \
+  --overlay "$OVERLAY_FILE" \
+  "$SINGULARITY_IMAGE" \
+  bash -c "
+    set -e
 
-IDX=$SLURM_ARRAY_TASK_ID
-ENT=${ENTROPY_VALUES[$IDX]}
-DIS=${DISCOUNT_VALUES[$IDX]}
-ORC=${ORACLE_MODES[$IDX]}
-SEEDS=${SEEDS_MISSING[$IDX]}
+    source ~/.bashrc
+    cd /scratch/mmk9418/projects/PufferDrive
+    source .venv/bin/activate
 
-echo "Rerunning entropy=$ENT discount=$DIS oracle=$ORC seeds=$SEEDS"
+    echo '=== Building extensions ==='
+    python setup.py build_ext --inplace --force
 
-for S in $SEEDS; do
-    echo "Running with seed $S..."
-    puffer train puffer_drive --wandb \
-        --env.entropy-weight-lb $ENT \
-        --env.entropy-weight-ub $ENT \
-        --env.discount-weight-lb $DIS \
-        --env.discount-weight-ub $DIS \
-        --env.condition-type all \
-        --env.oracle-mode $ORC \
-        --train.seed $S
-done
+    echo '=== Starting training ==='
+    puffer train puffer_drive --wandb
+  "
+
+echo "=== Job $SLURM_JOB_ID finished ==="
