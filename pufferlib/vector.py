@@ -174,9 +174,6 @@ class Serial:
             self.masks,
         )
 
-    def get_state(self):
-        return [env.get_state() for env in self.envs][0]
-
     def close(self):
         for env in self.envs:
             env.close()

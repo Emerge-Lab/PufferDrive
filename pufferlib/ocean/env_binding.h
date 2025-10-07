@@ -136,6 +136,7 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     }
     // env->truncations = PyArray_DATA(truncations);
 
+
     PyObject* seed_arg = PyTuple_GetItem(args, 5);
     if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "seed must be an integer");
@@ -597,38 +598,6 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
     return dict;
 }
 
-static PyObject* vec_get(PyObject* self, PyObject* args) {
-    VecEnv* vec = unpack_vecenv(args);
-    if (!vec) {
-        PyErr_SetString(PyExc_ValueError, "Invalid VecEnv handle");
-        return NULL;
-    }
-
-    PyObject* list = PyList_New(vec->num_envs);
-    if (!list) return NULL;
-
-    for (int i = 0; i < vec->num_envs; i++) {
-        Env* env = vec->envs[i];
-        if (!env) {
-            Py_INCREF(Py_None);
-            PyList_SetItem(list, i, Py_None);
-            continue;
-        }
-        PyObject* dict = PyDict_New();
-        if (!dict) { Py_DECREF(list); return NULL; }
-        PyObject* res = my_get(dict, env);
-        if (res == NULL) {
-            Py_DECREF(dict);
-            Py_DECREF(list);
-            return NULL;
-        }
-        /* my_get returns the dict (or NULL on error) */
-        PyList_SetItem(list, i, dict);
-    }
-
-    return list;
-}
-
 static PyObject* vec_close(PyObject* self, PyObject* args) {
     VecEnv* vec = unpack_vecenv(args);
     if (!vec) {
@@ -714,7 +683,6 @@ static PyMethodDef methods[] = {
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
-    {"vec_get", vec_get, METH_VARARGS, "Get attributes from each env in a VecEnv"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}
