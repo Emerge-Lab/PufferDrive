@@ -59,7 +59,7 @@ class Default(nn.Module):
 
     def forward_eval(self, observations, state=None):
         hidden = self.encode_observations(observations, state=state)
-        logits, values = self.decode_actions(hidden)
+        logits, values = self.decode_actions(hidden, state)
         return logits, values
 
     def forward(self, observations, state=None):
@@ -76,7 +76,7 @@ class Default(nn.Module):
             observations = observations.view(batch_size, -1)
         return self.encoder(observations.float())
 
-    def decode_actions(self, hidden):
+    def decode_actions(self, hidden, state=None):
         """Decodes a batch of hidden states into (multi)discrete actions.
         Assumes no time dimension (handled by LSTM wrappers)."""
         if self.is_multidiscrete:
@@ -106,6 +106,15 @@ class LSTMWrapper(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.is_continuous = self.policy.is_continuous
+        self.masksembles_enabled = bool(getattr(self.policy, "masksembles_enabled", False))
+        self.masksembles_masks = int(getattr(self.policy, "masksembles_masks", 0))
+        self.masksembles_forward_passes = int(
+            getattr(
+                self.policy,
+                "masksembles_forward_passes",
+                self.masksembles_masks if self.masksembles_masks else 0,
+            )
+        )
 
         for name, param in self.named_parameters():
             if "layer_norm" in name:
@@ -145,7 +154,7 @@ class LSTMWrapper(nn.Module):
         state["hidden"] = hidden
         state["lstm_h"] = hidden
         state["lstm_c"] = c
-        logits, values = self.policy.decode_actions(hidden)
+        logits, values = self.policy.decode_actions(hidden, state)
         return logits, values
 
     def forward(self, observations, state):
@@ -187,13 +196,22 @@ class LSTMWrapper(nn.Module):
         hidden = hidden.transpose(0, 1)
 
         flat_hidden = hidden.reshape(B * TT, self.hidden_size)
-        logits, values = self.policy.decode_actions(flat_hidden)
+        logits, values = self.policy.decode_actions(flat_hidden, state)
         values = values.reshape(B, TT)
         # state.batch_logits = logits.reshape(B, TT, -1)
         state["hidden"] = hidden
         state["lstm_h"] = lstm_h.detach()
         state["lstm_c"] = lstm_c.detach()
         return logits, values
+
+    @torch.no_grad()
+    def value_uncertainty_from_hidden(self, flat_hidden: torch.Tensor, passes: int | None = None):
+        if hasattr(self.policy, "value_uncertainty_from_hidden"):
+            return self.policy.value_uncertainty_from_hidden(flat_hidden, passes)
+        if hasattr(self.policy, "value"):
+            v = self.policy.value(flat_hidden)
+            return v, torch.zeros_like(v)
+        raise AttributeError("Underlying policy does not support value uncertainty computation")
 
 
 class Convolutional(nn.Module):
@@ -252,7 +270,7 @@ class Convolutional(nn.Module):
             observations = observations[:, :, :: self.downsample, :: self.downsample]
         return self.network(observations.float() / 255.0)
 
-    def decode_actions(self, flat_hidden):
+    def decode_actions(self, flat_hidden, state=None):
         action = self.actor(flat_hidden)
         value = self.value_fn(flat_hidden)
         return action, value
@@ -293,7 +311,7 @@ class ProcgenResnet(nn.Module):
         hidden = self.network(x.permute((0, 3, 1, 2)) / 255.0)
         return hidden
 
-    def decode_actions(self, hidden):
+    def decode_actions(self, hidden, state=None):
         """linear decoder function"""
         action = self.actor(hidden)
         value = self.value(hidden)

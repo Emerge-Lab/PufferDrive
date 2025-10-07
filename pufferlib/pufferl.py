@@ -223,6 +223,15 @@ class PuffeRL:
         self.last_stats = defaultdict(list)
         self.losses = {}
 
+        self._mask_id_map = {}
+        self.masksembles_log_interval = int(config.get("masksembles_log_interval", 0))
+        self._last_uncertainty_log_step = 0
+
+        self.masksembles_episode_logging = bool(config.get("masksembles_episode_logging", False))
+        self._ep_return_sum = torch.zeros(total_agents, device=device)
+        self._ep_uncert_sum = torch.zeros(total_agents, device=device)
+        self._ep_uncert_count = torch.zeros(total_agents, device=device)
+
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
@@ -268,6 +277,7 @@ class PuffeRL:
             o_device = o.to(device)  # , non_blocking=True)
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
+            t_torch = torch.as_tensor(t).to(device)
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
@@ -282,8 +292,18 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
+                module = getattr(self.policy, "module", self.policy)
+                ms_enabled = getattr(module, "masksembles_enabled", False)
+                if ms_enabled:
+                    K = int(getattr(module, "masksembles_masks", 4))
+                    l = self.ep_lengths[env_id.start].item()
+                    if env_id.start not in self._mask_id_map or l == 0:
+                        self._mask_id_map[env_id.start] = random.randint(0, K - 1)
+                    state["mask_id"] = self._mask_id_map[env_id.start]
+
                 logits, value = self.policy.forward_eval(o_device, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                raw_r = r
                 r = torch.clamp(r, -1, 1)
 
             profile("eval_copy", epoch)
@@ -315,6 +335,9 @@ class PuffeRL:
                     self.ep_lengths[env_id] = 0
                     self.free_idx += num_full
                     self.full_rows += num_full
+                    if getattr(module, "masksembles_enabled", False):
+                        for start in range(env_id.start, env_id.stop):
+                            self._mask_id_map.pop(start, None)
 
                 action = action.cpu().numpy()
                 if isinstance(logits, torch.distributions.Normal):
@@ -332,6 +355,62 @@ class PuffeRL:
 
             profile("env", epoch)
             self.vecenv.send(action)
+
+            if (
+                getattr(module, "masksembles_enabled", False)
+                and self.masksembles_log_interval > 0
+                and (self.global_step - self._last_uncertainty_log_step) >= self.masksembles_log_interval
+            ):
+                try:
+                    passes = int(getattr(module, "masksembles_forward_passes", getattr(module, "masksembles_masks", 4)))
+                    if config["use_rnn"] and "hidden" in state and hasattr(module, "value_uncertainty_from_hidden"):
+                        _, std = module.value_uncertainty_from_hidden(state["hidden"], passes=passes)
+                        val = float(std.mean().detach().cpu().item())
+                        self.logger.log({"uncertainty/value_std_mean": val}, step=self.global_step)
+                        self._last_uncertainty_log_step = self.global_step
+                except Exception:
+                    pass
+
+            if getattr(module, "masksembles_enabled", False) and self.masksembles_episode_logging:
+                try:
+                    passes = int(getattr(module, "masksembles_forward_passes", getattr(module, "masksembles_masks", 4)))
+                    if config["use_rnn"] and "hidden" in state and hasattr(module, "value_uncertainty_from_hidden"):
+                        _, std = module.value_uncertainty_from_hidden(state["hidden"], passes=passes)
+                        std = std.view(-1)
+                        agent_ids = torch.arange(env_id.start, env_id.stop, device=device)
+                        self._ep_uncert_sum[agent_ids] += std
+                        self._ep_uncert_count[agent_ids] += 1
+                        self._ep_return_sum[agent_ids] += raw_r.view(-1)
+                        done_bool = torch.logical_or(d.bool(), t_torch.bool())
+                        if torch.any(done_bool):
+                            done_idx = torch.nonzero(done_bool).view(-1)
+                            finished = agent_ids[done_idx]
+                            if done_idx.numel() > 0 and hasattr(self.logger, "wandb") and self.logger.wandb:
+                                import wandb
+                                ret = self._ep_return_sum[finished].detach().cpu().numpy().tolist()
+                                cnt = torch.clamp(self._ep_uncert_count[finished], min=1)
+                                unc = (self._ep_uncert_sum[finished] / cnt).detach().cpu().numpy().tolist()
+                                tbl = wandb.Table(columns=["episode_return", "uncertainty_mean"])
+                                for r_v, u_v in zip(ret, unc):
+                                    tbl.add_data(float(r_v), float(u_v))
+                                self.logger.wandb.log(
+                                    {
+                                        "uncertainty/episode_table": tbl,
+                                        "uncertainty/episode_scatter": wandb.plot.scatter(
+                                            tbl,
+                                            x="episode_return",
+                                            y="uncertainty_mean",
+                                            title="Episode Uncertainty vs Return",
+                                        ),
+                                    },
+                                    step=self.global_step,
+                                )
+                            # Reset finished accumulators
+                            self._ep_return_sum[finished] = 0
+                            self._ep_uncert_sum[finished] = 0
+                            self._ep_uncert_count[finished] = 0
+                except Exception:
+                    pass
 
         profile("eval_misc", epoch)
         self.free_idx = self.total_agents
@@ -545,24 +624,29 @@ class PuffeRL:
                         if config["show_human_logs"]:
                             cmd.append("--log-trajectories")
 
-                        # Call C code that runs eval_gif() in subprocess
+                        env_vars = os.environ.copy()
+                        env_vars["ASAN_OPTIONS"] = "exitcode=0"
                         result = subprocess.run(
                             cmd,
                             cwd=os.getcwd(),
                             capture_output=True,
                             text=True,
                             timeout=120,
+                            env=env_vars,
                         )
 
-                        if result.returncode == 1:
+                        # Treat normal success (0) as success; keep 1 tolerant if toolchains differ
+                        if result.returncode in (0, 1):
                             # Move both generated GIFs to the model directory
                             gifs = [
                                 ("resources/drive/output_topdown.gif", f"epoch_{self.epoch:06d}_topdown.gif"),
                                 ("resources/drive/output_agent.gif", f"epoch_{self.epoch:06d}_agent.gif"),
                             ]
 
+                            found_any = False
                             for source_gif, target_filename in gifs:
                                 if os.path.exists(source_gif):
+                                    found_any = True
                                     target_gif = os.path.join(gif_output_dir, target_filename)
                                     shutil.move(source_gif, target_gif)
 
@@ -575,11 +659,10 @@ class PuffeRL:
                                             {f"render/{view_type}": wandb.Video(target_gif, format="gif")},
                                             step=self.global_step,
                                         )
-
                                 else:
                                     print(f"GIF generation completed but {source_gif} not found")
 
-                            else:
+                            if not found_any:
                                 print("GIF generation completed but file not found")
                         else:
                             print(f"C rendering failed: {result.stderr}")
@@ -1125,6 +1208,7 @@ def log_wandb_report(
     aggregator,
     collisions_cumulative,
     gif_assets,
+    avg_uncertainty=None,
 ):
     import wandb
 
@@ -1172,6 +1256,8 @@ def log_wandb_report(
 
     if avg_entropy is not None:
         log_payload["report/policy_entropy"] = avg_entropy
+    if avg_uncertainty is not None:
+        log_payload["report/value_uncertainty_mean"] = avg_uncertainty
 
     # Build a compact metrics table to browse per-episode stats
     metric_keys = sorted(means.keys())
@@ -1192,6 +1278,8 @@ def log_wandb_report(
         summary_table.add_data(key, means.get(key), stds.get(key))
     if avg_entropy is not None:
         summary_table.add_data("policy_entropy", avg_entropy, None)
+    if avg_uncertainty is not None:
+        summary_table.add_data("value_uncertainty", avg_uncertainty, None)
     log_payload["report/summary_table"] = summary_table
     log_payload["report/tables/summary"] = summary_table
 
@@ -1234,6 +1322,8 @@ def log_wandb_report(
 
     if avg_entropy is not None:
         summary_updates["report/policy_entropy"] = avg_entropy
+    if avg_uncertainty is not None:
+        summary_updates["report/value_uncertainty_mean"] = avg_uncertainty
 
     # Log GIFs as per-view sliders under stable keys. Expect gif_assets to contain lists.
     if gif_assets:
@@ -1440,6 +1530,31 @@ def report(env_name, args=None, vecenv=None, policy=None):
     entropy_enabled = bool(report_cfg.get("entropy_metric", True))
     entropy_sum = 0.0
     entropy_count = 0.0
+    base_policy = getattr(policy, "module", policy)
+    uncertainty_enabled = bool(report_cfg.get("uncertainty", True)) and bool(
+        getattr(base_policy, "masksembles_enabled", False)
+    )
+    uncertainty_passes = int(
+        report_cfg.get(
+            "uncertainty_forward_passes",
+            getattr(base_policy, "masksembles_forward_passes", getattr(base_policy, "masksembles_masks", 4)),
+        )
+    )
+    uncertainty_sum = 0.0
+    uncertainty_count = 0.0
+    uncertainty_scatter = bool(report_cfg.get("uncertainty_episode_scatter", True))
+    base_policy = getattr(policy, "module", policy)
+    uncertainty_enabled = bool(report_cfg.get("uncertainty", True)) and bool(
+        getattr(base_policy, "masksembles_enabled", False)
+    )
+    uncertainty_passes = int(
+        report_cfg.get(
+            "uncertainty_forward_passes",
+            getattr(base_policy, "masksembles_forward_passes", getattr(base_policy, "masksembles_masks", 4)),
+        )
+    )
+    uncertainty_sum = 0.0
+    uncertainty_count = 0.0
     max_steps = int(report_cfg.get("max_steps", 0))
     steps = 0
     runtime = 0.0
@@ -1447,6 +1562,11 @@ def report(env_name, args=None, vecenv=None, policy=None):
     aggregator = ReportAggregator()
     collisions_cumulative = []
     collisions_total = 0.0
+    # Episode-level tracking arrays
+    ep_return_sum = np.zeros(num_agents, dtype=np.float32)
+    ep_unc_sum = np.zeros(num_agents, dtype=np.float32)
+    ep_unc_count = np.zeros(num_agents, dtype=np.int32)
+    episode_points = []
 
     seed_value = report_cfg.get("seed", None)
     if seed_value in (None, -1):
@@ -1465,6 +1585,48 @@ def report(env_name, args=None, vecenv=None, policy=None):
                     entropy_sum += entropy.sum().item()
                     entropy_count += float(entropy.numel())
 
+                std_vec_np = None
+                if uncertainty_enabled:
+                    try:
+                        mod = getattr(policy, "module", policy)
+                        if use_rnn and state is not None and "hidden" in state and hasattr(
+                            mod, "value_uncertainty_from_hidden"
+                        ):
+                            _, std = mod.value_uncertainty_from_hidden(state["hidden"], passes=uncertainty_passes)
+                        elif not use_rnn and hasattr(mod, "encode_observations") and hasattr(
+                            mod, "value_uncertainty_from_hidden"
+                        ):
+                            h = mod.encode_observations(obs_tensor)
+                            _, std = mod.value_uncertainty_from_hidden(h, passes=uncertainty_passes)
+                        else:
+                            std = None
+
+                        if std is not None:
+                            uncertainty_sum += float(std.mean().detach().cpu().item())
+                            uncertainty_count += 1.0
+                            std_vec_np = std.detach().cpu().view(-1).numpy()
+                    except Exception:
+                        pass
+
+                if uncertainty_enabled:
+                    try:
+                        mod = getattr(policy, "module", policy)
+                        if use_rnn and state is not None and "hidden" in state and hasattr(
+                            mod, "value_uncertainty_from_hidden"
+                        ):
+                            _, std = mod.value_uncertainty_from_hidden(state["hidden"], passes=uncertainty_passes)
+                            uncertainty_sum += float(std.mean().detach().cpu().item())
+                            uncertainty_count += 1.0
+                        elif not use_rnn and hasattr(mod, "encode_observations") and hasattr(
+                            mod, "value_uncertainty_from_hidden"
+                        ):
+                            h = mod.encode_observations(obs_tensor)
+                            _, std = mod.value_uncertainty_from_hidden(h, passes=uncertainty_passes)
+                            uncertainty_sum += float(std.mean().detach().cpu().item())
+                            uncertainty_count += 1.0
+                    except Exception:
+                        pass
+
             actions_np = actions.detach().cpu().numpy().reshape(vecenv.action_space.shape)
             if isinstance(logits, torch.distributions.Normal):
                 actions_np = np.clip(actions_np, vecenv.action_space.low, vecenv.action_space.high)
@@ -1472,12 +1634,27 @@ def report(env_name, args=None, vecenv=None, policy=None):
             observations, rewards, terminals, truncations, infos = pufferlib.vector.step(vecenv, actions_np)
             steps += 1
 
+            if uncertainty_enabled and std_vec_np is not None:
+                ep_unc_sum += std_vec_np
+                ep_unc_count += 1
+            ep_return_sum += rewards.astype(np.float32)
+
             if use_rnn:
                 done = np.logical_or(terminals, truncations).astype(np.float32)
                 if done.any():
                     keep = torch.as_tensor(1.0 - done, device=device).unsqueeze(1)
                     state["lstm_h"] = state["lstm_h"] * keep
                     state["lstm_c"] = state["lstm_c"] * keep
+
+            done_ep = np.logical_or(terminals, truncations)
+            if np.any(done_ep):
+                idxs = np.where(done_ep)[0]
+                for i in idxs.tolist():
+                    unc_mean = float(ep_unc_sum[i] / max(1, int(ep_unc_count[i])))
+                    episode_points.append((float(ep_return_sum[i]), unc_mean))
+                ep_return_sum[idxs] = 0.0
+                ep_unc_sum[idxs] = 0.0
+                ep_unc_count[idxs] = 0
 
             for log in infos or []:
                 if not log:
@@ -1510,6 +1687,7 @@ def report(env_name, args=None, vecenv=None, policy=None):
     means = aggregator.mean()
     stds = aggregator.std()
     avg_entropy = entropy_sum / entropy_count if entropy_count > 0 else None
+    avg_uncertainty = uncertainty_sum / uncertainty_count if uncertainty_count > 0 else None
 
     interesting_keys = [
         "score",
@@ -1533,6 +1711,8 @@ def report(env_name, args=None, vecenv=None, policy=None):
 
     if avg_entropy is not None:
         summary_lines.append(f"Average policy entropy: {avg_entropy:.4f}")
+    if avg_uncertainty is not None:
+        summary_lines.append(f"Average value uncertainty: {avg_uncertainty:.4f}")
 
     for key in interesting_keys:
         if key in means:
@@ -1557,7 +1737,24 @@ def report(env_name, args=None, vecenv=None, policy=None):
             aggregator,
             collisions_cumulative,
             gif_assets,
+            avg_uncertainty=avg_uncertainty,
         )
+        if uncertainty_enabled and uncertainty_scatter and episode_points:
+            import wandb
+            tbl = wandb.Table(columns=["episode_return", "uncertainty_mean"])
+            for r_v, u_v in episode_points:
+                tbl.add_data(float(r_v), float(u_v))
+            wandb_logger.wandb.log(
+                {
+                    "report/uncertainty/episode_table": tbl,
+                    "report/uncertainty/episode_scatter": wandb.plot.scatter(
+                        tbl,
+                        x="episode_return",
+                        y="uncertainty_mean",
+                        title="Report: Episode Uncertainty vs Return",
+                    ),
+                }
+            )
 
     return dict(
         mean=means,
@@ -1778,18 +1975,56 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None):
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv)
 
-    weights = []
-    for name, param in policy.named_parameters():
-        weights.append(param.data.cpu().numpy().flatten())
-        print(name, param.shape, param.data.cpu().numpy().ravel()[0])
 
-    weights = np.concatenate(weights)
+    skip_prefixes = ("value_hidden.", "value_out.")
+    has_mlp = False
+    has_linear_value = False
+    for name, _ in policy.named_parameters():
+        if ".value_fn." in name:
+            has_linear_value = True
+        if (".value_hidden." in name) or (".value_out." in name):
+            has_mlp = True
+
+    hidden_size = getattr(policy, "hidden_size", None)
+    if hidden_size is None and hasattr(policy, "policy"):
+        hidden_size = getattr(policy.policy, "hidden_size", None)
+
+    weights = []
+    total = 0
+    skipped = 0
+    inserted_placeholder = False
+    need_placeholder = has_mlp and not has_linear_value and hidden_size is not None
+
+    for name, param in policy.named_parameters():
+        if need_placeholder and not inserted_placeholder and name.startswith("lstm."):
+            import numpy as _np
+            placeholder = _np.zeros(hidden_size * 1 + 1, dtype=_np.float32)
+            weights.append(placeholder)
+            total += placeholder.size
+            inserted_placeholder = True
+
+        if (".value_hidden." in name) or (".value_out." in name):
+            skipped += param.numel()
+            continue
+
+        arr = param.data.detach().cpu().numpy().ravel()
+        weights.append(arr)
+        total += arr.size
+
+    if need_placeholder and not inserted_placeholder and hidden_size is not None:
+        placeholder = np.zeros(hidden_size * 1 + 1, dtype=np.float32)
+        weights.append(placeholder)
+
+    weights = np.concatenate(weights) if weights else np.array([], dtype=np.float32)
     if path is None:
         path = f"{args['env_name']}_weights.bin"
 
     weights.tofile(path)
-
-    print(f"Saved {len(weights)} weights to {path}")
+    try:
+        import os
+        print(f"Saved {len(weights)} weights to {path}; skipped {skipped} MLP-only params")
+    except Exception:
+        pass
 
 
 def ensure_drive_binary():
