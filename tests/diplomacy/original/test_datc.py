@@ -18,8 +18,19 @@
     - Contains the diplomacy adjudication test cases
 """
 # pylint: disable=too-many-lines
-from diplomacy.engine.game import Game
-from diplomacy.utils.order_results import OK, NO_CONVOY, BOUNCE, VOID, CUT, DISLODGED, DISRUPTED, DISBAND
+# Modified to use C implementation via adapter
+from tests.diplomacy.adapters import GameAdapter
+
+# Order result constants (matching original)
+# These are strings that appear in result lists
+OK = []
+NO_CONVOY = 'no convoy'
+BOUNCE = 'bounce'
+VOID = 'void'
+CUT = 'cut'
+DISLODGED = 'dislodged'
+DISRUPTED = 'disrupted'
+DISBAND = 'disband'
 
 # -----------------
 # DATC TEST CASES
@@ -31,7 +42,7 @@ class TestDATC:
     @staticmethod
     def create_game():
         """ Creates a game object"""
-        return Game()
+        return GameAdapter()
 
     @staticmethod
     def clear_units(game):

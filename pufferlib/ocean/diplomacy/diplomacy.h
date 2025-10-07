@@ -203,6 +203,9 @@ typedef struct {
 
     // Logging
     Log log;
+
+    // Bookkeeping for rewards
+    int last_welfare[MAX_POWERS];
 } Env;
 
 // Function declarations
@@ -231,6 +234,19 @@ void advance_phase(GameState* game);
 // Welfare Diplomacy specific
 void calculate_welfare_points(GameState* game);
 
+// Game state query functions (for testing)
+int get_current_year(GameState* game);
+PhaseType get_current_phase(GameState* game);
+int get_num_units(GameState* game, int power_id);
+void get_unit_info(GameState* game, int power_id, int unit_idx, UnitType* type, int* location);
+int get_num_centers(GameState* game, int power_id);
+void get_center_locations(GameState* game, int power_id, int* centers, int* num_centers);
+int get_welfare_points(GameState* game, int power_id);
+const char* get_location_name(Map* map, int location_idx);
+int get_num_locations(Map* map);
+LocationType get_location_type(Map* map, int location_idx);
+int is_supply_center(Map* map, int location_idx);
+
 // Utility functions
 const char* phase_to_string(PhaseType phase);
 const char* unit_type_to_string(UnitType type);
@@ -244,5 +260,7 @@ void c_reset(Env* env);
 void c_step(Env* env);
 void c_render(Env* env);
 void c_close(Env* env);
+// Configure runtime settings
+void c_configure(Env* env, int welfare_mode, int max_years);
 
 #endif // DIPLOMACY_H

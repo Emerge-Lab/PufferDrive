@@ -68,6 +68,13 @@ class Diplomacy(pufferlib.PufferEnv):
             seed
         )
 
+        # Configure runtime settings in C
+        try:
+            binding.env_configure(self.env_handle, int(self.welfare_mode), int(self.max_years))
+        except AttributeError:
+            # Backward compatibility if binding not yet exposes configure
+            pass
+
     def reset(self, seed=None):
         """Reset the environment to initial state."""
         if seed is not None:

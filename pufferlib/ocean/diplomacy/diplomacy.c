@@ -58,6 +58,86 @@ int can_move(Map* map, UnitType unit_type, int from_loc, int to_loc) {
 }
 
 // ============================================================================
+// Game State Query Functions (for testing)
+// ============================================================================
+
+int get_current_year(GameState* game) {
+    return game->year;
+}
+
+PhaseType get_current_phase(GameState* game) {
+    return game->phase;
+}
+
+int get_num_units(GameState* game, int power_id) {
+    if (power_id < 0 || power_id >= MAX_POWERS) {
+        return 0;
+    }
+    return game->powers[power_id].num_units;
+}
+
+void get_unit_info(GameState* game, int power_id, int unit_idx, UnitType* type, int* location) {
+    if (power_id < 0 || power_id >= MAX_POWERS) {
+        return;
+    }
+    if (unit_idx < 0 || unit_idx >= game->powers[power_id].num_units) {
+        return;
+    }
+    *type = game->powers[power_id].units[unit_idx].type;
+    *location = game->powers[power_id].units[unit_idx].location;
+}
+
+int get_num_centers(GameState* game, int power_id) {
+    if (power_id < 0 || power_id >= MAX_POWERS) {
+        return 0;
+    }
+    return game->powers[power_id].num_centers;
+}
+
+void get_center_locations(GameState* game, int power_id, int* centers, int* num_centers) {
+    if (power_id < 0 || power_id >= MAX_POWERS) {
+        *num_centers = 0;
+        return;
+    }
+    *num_centers = game->powers[power_id].num_centers;
+    for (int i = 0; i < *num_centers; i++) {
+        centers[i] = game->powers[power_id].centers[i];
+    }
+}
+
+int get_welfare_points(GameState* game, int power_id) {
+    if (power_id < 0 || power_id >= MAX_POWERS) {
+        return 0;
+    }
+    return game->powers[power_id].welfare_points;
+}
+
+const char* get_location_name(Map* map, int location_idx) {
+    if (location_idx < 0 || location_idx >= map->num_locations) {
+        return "";
+    }
+    return map->locations[location_idx].name;
+}
+
+int get_num_locations(Map* map) {
+    return map->num_locations;
+}
+
+LocationType get_location_type(Map* map, int location_idx) {
+    if (location_idx < 0 || location_idx >= map->num_locations) {
+        return LOC_LAND;  // Default
+    }
+    return map->locations[location_idx].type;
+}
+
+int is_supply_center(Map* map, int location_idx) {
+    if (location_idx < 0 || location_idx >= map->num_locations) {
+        return 0;
+    }
+    return map->locations[location_idx].has_supply_center;
+}
+
+// ============================================================================
 // Map Initialization - Generated from standard.map
 // ============================================================================
 
@@ -1116,6 +1196,54 @@ map->home_centers[6][15] = 45;  // NWY
 map->locations[45].is_home_center = 6;
 map->num_homes[6] = 17;
 
+    // Override and correct home center assignments and supply centers
+    // Reset all is_home_center to -1
+    for (int i = 0; i < map->num_locations; i++) {
+        map->locations[i].is_home_center = -1;
+    }
+
+    // Helper macro to set home centers
+    #define SET_HOME(power_idx, name) \
+        do { \
+            int idx = find_location_by_name(map, name); \
+            if (idx >= 0) { \
+                int n = map->num_homes[power_idx]; \
+                if (n < MAX_HOME_CENTERS) { \
+                    map->home_centers[power_idx][n] = idx; \
+                } \
+                map->num_homes[power_idx] = n + 1; \
+                map->locations[idx].is_home_center = power_idx; \
+                map->locations[idx].has_supply_center = 1; \
+            } \
+        } while(0)
+
+    // Clear counts
+    for (int p = 0; p < MAX_POWERS; p++) map->num_homes[p] = 0;
+
+    // Austria
+    SET_HOME(0, "BUD"); SET_HOME(0, "TRI"); SET_HOME(0, "VIE");
+    // England
+    SET_HOME(1, "EDI"); SET_HOME(1, "LON"); SET_HOME(1, "LVP");
+    // France
+    SET_HOME(2, "BRE"); SET_HOME(2, "MAR"); SET_HOME(2, "PAR");
+    // Germany
+    SET_HOME(3, "BER"); SET_HOME(3, "KIE"); SET_HOME(3, "MUN");
+    // Italy
+    SET_HOME(4, "NAP"); SET_HOME(4, "ROM"); SET_HOME(4, "VEN");
+    // Russia (4 homes)
+    SET_HOME(5, "MOS"); SET_HOME(5, "SEV"); SET_HOME(5, "STP"); SET_HOME(5, "WAR");
+    // Turkey
+    SET_HOME(6, "ANK"); SET_HOME(6, "CON"); SET_HOME(6, "SMY");
+
+    // Ensure neutral supply centers are marked
+    const char* neutrals[] = {"BEL","BUL","DEN","GRE","HOL","NWY","POR","RUM","SER","SPA","SWE","TUN"};
+    for (int i = 0; i < 12; i++) {
+        int idx = find_location_by_name(map, neutrals[i]);
+        if (idx >= 0) map->locations[idx].has_supply_center = 1;
+    }
+
+    #undef SET_HOME
+
     // Build adjacency cache for fast movement lookups
     // Initialize entire cache to 0
     memset(map->adjacency_cache, 0, sizeof(map->adjacency_cache));
@@ -1175,8 +1303,80 @@ void init_game(GameState* game, Map* map, int welfare_mode, int max_years) {
         game->powers[p].adjustment = 0;
     }
 
-    // TODO: Set up initial unit positions and supply centers
-    // based on standard Diplomacy starting positions
+    // Set up initial unit positions and supply centers
+    // Power IDs: 0=AUSTRIA, 1=ENGLAND, 2=FRANCE, 3=GERMANY, 4=ITALY, 5=RUSSIA, 6=TURKEY
+
+    // AUSTRIA (0): F TRI, A VIE, A BUD
+    game->powers[0].units[0] = (Unit){UNIT_FLEET, 64, 0, 0}; // F TRI
+    game->powers[0].units[1] = (Unit){UNIT_ARMY, 71, 0, 0};  // A VIE
+    game->powers[0].units[2] = (Unit){UNIT_ARMY, 14, 0, 0};  // A BUD
+    game->powers[0].num_units = 3;
+    game->powers[0].centers[0] = 64; // TRI
+    game->powers[0].centers[1] = 71; // VIE
+    game->powers[0].centers[2] = 14; // BUD
+    game->powers[0].num_centers = 3;
+
+    // ENGLAND (1): F LON, F EDI, A LVP
+    game->powers[1].units[0] = (Unit){UNIT_FLEET, 32, 1, 0}; // F LON
+    game->powers[1].units[1] = (Unit){UNIT_FLEET, 21, 1, 0}; // F EDI
+    game->powers[1].units[2] = (Unit){UNIT_ARMY, 34, 1, 0};  // A LVP
+    game->powers[1].num_units = 3;
+    game->powers[1].centers[0] = 32; // LON
+    game->powers[1].centers[1] = 21; // EDI
+    game->powers[1].centers[2] = 34; // LVP
+    game->powers[1].num_centers = 3;
+
+    // FRANCE (2): F BRE, A PAR, A MAR
+    game->powers[2].units[0] = (Unit){UNIT_FLEET, 13, 2, 0}; // F BRE
+    game->powers[2].units[1] = (Unit){UNIT_ARMY, 46, 2, 0};  // A PAR
+    game->powers[2].units[2] = (Unit){UNIT_ARMY, 37, 2, 0};  // A MAR
+    game->powers[2].num_units = 3;
+    game->powers[2].centers[0] = 13; // BRE
+    game->powers[2].centers[1] = 46; // PAR
+    game->powers[2].centers[2] = 37; // MAR
+    game->powers[2].num_centers = 3;
+
+    // GERMANY (3): F KIE, A BER, A MUN
+    game->powers[3].units[0] = (Unit){UNIT_FLEET, 31, 3, 0}; // F KIE
+    game->powers[3].units[1] = (Unit){UNIT_ARMY, 9, 3, 0};   // A BER
+    game->powers[3].units[2] = (Unit){UNIT_ARMY, 39, 3, 0};  // A MUN
+    game->powers[3].num_units = 3;
+    game->powers[3].centers[0] = 31; // KIE
+    game->powers[3].centers[1] = 9;  // BER
+    game->powers[3].centers[2] = 39; // MUN
+    game->powers[3].num_centers = 3;
+
+    // ITALY (4): F NAP, A ROM, A VEN
+    game->powers[4].units[0] = (Unit){UNIT_FLEET, 42, 4, 0}; // F NAP
+    game->powers[4].units[1] = (Unit){UNIT_ARMY, 51, 4, 0};  // A ROM
+    game->powers[4].units[2] = (Unit){UNIT_ARMY, 70, 4, 0};  // A VEN
+    game->powers[4].num_units = 3;
+    game->powers[4].centers[0] = 42; // NAP
+    game->powers[4].centers[1] = 51; // ROM
+    game->powers[4].centers[2] = 70; // VEN
+    game->powers[4].num_centers = 3;
+
+    // RUSSIA (5): F SEV, F STP(sc), A MOS, A WAR
+    game->powers[5].units[0] = (Unit){UNIT_FLEET, 55, 5, 0}; // F SEV
+    game->powers[5].units[1] = (Unit){UNIT_FLEET, 60, 5, 0}; // F STP
+    game->powers[5].units[2] = (Unit){UNIT_ARMY, 38, 5, 0};  // A MOS
+    game->powers[5].units[3] = (Unit){UNIT_ARMY, 73, 5, 0};  // A WAR
+    game->powers[5].num_units = 4;
+    game->powers[5].centers[0] = 55; // SEV
+    game->powers[5].centers[1] = 60; // STP
+    game->powers[5].centers[2] = 38; // MOS
+    game->powers[5].centers[3] = 73; // WAR
+    game->powers[5].num_centers = 4;
+
+    // TURKEY (6): F ANK, A CON, A SMY
+    game->powers[6].units[0] = (Unit){UNIT_FLEET, 3, 6, 0};  // F ANK
+    game->powers[6].units[1] = (Unit){UNIT_ARMY, 18, 6, 0};  // A CON
+    game->powers[6].units[2] = (Unit){UNIT_ARMY, 58, 6, 0};  // A SMY
+    game->powers[6].num_units = 3;
+    game->powers[6].centers[0] = 3;  // ANK
+    game->powers[6].centers[1] = 18; // CON
+    game->powers[6].centers[2] = 58; // SMY
+    game->powers[6].num_centers = 3;
 }
 
 void reset_game(GameState* game) {
@@ -1197,50 +1397,299 @@ void free_game(GameState* game) {
 // ============================================================================
 
 int parse_order(const char* order_str, Order* order, GameState* game) {
-    // TODO: Implement order parsing
+    // Parse standard Diplomacy order notation
     // Format examples:
     // "A PAR - MAR" (move)
-    // "A PAR H" (hold)
+    // "A PAR H" or "A PAR HOLDS" (hold)
     // "A PAR S A MAR - BUR" (support move)
     // "A PAR S A MAR" (support hold)
     // "F ENG C A WAL - BRE" (convoy)
-    // "A PAR B" (build)
-    // "A PAR D" (disband)
 
-    (void)order_str;
-    (void)order;
-    (void)game;
+    if (!order_str || !order || !game) {
+        return -1;
+    }
 
-    return 0;  // Not implemented yet
+    memset(order, 0, sizeof(Order));
+
+    char buffer[256];
+    strncpy(buffer, order_str, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+
+    // Convert to uppercase for easier parsing
+    for (char* p = buffer; *p; p++) {
+        *p = toupper(*p);
+    }
+
+    // Parse unit type (A or F)
+    char* token = strtok(buffer, " ");
+    if (!token) return -1;
+
+    if (token[0] == 'A') {
+        order->unit_type = UNIT_ARMY;
+    } else if (token[0] == 'F') {
+        order->unit_type = UNIT_FLEET;
+    } else {
+        return -1;  // Invalid unit type
+    }
+
+    // Parse unit location
+    token = strtok(NULL, " ");
+    if (!token) return -1;
+
+    int unit_loc = find_location_by_name(game->map, token);
+    if (unit_loc < 0) return -1;
+    order->unit_location = unit_loc;
+
+    // Parse order type
+    token = strtok(NULL, " ");
+    if (!token) return -1;
+
+    if (strcmp(token, "H") == 0 || strcmp(token, "HOLDS") == 0) {
+        // HOLD order
+        order->type = ORDER_HOLD;
+        return 0;
+
+    } else if (strcmp(token, "-") == 0 || strcmp(token, "->") == 0) {
+        // MOVE order
+        order->type = ORDER_MOVE;
+
+        // Parse destination
+        token = strtok(NULL, " ");
+        if (!token) return -1;
+
+        int dest_loc = find_location_by_name(game->map, token);
+        if (dest_loc < 0) return -1;
+        order->target_location = dest_loc;
+        return 0;
+
+    } else if (strcmp(token, "S") == 0 || strcmp(token, "SUPPORT") == 0 ||
+               strcmp(token, "SUPPORTS") == 0) {
+        // SUPPORT order
+
+        // Parse supported unit type
+        token = strtok(NULL, " ");
+        if (!token) return -1;
+
+        // Skip unit type (already know from next token)
+        // Parse supported unit location
+        token = strtok(NULL, " ");
+        if (!token) return -1;
+
+        int supported_loc = find_location_by_name(game->map, token);
+        if (supported_loc < 0) return -1;
+        order->target_unit_location = supported_loc;
+
+        // Check if it's support to hold or support to move
+        token = strtok(NULL, " ");
+        if (token && (strcmp(token, "-") == 0 || strcmp(token, "->") == 0)) {
+            // Support to move
+            order->type = ORDER_SUPPORT_MOVE;
+            token = strtok(NULL, " ");
+            if (!token) return -1;
+
+            int dest_loc = find_location_by_name(game->map, token);
+            if (dest_loc < 0) return -1;
+            order->dest_location = dest_loc;
+        } else {
+            // Support to hold (no destination)
+            order->type = ORDER_SUPPORT_HOLD;
+            order->dest_location = supported_loc;
+        }
+        return 0;
+
+    } else if (strcmp(token, "C") == 0 || strcmp(token, "CONVOY") == 0 ||
+               strcmp(token, "CONVOYS") == 0) {
+        // CONVOY order
+        order->type = ORDER_CONVOY;
+
+        // Parse convoyed unit type (should be A)
+        token = strtok(NULL, " ");
+        if (!token) return -1;
+
+        // Parse convoyed unit location
+        token = strtok(NULL, " ");
+        if (!token) return -1;
+
+        int convoyed_loc = find_location_by_name(game->map, token);
+        if (convoyed_loc < 0) return -1;
+        order->target_unit_location = convoyed_loc;
+
+        // Parse "-"
+        token = strtok(NULL, " ");
+        if (!token || (strcmp(token, "-") != 0 && strcmp(token, "->") != 0)) {
+            return -1;
+        }
+
+        // Parse destination
+        token = strtok(NULL, " ");
+        if (!token) return -1;
+
+        int dest_loc = find_location_by_name(game->map, token);
+        if (dest_loc < 0) return -1;
+        order->dest_location = dest_loc;
+        return 0;
+
+    } else if (strcmp(token, "B") == 0 || strcmp(token, "BUILD") == 0 ||
+               strcmp(token, "BUILDS") == 0) {
+        // BUILD order
+        order->type = ORDER_BUILD;
+        return 0;
+
+    } else if (strcmp(token, "D") == 0 || strcmp(token, "DISBAND") == 0 ||
+               strcmp(token, "DISBANDS") == 0 || strcmp(token, "REMOVE") == 0) {
+        // DISBAND order
+        order->type = ORDER_DISBAND;
+        return 0;
+
+    } else {
+        return -1;  // Unknown order type
+    }
 }
 
 int validate_order(GameState* game, int power_id, const Order* order) {
-    // TODO: Implement order validation
-    // Check:
-    // - Unit exists at specified location
-    // - Unit belongs to power
-    // - Move is to adjacent location
-    // - Support/convoy targets are valid
-    // - Build location is home center
-    // - Etc.
+    // Validate that an order is legal for the current game state
+    // Returns 0 if valid, -1 if invalid
 
-    (void)game;
-    (void)power_id;
-    (void)order;
+    if (!game || !order || power_id < 0 || power_id >= MAX_POWERS) {
+        return -1;
+    }
 
-    return 0;  // Not implemented yet
+    Power* power = &game->powers[power_id];
+    Map* map = game->map;
+
+    // Find unit at the specified location
+    int unit_idx = -1;
+    for (int i = 0; i < power->num_units; i++) {
+        if (power->units[i].location == order->unit_location) {
+            unit_idx = i;
+            break;
+        }
+    }
+
+    // Check unit exists and belongs to this power
+    if (unit_idx < 0) {
+        return -1;  // No unit at this location
+    }
+
+    Unit* unit = &power->units[unit_idx];
+
+    // Check unit type matches
+    if (unit->type != order->unit_type) {
+        return -1;  // Unit type mismatch
+    }
+
+    // Validate based on order type
+    switch (order->type) {
+        case ORDER_HOLD:
+            // HOLD is always valid
+            return 0;
+
+        case ORDER_MOVE:
+            // Check destination is adjacent and reachable by unit type
+            if (order->target_location < 0 || order->target_location >= map->num_locations) {
+                return -1;  // Invalid destination
+            }
+            // Check not moving to same location
+            if (order->target_location == unit->location) {
+                return -1;  // Cannot move to own sector
+            }
+            if (!can_move(map, unit->type, unit->location, order->target_location)) {
+                return -1;  // Not adjacent or wrong terrain
+            }
+            return 0;
+
+        case ORDER_SUPPORT_HOLD:
+        case ORDER_SUPPORT_MOVE:
+            // Check target unit location exists
+            if (order->target_unit_location < 0 || order->target_unit_location >= map->num_locations) {
+                return -1;
+            }
+            // Check supporting unit can reach the target location or destination
+            // (supporting unit must be adjacent to either the supported unit or the destination)
+            int can_support = 0;
+            if (can_move(map, unit->type, unit->location, order->target_unit_location)) {
+                can_support = 1;  // Adjacent to supported unit
+            }
+            if (order->dest_location >= 0 && order->dest_location < map->num_locations) {
+                if (can_move(map, unit->type, unit->location, order->dest_location)) {
+                    can_support = 1;  // Adjacent to destination
+                }
+            }
+            if (!can_support) {
+                return -1;  // Can't support this move
+            }
+            return 0;
+
+        case ORDER_CONVOY:
+            // Convoy must be given by a fleet
+            if (unit->type != UNIT_FLEET) {
+                return -1;  // Only fleets can convoy
+            }
+            // Check convoyed unit location exists
+            if (order->target_unit_location < 0 || order->target_unit_location >= map->num_locations) {
+                return -1;
+            }
+            // Check destination exists
+            if (order->dest_location < 0 || order->dest_location >= map->num_locations) {
+                return -1;
+            }
+            // TODO: Check that convoying fleet is adjacent to route
+            return 0;
+
+        case ORDER_BUILD:
+            // Can only build in home centers during adjustment phase
+            if (game->phase != PHASE_WINTER_ADJUSTMENT) {
+                return -1;  // Wrong phase
+            }
+            // TODO: Check location is home center and unoccupied
+            return 0;
+
+        case ORDER_DISBAND:
+            // Can always disband own units (in welfare diplomacy)
+            // In standard diplomacy, only during adjustment phase if over limit
+            if (!game->welfare_mode && game->phase != PHASE_WINTER_ADJUSTMENT) {
+                return -1;  // Wrong phase for standard diplomacy
+            }
+            return 0;
+
+        default:
+            return -1;  // Unknown order type
+    }
 }
 
 void get_possible_orders(GameState* game, int power_id, int location,
                          char orders[][MAX_ORDER_LENGTH], int* num_orders) {
-    // TODO: Generate list of all valid orders for unit at location
-
-    (void)game;
-    (void)power_id;
-    (void)location;
-    (void)orders;
-
     *num_orders = 0;
+    if (!game || power_id < 0 || power_id >= MAX_POWERS) return;
+    Power* power = &game->powers[power_id];
+    int unit_idx = -1;
+    for (int i = 0; i < power->num_units; i++) {
+        if (power->units[i].location == location) {
+            unit_idx = i;
+            break;
+        }
+    }
+    if (unit_idx < 0) return; // no unit
+    Unit* unit = &power->units[unit_idx];
+
+    // HOLD always available
+    snprintf(orders[*num_orders], MAX_ORDER_LENGTH, "%s %s H",
+             unit->type == UNIT_ARMY ? "A" : "F",
+             game->map->locations[unit->location].name);
+    (*num_orders)++;
+
+    // MOVE to any adjacent and reachable location
+    for (int a = 0; a < game->map->locations[location].num_adjacent; a++) {
+        int to = game->map->locations[location].adjacencies[a];
+        if (can_move(game->map, unit->type, location, to)) {
+            snprintf(orders[*num_orders], MAX_ORDER_LENGTH, "%s %s - %s",
+                     unit->type == UNIT_ARMY ? "A" : "F",
+                     game->map->locations[unit->location].name,
+                     game->map->locations[to].name);
+            (*num_orders)++;
+            if (*num_orders >= MAX_UNITS) break; // cap defensively
+        }
+    }
 }
 
 // ============================================================================
@@ -1268,45 +1717,493 @@ void process_orders(GameState* game) {
 }
 
 void resolve_movement_phase(GameState* game) {
-    // TODO: Implement movement resolution algorithm
-    // This is the core adjudication engine
-    // Steps:
-    // 1. Parse all submitted orders
-    // 2. Validate orders
-    // 3. Resolve paradoxes (circular moves, convoys)
-    // 4. Calculate attack strengths
-    // 5. Determine dislodgements
-    // 6. Move successful units
-    // 7. Record dislodged units for retreat phase
+    // Implementation of Diplomacy movement adjudication
+    // Algorithm:
+    // 1. Validate all orders
+    // 2. Calculate destination conflicts
+    // 3. Calculate attack/defense strengths
+    // 4. Determine successful moves and dislodgements
+    // 5. Apply moves and record dislodged units
 
-    (void)game;
+    // Clear any previous dislodgements
+    game->num_dislodged = 0;
+    game->num_combats = 0;
+
+    // Structure to track move attempts
+    typedef struct {
+        int unit_power;          // Which power owns the unit
+        int unit_idx;            // Index in power's unit array
+        int from_location;       // Where unit is
+        int to_location;         // Where it's trying to go (-1 for hold)
+        UnitType unit_type;
+        int is_valid;            // Is this a valid order?
+        int attack_strength;     // Strength moving into to_location
+        int defend_strength;     // Strength defending from_location
+        int can_move;            // Final determination: can this unit move?
+        int support_cut;         // Has this unit's support been cut?
+    } MoveAttempt;
+    
+    // Structure to track support orders
+    typedef struct {
+        int supporter_power;     // Power giving support
+        int supporter_location;  // Where supporter is
+        int supported_location;  // Where supported unit is (or -1 for hold)
+        int destination;         // Where supported unit is going (or where it is for hold support)
+        int is_valid;            // Is this support valid?
+        int is_cut;              // Has support been cut by attack?
+    } SupportOrder;
+
+    MoveAttempt attempts[MAX_POWERS * MAX_UNITS];
+    int num_attempts = 0;
+    
+    SupportOrder supports[MAX_POWERS * MAX_UNITS];
+    int num_supports = 0;
+
+    // Step 1: Collect all move attempts from orders
+    for (int p = 0; p < MAX_POWERS; p++) {
+        Power* power = &game->powers[p];
+        
+        // Create default HOLD orders for units without explicit orders
+        for (int u = 0; u < power->num_units; u++) {
+            Unit* unit = &power->units[u];
+            int has_order = 0;
+            
+            // Check if unit has an explicit order
+            for (int o = 0; o < power->num_orders; o++) {
+                if (power->orders[o].unit_location == unit->location) {
+                    has_order = 1;
+                    break;
+                }
+            }
+            
+            // If no order, create implicit HOLD
+            if (!has_order && power->num_orders < MAX_UNITS) {
+                Order hold_order;
+                memset(&hold_order, 0, sizeof(Order));
+                hold_order.type = ORDER_HOLD;
+                hold_order.unit_location = unit->location;
+                hold_order.unit_type = unit->type;
+                hold_order.power_id = p;
+                power->orders[power->num_orders++] = hold_order;
+            }
+        }
+        
+        // Process all orders for this power
+        for (int o = 0; o < power->num_orders; o++) {
+            Order* order = &power->orders[o];
+            
+            // Find the unit for this order
+            int unit_idx = -1;
+            for (int u = 0; u < power->num_units; u++) {
+                if (power->units[u].location == order->unit_location) {
+                    unit_idx = u;
+                    break;
+                }
+            }
+            
+            if (unit_idx < 0) {
+                continue;  // Order for non-existent unit
+            }
+            
+            // Handle different order types
+            if (order->type == ORDER_HOLD || order->type == ORDER_MOVE) {
+                MoveAttempt* attempt = &attempts[num_attempts++];
+                attempt->unit_power = p;
+                attempt->unit_idx = unit_idx;
+                attempt->from_location = order->unit_location;
+                attempt->unit_type = order->unit_type;
+                attempt->attack_strength = 1;  // Base strength (supports added later)
+                attempt->defend_strength = 1;  // Base strength (supports added later)
+                attempt->can_move = 0;         // Determined later
+                attempt->support_cut = 0;      // Not supporting, so can't be cut
+                
+                if (order->type == ORDER_HOLD) {
+                    attempt->to_location = -1;  // Holding
+                    attempt->is_valid = 1;
+                } else {  // ORDER_MOVE
+                    attempt->to_location = order->target_location;
+                    // Validate move
+                    int valid = validate_order(game, p, order);
+                    attempt->is_valid = (valid == 0);
+                }
+            } 
+            else if (order->type == ORDER_SUPPORT_HOLD || order->type == ORDER_SUPPORT_MOVE) {
+                // Collect support orders
+                SupportOrder* support = &supports[num_supports++];
+                support->supporter_power = p;
+                support->supporter_location = order->unit_location;
+                support->supported_location = order->target_unit_location;
+                support->destination = (order->type == ORDER_SUPPORT_MOVE) ? 
+                                      order->dest_location : order->target_unit_location;
+                support->is_valid = (validate_order(game, p, order) == 0);
+                support->is_cut = 0;  // Determined later
+                
+                // Also add this unit to move attempts as HOLD (supporting units hold their position)
+                MoveAttempt* attempt = &attempts[num_attempts++];
+                attempt->unit_power = p;
+                attempt->unit_idx = unit_idx;
+                attempt->from_location = order->unit_location;
+                attempt->to_location = -1;  // Supporting units hold
+                attempt->unit_type = order->unit_type;
+                attempt->attack_strength = 1;
+                attempt->defend_strength = 1;
+                attempt->can_move = 0;
+                attempt->is_valid = 1;
+                attempt->support_cut = 0;  // Will be set if attacked
+            }
+        }
+    }
+
+    // Step 2: Determine which supports are cut by attacks
+    // A support is cut if the supporter is attacked by any unit (except the supported unit)
+    for (int i = 0; i < num_attempts; i++) {
+        MoveAttempt* attacker = &attempts[i];
+        
+        if (!attacker->is_valid || attacker->to_location < 0) {
+            continue;  // Not attacking
+        }
+        
+        // Check if this attack cuts any supports
+        for (int s = 0; s < num_supports; s++) {
+            SupportOrder* support = &supports[s];
+            
+            if (!support->is_valid || support->is_cut) {
+                continue;  // Already invalid or cut
+            }
+            
+            // Support is cut if attacker is moving to supporter's location
+            if (attacker->to_location == support->supporter_location) {
+                // Exception: attack from the unit being supported doesn't cut support
+                if (attacker->from_location != support->supported_location) {
+                    // Exception: own units don't cut support
+                    if (attacker->unit_power != support->supporter_power) {
+                        support->is_cut = 1;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Step 3: Calculate attack and defense strengths with valid supports
+    for (int i = 0; i < num_attempts; i++) {
+        MoveAttempt* attempt = &attempts[i];
+        
+        if (!attempt->is_valid) {
+            continue;
+        }
+        
+        // Calculate attack strength (if moving)
+        if (attempt->to_location >= 0) {
+            // Count valid supports for this move
+            for (int s = 0; s < num_supports; s++) {
+                SupportOrder* support = &supports[s];
+                
+                if (!support->is_valid || support->is_cut) {
+                    continue;
+                }
+                
+                // Check if this support applies to this move
+                if (support->supported_location == attempt->from_location &&
+                    support->destination == attempt->to_location) {
+                    
+                    // Additional check: supporter's power can't support dislodging own unit
+                    // Find if there's own unit at destination
+                    int own_unit_at_dest = 0;
+                    for (int j = 0; j < num_attempts; j++) {
+                        if (attempts[j].from_location == attempt->to_location &&
+                            attempts[j].unit_power == support->supporter_power) {
+                            own_unit_at_dest = 1;
+                            break;
+                        }
+                    }
+                    
+                    if (!own_unit_at_dest) {
+                        attempt->attack_strength++;
+                    } else {
+                        // Can't support dislodging own unit - mark support as invalid
+                        support->is_valid = 0;
+                    }
+                }
+            }
+        }
+        
+        // Calculate defense strength (if holding or destination of attack)
+        // Units get hold support
+        for (int s = 0; s < num_supports; s++) {
+            SupportOrder* support = &supports[s];
+            
+            if (!support->is_valid || support->is_cut) {
+                continue;
+            }
+            
+            // Hold support: supported unit is at its location
+            if (support->supported_location == attempt->from_location &&
+                support->destination == attempt->from_location) {
+                attempt->defend_strength++;
+            }
+        }
+    }
+    
+    // Step 4: Detect conflicts and determine outcomes using strength calculations
+    for (int i = 0; i < num_attempts; i++) {
+        MoveAttempt* attacker = &attempts[i];
+        
+        if (!attacker->is_valid || attacker->to_location < 0) {
+            continue;  // Invalid order or holding
+        }
+        
+        int destination = attacker->to_location;
+        int source = attacker->from_location;
+        
+        // Find all competing moves to this destination
+        int max_attack_strength = 0;
+        int num_with_max_strength = 0;
+        int head_to_head_opponent_idx = -1;
+        
+        for (int j = 0; j < num_attempts; j++) {
+            MoveAttempt* other = &attempts[j];
+            
+            if (!other->is_valid || other->to_location != destination) {
+                continue;  // Not attacking this destination
+            }
+            
+            // Track max attack strength
+            if (other->attack_strength > max_attack_strength) {
+                max_attack_strength = other->attack_strength;
+                num_with_max_strength = 1;
+            } else if (other->attack_strength == max_attack_strength) {
+                num_with_max_strength++;
+            }
+            
+            // Check for head-to-head battle
+            if (other->from_location == destination && other->to_location == source) {
+                head_to_head_opponent_idx = j;
+            }
+        }
+        
+        // Find defender at destination (if any)
+        int defender_idx = -1;
+        int defender_strength = 0;
+        for (int j = 0; j < num_attempts; j++) {
+            if (attempts[j].from_location == destination) {
+                defender_idx = j;
+                defender_strength = attempts[j].defend_strength;
+                break;
+            }
+        }
+        
+        // Determine outcome based on strengths
+        if (num_with_max_strength > 1) {
+            // Multiple attackers with equal max strength → all bounce
+            continue;  // can_move stays 0
+        }
+        
+        // Single strongest attacker
+        if (attacker->attack_strength == max_attack_strength) {
+            if (defender_idx >= 0) {
+                // There's a defender
+                if (head_to_head_opponent_idx >= 0) {
+                    // Head-to-head battle
+                    MoveAttempt* opponent = &attempts[head_to_head_opponent_idx];
+                    if (attacker->attack_strength > opponent->attack_strength) {
+                        // We win - can move, they're dislodged
+                        attacker->can_move = 1;
+                        // Mark for dislodgement (tracked later)
+                    } else {
+                        // Equal or weaker - both bounce
+                        continue;
+                    }
+                } else {
+                    // Not head-to-head, defender holding or moving elsewhere
+                    if (attacker->attack_strength > defender_strength) {
+                        // Successful attack - defender dislodged
+                        attacker->can_move = 1;
+                        // Mark defender for dislodgement
+                    } else {
+                        // Attack bounced
+                        continue;
+                    }
+                }
+            } else {
+                // No defender - move succeeds
+                attacker->can_move = 1;
+            }
+        }
+    }
+    
+    // Step 5: Handle circular movements and chains (with strength consideration)
+    // Iteratively resolve moves where destination is being vacated
+    int changed = 1;
+    int iterations = 0;
+    while (changed && iterations < 20) {
+        changed = 0;
+        iterations++;
+        
+        for (int i = 0; i < num_attempts; i++) {
+            MoveAttempt* attempt = &attempts[i];
+            
+            if (attempt->can_move || !attempt->is_valid || attempt->to_location < 0) {
+                continue;  // Already resolved or not moving
+            }
+            
+            int destination = attempt->to_location;
+            
+            // Check if destination unit is moving away successfully
+            int dest_unit_moving = 0;
+            for (int j = 0; j < num_attempts; j++) {
+                if (attempts[j].from_location == destination && 
+                    attempts[j].to_location >= 0 && 
+                    attempts[j].can_move) {
+                    dest_unit_moving = 1;
+                    break;
+                }
+            }
+            
+            if (!dest_unit_moving) {
+                continue;  // Destination not being vacated
+            }
+            
+            // Check if we're the only/strongest attacker to this destination
+            int is_strongest = 1;
+            int max_str = attempt->attack_strength;
+            int num_at_max = 1;
+            
+            for (int j = 0; j < num_attempts; j++) {
+                if (i == j) continue;
+                if (!attempts[j].is_valid || attempts[j].to_location != destination) {
+                    continue;
+                }
+                
+                if (attempts[j].attack_strength > max_str) {
+                    is_strongest = 0;
+                    break;
+                } else if (attempts[j].attack_strength == max_str) {
+                    num_at_max++;
+                }
+            }
+            
+            // Can move if strongest attacker (or tied for strongest with only 1 other)
+            if (is_strongest && num_at_max == 1) {
+                attempt->can_move = 1;
+                changed = 1;
+            }
+        }
+    }
+    
+    // Step 6: Determine and record dislodgements
+    for (int i = 0; i < num_attempts; i++) {
+        MoveAttempt* attacker = &attempts[i];
+        
+        if (!attacker->can_move || attacker->to_location < 0) {
+            continue;  // Not moving
+        }
+        
+        // Check if we're dislodging a unit
+        for (int j = 0; j < num_attempts; j++) {
+            MoveAttempt* defender = &attempts[j];
+            
+            if (defender->from_location == attacker->to_location) {
+                // There's a unit at our destination
+                // It's dislodged if we have strength to dislodge it
+                if (attacker->attack_strength > defender->defend_strength) {
+                    // Record dislodgement
+                    DislodgedUnit* dislodged = &game->dislodged[game->num_dislodged++];
+                    dislodged->type = defender->unit_type;
+                    dislodged->power_id = defender->unit_power;
+                    dislodged->from_location = defender->from_location;
+                    dislodged->dislodged_by_location = attacker->from_location;
+                    dislodged->num_possible_retreats = 0;  // Calculate later in retreat phase
+                    
+                    // Mark defender as not able to stay
+                    // We'll remove the unit when applying moves
+                }
+                break;
+            }
+        }
+    }
+    
+    // Step 7: Apply successful moves and remove dislodged units
+    for (int i = 0; i < num_attempts; i++) {
+        MoveAttempt* attempt = &attempts[i];
+        
+        if (!attempt->can_move || attempt->to_location < 0) {
+            continue;  // Stay in place
+        }
+        
+        // Check if this unit was dislodged
+        int was_dislodged = 0;
+        for (int d = 0; d < game->num_dislodged; d++) {
+            if (game->dislodged[d].power_id == attempt->unit_power &&
+                game->dislodged[d].from_location == attempt->from_location) {
+                was_dislodged = 1;
+                break;
+            }
+        }
+        
+        if (was_dislodged) {
+            // Don't apply move for dislodged unit - it will be removed/retreated
+            continue;
+        }
+        
+        // Move the unit
+        Power* power = &game->powers[attempt->unit_power];
+        Unit* unit = &power->units[attempt->unit_idx];
+        unit->location = attempt->to_location;
+    }
+    
+    // Step 8: Remove dislodged units from their powers
+    for (int d = 0; d < game->num_dislodged; d++) {
+        DislodgedUnit* dislodged = &game->dislodged[d];
+        Power* power = &game->powers[dislodged->power_id];
+        
+        // Remove unit from power's unit list
+        for (int u = 0; u < power->num_units; u++) {
+            if (power->units[u].location == dislodged->from_location &&
+                power->units[u].type == dislodged->type) {
+                // Remove by shifting remaining units
+                for (int k = u + 1; k < power->num_units; k++) {
+                    power->units[k - 1] = power->units[k];
+                }
+                power->num_units--;
+                break;
+            }
+        }
+    }
 }
 
 void resolve_retreat_phase(GameState* game) {
-    // TODO: Implement retreat resolution
-    // Steps:
-    // 1. Process retreat orders
-    // 2. Check for conflicts (two units retreating to same space)
-    // 3. Move retreating units or disband if no valid retreat
-
-    (void)game;
+    // Retreat phase implementation
+    // For now, all dislodged units are disbanded (no retreat orders processed yet)
+    
+    // TODO: Implement full retreat resolution:
+    // 1. Calculate valid retreat destinations for each dislodged unit
+    // 2. Process retreat orders
+    // 3. Check for conflicts (two units retreating to same space → both disband)
+    // 4. Move retreating units or disband if no valid retreat/order
+    
+    // For now: just clear dislodged units (they're already removed from power.units)
+    game->num_dislodged = 0;
 }
 
 void resolve_adjustment_phase(GameState* game) {
-    // TODO: Implement adjustment resolution
-    // Steps:
-    // 1. Calculate adjustment count for each power (centers - units)
-    // 2. Process build orders
-    // 3. Process disband orders
-    // 4. In welfare mode: allow voluntary disbands
-    // 5. Calculate welfare points
+    // Simple implementation for Iteration 3: No builds/disbands yet
+    // Just calculate adjustment counts and welfare points
 
-    (void)game;
+    // Calculate adjustment count for each power
+    for (int p = 0; p < MAX_POWERS; p++) {
+        Power* power = &game->powers[p];
+        power->adjustment = power->num_centers - power->num_units;
+    }
 
     // Welfare Diplomacy: Calculate welfare points after adjustments
     if (game->welfare_mode) {
         calculate_welfare_points(game);
     }
+
+    // TODO: In future iterations, implement full adjustment resolution:
+    // 1. Process build orders
+    // 2. Process disband orders
+    // 3. In welfare mode: allow voluntary disbands
 }
 
 void advance_phase(GameState* game) {
@@ -1340,7 +2237,9 @@ void advance_phase(GameState* game) {
             game->phase = PHASE_SPRING_MOVEMENT;
 
             // Check if game should end
-            if (game->year > game->max_years) {
+            // max_years means "play for N years starting from 1901"
+            // e.g., max_years=10 means play years 1901-1910, end when year becomes 1911
+            if (game->year > 1900 + game->max_years) {
                 game->phase = PHASE_COMPLETED;
                 game->is_game_over = 1;
             }
@@ -1393,19 +2292,79 @@ void c_init(Env* env) {
     }
 
     init_standard_map(map);
-    init_game(env->game, map, 1, 10);  // Welfare mode, 10 year limit
+    init_game(env->game, map, 1, 10);  // Default: Welfare mode, 10 year limit
 
     // Initialize log
     memset(&env->log, 0, sizeof(Log));
+
+    // Initialize reward bookkeeping
+    for (int i = 0; i < MAX_POWERS; i++) {
+        env->last_welfare[i] = 0;
+    }
 }
 
 void c_reset(Env* env) {
     if (env->game) {
         reset_game(env->game);
     }
+    // Reset rewards and terminals
+    if (env->rewards) {
+        for (int i = 0; i < MAX_POWERS; i++) env->rewards[i] = 0.0f;
+    }
+    if (env->terminals) {
+        for (int i = 0; i < MAX_POWERS; i++) env->terminals[i] = 0;
+    }
+    // Initialize last welfare snapshot
+    for (int i = 0; i < MAX_POWERS; i++) env->last_welfare[i] = env->game->powers[i].welfare_points;
 
-    // TODO: Set initial observations
-    // TODO: Reset rewards and terminals
+    // Encode observations once on reset
+    if (env->observations) {
+        float* obs = (float*)env->observations;
+        int stride = 175;
+        for (int agent = 0; agent < MAX_POWERS; agent++) {
+            float* base = obs + agent * stride;
+            // Board ownership
+            for (int i = 0; i < env->game->map->num_locations; i++) {
+                base[i] = (float)env->game->map->locations[i].owner_power;
+            }
+            // Unit type at each location (0 none, 1 army, 2 fleet)
+            int offset = 75;
+            for (int i = 0; i < env->game->map->num_locations; i++) {
+                int owner = get_unit_at_location(env->game, i);
+                if (owner >= 0) {
+                    UnitType t = UNIT_NONE;
+                    for (int u = 0; u < env->game->powers[owner].num_units; u++) {
+                        if (env->game->powers[owner].units[u].location == i) {
+                            t = env->game->powers[owner].units[u].type;
+                            break;
+                        }
+                    }
+                    base[offset + i] = (float)t;
+                } else {
+                    base[offset + i] = 0.0f;
+                }
+            }
+            // Centers per power
+            offset += 75;
+            for (int p = 0; p < MAX_POWERS; p++) {
+                base[offset + p] = (float)env->game->powers[p].num_centers;
+            }
+            // Units per power
+            offset += 7;
+            for (int p = 0; p < MAX_POWERS; p++) {
+                base[offset + p] = (float)env->game->powers[p].num_units;
+            }
+            // Welfare per power
+            offset += 7;
+            for (int p = 0; p < MAX_POWERS; p++) {
+                base[offset + p] = (float)env->game->powers[p].welfare_points;
+            }
+            // Phase and year
+            offset += 7;
+            base[offset + 0] = (float)env->game->phase;
+            base[offset + 1] = (float)env->game->year;
+        }
+    }
 }
 
 void c_step(Env* env) {
@@ -1413,15 +2372,79 @@ void c_step(Env* env) {
         return;
     }
 
-    // TODO: Process actions from env->actions
-    // TODO: Resolve phase
-    // TODO: Update observations
-    // TODO: Calculate rewards
-    // TODO: Set terminals if game over
+    GameState* game = env->game;
 
-    // For now, just advance phase
-    process_orders(env->game);
-    advance_phase(env->game);
+    // For Iteration 3: Simple implementation with HOLD orders only
+    // Process current phase (all units hold)
+    process_orders(game);
+
+    // Advance to next phase
+    advance_phase(game);
+
+    // TODO: Process actions from env->actions (parse orders from action space)
+    // Update observations (encode without resetting)
+    if (env->observations) {
+        float* obs = (float*)env->observations;
+        int stride = 175;
+        for (int agent = 0; agent < MAX_POWERS; agent++) {
+            float* base = obs + agent * stride;
+            for (int i = 0; i < env->game->map->num_locations; i++) {
+                base[i] = (float)env->game->map->locations[i].owner_power;
+            }
+            int offset = 75;
+            for (int i = 0; i < env->game->map->num_locations; i++) {
+                int owner = get_unit_at_location(env->game, i);
+                if (owner >= 0) {
+                    UnitType t = UNIT_NONE;
+                    for (int u = 0; u < env->game->powers[owner].num_units; u++) {
+                        if (env->game->powers[owner].units[u].location == i) {
+                            t = env->game->powers[owner].units[u].type;
+                            break;
+                        }
+                    }
+                    base[offset + i] = (float)t;
+                } else {
+                    base[offset + i] = 0.0f;
+                }
+            }
+            offset += 75;
+            for (int p = 0; p < MAX_POWERS; p++) {
+                base[offset + p] = (float)env->game->powers[p].num_centers;
+            }
+            offset += 7;
+            for (int p = 0; p < MAX_POWERS; p++) {
+                base[offset + p] = (float)env->game->powers[p].num_units;
+            }
+            offset += 7;
+            for (int p = 0; p < MAX_POWERS; p++) {
+                base[offset + p] = (float)env->game->powers[p].welfare_points;
+            }
+            offset += 7;
+            base[offset + 0] = (float)env->game->phase;
+            base[offset + 1] = (float)env->game->year;
+        }
+    }
+
+    // Calculate rewards at end of adjustment phase based on welfare deltas
+    if (game->phase == PHASE_WINTER_ADJUSTMENT) {
+        for (int i = 0; i < MAX_POWERS; i++) {
+            int current = game->powers[i].welfare_points;
+            int delta = current - env->last_welfare[i];
+            if (env->rewards) env->rewards[i] = (float)delta;
+            env->last_welfare[i] = current;
+        }
+    } else {
+        if (env->rewards) {
+            for (int i = 0; i < MAX_POWERS; i++) env->rewards[i] = 0.0f;
+        }
+    }
+
+    // Set terminals if game over
+    if (game->is_game_over) {
+        for (int i = 0; i < MAX_POWERS; i++) {
+            env->terminals[i] = 1;
+        }
+    }
 }
 
 void c_render(Env* env) {
@@ -1450,4 +2473,13 @@ void c_close(Env* env) {
         free(env->game);
         env->game = NULL;
     }
+}
+
+void c_configure(Env* env, int welfare_mode, int max_years) {
+    if (!env || !env->game) {
+        return;
+    }
+    // Re-init game in-place preserving map pointer
+    Map* map = env->game->map;
+    init_game(env->game, map, welfare_mode, max_years);
 }

@@ -5,7 +5,7 @@ in welfare diplomacy mode.
 """
 
 import pytest
-from pufferlib.ocean.diplomacy import Diplomacy
+from pufferlib.ocean.diplomacy import Diplomacy, binding
 
 
 class TestCWelfare:
@@ -21,14 +21,15 @@ class TestCWelfare:
         env = Diplomacy(welfare_mode=False)
         assert env is not None
 
-    @pytest.mark.skip(reason="Welfare calculation not yet implemented")
     def test_initial_welfare_points(self):
         """Test that all powers start with 0 welfare points."""
         env = Diplomacy(welfare_mode=True)
-        env.reset()
-        # TODO: Add API to query welfare points
-        # assert all welfare points == 0
-        pass
+        state = binding.query_game_state(env.env_handle)
+        powers = state["powers"]
+
+        # All powers should start with 0 welfare points
+        for power in powers:
+            assert power["welfare_points"] == 0
 
     @pytest.mark.skip(reason="Welfare calculation not yet implemented")
     def test_welfare_calculation_basic(self):
