@@ -970,6 +970,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         }
     }
     if(collided == OFFROAD){
+        agent->metrics_array[OFFROAD_IDX] = 1.0f;
         if(env->post_offroad_action==STOP_AGENT  && !agent->stopped){ //Stop
             agent->stopped = 1;
             agent->vx=agent->vy = 0.0f;
@@ -980,6 +981,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
             agent->valid = 0;
 
         } //Remove
+        
     }
     if(car_collided_with_index == -1) return;
 
