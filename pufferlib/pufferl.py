@@ -487,7 +487,7 @@ class PuffeRL:
                 pg_loss
                 + config["vf_coef"] * v_loss
                 - config["ent_coef"] * entropy_loss
-                - self.config["human_ll_coef"] * human_loss  # minimize negative log likelihood
+                - config["human_ll_coef"] * human_loss
             )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
@@ -497,13 +497,13 @@ class PuffeRL:
             # Logging
             profile("train_misc", epoch)
             losses["policy_loss"] += pg_loss.item() / self.total_minibatches
-            losses["value_loss"] += v_loss.item() / self.total_minibatches
-            losses["entropy"] += entropy_loss.item() / self.total_minibatches
+            losses["value_loss"] += v_loss.item() * config["vf_coef"] / self.total_minibatches
+            losses["entropy"] += entropy_loss.item() * config["ent_coef"] / self.total_minibatches
             losses["old_approx_kl"] += old_approx_kl.item() / self.total_minibatches
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["human_loss"] += human_loss / self.total_minibatches
+            losses["human_loss"] += human_loss * config["human_ll_coef"] / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
