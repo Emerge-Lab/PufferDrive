@@ -93,7 +93,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
         Vector3 prev_point = {0};
         bool has_prev = false;
 
-        for(int j=0; j<TRAJECTORY_LENGTH; j++){
+        for(int j = 0; j < env->entities[idx].array_size; j++){
             float x = env->entities[idx].traj_x[j];
             float y = env->entities[idx].traj_y[j];
             float valid = env->entities[idx].traj_valid[j];
@@ -602,7 +602,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
-    }
+        }
 
     // Reset environment for agent view
     c_reset(&env);
@@ -625,7 +625,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
-    }
+        }
 
     double endTime = GetTime();
     double elapsedTime = endTime - startTime;
