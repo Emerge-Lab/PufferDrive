@@ -563,7 +563,7 @@ class PuffeRL:
                         # TODO: need to get a way to dynamically set this timeout based on episode_length
                         # as with higher episode length the gif generation takes longer
                         result = subprocess.run(
-                            cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1400, env=env
+                            cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=240, env=env
                         )
 
                         # Check if GIFs were generated successfully
