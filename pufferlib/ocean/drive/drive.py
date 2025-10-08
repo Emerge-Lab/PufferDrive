@@ -200,9 +200,6 @@ class Drive(pufferlib.PufferEnv):
         torch.save(torch.from_numpy(all_action_sequences[:idx]), actions_path)
         torch.save(torch.from_numpy(all_obs_sequences[:idx]), observations_path)
 
-        cache_size_mb = (all_action_sequences[:idx].nbytes + all_obs_sequences[:idx].nbytes) / (1024**2)
-        print(f"Saved {self._cache_size} expert sequences of length {bptt_horizon} ({cache_size_mb:.1f} MB)")
-
     def sample_expert_data(self, n_samples=512):
         """Sample a random batch of human (expert) sequences from disk.
 
