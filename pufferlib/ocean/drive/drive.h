@@ -1743,6 +1743,7 @@ void c_step(Drive* env){
                 env->entities[agent_idx].y,
                 env->entities[agent_idx].goal_position_x,
                 env->entities[agent_idx].goal_position_y);
+        // Reward agent if it is within X meters of goal
         if(distance_to_goal < env->goal_radius){
             if(env->entities[agent_idx].respawn_timestep != -1){
                 env->rewards[i] += env->reward_goal_post_respawn;
