@@ -27,8 +27,8 @@
 #define SPEED_BUMP 9
 #define DRIVEWAY 10
 
-// Trajectory Length
-#define TRAJECTORY_LENGTH 91
+// Default trajectory length if not overriden
+#define TRAJECTORY_LENGTH_DEFAULT 91
 
 // Actions
 #define NOOP 0
@@ -249,6 +249,7 @@ struct Drive {
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
     char* ini_file;
+    int episode_length;
 };
 
 void add_log(Drive* env) {
@@ -618,10 +619,29 @@ void set_means(Drive* env) {
 
 void move_expert(Drive* env, float* actions, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
-    agent->x = agent->traj_x[env->timestep];
-    agent->y = agent->traj_y[env->timestep];
-    agent->z = agent->traj_z[env->timestep];
-    agent->heading = agent->traj_heading[env->timestep];
+    int t = env->timestep;
+    if (t < 0 || t >= agent->array_size) {
+        agent->x = -10000.0f;
+        agent->y = -10000.0f;
+        agent->z = 0.0f;
+        agent->heading = 0.0f;
+        agent->heading_x = 1.0f;
+        agent->heading_y = 0.0f;
+        return;
+    }
+    if (agent->traj_valid && agent->traj_valid[t] == 0) {
+        agent->x = -10000.0f;
+        agent->y = -10000.0f;
+        agent->z = 0.0f;
+        agent->heading = 0.0f;
+        agent->heading_x = 1.0f;
+        agent->heading_y = 0.0f;
+        return;
+    }
+    agent->x = agent->traj_x[t];
+    agent->y = agent->traj_y[t];
+    agent->z = agent->traj_z[t];
+    agent->heading = agent->traj_heading[t];
     agent->heading_x = cosf(agent->heading);
     agent->heading_y = sinf(agent->heading);
 }
@@ -1046,7 +1066,8 @@ void remove_bad_trajectories(Drive* env){
     int collided_with_indices[env->active_agent_count];
     memset(collided_agents, 0, env->active_agent_count * sizeof(int));
     // move experts through trajectories to check for collisions and remove as illegal agents
-    for(int t = 0; t < TRAJECTORY_LENGTH; t++){
+    int horizon = env->episode_length > 0 ? env->episode_length : TRAJECTORY_LENGTH_DEFAULT;
+    for(int t = 0; t < horizon; t++){
         for(int i = 0; i < env->active_agent_count; i++){
             int agent_idx = env->active_agent_indices[i];
             move_expert(env, env->actions, agent_idx);
@@ -1391,7 +1412,8 @@ void c_step(Drive* env){
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
-    if(env->timestep == TRAJECTORY_LENGTH){
+    int horizon = env->episode_length > 0 ? env->episode_length : TRAJECTORY_LENGTH_DEFAULT;
+    if(env->timestep == horizon){
         add_log(env);
 	    c_reset(env);
         return;
@@ -2219,7 +2241,7 @@ void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTe
             if(log_trajectories){
                 for(int i=0; i<env->active_agent_count;i++){
                     int idx = env->active_agent_indices[i];
-                    for(int j=0; j<TRAJECTORY_LENGTH;j++){
+                    for(int j=0; j<env->entities[idx].array_size;j++){
                         float x = env->entities[idx].traj_x[j];
                         float y = env->entities[idx].traj_y[j];
                         float valid = env->entities[idx].traj_valid[j];

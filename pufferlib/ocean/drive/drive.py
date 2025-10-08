@@ -22,6 +22,7 @@ class Drive(pufferlib.PufferEnv):
         reward_ade=0.0,
         goal_radius=2.0,
         spawn_immunity_timer=30,
+        episode_length=91,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
@@ -41,6 +42,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
+        self.episode_length = episode_length
         self.resample_frequency = resample_frequency
         self.num_obs = 7 + 63 * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)

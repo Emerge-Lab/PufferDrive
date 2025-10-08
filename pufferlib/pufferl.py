@@ -299,7 +299,14 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
-                self.rewards[batch_rows, l] = r
+                # optionally add to the value of final state to reward
+                shaped_r = r
+                if config.get("terminal_bootstrap_reward", False):
+                    clip = float(config.get("terminal_bootstrap_clip", 1.0))
+                    addend = torch.clamp(value.flatten(), -clip, clip) * d.float()
+                    shaped_r = torch.clamp(shaped_r + addend, -1, 1)
+
+                self.rewards[batch_rows, l] = shaped_r
                 self.terminals[batch_rows, l] = d.float()
                 self.values[batch_rows, l] = value.flatten()
 
@@ -553,8 +560,10 @@ class PuffeRL:
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
                         # Call C code that runs eval_gif() in subprocess
+                        # TODO: need to get a way to dynamically set this timeout based on episode_length
+                        # as with higher episode length the gif generation takes longer
                         result = subprocess.run(
-                            cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env
+                            cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1400, env=env
                         )
 
                         # Check if GIFs were generated successfully
