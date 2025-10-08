@@ -414,9 +414,13 @@ class PuffeRL:
 
             # Add log likelihood loss of human actions under current policy.
             # 1: Sample a batch of human actions and observations from dataset
-            human_actions, human_observations = self.vecenv.driver_env.sample_expert_data(n_samples=mb_actions.shape[0])
-            human_actions = torch.as_tensor(human_actions, device=device)
-            human_observations = torch.as_tensor(human_observations, device=device)
+            # Shape: [n_samples, bptt_horizon, feature_dim]
+            human_actions, human_observations = self.vecenv.driver_env.sample_expert_data(
+                n_samples=config["human_samples"]
+            )
+
+            human_actions = human_actions.to(device)
+            human_observations = human_observations.to(device)
 
             if self.config["human_ll_coef"] > 0:
                 # 2: Compute the log-likelihood of human actions under the current policy,

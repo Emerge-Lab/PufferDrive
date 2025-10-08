@@ -30,8 +30,9 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         buf=None,
         seed=1,
-        expert_cache_size=1000,
         bptt_horizon=32,
+        human_data_dir="pufferlib/resources/drive/human_demonstrations",
+        max_expert_samples=128,
     ):
         # env
         self.render_mode = render_mode
@@ -57,7 +58,6 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")
 
         self._action_type_flag = 0 if action_type == "discrete" else 1
-        self.bptt_horizon = bptt_horizon
 
         # Check if resources directory exists
         binary_path = "resources/drive/binaries/map_000.bin"
@@ -105,8 +105,12 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
-        self.expert_cache_size = expert_cache_size
-        self._cache_expert_data(self.bptt_horizon)
+
+        # Human data storage
+        self.bptt_horizon = bptt_horizon
+        self.human_data_dir = human_data_dir
+        os.makedirs(self.human_data_dir, exist_ok=True)
+        self._save_expert_data(bptt_horizon, max_expert_samples)
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -162,71 +166,65 @@ class Drive(pufferlib.PufferEnv):
                 self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
-    def _cache_expert_data(self, bptt_horizon=32):
-        """Collect and cache expert trajectories with bptt_horizon length sequences."""
+    def _save_expert_data(self, bptt_horizon=32, max_expert_sequences=10000):
+        """Collect and save expert trajectories with bptt_horizon length sequences."""
         trajectory_length = 91
-
-        # Calculate how many complete sequences we can extract per trajectory
         sequences_per_trajectory = trajectory_length - bptt_horizon + 1
-        total_sequences = sequences_per_trajectory * self.num_agents
-        cache_size = min(self.expert_cache_size, total_sequences)
 
         # Collect full expert trajectories
         expert_actions_full = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
         expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
-
         binding.vec_collect_expert_data(self.c_envs, expert_actions_full, expert_observations_full)
 
-        # Preallocate arrays for all sequences
-        # Shape: (num_agents * sequences_per_trajectory, bptt_horizon, feature_dim)
-        all_action_sequences = np.zeros((total_sequences, bptt_horizon, 2), dtype=np.float32)
-        all_obs_sequences = np.zeros((total_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
-
-        # Create sliding windows using vectorized indexing
+        # Preallocate only what we need
+        all_action_sequences = np.zeros((max_expert_sequences, bptt_horizon, 2), dtype=np.float32)
+        all_obs_sequences = np.zeros((max_expert_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
         idx = 0
         for agent_idx in range(self.num_agents):
             for start_idx in range(sequences_per_trajectory):
+                if idx >= max_expert_sequences:
+                    break
                 end_idx = start_idx + bptt_horizon
                 all_action_sequences[idx] = expert_actions_full[start_idx:end_idx, agent_idx, :]
                 all_obs_sequences[idx] = expert_observations_full[start_idx:end_idx, agent_idx, :]
                 idx += 1
+            if idx >= max_expert_sequences:
+                break
 
-        # Sample random subset if needed
-        if cache_size < total_sequences:
-            indices = np.random.choice(total_sequences, size=cache_size, replace=False)
-            self._expert_actions_cache = all_action_sequences[indices]
-            self._expert_observations_cache = all_obs_sequences[indices]
-        else:
-            self._expert_actions_cache = all_action_sequences
-            self._expert_observations_cache = all_obs_sequences
+        self._cache_size = idx
 
-        self._cache_size = self._expert_actions_cache.shape[0]
-        self._bptt_horizon = bptt_horizon
+        # Save to disk
+        actions_path = os.path.join(self.human_data_dir, f"expert_actions_h{bptt_horizon}.pt")
+        observations_path = os.path.join(self.human_data_dir, f"expert_observations_h{bptt_horizon}.pt")
 
-        # Free memory
-        del expert_actions_full, expert_observations_full, all_action_sequences, all_obs_sequences
+        torch.save(torch.from_numpy(all_action_sequences[:idx]), actions_path)
+        torch.save(torch.from_numpy(all_obs_sequences[:idx]), observations_path)
 
-        cache_size_mb = (self._expert_actions_cache.nbytes + self._expert_observations_cache.nbytes) / (1024**2)
-        print(f"Cached {self._cache_size} expert sequences of length {bptt_horizon} ({cache_size_mb:.1f} MB)")
+        cache_size_mb = (all_action_sequences[:idx].nbytes + all_obs_sequences[:idx].nbytes) / (1024**2)
+        print(f"Saved {self._cache_size} expert sequences of length {bptt_horizon} ({cache_size_mb:.1f} MB)")
 
     def sample_expert_data(self, n_samples=512):
-        """Sample a random batch of expert sequences from cache.
+        """Sample a random batch of human (expert) sequences from disk.
 
         Args:
-            n_samples: Number of sequences to randomly sample (should match minibatch_segments)
+            n_samples: Number of sequences to randomly sample
 
         Returns:
-            expert_actions: Tensor of shape (n_samples, bptt_horizon, 2)
-            expert_observations: Tensor of shape (n_samples, bptt_horizon, num_obs)
+            expert_actions: Tensor of shape (n_samples, bptt_horizon, action_dim)
+            expert_observations: Tensor of shape (n_samples, bptt_horizon, obs_dim)
         """
-        # Sample with replacement
+        actions_path = os.path.join(self.human_data_dir, f"expert_actions_h{self.bptt_horizon}.pt")
+        observations_path = os.path.join(self.human_data_dir, f"expert_observations_h{self.bptt_horizon}.pt")
+
+        # Load to CPU with map_location
+        actions_full = torch.load(actions_path, map_location="cpu")
+        observations_full = torch.load(observations_path, map_location="cpu")
+
+        # Sample indices
         indices = torch.randint(0, self._cache_size, (n_samples,))
 
-        # Convert to torch tensors - shapes are already correct
-        actions = torch.from_numpy(self._expert_actions_cache[indices])
-        observations = torch.from_numpy(self._expert_observations_cache[indices])
-
-        return actions, observations
+        # Return sampled data (still on CPU - will be moved to GPU in training code)
+        return actions_full[indices], observations_full[indices]
 
     def render(self):
         binding.vec_render(self.c_envs, 0)
