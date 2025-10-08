@@ -1504,7 +1504,7 @@ void c_step(Drive* env){
     compute_observations(env);
 }
 
-void c_collect_expert_data(Drive* env, float* expert_actions_out, float* expert_obs_out) {
+void c_collect_expert_data(Drive* env, float* expert_actions_discrete_out, float* expert_actions_continuous_out, float* expert_obs_out) {
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
 
     int original_timestep = env->timestep;
@@ -1522,7 +1522,12 @@ void c_collect_expert_data(Drive* env, float* expert_actions_out, float* expert_
                 float continuous_accel = agent->expert_accel[t];
                 float continuous_steer = agent->expert_steering[t];
 
-                // Discretize acceleration - find closest value in ACCELERATION_VALUES
+                // Store continuous actions
+                int continuous_offset = t * env->active_agent_count * 2 + i * 2;
+                expert_actions_continuous_out[continuous_offset] = continuous_accel;
+                expert_actions_continuous_out[continuous_offset + 1] = continuous_steer;
+
+                // Discretize and store discrete actions
                 int best_accel_idx = 0;
                 float min_accel_diff = fabsf(continuous_accel - ACCELERATION_VALUES[0]);
                 for (int j = 1; j < 7; j++) {
@@ -1544,16 +1549,14 @@ void c_collect_expert_data(Drive* env, float* expert_actions_out, float* expert_
                     }
                 }
 
-                // Layout: [t * num_agents * 2 + agent_i * 2 + action_dim]
-                int action_offset = t * env->active_agent_count * 2 + i * 2;
-                expert_actions_out[action_offset] = (float)best_accel_idx;
-                expert_actions_out[action_offset + 1] = (float)best_steer_idx;
+                int discrete_offset = t * env->active_agent_count * 2 + i * 2;
+                expert_actions_discrete_out[discrete_offset] = (float)best_accel_idx;
+                expert_actions_discrete_out[discrete_offset + 1] = (float)best_steer_idx;
             }
         }
 
         int obs_offset = t * env->active_agent_count * max_obs;
-        memcpy(&expert_obs_out[obs_offset],
-               env->observations,
+        memcpy(&expert_obs_out[obs_offset], env->observations,
                env->active_agent_count * max_obs * sizeof(float));
 
         // Step environment to get next observations

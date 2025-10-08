@@ -171,57 +171,105 @@ class Drive(pufferlib.PufferEnv):
         trajectory_length = 91
         sequences_per_trajectory = trajectory_length - bptt_horizon + 1
 
-        # Collect full expert trajectories
-        expert_actions_full = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
+        # Collect full expert trajectories - both discrete and continuous
+        expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
+        expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
         expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
-        binding.vec_collect_expert_data(self.c_envs, expert_actions_full, expert_observations_full)
 
-        # Preallocate only what we need
-        all_action_sequences = np.zeros((max_expert_sequences, bptt_horizon, 2), dtype=np.float32)
-        all_obs_sequences = np.zeros((max_expert_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
+        binding.vec_collect_expert_data(
+            self.c_envs, expert_actions_discrete, expert_actions_continuous, expert_observations_full
+        )
+
+        # Preallocate sequences
+        discrete_sequences = np.zeros((max_expert_sequences, bptt_horizon, 2), dtype=np.float32)
+        continuous_sequences = np.zeros((max_expert_sequences, bptt_horizon, 2), dtype=np.float32)
+        obs_sequences = np.zeros((max_expert_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
+
         idx = 0
         for agent_idx in range(self.num_agents):
             for start_idx in range(sequences_per_trajectory):
                 if idx >= max_expert_sequences:
                     break
                 end_idx = start_idx + bptt_horizon
-                all_action_sequences[idx] = expert_actions_full[start_idx:end_idx, agent_idx, :]
-                all_obs_sequences[idx] = expert_observations_full[start_idx:end_idx, agent_idx, :]
+                discrete_sequences[idx] = expert_actions_discrete[start_idx:end_idx, agent_idx, :]
+                continuous_sequences[idx] = expert_actions_continuous[start_idx:end_idx, agent_idx, :]
+                obs_sequences[idx] = expert_observations_full[start_idx:end_idx, agent_idx, :]
                 idx += 1
             if idx >= max_expert_sequences:
                 break
 
         self._cache_size = idx
 
-        # Save to disk
-        actions_path = os.path.join(self.human_data_dir, f"expert_actions_h{bptt_horizon}.pt")
-        observations_path = os.path.join(self.human_data_dir, f"expert_observations_h{bptt_horizon}.pt")
+        torch.save(
+            torch.from_numpy(discrete_sequences[:idx]),
+            os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt"),
+        )
+        torch.save(
+            torch.from_numpy(continuous_sequences[:idx]),
+            os.path.join(self.human_data_dir, f"expert_actions_continuous_h{bptt_horizon}.pt"),
+        )
+        torch.save(
+            torch.from_numpy(obs_sequences[:idx]),
+            os.path.join(self.human_data_dir, f"expert_observations_h{bptt_horizon}.pt"),
+        )
 
-        torch.save(torch.from_numpy(all_action_sequences[:idx]), actions_path)
-        torch.save(torch.from_numpy(all_obs_sequences[:idx]), observations_path)
-
-    def sample_expert_data(self, n_samples=512):
+    def sample_expert_data(self, n_samples=512, return_both=False):
         """Sample a random batch of human (expert) sequences from disk.
 
         Args:
             n_samples: Number of sequences to randomly sample
+            return_both: If True, return both continuous and discrete actions as a tuple.
+                        If False, return only the action type matching the environment's action space.
 
         Returns:
-            expert_actions: Tensor of shape (n_samples, bptt_horizon, action_dim)
-            expert_observations: Tensor of shape (n_samples, bptt_horizon, obs_dim)
+            If return_both=True:
+                (discrete_actions, continuous_actions, observations)
+            If return_both=False:
+                (actions, observations) where actions match the env's action type
         """
-        actions_path = os.path.join(self.human_data_dir, f"expert_actions_h{self.bptt_horizon}.pt")
+        discrete_path = os.path.join(self.human_data_dir, f"expert_actions_discrete_h{self.bptt_horizon}.pt")
+        continuous_path = os.path.join(self.human_data_dir, f"expert_actions_continuous_h{self.bptt_horizon}.pt")
         observations_path = os.path.join(self.human_data_dir, f"expert_observations_h{self.bptt_horizon}.pt")
 
-        # Load to CPU with map_location
-        actions_full = torch.load(actions_path, map_location="cpu")
         observations_full = torch.load(observations_path, map_location="cpu")
 
         # Sample indices
         indices = torch.randint(0, self._cache_size, (n_samples,))
+        sampled_obs = observations_full[indices]
 
-        # Return sampled data (still on CPU - will be moved to GPU in training code)
-        return actions_full[indices], observations_full[indices]
+        if return_both:
+            discrete_actions = torch.load(discrete_path, map_location="cpu")[indices]
+            continuous_actions = torch.load(continuous_path, map_location="cpu")[indices]
+            return discrete_actions, continuous_actions, sampled_obs
+        else:
+            # Return only the action type matching the environment
+            if self._action_type_flag == 1:  # continuous
+                actions = torch.load(continuous_path, map_location="cpu")[indices]
+            else:  # discrete
+                actions = torch.load(discrete_path, map_location="cpu")[indices]
+            return actions, sampled_obs
+
+    def compute_realism_metrics(self, discrete_actions, continuous_actions):
+        """Compute realism metrics from expert action samples.
+
+        Args:
+            discrete_actions: Tensor of shape (n_samples, bptt_horizon, 2) with discrete actions
+            continuous_actions: Tensor of shape (n_samples, bptt_horizon, 2) with continuous actions
+
+        Returns:
+            Dictionary with realism metrics.
+        """
+        metrics = {}
+
+        with torch.no_grad():
+            # Flatten along the bptt_horizon
+            continuous_accel = continuous_actions[:, :, 0].flatten()
+            continuous_steer = continuous_actions[:, :, 1].flatten()
+
+            metrics["expert_accel_histogram"] = continuous_accel.cpu().numpy()
+            metrics["expert_steer_histogram"] = continuous_steer.cpu().numpy()
+
+        return metrics
 
     def render(self):
         binding.vec_render(self.c_envs, 0)

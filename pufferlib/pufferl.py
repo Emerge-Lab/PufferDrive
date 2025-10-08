@@ -218,6 +218,7 @@ class PuffeRL:
         self.stats = defaultdict(list)
         self.last_stats = defaultdict(list)
         self.losses = {}
+        self.realism = {}
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -415,11 +416,22 @@ class PuffeRL:
             # Add log likelihood loss of human actions under current policy.
             # 1: Sample a batch of human actions and observations from dataset
             # Shape: [n_samples, bptt_horizon, feature_dim]
-            human_actions, human_observations = self.vecenv.driver_env.sample_expert_data(
-                n_samples=config["human_samples"]
+            discrete_human_actions, continuous_human_actions, human_observations = (
+                self.vecenv.driver_env.sample_expert_data(n_samples=config["human_samples"], return_both=True)
             )
+            discrete_human_actions = discrete_human_actions.to(device)
+            continuous_human_actions = continuous_human_actions.to(device)
+            human_observations = human_observations.to(device)
 
-            human_actions = human_actions.to(device)
+            # Use helper function to compute realism metrics
+            realism_metrics = self.vecenv.driver_env.compute_realism_metrics(
+                discrete_human_actions, continuous_human_actions
+            )
+            self.realism.update(realism_metrics)
+
+            # Select appropriate action type for training
+            use_continuous = self.vecenv.driver_env._action_type_flag == 1
+            human_actions = continuous_human_actions if use_continuous else discrete_human_actions
             human_observations = human_observations.to(device)
 
             if self.config["human_ll_coef"] > 0:
@@ -437,6 +449,8 @@ class PuffeRL:
                 _, human_log_prob, entropy = pufferlib.pytorch.sample_logits(logits=human_logits, action=human_actions)
             else:
                 human_log_prob = torch.zeros(1, device=device)
+
+            self.realism["human_log_prob"] = human_log_prob.mean().item()
 
             adv = advantages[idx]
             adv = compute_puff_advantage(
@@ -664,6 +678,16 @@ class PuffeRL:
             # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
+
+        for k, v in self.realism.items():
+            if k.endswith("_histogram"):
+                if hasattr(self.logger, "wandb") and self.logger.wandb:
+                    import wandb
+
+                    metric_name = k.replace("_histogram", "")
+                    logs[f"realism/{metric_name}"] = wandb.Histogram(v)
+            else:
+                logs[f"realism/{k}"] = v
 
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:

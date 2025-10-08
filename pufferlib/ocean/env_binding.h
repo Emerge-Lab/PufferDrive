@@ -668,8 +668,8 @@ static char* unpack_str(PyObject* kwargs, char* key) {
 }
 
 static PyObject* vec_collect_expert_data(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 3) {
-        PyErr_SetString(PyExc_TypeError, "collect_expert_data requires 3 arguments");
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(PyExc_TypeError, "collect_expert_data requires 4 arguments");
         return NULL;
     }
 
@@ -678,14 +678,24 @@ static PyObject* vec_collect_expert_data(PyObject* self, PyObject* args) {
         return NULL;
     }
 
-    PyObject* actions_arg = PyTuple_GetItem(args, 1);
-    if (!PyObject_TypeCheck(actions_arg, &PyArray_Type)) {
-        PyErr_SetString(PyExc_TypeError, "expert_actions must be a NumPy array");
+    // Argument 1: discrete actions
+    PyObject* discrete_actions_arg = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(discrete_actions_arg, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "expert_actions_discrete must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* expert_actions = (PyArrayObject*)actions_arg;
+    PyArrayObject* expert_actions_discrete = (PyArrayObject*)discrete_actions_arg;
 
-    PyObject* obs_arg = PyTuple_GetItem(args, 2);
+    // Argument 2: continuous actions
+    PyObject* continuous_actions_arg = PyTuple_GetItem(args, 2);
+    if (!PyObject_TypeCheck(continuous_actions_arg, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "expert_actions_continuous must be a NumPy array");
+        return NULL;
+    }
+    PyArrayObject* expert_actions_continuous = (PyArrayObject*)continuous_actions_arg;
+
+    // Argument 3: observations
+    PyObject* obs_arg = PyTuple_GetItem(args, 3);
     if (!PyObject_TypeCheck(obs_arg, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "expert_observations must be a NumPy array");
         return NULL;
@@ -693,8 +703,12 @@ static PyObject* vec_collect_expert_data(PyObject* self, PyObject* args) {
     PyArrayObject* expert_observations = (PyArrayObject*)obs_arg;
 
     // Check array shapes
-    if (PyArray_NDIM(expert_actions) != 3) {
-        PyErr_SetString(PyExc_ValueError, "expert_actions must be 3D (trajectory_length, num_agents, 2)");
+    if (PyArray_NDIM(expert_actions_discrete) != 3) {
+        PyErr_SetString(PyExc_ValueError, "expert_actions_discrete must be 3D (trajectory_length, num_agents, 2)");
+        return NULL;
+    }
+    if (PyArray_NDIM(expert_actions_continuous) != 3) {
+        PyErr_SetString(PyExc_ValueError, "expert_actions_continuous must be 3D (trajectory_length, num_agents, 2)");
         return NULL;
     }
     if (PyArray_NDIM(expert_observations) != 3) {
@@ -702,7 +716,7 @@ static PyObject* vec_collect_expert_data(PyObject* self, PyObject* args) {
         return NULL;
     }
 
-    int trajectory_length = PyArray_DIM(expert_actions, 0);
+    int trajectory_length = PyArray_DIM(expert_actions_discrete, 0);
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
 
     // Process each environment
@@ -712,27 +726,35 @@ static PyObject* vec_collect_expert_data(PyObject* self, PyObject* args) {
         int num_agents = env->active_agent_count;
 
         // Allocate temporary buffers for this environment
-        float* env_actions = (float*)malloc(trajectory_length * num_agents * 2 * sizeof(float));
+        float* env_actions_discrete = (float*)malloc(trajectory_length * num_agents * 2 * sizeof(float));
+        float* env_actions_continuous = (float*)malloc(trajectory_length * num_agents * 2 * sizeof(float));
         float* env_obs = (float*)malloc(trajectory_length * num_agents * max_obs * sizeof(float));
 
-        if (!env_actions || !env_obs) {
+        if (!env_actions_discrete || !env_actions_continuous || !env_obs) {
             PyErr_SetString(PyExc_MemoryError, "Failed to allocate temporary buffers");
-            free(env_actions);
+            free(env_actions_discrete);
+            free(env_actions_continuous);
             free(env_obs);
             return NULL;
         }
 
-        // Call C function
-        c_collect_expert_data(env, env_actions, env_obs);
+        // Call C function with both action types
+        c_collect_expert_data(env, env_actions_discrete, env_actions_continuous, env_obs);
 
         // Copy results back to Python arrays
         for (int t = 0; t < trajectory_length; t++) {
             for (int a = 0; a < num_agents; a++) {
-                // Copy actions: env_actions[t * num_agents * 2 + a * 2 : t * num_agents * 2 + a * 2 + 2]
-                float* action_src = &env_actions[t * num_agents * 2 + a * 2];
-                float* action_dst = (float*)PyArray_GETPTR3(expert_actions, t, agent_offset + a, 0);
-                action_dst[0] = action_src[0];
-                action_dst[1] = action_src[1];
+                // Copy discrete actions
+                float* discrete_action_src = &env_actions_discrete[t * num_agents * 2 + a * 2];
+                float* discrete_action_dst = (float*)PyArray_GETPTR3(expert_actions_discrete, t, agent_offset + a, 0);
+                discrete_action_dst[0] = discrete_action_src[0];
+                discrete_action_dst[1] = discrete_action_src[1];
+
+                // Copy continuous actions
+                float* continuous_action_src = &env_actions_continuous[t * num_agents * 2 + a * 2];
+                float* continuous_action_dst = (float*)PyArray_GETPTR3(expert_actions_continuous, t, agent_offset + a, 0);
+                continuous_action_dst[0] = continuous_action_src[0];
+                continuous_action_dst[1] = continuous_action_src[1];
 
                 // Copy observations
                 float* obs_src = &env_obs[t * num_agents * max_obs + a * max_obs];
@@ -741,7 +763,8 @@ static PyObject* vec_collect_expert_data(PyObject* self, PyObject* args) {
             }
         }
 
-        free(env_actions);
+        free(env_actions_discrete);
+        free(env_actions_continuous);
         free(env_obs);
         agent_offset += num_agents;
     }
