@@ -944,7 +944,6 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     int is_active_agent = env->entities[agent_idx].active_agent;
     int respawned = env->entities[agent_idx].respawn_timestep != -1;
     int exceeded_spawn_immunity_agent = (env->timestep - env->entities[agent_idx].respawn_timestep) >= env->spawn_immunity_timer;
-    
     if(collided == VEHICLE_COLLISION){
         if(env->post_collision_action==STOP_AGENT && !agent->stopped){ //Stop
             agent->stopped = 1;
@@ -975,7 +974,6 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
             agent->valid = 0;
 
         } //Remove
-        
     }
     if(car_collided_with_index == -1) return;
 
