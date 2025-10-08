@@ -135,6 +135,8 @@ struct Entity {
     float goal_position_x;
     float goal_position_y;
     float goal_position_z;
+    float init_goal_x;
+    float init_goal_y;
     int mark_as_expert;
     int collision_state;
     float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, avg_displacement_error]
@@ -1245,6 +1247,14 @@ void remove_bad_trajectories(Drive* env){
     env->timestep = 0;
 }
 
+void init_goal_positions(Drive* env){
+    for(int x = 0;x<env->active_agent_count; x++){
+        int agent_idx = env->active_agent_indices[x];
+        env->entities[agent_idx].init_goal_x = env->entities[agent_idx].goal_position_x;
+        env->entities[agent_idx].init_goal_y = env->entities[agent_idx].goal_position_y;
+    }
+}
+
 void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
@@ -1260,6 +1270,7 @@ void init(Drive* env){
     set_active_agents(env);
     remove_bad_trajectories(env);
     set_start_position(env);
+    init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
 }
 
@@ -1650,16 +1661,15 @@ void c_reset(Drive* env){
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-
-        if (!env->use_respawn) {
-            env->entities[agent_idx].goal_position_x = env->entities[agent_idx].traj_x[TRAJECTORY_LENGTH - 10];
-            env->entities[agent_idx].goal_position_y = env->entities[agent_idx].traj_y[TRAJECTORY_LENGTH - 10];
-            env->entities[agent_idx].sampled_new_goal = 0;
-        }
-
         env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
         env->entities[agent_idx].cumulative_displacement = 0.0f;
         env->entities[agent_idx].displacement_sample_count = 0;
+
+        if (!env->use_respawn) {
+            env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
+            env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
+            env->entities[agent_idx].sampled_new_goal = 0;
+        }
 
         compute_agent_metrics(env, agent_idx);
     }
