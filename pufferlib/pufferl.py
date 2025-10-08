@@ -508,9 +508,7 @@ class PuffeRL:
         y_true = advantages.flatten() + self.values.flatten()
         var_y = y_true.var()
         explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
-        losses["explained_variance"] = (
-            explained_var.item() if isinstance(explained_var, torch.Tensor) else explained_var
-        )
+        losses["explained_variance"] = explained_var.item()
 
         profile.end()
         logs = None
