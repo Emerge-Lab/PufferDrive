@@ -5,6 +5,8 @@ ARG RUNTIME_IMAGE_TAG=12.1.1-cudnn8-runtime-ubuntu22.04
 FROM ${BASE_IMAGE_NAME}:${BUILD_IMAGE_TAG} AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
+# Can be local/web/fast
+ARG BUILD_MODE="fast"
 
 FROM base AS builder
 
@@ -38,6 +40,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && uv pip install -e ./carbs \
     && uv pip install gcsfs google-cloud-monitoring
 
+RUN /bin/bash /pufferdrive/scripts/build_ocean.sh drive ${BUILD_MODE}
+
 # Descr: Image goal is minimum size and to be trained with cloud computing
 FROM ${BASE_IMAGE_NAME}:${RUNTIME_IMAGE_TAG} AS gcp
 
@@ -55,6 +59,9 @@ COPY --from=builder /pufferdrive/pufferlib ./pufferlib
 COPY --from=builder /pufferdrive/automation ./automation
 COPY --from=builder /pufferdrive/resources ./resources
 COPY --from=builder /pufferdrive/carbs ./carbs
+COPY --from=builder /pufferdrive/drive ./drive
+COPY --from=builder /pufferdrive/raylib-5.5_linux_amd64 ./raylib-5.5_linux_amd64/
+COPY --from=builder /pufferdrive/box2d-linux-amd64 ./box2d-linux-amd64/
 
 # Add the virtual environment's binaries to the PATH
 ENV PATH="/pufferdrive/.venv/bin:${PATH}"

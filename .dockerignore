@@ -27,13 +27,13 @@ resources/*.bin
 .vscode/
 .idea/
 
-# 3rd parties
-box2d-*
+# Binaries
 build*
 
 # Downloaded dependencies from setup.py (should be downloaded inside the container)
-raylib-*/
-box2d-*/
+!raylib-*/
+!box2d-*/
+!inih-*/
 
 # Documentation and local config files
 README.md
