@@ -1132,6 +1132,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
 def eval(env_name, args=None, vecenv=None, policy=None):
     args = args or load_config(env_name)
+
+    wosac_enabled = args["wosac"]["enabled"]
+
+    if wosac_enabled:
+        print(f"Running WOSAC realism evaluation ---")
+        from pufferlib.ocean.wosac.evaluator import run_wosac_eval
+
+        results = run_wosac_eval(env_name, args, vecenv, policy)
+        return results
+
     backend = args["vec"]["backend"]
     if backend != "PufferEnv":
         backend = "Serial"
