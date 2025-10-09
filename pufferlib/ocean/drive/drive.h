@@ -109,6 +109,7 @@ struct Log {
     float score;
     float offroad_rate;
     float collision_rate;
+    float clean_collision_rate;
     float num_goals_reached;
     float completion_rate;
     float dnf_rate;
@@ -270,6 +271,8 @@ void add_log(Drive* env) {
         env->log.offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
         env->log.collision_rate += collided;
+        int clean_collided = env->logs[i].clean_collision_rate;
+        env->log.clean_collision_rate += clean_collided;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
         if(e->reached_goal_this_episode && !e->collided_before_goal){
@@ -1734,6 +1737,7 @@ void c_step(Drive* env){
                 } else {
                     env->rewards[i] = env->reward_vehicle_collision;
                     env->logs[i].episode_return += env->reward_vehicle_collision;
+                    env->logs[i].clean_collision_rate = 1.0f;
                 }
                 env->logs[i].collision_rate = 1.0f;
             }
