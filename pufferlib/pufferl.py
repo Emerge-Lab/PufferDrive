@@ -445,7 +445,9 @@ class PuffeRL:
 
             human_logits, _ = self.policy(human_observations, human_state)
 
-            _, human_log_prob, entropy = pufferlib.pytorch.sample_logits(logits=human_logits, action=human_actions)
+            _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
+                logits=human_logits, action=human_actions
+            )
 
             self.realism["human_log_prob"] = human_log_prob.mean().item()
 
