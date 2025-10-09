@@ -254,6 +254,11 @@ int find_location_by_name(Map* map, const char* name);
 int get_unit_at_location(GameState* game, int location);
 int can_move(Map* map, UnitType unit_type, int from_loc, int to_loc);
 
+// Convoy functions
+int can_fleet_convoy(Map* map, int location);
+int is_convoyed_move(GameState* game, int from, int to);
+int detect_paradox(GameState* game, int starting_location, int convoying_fleet_location);
+
 // PufferLib integration functions
 void c_init(Env* env);
 void c_reset(Env* env);

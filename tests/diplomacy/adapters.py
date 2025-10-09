@@ -229,6 +229,7 @@ class GameAdapter:
         
         # Submit orders to C code for movement/retreat phases
         orders_submitted = {}
+        convoy_path_valid = {}  # Cache convoy path validity BEFORE processing
         if phase in (0, 2) and hasattr(self, "_pending_orders") and self._pending_orders:
             # Movement phase - submit orders to C
             for power, orders in self._pending_orders.items():
@@ -240,6 +241,22 @@ class GameAdapter:
                 pidx = power_names.index(pname)
                 binding.game_submit_orders(self.env.env_handle, pidx, orders)
                 orders_submitted[pname] = orders
+
+            # Cache convoy path validity NOW (before env.step() clears orders)
+            for pname, orders in orders_submitted.items():
+                for order_str in orders:
+                    parts = order_str.strip().upper().split()
+                    # Check convoy orders
+                    if (len(parts) >= 7 and parts[2] in ['C', 'CONVOY', 'CONVOYS']):
+                        army_start = parts[4]
+                        army_dest = parts[6]
+                        key = f"{army_start}-{army_dest}"
+                        if key not in convoy_path_valid:
+                            try:
+                                convoy_path_valid[key] = binding.is_convoyed_move(self.env.env_handle, army_start, army_dest)
+                            except:
+                                convoy_path_valid[key] = False
+
             # Clear after submitting
             self._pending_orders = {}
         
@@ -382,28 +399,74 @@ class GameAdapter:
                         if len(parts) >= 7 and parts[5] in ['-', '->']:
                             # Support move: S <type> <loc> - <dest>
                             dest_loc = parts[6]
-                            
-                            # Check if dest has own unit
+
+                            # Check if dest has own unit that is NOT moving away
                             for u in units_before[pname]:
                                 u_parts = u.split()
                                 if len(u_parts) >= 2 and u_parts[1] == dest_loc:
-                                    # Supporting dislodgement of own unit → VOID
-                                    is_void = True
+                                    # Check if this unit has a move order (moving away)
+                                    unit_has_move_order = False
+                                    for check_order in orders_submitted.get(pname, []):
+                                        check_parts = check_order.strip().upper().split()
+                                        if (len(check_parts) >= 4 and
+                                            check_parts[0] == u_parts[0] and
+                                            check_parts[1] == dest_loc and
+                                            check_parts[2] in ['-', '->'] and
+                                            check_parts[3] != dest_loc):  # Moving to different location
+                                            unit_has_move_order = True
+                                            break
+
+                                    # Only VOID if unit at dest is NOT moving away
+                                    if not unit_has_move_order:
+                                        # Supporting dislodgement of own unit → VOID
+                                        is_void = True
                                     break
                         
                         # Check if support was cut by attack
                         for other_pname, other_orders in orders_submitted.items():
                             if other_pname == pname:
                                 continue  # Own units don't cut support
-                            
+
                             for other_order in other_orders:
                                 other_parts = other_order.strip().upper().split()
                                 if len(other_parts) >= 4 and other_parts[2] in ['-', '->']:
                                     # Move order targeting supporter's location
                                     if other_parts[3] == parts[1]:
+                                        # Check if this is a convoyed move that was disrupted
+                                        if other_parts[0] == 'A':
+                                            # Look for convoy orders for this move
+                                            attacker_loc = other_parts[1]
+                                            target_loc = other_parts[3]
+                                            has_convoy = False
+                                            convoy_disrupted = False
+
+                                            # Find convoy orders for this army move
+                                            for convoy_pname, convoy_orders in orders_submitted.items():
+                                                for convoy_order in convoy_orders:
+                                                    convoy_parts = convoy_order.strip().upper().split()
+                                                    if (len(convoy_parts) >= 7 and
+                                                        convoy_parts[0] == 'F' and
+                                                        convoy_parts[2] in ['C', 'CONVOY', 'CONVOYS'] and
+                                                        convoy_parts[4] == attacker_loc and
+                                                        convoy_parts[6] == target_loc):
+                                                        has_convoy = True
+                                                        # Check if this convoying fleet was dislodged
+                                                        fleet_loc = convoy_parts[1]
+                                                        fleet_key = f'F {fleet_loc}'
+                                                        if fleet_key in dislodged_units:
+                                                            convoy_disrupted = True
+                                                            break
+                                                if convoy_disrupted:
+                                                    break
+
+                                            # If convoy was disrupted, don't count as support cut
+                                            if has_convoy and convoy_disrupted:
+                                                continue  # Convoy disrupted, no support cut
+
+                                        # Support was cut by this attack
                                         was_cut = True
                                         break
-                            
+
                             if was_cut:
                                 break
                         
@@ -422,51 +485,176 @@ class GameAdapter:
                     if len(parts) >= 4 and parts[2] in ['-', '->']:
                         # Move order
                         dest = parts[3]
-                        
+
                         # Check for move to same location (VOID)
                         if parts[1] == dest:
                             results[unit_key] = ['void']
                             continue
-                        
+
                         dest_unit = f"{parts[0]} {dest}"
                         unit_at_dest = dest_unit in [u.upper() for u in units_after[pname]]
                         unit_at_source = unit_key in [u.upper() for u in units_after[pname]]
                         unit_disappeared = unit_key in dislodged_units
-                        
-                        if unit_at_dest and parts[1] != dest:
+
+                        # Check if another unit moved to this unit's source (swap/cycle detection)
+                        # Only count as swap if the other unit actually LEFT its original position
+                        someone_moved_to_source = False
+                        if unit_at_dest and unit_at_source:
+                            # Check if any other unit has a move order targeting this unit's source
+                            # AND that other unit is not at its original position anymore
+                            for other_order in orders_submitted.get(pname, []):
+                                other_parts = other_order.strip().upper().split()
+                                if (len(other_parts) >= 4 and
+                                    other_parts[2] in ['-', '->'] and
+                                    other_parts[3] == parts[1] and  # Moving to our source
+                                    other_parts[1] != parts[1]):     # Different source location
+                                    # Check if this other unit is still at its source
+                                    other_unit_key = f"{other_parts[0]} {other_parts[1]}"
+                                    other_still_at_source = other_unit_key in [u.upper() for u in units_after[pname]]
+                                    # Only count as successful swap if other unit LEFT its source
+                                    if not other_still_at_source:
+                                        someone_moved_to_source = True
+                                        break
+
+                        # Unit moved successfully if:
+                        # 1. At dest and not at source (simple move), OR
+                        # 2. At dest and at source, but someone else successfully moved to source (swap/cycle)
+                        if unit_at_dest and parts[1] != dest and (not unit_at_source or someone_moved_to_source):
                             results[unit_key] = []  # OK - moved successfully
-                        elif unit_disappeared:
-                            # Unit was dislodged
-                            results[unit_key] = ['dislodged']
-                        elif unit_at_source:
-                            # Unit didn't move - need to determine why
-                            try:
-                                pidx = power_names.index(pname)
-                                loc_idx = binding.get_location_index(self.env.env_handle, parts[1])
-                                dest_idx = binding.get_location_index(self.env.env_handle, dest)
-                                unit_type = 1 if parts[0] == 'A' else 2
-                                
-                                # Check if move to self
-                                if loc_idx == dest_idx:
-                                    results[unit_key] = ['void']
-                                # Check if not adjacent
-                                elif not binding.can_move_names(self.env.env_handle, unit_type, parts[1], dest):
-                                    results[unit_key] = ['void']
-                                else:
-                                    # Valid move that didn't succeed → BOUNCE
-                                    results[unit_key] = ['bounce']
-                            except Exception as e:
-                                results[unit_key] = ['void']  # Fallback
                         else:
-                            # Unit not at source or dest - unexpected
-                            results[unit_key] = []
+                            # Unit didn't move successfully - determine why (bounce/void/no convoy)
+                            # Then check if it was also dislodged
+                            move_result = []
+                            # Unit didn't move successfully - determine why
+                            if not unit_at_source and not unit_disappeared:
+                                # Unit not at source but also not dislodged - unexpected
+                                move_result = []
+                            else:
+                                try:
+                                    pidx = power_names.index(pname)
+                                    loc_idx = binding.get_location_index(self.env.env_handle, parts[1])
+                                    dest_idx = binding.get_location_index(self.env.env_handle, dest)
+                                    unit_type = 1 if parts[0] == 'A' else 2
+
+                                    # Check if move to self
+                                    if loc_idx == dest_idx:
+                                        move_result = ['void']
+                                    # Check if adjacent OR has convoy path (for armies)
+                                    elif binding.can_move_names(self.env.env_handle, unit_type, parts[1], dest):
+                                        # Valid adjacent move that didn't succeed → BOUNCE
+                                        move_result = ['bounce']
+                                    elif parts[0] == 'A':
+                                        # Check for convoy - need to validate path exists before processing
+                                        # Save current state to check convoy validity
+                                        convoying_fleet_locs = []
+                                        valid_convoying_fleets = []
+
+                                        for other_pname, other_orders_list in orders_submitted.items():
+                                            for other_order in other_orders_list:
+                                                other_parts = other_order.strip().upper().split()
+                                                # Check for convoy order: "F LOC C A START - DEST"
+                                                if (len(other_parts) >= 6 and
+                                                    other_parts[0] == 'F' and
+                                                    other_parts[2] in ['C', 'CONVOY', 'CONVOYS'] and
+                                                    other_parts[3] == 'A' and
+                                                    other_parts[4] == parts[1] and
+                                                    other_parts[5] in ['-', '->'] and
+                                                    len(other_parts) >= 7 and
+                                                    other_parts[6] == dest):
+                                                    fleet_loc = other_parts[1]
+                                                    convoying_fleet_locs.append(fleet_loc)
+                                                    # Check if this fleet is dislodged
+                                                    fleet_key = f'F {fleet_loc}'
+                                                    if fleet_key not in dislodged_units:
+                                                        valid_convoying_fleets.append(fleet_loc)
+
+                                        if convoying_fleet_locs:
+                                            # Validate each fleet can actually convoy (not coastal)
+                                            valid_fleet_count = 0
+                                            dislodged_fleet_count = 0
+
+                                            for fleet_loc in convoying_fleet_locs:
+                                                fleet_key = f'F {fleet_loc}'
+                                                is_dislodged = fleet_key in dislodged_units
+
+                                                # Check if fleet can convoy (in water, not coastal)
+                                                can_convoy = False
+                                                try:
+                                                    can_convoy = binding.can_fleet_convoy(self.env.env_handle, fleet_loc)
+                                                except:
+                                                    can_convoy = False
+
+                                                if is_dislodged:
+                                                    dislodged_fleet_count += 1
+                                                elif can_convoy:
+                                                    valid_fleet_count += 1
+
+                                            # Determine result based on convoy state
+                                            has_any_invalid_fleet = (valid_fleet_count + dislodged_fleet_count) < len(convoying_fleet_locs)
+                                            convoy_disrupted = dislodged_fleet_count > 0
+
+                                            if has_any_invalid_fleet:
+                                                # Some fleet can't convoy (coastal, etc) - path never valid
+                                                move_result = ['void']
+                                            elif convoy_disrupted:
+                                                # All fleets could convoy but some were dislodged
+                                                move_result = ['no convoy']
+                                            elif valid_fleet_count > 0:
+                                                # Valid convoy that didn't succeed → BOUNCE
+                                                move_result = ['bounce']
+                                            else:
+                                                # No valid fleets
+                                                move_result = ['void']
+                                        else:
+                                            # No convoy orders → VOID
+                                            move_result = ['void']
+                                    else:
+                                        # Not adjacent and not an army → VOID
+                                        move_result = ['void']
+                                except Exception as e:
+                                    move_result = ['void']  # Fallback
+
+                            # Now add dislodged status if unit disappeared
+                            if unit_disappeared and 'dislodged' not in move_result:
+                                move_result.append('dislodged')
+
+                            results[unit_key] = move_result
+                    # Check if this is a convoy order
+                    elif len(parts) >= 7 and parts[2] in ['C', 'CONVOY', 'CONVOYS']:
+                        # Convoy order: F LOC C A START - DEST
+                        fleet_loc = parts[1]
+                        army_start = parts[4]
+                        army_dest = parts[6]
+
+                        # Check if fleet can convoy (not coastal)
+                        can_convoy_here = False
+                        try:
+                            can_convoy_here = binding.can_fleet_convoy(self.env.env_handle, fleet_loc)
+                        except:
+                            can_convoy_here = False
+
+                        if not can_convoy_here:
+                            # Fleet in coastal area - VOID
+                            results[unit_key] = ['void']
+                        else:
+                            # Use cached convoy path validity (checked before processing)
+                            key = f"{army_start}-{army_dest}"
+                            has_valid_path = convoy_path_valid.get(key, False)
+
+                            if not has_valid_path:
+                                # No valid convoy path - VOID
+                                results[unit_key] = ['void']
+                            elif unit_key in dislodged_units:
+                                results[unit_key] = ['dislodged']
+                            else:
+                                results[unit_key] = []  # OK
                     else:
                         # Hold order - check if dislodged
                         if unit_key in dislodged_units:
                             results[unit_key] = ['dislodged']
                         else:
                             results[unit_key] = []  # OK
-            
+
             self.result_history.add(results)
 
         # Update state history short snapshot

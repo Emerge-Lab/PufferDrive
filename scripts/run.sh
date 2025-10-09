@@ -8,6 +8,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
+#SBATCH --account=pr_100_tandon_priority
+#SBATCH --array=0-0
 
 echo "=== SLURM job $SLURM_JOB_ID on node $SLURM_NODELIST ==="
 

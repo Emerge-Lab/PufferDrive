@@ -1593,10 +1593,15 @@ int validate_order(GameState* game, int power_id, const Order* order) {
             if (order->target_location == unit->location) {
                 return -1;  // Cannot move to own sector
             }
-            if (!can_move(map, unit->type, unit->location, order->target_location)) {
-                return -1;  // Not adjacent or wrong terrain
+            // Check if move is adjacent (normal move)
+            if (can_move(map, unit->type, unit->location, order->target_location)) {
+                return 0;  // Valid adjacent move
             }
-            return 0;
+            // If not adjacent and unit is army, check for convoy path
+            if (unit->type == UNIT_ARMY && is_convoyed_move(game, unit->location, order->target_location)) {
+                return 0;  // Valid convoy move
+            }
+            return -1;  // Not adjacent and no convoy path
 
         case ORDER_SUPPORT_HOLD:
         case ORDER_SUPPORT_MOVE:
@@ -1625,6 +1630,10 @@ int validate_order(GameState* game, int power_id, const Order* order) {
             if (unit->type != UNIT_FLEET) {
                 return -1;  // Only fleets can convoy
             }
+            // Check fleet is in WATER (not COAST) - can't convoy from coastal areas
+            if (!can_fleet_convoy(map, unit->location)) {
+                return -1;  // Fleet must be in water to convoy
+            }
             // Check convoyed unit location exists
             if (order->target_unit_location < 0 || order->target_unit_location >= map->num_locations) {
                 return -1;
@@ -1633,7 +1642,7 @@ int validate_order(GameState* game, int power_id, const Order* order) {
             if (order->dest_location < 0 || order->dest_location >= map->num_locations) {
                 return -1;
             }
-            // TODO: Check that convoying fleet is adjacent to route
+            // Convoy order is valid if fleet can convoy
             return 0;
 
         case ORDER_BUILD:
@@ -1693,6 +1702,210 @@ void get_possible_orders(GameState* game, int power_id, int location,
 }
 
 // ============================================================================
+// Convoy Pathfinding
+// ============================================================================
+
+// Check if a fleet at given location can convoy (must be in water, not coast)
+int can_fleet_convoy(Map* map, int location) {
+    if (location < 0 || location >= map->num_locations) {
+        return 0;
+    }
+
+    Location* loc = &map->locations[location];
+    // Fleet can convoy only if in WATER (not COAST, not LAND)
+    return (loc->type == LOC_WATER);
+}
+
+// BFS to find if there's a convoy path from start to end through convoying fleets
+// Returns 1 if path exists, 0 otherwise
+// convoying_fleets: array of locations where fleets are offering to convoy
+// num_convoying_fleets: number of such fleets
+int find_convoy_path(Map* map, int start, int end,
+                     int* convoying_fleets, int num_convoying_fleets) {
+    if (start == end) return 0;  // Can't convoy to same location
+
+    // Check if start and end are coastal (armies can only convoy from/to coast)
+    Location* start_loc = &map->locations[start];
+    Location* end_loc = &map->locations[end];
+
+    if (start_loc->type != LOC_COAST && start_loc->type != LOC_PORT) return 0;
+    if (end_loc->type != LOC_COAST && end_loc->type != LOC_PORT) return 0;
+
+    // BFS to find path through convoying fleets
+    // Queue for BFS
+    int queue[MAX_LOCATIONS];
+    int visited[MAX_LOCATIONS] = {0};
+    int queue_start = 0, queue_end = 0;
+
+    // Start with convoying fleets adjacent to start location
+    for (int i = 0; i < num_convoying_fleets; i++) {
+        int fleet_loc = convoying_fleets[i];
+
+        // Check if this fleet is adjacent to start
+        int adjacent = 0;
+        for (int j = 0; j < start_loc->num_adjacent; j++) {
+            if (start_loc->adjacencies[j] == fleet_loc) {
+                adjacent = 1;
+                break;
+            }
+        }
+
+        if (adjacent && can_fleet_convoy(map, fleet_loc)) {
+            queue[queue_end++] = fleet_loc;
+            visited[fleet_loc] = 1;
+        }
+    }
+
+    // BFS through convoying fleets
+    while (queue_start < queue_end) {
+        int current = queue[queue_start++];
+        Location* current_loc = &map->locations[current];
+
+        // Check if this fleet is adjacent to destination
+        for (int i = 0; i < current_loc->num_adjacent; i++) {
+            if (current_loc->adjacencies[i] == end) {
+                return 1;  // Found a path!
+            }
+        }
+
+        // Expand to adjacent convoying fleets
+        for (int i = 0; i < current_loc->num_adjacent; i++) {
+            int adj = current_loc->adjacencies[i];
+
+            if (visited[adj]) continue;
+
+            // Check if there's a convoying fleet at this location
+            for (int j = 0; j < num_convoying_fleets; j++) {
+                if (convoying_fleets[j] == adj && can_fleet_convoy(map, adj)) {
+                    queue[queue_end++] = adj;
+                    visited[adj] = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    return 0;  // No path found
+}
+
+// Get list of fleets offering to convoy an army from start to end
+// Returns number of convoying fleets found
+int get_convoying_fleets(GameState* game, int start, int end, int* convoying_fleets) {
+    int count = 0;
+
+    // Look through all powers' orders
+    for (int p = 0; p < MAX_POWERS; p++) {
+        Power* power = &game->powers[p];
+
+        for (int o = 0; o < power->num_orders; o++) {
+            Order* order = &power->orders[o];
+
+            // Check if this is a convoy order for the right army move
+            if (order->type == ORDER_CONVOY &&
+                order->target_unit_location == start &&
+                order->dest_location == end) {
+
+                // Find the fleet's location (order->unit_location is where the fleet is)
+                int fleet_loc = order->unit_location;
+
+                // Only add if fleet is in water and can actually convoy
+                if (can_fleet_convoy(game->map, fleet_loc)) {
+                    convoying_fleets[count++] = fleet_loc;
+                    if (count >= MAX_LOCATIONS) break;
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
+// Check if an army move should be via convoy (has valid convoy path)
+int is_convoyed_move(GameState* game, int from, int to) {
+    // Get all fleets offering to convoy this move
+    int convoying_fleets[MAX_LOCATIONS];
+    int num_fleets = get_convoying_fleets(game, from, to, convoying_fleets);
+
+    if (num_fleets == 0) {
+        return 0;  // No fleets offering to convoy
+    }
+
+    // Check if there's a valid path through these fleets
+    return find_convoy_path(game->map, from, to, convoying_fleets, num_fleets);
+}
+
+int detect_paradox(GameState* game, int starting_location, int convoying_fleet_location) {
+    // Paradox detection: Follow chain from starting_location to see if we eventually
+    // find a support order supporting the convoying fleet
+    // Returns 1 if paradox detected, 0 otherwise
+
+    int visited_locations[MAX_LOCATIONS];
+    int num_visited = 0;
+    int current_location = starting_location;
+
+    // Follow the chain for up to MAX_LOCATIONS steps
+    while (num_visited < MAX_LOCATIONS) {
+        // Check if we've visited this location before (cycle detection)
+        for (int i = 0; i < num_visited; i++) {
+            if (visited_locations[i] == current_location) {
+                return 0;  // Cycle detected, no paradox
+            }
+        }
+        visited_locations[num_visited++] = current_location;
+
+        // Find unit at current location
+        int unit_power = -1;
+        Order* current_order = NULL;
+
+        for (int p = 0; p < MAX_POWERS; p++) {
+            Power* power = &game->powers[p];
+            for (int u = 0; u < power->num_units; u++) {
+                if (power->units[u].location == current_location) {
+                    // Found unit, now find its order
+                    for (int o = 0; o < power->num_orders; o++) {
+                        if (power->orders[o].unit_location == current_location) {
+                            current_order = &power->orders[o];
+                            unit_power = p;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+            if (current_order) break;
+        }
+
+        if (!current_order) {
+            return 0;  // No unit or no order at this location
+        }
+
+        // Check if this is a support order for the convoying fleet
+        if (current_order->type == ORDER_SUPPORT_HOLD || current_order->type == ORDER_SUPPORT_MOVE) {
+            // Check if this support is for the fleet at convoying_fleet_location
+            if (current_order->target_unit_location == convoying_fleet_location) {
+                return 1;  // Paradox detected!
+            }
+        }
+
+        // Only continue chain if order is Support or Convoy
+        if (current_order->type != ORDER_SUPPORT_HOLD &&
+            current_order->type != ORDER_SUPPORT_MOVE &&
+            current_order->type != ORDER_CONVOY) {
+            return 0;  // Chain ends
+        }
+
+        // Move to the next location in the chain
+        if (current_order->type == ORDER_SUPPORT_MOVE || current_order->type == ORDER_CONVOY) {
+            current_location = current_order->dest_location;
+        } else {
+            return 0;  // Hold support doesn't continue the chain
+        }
+    }
+
+    return 0;  // No paradox found
+}
+
+// ============================================================================
 // Phase Processing
 // ============================================================================
 
@@ -1741,6 +1954,8 @@ void resolve_movement_phase(GameState* game) {
         int defend_strength;     // Strength defending from_location
         int can_move;            // Final determination: can this unit move?
         int support_cut;         // Has this unit's support been cut?
+        int is_convoyed;         // Is this a convoyed move?
+        int convoy_disrupted;    // Has the convoy been disrupted?
     } MoveAttempt;
     
     // Structure to track support orders
@@ -1816,7 +2031,9 @@ void resolve_movement_phase(GameState* game) {
                 attempt->defend_strength = 1;  // Base strength (supports added later)
                 attempt->can_move = 0;         // Determined later
                 attempt->support_cut = 0;      // Not supporting, so can't be cut
-                
+                attempt->is_convoyed = 0;      // Determined below for armies
+                attempt->convoy_disrupted = 0; // Checked later
+
                 if (order->type == ORDER_HOLD) {
                     attempt->to_location = -1;  // Holding
                     attempt->is_valid = 1;
@@ -1825,6 +2042,16 @@ void resolve_movement_phase(GameState* game) {
                     // Validate move
                     int valid = validate_order(game, p, order);
                     attempt->is_valid = (valid == 0);
+
+                    // Check if this is a convoyed move (army moving to non-adjacent location)
+                    if (attempt->is_valid && order->unit_type == UNIT_ARMY) {
+                        int is_adjacent = can_move(game->map, order->unit_type,
+                                                   order->unit_location, order->target_location);
+                        if (!is_adjacent) {
+                            // Army move to non-adjacent location requires convoy
+                            attempt->is_convoyed = 1;
+                        }
+                    }
                 }
             } 
             else if (order->type == ORDER_SUPPORT_HOLD || order->type == ORDER_SUPPORT_MOVE) {
@@ -1833,11 +2060,11 @@ void resolve_movement_phase(GameState* game) {
                 support->supporter_power = p;
                 support->supporter_location = order->unit_location;
                 support->supported_location = order->target_unit_location;
-                support->destination = (order->type == ORDER_SUPPORT_MOVE) ? 
+                support->destination = (order->type == ORDER_SUPPORT_MOVE) ?
                                       order->dest_location : order->target_unit_location;
                 support->is_valid = (validate_order(game, p, order) == 0);
                 support->is_cut = 0;  // Determined later
-                
+
                 // Also add this unit to move attempts as HOLD (supporting units hold their position)
                 MoveAttempt* attempt = &attempts[num_attempts++];
                 attempt->unit_power = p;
@@ -1850,27 +2077,52 @@ void resolve_movement_phase(GameState* game) {
                 attempt->can_move = 0;
                 attempt->is_valid = 1;
                 attempt->support_cut = 0;  // Will be set if attacked
+                attempt->is_convoyed = 0;  // Not a move
+                attempt->convoy_disrupted = 0;
+            }
+            else if (order->type == ORDER_CONVOY) {
+                // Convoying units also hold their position and can defend
+                MoveAttempt* attempt = &attempts[num_attempts++];
+                attempt->unit_power = p;
+                attempt->unit_idx = unit_idx;
+                attempt->from_location = order->unit_location;
+                attempt->to_location = -1;  // Convoying units hold
+                attempt->unit_type = order->unit_type;
+                attempt->attack_strength = 1;
+                attempt->defend_strength = 1;
+                attempt->can_move = 0;
+                attempt->is_valid = (validate_order(game, p, order) == 0);
+                attempt->support_cut = 0;  // Not used for convoy, but initialize
+                attempt->is_convoyed = 0;  // Not a move
+                attempt->convoy_disrupted = 0;
             }
         }
     }
 
     // Step 2: Determine which supports are cut by attacks
     // A support is cut if the supporter is attacked by any unit (except the supported unit)
+    // NOTE: Convoyed moves are checked later after convoy disruption (Step 6b)
     for (int i = 0; i < num_attempts; i++) {
         MoveAttempt* attacker = &attempts[i];
-        
+
         if (!attacker->is_valid || attacker->to_location < 0) {
             continue;  // Not attacking
         }
-        
+
+        // Skip convoyed moves - they only cut support if convoy succeeds
+        // (checked later after convoy disruption)
+        if (attacker->is_convoyed) {
+            continue;
+        }
+
         // Check if this attack cuts any supports
         for (int s = 0; s < num_supports; s++) {
             SupportOrder* support = &supports[s];
-            
+
             if (!support->is_valid || support->is_cut) {
                 continue;  // Already invalid or cut
             }
-            
+
             // Support is cut if attacker is moving to supporter's location
             if (attacker->to_location == support->supporter_location) {
                 // Exception: attack from the unit being supported doesn't cut support
@@ -1947,11 +2199,11 @@ void resolve_movement_phase(GameState* game) {
     // Step 4: Detect conflicts and determine outcomes using strength calculations
     for (int i = 0; i < num_attempts; i++) {
         MoveAttempt* attacker = &attempts[i];
-        
+
         if (!attacker->is_valid || attacker->to_location < 0) {
             continue;  // Invalid order or holding
         }
-        
+
         int destination = attacker->to_location;
         int source = attacker->from_location;
         
@@ -1962,11 +2214,11 @@ void resolve_movement_phase(GameState* game) {
         
         for (int j = 0; j < num_attempts; j++) {
             MoveAttempt* other = &attempts[j];
-            
+
             if (!other->is_valid || other->to_location != destination) {
                 continue;  // Not attacking this destination
             }
-            
+
             // Track max attack strength
             if (other->attack_strength > max_attack_strength) {
                 max_attack_strength = other->attack_strength;
@@ -2031,49 +2283,140 @@ void resolve_movement_phase(GameState* game) {
         }
     }
     
-    // Step 5: Handle circular movements and chains (with strength consideration)
-    // Iteratively resolve moves where destination is being vacated
+    // Step 5: Handle circular movements and chains
+    // Detect and resolve cycles like A→B, B→C, C→A
+    for (int i = 0; i < num_attempts; i++) {
+        MoveAttempt* attempt = &attempts[i];
+
+        if (attempt->can_move || !attempt->is_valid || attempt->to_location < 0) {
+            continue;  // Already resolved or not moving
+        }
+
+        // Try to find a cycle starting from this unit
+        int visited[MAX_UNITS] = {0};
+        int cycle_indices[MAX_UNITS];
+        int cycle_len = 0;
+
+        int current_idx = i;
+        int found_cycle = 0;
+
+        // Follow the chain of moves
+        while (current_idx >= 0 && cycle_len < MAX_UNITS) {
+            if (visited[current_idx]) {
+                // Found a cycle - check if it starts at our original unit
+                for (int c = 0; c < cycle_len; c++) {
+                    if (cycle_indices[c] == current_idx) {
+                        found_cycle = 1;
+                        // Trim cycle to only include units in the actual cycle
+                        for (int k = c; k < cycle_len; k++) {
+                            cycle_indices[k - c] = cycle_indices[k];
+                        }
+                        cycle_len -= c;
+                        break;
+                    }
+                }
+                break;
+            }
+
+            visited[current_idx] = 1;
+            cycle_indices[cycle_len++] = current_idx;
+
+            // Find unit at destination
+            int next_idx = -1;
+            int dest = attempts[current_idx].to_location;
+            for (int j = 0; j < num_attempts; j++) {
+                if (attempts[j].from_location == dest && attempts[j].to_location >= 0) {
+                    next_idx = j;
+                    break;
+                }
+            }
+
+            current_idx = next_idx;
+        }
+
+        // If we found a cycle, check if all units in cycle can move
+        if (found_cycle && cycle_len >= 2) {
+            int can_resolve_cycle = 1;
+
+            // Check if any external unit is attacking into the cycle
+            for (int c = 0; c < cycle_len; c++) {
+                int cycle_dest = attempts[cycle_indices[c]].to_location;
+                int cycle_strength = attempts[cycle_indices[c]].attack_strength;
+
+                // Check for external attackers
+                for (int j = 0; j < num_attempts; j++) {
+                    if (attempts[j].to_location == cycle_dest && attempts[j].is_valid) {
+                        // Is this attacker part of the cycle?
+                        int in_cycle = 0;
+                        for (int k = 0; k < cycle_len; k++) {
+                            if (j == cycle_indices[k]) {
+                                in_cycle = 1;
+                                break;
+                            }
+                        }
+
+                        if (!in_cycle && attempts[j].attack_strength >= cycle_strength) {
+                            // External unit blocks the cycle
+                            can_resolve_cycle = 0;
+                            break;
+                        }
+                    }
+                }
+
+                if (!can_resolve_cycle) break;
+            }
+
+            // If cycle can resolve, mark all units in cycle as can_move
+            if (can_resolve_cycle) {
+                for (int c = 0; c < cycle_len; c++) {
+                    attempts[cycle_indices[c]].can_move = 1;
+                }
+            }
+        }
+    }
+
+    // Step 5b: Iteratively resolve remaining moves where destination is being vacated
     int changed = 1;
     int iterations = 0;
     while (changed && iterations < 20) {
         changed = 0;
         iterations++;
-        
+
         for (int i = 0; i < num_attempts; i++) {
             MoveAttempt* attempt = &attempts[i];
-            
+
             if (attempt->can_move || !attempt->is_valid || attempt->to_location < 0) {
                 continue;  // Already resolved or not moving
             }
-            
+
             int destination = attempt->to_location;
-            
+
             // Check if destination unit is moving away successfully
             int dest_unit_moving = 0;
             for (int j = 0; j < num_attempts; j++) {
-                if (attempts[j].from_location == destination && 
-                    attempts[j].to_location >= 0 && 
+                if (attempts[j].from_location == destination &&
+                    attempts[j].to_location >= 0 &&
                     attempts[j].can_move) {
                     dest_unit_moving = 1;
                     break;
                 }
             }
-            
+
             if (!dest_unit_moving) {
                 continue;  // Destination not being vacated
             }
-            
+
             // Check if we're the only/strongest attacker to this destination
             int is_strongest = 1;
             int max_str = attempt->attack_strength;
             int num_at_max = 1;
-            
+
             for (int j = 0; j < num_attempts; j++) {
                 if (i == j) continue;
                 if (!attempts[j].is_valid || attempts[j].to_location != destination) {
                     continue;
                 }
-                
+
                 if (attempts[j].attack_strength > max_str) {
                     is_strongest = 0;
                     break;
@@ -2081,8 +2424,8 @@ void resolve_movement_phase(GameState* game) {
                     num_at_max++;
                 }
             }
-            
-            // Can move if strongest attacker (or tied for strongest with only 1 other)
+
+            // Can move if strongest attacker
             if (is_strongest && num_at_max == 1) {
                 attempt->can_move = 1;
                 changed = 1;
@@ -2122,10 +2465,176 @@ void resolve_movement_phase(GameState* game) {
         }
     }
     
+    // Step 6b: Check convoy disruption and handle support cutting for convoyed moves
+    // For convoyed moves:
+    // - If convoy is disrupted (fleet dislodged), move fails and support is NOT cut
+    // - If convoy is valid, check if move succeeds and cut support if it attacks
+    for (int i = 0; i < num_attempts; i++) {
+        MoveAttempt* attempt = &attempts[i];
+
+        if (!attempt->is_convoyed || attempt->to_location < 0) {
+            continue;  // Not a convoyed move
+        }
+
+        // This is a convoyed move - check if convoy is still valid after dislodgements
+        // Build list of non-dislodged convoying fleets
+        int convoying_fleets[MAX_LOCATIONS];
+        int num_fleets = 0;
+        int dislodged_fleet_locs[MAX_LOCATIONS];
+        int num_dislodged_fleets = 0;
+
+        // Get all fleets offering to convoy this move
+        for (int p = 0; p < MAX_POWERS; p++) {
+            Power* power = &game->powers[p];
+            for (int o = 0; o < power->num_orders; o++) {
+                Order* order = &power->orders[o];
+
+                if (order->type == ORDER_CONVOY &&
+                    order->target_unit_location == attempt->from_location &&
+                    order->dest_location == attempt->to_location) {
+
+                    int fleet_loc = order->unit_location;
+
+                    // Check if this fleet is dislodged
+                    int is_dislodged = 0;
+                    for (int d = 0; d < game->num_dislodged; d++) {
+                        if (game->dislodged[d].from_location == fleet_loc) {
+                            is_dislodged = 1;
+                            dislodged_fleet_locs[num_dislodged_fleets++] = fleet_loc;
+                            break;
+                        }
+                    }
+
+                    // Only include non-dislodged fleets in water
+                    if (!is_dislodged && can_fleet_convoy(game->map, fleet_loc)) {
+                        convoying_fleets[num_fleets++] = fleet_loc;
+                    }
+                }
+            }
+        }
+
+        // Check if convoy path still exists with remaining fleets
+        int convoy_valid = (num_fleets > 0 &&
+                           find_convoy_path(game->map, attempt->from_location,
+                                          attempt->to_location,
+                                          convoying_fleets, num_fleets));
+
+        if (!convoy_valid && num_dislodged_fleets > 0) {
+            // Convoy appears disrupted - check for paradox
+            // Paradox: destination unit supports a dislodged convoying fleet
+            int is_paradox = 0;
+            for (int df = 0; df < num_dislodged_fleets; df++) {
+                if (detect_paradox(game, attempt->to_location, dislodged_fleet_locs[df])) {
+                    is_paradox = 1;
+                    break;
+                }
+            }
+
+            if (!is_paradox) {
+                // Not a paradox - convoy is disrupted, move fails and does NOT cut support
+                attempt->convoy_disrupted = 1;
+                attempt->can_move = 0;
+            }
+            // If paradox, don't mark as disrupted - convoy succeeds despite dislodged fleet
+        } else if (!convoy_valid) {
+            // No valid path and no dislodged fleets (invalid from start)
+            attempt->convoy_disrupted = 1;
+            attempt->can_move = 0;
+        }
+
+        // If convoy is valid (or paradox), check if it cuts any supports
+        if (!attempt->convoy_disrupted) {
+            // Convoy is valid - check if it cuts any supports
+            // (convoyed moves cut support just like normal moves, if convoy succeeds)
+            for (int s = 0; s < num_supports; s++) {
+                SupportOrder* support = &supports[s];
+
+                if (!support->is_valid || support->is_cut) {
+                    continue;  // Already invalid or cut
+                }
+
+                // Support is cut if attacker is moving to supporter's location
+                if (attempt->to_location == support->supporter_location) {
+                    // Exception: attack from the unit being supported doesn't cut support
+                    if (attempt->from_location != support->supported_location) {
+                        // Exception: own units don't cut support
+                        if (attempt->unit_power != support->supporter_power) {
+                            support->is_cut = 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 6c: Resolve valid convoyed moves
+    // Now that we know which convoys are disrupted, resolve the valid ones
+    for (int i = 0; i < num_attempts; i++) {
+        MoveAttempt* attempt = &attempts[i];
+
+        if (!attempt->is_convoyed || attempt->to_location < 0) {
+            continue;  // Not a convoyed move
+        }
+
+        if (attempt->convoy_disrupted) {
+            continue;  // Convoy failed, already marked
+        }
+
+        // Convoy is valid - check if move can succeed
+        int destination = attempt->to_location;
+
+        // Check if destination is vacant or being vacated
+        int dest_vacant = 1;
+        int dest_unit_moving = 0;
+
+        for (int j = 0; j < num_attempts; j++) {
+            if (attempts[j].from_location == destination) {
+                dest_vacant = 0;
+                if (attempts[j].to_location >= 0 && attempts[j].can_move) {
+                    dest_unit_moving = 1;
+                }
+                break;
+            }
+        }
+
+        if (!dest_vacant && !dest_unit_moving) {
+            continue;  // Destination occupied and not moving - convoy bounces
+        }
+
+        // Check if we're the strongest attacker (among other convoyed moves and already-resolved moves)
+        int is_strongest = 1;
+        int max_str = attempt->attack_strength;
+
+        for (int j = 0; j < num_attempts; j++) {
+            if (i == j) continue;
+            if (!attempts[j].is_valid || attempts[j].to_location != destination) {
+                continue;
+            }
+
+            // Check other convoyed moves
+            if (attempts[j].is_convoyed && !attempts[j].convoy_disrupted) {
+                if (attempts[j].attack_strength >= max_str) {
+                    is_strongest = 0;
+                    break;
+                }
+            }
+            // Check already-resolved non-convoyed moves
+            else if (!attempts[j].is_convoyed && attempts[j].can_move) {
+                // There's already a stronger move succeeding
+                is_strongest = 0;
+                break;
+            }
+        }
+
+        if (is_strongest) {
+            attempt->can_move = 1;
+        }
+    }
+
     // Step 7: Apply successful moves and remove dislodged units
     for (int i = 0; i < num_attempts; i++) {
         MoveAttempt* attempt = &attempts[i];
-        
+
         if (!attempt->can_move || attempt->to_location < 0) {
             continue;  // Stay in place
         }

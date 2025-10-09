@@ -242,6 +242,48 @@ static PyObject* can_move_names(PyObject* self, PyObject* args) {
     return PyLong_FromLong(res);
 }
 
+static PyObject* is_convoyed_move_binding(PyObject* self, PyObject* args) {
+    PyObject* handle_obj;
+    const char* from_name;
+    const char* to_name;
+    if (!PyArg_ParseTuple(args, "Oss", &handle_obj, &from_name, &to_name)) {
+        return NULL;
+    }
+
+    Env* env = (Env*)PyLong_AsVoidPtr(handle_obj);
+    if (!env || !env->game || !env->game->map) {
+        PyErr_SetString(PyExc_ValueError, "Invalid env handle or map not initialized");
+        return NULL;
+    }
+    int from_idx = find_location_by_name(env->game->map, from_name);
+    int to_idx = find_location_by_name(env->game->map, to_name);
+    if (from_idx < 0 || to_idx < 0) {
+        return PyLong_FromLong(0);
+    }
+    int res = is_convoyed_move(env->game, from_idx, to_idx);
+    return PyLong_FromLong(res);
+}
+
+static PyObject* can_fleet_convoy_binding(PyObject* self, PyObject* args) {
+    PyObject* handle_obj;
+    const char* loc_name;
+    if (!PyArg_ParseTuple(args, "Os", &handle_obj, &loc_name)) {
+        return NULL;
+    }
+
+    Env* env = (Env*)PyLong_AsVoidPtr(handle_obj);
+    if (!env || !env->game || !env->game->map) {
+        PyErr_SetString(PyExc_ValueError, "Invalid env handle or map not initialized");
+        return NULL;
+    }
+    int loc_idx = find_location_by_name(env->game->map, loc_name);
+    if (loc_idx < 0) {
+        return PyLong_FromLong(0);
+    }
+    int res = can_fleet_convoy(env->game->map, loc_idx);
+    return PyLong_FromLong(res);
+}
+
 static PyObject* is_home_center_index(PyObject* self, PyObject* args) {
     PyObject* handle_obj;
     int location_idx;
@@ -435,6 +477,8 @@ static PyObject* game_set_centers(PyObject* self, PyObject* args) {
     {"env_configure", env_configure, METH_VARARGS, "Configure welfare mode and max years"}, \
     {"get_location_index", get_location_index, METH_VARARGS, "Get location index by name"}, \
     {"can_move_names", can_move_names, METH_VARARGS, "Check adjacency/movement between locations by names"}, \
+    {"is_convoyed_move", is_convoyed_move_binding, METH_VARARGS, "Check if army move has valid convoy path"}, \
+    {"can_fleet_convoy", can_fleet_convoy_binding, METH_VARARGS, "Check if fleet at location can convoy (in water)"}, \
     {"is_home_center_index", is_home_center_index, METH_VARARGS, "Return home-center power id or -1"}, \
     {"get_home_centers", get_home_centers, METH_VARARGS, "List of home center indices for a power"}, \
     {"game_clear_units", game_clear_units, METH_VARARGS, "Clear all units for a power"}, \
