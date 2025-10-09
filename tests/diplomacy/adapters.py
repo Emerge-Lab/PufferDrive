@@ -78,14 +78,27 @@ class GameAdapter:
             units = list(units) if units else []
         
         # Normalize to list of tuples (type, name)
+        # IMPORTANT: For split coasts, preserve case (stp/bul/spa are lowercase for land)
         norm = []
         for u in units:
             if isinstance(u, str):
                 parts = u.strip().split()
                 if len(parts) >= 2:
-                    norm.append((parts[0].upper(), parts[1].upper()))
+                    loc_name = parts[1]
+                    # Keep lowercase for generic land connections (stp, bul, spa)
+                    # but uppercase everything else including coast specs (STP/NC, BUL/EC, etc.)
+                    if loc_name.lower() in ['stp', 'bul', 'spa'] and '/' not in loc_name:
+                        loc_name = loc_name.lower()
+                    else:
+                        loc_name = loc_name.upper()
+                    norm.append((parts[0].upper(), loc_name))
             elif isinstance(u, (list, tuple)) and len(u) >= 2:
-                norm.append((str(u[0]).upper(), str(u[1]).upper()))
+                loc_name = str(u[1])
+                if loc_name.lower() in ['stp', 'bul', 'spa'] and '/' not in loc_name:
+                    loc_name = loc_name.lower()
+                else:
+                    loc_name = loc_name.upper()
+                norm.append((str(u[0]).upper(), loc_name))
         binding.game_set_units(self.env.env_handle, power_idx, norm)
 
     def set_centers(self, power: str, centers):
@@ -226,7 +239,19 @@ class GameAdapter:
         if phase in (0, 2):  # Movement phases
             for pname in power_names:
                 units_before[pname] = set(self.get_units(pname))
-        
+
+        # Track dislodged units before processing (for retreat phase)
+        dislodged_before_retreat = {}
+        if phase in (1, 3):  # Retreat phases
+            map_info = binding.query_map_info(self.env.env_handle)
+            idx_to_name = [loc["name"] for loc in map_info["locations"]]
+            dislodged_info = binding.get_dislodged_units(self.env.env_handle)
+            for d_info in dislodged_info:
+                unit_type = "A" if d_info["type"] == 1 else "F"
+                from_loc = idx_to_name[d_info["from_location"]]
+                unit_str = f"{unit_type} {from_loc}"
+                dislodged_before_retreat[unit_str] = from_loc
+
         # Submit orders to C code for movement/retreat phases
         orders_submitted = {}
         convoy_path_valid = {}  # Cache convoy path validity BEFORE processing
@@ -259,22 +284,9 @@ class GameAdapter:
 
             # Clear after submitting
             self._pending_orders = {}
-        
-        # If in adjustment phase, apply minimal build/disband semantics based on pending orders
-        if phase == 4 and hasattr(self, "_pending_orders") and self._pending_orders:
-            power_names = ["AUSTRIA","ENGLAND","FRANCE","GERMANY","ITALY","RUSSIA","TURKEY"]
-            map_info = binding.query_map_info(self.env.env_handle)
-            idx_to_name = [loc["name"] for loc in map_info["locations"]]
 
-            def is_occupied(loc_idx: int) -> bool:
-                st = binding.query_game_state(self.env.env_handle)
-                for p in range(7):
-                    for u in st["powers"][p]["units"]:
-                        if u["location"] == loc_idx:
-                            return True
-                return False
-
-            adj_results = {}
+        # Submit retreat orders to C
+        if phase in (1, 3) and hasattr(self, "_pending_orders") and self._pending_orders:
             for power, orders in self._pending_orders.items():
                 if power is None:
                     continue
@@ -282,64 +294,24 @@ class GameAdapter:
                 if pname not in power_names:
                     continue
                 pidx = power_names.index(pname)
-                st = binding.query_game_state(self.env.env_handle)
-                num_centers = st["powers"][pidx]["num_centers"]
-                num_units = st["powers"][pidx]["num_units"]
-                build_allow = max(0, num_centers - num_units)
-                disband_allow = max(0, num_units - num_centers)
-                homes = set(binding.get_home_centers(self.env.env_handle, pidx))
-
-                # Start with current units list for this power
-                current_units = []
-                for u in st["powers"][pidx]["units"]:
-                    ut = "A" if u["type"] == 1 else "F"
-                    current_units.append((ut, idx_to_name[u["location"]]))
-
-                centers_owned = set(st["powers"][pidx]["centers"])
-
-                for order in orders:
-                    parts = order.strip().split()
-                    if len(parts) < 3:
-                        continue
-                    ut = parts[0].upper()  # 'A' or 'F'
-                    loc = parts[1].upper()
-                    act = parts[2].upper()  # 'B' or 'D' (or words)
-                    loc_idx = binding.get_location_index(self.env.env_handle, loc)
-                    if loc_idx < 0:
-                        continue
-                    result_key = f"{ut} {loc}"
-                    if act in ("B", "BUILD", "BUILDS"):
-                        if build_allow <= 0:
-                            adj_results[result_key] = ["void"]
-                            continue
-                        # Valid build if home center, owned, unoccupied
-                        if loc_idx in homes and loc_idx in centers_owned and not is_occupied(loc_idx):
-                            current_units.append((ut, loc))
-                            build_allow -= 1
-                            adj_results[result_key] = [0]  # OK
-                        else:
-                            adj_results[result_key] = ["void"]
-                    elif act in ("D", "DISBAND", "REMOVE", "DISBANDS"):
-                        # Standard rules: only if must disband or in welfare mode could be more lenient.
-                        if disband_allow <= 0:
-                            adj_results[result_key] = ["void"]
-                            continue
-                        # Remove if present
-                        before = len(current_units)
-                        current_units = [(t, l) for (t, l) in current_units if l != loc]
-                        if len(current_units) < before:
-                            disband_allow -= 1
-                            adj_results[result_key] = [0]
-                        else:
-                            adj_results[result_key] = ["void"]
-
-                # Write back updated units for this power
-                binding.game_set_units(self.env.env_handle, pidx, current_units)
-
-            # Clear pending orders after applying
+                binding.game_submit_orders(self.env.env_handle, pidx, orders)
+                orders_submitted[pname] = orders
+            # Clear after submitting
             self._pending_orders = {}
-            # Record adjustment results
-            self.result_history.add(adj_results)
+
+        # Submit adjustment orders to C
+        if phase == 4 and hasattr(self, "_pending_orders") and self._pending_orders:
+            for power, orders in self._pending_orders.items():
+                if power is None:
+                    continue
+                pname = str(power).upper()
+                if pname not in power_names:
+                    continue
+                pidx = power_names.index(pname)
+                binding.game_submit_orders(self.env.env_handle, pidx, orders)
+                orders_submitted[pname] = orders
+            # Clear after submitting
+            self._pending_orders = {}
 
         # Advance the environment one step (holds by default)
         actions = np.zeros(7, dtype=np.int32)
@@ -393,33 +365,20 @@ class GameAdapter:
                         was_cut = False
                         is_void = False
                         
-                        # Check if supporting own unit to dislodge own unit (VOID)
+                        # Check if supporting move would dislodge own unit (VOID)
                         # Support move format: "A MUN S F KIE - BER"
                         # parts = ['A', 'MUN', 'S', 'F', 'KIE', '-', 'BER']
                         if len(parts) >= 7 and parts[5] in ['-', '->']:
                             # Support move: S <type> <loc> - <dest>
                             dest_loc = parts[6]
 
-                            # Check if dest has own unit that is NOT moving away
+                            # DATC rule: Cannot support a move to a location occupied by own unit
+                            # even if that unit has orders to move (the move might fail)
                             for u in units_before[pname]:
                                 u_parts = u.split()
                                 if len(u_parts) >= 2 and u_parts[1] == dest_loc:
-                                    # Check if this unit has a move order (moving away)
-                                    unit_has_move_order = False
-                                    for check_order in orders_submitted.get(pname, []):
-                                        check_parts = check_order.strip().upper().split()
-                                        if (len(check_parts) >= 4 and
-                                            check_parts[0] == u_parts[0] and
-                                            check_parts[1] == dest_loc and
-                                            check_parts[2] in ['-', '->'] and
-                                            check_parts[3] != dest_loc):  # Moving to different location
-                                            unit_has_move_order = True
-                                            break
-
-                                    # Only VOID if unit at dest is NOT moving away
-                                    if not unit_has_move_order:
-                                        # Supporting dislodgement of own unit → VOID
-                                        is_void = True
+                                    # Own unit at destination → support is VOID
+                                    is_void = True
                                     break
                         
                         # Check if support was cut by attack
@@ -656,6 +615,107 @@ class GameAdapter:
                             results[unit_key] = []  # OK
 
             self.result_history.add(results)
+
+        # Infer results from retreat phases
+        if phase in (1, 3) and dislodged_before_retreat:
+
+            # Track retreat destinations from submitted orders
+            retreat_destinations = {}  # unit_str -> dest_loc
+            for pname, orders in orders_submitted.items():
+                for order_str in orders:
+                    parts = order_str.strip().upper().split()
+                    if len(parts) >= 4 and parts[2] in ['R', 'RETREAT', 'RETREATS']:
+                        # Retreat order: "F TRI R ALB"
+                        unit_key = f"{parts[0]} {parts[1]}"
+                        dest_loc = parts[3]
+                        retreat_destinations[unit_key] = dest_loc
+
+            # After processing, check which units successfully retreated
+            units_after = {}
+            for pname in power_names:
+                units_after[pname] = set(self.get_units(pname))
+
+            # Build results dict
+            retreat_results = {}
+            for unit_str, from_loc in dislodged_before_retreat.items():
+                parts = unit_str.split()
+                unit_type = parts[0]
+                unit_loc = parts[1]
+                unit_key = f"{unit_type} {unit_loc}"
+
+                # Find which power owns this unit
+                owner_power = None
+                for pname in power_names:
+                    for u in units_after[pname]:
+                        if u.split()[0] == unit_type:  # Same type
+                            # Check if unit is at a new location (successful retreat)
+                            u_loc = u.split()[1]
+                            if retreat_destinations.get(unit_key) == u_loc:
+                                owner_power = pname
+                                break
+                    if owner_power:
+                        break
+
+                # Determine result
+                if unit_key in retreat_destinations:
+                    dest = retreat_destinations[unit_key]
+                    # Check if unit successfully retreated to dest
+                    retreated_successfully = False
+                    for pname in power_names:
+                        if f"{unit_type} {dest}" in [u.upper() for u in units_after[pname]]:
+                            retreated_successfully = True
+                            break
+
+                    if retreated_successfully:
+                        retreat_results[unit_key] = []  # OK
+                    else:
+                        # Check for conflict (multiple units to same dest)
+                        # Count how many units tried to retreat to this dest
+                        conflict_count = sum(1 for d in retreat_destinations.values() if d == dest)
+                        if conflict_count > 1:
+                            # In DATC, bounce implies disband for retreats
+                            retreat_results[unit_key] = ['bounce']
+                        else:
+                            # Some other reason (invalid dest, etc.)
+                            retreat_results[unit_key] = ['disband']
+                else:
+                    # No retreat order → auto-disband
+                    retreat_results[unit_key] = ['disband']
+
+            self.result_history.add(retreat_results)
+
+        # Infer results from adjustment phase
+        if phase == 4 and orders_submitted:
+            units_before_adj = {}
+            units_after_adj = {}
+            for pname in power_names:
+                units_before_adj[pname] = set(self.get_units(pname)) if hasattr(self, '_units_before_adj') and pname in self._units_before_adj else set()
+                units_after_adj[pname] = set(self.get_units(pname))
+
+            adj_results = {}
+            for pname, orders in orders_submitted.items():
+                for order_str in orders:
+                    parts = order_str.strip().upper().split()
+                    if len(parts) < 3:
+                        continue
+
+                    unit_key = f"{parts[0]} {parts[1]}"
+                    action = parts[2].upper()
+
+                    if action in ('B', 'BUILD', 'BUILDS'):
+                        # Check if unit was built
+                        if unit_key in [u.upper() for u in units_after_adj[pname]]:
+                            adj_results[unit_key] = []  # OK
+                        else:
+                            adj_results[unit_key] = ['void']
+                    elif action in ('D', 'DISBAND', 'DISBANDS', 'REMOVE'):
+                        # Check if unit was disbanded
+                        if unit_key not in [u.upper() for u in units_after_adj[pname]]:
+                            adj_results[unit_key] = []  # OK
+                        else:
+                            adj_results[unit_key] = ['void']
+
+            self.result_history.add(adj_results)
 
         # Update state history short snapshot
         state = binding.query_game_state(self.env.env_handle)

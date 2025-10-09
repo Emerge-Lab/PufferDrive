@@ -38,6 +38,108 @@ int find_location_by_name(Map* map, const char* name) {
     return -1;  // Not found
 }
 
+// Get the parent location (base location without coast specification)
+int get_parent_location(Map* map, int loc_idx) {
+    if (loc_idx < 0 || loc_idx >= map->num_locations) {
+        return -1;
+    }
+    int parent = map->locations[loc_idx].parent_location;
+    if (parent == -1) {
+        return loc_idx;  // This is already a parent location
+    }
+    return parent;
+}
+
+// Get all coast variants of a location (including the location itself)
+void find_coasts(Map* map, int loc_idx, int* coasts, int* num_coasts) {
+    *num_coasts = 0;
+    if (loc_idx < 0 || loc_idx >= map->num_locations) {
+        return;
+    }
+
+    // Get the parent location
+    int parent = get_parent_location(map, loc_idx);
+
+    // Find all locations that have this parent (or are the parent)
+    for (int i = 0; i < map->num_locations; i++) {
+        if (i == parent || map->locations[i].parent_location == parent) {
+            coasts[*num_coasts] = i;
+            (*num_coasts)++;
+        }
+    }
+}
+
+// Check if a location requires coast specification for fleets
+int is_coast_required(Map* map, int loc_idx) {
+    if (loc_idx < 0 || loc_idx >= map->num_locations) {
+        return 0;
+    }
+
+    // A location requires coast specification if it has multiple coast variants
+    int coasts[10];
+    int num_coasts;
+    find_coasts(map, loc_idx, coasts, &num_coasts);
+
+    // Count how many of these are actual coast locations (not generic land)
+    int coast_count = 0;
+    for (int i = 0; i < num_coasts; i++) {
+        if (map->locations[coasts[i]].coast_type != COAST_GENERIC &&
+            map->locations[coasts[i]].coast_type != COAST_NONE) {
+            coast_count++;
+        }
+    }
+
+    return coast_count > 1;
+}
+
+// Auto-determine coast for fleet move if only one reachable coast
+// Returns the specific coast index, or -1 if ambiguous or not found
+int default_coast(Map* map, int from_loc, const char* dest_name) {
+    if (from_loc < 0 || from_loc >= map->num_locations) {
+        return -1;
+    }
+
+    // First, try to find exact match
+    int exact = find_location_by_name(map, dest_name);
+    if (exact != -1) {
+        return exact;
+    }
+
+    // If not found, check if it's a split coast location without coast specified
+    // Try to find all variants of this location
+    char base_name[4];
+    if (strlen(dest_name) == 3) {
+        strncpy(base_name, dest_name, 3);
+        base_name[3] = '\0';
+
+        // Find all locations that match this base name
+        int matching_coasts[10];
+        int num_matching = 0;
+
+        for (int i = 0; i < map->num_locations; i++) {
+            if (strncmp(map->locations[i].name, base_name, 3) == 0) {
+                // Check if this location is reachable from from_loc
+                for (int j = 0; j < map->locations[from_loc].num_adjacent; j++) {
+                    if (map->locations[from_loc].adjacencies[j] == i) {
+                        matching_coasts[num_matching++] = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If exactly one reachable coast, return it
+        if (num_matching == 1) {
+            return matching_coasts[0];
+        }
+
+        // If multiple or none, it's ambiguous
+        return -1;
+    }
+
+    return -1;
+}
+
 int get_unit_at_location(GameState* game, int location) {
     for (int p = 0; p < MAX_POWERS; p++) {
         for (int u = 0; u < game->powers[p].num_units; u++) {
@@ -163,7 +265,13 @@ void init_standard_map(Map* map) {
     strcpy(map->power_abbrev[6], "T");
 
     // Initialize all locations (generated from standard.map)
-    map->num_locations = 76;
+    map->num_locations = 85;  // 76 original + 9 split coast variants
+
+    // Initialize new coast fields for all locations (default: not a coast variant)
+    for (int i = 0; i < MAX_LOCATIONS; i++) {
+        map->locations[i].parent_location = -1;
+        map->locations[i].coast_type = COAST_NONE;
+    }
 
 // 0: ADR
 strcpy(map->locations[0].name, "ADR");
@@ -183,7 +291,7 @@ map->locations[1].type = LOC_WATER;
 map->locations[1].has_supply_center = 0;
 map->locations[1].owner_power = -1;  // Neutral initially
 map->locations[1].num_adjacent = 6;
-map->locations[1].adjacencies[0] = 15;
+map->locations[1].adjacencies[0] = 78;  // BUL/SC (was 15 BUL)
 map->locations[1].adjacencies[1] = 18;
 map->locations[1].adjacencies[2] = 20;
 map->locations[1].adjacencies[3] = 26;
@@ -259,7 +367,7 @@ map->locations[7].owner_power = -1;  // Neutral initially
 map->locations[7].num_adjacent = 3;
 map->locations[7].adjacencies[0] = 45;
 map->locations[7].adjacencies[1] = 44;
-map->locations[7].adjacencies[2] = 60;
+map->locations[7].adjacencies[2] = 83;  // STP/NC (was 60 STP)
 
 // 8: BEL
 strcpy(map->locations[8].name, "BEL");
@@ -294,7 +402,7 @@ map->locations[10].owner_power = -1;  // Neutral initially
 map->locations[10].num_adjacent = 6;
 map->locations[10].adjacencies[0] = 3;
 map->locations[10].adjacencies[1] = 5;
-map->locations[10].adjacencies[2] = 15;
+map->locations[10].adjacencies[2] = 77;  // BUL/EC (was 15 BUL)
 map->locations[10].adjacencies[3] = 18;
 map->locations[10].adjacencies[4] = 53;
 map->locations[10].adjacencies[5] = 55;
@@ -320,7 +428,7 @@ map->locations[12].num_adjacent = 5;
 map->locations[12].adjacencies[0] = 6;
 map->locations[12].adjacencies[1] = 23;
 map->locations[12].adjacencies[2] = 33;
-map->locations[12].adjacencies[3] = 60;
+map->locations[12].adjacencies[3] = 84;  // STP/SC (was 60 STP)
 map->locations[12].adjacencies[4] = 61;
 
 // 13: BRE
@@ -347,18 +455,13 @@ map->locations[14].adjacencies[2] = 54;
 map->locations[14].adjacencies[3] = 64;
 map->locations[14].adjacencies[4] = 71;
 
-// 15: BUL
+// 15: BUL (parent location - supply center only, no direct movement)
 strcpy(map->locations[15].name, "BUL");
 map->locations[15].type = LOC_COAST;
 map->locations[15].has_supply_center = 1;
 map->locations[15].owner_power = -1;  // Neutral initially
-map->locations[15].num_adjacent = 6;
-map->locations[15].adjacencies[0] = 1;
-map->locations[15].adjacencies[1] = 10;
-map->locations[15].adjacencies[2] = 18;
-map->locations[15].adjacencies[3] = 26;
-map->locations[15].adjacencies[4] = 53;
-map->locations[15].adjacencies[5] = 54;
+map->locations[15].num_adjacent = 0;  // No adjacencies - use coast variants instead
+// Adjacencies removed - units must be on specific coasts (bul, BUL/EC, BUL/SC)
 
 // 16: BUR
 strcpy(map->locations[16].name, "BUR");
@@ -393,8 +496,8 @@ map->locations[18].has_supply_center = 1;
 map->locations[18].owner_power = -1;  // Neutral initially
 map->locations[18].num_adjacent = 6;
 map->locations[18].adjacencies[0] = 1;
-map->locations[18].adjacencies[1] = 15;
-map->locations[18].adjacencies[2] = 15;
+map->locations[18].adjacencies[1] = 77;  // BUL/EC (was 15 BUL)
+map->locations[18].adjacencies[2] = 78;  // BUL/SC (was 15 BUL)
 map->locations[18].adjacencies[3] = 10;
 map->locations[18].adjacencies[4] = 3;
 map->locations[18].adjacencies[5] = 58;
@@ -455,11 +558,12 @@ strcpy(map->locations[23].name, "FIN");
 map->locations[23].type = LOC_COAST;
 map->locations[23].has_supply_center = 0;
 map->locations[23].owner_power = -1;  // Neutral initially
-map->locations[23].num_adjacent = 4;
+map->locations[23].num_adjacent = 5;  // Increased from 4 for split coasts
 map->locations[23].adjacencies[0] = 12;
 map->locations[23].adjacencies[1] = 45;
-map->locations[23].adjacencies[2] = 60;
+map->locations[23].adjacencies[2] = 84;  // STP/SC (was 60 STP)
 map->locations[23].adjacencies[3] = 61;
+map->locations[23].adjacencies[4] = 82;  // stp land
 
 // 24: GAL
 strcpy(map->locations[24].name, "GAL");
@@ -480,13 +584,14 @@ strcpy(map->locations[25].name, "GAS");
 map->locations[25].type = LOC_COAST;
 map->locations[25].has_supply_center = 0;
 map->locations[25].owner_power = -1;  // Neutral initially
-map->locations[25].num_adjacent = 6;
+map->locations[25].num_adjacent = 7;  // Increased from 6 for split coasts
 map->locations[25].adjacencies[0] = 16;
 map->locations[25].adjacencies[1] = 13;
 map->locations[25].adjacencies[2] = 36;
 map->locations[25].adjacencies[3] = 37;
 map->locations[25].adjacencies[4] = 46;
-map->locations[25].adjacencies[5] = 59;
+map->locations[25].adjacencies[5] = 80;  // SPA/NC (was 59 SPA)
+map->locations[25].adjacencies[6] = 79;  // spa land
 
 // 26: GRE
 strcpy(map->locations[26].name, "GRE");
@@ -496,7 +601,7 @@ map->locations[26].owner_power = -1;  // Neutral initially
 map->locations[26].num_adjacent = 5;
 map->locations[26].adjacencies[0] = 1;
 map->locations[26].adjacencies[1] = 2;
-map->locations[26].adjacencies[2] = 15;
+map->locations[26].adjacencies[2] = 78;  // BUL/SC (was 15 BUL)
 map->locations[26].adjacencies[3] = 29;
 map->locations[26].adjacencies[4] = 54;
 
@@ -581,13 +686,14 @@ strcpy(map->locations[33].name, "LVN");
 map->locations[33].type = LOC_COAST;
 map->locations[33].has_supply_center = 0;
 map->locations[33].owner_power = -1;  // Neutral initially
-map->locations[33].num_adjacent = 6;
+map->locations[33].num_adjacent = 7;  // Increased from 6 for split coasts
 map->locations[33].adjacencies[0] = 6;
 map->locations[33].adjacencies[1] = 12;
 map->locations[33].adjacencies[2] = 38;
 map->locations[33].adjacencies[3] = 50;
-map->locations[33].adjacencies[4] = 60;
+map->locations[33].adjacencies[4] = 84;  // STP/SC (was 60 STP)
 map->locations[33].adjacencies[5] = 73;
+map->locations[33].adjacencies[6] = 82;  // stp land
 
 // 34: LVP
 strcpy(map->locations[34].name, "LVP");
@@ -610,7 +716,7 @@ map->locations[35].owner_power = -1;  // Neutral initially
 map->locations[35].num_adjacent = 6;
 map->locations[35].adjacencies[0] = 37;
 map->locations[35].adjacencies[1] = 48;
-map->locations[35].adjacencies[2] = 59;
+map->locations[35].adjacencies[2] = 81;  // SPA/SC (was 59 SPA)
 map->locations[35].adjacencies[3] = 66;
 map->locations[35].adjacencies[4] = 68;
 map->locations[35].adjacencies[5] = 74;
@@ -628,8 +734,8 @@ map->locations[36].adjacencies[3] = 30;
 map->locations[36].adjacencies[4] = 40;
 map->locations[36].adjacencies[5] = 41;
 map->locations[36].adjacencies[6] = 49;
-map->locations[36].adjacencies[7] = 59;
-map->locations[36].adjacencies[8] = 59;
+map->locations[36].adjacencies[7] = 80;  // SPA/NC (was 59 SPA)
+map->locations[36].adjacencies[8] = 81;  // SPA/SC (was 59 SPA)
 map->locations[36].adjacencies[9] = 74;
 
 // 37: MAR
@@ -637,13 +743,14 @@ strcpy(map->locations[37].name, "MAR");
 map->locations[37].type = LOC_COAST;
 map->locations[37].has_supply_center = 1;
 map->locations[37].owner_power = -1;  // Neutral initially
-map->locations[37].num_adjacent = 6;
+map->locations[37].num_adjacent = 7;  // Increased from 6 for split coasts
 map->locations[37].adjacencies[0] = 16;
 map->locations[37].adjacencies[1] = 25;
 map->locations[37].adjacencies[2] = 35;
 map->locations[37].adjacencies[3] = 48;
-map->locations[37].adjacencies[4] = 59;
+map->locations[37].adjacencies[4] = 81;  // SPA/SC (was 59 SPA)
 map->locations[37].adjacencies[5] = 62;
+map->locations[37].adjacencies[6] = 79;  // spa land
 
 // 38: MOS
 strcpy(map->locations[38].name, "MOS");
@@ -653,7 +760,7 @@ map->locations[38].owner_power = -1;  // Neutral initially
 map->locations[38].num_adjacent = 5;
 map->locations[38].adjacencies[0] = 33;
 map->locations[38].adjacencies[1] = 55;
-map->locations[38].adjacencies[2] = 60;
+map->locations[38].adjacencies[2] = 82;  // stp land (was 60 STP)
 map->locations[38].adjacencies[3] = 69;
 map->locations[38].adjacencies[4] = 73;
 
@@ -741,14 +848,15 @@ strcpy(map->locations[45].name, "NWY");
 map->locations[45].type = LOC_COAST;
 map->locations[45].has_supply_center = 1;
 map->locations[45].owner_power = -1;  // Neutral initially
-map->locations[45].num_adjacent = 7;
+map->locations[45].num_adjacent = 8;  // Increased from 7 for split coasts
 map->locations[45].adjacencies[0] = 7;
 map->locations[45].adjacencies[1] = 23;
 map->locations[45].adjacencies[2] = 43;
 map->locations[45].adjacencies[3] = 44;
 map->locations[45].adjacencies[4] = 57;
-map->locations[45].adjacencies[5] = 60;
+map->locations[45].adjacencies[5] = 83;  // STP/NC (was 60 STP)
 map->locations[45].adjacencies[6] = 61;
+map->locations[45].adjacencies[7] = 82;  // stp land
 
 // 46: PAR
 strcpy(map->locations[46].name, "PAR");
@@ -793,8 +901,8 @@ map->locations[49].has_supply_center = 1;
 map->locations[49].owner_power = -1;  // Neutral initially
 map->locations[49].num_adjacent = 3;
 map->locations[49].adjacencies[0] = 36;
-map->locations[49].adjacencies[1] = 59;
-map->locations[49].adjacencies[2] = 59;
+map->locations[49].adjacencies[1] = 80;  // SPA/NC (was 59 SPA)
+map->locations[49].adjacencies[2] = 81;  // SPA/SC (was 59 SPA)
 
 // 50: PRU
 strcpy(map->locations[50].name, "PRU");
@@ -840,7 +948,7 @@ map->locations[53].owner_power = -1;  // Neutral initially
 map->locations[53].num_adjacent = 7;
 map->locations[53].adjacencies[0] = 10;
 map->locations[53].adjacencies[1] = 14;
-map->locations[53].adjacencies[2] = 15;
+map->locations[53].adjacencies[2] = 77;  // BUL/EC (was 15 BUL)
 map->locations[53].adjacencies[3] = 24;
 map->locations[53].adjacencies[4] = 54;
 map->locations[53].adjacencies[5] = 55;
@@ -854,7 +962,7 @@ map->locations[54].owner_power = -1;  // Neutral initially
 map->locations[54].num_adjacent = 6;
 map->locations[54].adjacencies[0] = 2;
 map->locations[54].adjacencies[1] = 14;
-map->locations[54].adjacencies[2] = 15;
+map->locations[54].adjacencies[2] = 76;  // bul land (was 15 BUL)
 map->locations[54].adjacencies[3] = 26;
 map->locations[54].adjacencies[4] = 53;
 map->locations[54].adjacencies[5] = 64;
@@ -908,31 +1016,21 @@ map->locations[58].adjacencies[3] = 18;
 map->locations[58].adjacencies[4] = 20;
 map->locations[58].adjacencies[5] = 63;
 
-// 59: SPA
+// 59: SPA (parent location - supply center only, no direct movement)
 strcpy(map->locations[59].name, "SPA");
 map->locations[59].type = LOC_COAST;
 map->locations[59].has_supply_center = 1;
 map->locations[59].owner_power = -1;  // Neutral initially
-map->locations[59].num_adjacent = 6;
-map->locations[59].adjacencies[0] = 25;
-map->locations[59].adjacencies[1] = 35;
-map->locations[59].adjacencies[2] = 36;
-map->locations[59].adjacencies[3] = 37;
-map->locations[59].adjacencies[4] = 49;
-map->locations[59].adjacencies[5] = 74;
+map->locations[59].num_adjacent = 0;  // No adjacencies - use coast variants instead
+// Adjacencies removed - units must be on specific coasts (spa, SPA/NC, SPA/SC)
 
-// 60: STP
+// 60: STP (parent location - supply center only, no direct movement)
 strcpy(map->locations[60].name, "STP");
 map->locations[60].type = LOC_COAST;
-map->locations[60].has_supply_center = 0;
+map->locations[60].has_supply_center = 1;  // STP is a supply center (Russia home)
 map->locations[60].owner_power = -1;  // Neutral initially
-map->locations[60].num_adjacent = 6;
-map->locations[60].adjacencies[0] = 7;
-map->locations[60].adjacencies[1] = 12;
-map->locations[60].adjacencies[2] = 23;
-map->locations[60].adjacencies[3] = 33;
-map->locations[60].adjacencies[4] = 38;
-map->locations[60].adjacencies[5] = 45;
+map->locations[60].num_adjacent = 0;  // No adjacencies - use coast variants instead
+// Adjacencies removed - units must be on specific coasts (stp, STP/NC, STP/SC)
 
 // 61: SWE
 strcpy(map->locations[61].name, "SWE");
@@ -1106,7 +1204,7 @@ map->locations[74].num_adjacent = 6;
 map->locations[74].adjacencies[0] = 36;
 map->locations[74].adjacencies[1] = 35;
 map->locations[74].adjacencies[2] = 40;
-map->locations[74].adjacencies[3] = 59;
+map->locations[74].adjacencies[3] = 81;  // SPA/SC (was 59 SPA)
 map->locations[74].adjacencies[4] = 65;
 map->locations[74].adjacencies[5] = 68;
 
@@ -1121,6 +1219,124 @@ map->locations[75].adjacencies[1] = 32;
 map->locations[75].adjacencies[2] = 34;
 map->locations[75].adjacencies[3] = 43;
 map->locations[75].adjacencies[4] = 72;
+
+// ===== SPLIT COAST LOCATIONS =====
+
+// 76: bul (generic land connection for armies)
+strcpy(map->locations[76].name, "bul");
+map->locations[76].type = LOC_LAND;
+map->locations[76].has_supply_center = 0;  // SC is on the main location (15)
+map->locations[76].owner_power = -1;
+map->locations[76].num_adjacent = 6;
+map->locations[76].adjacencies[0] = 1;   // AEG
+map->locations[76].adjacencies[1] = 10;  // BLA
+map->locations[76].adjacencies[2] = 18;  // CON
+map->locations[76].adjacencies[3] = 26;  // GRE
+map->locations[76].adjacencies[4] = 53;  // RUM
+map->locations[76].adjacencies[5] = 54;  // SER
+map->locations[76].parent_location = 15; // BUL
+map->locations[76].coast_type = COAST_GENERIC;
+
+// 77: BUL/EC (Bulgaria East Coast)
+strcpy(map->locations[77].name, "BUL/EC");
+map->locations[77].type = LOC_COAST;
+map->locations[77].has_supply_center = 0;
+map->locations[77].owner_power = -1;
+map->locations[77].num_adjacent = 3;
+map->locations[77].adjacencies[0] = 10;  // BLA
+map->locations[77].adjacencies[1] = 18;  // CON
+map->locations[77].adjacencies[2] = 53;  // RUM
+map->locations[77].parent_location = 15; // BUL
+map->locations[77].coast_type = COAST_EAST;
+
+// 78: BUL/SC (Bulgaria South Coast)
+strcpy(map->locations[78].name, "BUL/SC");
+map->locations[78].type = LOC_COAST;
+map->locations[78].has_supply_center = 0;
+map->locations[78].owner_power = -1;
+map->locations[78].num_adjacent = 3;
+map->locations[78].adjacencies[0] = 1;   // AEG
+map->locations[78].adjacencies[1] = 18;  // CON
+map->locations[78].adjacencies[2] = 26;  // GRE
+map->locations[78].parent_location = 15; // BUL
+map->locations[78].coast_type = COAST_SOUTH;
+
+// 79: spa (generic land connection for armies)
+strcpy(map->locations[79].name, "spa");
+map->locations[79].type = LOC_LAND;
+map->locations[79].has_supply_center = 0;  // SC is on the main location (59)
+map->locations[79].owner_power = -1;
+map->locations[79].num_adjacent = 4;
+map->locations[79].adjacencies[0] = 25;  // GAS
+map->locations[79].adjacencies[1] = 35;  // LYO
+map->locations[79].adjacencies[2] = 37;  // MAR
+map->locations[79].adjacencies[3] = 49;  // POR
+map->locations[79].parent_location = 59; // SPA
+map->locations[79].coast_type = COAST_GENERIC;
+
+// 80: SPA/NC (Spain North Coast)
+strcpy(map->locations[80].name, "SPA/NC");
+map->locations[80].type = LOC_COAST;
+map->locations[80].has_supply_center = 0;
+map->locations[80].owner_power = -1;
+map->locations[80].num_adjacent = 3;
+map->locations[80].adjacencies[0] = 25;  // GAS
+map->locations[80].adjacencies[1] = 36;  // MAO
+map->locations[80].adjacencies[2] = 49;  // POR
+map->locations[80].parent_location = 59; // SPA
+map->locations[80].coast_type = COAST_NORTH;
+
+// 81: SPA/SC (Spain South Coast)
+strcpy(map->locations[81].name, "SPA/SC");
+map->locations[81].type = LOC_COAST;
+map->locations[81].has_supply_center = 0;
+map->locations[81].owner_power = -1;
+map->locations[81].num_adjacent = 5;
+map->locations[81].adjacencies[0] = 35;  // LYO
+map->locations[81].adjacencies[1] = 36;  // MAO
+map->locations[81].adjacencies[2] = 37;  // MAR
+map->locations[81].adjacencies[3] = 49;  // POR
+map->locations[81].adjacencies[4] = 74;  // WES
+map->locations[81].parent_location = 59; // SPA
+map->locations[81].coast_type = COAST_SOUTH;
+
+// 82: stp (generic land connection for armies)
+strcpy(map->locations[82].name, "stp");
+map->locations[82].type = LOC_LAND;
+map->locations[82].has_supply_center = 0;  // SC is on the main location (60)
+map->locations[82].owner_power = -1;
+map->locations[82].num_adjacent = 6;
+map->locations[82].adjacencies[0] = 7;   // BAR
+map->locations[82].adjacencies[1] = 12;  // BOT
+map->locations[82].adjacencies[2] = 23;  // FIN
+map->locations[82].adjacencies[3] = 33;  // LVN
+map->locations[82].adjacencies[4] = 38;  // MOS
+map->locations[82].adjacencies[5] = 45;  // NWY
+map->locations[82].parent_location = 60; // STP
+map->locations[82].coast_type = COAST_GENERIC;
+
+// 83: STP/NC (St Petersburg North Coast)
+strcpy(map->locations[83].name, "STP/NC");
+map->locations[83].type = LOC_COAST;
+map->locations[83].has_supply_center = 0;
+map->locations[83].owner_power = -1;
+map->locations[83].num_adjacent = 2;
+map->locations[83].adjacencies[0] = 7;   // BAR
+map->locations[83].adjacencies[1] = 45;  // NWY
+map->locations[83].parent_location = 60; // STP
+map->locations[83].coast_type = COAST_NORTH;
+
+// 84: STP/SC (St Petersburg South Coast)
+strcpy(map->locations[84].name, "STP/SC");
+map->locations[84].type = LOC_COAST;
+map->locations[84].has_supply_center = 0;
+map->locations[84].owner_power = -1;
+map->locations[84].num_adjacent = 3;
+map->locations[84].adjacencies[0] = 12;  // BOT
+map->locations[84].adjacencies[1] = 23;  // FIN
+map->locations[84].adjacencies[2] = 33;  // LVN
+map->locations[84].parent_location = 60; // STP
+map->locations[84].coast_type = COAST_SOUTH;
 
 
 // Home center assignments
@@ -1437,6 +1653,20 @@ int parse_order(const char* order_str, Order* order, GameState* game) {
     if (!token) return -1;
 
     int unit_loc = find_location_by_name(game->map, token);
+
+    // If not found and this is an army on a split coast territory,
+    // try the generic land version (lowercase name)
+    if (unit_loc < 0 && order->unit_type == UNIT_ARMY) {
+        // Try lowercase version for generic land connections (stp, bul, spa)
+        char lower_name[8];
+        strncpy(lower_name, token, sizeof(lower_name) - 1);
+        lower_name[sizeof(lower_name) - 1] = '\0';
+        for (char* p = lower_name; *p; p++) {
+            *p = tolower(*p);
+        }
+        unit_loc = find_location_by_name(game->map, lower_name);
+    }
+
     if (unit_loc < 0) return -1;
     order->unit_location = unit_loc;
 
@@ -1458,7 +1688,13 @@ int parse_order(const char* order_str, Order* order, GameState* game) {
         if (!token) return -1;
 
         int dest_loc = find_location_by_name(game->map, token);
-        if (dest_loc < 0) return -1;
+
+        // If not found and this is a fleet, try default_coast
+        if (dest_loc < 0 && order->unit_type == UNIT_FLEET) {
+            dest_loc = default_coast(game->map, order->unit_location, token);
+        }
+
+        if (dest_loc < 0) return -1;  // Invalid or ambiguous
         order->target_location = dest_loc;
         return 0;
 
@@ -1539,6 +1775,20 @@ int parse_order(const char* order_str, Order* order, GameState* game) {
                strcmp(token, "DISBANDS") == 0 || strcmp(token, "REMOVE") == 0) {
         // DISBAND order
         order->type = ORDER_DISBAND;
+        return 0;
+
+    } else if (strcmp(token, "R") == 0 || strcmp(token, "RETREAT") == 0 ||
+               strcmp(token, "RETREATS") == 0) {
+        // RETREAT order: "F TRI R ALB"
+        order->type = ORDER_RETREAT;
+
+        // Parse retreat destination
+        token = strtok(NULL, " ");
+        if (!token) return -1;
+
+        int dest_loc = find_location_by_name(game->map, token);
+        if (dest_loc < 0) return -1;
+        order->target_location = dest_loc;
         return 0;
 
     } else {
@@ -2041,10 +2291,14 @@ void resolve_movement_phase(GameState* game) {
                     attempt->to_location = order->target_location;
                     // Validate move
                     int valid = validate_order(game, p, order);
-                    attempt->is_valid = (valid == 0);
+                    if (valid != 0) {
+                        // Invalid move becomes a hold
+                        attempt->to_location = -1;
+                    }
+                    attempt->is_valid = 1; // The attempt itself is now a valid action (either the original move or a hold)
 
                     // Check if this is a convoyed move (army moving to non-adjacent location)
-                    if (attempt->is_valid && order->unit_type == UNIT_ARMY) {
+                    if (attempt->to_location != -1 && order->unit_type == UNIT_ARMY) {
                         int is_adjacent = can_move(game->map, order->unit_type,
                                                    order->unit_location, order->target_location);
                         if (!is_adjacent) {
@@ -2660,11 +2914,25 @@ void resolve_movement_phase(GameState* game) {
         unit->location = attempt->to_location;
     }
     
-    // Step 8: Remove dislodged units from their powers
     for (int d = 0; d < game->num_dislodged; d++) {
         DislodgedUnit* dislodged = &game->dislodged[d];
         Power* power = &game->powers[dislodged->power_id];
-        
+        int has_void_order = 0;
+
+        // Check if this unit had a VOID order - if so, don't remove it
+        for (int o = 0; o < power->num_orders; o++) {
+            Order* order = &power->orders[o];
+            if (attempts[o].from_location == dislodged->from_location && !attempts[o].is_valid) {
+                has_void_order = 1;
+                break;
+            }
+        }
+
+        // Skip removal if unit had VOID order (stays at original location)
+        if (has_void_order) {
+            continue;
+        }
+
         // Remove unit from power's unit list
         for (int u = 0; u < power->num_units; u++) {
             if (power->units[u].location == dislodged->from_location &&
@@ -2678,41 +2946,312 @@ void resolve_movement_phase(GameState* game) {
             }
         }
     }
+
+    // Final check for multiple successful moves to the same destination
+    for (int i = 0; i < num_attempts; i++) {
+        if (attempts[i].can_move && attempts[i].to_location != -1) {
+            for (int j = i + 1; j < num_attempts; j++) {
+                if (attempts[j].can_move && attempts[j].to_location == attempts[i].to_location) {
+                    // Two units moved to the same location. Both should bounce.
+                    attempts[i].can_move = 0;
+                    attempts[j].can_move = 0;
+                }
+            }
+        }
+    }
+
+    // Calculate retreat destinations for dislodged units
+    calculate_retreat_destinations(game);
+}
+
+void calculate_retreat_destinations(GameState* game) {
+    // Calculate valid retreat destinations for all dislodged units
+    // Called after movement resolution
+
+    for (int d = 0; d < game->num_dislodged; d++) {
+        DislodgedUnit* dislodged = &game->dislodged[d];
+        Power* power = &game->powers[dislodged->power_id];
+
+        // Add this unit to power's retreat list
+        DislodgedUnit* retreat = &power->retreats[power->num_retreats++];
+        *retreat = *dislodged;  // Copy dislodged unit info
+        retreat->num_possible_retreats = 0;
+
+        int from_loc = dislodged->from_location;
+        int attacker_loc = dislodged->dislodged_by_location;
+
+        // Find all adjacent locations where unit can retreat
+        Location* loc = &game->map->locations[from_loc];
+
+        for (int a = 0; a < loc->num_adjacent; a++) {
+            int adj_loc = loc->adjacencies[a];
+
+            // Check if unit can move there (based on unit type and terrain)
+            if (!can_move(game->map, dislodged->type, from_loc, adj_loc)) {
+                continue;
+            }
+
+            // Cannot retreat to attacker's origin
+            if (adj_loc == attacker_loc) {
+                continue;
+            }
+
+            // Cannot retreat to a location that had combat (contested)
+            // (unless attacker moved via convoy)
+            int had_combat = 0;
+            for (int c = 0; c < game->num_combats; c++) {
+                if (game->combats[c].location == adj_loc) {
+                    had_combat = 1;
+                    break;
+                }
+            }
+
+            if (had_combat) {
+                // Check if attacker moved via convoy
+                int attacker_convoyed = 0;
+                for (int p = 0; p < MAX_POWERS; p++) {
+                    for (int o = 0; o < game->powers[p].num_orders; o++) {
+                        Order* order = &game->powers[p].orders[o];
+                        if (order->type == ORDER_MOVE &&
+                            order->unit_location == attacker_loc &&
+                            order->target_location == from_loc) {
+                            // Check if this was a convoyed move
+                            // If it was, we allow retreat to contested locations
+                            // For now, skip - TODO: track convoyed moves
+                            break;
+                        }
+                    }
+                }
+
+                if (!attacker_convoyed) {
+                    continue;  // Skip contested location
+                }
+            }
+
+            // Valid retreat destination
+            retreat->possible_retreats[retreat->num_possible_retreats].location = adj_loc;
+            retreat->num_possible_retreats++;
+        }
+    }
 }
 
 void resolve_retreat_phase(GameState* game) {
-    // Retreat phase implementation
-    // For now, all dislodged units are disbanded (no retreat orders processed yet)
-    
-    // TODO: Implement full retreat resolution:
-    // 1. Calculate valid retreat destinations for each dislodged unit
-    // 2. Process retreat orders
-    // 3. Check for conflicts (two units retreating to same space → both disband)
-    // 4. Move retreating units or disband if no valid retreat/order
-    
-    // For now: just clear dislodged units (they're already removed from power.units)
+    // Process retreat orders
+    // 1. Parse retreat orders from power->orders[]
+    // 2. Check for conflicts (multiple units retreating to same location)
+    // 3. Move units or disband them
+
+    int retreat_destinations[MAX_UNITS];  // Where each unit is retreating to (-1 = disband)
+    int retreat_power[MAX_UNITS];
+    int num_retreat_orders = 0;
+
+    // Process retreat orders for each power
+    for (int p = 0; p < MAX_POWERS; p++) {
+        Power* power = &game->powers[p];
+
+        if (power->num_retreats == 0) {
+            continue;  // No dislodged units
+        }
+
+        // If no orders given, disband all retreating units
+        if (power->num_orders == 0) {
+            for (int r = 0; r < power->num_retreats; r++) {
+                // Auto-disband
+                retreat_destinations[num_retreat_orders] = -1;
+                retreat_power[num_retreat_orders] = p;
+                num_retreat_orders++;
+            }
+            continue;
+        }
+
+        // Parse retreat orders
+        for (int r = 0; r < power->num_retreats; r++) {
+            DislodgedUnit* dislodged = &power->retreats[r];
+            int found_order = 0;
+
+            // Find matching retreat order
+            for (int o = 0; o < power->num_orders; o++) {
+                Order* order = &power->orders[o];
+
+                if (order->type == ORDER_RETREAT &&
+                    order->unit_location == dislodged->from_location) {
+                    // Found retreat order for this unit
+
+                    // Check if destination is valid
+                    int valid_dest = 0;
+                    for (int d = 0; d < dislodged->num_possible_retreats; d++) {
+                        if (dislodged->possible_retreats[d].location == order->target_location) {
+                            valid_dest = 1;
+                            break;
+                        }
+                    }
+
+                    if (valid_dest) {
+                        retreat_destinations[num_retreat_orders] = order->target_location;
+                        retreat_power[num_retreat_orders] = p;
+                        num_retreat_orders++;
+                    } else {
+                        // Invalid destination - disband
+                        retreat_destinations[num_retreat_orders] = -1;
+                        retreat_power[num_retreat_orders] = p;
+                        num_retreat_orders++;
+                    }
+                    found_order = 1;
+                    break;
+                }
+
+                if (order->type == ORDER_DISBAND &&
+                    order->unit_location == dislodged->from_location) {
+                    // Explicit disband order
+                    retreat_destinations[num_retreat_orders] = -1;
+                    retreat_power[num_retreat_orders] = p;
+                    num_retreat_orders++;
+                    found_order = 1;
+                    break;
+                }
+            }
+
+            if (!found_order) {
+                // No order for this unit - disband
+                retreat_destinations[num_retreat_orders] = -1;
+                retreat_power[num_retreat_orders] = p;
+                num_retreat_orders++;
+            }
+        }
+    }
+
+    // Check for conflicts: multiple units retreating to same location
+    for (int i = 0; i < num_retreat_orders; i++) {
+        if (retreat_destinations[i] == -1) {
+            continue;  // Already disbanding
+        }
+
+        for (int j = i + 1; j < num_retreat_orders; j++) {
+            if (retreat_destinations[i] == retreat_destinations[j]) {
+                // Conflict! Both units disband
+                retreat_destinations[i] = -1;
+                retreat_destinations[j] = -1;
+            }
+        }
+    }
+
+    // Apply retreats
+    int retreat_idx = 0;
+    for (int p = 0; p < MAX_POWERS; p++) {
+        Power* power = &game->powers[p];
+
+        for (int r = 0; r < power->num_retreats; r++) {
+            DislodgedUnit* dislodged = &power->retreats[r];
+
+            if (retreat_idx < num_retreat_orders && retreat_destinations[retreat_idx] != -1) {
+                // Unit successfully retreats
+                Unit new_unit;
+                new_unit.type = dislodged->type;
+                new_unit.location = retreat_destinations[retreat_idx];
+                new_unit.power_id = p;
+                new_unit.can_retreat = 0;
+
+                // Add unit to power's unit list
+                power->units[power->num_units++] = new_unit;
+            }
+            // else: unit disbands (do nothing, already removed)
+
+            retreat_idx++;
+        }
+
+        // Clear retreat list
+        power->num_retreats = 0;
+    }
+
+    // Clear dislodged units
     game->num_dislodged = 0;
 }
 
 void resolve_adjustment_phase(GameState* game) {
-    // Simple implementation for Iteration 3: No builds/disbands yet
-    // Just calculate adjustment counts and welfare points
-
-    // Calculate adjustment count for each power
+    // Process build and disband orders for each power
     for (int p = 0; p < MAX_POWERS; p++) {
         Power* power = &game->powers[p];
+        int diff = power->num_units - power->num_centers;
+
+        // Process each order
+        for (int o = 0; o < power->num_orders; o++) {
+            Order* order = &power->orders[o];
+
+            // Process BUILD orders
+            if (order->type == ORDER_BUILD && diff < 0) {
+                // Validate build location
+                int is_valid_build = 0;
+
+                // Check if location is a supply center owned by this power
+                Location* loc = &game->map->locations[order->unit_location];
+                if (loc->has_supply_center && loc->owner_power == p) {
+                    // Check if location is empty
+                    int location_empty = 1;
+                    for (int u = 0; u < power->num_units; u++) {
+                        if (power->units[u].location == order->unit_location) {
+                            location_empty = 0;
+                            break;
+                        }
+                    }
+
+                    // Check if it's a home center (standard Diplomacy rule)
+                    if (location_empty && loc->is_home_center == p) {
+                        is_valid_build = 1;
+                    }
+                }
+
+                // Execute build if valid
+                if (is_valid_build && power->num_units < MAX_UNITS) {
+                    Unit new_unit;
+                    new_unit.type = order->unit_type;
+                    new_unit.location = order->unit_location;
+                    new_unit.power_id = p;
+                    new_unit.can_retreat = 0;
+
+                    power->units[power->num_units++] = new_unit;
+                    diff++;
+                }
+            }
+            // Process DISBAND orders
+            else if (order->type == ORDER_DISBAND) {
+                // In standard mode: only allow if more units than centers
+                // In welfare mode: always allow voluntary disbands
+                if (diff > 0 || game->welfare_mode) {
+                    // Find and remove the unit
+                    for (int u = 0; u < power->num_units; u++) {
+                        if (power->units[u].location == order->unit_location) {
+                            // Remove unit by shifting array
+                            for (int i = u; i < power->num_units - 1; i++) {
+                                power->units[i] = power->units[i + 1];
+                            }
+                            power->num_units--;
+                            diff--;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Civil disorder: auto-disband if still over supply limit
+        while (diff > 0 && power->num_units > 0) {
+            // Find unit furthest from home centers (simplified: just remove last unit)
+            // TODO: Implement proper distance-based selection
+            power->num_units--;
+            diff--;
+        }
+
+        // Update adjustment count
         power->adjustment = power->num_centers - power->num_units;
+
+        // Clear orders for this phase
+        power->num_orders = 0;
     }
 
     // Welfare Diplomacy: Calculate welfare points after adjustments
     if (game->welfare_mode) {
         calculate_welfare_points(game);
     }
-
-    // TODO: In future iterations, implement full adjustment resolution:
-    // 1. Process build orders
-    // 2. Process disband orders
-    // 3. In welfare mode: allow voluntary disbands
 }
 
 void advance_phase(GameState* game) {

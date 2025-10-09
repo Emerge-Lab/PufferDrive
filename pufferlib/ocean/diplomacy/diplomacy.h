@@ -4,14 +4,14 @@
 #include <stdint.h>
 
 // Constants
-#define MAX_LOCATIONS 76
+#define MAX_LOCATIONS 85        // Expanded from 76 to accommodate split coasts
 #define MAX_POWERS 7
 #define MAX_UNITS 34
 #define MAX_ADJACENCIES 20
 #define MAX_HOME_CENTERS 4
 #define MAX_ORDER_LENGTH 64
 #define MAX_POWER_NAME_LENGTH 10
-#define MAX_LOCATION_NAME_LENGTH 4
+#define MAX_LOCATION_NAME_LENGTH 8  // Expanded from 4 to fit "STP/NC" + null
 
 // Location types
 typedef enum {
@@ -20,6 +20,16 @@ typedef enum {
     LOC_WATER = 2,
     LOC_PORT = 3
 } LocationType;
+
+// Coast types for split coast locations
+typedef enum {
+    COAST_NONE = 0,      // Not a split coast location
+    COAST_NORTH = 1,     // /NC
+    COAST_SOUTH = 2,     // /SC
+    COAST_EAST = 3,      // /EC
+    COAST_WEST = 4,      // /WC (for completeness)
+    COAST_GENERIC = 5    // Generic land connection (stp, bul, spa in Python)
+} CoastType;
 
 // Unit types
 typedef enum {
@@ -53,13 +63,15 @@ typedef enum {
 
 // Location structure
 typedef struct {
-    char name[MAX_LOCATION_NAME_LENGTH];  // 3-letter code + null terminator
+    char name[MAX_LOCATION_NAME_LENGTH];  // Up to 7 chars for "STP/NC" + null
     LocationType type;
     int adjacencies[MAX_ADJACENCIES];      // Indices of adjacent locations (-1 terminated)
     int num_adjacent;
     int has_supply_center;                 // 1 if supply center, 0 otherwise
     int owner_power;                       // -1 if neutral, 0-6 for power index
     int is_home_center;                    // Which power's home center (0-6), or -1
+    int parent_location;                   // Index of base location (-1 if not a coast variant)
+    CoastType coast_type;                  // Which coast variant this is
 } Location;
 
 // Map structure (Standard Diplomacy map)
@@ -227,6 +239,7 @@ void get_possible_orders(GameState* game, int power_id, int location, char order
 // Phase processing
 void process_orders(GameState* game);
 void resolve_movement_phase(GameState* game);
+void calculate_retreat_destinations(GameState* game);
 void resolve_retreat_phase(GameState* game);
 void resolve_adjustment_phase(GameState* game);
 void advance_phase(GameState* game);
@@ -253,6 +266,12 @@ const char* unit_type_to_string(UnitType type);
 int find_location_by_name(Map* map, const char* name);
 int get_unit_at_location(GameState* game, int location);
 int can_move(Map* map, UnitType unit_type, int from_loc, int to_loc);
+
+// Coast handling functions
+void find_coasts(Map* map, int loc_idx, int* coasts, int* num_coasts);
+int default_coast(Map* map, int from_loc, const char* dest_name);
+int is_coast_required(Map* map, int loc_idx);
+int get_parent_location(Map* map, int loc_idx);
 
 // Convoy functions
 int can_fleet_convoy(Map* map, int location);

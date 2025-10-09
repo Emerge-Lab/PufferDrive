@@ -15,7 +15,7 @@ echo "=== SLURM job $SLURM_JOB_ID on node $SLURM_NODELIST ==="
 
 # Run inside singularity container
 singularity exec --nv \
-  --overlay "$OVERLAY_FILE" \
+  --overlay "${OVERLAY_FILE}:ro" \
   "$SINGULARITY_IMAGE" \
   bash -c "
     set -e
@@ -29,7 +29,7 @@ singularity exec --nv \
     python setup.py build_ext --inplace --force
 
     echo '=== Starting training ==='
-    puffer train puffer_drive --wandb
+    puffer train puffer_drive --wandb --entropy-weight-ub 0.1
   "
 
 echo "=== Job $SLURM_JOB_ID finished ==="
