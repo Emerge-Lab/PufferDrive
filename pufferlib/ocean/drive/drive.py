@@ -481,8 +481,8 @@ def save_map_binary(map_data, output_file):
             if obj_type == 1:  # Only for vehicles
                 human_accel, human_steering = infer_human_actions(obj)
 
-                print(f"Human Acceleration: {human_accel}")
-                print(f"Human Steering: {human_steering}")
+                # print(f"Human Acceleration: {human_accel}")
+                # print(f"Human Steering: {human_steering}")
 
                 f.write(struct.pack(f"{trajectory_length}f", *human_accel))
                 f.write(struct.pack(f"{trajectory_length}f", *human_steering))

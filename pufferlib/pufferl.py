@@ -434,21 +434,18 @@ class PuffeRL:
             human_actions = continuous_human_actions if use_continuous else discrete_human_actions
             human_observations = human_observations.to(device)
 
-            if self.config["human_ll_coef"] > 0:
-                # 2: Compute the log-likelihood of human actions under the current policy,
-                # given the corresponding human observations. A higher likelihood indicates
-                # that the policy behaves more like a human under the same observations.
-                human_state = dict(
-                    action=human_actions,
-                    lstm_h=None,
-                    lstm_c=None,
-                )
+            # 2: Compute the log-likelihood of human actions under the current policy,
+            # given the corresponding human observations. A higher likelihood indicates
+            # that the policy behaves more like a human under the same observations.
+            human_state = dict(
+                action=human_actions,
+                lstm_h=None,
+                lstm_c=None,
+            )
 
-                human_logits, _ = self.policy(human_observations, human_state)
+            human_logits, _ = self.policy(human_observations, human_state)
 
-                _, human_log_prob, entropy = pufferlib.pytorch.sample_logits(logits=human_logits, action=human_actions)
-            else:
-                human_log_prob = torch.zeros(1, device=device)
+            _, human_log_prob, entropy = pufferlib.pytorch.sample_logits(logits=human_logits, action=human_actions)
 
             self.realism["human_log_prob"] = human_log_prob.mean().item()
 
@@ -497,13 +494,13 @@ class PuffeRL:
             # Logging
             profile("train_misc", epoch)
             losses["policy_loss"] += pg_loss.item() / self.total_minibatches
-            losses["value_loss"] += v_loss.item() * config["vf_coef"] / self.total_minibatches
-            losses["entropy"] += entropy_loss.item() * config["ent_coef"] / self.total_minibatches
+            losses["value_loss"] += v_loss.item() / self.total_minibatches
+            losses["entropy"] += entropy_loss.item() / self.total_minibatches
             losses["old_approx_kl"] += old_approx_kl.item() / self.total_minibatches
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["human_loss"] += human_loss * config["human_ll_coef"] / self.total_minibatches
+            losses["human_loss"] += human_loss / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
