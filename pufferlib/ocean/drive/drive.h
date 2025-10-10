@@ -1095,9 +1095,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
         agent->cumulative_lane_alignment += lane_aligned;
         agent->metrics_array[LANE_ALIGNED_IDX] = agent->cumulative_displacement / (env->timestep + 1);
-
     }
-
 
     // Check for vehicle collisions
     int car_collided_with_index = collision_check(env, agent_idx);
