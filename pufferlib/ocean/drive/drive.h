@@ -160,6 +160,7 @@ struct Entity {
     int active_agent;
     float cumulative_displacement;
     int displacement_sample_count;
+    float cumulative_lane_alignment;
     float goal_radius;
 };
 
@@ -469,6 +470,7 @@ void set_start_position(Drive* env){
         e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
+        e->cumulative_lane_alignment = 0.0f;
         e->respawn_timestep = -1;
     }
     //EndDrawing();
@@ -1084,13 +1086,16 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     }
 
     // check if aligned with closest lane and set current lane
-    if (closest_lane_entity_idx == -1) {
+    if (min_distance > 4.0f || closest_lane_entity_idx == -1) {
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
         agent->current_lane_idx = -1;
     } else {
-        int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
-        agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned ? 1.0f : 0.0f;
         agent->current_lane_idx = closest_lane_entity_idx;
+
+        int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
+        agent->cumulative_lane_alignment += lane_aligned;
+        agent->metrics_array[LANE_ALIGNED_IDX] = agent->cumulative_displacement / (env->timestep + 1);
+
     }
 
 
