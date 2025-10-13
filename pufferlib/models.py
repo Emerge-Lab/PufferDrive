@@ -195,6 +195,9 @@ class LSTMWrapper(nn.Module):
         state["lstm_c"] = lstm_c.detach()
         return logits, values
 
+class TransformerBlock(nn.Module):
+    def __init__(self, env, policy, input_size=128, hidden_size=128):
+        pass
 
 class Convolutional(nn.Module):
     def __init__(

@@ -1806,7 +1806,40 @@ int validate_order(GameState* game, int power_id, const Order* order) {
 
     Power* power = &game->powers[power_id];
     Map* map = game->map;
+    PhaseType phase = game->phase;
 
+    // Phase-specific order validation
+    // During retreat phase, only RETREAT and DISBAND orders are allowed
+    if (phase == PHASE_SPRING_RETREAT || phase == PHASE_FALL_RETREAT) {
+        if (order->type != ORDER_RETREAT && order->type != ORDER_DISBAND) {
+            return -1;  // Invalid order type for retreat phase
+        }
+        // For retreat orders, validate against dislodged units
+        // Check if this unit is in the retreat list (must be dislodged)
+        int found = 0;
+        for (int r = 0; r < power->num_retreats; r++) {
+            if (power->retreats[r].from_location == order->unit_location &&
+                power->retreats[r].type == order->unit_type) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            return -1;  // Unit not dislodged, cannot retreat
+        }
+        return 0;  // Valid retreat/disband order
+    }
+
+    // During adjustment phase, only BUILD and DISBAND orders are allowed
+    if (phase == PHASE_WINTER_ADJUSTMENT) {
+        if (order->type != ORDER_BUILD && order->type != ORDER_DISBAND) {
+            return -1;  // Invalid order type for adjustment phase
+        }
+        // Additional validation for builds/disbands would go here
+        return 0;
+    }
+
+    // Movement phase - normal validation
     // Find unit at the specified location
     int unit_idx = -1;
     for (int i = 0; i < power->num_units; i++) {
@@ -3086,12 +3119,27 @@ void resolve_retreat_phase(GameState* game) {
                         }
                     }
 
+                    // Check if destination is occupied by another unit
+                    int occupied = 0;
                     if (valid_dest) {
+                        for (int check_p = 0; check_p < MAX_POWERS; check_p++) {
+                            Power* check_power = &game->powers[check_p];
+                            for (int u = 0; u < check_power->num_units; u++) {
+                                if (check_power->units[u].location == order->target_location) {
+                                    occupied = 1;
+                                    break;
+                                }
+                            }
+                            if (occupied) break;
+                        }
+                    }
+
+                    if (valid_dest && !occupied) {
                         retreat_destinations[num_retreat_orders] = order->target_location;
                         retreat_power[num_retreat_orders] = p;
                         num_retreat_orders++;
                     } else {
-                        // Invalid destination - disband
+                        // Invalid destination or occupied - disband
                         retreat_destinations[num_retreat_orders] = -1;
                         retreat_power[num_retreat_orders] = p;
                         num_retreat_orders++;
@@ -3121,17 +3169,30 @@ void resolve_retreat_phase(GameState* game) {
     }
 
     // Check for conflicts: multiple units retreating to same location
+    // Use a conflict marker array to avoid corrupting destinations during detection
+    int has_conflict[MAX_UNITS] = {0};
     for (int i = 0; i < num_retreat_orders; i++) {
         if (retreat_destinations[i] == -1) {
             continue;  // Already disbanding
         }
 
         for (int j = i + 1; j < num_retreat_orders; j++) {
-            if (retreat_destinations[i] == retreat_destinations[j]) {
-                // Conflict! Both units disband
-                retreat_destinations[i] = -1;
-                retreat_destinations[j] = -1;
+            if (retreat_destinations[j] == -1) {
+                continue;  // Already disbanding
             }
+
+            if (retreat_destinations[i] == retreat_destinations[j]) {
+                // Conflict! Mark both units to disband
+                has_conflict[i] = 1;
+                has_conflict[j] = 1;
+            }
+        }
+    }
+
+    // Apply conflicts: set all conflicting retreats to disband
+    for (int i = 0; i < num_retreat_orders; i++) {
+        if (has_conflict[i]) {
+            retreat_destinations[i] = -1;
         }
     }
 

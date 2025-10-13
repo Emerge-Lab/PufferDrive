@@ -47,6 +47,8 @@ class GameAdapter:
             max_years: Maximum number of years before game ends
         """
         self.env = Diplomacy(welfare_mode=welfare_mode, max_years=max_years)
+        self._popped_units = set()  # Track units disbanded in retreat phase
+        self._convoy_moves = set()  # Track which moves used convoy: set of unit_keys
         self._reset()
         # Minimal histories compatible with tests
         self.result_history = _History()
@@ -57,6 +59,7 @@ class GameAdapter:
     def _reset(self):
         """Reset the environment."""
         self.obs, self.info = self.env.reset()
+        self._popped_units = set()  # Clear popped units on reset
 
     def clear_units(self):
         """Clear all units for all powers."""
@@ -242,15 +245,39 @@ class GameAdapter:
 
         # Track dislodged units before processing (for retreat phase)
         dislodged_before_retreat = {}
+        attacker_origins = {}  # unit_key -> attacker_origin_loc
+        dislodged_unit_powers = {}  # unit_key -> power_name (which power owns this dislodged unit)
         if phase in (1, 3):  # Retreat phases
             map_info = binding.query_map_info(self.env.env_handle)
             idx_to_name = [loc["name"] for loc in map_info["locations"]]
             dislodged_info = binding.get_dislodged_units(self.env.env_handle)
+
+            # First, get current units to determine power ownership of dislodged units
+            # The dislodged units are still "in play" but marked as dislodged
+            current_units_by_power = {}
+            for pname in power_names:
+                current_units_by_power[pname] = set()
+                pidx = power_names.index(pname)
+                state = binding.query_game_state(self.env.env_handle)
+                for unit in state["powers"][pidx]["units"]:
+                    unit_type = "A" if unit["type"] == 1 else "F"
+                    unit_loc = idx_to_name[unit["location"]]
+                    current_units_by_power[pname].add(f"{unit_type} {unit_loc}")
+
             for d_info in dislodged_info:
                 unit_type = "A" if d_info["type"] == 1 else "F"
                 from_loc = idx_to_name[d_info["from_location"]]
                 unit_str = f"{unit_type} {from_loc}"
                 dislodged_before_retreat[unit_str] = from_loc
+                # Track attacker origin for VOID detection
+                attacker_origin = idx_to_name[d_info["dislodged_by_location"]]
+                attacker_origins[unit_str] = attacker_origin
+
+                # Determine which power owns this dislodged unit
+                # Check all powers to see who has this unit in their "dislodged" state
+                # Actually, dislodged units are removed from the board, so we need to track from before
+                # For now, we can determine from the context of submitted orders
+                dislodged_unit_powers[unit_str] = None  # Will be determined from orders
 
         # Submit orders to C code for movement/retreat phases
         orders_submitted = {}
@@ -286,7 +313,39 @@ class GameAdapter:
             self._pending_orders = {}
 
         # Submit retreat orders to C
+        rejected_retreat_orders = {}  # Track orders that were rejected (e.g., support during retreat)
+        contested_areas_for_retreats = set()  # Track contested areas from movement phase
+
         if phase in (1, 3) and hasattr(self, "_pending_orders") and self._pending_orders:
+            # First, infer contested areas from previous movement phase
+            # Need to find the movement phase orders, not the current retreat phase orders
+            # The result_history[-1] has movement results, but order_history[-1] might have retreat orders mixed in
+            # Look back in order_history to find the snapshot without retreat orders
+            if self.result_history.values() and len(self.order_history.values()) >= 2:
+                prev_results = self.result_history.values()[-1]
+                # Use -2 to get the movement phase orders (before retreat orders were set)
+                prev_orders = self.order_history.values()[-2]
+                dest_attempts = {}
+                for pname_check, porders in prev_orders.items():
+                    for order_str in porders:
+                        parts = order_str.strip().upper().split()
+                        if len(parts) >= 4 and parts[2] in ['-', '->']:
+                            unit_key = f"{parts[0]} {parts[1]}"
+                            dest_loc = parts[3]
+                            result = prev_results.get(unit_key, [])
+                            if dest_loc not in dest_attempts:
+                                dest_attempts[dest_loc] = []
+                            dest_attempts[dest_loc].append((unit_key, result))
+                for dest_loc, attempts in dest_attempts.items():
+                    if len(attempts) >= 2:
+                        all_bounced = all('bounce' in result for unit, result in attempts)
+                        if all_bounced:
+                            contested_areas_for_retreats.add(dest_loc)
+                            # For split coasts, also mark parent location as contested
+                            dest_parent = dest_loc.split('/')[0] if '/' in dest_loc else dest_loc
+                            if '/' in dest_loc:
+                                contested_areas_for_retreats.add(dest_parent)
+
             for power, orders in self._pending_orders.items():
                 if power is None:
                     continue
@@ -294,8 +353,74 @@ class GameAdapter:
                 if pname not in power_names:
                     continue
                 pidx = power_names.index(pname)
-                binding.game_submit_orders(self.env.env_handle, pidx, orders)
-                orders_submitted[pname] = orders
+
+                # Filter out invalid retreat orders before submitting to C
+                valid_orders = []
+                for order_str in orders:
+                    parts = order_str.strip().upper().split()
+                    if len(parts) >= 2:
+                        unit_key = f"{parts[0]} {parts[1]}"
+                        unit_is_dislodged = unit_key in dislodged_before_retreat
+
+                        # Non-dislodged units can't give retreat orders
+                        if not unit_is_dislodged and len(parts) >= 3:
+                            if parts[2] in ['R', 'RETREAT', 'RETREATS', 'D', 'DISBAND', 'DISBANDS']:
+                                rejected_retreat_orders[unit_key] = 'void'
+                                continue
+
+                        # Support/convoy orders invalid during retreat
+                        if len(parts) >= 3 and parts[2] in ['S', 'SUPPORT', 'SUPPORTS', 'C', 'CONVOY', 'CONVOYS']:
+                            rejected_retreat_orders[unit_key] = 'void'
+                            continue
+
+                        # For retreat orders, validate destination
+                        if len(parts) >= 4 and parts[2] in ['R', 'RETREAT', 'RETREATS']:
+                            dest_loc = parts[3]
+                            attacker_origin = attacker_origins.get(unit_key, "")
+
+                            # Check 1: Can't retreat to attacker's origin (including split coast parent)
+                            # Extract parent location for split coasts (e.g., "SPA/SC" -> "SPA")
+                            dest_parent = dest_loc.split('/')[0] if '/' in dest_loc else dest_loc
+                            attacker_parent = attacker_origin.split('/')[0] if '/' in attacker_origin else attacker_origin
+
+                            if dest_loc == attacker_origin or dest_parent == attacker_parent:
+                                # Can't retreat to attacker's origin or any coast of it
+                                rejected_retreat_orders[unit_key] = 'void'
+                                continue
+
+                            # Check 2: Can't retreat to contested area
+                            # For split coasts, also check if parent location is contested
+                            if dest_loc in contested_areas_for_retreats or dest_parent in contested_areas_for_retreats:
+                                rejected_retreat_orders[unit_key] = 'void'
+                                continue
+
+                            # Check 3: Must be adjacent (no convoy for retreats)
+                            try:
+                                unit_type_int = 1 if parts[0] == 'A' else 2
+                                src_loc = parts[1]
+                                is_adjacent = binding.can_move_names(self.env.env_handle, unit_type_int, src_loc, dest_loc)
+                                if not is_adjacent:
+                                    rejected_retreat_orders[unit_key] = 'void'
+                                    continue
+                            except:
+                                rejected_retreat_orders[unit_key] = 'void'
+                                continue
+
+                    # Order is valid, add to list
+                    valid_orders.append(order_str)
+
+                # Submit only valid orders to C
+                binding.game_submit_orders(self.env.env_handle, pidx, valid_orders)
+                orders_submitted[pname] = orders  # Keep original for result tracking
+
+                # Track power ownership of dislodged units from retreat orders
+                for order_str in orders:
+                    parts = order_str.strip().upper().split()
+                    if len(parts) >= 2:
+                        unit_key = f"{parts[0]} {parts[1]}"
+                        if unit_key in dislodged_before_retreat:
+                            dislodged_unit_powers[unit_key] = pname
+
             # Clear after submitting
             self._pending_orders = {}
 
@@ -618,69 +743,176 @@ class GameAdapter:
 
         # Infer results from retreat phases
         if phase in (1, 3) and dislodged_before_retreat:
+            # Clear popped units from previous retreat phase
+            self._popped_units = set()
 
-            # Track retreat destinations from submitted orders
-            retreat_destinations = {}  # unit_str -> dest_loc
+            # Get map info
+            map_info = binding.query_map_info(self.env.env_handle)
+            idx_to_name = [loc["name"] for loc in map_info["locations"]]
+
+            # Initialize retreat_results with rejected orders (VOID + DISBAND)
+            retreat_results = {}
+            for unit_key, result in rejected_retreat_orders.items():
+                retreat_results[unit_key] = ['void', 'disband']
+                self._popped_units.add(unit_key)
+
+            # Pass 1: Collect all retreat destinations
+            retreat_destinations = {}  # unit_key -> dest_loc
             for pname, orders in orders_submitted.items():
                 for order_str in orders:
                     parts = order_str.strip().upper().split()
                     if len(parts) >= 4 and parts[2] in ['R', 'RETREAT', 'RETREATS']:
-                        # Retreat order: "F TRI R ALB"
                         unit_key = f"{parts[0]} {parts[1]}"
                         dest_loc = parts[3]
                         retreat_destinations[unit_key] = dest_loc
 
-            # After processing, check which units successfully retreated
+            # Infer contested areas from movement phase results
+            # A contested area is where multiple units tried to move and all bounced
+            contested_areas = set()
+            if self.result_history.values():
+                prev_results = self.result_history.values()[-1]  # Movement phase results
+                # Find all move orders and their destinations from order history
+                if self.order_history.values():
+                    prev_orders = self.order_history.values()[-1]
+                    # Track which destinations had move attempts
+                    dest_attempts = {}  # dest -> [(unit_key, result)]
+                    for pname, porders in prev_orders.items():
+                        for order_str in porders:
+                            parts = order_str.strip().upper().split()
+                            if len(parts) >= 4 and parts[2] in ['-', '->']:
+                                unit_key = f"{parts[0]} {parts[1]}"
+                                dest_loc = parts[3]
+                                result = prev_results.get(unit_key, [])
+                                if dest_loc not in dest_attempts:
+                                    dest_attempts[dest_loc] = []
+                                dest_attempts[dest_loc].append((unit_key, result))
+
+                    # A location is contested if 2+ units tried to move there and ALL bounced
+                    for dest_loc, attempts in dest_attempts.items():
+                        if len(attempts) >= 2:
+                            all_bounced = all('bounce' in result for unit, result in attempts)
+                            if all_bounced:
+                                contested_areas.add(dest_loc)
+                                # For split coasts, also mark other coasts as contested
+                                # If SPA/NC is contested, SPA/SC should also be unavailable
+                                dest_parent = dest_loc.split('/')[0] if '/' in dest_loc else dest_loc
+                                if '/' in dest_loc:
+                                    # Mark parent location as contested to block all coasts
+                                    contested_areas.add(dest_parent)
+
+            # Pass 2: Mark invalid retreats as VOID (attacker origin, contested, not adjacent)
+            # These should be filtered out BEFORE conflict resolution
+            invalid_retreats = set()  # Units with invalid retreat orders
+
+            for unit_key, dest in list(retreat_destinations.items()):
+                if unit_key in retreat_results:
+                    # Already marked VOID by rejected_retreat_orders
+                    invalid_retreats.add(unit_key)
+                    continue
+
+                parts = unit_key.split()
+                unit_type = parts[0]
+                unit_loc = parts[1]
+                attacker_origin = attacker_origins.get(unit_key, "")
+
+                try:
+                    unit_type_int = 1 if unit_type == 'A' else 2
+
+                    # Check 1: Retreating to attacker's origin (VOID)
+                    # For split coasts, check parent location too
+                    dest_parent = dest.split('/')[0] if '/' in dest else dest
+                    attacker_parent = attacker_origin.split('/')[0] if '/' in attacker_origin else attacker_origin
+
+                    if dest == attacker_origin or dest_parent == attacker_parent:
+                        retreat_results[unit_key] = ['void', 'disband']
+                        self._popped_units.add(unit_key)
+                        invalid_retreats.add(unit_key)
+                        continue
+
+                    # Check 2: Contested area from movement phase (VOID)
+                    # For split coasts, also check if parent location is contested
+                    if dest in contested_areas or dest_parent in contested_areas:
+                        retreat_results[unit_key] = ['void', 'disband']
+                        self._popped_units.add(unit_key)
+                        invalid_retreats.add(unit_key)
+                        continue
+
+                    # Check 3: Not adjacent (trying to convoy, which is invalid for retreats)
+                    is_adjacent = binding.can_move_names(self.env.env_handle, unit_type_int, unit_loc, dest)
+                    if not is_adjacent:
+                        retreat_results[unit_key] = ['void', 'disband']
+                        self._popped_units.add(unit_key)
+                        invalid_retreats.add(unit_key)
+                        continue
+
+                except Exception:
+                    # If validation fails, mark as invalid
+                    retreat_results[unit_key] = ['void', 'disband']
+                    self._popped_units.add(unit_key)
+                    invalid_retreats.add(unit_key)
+
+            # Pass 3: Check which units successfully retreated
             units_after = {}
             for pname in power_names:
                 units_after[pname] = set(self.get_units(pname))
 
-            # Build results dict
-            retreat_results = {}
+            # Pass 4: Handle conflicts among valid retreats only
+            # Count conflicts per destination (excluding invalid retreats)
+            dest_counts = {}
+            dest_units = {}  # dest -> list of unit_keys trying to retreat there
+            for unit_key, dest in retreat_destinations.items():
+                if unit_key not in invalid_retreats:
+                    dest_counts[dest] = dest_counts.get(dest, 0) + 1
+                    if dest not in dest_units:
+                        dest_units[dest] = []
+                    dest_units[dest].append(unit_key)
+
+            # Pass 5: Process each dislodged unit
             for unit_str, from_loc in dislodged_before_retreat.items():
                 parts = unit_str.split()
                 unit_type = parts[0]
                 unit_loc = parts[1]
                 unit_key = f"{unit_type} {unit_loc}"
 
-                # Find which power owns this unit
-                owner_power = None
-                for pname in power_names:
-                    for u in units_after[pname]:
-                        if u.split()[0] == unit_type:  # Same type
-                            # Check if unit is at a new location (successful retreat)
-                            u_loc = u.split()[1]
-                            if retreat_destinations.get(unit_key) == u_loc:
-                                owner_power = pname
-                                break
-                    if owner_power:
-                        break
+                # Skip if already processed (VOID or invalid)
+                if unit_key in retreat_results:
+                    continue
 
-                # Determine result
-                if unit_key in retreat_destinations:
-                    dest = retreat_destinations[unit_key]
-                    # Check if unit successfully retreated to dest
-                    retreated_successfully = False
-                    for pname in power_names:
-                        if f"{unit_type} {dest}" in [u.upper() for u in units_after[pname]]:
-                            retreated_successfully = True
-                            break
-
-                    if retreated_successfully:
-                        retreat_results[unit_key] = []  # OK
-                    else:
-                        # Check for conflict (multiple units to same dest)
-                        # Count how many units tried to retreat to this dest
-                        conflict_count = sum(1 for d in retreat_destinations.values() if d == dest)
-                        if conflict_count > 1:
-                            # In DATC, bounce implies disband for retreats
-                            retreat_results[unit_key] = ['bounce']
-                        else:
-                            # Some other reason (invalid dest, etc.)
-                            retreat_results[unit_key] = ['disband']
-                else:
+                # Check if unit gave a retreat order
+                if unit_key not in retreat_destinations:
                     # No retreat order → auto-disband
                     retreat_results[unit_key] = ['disband']
+                    self._popped_units.add(unit_key)
+                    continue
+
+                dest = retreat_destinations[unit_key]
+                conflict_count = dest_counts.get(dest, 0)
+
+                # If multiple units trying to reach same destination, ALL get BOUNCE + DISBAND
+                # This is true even if C code allowed one to succeed (which is a C bug)
+                if conflict_count > 1:
+                    retreat_results[unit_key] = ['bounce', 'disband']
+                    self._popped_units.add(unit_key)
+                    continue
+
+                # Single unit trying to retreat to this destination
+                # Get which power owns this dislodged unit
+                unit_power = dislodged_unit_powers.get(unit_key, None)
+                if not unit_power:
+                    # Shouldn't happen, but mark as disband if we can't find owner
+                    retreat_results[unit_key] = ['disband']
+                    self._popped_units.add(unit_key)
+                    continue
+
+                # Check if THIS POWER'S unit successfully retreated to destination
+                retreated_successfully = f"{unit_type} {dest}" in [u.upper() for u in units_after[unit_power]]
+
+                if retreated_successfully:
+                    retreat_results[unit_key] = []  # OK
+                else:
+                    # Single unit failed - either occupied or other reason
+                    retreat_results[unit_key] = ['disband']
+                    self._popped_units.add(unit_key)
 
             self.result_history.add(retreat_results)
 
@@ -874,11 +1106,10 @@ class GameAdapter:
     @property
     def popped(self):
         """Return list of units that were popped (disbanded in retreats).
-        
-        TODO: Implement retreat tracking.
+
+        Returns set of unit strings that were disbanded (e.g., {'F TRI', 'A VEN'})
         """
-        # Placeholder
-        return set()
+        return self._popped_units
     
     @property
     def command(self):
