@@ -582,10 +582,10 @@ void demo() { // change name to multi policy demo once you get this working
     }
 
     Weights* ego_weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* ego_net = init_drivenet(ego_weights, 1, false, false, false);
+    DriveNet* ego_net = init_drivenet(ego_weights, 1, false, false, false, false);
 
     Weights* co_player_weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* co_player_net = init_drivenet(co_player_weights, num_co_players, false, false, false); 
+    DriveNet* co_player_net = init_drivenet(co_player_weights, num_co_players, false, false, false, false); 
     //Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;
@@ -759,7 +759,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     // Load cpt into network
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, false, false, false, false);
 
     int frame_count = 91;
     char filename[256];
