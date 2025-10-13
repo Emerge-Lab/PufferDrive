@@ -256,7 +256,6 @@ class PuffeRL:
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
 
-            done_mask = d + t  # TODO: Handle truncations separately
             self.global_step += int(mask.sum())
 
             profile("eval_copy", epoch)
@@ -264,6 +263,7 @@ class PuffeRL:
             o_device = o.to(device)  # , non_blocking=True)
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
+            t = torch.as_tensor(t).to(device)
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
@@ -303,11 +303,13 @@ class PuffeRL:
                 shaped_r = r
                 if config.get("terminal_bootstrap_reward", False):
                     clip = float(config.get("terminal_bootstrap_clip", 1.0))
-                    addend = torch.clamp(value.flatten(), -clip, clip) * d.float()
-                    shaped_r = torch.clamp(shaped_r + addend, -1, 1)
+                    gamma = float(config.get("gamma", 0.99))
+                    addend = gamma * torch.clamp(value.flatten(), -clip, clip) * t.float()
+                    shaped_r = shaped_r + addend
 
                 self.rewards[batch_rows, l] = shaped_r
-                self.terminals[batch_rows, l] = d.float()
+                self.terminals[batch_rows, l] = torch.logical_or(d, t).float()
+                self.truncations[batch_rows, l] = t.float()
                 self.values[batch_rows, l] = value.flatten()
 
                 # Note: We are not yet handling masks in this version
