@@ -614,8 +614,8 @@ static PyObject* vec_close(PyObject* self, PyObject* args) {
 }
 
 static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 5) {
-        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 5 arguments");
+    if (PyTuple_Size(args) != 6) {
+        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 6 arguments");
         return NULL;
     }
 
@@ -631,9 +631,11 @@ static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
     PyObject* y_arr = PyTuple_GetItem(args, 2);
     PyObject* z_arr = PyTuple_GetItem(args, 3);
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
+    PyObject* id_arr = PyTuple_GetItem(args, 5);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
-        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr)) {
+        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -642,15 +644,16 @@ static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
     float* y_data = (float*)PyArray_DATA((PyArrayObject*)y_arr);
     float* z_data = (float*)PyArray_DATA((PyArrayObject*)z_arr);
     float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
+    int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
 
-    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data);
+    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data);
 
     Py_RETURN_NONE;
 }
 
 static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 5) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 5 arguments");
+    if (PyTuple_Size(args) != 6) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 6 arguments");
         return NULL;
     }
 
@@ -664,9 +667,11 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     PyObject* y_arr = PyTuple_GetItem(args, 2);
     PyObject* z_arr = PyTuple_GetItem(args, 3);
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
+    PyObject* id_arr = PyTuple_GetItem(args, 5);  // ADD THIS LINE
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
-        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr)) {
+        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -675,6 +680,7 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     PyArrayObject* y_array = (PyArrayObject*)y_arr;
     PyArrayObject* z_array = (PyArrayObject*)z_arr;
     PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
+    PyArrayObject* id_array = (PyArrayObject*)id_arr;
 
     for (int i = 0; i < vec->num_envs; i++) {
         Drive* drive = (Drive*)vec->envs[i];
@@ -683,8 +689,9 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
         float* y_data = (float*)((char*)PyArray_DATA(y_array) + i * PyArray_STRIDE(y_array, 0));
         float* z_data = (float*)((char*)PyArray_DATA(z_array) + i * PyArray_STRIDE(z_array, 0));
         float* heading_data = (float*)((char*)PyArray_DATA(heading_array) + i * PyArray_STRIDE(heading_array, 0));
+        int* id_data = (int*)((char*)PyArray_DATA(id_array) + i * PyArray_STRIDE(id_array, 0));
 
-        c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data);
+        c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data);
     }
 
     Py_RETURN_NONE;

@@ -11,6 +11,11 @@ from pufferlib.ocean.drive.drive import Drive
 
 
 class WOSACEvaluator:
+    """Evaluates policys on the Waymo Open Sim Agent Challenge (WOSAC) in PufferDrive.
+
+    Leaderboard: https://waymo.com/open/challenges/2025/sim-agents/
+    """
+
     def __init__(self, config: Dict):
         self.config = config
         self.num_steps = 91
@@ -33,6 +38,7 @@ class WOSACEvaluator:
             "y": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
             "z": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
             "heading": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
+            "id": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.int32),
         }
 
         for rollout_idx in range(self.num_rollouts):
@@ -51,6 +57,7 @@ class WOSACEvaluator:
                 trajectories["y"][:, rollout_idx, time_idx] = agent_state["y"]
                 trajectories["z"][:, rollout_idx, time_idx] = agent_state["z"]
                 trajectories["heading"][:, rollout_idx, time_idx] = agent_state["heading"]
+                trajectories["id"][:, rollout_idx, time_idx] = agent_state["id"]
 
                 # Step policy
                 with torch.no_grad():
@@ -66,6 +73,10 @@ class WOSACEvaluator:
 
         if self.show_dashboard:
             self._display_dashboard(trajectories)
+
+        import pdb
+
+        pdb.set_trace()
 
         return trajectories
 
@@ -183,10 +194,8 @@ class WOSACEvaluator:
             linewidth=0.5,
             ax=ax1,
         )
-        mean_x = np.mean(x_flat)
-        ax1.axvline(mean_x, color="#e74c3c", linestyle="--", linewidth=2.5, label=f"Mean: {mean_x:.2f}", zorder=10)
-        ax1.set_title("X Position Distribution", fontsize=13, fontweight="bold", pad=10)
-        ax1.set_xlabel("X (m)", fontsize=11)
+        ax1.set_title(r"$x$ position distribution", fontsize=13, fontweight="bold", pad=10)
+        ax1.set_xlabel(r"$x$ (m)", fontsize=11)
         ax1.set_ylabel("Frequency", fontsize=11)
         ax1.legend(fontsize=10, frameon=True, fancybox=True)
 
@@ -201,10 +210,8 @@ class WOSACEvaluator:
             linewidth=0.5,
             ax=ax2,
         )
-        mean_y = np.mean(y_flat)
-        ax2.axvline(mean_y, color="#e74c3c", linestyle="--", linewidth=2.5, label=f"Mean: {mean_y:.2f}", zorder=10)
-        ax2.set_title("Y Position Distribution", fontsize=13, fontweight="bold", pad=10)
-        ax2.set_xlabel("Y (m)", fontsize=11)
+        ax2.set_title(r"$y$ position distribution", fontsize=13, fontweight="bold", pad=10)
+        ax2.set_xlabel(r"$y$ (m)", fontsize=11)
         ax2.set_ylabel("Frequency", fontsize=11)
         ax2.legend(fontsize=10, frameon=True, fancybox=True)
 
@@ -219,10 +226,8 @@ class WOSACEvaluator:
             linewidth=0.5,
             ax=ax3,
         )
-        mean_z = np.mean(z_flat)
-        ax3.axvline(mean_z, color="#e74c3c", linestyle="--", linewidth=2.5, label=f"Mean: {mean_z:.2f}", zorder=10)
-        ax3.set_title("Z Position Distribution", fontsize=13, fontweight="bold", pad=10)
-        ax3.set_xlabel("Z (m)", fontsize=11)
+        ax3.set_title(r"$z$ position distribution", fontsize=13, fontweight="bold", pad=10)
+        ax3.set_xlabel(r"$z$ (m)", fontsize=11)
         ax3.set_ylabel("Frequency", fontsize=11)
         ax3.legend(fontsize=10, frameon=True, fancybox=True)
 
@@ -373,7 +378,7 @@ class WOSACEvaluator:
         ax9.set_ylabel("Y (m)", fontsize=11)
         ax9.set_aspect("equal", adjustable="box")
 
-        plt.suptitle("🚗 WOSAC dashboard", fontsize=18, fontweight="bold", y=0.995)
+        plt.suptitle("WOSAC metrics dashboard", fontsize=18, fontweight="bold", y=0.995)
         plt.tight_layout(rect=[0, 0, 1, 0.99])
 
         # Save to file

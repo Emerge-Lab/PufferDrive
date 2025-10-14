@@ -1111,7 +1111,9 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         backend = "Serial"
 
     args["vec"] = dict(backend=backend, num_envs=1)
-    args["env"]["num_agents"] = 128  # We never have more than 128 agents in WOMD scenes
+    # We never have more than 128 agents in WOMD scenes
+    # TODO(dc): Figure out how to control a specific set of ids
+    args["env"]["num_agents"] = 1
 
     vecenv = vecenv or load_env(env_name, args)
 
@@ -1131,9 +1133,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print(simulated_trajs.keys())
         print(simulated_trajs["x"].shape)
 
-        import pdb
-
-        pdb.set_trace()
+        # import pdb; pdb.set_trace()
 
         # TODO(2) Prepare ground truth data
         # x_batch, y_batch, z_batch, heading_batch = evaluator.collect_ground_truth_data()
