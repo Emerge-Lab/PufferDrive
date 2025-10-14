@@ -222,7 +222,7 @@ struct Drive {
     int human_agent_idx;
     Entity* entities;
     int num_entities;
-    int num_cars;
+    int num_controllable_agents;
     int num_objects;
     int num_roads;
     int static_car_count;
@@ -250,6 +250,7 @@ struct Drive {
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
     char* ini_file;
+    int control_non_vehicles;
 };
 
 void add_log(Drive* env) {
@@ -298,7 +299,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         entities[i].traj_x = (float*)malloc(size * sizeof(float));
         entities[i].traj_y = (float*)malloc(size * sizeof(float));
         entities[i].traj_z = (float*)malloc(size * sizeof(float));
-        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {  // Object type
+        if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
             // Allocate arrays for object-specific data
             entities[i].traj_vx = (float*)malloc(size * sizeof(float));
             entities[i].traj_vy = (float*)malloc(size * sizeof(float));
@@ -317,7 +318,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(entities[i].traj_x, sizeof(float), size, file);
         fread(entities[i].traj_y, sizeof(float), size, file);
         fread(entities[i].traj_z, sizeof(float), size, file);
-        if (entities[i].type == 1 || entities[i].type == 2 || entities[i].type == 3) {  // Object type
+        if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
             fread(entities[i].traj_vx, sizeof(float), size, file);
             fread(entities[i].traj_vy, sizeof(float), size, file);
             fread(entities[i].traj_vz, sizeof(float), size, file);
@@ -585,7 +586,7 @@ void set_means(Drive* env) {
 
     // Compute single mean for all entities (vehicles and roads)
     for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type == VEHICLE) {
+        if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST) {
             for (int j = 0; j < env->entities[i].array_size; j++) {
                 // Assume a validity flag exists (e.g., valid[j]); adjust if not available
                 if (env->entities[i].traj_valid[j]) { // Add validity check if applicable
@@ -605,7 +606,7 @@ void set_means(Drive* env) {
     env->world_mean_x = mean_x;
     env->world_mean_y = mean_y;
     for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type == VEHICLE || env->entities[i].type >= 4) {
+        if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST || env->entities[i].type >= 4) {
             for (int j = 0; j < env->entities[i].array_size; j++) {
                 if(env->entities[i].traj_x[j] == -10000) continue;
                 env->entities[i].traj_x[j] -= mean_x;
@@ -763,7 +764,7 @@ int collision_check(Drive* env, int agent_idx) {
         int index = -1;
         if(i < env->active_agent_count){
             index = env->active_agent_indices[i];
-        } else if (i < env->num_cars){
+        } else if (i < env->num_controllable_agents){
             index = env->static_car_indices[i - env->active_agent_count];
         }
         if(index == -1) continue;
@@ -983,13 +984,13 @@ int valid_active_agent(Drive* env, int agent_idx){
 void set_active_agents(Drive* env){
     env->active_agent_count = 0;
     env->static_car_count = 0;
-    env->num_cars = 1;
+    env->num_controllable_agents = 1;
     env->expert_static_car_count = 0;
     int active_agent_indices[MAX_CARS];
     int static_car_indices[MAX_CARS];
     int expert_static_car_indices[MAX_CARS];
 
-    if(env->num_agents ==0){
+    if(env->num_agents == 0){
         env->num_agents = MAX_CARS;
     }
     int first_agent_id = env->num_objects-1;
@@ -998,15 +999,18 @@ void set_active_agents(Drive* env){
         env->active_agent_count = 1;
         active_agent_indices[0] = first_agent_id;
         env->entities[first_agent_id].active_agent = 1;
-        env->num_cars = 1;
+        env->num_controllable_agents = 1;
     } else {
         env->active_agent_count = 0;
-        env->num_cars = 0;
+        env->num_controllable_agents = 0;
     }
-    for(int i = 0; i < env->num_objects-1 && env->num_cars < MAX_CARS; i++){
-        if(env->entities[i].type != 1) continue;
+    for(int i = 0; i < env->num_objects-1 && env->num_controllable_agents < MAX_CARS; i++){
+        int is_controllable = (env->entities[i].type == VEHICLE) || (env->control_non_vehicles && (env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST));
+
+        if(!is_controllable) continue;
+
         if(env->entities[i].traj_valid[0] != 1) continue;
-        env->num_cars++;
+        env->num_controllable_agents++;
         float distance_to_goal = valid_active_agent(env, i);
         if(distance_to_goal > 0){
             active_agent_indices[env->active_agent_count] = i;
@@ -1122,7 +1126,7 @@ void allocate(Drive* env){
     init(env);
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("max obs: %d\n", max_obs*env->active_agent_count);
-    // printf("num cars: %d\n", env->num_cars);
+    // printf("num cars: %d\n", env->num_controllable_agents);
     // printf("num static cars: %d\n", env->static_car_count);
     // printf("active agent count: %d\n", env->active_agent_count);
     // printf("num objects: %d\n", env->num_objects);
@@ -1273,7 +1277,7 @@ void compute_observations(Drive* env) {
             int index = -1;
             if(j < env->active_agent_count){
                 index = env->active_agent_indices[j];
-            } else if (j < env->num_cars){
+            } else if (j < env->num_controllable_agents){
                 index = env->static_car_indices[j - env->active_agent_count];
             }
             if(index == -1) continue;
@@ -1970,8 +1974,8 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
     DrawLine3D((Vector3){env->map_corners[2], env->map_corners[1], 0}, (Vector3){env->map_corners[2], env->map_corners[3], 0}, PUFF_CYAN);
     DrawLine3D((Vector3){env->map_corners[0], env->map_corners[3], 0}, (Vector3){env->map_corners[2], env->map_corners[3], 0}, PUFF_CYAN);
     for(int i = 0; i < env->num_entities; i++) {
-        // Draw cars
-        if(env->entities[i].type == 1 || env->entities[i].type == 2) {
+        // Draw objects
+        if(env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST) {
             // Check if this vehicle is an active agent
             bool is_active_agent = false;
             bool is_static_car = false;
