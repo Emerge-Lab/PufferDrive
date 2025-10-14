@@ -6,59 +6,72 @@
 # specified output directory.
 #
 # Usage:
-#   ./run_training.sh [DATASET_PATH] [PUFFERL_ARGS...]
+#   ./run_training.sh [--dataset-path DATASET_PATH] [PUFFERL_ARGS...]
 #
 # Arguments:
-#   DATASET_PATH (optional): Path to the dataset (e.g., gs://my-bucket/data).
-#                            If not provided, the default in drive.py is used.
-#   PUFFERL_ARGS (optional): Additional arguments passed to `pufferl train`.
+#   --dataset-path (optional): Path to the dataset (e.g., gs://my-bucket/data).
+#                              If not provided, the default in drive.py is used.
+#   PUFFERL_ARGS   (optional): Additional arguments passed to `pufferl train`.
 
 set -e # Exit on error
 
-# Prepare arguments for the data processing script
+# --- Argument Parsing ---
+DATASET_PATH=""
+PUFFERL_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dataset-path)
+      DATASET_PATH="$2"
+      shift 2
+      ;;
+    *)
+      PUFFERL_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# --- Data Pre-processing ---
 DATA_PROCESSING_ARGS=()
-if [ -n "$1" ]; then
-  # The first argument is assumed to be the dataset path for pre-processing.
-  # All subsequent arguments are passed to the training command.
-  echo "Using dataset for pre-processing from: $1"
-  DATA_PROCESSING_ARGS+=(--data_dir "$1")
-  shift # Remove the dataset path from the list of arguments
+if [ -n "$DATASET_PATH" ]; then
+  echo "Using dataset for pre-processing from: $DATASET_PATH"
+  DATA_PROCESSING_ARGS+=(--data_dir "$DATASET_PATH")
 else
-  # If no path is provided, the Python script will use its default
   echo "No dataset path provided. The default path inside drive.py will be used."
 fi
-
-# Define a local directory for training outputs. Pufferl will save checkpoints here.
-LOCAL_OUTPUT_DIR="/pufferdrive/training_output"
-mkdir -p "$LOCAL_OUTPUT_DIR"
-echo "Local training outputs will be saved to: $LOCAL_OUTPUT_DIR"
 
 # Prepare JSONs by converting them to the binary format required for training.
 python /pufferdrive/pufferlib/ocean/drive/drive.py "${DATA_PROCESSING_ARGS[@]}"
 
-# Prepare arguments for the training command.
-TRAINING_ARGS=("$@")
+# Always write artifacts to a local directory first. This is the most robust
+# pattern for cloud jobs, avoiding issues with direct GCS writes (e.g., append mode).
+# The entire directory will be uploaded to GCS at the end of the job.
+OUTPUT_DIR="/pufferdrive/training_output"
+mkdir -p "$OUTPUT_DIR"
+echo "Training artifacts will be saved locally to: $OUTPUT_DIR"
 
-# If running in a GCP environment (detected by AIP_MODEL_DIR), enable GCP logging.
 # The GCPLogger in pufferl.py will automatically pick up project and job IDs from env vars.
-if [ -n "$AIP_MODEL_DIR" ]; then
-  echo "GCP environment detected. Enabling GCP Cloud Monitoring logger."
-  TRAINING_ARGS+=(--gcp)
+if [ -n "$CLOUD_ML_JOB_ID" ]; then
+  echo "GCP environment detected (via CLOUD_ML_JOB_ID). Enabling GCP Cloud Monitoring logger."
+  echo "AJE bypass for test: use a tensorboard"
+  PUFFERL_ARGS+=(--tb)
 fi
 
+# --- Training ---
 # Run the PufferLib training command for the 'puffer_drive' environment.
 # PufferLib saves checkpoints to the directory specified by --train.data-dir.
-echo "Starting PufferDrive training..."
-python -m pufferlib.pufferl train puffer_drive --train.data-dir "$LOCAL_OUTPUT_DIR" "${TRAINING_ARGS[@]}"
+echo "Starting PufferDrive training... Artifacts will be saved to: $OUTPUT_DIR"
+python -m pufferlib.pufferl train puffer_drive --train.data-dir "$OUTPUT_DIR" "${PUFFERL_ARGS[@]}"
 
 # After training, if running on Vertex AI, copy the artifacts to the GCS bucket
 # provided by the AIP_MODEL_DIR environment variable. This makes the model
 # available in the Vertex AI Model Registry.
 if [ -n "$AIP_MODEL_DIR" ]; then
   echo "AIP_MODEL_DIR is set to $AIP_MODEL_DIR"
-  echo "Copying training artifacts from $LOCAL_OUTPUT_DIR to $AIP_MODEL_DIR..."
+  echo "Copying final training artifacts from $OUTPUT_DIR to $AIP_MODEL_DIR..."
   # Use a helper script with gcsfs since gsutil is not in the image.
-  python /pufferdrive/automation/gcs_sync.py "$LOCAL_OUTPUT_DIR" "$AIP_MODEL_DIR"
+  python /pufferdrive/automation/gcs_sync.py "${OUTPUT_DIR}/" "$AIP_MODEL_DIR"
 else
-  echo "AIP_MODEL_DIR is not set. Skipping copy to GCS. Artifacts are in $LOCAL_OUTPUT_DIR."
+  echo "AIP_MODEL_DIR is not set. Skipping final copy. Artifacts are in $OUTPUT_DIR."
 fi

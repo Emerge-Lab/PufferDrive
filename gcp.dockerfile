@@ -38,7 +38,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && uv pip install glfw==2.7 \
     && git clone https://github.com/pufferai/carbs \
     && uv pip install -e ./carbs \
-    && uv pip install gcsfs google-cloud-monitoring
+    && uv pip install tensorboard \
+    && uv pip install gcsfs google-cloud-aiplatform
 
 RUN /bin/bash /pufferdrive/scripts/build_ocean.sh drive ${BUILD_MODE}
 

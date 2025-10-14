@@ -1033,61 +1033,60 @@ class WandbLogger:
         return f"{data_dir}/{model_file}"
 
 
+class TensorBoardLogger:
+    def __init__(self, args):
+        try:
+            from torch.utils.tensorboard import SummaryWriter
+        except ImportError:
+            raise ImportError("TensorBoardLogger requires tensorboard. Please run `uv pip install tensorboard`.")
+
+        self.run_id = args.get("run_id", str(int(100 * time.time())))
+        log_dir = os.path.join(args["train"]["data_dir"], "tensorboard_logs", self.run_id)
+        print(f"[TensorBoardLogger] Logging locally to: {log_dir}")
+        self.writer = SummaryWriter(log_dir=log_dir)
+
+    def log(self, logs, step):
+        for key, value in logs.items():
+            if isinstance(value, (int, float)):
+                self.writer.add_scalar(key, value, step)
+
+    def close(self, model_path):
+        self.writer.close()
+
+
 class GCPLogger:
     def __init__(self, args):
         try:
-            from google.cloud import monitoring_v3
-            from google.api import metric_pb2 as ga_metric
-            from google.api import monitored_resource_pb2 as ga_resource
-            from google.protobuf.timestamp_pb2 import Timestamp
+            from google.cloud import aiplatform
+            from google.cloud import storage
         except ImportError:
-            raise ImportError("GCPLogger requires google-cloud-monitoring. pip install google-cloud-monitoring")
+            raise ImportError(
+                "GCPLogger requires google-cloud-aiplatform. Please run `uv pip install google-cloud-aiplatform`."
+            )
 
+        self.args = args
+        self.fallback_logger = None
+        self.aiplatform = aiplatform
         self.project_id = args["gcp_project_id"]
         if not self.project_id:
             raise ValueError("gcp_project_id must be set when using GCPLogger")
-
-        self.client = monitoring_v3.MetricServiceClient()
         self.project_name = f"projects/{self.project_id}"
         self.run_id = args.get("run_id") or str(int(time.time()))
         self.job_name = args.get("gcp_job_name", "pufferdrive-run")
 
+        experiment_name = args.get("experiment", "")
+
+        self.aiplatform.init(experiment=experiment_name)
+        self.aiplatform.start_run("run-1")
+
     def log(self, logs, step):
-        if not logs:
-            return
-
-        now = Timestamp()
-        now.FromDatetime(time.time())
-
-        series = []
-        for key, value in logs.items():
-            if not isinstance(value, (int, float)):
-                continue
-
-            metric_path = key.replace("/", "_")  # e.g. environment/total_reward -> environment_total_reward
-
-            time_series = monitoring_v3.TimeSeries()
-            time_series.metric.type = f"custom.googleapis.com/pufferdrive/{metric_path}"
-            time_series.metric.labels["run_id"] = self.run_id
-
-            # Identify the resource being monitored. Using 'generic_task' is flexible.
-            time_series.resource.type = "generic_task"
-            time_series.resource.labels["project_id"] = self.project_id
-            time_series.resource.labels["job"] = self.job_name
-            time_series.resource.labels["task_id"] = self.run_id
-
-            point = monitoring_v3.Point()
-            point.value.double_value = value
-            point.interval.end_time = now
-            time_series.points.append(point)
-            series.append(time_series)
-
-        if series:
-            self.client.create_time_series(name=self.project_name, time_series=series)
+        try:
+            self.aiplatform.log_metrics(logs)
+        except Exception as e:
+            print(f"[GCPLogger] Warning: Failed to write metrics to Vertex AI: {e}")
 
     def close(self, model_path):
-        # GCP logging is stateless per call, so no explicit close needed.
-        pass
+        self.aiplatform.end_run()
 
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
@@ -1125,6 +1124,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         logger = WandbLogger(args)
     elif args["gcp"]:
         logger = GCPLogger(args)
+    elif args["tb"]:
+        logger = TensorBoardLogger(args)
 
     train_config = dict(**args["train"], env=env_name)
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
@@ -1401,15 +1402,7 @@ def load_config(env_name):
     parser.add_argument("--neptune", action="store_true", help="Use neptune for logging")
     parser.add_argument("--neptune-name", type=str, default="pufferai")
     parser.add_argument("--gcp", action="store_true", help="Use GCP Cloud Monitoring for logging")
-    parser.add_argument(
-        "--gcp-project-id", type=str, default=os.environ.get("GCP_PROJECT_ID"), help="GCP Project ID for logging"
-    )
-    parser.add_argument(
-        "--gcp-job-name",
-        type=str,
-        default=os.environ.get("CLOUD_ML_JOB_ID", "pufferdrive-local"),
-        help="GCP Job name for resource labeling",
-    )
+    parser.add_argument("--tb", action="store_true", help="Use Tensorboard for logging")
     parser.add_argument("--neptune-project", type=str, default="ablations")
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")

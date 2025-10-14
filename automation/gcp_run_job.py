@@ -4,7 +4,7 @@ import configparser
 import os
 from datetime import datetime
 import time
-from typing import Optional
+from typing import Optional, Union
 
 from google.cloud import aiplatform
 from google.api_core import exceptions
@@ -87,6 +87,7 @@ def create_custom_job(
     hyperparameters: Optional[dict[str, any]] = None,
 ) -> None:
     """Creates and runs a Vertex AI Custom Job using a pre-built container."""
+    tensorboard = None
     aiplatform.init(project=project, location=location, staging_bucket=staging_bucket)
 
     # If an experiment is specified, ensure it exists before associating the job.
@@ -96,22 +97,43 @@ def create_custom_job(
         except exceptions.NotFound:
             print(f"🧪 Experiment '{experiment}' not found. Creating it now.")
             aiplatform.Experiment.create(experiment_name=experiment)
+
+        # Find or create a Tensorboard instance for logging metrics
+        tensorboard_name = f"{experiment}-tensorboard"
+        tensorboards = aiplatform.Tensorboard.list(filter=f'display_name="{tensorboard_name}"')
+        if tensorboards:
+            tensorboard = tensorboards[0]
+            print(f"📈 Found existing Tensorboard: {tensorboard.resource_name}")
+        else:
+            print(f"📈 Creating a new Tensorboard '{tensorboard_name}'...")
+            tensorboard = aiplatform.Tensorboard.create(display_name=tensorboard_name)
+            print(f"✅ Created Tensorboard: {tensorboard.resource_name}")
+
         if experiment_run:
             try:
                 aiplatform.ExperimentRun(run_name=experiment_run, experiment=experiment)
                 print(f"Found existing experiment run '{experiment_run}'. Associating job with it.")
             except exceptions.NotFound:
                 print(f"🧪 Experiment run '{experiment_run}' not found. Creating it now.")
-                aiplatform.ExperimentRun.create(run_name=experiment_run, experiment=experiment)
+                aiplatform.ExperimentRun.create(
+                    run_name=experiment_run,
+                    experiment=experiment,
+                    tensorboard=tensorboard.resource_name if tensorboard else None,
+                )
 
     # Define the container spec, passing arguments to the entrypoint script.
     args_list = []
     if dataset_path:
-        args_list.append(dataset_path)
+        # Pass dataset path as a named argument for clarity
+        args_list.extend(["--dataset-path", dataset_path])
+
     if container_args:
         args_list.extend(container_args)
-    container_spec = {"image_uri": container_uri}
-    container_spec["args"] = args_list
+
+    container_spec = {
+        "image_uri": container_uri,
+        "args": args_list,
+    }
 
     # Define the hardware resources for the job, mirroring the YAML configuration.
     worker_pool_specs = [
@@ -142,6 +164,7 @@ def create_custom_job(
         experiment=experiment,
         experiment_run=experiment_run,
         sync=True,
+        enable_web_access=False,
     )
 
     print(f"✅ Custom job '{display_name}' submitted successfully.")
@@ -150,15 +173,15 @@ def create_custom_job(
     )
 
     # If the job is part of an experiment, log the hyperparameters to its run
-    if experiment and hyperparameters:
-        # The job.create() call creates the experiment run if it doesn't exist.
-        # We can now get a handle to it and log our parameters, as job.experiment_run_name is now populated.
+    if experiment and experiment_run and hyperparameters:
+        # After the synchronous job.run() completes, we can log the hyperparameters
+        # to the experiment run we created or specified earlier.
         try:
             run = aiplatform.ExperimentRun(
-                run_name=job.experiment_run_name,
-                experiment=job.experiment,
+                run_name=experiment_run,
+                experiment=experiment,
             )
-            print(f"Logging hyperparameters to run '{job.experiment_run_name}'...")
+            print(f"Logging hyperparameters to run '{experiment_run}'...")
             run.log_params(hyperparameters)
             print("✅ Hyperparameters logged successfully.")
         except Exception as e:
@@ -216,10 +239,12 @@ if __name__ == "__main__":
     # 1.2 Expand environment variables in container URI (e.g., $DOMAIN)
     container_uri = os.path.expandvars(args.container_uri)
 
-    # 1.3 If an experiment is specified but no run name, create a default one
-    experiment_run = args.experiment_run
-    if args.experiment and not experiment_run:
-        experiment_run = f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    # 1.3 Handle experiment and run names
+    experiment = args.experiment
+    experiment_run = None  # Default to None if no experiment is specified
+    if experiment:
+        # If an experiment is specified but no run name, create a default one
+        experiment_run = args.experiment_run or f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
     # 1.4 Parse labels from key=value format
     labels = {}
@@ -258,7 +283,7 @@ if __name__ == "__main__":
         accelerator_count=args.accelerator_count,
         dataset_path=args.dataset_path,
         container_args=unknown_args,
-        experiment=args.experiment,
+        experiment=experiment,
         experiment_run=experiment_run,
         labels=labels,
         hyperparameters=hyperparameters,
