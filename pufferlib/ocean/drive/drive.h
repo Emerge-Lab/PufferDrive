@@ -1219,6 +1219,18 @@ float reverse_normalize_value(float value, float min, float max){
     return value*50.0f;
 }
 
+void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out) {
+    for(int i = 0; i < env->active_agent_count; i++){
+        int agent_idx = env->active_agent_indices[i];
+        Entity* agent = &env->entities[agent_idx];
+        // For WOSAC, we need the original world coordinates, so we add the world means back
+        x_out[i] = agent->x + env->world_mean_x;
+        y_out[i] = agent->y + env->world_mean_y;
+        z_out[i] = agent->z;
+        heading_out[i] = agent->heading;
+    }
+}
+
 void compute_observations(Drive* env) {
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
