@@ -217,6 +217,26 @@ class Drive(pufferlib.PufferEnv):
                 self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
+    def get_global_agent_state(self):
+        """Get current global state of all active agents.
+
+        Returns:
+            dict with keys 'x', 'y', 'z', 'heading' containing numpy arrays
+            of shape (num_active_agents,)
+        """
+        num_agents = self.num_agents
+
+        states = {
+            "x": np.zeros(num_agents, dtype=np.float32),
+            "y": np.zeros(num_agents, dtype=np.float32),
+            "z": np.zeros(num_agents, dtype=np.float32),
+            "heading": np.zeros(num_agents, dtype=np.float32),
+        }
+
+        binding.vec_get_global_agent_state(self.c_envs, states["x"], states["y"], states["z"], states["heading"])
+
+        return states
+
     def render(self):
         binding.vec_render(self.c_envs, 0)
 

@@ -1134,22 +1134,43 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args = args or load_config(env_name)
 
     wosac_enabled = args["wosac"]["enabled"]
-
-    if wosac_enabled:
-        print(f"Running WOSAC realism evaluation ---")
-        from pufferlib.ocean.wosac.evaluator import run_wosac_eval
-
-        results = run_wosac_eval(env_name, args, vecenv, policy)
-        return results
-
     backend = args["vec"]["backend"]
     if backend != "PufferEnv":
         backend = "Serial"
 
     args["vec"] = dict(backend=backend, num_envs=1)
+    args["env"]["num_agents"] = 128  # We never have more than 128 agents in WOMD scenes
+
     vecenv = vecenv or load_env(env_name, args)
 
     policy = policy or load_policy(args, vecenv, env_name)
+
+    if wosac_enabled:
+        print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
+        from pufferlib.ocean.wosac.evaluator import WOSACEvaluator
+
+        evaluator = WOSACEvaluator(args)
+
+        # Roll out trained policy in the simulator to collect trajectories
+        # Output is a dict with every element (e.g., "x") of shape: [num_agents, num_rollouts, num_steps]
+        simulated_trajs = evaluator.collect_simulated_trajectories(args, vecenv=vecenv, policy=policy)
+
+        print(len(simulated_trajs))
+        print(simulated_trajs.keys())
+        print(simulated_trajs["x"].shape)
+
+        import pdb
+
+        pdb.set_trace()
+
+        # TODO(2) Prepare ground truth data
+        # x_batch, y_batch, z_batch, heading_batch = evaluator.collect_ground_truth_data()
+
+        # TODO(3) Compute WOSAC metrics
+        # results = evaluator.compute_metrics(x_hat_batch, y_hat_batch, z_hat_batch, heading_hat_batch)
+
+        # return results
+
     ob, info = vecenv.reset()
     driver = vecenv.driver_env
     num_agents = vecenv.observation_space.shape[0]
