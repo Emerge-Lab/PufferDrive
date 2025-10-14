@@ -131,6 +131,7 @@ struct Log {
 typedef struct Entity Entity;
 struct Entity {
     int type;
+    int id;
     int array_size;
     float* traj_x;
     float* traj_y;
@@ -495,6 +496,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
     for (int i = 0; i < env->num_entities; i++) {
 	    // Read base entity data
         fread(&entities[i].type, sizeof(int), 1, file);
+        fread(&entities[i].id, sizeof(int), 1, file);
         fread(&entities[i].array_size, sizeof(int), 1, file);
         // Allocate arrays based on type
         int size = entities[i].array_size;
@@ -1890,7 +1892,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     return;
 }
 
-void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out) {
+void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* id_out) {
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
@@ -1899,6 +1901,7 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
+        id_out[i] = agent->id;
     }
 }
 

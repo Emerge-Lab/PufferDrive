@@ -221,7 +221,7 @@ class Drive(pufferlib.PufferEnv):
         """Get current global state of all active agents.
 
         Returns:
-            dict with keys 'x', 'y', 'z', 'heading' containing numpy arrays
+            dict with keys 'x', 'y', 'z', 'heading', 'id' containing numpy arrays
             of shape (num_active_agents,)
         """
         num_agents = self.num_agents
@@ -231,9 +231,12 @@ class Drive(pufferlib.PufferEnv):
             "y": np.zeros(num_agents, dtype=np.float32),
             "z": np.zeros(num_agents, dtype=np.float32),
             "heading": np.zeros(num_agents, dtype=np.float32),
+            "id": np.zeros(num_agents, dtype=np.int32),
         }
 
-        binding.vec_get_global_agent_state(self.c_envs, states["x"], states["y"], states["z"], states["heading"])
+        binding.vec_get_global_agent_state(
+            self.c_envs, states["x"], states["y"], states["z"], states["heading"], states["id"]
+        )
 
         return states
 
@@ -313,7 +316,7 @@ def save_map_binary(map_data, output_file):
             elif obj_type == "cyclist":
                 obj_type = 3
             f.write(struct.pack("i", obj_type))  # type
-            # f.write(struct.pack("i", obj.get("id", 0)))  # id
+            f.write(struct.pack("i", obj.get("id", 0)))  # original object id
             f.write(struct.pack("i", trajectory_length))  # array_size
             # Write position arrays
             positions = obj.get("position", [])
@@ -391,7 +394,7 @@ def save_map_binary(map_data, output_file):
                 road_type = 10
             # Write base entity data
             f.write(struct.pack("i", road_type))  # type
-            # f.write(struct.pack("i", road.get("id", 0)))  # id
+            f.write(struct.pack("i", road.get("id", 0)))  # id
             f.write(struct.pack("i", size))  # array_size
 
             # Write position arrays
