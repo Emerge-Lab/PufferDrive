@@ -36,8 +36,6 @@
 #define VEHICLE_COLLISION 1
 #define OFFROAD 2
 
-#define DT 0.1f // Timestep in seconds
-
 // Metrics array indices
 #define COLLISION_IDX 0
 #define OFFROAD_IDX 1
@@ -252,6 +250,7 @@ struct Drive {
     float world_mean_x;
     float world_mean_y;
     int spawn_immunity_timer;
+    int dt;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
@@ -1196,8 +1195,8 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     }
     
     // Calculate new acceleration
-    float a_long_new = agent->a_long + a_long * DT;
-    float a_lat_new = agent->a_lat + a_lat * DT;
+    float a_long_new = agent->a_long + a_long * env->dt;
+    float a_lat_new = agent->a_lat + a_lat * env->dt;
     
     // Make it easy to stop with 0 accel
     if (agent->a_long * a_long_new < 0) {
@@ -1215,7 +1214,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     // Calculate new velocity
     float v_dot_heading = agent->vx * agent->heading_x + agent->vy * agent->heading_y;
     float signed_v = copysignf(sqrtf(agent->vx*agent->vx + agent->vy*agent->vy), v_dot_heading);
-    float v_new = signed_v + 0.5f * (a_long_new + agent->a_long) * DT;
+    float v_new = signed_v + 0.5f * (a_long_new + agent->a_long) * env->dt;
     
     // Make it easy to stop with 0 vel
     if (signed_v * v_new < 0) {
@@ -1228,7 +1227,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     float signed_curvature = a_lat_new / fmaxf(v_new * v_new, 1e-5f);
     signed_curvature = copysignf(fmaxf(fabsf(signed_curvature), 1e-5f), signed_curvature);
     float steering_angle = atanf(signed_curvature * agent->wheelbase);
-    float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * DT, 0.6f * DT);
+    float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
     float new_steering_angle = clip(agent->steering_angle + delta_steer, -0.55f, 0.55f);
     
     // Update curvature and accel to account for limited steering
@@ -1236,7 +1235,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     a_lat_new = v_new * v_new * signed_curvature;
     
     // Calculate resulting movement using bicycle dynamics
-    float d = 0.5f * (v_new + signed_v) * DT;
+    float d = 0.5f * (v_new + signed_v) * env->dt;
     float theta = d * signed_curvature;
     float dx_local, dy_local;
     
@@ -1254,8 +1253,8 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     // Update everything
     agent->x += dx;
     agent->y += dy;
-    agent->jerk_long = (a_long_new - agent->a_long) / DT;
-    agent->jerk_lat = (a_lat_new - agent->a_lat) / DT;
+    agent->jerk_long = (a_long_new - agent->a_long) / env->dt;
+    agent->jerk_lat = (a_lat_new - agent->a_lat) / env->dt;
     agent->a_long = a_long_new;
     agent->a_lat = a_lat_new;
     agent->heading = normalize_heading(agent->heading + theta);
@@ -1703,7 +1702,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = 10 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
@@ -1727,7 +1726,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
-    int obs_idx = 7;  // Start after goal distances
+    int obs_idx = 10;  // Start after ego obs 
     for(int j = 0; j < MAX_CARS - 1; j++) {
         if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 7;  // Move to next agent observation

@@ -199,7 +199,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     int input_size = 64;
 
     net->num_agents = num_agents;
-    net->obs_self = calloc(num_agents*7, sizeof(float)); // 7 features
+    net->obs_self = calloc(num_agents*10, sizeof(float)); // 7 features
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
     net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
@@ -208,7 +208,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     net->road_linear_output_two = calloc(num_agents*200*input_size, sizeof(float));
     net->partner_layernorm_output = calloc(num_agents*63*input_size, sizeof(float));
     net->road_layernorm_output = calloc(num_agents*200*input_size, sizeof(float));
-    net->ego_encoder = make_linear(weights, num_agents, 7, input_size);
+    net->ego_encoder = make_linear(weights, num_agents, 10, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->road_encoder = make_linear(weights, num_agents, 13, input_size);
@@ -269,21 +269,21 @@ void free_drivenet(DriveNet* net) {
 
 void forward(DriveNet* net, float* observations, int* actions) {
     // Clear previous observations
-    memset(net->obs_self, 0, net->num_agents * 7 * sizeof(float));
+    memset(net->obs_self, 0, net->num_agents * 10 * sizeof(float));
     memset(net->obs_partner, 0, net->num_agents * 63 * 7 * sizeof(float));
     memset(net->obs_road, 0, net->num_agents * 200 * 13 * sizeof(float));
 
     // Reshape observations into 2D boards and additional features
-    float (*obs_self)[7] = (float (*)[7])net->obs_self;
+    float (*obs_self)[7] = (float (*)[10])net->obs_self;
     float (*obs_partner)[63][7] = (float (*)[63][7])net->obs_partner;
     float (*obs_road)[200][13] = (float (*)[200][13])net->obs_road;
 
     for (int b = 0; b < net->num_agents; b++) {
-        int b_offset = b * (7 + 63*7 + 200*7);  // offset for each batch
-        int partner_offset = b_offset + 7;
-        int road_offset = b_offset + 7 + 63*7;
+        int b_offset = b * (10 + 63*7 + 200*7);  // offset for each batch
+        int partner_offset = b_offset + 10;
+        int road_offset = b_offset + 10 + 63*7;
         // Process self observation
-        for(int i = 0; i < 7; i++) {
+        for(int i = 0; i < 10; i++) {
             obs_self[b][i] = observations[b_offset + i];
         }
 
@@ -392,6 +392,7 @@ void demo() {
         .goal_radius = 2.0f,
 	    .map_name = "resources/drive/binaries/map_000.bin",
         .spawn_immunity_timer = 50,
+        .dt = 0.1f,
     };
     allocate(&env);
     c_reset(&env);
@@ -507,7 +508,8 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
         .reward_ade = -0.0f,
         .goal_radius = goal_radius,
 	    .map_name = map_name,
-        .spawn_immunity_timer = 50
+        .spawn_immunity_timer = 50,
+        .dt = 0.1f,
     };
     allocate(&env);
 
