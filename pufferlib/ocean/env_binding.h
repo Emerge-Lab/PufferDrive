@@ -713,6 +713,7 @@ typedef struct
     float goal_radius;
     int spawn_immunity_timer;
     float dt;
+    int random_init;
 } env_init_config;
 
 static int handler(
@@ -745,6 +746,12 @@ static int handler(
         env_config->goal_radius = atof(value);
     } else if (MATCH("env", "dt")) {
         env_config->dt = atof(value);
+    } else if (MATCH("env", "random_init")) {
+        if(strcmp(value, "True") == 0 || strcmp(value, "true") == 0) {
+            env_config->random_init = 1;
+        } else {
+            env_config->random_init = 0;
+        }
     } else {
        return 0;
     }

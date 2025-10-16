@@ -23,6 +23,7 @@ class Drive(pufferlib.PufferEnv):
         goal_radius=2.0,
         spawn_immunity_timer=30,
         dt = 0.3,
+        random_init = False,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
@@ -32,6 +33,7 @@ class Drive(pufferlib.PufferEnv):
     ):
         # env
         self.dt = dt
+        self.random_init = random_init
         self.render_mode = render_mode
         self.num_maps = num_maps
         self.report_interval = report_interval
@@ -104,6 +106,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_radius=goal_radius,
                 spawn_immunity_timer=spawn_immunity_timer,
                 dt=dt,
+                random_init=random_init,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
@@ -156,6 +159,7 @@ class Drive(pufferlib.PufferEnv):
                         goal_radius=self.goal_radius,
                         spawn_immunity_timer=self.spawn_immunity_timer,
                         dt=self.dt,
+                        random_init=self.random_init,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                         ini_file="pufferlib/config/ocean/drive.ini",

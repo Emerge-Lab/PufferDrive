@@ -185,6 +185,34 @@ float clip(float value, float min, float max) {
     return value;
 }
 
+float clipSpeed(float speed) {
+    const float maxSpeed = MAX_SPEED;
+    if (speed > maxSpeed) return maxSpeed;
+    if (speed < -maxSpeed) return -maxSpeed;
+    return speed;
+}
+
+float normalize_heading(float heading){
+    if(heading > M_PI) heading -= 2*M_PI;
+    if(heading < -M_PI) heading += 2*M_PI;
+    return heading;
+}
+
+float normalize_value(float value, float min, float max){
+    return (value - min) / (max - min);
+}
+
+int random_range_int(int min, int max) {
+    if (min == max) {
+        return min;
+    }
+    return min + (rand() % (max - min + 1));
+}
+
+float random_range_float(float min, float max) {
+    return min + (max - min) * ((float)rand() / RAND_MAX);
+}
+
 float compute_displacement_error(Entity* agent, int timestep) {
     // Check if timestep is within valid range
     if (timestep < 0 || timestep >= agent->array_size) {
@@ -251,6 +279,7 @@ struct Drive {
     float world_mean_y;
     int spawn_immunity_timer;
     float dt;
+    int random_init;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
@@ -342,63 +371,159 @@ Entity* load_map_binary(const char* filename, Drive* env) {
 }
 
 void set_start_position(Drive* env){
-    //InitWindow(800, 600, "GPU Drive");
-    //BeginDrawing();
-    for(int i = 0; i < env->num_entities; i++){
-        int is_active = 0;
-        for(int j = 0; j < env->active_agent_count; j++){
-            if(env->active_agent_indices[j] == i){
-                is_active = 1;
-                break;
+    // Init road objects as usual
+    for (int i = env->num_objects; i < env->num_entities; i++) {
+        Entity* e = &env->entities[i];
+        if (e->type > 3) {
+            e->x = e->traj_x[0];
+            e->y = e->traj_y[0];
+            e->z = e->traj_z[0];
+        }
+    }
+    
+    if (env->random_init) {
+        // Random initialization mode
+        // First, mark all vehicles as unplaced
+        for (int i = 0; i < env->num_objects; i++) {
+            if (env->entities[i].type == 1) {
+                env->entities[i].x = -10000.0f;
+                env->entities[i].y = -10000.0f;
             }
         }
-        Entity* e = &env->entities[i];
-        e->x = e->traj_x[0];
-        e->y = e->traj_y[0];
-        e->z = e->traj_z[0];
-        //printf("Entity %d is at (%f, %f, %f)\n", i, e->x, e->y, e->z);
-        //if (e->type < 4) {
-        //    DrawRectangle(200+2*e->x, 200+2*e->y, 2.0, 2.0, RED);
-        //}
-        if(e->type >3 || e->type == 0){
-            continue;
-        }
-        if(is_active == 0){
-            e->vx = 0;
-            e->vy = 0;
-            e->vz = 0;
-            e->collided_before_goal = 0;
-        } else{
-            e->vx = e->traj_vx[0];
-            e->vy = e->traj_vy[0];
-            e->vz = e->traj_vz[0];
-        }
-        e->heading = e->traj_heading[0];
-        e->heading_x = cosf(e->heading);
-        e->heading_y = sinf(e->heading);
-        e->valid = e->traj_valid[0];
-        e->collision_state = 0;
-        e->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
-        e->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
-        e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
-        e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
-        e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
-        e->cumulative_displacement = 0.0f;
-        e->displacement_sample_count = 0;
-        e->respawn_timestep = -1;
         
-        // Dynamics
-        e->a_long = 0.0f;
-        e->a_lat = 0.0f;
-        e->jerk_long = 0.0f;
-        e->jerk_lat = 0.0f;
-        e->steering_angle = 0.0f;
-        e->wheelbase = 0.6f * e->length;
+        // Place active agents one by one
+        srand(time(NULL));
+        for (int j = 0; j < env->active_agent_count; j++) {
+            int i = env->active_agent_indices[j];
+            Entity* obj = &env->entities[i];
+            
+            if (obj->type != 1) continue; // Only vehicles
+            
+            // Random sample vehicle dimensions
+            obj->length = random_range_float(3.0f, 5.0f);
+            obj->width = random_range_float(1.5f, 3.0f);
+            obj->width = clip(obj->width, 1.5f, obj->length);
+            obj->height = 1.0f;
+            obj->wheelbase = 0.6f * obj->length;
+            
+            // Try to place vehicle without collisions
+            int collision_free = 0;
+            int max_attempts = 100;
+            int attempt = 0;
+            
+            while (!collision_free && attempt < max_attempts) {
+                // Random sample a lane
+                int lane_idx = random_range_int(0, env->lane_count - 1);
+                int entity_idx = env->lane_indices[lane_idx];
+                Entity* lane = &env->entities[entity_idx];
+                
+                // Place at start of lane (index 0)
+                obj->x = lane->traj_x[0];
+                obj->y = lane->traj_y[0];
+                obj->z = lane->traj_z[0];
+                
+                // Set heading from lane direction
+                float dx = lane->traj_x[1] - lane->traj_x[0];
+                float dy = lane->traj_y[1] - lane->traj_y[0];
+                obj->heading = normalize_heading(atan2f(dy, dx));
+                obj->heading_x = cosf(obj->heading);
+                obj->heading_y = sinf(obj->heading);
+                
+                // Set goal to end of lane
+                int goal_idx = lane->array_size - 1;
+                obj->goal_position_x = lane->traj_x[goal_idx];
+                obj->goal_position_y = lane->traj_y[goal_idx];
+                obj->goal_position_z = lane->traj_z[goal_idx];
+                
+                // Check for collisions with already-placed vehicles
+                obj->collision_state = 0;
+                int collided_with = collision_check(env, i);
+                
+                if (collided_with == -1) {
+                    collision_free = 1;
+                }
+                attempt++;
+            }
+            
+            if (!collision_free) {
+                printf("Warning: Could not place vehicle %d without collision after %d attempts\n", i, max_attempts);
+            }
+            
+            // Initialize velocity and dynamics
+            obj->vx = 0.0f;
+            obj->vy = 0.0f;
+            obj->vz = 0.0f;
+            obj->a_long = 0.0f;
+            obj->a_lat = 0.0f;
+            obj->jerk_long = 0.0f;
+            obj->jerk_lat = 0.0f;
+            obj->steering_angle = 0.0f;
+            
+            // Initialize state
+            obj->valid = 1;
+            obj->reached_goal_this_episode = 0;
+            obj->collided_before_goal = 0;
+            obj->respawn_timestep = -1;
+            obj->cumulative_displacement = 0.0f;
+            obj->displacement_sample_count = 0;
+            
+            // Initialize metrics
+            obj->metrics_array[COLLISION_IDX] = 0.0f;
+            obj->metrics_array[OFFROAD_IDX] = 0.0f;
+            obj->metrics_array[REACHED_GOAL_IDX] = 0.0f;
+            obj->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+            obj->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
+        }
+    } else {
+        // Original trajectory-based initialization
+        for(int i = 0; i < env->num_entities; i++){
+            int is_active = 0;
+            for(int j = 0; j < env->active_agent_count; j++){
+                if(env->active_agent_indices[j] == i){
+                    is_active = 1;
+                    break;
+                }
+            }
+            Entity* e = &env->entities[i];
+            e->x = e->traj_x[0];
+            e->y = e->traj_y[0];
+            e->z = e->traj_z[0];
+            
+            if(e->type >3 || e->type == 0){
+                continue;
+            }
+            if(is_active == 0){
+                e->vx = 0;
+                e->vy = 0;
+                e->vz = 0;
+                e->collided_before_goal = 0;
+            } else{
+                e->vx = e->traj_vx[0];
+                e->vy = e->traj_vy[0];
+                e->vz = e->traj_vz[0];
+            }
+            e->heading = e->traj_heading[0];
+            e->heading_x = cosf(e->heading);
+            e->heading_y = sinf(e->heading);
+            e->valid = e->traj_valid[0];
+            e->collision_state = 0;
+            e->metrics_array[COLLISION_IDX] = 0.0f;
+            e->metrics_array[OFFROAD_IDX] = 0.0f;
+            e->metrics_array[REACHED_GOAL_IDX] = 0.0f;
+            e->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+            e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
+            e->cumulative_displacement = 0.0f;
+            e->displacement_sample_count = 0;
+            e->respawn_timestep = -1;
+            
+            e->a_long = 0.0f;
+            e->a_lat = 0.0f;
+            e->jerk_long = 0.0f;
+            e->jerk_lat = 0.0f;
+            e->steering_angle = 0.0f;
+            e->wheelbase = 0.6f * e->length;
+        }
     }
-    //EndDrawing();
-    int x = 0;
-
-
 }
 
 int getGridIndex(Drive* env, float x1, float y1) {
@@ -1150,27 +1275,6 @@ void free_allocated(Drive* env){
     free(env->rewards);
     free(env->terminals);
     c_close(env);
-}
-
-float clipSpeed(float speed) {
-    const float maxSpeed = MAX_SPEED;
-    if (speed > maxSpeed) return maxSpeed;
-    if (speed < -maxSpeed) return -maxSpeed;
-    return speed;
-}
-
-float normalize_heading(float heading){
-    if(heading > M_PI) heading -= 2*M_PI;
-    if(heading < -M_PI) heading += 2*M_PI;
-    return heading;
-}
-
-float normalize_value(float value, float min, float max){
-    return (value - min) / (max - min);
-}
-
-float reverse_normalize_value(float value, float min, float max){
-    return value*50.0f;
 }
 
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
