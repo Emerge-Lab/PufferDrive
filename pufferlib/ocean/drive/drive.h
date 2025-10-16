@@ -254,8 +254,8 @@ struct Drive {
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
     char* ini_file;
-    int post_collision_action; //0 = none, 1=stop, 2 = remove
-    int post_offroad_action;  //0 = none, 1=stop, 2 = remove
+    int collision_behaviour; //0 = none, 1=stop, 2 = remove
+    int offroad_behaviour; //0 = none, 1=stop, 2 = remove
 };
 
 void add_log(Drive* env) {
@@ -945,11 +945,11 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     int respawned = env->entities[agent_idx].respawn_timestep != -1;
     int exceeded_spawn_immunity_agent = (env->timestep - env->entities[agent_idx].respawn_timestep) >= env->spawn_immunity_timer;
     if(collided == VEHICLE_COLLISION){
-        if(env->post_collision_action==STOP_AGENT && !agent->stopped){ //Stop
+        if(env->collision_behaviour==STOP_AGENT && !agent->stopped){ //Stop
             agent->stopped = 1;
             agent->vx=agent->vy = 0.0f;
         }
-        else if(env->post_collision_action==REMOVE_AGENT && !agent->removed){
+        else if(env->collision_behaviour==REMOVE_AGENT && !agent->removed){
             Entity* car_collided = &env->entities[car_collided_with_index];
             agent->removed = 1;
             car_collided->removed = 1;
@@ -964,11 +964,11 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     }
     if(collided == OFFROAD){
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        if(env->post_offroad_action==STOP_AGENT  && !agent->stopped){ //Stop
+        if(env->offroad_behaviour==STOP_AGENT  && !agent->stopped){ //Stop
             agent->stopped = 1;
             agent->vx=agent->vy = 0.0f;
         }
-        else if(env->post_offroad_action==REMOVE_AGENT && !agent->removed){
+        else if(env->offroad_behaviour==REMOVE_AGENT && !agent->removed){
             agent->removed = 1;
             agent->x = agent->y = -10000.0f;
             agent->valid = 0;
@@ -1114,8 +1114,6 @@ void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
     env->entities = load_map_binary(env->map_name, env);
-    env->post_collision_action = 1;
-    env->post_offroad_action = 1;
     env->dynamics_model = CLASSIC;
     set_means(env);
     init_grid_map(env);

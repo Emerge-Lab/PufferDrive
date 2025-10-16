@@ -143,6 +143,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
+    env->collision_behaviour = conf.collision_behaviour;
+    env->offroad_behaviour = conf.offroad_behaviour;
     env->action_type = conf.action_type;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;
