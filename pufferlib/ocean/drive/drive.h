@@ -320,20 +320,6 @@ struct Graph* createGraph(int V) {
     return graph;
 }
 
-// Function to add an edge to an undirected graph
-void addEdge(struct Graph* graph, int src, int dest) {
-
-    // Add an edge from src to dest
-    struct AdjListNode* node = newAdjListNode(dest);
-    node->next = graph->array[src];
-    graph->array[src] = node;
-
-    // Since the graph is undirected, add an edge from dest to src
-    node = newAdjListNode(src);
-    node->next = graph->array[dest];
-    graph->array[dest] = node;
-}
-
 // Function to get next lanes from a given lane entity index
 // Returns the number of next lanes found, fills next_lanes array with entity indices
 int getNextLanes(struct Graph* graph, int entity_idx, int* next_lanes, int max_lanes) {
