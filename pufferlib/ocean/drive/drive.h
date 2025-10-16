@@ -250,7 +250,7 @@ struct Drive {
     float world_mean_x;
     float world_mean_y;
     int spawn_immunity_timer;
-    int dt;
+    float dt;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
