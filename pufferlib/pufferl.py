@@ -562,7 +562,7 @@ class PuffeRL:
                         env = os.environ.copy()
                         env["ASAN_OPTIONS"] = "exitcode=0"
 
-                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive"]
+                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
                         # Add render configurations
                         if config["show_grid"]:

@@ -1,0 +1,213 @@
+import argparse
+import itertools
+import json
+import os
+import time
+import numpy as np
+import torch
+import pufferlib
+import pufferlib.vector
+from pufferlib.ocean import env_creator
+from pufferlib.ocean.torch import Drive, Recurrent
+
+
+def evaluate_oracle_policy(
+    policy_path,
+    num_maps=10,
+    num_rollouts=10,
+    num_workers=8,
+    oracle_mode=True,
+    device="cuda",
+):
+
+    num_agents = 64
+
+    collision_weights = [-1.0, -0.5, 0.0]
+    offroad_weights = [-0.4, -0.2, 0.0]
+    goal_weights = [0.0, 0.5, 1.0]
+    entropy_weights = [0.0, 5e-4, 1e-3]
+    discount_weights = [0.9, 0.95, 0.98, 1.0]
+
+    combos = list(itertools.product(
+        collision_weights,
+        offroad_weights,
+        goal_weights,
+        entropy_weights,
+        discount_weights,
+    ))
+
+    print(f"Evaluation Configuration:")
+    print(f"  Policy: {policy_path}")
+    print(f"  Device: {device}")
+    print(f"  Num maps: {num_maps}")
+    print(f"  Num agents per env: {num_agents}")
+    print(f"  Num workers: {num_workers}")
+    print(f"  Rollouts per combo (parallel): {num_rollouts}")
+    print(f"  Total parallel agents: {num_agents * num_rollouts}")
+    print(f"  Total combinations: {len(combos)}")
+    print(f"  Oracle mode: {oracle_mode}")
+
+    policy_dir = os.path.dirname(policy_path)
+    policy_name = os.path.basename(policy_path).replace(".pt", "")
+    out_path = os.path.join(policy_dir, f"{policy_name}_eval_results.jsonl")
+    print(f"  Output: {out_path}\n")
+
+    print("Loading policy...")
+    make_env = env_creator("puffer_drive")
+
+    temp_env = make_env(num_agents=1, num_maps=1, oracle_mode=oracle_mode, condition_type="all",)
+    base_policy = Drive(temp_env, input_size=64, hidden_size=256)
+    policy = Recurrent(temp_env, base_policy, input_size=256, hidden_size=256).to(device)
+    state_dict = torch.load(policy_path, map_location=device)
+    state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+    policy.load_state_dict(state_dict)
+    policy.eval()
+    temp_env.close()
+
+    print("Policy loaded successfully\n")
+
+    with open(out_path, "w") as f:
+        t0 = time.time()
+        completed = 0
+
+        print("Starting evaluation sweep...\n")
+
+        for combo_idx, (cw, ow, gw, ew, dw) in enumerate(combos):
+            # Run num_rollouts environments in parallel
+            env_kwargs = {
+                "num_agents": num_agents,
+                "num_maps": num_maps,
+                "collision_weight_lb": cw,
+                "collision_weight_ub": cw,  # lb=ub: all agents same
+                "offroad_weight_lb": ow,
+                "offroad_weight_ub": ow,
+                "goal_weight_lb": gw,
+                "goal_weight_ub": gw,
+                "entropy_weight_lb": ew,
+                "entropy_weight_ub": ew,
+                "discount_weight_lb": dw,
+                "discount_weight_ub": dw,
+                "oracle_mode": oracle_mode,
+                "condition_type": "all",
+                "population_play": False,
+                "report_interval": 1,  # Report every step for metrics
+            }
+
+            vecenv = pufferlib.vector.make(
+                make_env,
+                env_kwargs=env_kwargs,
+                backend=pufferlib.vector.Multiprocessing,
+                num_envs=num_rollouts,
+                num_workers=min(num_workers, num_rollouts),
+            )
+
+            obs, _ = vecenv.reset()
+            total_agents = num_agents * num_rollouts
+
+            state = {
+                "lstm_h": torch.zeros(total_agents, policy.hidden_size, device=device),
+                "lstm_c": torch.zeros(total_agents, policy.hidden_size, device=device),
+            }
+
+            total_reward = np.zeros(total_agents)
+            all_infos = []
+
+            with torch.no_grad():
+                for t in range(91):
+                    obs_t = torch.as_tensor(obs, device=device)
+                    logits, _ = policy.forward_eval(obs_t, state)
+                    action, _, _ = pufferlib.pytorch.sample_logits(logits)
+
+                    obs, reward, done, trunc, info = vecenv.step(action.cpu().numpy())
+                    total_reward += reward
+
+                    # Collect all infos for metrics
+                    if info:
+                        all_infos.extend(info)
+
+            # Compute per-rollout returns
+            rollout_rewards = total_reward.reshape(num_rollouts, num_agents)
+            rollout_returns = rollout_rewards.mean(axis=1)
+
+            # Extract performance metrics (always available)
+            # Sum up all metrics across all infos
+            perf_sum = sum(info.get('perf', 0) for info in all_infos)
+            score_sum = sum(info.get('score', 0) for info in all_infos)
+            collision_rate_sum = sum(info.get('collision_rate', 0) for info in all_infos)
+            offroad_rate_sum = sum(info.get('offroad_rate', 0) for info in all_infos)
+            completion_rate_sum = sum(info.get('completion_rate', 0) for info in all_infos)
+            dnf_rate_sum = sum(info.get('dnf_rate', 0) for info in all_infos)
+            num_infos = len(all_infos) or 1
+
+            # Average across all logged episodes
+            perf_avg = perf_sum / num_infos
+            score_avg = score_sum / num_infos
+            collision_rate_avg = collision_rate_sum / num_infos
+            offroad_rate_avg = offroad_rate_sum / num_infos
+            completion_rate_avg = completion_rate_sum / num_infos
+            dnf_rate_avg = dnf_rate_sum / num_infos
+
+            vecenv.close()
+
+            completed += 1
+            elapsed = time.time() - t0
+            rate = completed / elapsed
+            eta = (len(combos) - completed) / rate if rate > 0 else 0
+
+            avg_ret = float(np.mean(rollout_returns))
+            print(f"  [{completed}/{len(combos)}] "
+                  f"{rate:.2f} combos/s | ETA: {eta:.0f}s | "
+                  f"Ret: {avg_ret:.3f} | Perf: {perf_avg:.3f} | "
+                  f"Coll: {collision_rate_avg:.3f} | Off: {offroad_rate_avg:.3f} | "
+                  f"Comp: {completion_rate_avg:.3f}")
+
+            result = {
+                "collision_weight": cw,
+                "offroad_weight": ow,
+                "goal_weight": gw,
+                "entropy_weight": ew,
+                "discount_weight": dw,
+                "num_maps": num_maps,
+                "num_agents": num_agents,
+                "horizon": 91,
+                "rollouts": num_rollouts,
+                "avg_return": float(np.mean(rollout_returns)),
+                "std_return": float(np.std(rollout_returns)),
+                "min_return": float(np.min(rollout_returns)),
+                "max_return": float(np.max(rollout_returns)),
+                "perf": perf_avg,
+                "score": score_avg,
+                "collision_rate": collision_rate_avg,
+                "offroad_rate": offroad_rate_avg,
+                "completion_rate": completion_rate_avg,
+                "dnf_rate": dnf_rate_avg,
+            }
+            f.write(json.dumps(result) + "\n")
+            f.flush()
+
+    elapsed = time.time() - t0
+    print(f"\nDone!")
+    print(f"  Total time: {elapsed:.0f}s ({completed / elapsed:.2f} rollouts/sec)")
+    print(f"  Results written to: {out_path}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Evaluate oracle policy in homogeneous behavioral environments"
+    )
+    parser.add_argument("--policy-name", type=str, required=True, help="Path to trained model checkpoint (.pt file)",)
+    parser.add_argument("--num-maps", type=int, default=10, help="Number of maps to evaluate on",)
+    parser.add_argument("--num-rollouts", type=int, default=10, help="Number of independent rollouts per conditioning combination",)
+    parser.add_argument("--num-workers", type=int, default=8, help="Number of parallel workers for environment vectorization",)
+    parser.add_argument("--oracle", action="store_true", default=True, help="Whether policy was trained with oracle conditioning",)
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to run on",)
+    args = parser.parse_args()
+
+    evaluate_oracle_policy(
+        policy_path=args.policy_name,
+        num_maps=args.num_maps,
+        num_rollouts=args.num_rollouts,
+        num_workers=args.num_workers,
+        oracle_mode=args.oracle,
+        device=args.device,
+    )

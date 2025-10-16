@@ -36,6 +36,10 @@ bool OpenVideo(VideoRecorder *recorder, const char *output_filename, int width, 
         close(recorder->pipefd[1]);
         dup2(recorder->pipefd[0], STDIN_FILENO);
         close(recorder->pipefd[0]);
+        // Close all other file descriptors to prevent leaks
+        for (int fd = 3; fd < 256; fd++) {
+            close(fd);
+        }
         execlp("ffmpeg", "ffmpeg",
                "-y",
                "-f", "rawvideo",
@@ -193,9 +197,12 @@ static int make_gif_from_frames(const char *pattern, int fps,
 
 int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int oracle_mode, int use_rc, int use_ec, int use_dc, const char* view_mode) {
 
-    // Use default if no map provided
+    char map_buffer[100];
     if (map_name == NULL) {
-        map_name = "resources/drive/binaries/map_000.bin";
+        srand(time(NULL));
+        int random_map = rand() % 100;
+        sprintf(map_buffer, "resources/drive/binaries/map_%03d.bin", random_map);
+        map_name = map_buffer;
     }
 
     if (frame_skip <= 0) {
@@ -328,7 +335,12 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
+            for(int i=0; i < env.active_agent_count; i++)
+            {
+                printf("Agent %d - %f %f %f %f %f\n", i, env.logs[i].perf, env.logs[i].episode_return, env.logs[i].collision_rate, env.logs[i].offroad_rate, env.logs[i].completion_rate);
+            }
         }
+
     }
 
     // Reset environment for agent view

@@ -5,7 +5,13 @@
 ENV=$1
 MODE=${2:-local}
 PLATFORM="$(uname -s)"
-SRC_DIR="pufferlib/ocean/$ENV"
+
+# Handle special cases for drive-based binaries
+if [ "$ENV" = "visualize" ] || [ "$ENV" = "evaluate" ]; then
+    SRC_DIR="pufferlib/ocean/drive"
+else
+    SRC_DIR="pufferlib/ocean/$ENV"
+fi
 WEB_OUTPUT_DIR="build_web/$ENV"
 RAYLIB_NAME='raylib-5.5_macos'
 BOX2D_NAME='box2d-macos-arm64'
@@ -81,13 +87,15 @@ FLAGS=(
     -I./$BOX2D_NAME/include
     -I./$BOX2D_NAME/src
     -I./pufferlib/extensions
-    "$SRC_DIR/$ENV.c" -o "$ENV"
-    $LINK_ARCHIVES
+    "$SRC_DIR/$ENV.c"
     -lm
     -lpthread
     $ERROR_LIMIT_FLAG
     -DPLATFORM_DESKTOP
 )
+
+# Add output and libraries
+FLAGS+=(-o "$ENV" $LINK_ARCHIVES)
 
 
 if [ "$PLATFORM" = "Darwin" ]; then

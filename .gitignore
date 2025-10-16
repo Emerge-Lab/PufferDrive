@@ -173,8 +173,11 @@ pufferlib/resources/drive/binaries/
 # Compiled drive binary in root
 /drive
 /evaluate
+/visualize
 # But allow drive directories
 !*/drive/
 *.exe
 *.out
 *.app
+*.mp4
+CLAUDE.md
