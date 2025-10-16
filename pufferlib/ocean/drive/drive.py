@@ -6,9 +6,6 @@ import os
 import pufferlib
 from pufferlib.ocean.drive import binding
 
-REMOVE = 2
-STOP = 1
-IGNORE = 0
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
