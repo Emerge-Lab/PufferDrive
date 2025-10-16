@@ -368,10 +368,7 @@ void set_start_position(Drive* env){
         e->x = e->traj_x[0];
         e->y = e->traj_y[0];
         e->z = e->traj_z[0];
-        //printf("Entity %d is at (%f, %f, %f)\n", i, e->x, e->y, e->z);
-        //if (e->type < 4) {
-        //    DrawRectangle(200+2*e->x, 200+2*e->y, 2.0, 2.0, RED);
-        //}
+
         if(e->type >3 || e->type == 0){
             continue;
         }
@@ -404,7 +401,6 @@ void set_start_position(Drive* env){
 
 int getGridIndex(Drive* env, float x1, float y1) {
     if (env->grid_map->top_left_x >= env->grid_map->bottom_right_x || env->grid_map->bottom_right_y >= env->grid_map->top_left_y) {
-        printf("Invalid grid coordinates\n");
         return -1;  // Invalid grid coordinates
     }
 
@@ -582,7 +578,6 @@ void cache_neighbor_offsets(Drive* env){
         env->grid_map->neighbor_cache_count[i] = current_cell_neighbor_count;
         count += current_cell_neighbor_count;
         if(current_cell_neighbor_count == 0) {
-            // printf("Cell %d has no neighbors\n", i);
             env->grid_map->neighbor_cache_entities[i] = NULL;
             continue;
         }
@@ -1184,16 +1179,10 @@ void c_close(Drive* env){
 void allocate(Drive* env){
     init(env);
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    // printf("max obs: %d\n", max_obs*env->active_agent_count);
-    // printf("num cars: %d\n", env->num_cars);
-    // printf("num static cars: %d\n", env->static_car_count);
-    // printf("active agent count: %d\n", env->active_agent_count);
-    // printf("num objects: %d\n", env->num_objects);
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
     env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
     env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
-    // printf("allocated\n");
 }
 
 void free_allocated(Drive* env){
@@ -1368,12 +1357,10 @@ void compute_observations(Drive* env) {
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
 
         int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
-        // printf("DEBUG: grid_idx = %d list_size = %d\n", grid_idx, list_size);
 
         for(int k = 0; k < list_size; k++) {
             int entity_idx = entity_list[k].entity_idx;
             int geometry_idx = entity_list[k].geometry_idx;
-            // printf("DEBUG: k=%d entity_idx=%d geometry_idx=%d\n", k, entity_idx, geometry_idx);
 
             // Validate entity_idx before accessing
             if(entity_idx < 0 || entity_idx >= env->num_entities) {
@@ -1382,7 +1369,6 @@ void compute_observations(Drive* env) {
             }
 
             Entity* entity = &env->entities[entity_idx];
-            // printf("DEBUG: entity pointer = %p\n", (void*)entity);
 
             // Validate geometry_idx before accessing
             if(geometry_idx < 0 || geometry_idx >= entity->array_size) {
@@ -1390,7 +1376,6 @@ void compute_observations(Drive* env) {
                        geometry_idx, entity_idx, entity->array_size-1);
                 continue;
             }
-            // printf("DEBUG: entity_idx = %d, geometry_idx = %d\n", entity_idx, geometry_idx);
             float start_x = entity->traj_x[geometry_idx];
             float start_y = entity->traj_y[geometry_idx];
             float end_x = entity->traj_x[geometry_idx+1];
@@ -1523,7 +1508,6 @@ void c_step(Drive* env){
             if(!env->entities[agent_idx].reached_goal_this_episode){
                 env->entities[agent_idx].collided_before_goal = 1;
             }
-            //printf("agent %d collided\n", agent_idx);
         }
 
         float distance_to_goal = relative_distance_2d(
