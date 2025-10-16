@@ -22,5 +22,5 @@ jobs:
           python setup.py build_ext --inplace --force
 
       - name: Test simulator performance
-        run: python tests/test_simulator_perf.py --expected_sps 100000 --warning_threshold 0.9
+        run: python tests/test_simulator_perf.py
         timeout-minutes: 8
