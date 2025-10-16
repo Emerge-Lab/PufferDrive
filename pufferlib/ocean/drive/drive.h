@@ -547,8 +547,10 @@ void init_topology_graph(Drive* env){
             float distance = relative_distance_2d(end_x, end_y, start_x, start_y);
             float heading_diff = fabsf(end_heading - start_heading);
 
-            // Use a threshold for connectivity (adjust as needed)
-            if(distance < 0.01f && heading_diff < 0.5f){
+            // Lane connectivity thresholds:
+            // - 0.01m distance: lanes must connect within 1cm (very strict for clean topology)
+            // - 0.1 (~5.7 degrees) heading difference: allow slight curves
+            if(distance < 0.01f && heading_diff < 0.1f){
                 // Add directed edge from i to j (lane i connects to lane j)
                 struct AdjListNode* node = newAdjListNode(j);
                 node->next = env->topology_graph->array[i];
@@ -1072,6 +1074,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     }
 
     // check if aligned with closest lane and set current lane
+    // 4.0m threshold: agents more than 4 meters from any lane are considered off-road
     if (min_distance > 4.0f || closest_lane_entity_idx == -1) {
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
         agent->current_lane_idx = -1;
@@ -1566,6 +1569,7 @@ void compute_new_goal(Drive* env, int agent_idx) {
 
     if (current_lane == -1) return; // No current lane
 
+    // Target distance: 40m ahead along the lane topology from agent's current position
     float target_distance = 40.0f;
     int current_entity = current_lane;
     Entity* lane = &env->entities[current_entity];
@@ -1604,6 +1608,8 @@ void compute_new_goal(Drive* env, int agent_idx) {
         lane = &env->entities[current_entity];
 
         int start_idx = first_lane ? initial_segment_idx : 1;
+        // Ensure start_idx is at least 1 to avoid accessing traj_x[i-1] with i=0
+        if (start_idx < 1) start_idx = 1;
         first_lane = 0;
 
         for (int i = start_idx; i < lane->array_size; i++) {
@@ -1635,7 +1641,7 @@ void compute_new_goal(Drive* env, int agent_idx) {
             return; // No further lanes to traverse
         }
 
-        int random_idx = rand() % num_connected;
+        int random_idx = agent_idx % num_connected;
         current_entity = connected_lanes[random_idx];
     }
 }
