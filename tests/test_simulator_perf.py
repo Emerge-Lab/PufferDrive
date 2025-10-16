@@ -6,7 +6,7 @@ import argparse
 from pufferlib.ocean.drive.drive import Drive
 
 
-def test_simulator_raw(expected_sps=1000, warning_threshold=0.9):
+def test_simulator_raw(expected_sps, warning_threshold):
     """
     Measure raw simulator performance and warn if it regresses.
 
@@ -18,7 +18,7 @@ def test_simulator_raw(expected_sps=1000, warning_threshold=0.9):
     atn_cache = 16  # batched action cache
     num_agents = 32
 
-    env = Drive(num_agents=num_agents)
+    env = Drive(num_agents=num_agents, num_maps=1)
     obs, _ = env.reset()
     tick = 0
 
