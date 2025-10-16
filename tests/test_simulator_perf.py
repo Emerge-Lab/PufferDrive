@@ -1,28 +1,67 @@
-# tests/test_simulator_perf.py
 import time
+import json
 import numpy as np
 import warnings
-import argparse
+from pathlib import Path
 from pufferlib.ocean.drive.drive import Drive
 
+# ===============================================================
+# CONFIGURATION
+# ===============================================================
 
-def test_simulator_raw(expected_sps, warning_threshold):
+# Path where the history JSON will be stored
+# (relative to project root, regardless of where the test runs from)
+ROOT_DIR = Path(__file__).resolve().parents[2]  # goes up from tests/ to PufferDrive/
+DATA_FILE = ROOT_DIR / "pufferlib" / "resources" / "drive" / "simulator_perf_history.json"
+
+# ===============================================================
+# HELPER FUNCTIONS
+# ===============================================================
+
+
+def load_history():
+    """Load previous SPS values from JSON (if exists)."""
+    if DATA_FILE.exists():
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {"sps_values": []}
+
+
+def save_history(history):
+    """Save SPS history back to JSON."""
+    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(DATA_FILE, "w") as f:
+        json.dump(history, f, indent=4)
+
+
+def compute_baseline(history):
+    """Compute mean and std from stored SPS values."""
+    sps_values = np.array(history["sps_values"], dtype=float)
+    if len(sps_values) < 3:
+        # Not enough data to compute reliable stats yet
+        return 0, 0
+    return np.mean(sps_values), np.std(sps_values)
+
+
+# ===============================================================
+# MAIN TEST
+# ===============================================================
+
+
+def test_simulator_raw():
     """
-    Measure raw simulator performance and warn if it regresses.
-
-    Args:
-        expected_sps (float): Expected baseline steps per second (SPS).
-        warning_threshold (float): Fraction of expected SPS below which a warning is issued.
+    Run the simulator, measure performance (SPS),
+    and update or warn based on dynamic baseline.
     """
     timeout = 5  # seconds (short for CI)
     atn_cache = 16  # batched action cache
     num_agents = 32
 
+    # ---- Run simulation ----
     env = Drive(num_agents=num_agents, num_maps=1)
     obs, _ = env.reset()
     tick = 0
 
-    # Pre-generate random batched actions
     actions = np.stack(
         [np.random.randint(0, space.n, (atn_cache, num_agents)) for space in env.single_action_space], axis=-1
     )
@@ -39,27 +78,35 @@ def test_simulator_raw(expected_sps, warning_threshold):
 
     env.close()
 
-    # Calculate performance
     total_time = time.time() - start_time
     sps = num_agents * tick / total_time
     print(f"Steps per second (SPS): {sps:.1f}")
     print(f"Step time mean: {np.mean(step_times):.6f}s, std: {np.std(step_times):.6f}s")
 
-    # Compare to expected baseline
-    performance_pct = sps / expected_sps
-    if performance_pct < warning_threshold:
-        warnings.warn(
-            f"⚠️ Simulator performance is {performance_pct * 100:.1f}% of expected baseline "
-            f"({expected_sps} SPS). Threshold for warning: {warning_threshold * 100:.0f}%."
-        )
+    # ---- Load and update history ----
+    history = load_history()
+    mean, std = compute_baseline(history)
 
+    if mean > 0:
+        threshold = mean - std
+        if sps < threshold:
+            warnings.warn(
+                f"\033[91m⚠️ Performance regression detected: {sps:.1f} < {threshold:.1f} (mean - 1 std).\033[0m\n"
+                f"Current mean: {mean:.1f}, std: {std:.1f}, history size: {len(history['sps_values'])}"
+            )
+        else:
+            history["sps_values"].append(sps)
+            save_history(history)
+            print(f"\033[92m✅ Performance acceptable. Updated baseline (mean={mean:.1f}, std={std:.1f}).\033[0m")
+    else:
+        history["sps_values"].append(sps)
+        save_history(history)
+        print("📈 Initialized baseline tracking.")
+
+
+# ===============================================================
+# ENTRY POINT
+# ===============================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Test simulator performance")
-    parser.add_argument("--expected_sps", type=float, default=100000, help="Expected baseline steps per second (SPS)")
-    parser.add_argument(
-        "--warning_threshold", type=float, default=0.9, help="Fraction of expected SPS below which a warning is issued"
-    )
-
-    args = parser.parse_args()
-    test_simulator_raw(expected_sps=args.expected_sps, warning_threshold=args.warning_threshold)
+    test_simulator_raw()
