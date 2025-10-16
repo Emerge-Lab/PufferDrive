@@ -153,11 +153,13 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->spawn_immunity_timer = conf.spawn_immunity_timer;
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
-
+    int init_steps = unpack(kwargs, "init_steps");
     char map_file[100];
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
     env->num_agents = max_agents;
     env->map_name = strdup(map_file);
+    env->init_steps = init_steps;
+    env->timestep = init_steps;
     init(env);
     return 0;
 }

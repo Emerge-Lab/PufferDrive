@@ -91,7 +91,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
         Vector3 prev_point = {0};
         bool has_prev = false;
 
-        for(int j=0; j<TRAJECTORY_LENGTH; j++){
+        for(int j=env->init_steps; j<TRAJECTORY_LENGTH; j++){
             float x = env->entities[idx].traj_x[j];
             float y = env->entities[idx].traj_y[j];
             float valid = env->entities[idx].traj_valid[j];
@@ -482,7 +482,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius) {
+int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps) {
 
     // Use default if no map provided
     if (map_name == NULL) {
@@ -508,7 +508,8 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
         .reward_ade = -0.0f,
         .goal_radius = goal_radius,
 	    .map_name = map_name,
-        .spawn_immunity_timer = 50
+        .spawn_immunity_timer = 50,
+        .init_steps = init_steps,
     };
     allocate(&env);
 
@@ -540,7 +541,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
-    int frame_count = 91;
+    int frame_count = TRAJECTORY_LENGTH - init_steps;
     char filename[256];
     int log_trajectory = log_trajectories;
 
@@ -658,6 +659,7 @@ int main(int argc, char* argv[]) {
     int log_trajectories = 1;
     int frame_skip = 1;
     float goal_radius = 2.0f;
+    int init_steps = 0;
     const char* map_name = NULL;
 
     // Parse command line arguments
@@ -670,6 +672,17 @@ int main(int argc, char* argv[]) {
             lasers = 1;
         } else if (strcmp(argv[i], "--log-trajectories") == 0) {
             log_trajectories = 1;
+        } else if (strcmp(argv[i], "--init-steps") == 0) {
+            if (i + 1 < argc) {
+                init_steps = atoi(argv[i + 1]);
+                i++;
+                if (init_steps < 0) {
+                    init_steps = 0; // Ensure non-negative
+                }
+                if (init_steps > TRAJECTORY_LENGTH-1) {
+                    init_steps = TRAJECTORY_LENGTH-1; // Upper bound
+                }
+            }
         } else if (strcmp(argv[i], "--frame-skip") == 0) {
             if (i + 1 < argc) {
                 frame_skip = atoi(argv[i + 1]);
@@ -698,7 +711,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius);
+    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps);
     //demo();
     //performance_test();
     return 0;

@@ -28,6 +28,7 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         buf=None,
         seed=1,
+        init_steps=0,
     ):
         # env
         self.render_mode = render_mode
@@ -44,6 +45,7 @@ class Drive(pufferlib.PufferEnv):
         self.resample_frequency = resample_frequency
         self.num_obs = 7 + 63 * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+        self.init_steps = init_steps
 
         if action_type == "discrete":
             self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
@@ -96,6 +98,7 @@ class Drive(pufferlib.PufferEnv):
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
+                init_steps=init_steps,
             )
             env_ids.append(env_id)
 
@@ -147,6 +150,7 @@ class Drive(pufferlib.PufferEnv):
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                         ini_file="pufferlib/config/ocean/drive.ini",
+                        init_steps=self.init_steps,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)

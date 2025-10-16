@@ -229,6 +229,7 @@ struct Drive {
     int expert_static_car_count;
     int* expert_static_car_indices;
     int timestep;
+    int init_steps;
     int dynamics_model;
     float* map_corners;
     int* grid_cells;  // holds entity ids and geometry index per cell
@@ -288,7 +289,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
     env->num_entities = env->num_objects + env->num_roads;
     Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
     for (int i = 0; i < env->num_entities; i++) {
-	// Read base entity data
+	    // Read base entity data
         fread(&entities[i].type, sizeof(int), 1, file);
         fread(&entities[i].array_size, sizeof(int), 1, file);
         // Allocate arrays based on type
@@ -347,9 +348,15 @@ void set_start_position(Drive* env){
             }
         }
         Entity* e = &env->entities[i];
-        e->x = e->traj_x[0];
-        e->y = e->traj_y[0];
-        e->z = e->traj_z[0];
+
+        // Clamp init_steps to ensure we don't go out of bounds
+        int step = env->init_steps;
+        if (step >= e->array_size) step = e->array_size - 1;
+        if (step < 0) step = 0;
+
+        e->x = e->traj_x[step];
+        e->y = e->traj_y[step];
+        e->z = e->traj_z[step];
         //printf("Entity %d is at (%f, %f, %f)\n", i, e->x, e->y, e->z);
         //if (e->type < 4) {
         //    DrawRectangle(200+2*e->x, 200+2*e->y, 2.0, 2.0, RED);
@@ -363,14 +370,14 @@ void set_start_position(Drive* env){
             e->vz = 0;
             e->collided_before_goal = 0;
         } else{
-            e->vx = e->traj_vx[0];
-            e->vy = e->traj_vy[0];
-            e->vz = e->traj_vz[0];
+            e->vx = e->traj_vx[env->init_steps];
+            e->vy = e->traj_vy[env->init_steps];
+            e->vz = e->traj_vz[env->init_steps];
         }
-        e->heading = e->traj_heading[0];
+        e->heading = e->traj_heading[env->init_steps];
         e->heading_x = cosf(e->heading);
         e->heading_y = sinf(e->heading);
-        e->valid = e->traj_valid[0];
+        e->valid = e->traj_valid[env->init_steps];
         e->collision_state = 0;
         e->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
         e->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
@@ -1348,7 +1355,7 @@ void compute_observations(Drive* env) {
 }
 
 void c_reset(Drive* env){
-    env->timestep = 0;
+    env->timestep = env->init_steps;
     set_start_position(env);
     for(int x = 0;x<env->active_agent_count; x++){
         env->logs[x] = (Log){0};
