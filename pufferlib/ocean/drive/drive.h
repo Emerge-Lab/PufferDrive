@@ -1379,6 +1379,12 @@ void allocate(Drive* env){
         max_obs += 1;
     }
 
+    // Add oracle observations (hardcoded to 64 agents like Python)
+    if (env->oracle_mode) {
+        int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0) + (env->use_dc ? 1 : 0);
+        max_obs += 64 * conditioning_dims;
+    }
+
 
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
     env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
