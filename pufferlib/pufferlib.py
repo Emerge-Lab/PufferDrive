@@ -31,6 +31,14 @@ def set_buffers(env, buf=None):
             env.actions = np.zeros(atn_space.shape, dtype=atn_space.dtype)
         else:
             env.actions = np.zeros(atn_space.shape, dtype=np.int32)
+
+        if getattr(env, "population_play", False):
+            atn_space = pufferlib.spaces.joint_space(env.single_action_space, env.num_ego_agents)
+            if isinstance(env.single_action_space, pufferlib.spaces.Box):
+                env.ego_actions = np.zeros(atn_space.shape, dtype=atn_space.dtype)
+            else:
+                env.ego_actions = np.zeros(atn_space.shape, dtype=np.int32)
+
     else:
         env.observations = buf["observations"]
         env.rewards = buf["rewards"]
@@ -38,6 +46,8 @@ def set_buffers(env, buf=None):
         env.truncations = buf["truncations"]
         env.masks = buf["masks"]
         env.actions = buf["actions"]
+        if env.population_play:
+            env.ego_actions = buf["ego_actions"]
 
 
 class PufferEnv:

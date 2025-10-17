@@ -487,7 +487,7 @@ int eval_gif(const char* map_name,
              int lasers,
              int log_trajectories,
              int frame_skip,
-             float goal_radius,
+             float goal_radius, int population_play,
              int control_non_vehicles,
              int init_steps,
              int control_all_agents,
@@ -522,43 +522,116 @@ int eval_gif(const char* map_name,
         .init_steps = init_steps,
         .control_all_agents = control_all_agents,
         .policy_agents_per_env = policy_agents_per_env,
-        .deterministic_agent_selection = deterministic_selection
+        .deterministic_agent_selection = deterministic_selection,
+        .population_play = population_play,
     };
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
+
+    // Set which vehicle to focus on for obs mode
     env.human_agent_idx = 0;
 
+
     c_reset(&env);
+
+    printf("DEBUG: Environment initialized, active_agent_count=%d\n", env.active_agent_count);
+    fflush(stdout);
+
     // Make client for rendering
     Client* client = (Client*)calloc(1, sizeof(Client));
     env.client = client;
 
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
-
     SetTargetFPS(6000);
 
-    float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
-    float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    srand(ts.tv_nsec);
 
-    printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 6.0f; // Can be used to increase the video quality
+    int ego_agent_id = rand() % env.active_agent_count;
+    int num_co_players = env.active_agent_count - 1;
 
-    // Calculate video width and height; round to nearest even number
+    printf("DEBUG: ego_agent_id=%d, num_co_players=%d\n", ego_agent_id, num_co_players);
+    fflush(stdout);
+
+    for (int i = 0; i < env.active_agent_count; i++) {
+
+        if (i != ego_agent_id && population_play) {
+            env.entities[env.active_agent_indices[i]].is_ego = false;
+            env.entities[env.active_agent_indices[i]].is_co_player = true;
+        }
+        else {
+            env.entities[env.active_agent_indices[i]].is_ego = true;
+            env.entities[env.active_agent_indices[i]].is_co_player = false;
+        }
+    }
+
+    float map_width = env.map_corners[2] - env.map_corners[0];
+    float map_height = env.map_corners[3] - env.map_corners[1];
+    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+
+    printf("Map size: %.1fx%.1f, max_obs=%d\n", map_width, map_height, max_obs);
+    fflush(stdout);
+
+    float scale = 6.0f;
+
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
     int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
-    // Load cpt into network
-    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    Weights* weights = NULL;
+    Weights* co_player_policy_weights = NULL;
+    DriveNet* net = NULL;
+    DriveNet* ego_net = NULL;
+    DriveNet* co_player_net = NULL;
+    int* co_player_actions = NULL;
+    int* ego_actions = NULL;
+    float* co_player_obs = NULL;
+    float* ego_agent_obs = NULL;
+
+    if (population_play) {
+        printf("DEBUG: Loading ego network...\n");
+        fflush(stdout);
+        printf("DFEBUG: first agent id: %d\n", ego_agent_id);
+        fflush(stdout);
+        weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+        ego_net = init_drivenet(weights, 1);
+
+        printf("DEBUG: Loading co-player network...\n");
+        fflush(stdout);
+
+<<<<<<< HEAD
+        co_player_policy_weights = load_weights("resources/drive/puffer_drive_co_player.bin", 595925);
+=======
+        co_player_policy_weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+>>>>>>> 93701fe6 (Cleaning because files were tests were failing)
+        co_player_net = init_drivenet(co_player_policy_weights, num_co_players);
+
+        printf("DEBUG: Allocating action and observation buffers...\n");
+        fflush(stdout);
+
+        co_player_actions = (int*)calloc((env.active_agent_count-1)*2, sizeof(int));
+        ego_actions = (int*)calloc(1*2, sizeof(int));
+        co_player_obs = (float*)calloc(num_co_players*max_obs, sizeof(float));
+        ego_agent_obs = (float*)calloc(1*max_obs, sizeof(float));
+        env.human_agent_idx = ego_agent_id;
+        printf("DEBUG: Population play setup complete\n");
+        fflush(stdout);
+    } else {
+        printf("DEBUG: Loading single network for all agents...\n");
+        fflush(stdout);
+
+        weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+        net = init_drivenet(weights, env.active_agent_count);
+    }
 
     int frame_count = TRAJECTORY_LENGTH - init_steps;
     char filename[256];
     int log_trajectory = log_trajectories;
 
     printf("Starting video recording...\n");
+    fflush(stdout);
 
     // Create video recorders
     VideoRecorder topdown_recorder;
@@ -572,8 +645,14 @@ int eval_gif(const char* map_name,
 
     // Generate top-down view video
     printf("Recording top-down view...\n");
+    fflush(stdout);
 
     for(int i = 0; i < frame_count; i++) {
+
+        printf("DEBUG: Frame %d/%d\n", i, frame_count);
+        fflush(stdout);
+
+
         // Only render every frame_skip frames
         if (i % frame_skip == 0) {
             renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid);
@@ -581,14 +660,59 @@ int eval_gif(const char* map_name,
             rendered_frames++;
         }
 
-            int (*actions)[2] = (int(*)[2])env.actions;
+        int (*actions)[2] = (int(*)[2])env.actions;
+
+        if (population_play) {
+            // Copy ego agent observation
+            memcpy(ego_agent_obs, &env.observations[ego_agent_id * max_obs], max_obs * sizeof(float));
+            // printf("DEBUG: in population play \n");
+            // fflush(stdout);
+            // Copy co-player observations
+            int co_obs_offset = 0;
+            for (int j = 0; j < env.active_agent_count; j++) {
+                if (j == ego_agent_id) continue;
+                memcpy(&co_player_obs[co_obs_offset],
+                    &env.observations[j * max_obs],
+                    max_obs * sizeof(float));
+                co_obs_offset += max_obs;
+            }
+            // printf("DEBUG: attemtping forwards\n");
+            // fflush(stdout);
+            // Get actions from both networks
+            forward(ego_net, ego_agent_obs, ego_actions);
+            forward(co_player_net, co_player_obs, co_player_actions);
+
+            // Assign ego action
+            actions[ego_agent_id][0] = ego_actions[0];
+            actions[ego_agent_id][1] = ego_actions[1];
+
+            // Assign co-player actions with correct indexing
+            int co_player_idx = 0;
+            for (int j = 0; j < env.active_agent_count; j++) {
+                if (j == ego_agent_id) continue;
+                actions[j][0] = co_player_actions[co_player_idx * 2];
+                actions[j][1] = co_player_actions[co_player_idx * 2 + 1];
+                co_player_idx++;
+            }
+            // printf("DEBUG: forwards complete, actions assigned\n");
+            // fflush(stdout);
+        } else {
             forward(net, env.observations, env.actions);
-            c_step(&env);
+        }
+        // printf("DEBUG: stepping environment\n");
+        // fflush(stdout);
+        c_step(&env);
     }
+
+    printf("DEBUG: Topdown recording complete, resetting environment...\n");
+    fflush(stdout);
 
     // Reset environment for agent view
     c_reset(&env);
     CloseVideo(&topdown_recorder);
+
+    printf("DEBUG: Starting agent view recording...\n");
+    fflush(stdout);
 
     VideoRecorder agent_recorder;
     if (!OpenVideo(&agent_recorder, "resources/drive/output_agent.mp4", img_width, img_height)) {
@@ -597,16 +721,45 @@ int eval_gif(const char* map_name,
     }
 
     for(int i = 0; i < frame_count; i++) {
-
         if (i % frame_skip == 0) {
             renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
             WriteFrame(&agent_recorder, img_width, img_height);
             rendered_frames++;
         }
 
-            int (*actions)[2] = (int(*)[2])env.actions;
+        int (*actions)[2] = (int(*)[2])env.actions;
+
+        // BUG FIX: This loop also needs population_play logic!
+        if (population_play) {
+            memcpy(ego_agent_obs, &env.observations[ego_agent_id * max_obs], max_obs * sizeof(float));
+
+            int co_obs_offset = 0;
+            for (int j = 0; j < env.active_agent_count; j++) {
+                if (j == ego_agent_id) continue;
+                memcpy(&co_player_obs[co_obs_offset],
+                    &env.observations[j * max_obs],
+                    max_obs * sizeof(float));
+                co_obs_offset += max_obs;
+            }
+
+            forward(ego_net, ego_agent_obs, ego_actions);
+            forward(co_player_net, co_player_obs, co_player_actions);
+
+            actions[ego_agent_id][0] = ego_actions[0];
+            actions[ego_agent_id][1] = ego_actions[1];
+
+            int co_player_idx = 0;
+            for (int j = 0; j < env.active_agent_count; j++) {
+                if (j == ego_agent_id) continue;
+                actions[j][0] = co_player_actions[co_player_idx * 2];
+                actions[j][1] = co_player_actions[co_player_idx * 2 + 1];
+                co_player_idx++;
+            }
+        } else {
             forward(net, env.observations, env.actions);
-            c_step(&env);
+        }
+
+        c_step(&env);
     }
 
     double endTime = GetTime();
@@ -615,19 +768,37 @@ int eval_gif(const char* map_name,
 
     printf("Wrote %d frames in %.2f seconds (%.2f FPS)\n",
            rendered_frames, elapsedTime, writeFPS);
+    fflush(stdout);
 
     // Close video recorders
     CloseVideo(&agent_recorder);
     CloseWindow();
 
-    // Clean up resources
+    printf("DEBUG: Cleaning up resources...\n");
+    fflush(stdout);
+
+    // Free networks properly based on mode
+    if (population_play) {
+        if (ego_net) free_drivenet(ego_net);
+        if (co_player_net) free_drivenet(co_player_net);
+        if (co_player_actions) free(co_player_actions);
+        if (ego_actions) free(ego_actions);
+        if (co_player_obs) free(co_player_obs);
+        if (ego_agent_obs) free(ego_agent_obs);
+        if (weights) free(weights);
+        if (co_player_policy_weights) free(co_player_policy_weights);
+    } else {
+        if (net) free_drivenet(net);
+        if (weights) free(weights);
+    }
+        // Clean up resources
     free(client);
     free_allocated(&env);
-    free_drivenet(net);
-    free(weights);
+    printf("DEBUG: Cleanup complete\n");
+    fflush(stdout);
+
     return 0;
 }
-
 void performance_test() {
     long test_time = 10;
     Drive env = {
@@ -674,6 +845,7 @@ int main(int argc, char* argv[]) {
     float goal_radius = 2.0f;
     int init_steps = 0;
     const char* map_name = NULL;
+    int population_play = 1;
     int control_all_agents = 0;
     int deterministic_selection = 0;
     int policy_agents_per_env = -1;
@@ -727,6 +899,13 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Error: --map-name option requires a map file path\n");
                 return 1;
             }
+        }else if (strcmp(argv[i], "--population-play") == 0) {
+            population_play = 1;
+        }
+
+    }
+
+    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, population_play);
         } else if (strcmp(argv[i], "--pure-self-play") == 0) {
             control_all_agents = 1;
         } else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {

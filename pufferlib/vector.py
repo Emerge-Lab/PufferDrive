@@ -4,7 +4,8 @@
 import numpy as np
 import time
 import psutil
-
+import sys
+import os
 from pufferlib.emulation import GymnasiumPufferEnv, PettingZooPufferEnv
 from pufferlib import PufferEnv, set_buffers
 import pufferlib.spaces
@@ -28,12 +29,16 @@ def recv_precheck(vecenv):
 def send_precheck(vecenv, actions):
     if vecenv.flag != SEND:
         raise pufferlib.APIUsageError("Call (async) reset + recv before sending")
-
+    
     actions = np.asarray(actions)
     if not vecenv.initialized:
         vecenv.initialized = True
-        if not vecenv.action_space.contains(actions):
-            raise pufferlib.APIUsageError("Actions do not match action space")
+        if vecenv.population_play:
+            if not vecenv.ego_action_space.contains(actions):
+                raise pufferlib.APIUsageError("Ego Actions do not match action space")
+        else:
+            if not vecenv.action_space.contains(actions):
+                raise pufferlib.APIUsageError("Actions do not match action space")
 
     vecenv.flag = RECV
     return actions
@@ -47,6 +52,7 @@ def reset(vecenv, seed=42):
 
 def step(vecenv, actions):
     actions = np.asarray(actions)
+
     vecenv.send(actions)
     obs, rewards, terminals, truncations, infos, env_ids, masks = vecenv.recv()
     return obs, rewards, terminals, truncations, infos  # include env_ids or no?
@@ -196,6 +202,8 @@ def _worker_process(
     shm,
     is_native,
     seed,
+    population_play=False,
+    num_ego_agents=0,
 ):
     # Environments read and write directly to shared memory
     shape = (num_workers, num_envs * num_agents)
@@ -210,11 +218,17 @@ def _worker_process(
     )
     buf["masks"][:] = True
 
+    if population_play:
+        ego_shape = (num_workers, num_envs * num_ego_agents) 
+        atn_arr = np.ndarray((*ego_shape,*atn_shape), dtype=atn_dtype, buffer=shm["ego_actions"])[worker_idx]
+        buf["ego_actions"] = atn_arr
+
     if is_native and num_envs == 1:
         envs = env_creators[0](*env_args[0], **env_kwargs[0], buf=buf, seed=seed)
     else:
         envs = Serial(env_creators, env_args, env_kwargs, num_envs, buf=buf, seed=seed * num_envs)
 
+    
     semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
     start = time.time()
@@ -303,6 +317,7 @@ class Multiprocessing:
         self.envs_per_worker = envs_per_worker
         self.workers_per_batch = batch_size // envs_per_worker
         self.num_workers = num_workers
+        self.batch_size = batch_size
 
         # I really didn't want to need a driver process... with mp.shared_memory
         # we can fetch this data from the worker processes and ever perform
@@ -313,11 +328,16 @@ class Multiprocessing:
         self.driver_env = driver_env = env_creators[0](*env_args[0], **env_kwargs[0])
         is_native = isinstance(driver_env, PufferEnv)
         self.emulated = False if is_native else driver_env.emulated
+
+        # self.num_agents = num_agents = driver_env.num_agents * num_envs
         self.num_agents = num_agents = driver_env.num_agents * num_envs
+
         self.agents_per_batch = driver_env.num_agents * batch_size
+
         agents_per_worker = driver_env.num_agents * envs_per_worker
         obs_space = driver_env.single_observation_space
         obs_shape = obs_space.shape
+        self.obs_shape = obs_shape
         obs_dtype = obs_space.dtype
         obs_ctype = np.ctypeslib.as_ctypes_type(obs_dtype)
         atn_space = driver_env.single_action_space
@@ -329,8 +349,9 @@ class Multiprocessing:
         atn_ctype = np.ctypeslib.as_ctypes_type(atn_dtype)
 
         self.single_observation_space = driver_env.single_observation_space
-        self.single_action_space = driver_env.single_action_space
+        self.single_action_space = driver_env.single_action_space          
         self.action_space = pufferlib.spaces.joint_space(self.single_action_space, self.agents_per_batch)
+
         self.observation_space = pufferlib.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
         self.agent_ids = np.arange(num_agents).reshape(num_workers, agents_per_worker)
 
@@ -350,8 +371,34 @@ class Multiprocessing:
         )
         shape = (num_workers, agents_per_worker)
         self.obs_batch_shape = (self.agents_per_batch, *obs_shape)
+
+        self.population_play = getattr(self.driver_env, "population_play", False)
+        if self.population_play:
+            num_ego_agents_per_env = driver_env.num_ego_agents  # ego agents in ONE environment
+            self.num_ego_agents = num_ego_agents_per_env * num_envs  # total across ALL environments
+
+            ego_envs_per_worker = envs_per_worker  # or however many envs each worker handles
+            ego_agents_per_worker = num_ego_agents_per_env * ego_envs_per_worker
+            ego_agents_per_batch = num_ego_agents_per_env * batch_size
+
+            self.ego_agents_per_worker = ego_agents_per_worker
+            self.ego_agents_per_batch = ego_agents_per_batch
+
+            self.shm["ego_actions"] = RawArray(atn_ctype, self.num_ego_agents * int(np.prod(atn_shape)))
+            print(f"ego workers per batch {self.workers_per_batch}, agents per worker {ego_agents_per_worker}")
+            sys.stdout.flush()
+            ego_shape = (num_workers, ego_agents_per_worker, *atn_shape)
+            self.ego_actions = np.ndarray(ego_shape, dtype=atn_dtype, buffer=self.shm["ego_actions"])
+            self.ego_action_space = pufferlib.spaces.joint_space(self.single_action_space, ego_agents_per_batch)
+            self.ego_atn_batch_shape = (self.workers_per_batch, ego_agents_per_worker, *atn_shape)
+            # self.agent_ids = np.arange(num_agents).reshape(num_workers, agents_per_worker)
+            self.ego_agent_ids = np.arange(self.num_ego_agents).reshape(num_workers, ego_agents_per_worker)
+        else:
+            num_ego_agents = num_agents
+
         self.atn_batch_shape = (self.workers_per_batch, agents_per_worker, *atn_shape)
         self.actions = np.ndarray((*shape, *atn_shape), dtype=atn_dtype, buffer=self.shm["actions"])
+
         self.buf = dict(
             observations=np.ndarray((*shape, *obs_shape), dtype=obs_dtype, buffer=self.shm["observations"]),
             rewards=np.ndarray(shape, dtype=np.float32, buffer=self.shm["rewards"]),
@@ -362,6 +409,8 @@ class Multiprocessing:
             notify=np.ndarray(num_workers, dtype=bool, buffer=self.shm["notify"]),
         )
         self.buf["semaphores"][:] = MAIN
+
+
 
         from multiprocessing import Pipe, Process
 
@@ -385,7 +434,7 @@ class Multiprocessing:
                     atn_shape,
                     atn_dtype,
                     envs_per_worker,
-                    driver_env.num_agents,
+                    driver_env.num_agents ,
                     num_workers,
                     i,
                     w_send_pipes[i],
@@ -393,6 +442,8 @@ class Multiprocessing:
                     self.shm,
                     is_native,
                     seed_i,
+                    self.population_play,
+                    getattr(self.driver_env, "num_ego_agents", self.num_agents),
                 ),
             )
             p.start()
@@ -478,10 +529,21 @@ class Multiprocessing:
         self.w_slice = w_slice
         buf = self.buf
 
-        o = buf["observations"][w_slice].reshape(self.obs_batch_shape)
-        r = buf["rewards"][w_slice].ravel()
-        d = buf["terminals"][w_slice].ravel()
-        t = buf["truncations"][w_slice].ravel()
+        # Normalize w_slice into a list of integer world indices
+        if isinstance(w_slice, slice):
+            w_indices = list(range(w_slice.start or 0, w_slice.stop or self.num_workers, w_slice.step or 1))
+        elif isinstance(w_slice, int):
+            w_indices = [w_slice]
+        elif isinstance(w_slice, range):
+            w_indices = list(w_slice)
+        else:
+            # covers lists, tuples, numpy arrays, etc.
+            w_indices = list(w_slice)
+
+        o = buf["observations"][w_indices].reshape(self.obs_batch_shape)
+        r = buf["rewards"][w_indices].ravel()
+        d = buf["terminals"][w_indices].ravel()
+        t = buf["truncations"][w_indices].ravel()
 
         infos = []
         for i in s_range:
@@ -493,14 +555,25 @@ class Multiprocessing:
         m = buf["masks"][w_slice].ravel()
         self.batch_mask = m
 
+        if self.population_play:
+            agent_ids = self.ego_agent_ids[w_slice].ravel()
+        else:
+            agent_ids = self.agent_ids[w_slice].ravel()
+
         return o, r, d, t, infos, agent_ids, m
 
     def send(self, actions):
-        actions = send_precheck(self, actions).reshape(self.atn_batch_shape)
+        if self.population_play:
+            actions = send_precheck(self, actions).reshape(self.ego_atn_batch_shape)
+        else:
+            actions = send_precheck(self, actions).reshape(self.atn_batch_shape)
         # TODO: What shape?
-
         idxs = self.w_slice
-        self.actions[idxs] = actions
+        if self.population_play:
+            self.ego_actions[idxs] = actions
+        else:
+            self.actions[idxs] = actions
+
         self.buf["semaphores"][idxs] = STEP
 
     def async_reset(self, seed=0):
@@ -558,6 +631,7 @@ class Ray:
         envs_per_worker = num_envs // num_workers
         self.workers_per_batch = batch_size // envs_per_worker
         self.num_workers = num_workers
+        self.batch_size = batch_size
 
         driver_env = env_creators[0](*env_args[0], **env_kwargs[0])
         self.driver_env = driver_env
@@ -567,6 +641,7 @@ class Ray:
         agents_per_worker = driver_env.num_agents * envs_per_worker
         obs_space = driver_env.single_observation_space
         obs_shape = obs_space.shape
+
         atn_space = driver_env.single_action_space
         atn_shape = atn_space.shape
 
@@ -666,6 +741,9 @@ class Ray:
 
 
 def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=PufferEnv, num_envs=1, seed=0, **kwargs):
+    import pufferlib
+
+    import pufferlib
     if num_envs < 1:
         raise pufferlib.APIUsageError("num_envs must be at least 1")
     if num_envs != int(num_envs):
@@ -756,6 +834,65 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
             raise pufferlib.APIUsageError(f"Invalid argument: {k}")
 
     # TODO: First step action space check
+    env_k = env_kwargs[0]
+    if env_k["population_play"]:
+        import torch
+        import os
+        from types import SimpleNamespace
+        import gymnasium
+        from pufferlib.ocean.torch import Drive
+        import pufferlib.models
+        
+        input_size = env_k["co_player_policy"]["input_size"]
+        hidden_size = env_k["co_player_policy"]["hidden_size"]
+        num_obs = 7 + 63 * 7 + 200 * 7 ## normal observations
+        num_obs += env_k["co_player_policy"]["num_conditioning_vars"] ## conditioning observations  eg. goal weight, off road weight etc
+    
+        temp_env = SimpleNamespace(
+            single_action_space=gymnasium.spaces.MultiDiscrete([7, 13]),
+            single_observation_space = gymnasium.spaces.Box(
+        low=-1, high=1, shape=(num_obs,), dtype=np.float32
+        )
+        )
+
+        base_policy = Drive(temp_env, input_size=input_size, hidden_size=hidden_size)
+        
+        policy = pufferlib.models.LSTMWrapper(
+            temp_env,
+            base_policy,
+            input_size=hidden_size,  
+            hidden_size=hidden_size,  
+
+        )
+
+        checkpoint_path = env_k["co_player_policy_path"]
+
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        
+        state_dict = torch.load(checkpoint_path, map_location='cpu')
+
+        policy.load_state_dict(state_dict, strict=True)
+        policy.eval()
+        print("Co player policy loaded", flush=True)
+
+        torch.set_num_threads(1) # NOTE this is the only way I could get co-player policies to work inside environment evaluation
+        torch.set_num_interop_threads(1)
+        import  os
+
+        os.environ['OMP_NUM_THREADS'] = '1'
+        os.environ['MKL_NUM_THREADS'] = '1'
+        os.environ['NUMEXPR_NUM_THREADS'] = '1'
+        
+        # Disable MKL if available
+        try:
+            torch.backends.mkl.enabled = False
+        except:
+            pass
+        
+
+        for i in range(len(env_kwargs)):
+            env_kwargs[i]["co_player_policy"] = policy
 
     return backend(env_creators, env_args, env_kwargs, num_envs, **kwargs)
 

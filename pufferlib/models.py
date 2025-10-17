@@ -134,7 +134,9 @@ class LSTMWrapper(nn.Module):
 
         # TODO: Don't break compile
         if h is not None:
-            assert h.shape[0] == c.shape[0] == observations.shape[0], "LSTM state must be (h, c)"
+            assert h.shape[0] == c.shape[0] == observations.shape[0], (
+                f"LSTM state must be (h, c), h shape {h.shape[0]}, c shape {c.shape[0]}, obs shape {observations.shape[0]}"
+            )
             lstm_state = (h, c)
         else:
             lstm_state = None
