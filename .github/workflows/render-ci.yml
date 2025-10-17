@@ -34,7 +34,8 @@ jobs:
 
       - name: Install pufferlib
         run: |
-          rm -rf ~/.cache/pip /tmp/*
+          rm -rf ~/.cache/pip
+          mkdir -p $GITHUB_WORKSPACE/build_temp
           pip install -e .[cpu] --no-cache-dir --no-build-isolation --build $GITHUB_WORKSPACE/build_temp
 
       - name: Compile C extensions
