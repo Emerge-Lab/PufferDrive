@@ -712,7 +712,7 @@ typedef struct
     float reward_ade;
     float goal_radius;
     int spawn_immunity_timer;
-    int use_respawn;
+    int use_goal_generation;
 } env_init_config;
 
 static int handler(
@@ -729,11 +729,11 @@ static int handler(
         } else {
             env_config->action_type = 1;
         }
-    } else if (MATCH("env", "use_respawn")) {
+    } else if (MATCH("env", "use_goal_generation")) {
         if (strcmp(value, "True") == 0) {
-            env_config->use_respawn = 1;
+            env_config->use_goal_generation = 1;
         } else if (strcmp(value, "False") == 0) {
-            env_config->use_respawn = 0;
+            env_config->use_goal_generation = 0;
         }
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);

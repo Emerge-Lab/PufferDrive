@@ -26,7 +26,7 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
-        use_respawn=True,
+        use_goal_generation=False,
         buf=None,
         seed=1,
     ):

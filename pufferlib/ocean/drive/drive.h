@@ -258,7 +258,7 @@ struct Drive {
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
-    int use_respawn;
+    int use_goal_generation;
     char* ini_file;
 };
 
@@ -1093,7 +1093,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     agent->collision_state = collided;
 
     // spawn immunity for collisions with other agent cars as agent_idx respawns
-    if (env->use_respawn) {
+    if (!env->use_goal_generation) {
         int is_active_agent = env->entities[agent_idx].active_agent;
         int respawned = env->entities[agent_idx].respawn_timestep != -1;
         int exceeded_spawn_immunity_agent = (env->timestep - env->entities[agent_idx].respawn_timestep) >= env->spawn_immunity_timer;
@@ -1257,7 +1257,7 @@ void init(Drive* env){
     env->dynamics_model = CLASSIC;
     set_means(env);
     init_grid_map(env);
-    if (!env->use_respawn) init_topology_graph(env);
+    if (env->use_goal_generation) init_topology_graph(env);
     env->vision_range = 21;
     init_neighbor_offsets(env);
     env->neighbor_cache_indices = (int*)calloc((env->grid_cols*env->grid_rows) + 1, sizeof(int));
@@ -1663,7 +1663,7 @@ void c_reset(Drive* env){
         env->entities[agent_idx].cumulative_displacement = 0.0f;
         env->entities[agent_idx].displacement_sample_count = 0;
 
-        if (!env->use_respawn) {
+        if (env->use_goal_generation) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
             env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
             env->entities[agent_idx].sampled_new_goal = 0;
@@ -1767,7 +1767,7 @@ void c_step(Drive* env){
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
 	    }
 
-        if (!env->use_respawn && env->entities[agent_idx].sampled_new_goal) {
+        if (env->use_goal_generation && env->entities[agent_idx].sampled_new_goal) {
             compute_new_goal(env, agent_idx);
         }
 
@@ -1788,7 +1788,7 @@ void c_step(Drive* env){
         env->logs[i].avg_displacement_error = current_ade;
     }
 
-    if (env->use_respawn) {
+    if (!env->use_goal_generation) {
         for(int i = 0; i < env->active_agent_count; i++){
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
