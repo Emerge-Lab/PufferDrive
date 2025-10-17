@@ -40,10 +40,8 @@ jobs:
         py:
           - "3.11"
           - "3.10"
-          - "3.9"
         env:
           - pip
-          - conda
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
