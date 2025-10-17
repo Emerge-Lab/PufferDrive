@@ -7,7 +7,13 @@ on:
     branches: [ main ]
 
 jobs:
+  cleanup-before:
+    uses: ./.github/workflows/_cleanup.yml
+    with:
+      when: "before"
+
   test-render:
+    needs: cleanup-before
     name: test-render - ubuntu-latest
     runs-on: ubuntu-latest
     steps:
@@ -18,17 +24,6 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
-
-      # Pre-install cleanup to free space
-      - name: Free up disk space (before install)
-        run: |
-          echo "Before cleanup:"
-          df -h
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
-          sudo apt clean
-          echo "After cleanup:"
-          df -h
-
       - name: Install system dependencies for headless rendering
         run: |
           sudo apt update
@@ -46,11 +41,3 @@ jobs:
       - name: Run render test
         run: python tests/test_drive_render.py
         timeout-minutes: 15
-
-      # Post-test cleanup (good practice if multiple workflows run)
-      - name: Free up disk space (after test)
-        if: always()
-        run: |
-          echo "Cleaning up after tests..."
-          sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
-          df -h

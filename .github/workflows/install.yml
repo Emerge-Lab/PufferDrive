@@ -22,9 +22,14 @@ jobs:
         with:
           extra_args: --all-files --show-diff-on-failure
 
+  cleanup-before:
+    uses: ./.github/workflows/_cleanup.yml
+    with:
+      when: "before"
+
   test:
     name: test ${{ matrix.py }} - ${{ matrix.os }} - ${{ matrix.env }}
-    needs: pre-commit
+    needs: [pre-commit, cleanup-before]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -58,18 +63,15 @@ jobs:
         with:
           python-version: ${{ matrix.py }}
 
-      - name: Free up disk space
-        if: runner.os == 'Linux'
-        run: |
-          echo "Before cleanup:"
-          df -h
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
-          sudo apt clean
-          echo "After cleanup:"
-          df -h
-
       - name: Upgrade pip
         run: python -m pip install -U pip
 
       - name: Install pufferlib
         run: pip install -e .
+
+  cleanup-after:
+    if: always()
+    needs: test
+    uses: ./.github/workflows/_cleanup.yml
+    with:
+      when: "after"
