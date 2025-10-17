@@ -58,6 +58,16 @@ jobs:
         with:
           python-version: ${{ matrix.py }}
 
+      - name: Free up disk space
+        if: runner.os == 'Linux'
+        run: |
+          echo "Before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo apt clean
+          echo "After cleanup:"
+          df -h
+
       - name: Upgrade pip
         run: python -m pip install -U pip
 
