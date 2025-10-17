@@ -24,6 +24,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
+
       - name: Install system dependencies for headless rendering
         run: |
           sudo apt update
@@ -34,9 +35,10 @@ jobs:
 
       - name: Install pufferlib
         run: |
-          rm -rf ~/.cache/pip
-          mkdir -p $GITHUB_WORKSPACE/build_temp
-          pip install -e .[cpu] --no-cache-dir --no-build-isolation --build $GITHUB_WORKSPACE/build_temp
+          pip install -e .[cpu] --no-cache-dir --no-build-isolation
+        env:
+          TMPDIR: ${{ runner.temp }}/build
+          PIP_NO_CACHE_DIR: 1
 
       - name: Compile C extensions
         run: python setup.py build_ext --inplace --force
