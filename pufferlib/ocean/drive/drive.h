@@ -489,11 +489,18 @@ void init_grid_map(Drive* env){
             }
         }
     }
-    int* cell_entities_insert_index = (int*)calloc(grid_cell_count, sizeof(int));   // Helper array for insertion index
+    int cell_entities_insert_index[grid_cell_count];   // Helper array for insertion index
+    memset(cell_entities_insert_index, 0, grid_cell_count * sizeof(int));
 
     // Initialize grid cells
     for(int grid_index = 0; grid_index < grid_cell_count; grid_index++){
         env->grid_map->cells[grid_index] = (GridMapEntity*)calloc(env->grid_map->cell_entities_count[grid_index], sizeof(GridMapEntity));
+    }
+    for(int i = 0;i<grid_cell_count;i++){
+        if(cell_entities_insert_index[i] != 0){
+            printf("Error: cell_entities_insert_index[%d] not zero during initialization.\n", i);
+            cell_entities_insert_index[i] = 0;
+        }
     }
 
     // Populate grid cells
@@ -507,9 +514,6 @@ void init_grid_map(Drive* env){
             }
         }
     }
-
-    // Free Memory
-    free(cell_entities_insert_index);
 }
 
 void init_neighbor_offsets(Drive* env) {
