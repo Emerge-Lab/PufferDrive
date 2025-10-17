@@ -254,6 +254,7 @@ struct Drive {
     float world_mean_x;
     float world_mean_y;
     int spawn_immunity_timer;
+    float reward_goal;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
@@ -1760,8 +1761,8 @@ void c_step(Drive* env){
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
             } else {
-                env->rewards[i] += 1.0f;
-                env->logs[i].episode_return += 1.0f;
+                env->rewards[i] += env->reward_goal;
+                env->logs[i].episode_return += env->reward_goal;
                 env->entities[agent_idx].sampled_new_goal = 1;
                 env->logs[i].num_goals_reached += 1;
             }
