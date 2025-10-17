@@ -35,7 +35,7 @@ jobs:
 
       - name: Install pufferlib
         run: |
-          pip install -e .[cpu] --no-cache-dir --no-build-isolation
+          pip install -e .[cpu] --no-cache-dir
         env:
           TMPDIR: ${{ runner.temp }}/build
           PIP_NO_CACHE_DIR: 1
