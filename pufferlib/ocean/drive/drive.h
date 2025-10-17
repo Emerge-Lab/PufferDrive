@@ -415,20 +415,20 @@ int getGridIndex(Drive* env, float x1, float y1) {
     return index;
 }
 
-void add_entity_to_grid(Drive* env, int grid_index, int entity_idx, int geometry_idx, int* cell_entities_count_copy){
+void add_entity_to_grid(Drive* env, int grid_index, int entity_idx, int geometry_idx, int* cell_entities_insert_index){
     if(grid_index == -1){
         return;
     }
 
-    int count = env->grid_map->cell_entities_count[grid_index];
-    if(count >= cell_entities_count_copy[grid_index]) {
-        printf("Error: Exceeded precomputed entity count for grid cell %d. Current count: %d, Precomputed count: %d\n", grid_index, count, cell_entities_count_copy[grid_index]);
+    int count = cell_entities_insert_index[grid_index];
+    if(count >= env->grid_map->cell_entities_count[grid_index]) {
+        printf("Error: Exceeded precomputed entity count for grid cell %d. Current count: %d, Max count(Precomputed): %d\n", grid_index, count, env->grid_map->cell_entities_count[grid_index]);
         return;
     }
 
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
-    env->grid_map->cell_entities_count[grid_index] = count + 1;
+    cell_entities_insert_index[grid_index] = count + 1;
 }
 
 void init_grid_map(Drive* env){
@@ -489,8 +489,7 @@ void init_grid_map(Drive* env){
             }
         }
     }
-    int* cell_entities_count_copy = (int*)calloc(grid_cell_count, sizeof(int));
-    memcpy(cell_entities_count_copy, env->grid_map->cell_entities_count, grid_cell_count*sizeof(int));
+    int* cell_entities_insert_index = (int*)calloc(grid_cell_count, sizeof(int));   // Helper array for insertion index
 
     // Initialize grid cells
     for(int grid_index = 0; grid_index < grid_cell_count; grid_index++){
@@ -498,21 +497,19 @@ void init_grid_map(Drive* env){
     }
 
     // Populate grid cells
-    free(env->grid_map->cell_entities_count);
-    env->grid_map->cell_entities_count = (int*)calloc(grid_cell_count, sizeof(int));        // Reset counts to 0 for insertion
     for(int i = 0; i < env->num_entities; i++){
-        if(env->entities[i].type > 3 && env->entities[i].type < 7){
+        if(env->entities[i].type > 3 && env->entities[i].type < 7){         // NOTE: Only Road Edges, Lines, and Lanes in grid map
             for(int j = 0; j < env->entities[i].array_size - 1; j++){
                 float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
                 float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
                 int grid_index = getGridIndex(env, x_center, y_center);
-                add_entity_to_grid(env, grid_index, i, j, cell_entities_count_copy);
+                add_entity_to_grid(env, grid_index, i, j, cell_entities_insert_index);
             }
         }
     }
 
     // Free Memory
-    free(cell_entities_count_copy);
+    free(cell_entities_insert_index);
 }
 
 void init_neighbor_offsets(Drive* env) {
