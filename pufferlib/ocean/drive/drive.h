@@ -160,7 +160,6 @@ struct Entity {
     int active_agent;
     float cumulative_displacement;
     int displacement_sample_count;
-    float cumulative_lane_alignment;
     float goal_radius;
 };
 
@@ -456,7 +455,6 @@ void set_start_position(Drive* env){
         e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
-        e->cumulative_lane_alignment = 0.0f;
         e->respawn_timestep = -1;
     }
     //EndDrawing();
@@ -956,7 +954,8 @@ int check_lane_aligned(Entity* car, Entity* lane, int geometry_idx) {
 
     if (heading_diff > M_PI) heading_diff = 2.0f * M_PI - heading_diff;
 
-    return (heading_diff < (M_PI / 6.0f)) ? 1 : 0; // within 30 degrees
+    // within 15 degrees
+    return (heading_diff < (M_PI / 12.0f)) ? 1 : 0;
 }
 
 void reset_agent_metrics(Drive* env, int agent_idx){
@@ -1062,9 +1061,13 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
             float dist = point_to_segment_distance_2d(agent->x, agent->y, start[0], start[1], end[0], end[1]);
             float heading_diff = fabsf(atan2f(end[1]-start[1], end[0]-start[0]) - agent->heading);
+
+            // Normalize heading difference to [0, pi]
             if (heading_diff > M_PI) heading_diff = 2.0f * M_PI - heading_diff;
+
             // Penalize if heading differs by more than 30 degrees
-            if (heading_diff > (M_PI / 6.0f)) dist += 5.0f;
+            if (heading_diff > (M_PI / 6.0f)) dist += 3.0f;
+
             if (dist < min_distance) {
                 min_distance = dist;
                 closest_lane_entity_idx = entity_idx;
@@ -1082,8 +1085,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         agent->current_lane_idx = closest_lane_entity_idx;
 
         int lane_aligned = check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
-        agent->cumulative_lane_alignment += lane_aligned;
-        agent->metrics_array[LANE_ALIGNED_IDX] = agent->cumulative_lane_alignment / (env->timestep + 1);
+        agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned;
     }
 
     // Check for vehicle collisions
@@ -1772,11 +1774,7 @@ void c_step(Drive* env){
         }
 
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
-        if(lane_aligned){
-        //     env->rewards[i] += 0.01f;
-        //     env->logs[i].episode_return += 0.01f;
-            env->logs[i].lane_alignment_rate = 1.0f;
-        }
+        env->logs[i].lane_alignment_rate = lane_aligned;
 
         // Apply ADE reward
         float current_ade = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
