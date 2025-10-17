@@ -224,12 +224,12 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     net->gelu = make_gelu(num_agents, 3*input_size);
     net->shared_embedding = make_linear(weights, num_agents, input_size*3, hidden_size);
     net->relu = make_relu(num_agents, hidden_size);
-    net->actor = make_linear(weights, num_agents, hidden_size, 20);
+    net->actor = make_linear(weights, num_agents, hidden_size, 7);
     net->value_fn = make_linear(weights, num_agents, hidden_size, 1);
     net->lstm = make_lstm(weights, num_agents, hidden_size, 256);
     memset(net->lstm->state_h, 0, num_agents*256*sizeof(float));
     memset(net->lstm->state_c, 0, num_agents*256*sizeof(float));
-    int logit_sizes[2] = {7, 13};
+    int logit_sizes[2] = {4, 3};
     net->multidiscrete = make_multidiscrete(num_agents, logit_sizes, 2);
     return net;
 }
@@ -274,7 +274,7 @@ void forward(DriveNet* net, float* observations, int* actions) {
     memset(net->obs_road, 0, net->num_agents * 200 * 13 * sizeof(float));
 
     // Reshape observations into 2D boards and additional features
-    float (*obs_self)[7] = (float (*)[10])net->obs_self;
+    float (*obs_self)[10] = (float (*)[10])net->obs_self;
     float (*obs_partner)[63][7] = (float (*)[63][7])net->obs_partner;
     float (*obs_road)[200][13] = (float (*)[200][13])net->obs_road;
 
@@ -502,7 +502,6 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     // Make env
     Drive env = {
-        .dynamics_model = CLASSIC,
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
         .reward_ade = -0.0f,
@@ -538,7 +537,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
     // Load cpt into network
-    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 592776);
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
     int frame_count = 91;
@@ -618,7 +617,6 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 void performance_test() {
     long test_time = 10;
     Drive env = {
-        .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
 	    .map_name = "resources/drive/binaries/map_000.bin"
     };
