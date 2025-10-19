@@ -30,6 +30,9 @@
 // Trajectory Length
 #define TRAJECTORY_LENGTH 91
 
+// Minimum distance to goal position
+#define MIN_DISTANCE_TO_GOAL 2.0f
+
 // Actions
 #define NOOP 0
 
@@ -971,9 +974,10 @@ int valid_active_agent(Drive* env, int agent_idx){
     float rel_goal_x = goal_x*cos_heading + goal_y*sin_heading;
     float rel_goal_y = -goal_x*sin_heading + goal_y*cos_heading;
     float distance_to_goal = relative_distance_2d(0, 0, rel_goal_x, rel_goal_y);
+    // Shrink agent size
     env->entities[agent_idx].width *= 0.7f;
     env->entities[agent_idx].length *= 0.7f;
-    if(distance_to_goal >= 2.0f && env->entities[agent_idx].mark_as_expert == 0 && env->active_agent_count < env->num_agents){
+    if(distance_to_goal >= MIN_DISTANCE_TO_GOAL && env->entities[agent_idx].mark_as_expert == 0 && env->active_agent_count < env->num_agents){
         return distance_to_goal;
     }
     return 0;
@@ -1005,7 +1009,7 @@ void set_active_agents(Drive* env){
     }
     for(int i = 0; i < env->num_objects-1 && env->num_controllable_agents < MAX_AGENTS; i++){
 
-        // Determine if the entity type is controllable
+        // Check if the entity type is controllable
         int is_type_controllable;
         if (env->control_non_vehicles) {
             is_type_controllable = (env->entities[i].type == VEHICLE) ||
@@ -1017,8 +1021,11 @@ void set_active_agents(Drive* env){
 
         if(!is_type_controllable) continue;
 
-        if(env->entities[i].traj_valid[0] != 1) continue;
+        // Check if the agent has a valid data point at the initial timestep
+        if(env->entities[i].traj_valid[10] != 1) continue;
         env->num_controllable_agents++;
+
+        // Return current distance to goal if agent meets other conditions
         float distance_to_goal = valid_active_agent(env, i);
         if(distance_to_goal > 0){
             active_agent_indices[env->active_agent_count] = i;
@@ -1107,7 +1114,7 @@ void init(Drive* env){
     env->neighbor_cache_indices = (int*)calloc((env->grid_cols*env->grid_rows) + 1, sizeof(int));
     cache_neighbor_offsets(env);
     set_active_agents(env);
-    //remove_bad_trajectories(env);
+    remove_bad_trajectories(env);
     set_start_position(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
 }
