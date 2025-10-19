@@ -1,4 +1,4 @@
-## Assumptions for creating and initialization agents
+## Assumptions for initializating agents
 
 ### Waymo Open Motion Dataset (WOMD)
 

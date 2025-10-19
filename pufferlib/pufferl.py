@@ -548,7 +548,6 @@ class PuffeRL:
                             cmd.append("--log-trajectories")
 
                         if self.vecenv.driver_env.control_non_vehicles:
-                            print("Enabling control of non-vehicle entities in rendering")
                             cmd.append("--control-non-vehicles")
                         if self.vecenv.driver_env.goal_radius is not None:
                             cmd.extend(["--goal-radius", str(self.vecenv.driver_env.goal_radius)])

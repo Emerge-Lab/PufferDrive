@@ -235,7 +235,7 @@ def save_map_binary(map_data, output_file):
             elif obj_type == "cyclist":
                 obj_type = 3
             f.write(struct.pack("i", obj_type))  # type
-            # f.write(struct.pack("i", obj.get("id", 0)))  # original object id
+            # f.write(struct.pack("i", obj.get("id", 0)))  # id
             f.write(struct.pack("i", trajectory_length))  # array_size
             # Write position arrays
             positions = obj.get("position", [])
@@ -368,10 +368,10 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=0.01, atn_cache=1024, num_agents=1024):
     import time
 
-    env = Drive(num_agents=num_agents)
+    env = Drive(num_agents=num_agents, num_maps=1, control_non_vehicles=True)
     env.reset()
     tick = 0
     num_agents = 1024
@@ -390,5 +390,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()

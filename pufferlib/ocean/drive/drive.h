@@ -1022,7 +1022,7 @@ void set_active_agents(Drive* env){
         if(!is_type_controllable) continue;
 
         // Check if the agent has a valid data point at the initial timestep
-        if(env->entities[i].traj_valid[10] != 1) continue;
+        if(env->entities[i].traj_valid[0] != 1) continue;
         env->num_controllable_agents++;
 
         // Return current distance to goal if agent meets other conditions
