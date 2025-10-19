@@ -7,10 +7,16 @@ on:
     branches: [ main ]
 
 jobs:
+  cleanup-before:
+    uses: ./.github/workflows/_cleanup.yml
+    with:
+      when: "before"
+
   test-training:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
       - uses: actions/setup-python@v4
         with:
           python-version: "3.11"
@@ -24,3 +30,10 @@ jobs:
       - name: Test training
         run: python tests/test_drive_train.py
         timeout-minutes: 8
+
+  cleanup-after:
+    if: always()
+    needs: test-training
+    uses: ./.github/workflows/_cleanup.yml
+    with:
+      when: "after"
