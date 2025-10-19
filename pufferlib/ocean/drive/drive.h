@@ -1010,7 +1010,10 @@ void set_active_agents(Drive* env){
     }
     for(int i = 0; i < env->num_objects-1 && env->num_cars < MAX_CARS; i++){
         if(env->entities[i].type != 1) continue;
-        if(env->entities[i].traj_valid[0] != 1) continue;
+
+        // Check if agent has valid trajectory point at the initial timestep
+        if(env->entities[i].traj_valid[env->init_steps] != 1) continue;
+
         env->num_cars++;
         float distance_to_goal = valid_active_agent(env, i);
         if(distance_to_goal > 0){
