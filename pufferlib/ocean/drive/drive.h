@@ -312,79 +312,12 @@ struct Drive {
     int logs_capacity;
     int goal_behaviour; //0 = respawn, 1 = generate_new_goals, 2 = stop
     char* ini_file;
-    int collision_behaviour; //0 = none, 1=stop, 2 = remove
-    int offroad_behaviour; //0 = none, 1=stop, 2 = remove
-    int scenario_length;
-    int control_non_vehicles;
+    char* scenario_id;
+    int sdc_track_index;
+    int num_tracks_to_predict;
+    int* tracks_to_predict_indices;
 };
 
-typedef struct {
-    int candidates[MAX_AGENTS];
-    int candidates_count;
-    int forced_experts[MAX_AGENTS];
-    int forced_experts_count;
-    int statics[MAX_AGENTS];
-    int statics_count;
-} SelectionBuckets;
-
-static inline void push_capped(int* arr, int* count, int val, int cap) {
-    if (*count < cap) {
-        arr[(*count)++] = val;
-    }
-}
-
-static inline float ego_goal_distance_t0(const Entity* e) {
-    // Requires traj_* arrays and goal position
-    float cos_heading = cosf(e->traj_heading[0]);
-    float sin_heading = sinf(e->traj_heading[0]);
-    float goal_x = e->goal_position_x - e->traj_x[0];
-    float goal_y = e->goal_position_y - e->traj_y[0];
-    float rel_goal_x = goal_x * cos_heading + goal_y * sin_heading;
-    float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
-    return relative_distance_2d(0, 0, rel_goal_x, rel_goal_y);
-}
-
-static inline int vehicle_eligible_t0(const Entity* e) {
-    if (e->traj_valid == NULL || e->traj_valid[0] != 1) return 0;
-    float dist = ego_goal_distance_t0(e);
-    return dist >= 2.0f;
-}
-
-static inline void fisher_yates_shuffle(int* arr, int n) {
-    for (int i = n - 1; i > 0; --i) {
-        int j = rand() % (i + 1);
-        int tmp = arr[i];
-        arr[i] = arr[j];
-        arr[j] = tmp;
-    }
-}
-
-static void scan_vehicles_initial(const Drive* env, SelectionBuckets* out, int control_all_agents) {
-    out->candidates_count = 0;
-    out->forced_experts_count = 0;
-    out->statics_count = 0;
-
-    for (int i = 0; i < env->num_objects; i++) {
-        const Entity* e = &env->entities[i];
-        if (e->type != VEHICLE) continue;
-
-        int eligible = vehicle_eligible_t0(e);
-        if (!eligible) {
-            push_capped(out->statics, &out->statics_count, i, MAX_AGENTS);
-            continue;
-        }
-
-        if (control_all_agents) {
-            push_capped(out->candidates, &out->candidates_count, i, MAX_AGENTS);
-        } else {
-            if (e->mark_as_expert == 1) {
-                push_capped(out->forced_experts, &out->forced_experts_count, i, MAX_AGENTS);
-            } else {
-                push_capped(out->candidates, &out->candidates_count, i, MAX_AGENTS);
-            }
-        }
-    }
-}
 void add_log(Drive* env) {
     for(int i = 0; i < env->active_agent_count; i++){
         Entity* e = &env->entities[env->active_agent_indices[i]];
@@ -489,6 +422,33 @@ void freeTopologyGraph(struct Graph* graph) {
 Entity* load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
+
+    // Read scenario_id
+    int scenario_id_length;
+    fread(&scenario_id_length, sizeof(int), 1, file);
+    if (scenario_id_length > 0) {
+        env->scenario_id = (char*)malloc((scenario_id_length + 1) * sizeof(char));
+        fread(env->scenario_id, sizeof(char), scenario_id_length, file);
+        env->scenario_id[scenario_id_length] = '\0';
+    } else {
+        env->scenario_id = NULL;
+    }
+
+    // Read sdc_track_index
+    fread(&env->sdc_track_index, sizeof(int), 1, file);
+
+    // Read tracks_to_predict
+    fread(&env->num_tracks_to_predict, sizeof(int), 1, file);
+    if (env->num_tracks_to_predict > 0) {
+        env->tracks_to_predict_indices = (int*)malloc(env->num_tracks_to_predict * sizeof(int));
+
+        for (int i = 0; i < env->num_tracks_to_predict; i++) {
+            fread(&env->tracks_to_predict_indices[i], sizeof(int), 1, file);
+        }
+    } else {
+        env->tracks_to_predict_indices = NULL;
+    }
+
     fread(&env->num_objects, sizeof(int), 1, file);
     fread(&env->num_roads, sizeof(int), 1, file);
     env->num_entities = env->num_objects + env->num_roads;
@@ -538,6 +498,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
     }
+
     fclose(file);
     return entities;
 }

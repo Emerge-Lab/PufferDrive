@@ -240,6 +240,10 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
+    def get_scenario_ids(self):
+        """Get scenario hex IDs for all environments."""
+        return binding.vec_get_scenario_ids(self.c_envs)
+
     def render(self):
         binding.vec_render(self.c_envs, 0)
 
@@ -296,6 +300,29 @@ def save_map_binary(map_data, output_file):
     trajectory_length = 91
     """Saves map data in a binary format readable by C"""
     with open(output_file, "wb") as f:
+        # Get scenario_id
+        scenario_id = map_data.get("scenario_id", "")
+        scenario_id_bytes = scenario_id.encode("utf-8")
+
+        # Get metadata
+        metadata = map_data.get("metadata", {})
+        sdc_track_index = metadata.get("sdc_track_index", -1)  # -1 as default if not found
+        tracks_to_predict = metadata.get("tracks_to_predict", [])
+
+        # Write scenario_id (length + string bytes)
+        f.write(struct.pack("i", len(scenario_id_bytes)))
+        if len(scenario_id_bytes) > 0:
+            f.write(scenario_id_bytes)
+
+        # Write sdc_track_index
+        f.write(struct.pack("i", sdc_track_index))
+
+        # Write tracks_to_predict info (indices only)
+        f.write(struct.pack("i", len(tracks_to_predict)))
+        for track in tracks_to_predict:
+            track_index = track.get("track_index", -1)
+            f.write(struct.pack("i", track_index))
+
         # Count total entities
         print(len(map_data.get("objects", [])))
         print(len(map_data.get("roads", [])))
@@ -452,8 +479,11 @@ def process_all_maps():
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
 
-    env = Drive(num_agents=num_agents)
+    env = Drive(num_agents=num_agents, num_maps=1)
     env.reset()
+
+    # print(env.get_scenario_ids())
+
     tick = 0
     num_agents = 1024
     actions = np.stack(
@@ -471,5 +501,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()
