@@ -368,10 +368,10 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=0.01, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
 
-    env = Drive(num_agents=num_agents, num_maps=1, control_non_vehicles=True)
+    env = Drive(num_agents=num_agents)
     env.reset()
     tick = 0
     num_agents = 1024
@@ -390,5 +390,5 @@ def test_performance(timeout=0.01, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    test_performance()
-    # process_all_maps()
+    # test_performance()
+    process_all_maps()
