@@ -743,7 +743,7 @@ static int handler(
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
-    } else if (MATCH("env", "control_non_vehicles")) {  // ← Add this
+    } else if (MATCH("env", "control_non_vehicles")) {
         env_config->control_non_vehicles = atoi(value);
     } else {
         return 0;
