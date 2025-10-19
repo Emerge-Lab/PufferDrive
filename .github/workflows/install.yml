@@ -22,9 +22,14 @@ jobs:
         with:
           extra_args: --all-files --show-diff-on-failure
 
+  cleanup-before:
+    uses: ./.github/workflows/_cleanup.yml
+    with:
+      when: "before"
+
   test:
     name: test ${{ matrix.py }} - ${{ matrix.os }} - ${{ matrix.env }}
-    needs: pre-commit
+    needs: [pre-commit, cleanup-before]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -35,10 +40,8 @@ jobs:
         py:
           - "3.11"
           - "3.10"
-          - "3.9"
         env:
           - pip
-          - conda
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -63,3 +66,10 @@ jobs:
 
       - name: Install pufferlib
         run: pip install -e .
+
+  cleanup-after:
+    if: always()
+    needs: test
+    uses: ./.github/workflows/_cleanup.yml
+    with:
+      when: "after"
