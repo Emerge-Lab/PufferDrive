@@ -751,6 +751,46 @@ static char* unpack_str(PyObject* kwargs, char* key) {
     return ret;
 }
 
+static PyObject* env_get_scenario_id(PyObject* self, PyObject* args) {
+    // Get scenario id from a single environment
+    Env* env = unpack_env(args);
+    if (!env) {
+        return NULL;
+    }
+
+    Drive* drive = (Drive*)env;
+    if (!drive->scenario_id) {
+        return PyUnicode_FromString("");
+    }
+
+    return PyUnicode_FromString(drive->scenario_id);
+}
+
+static PyObject* vec_get_scenario_ids(PyObject* self, PyObject* args) {
+    // Get all scenario_ids from a vectorized environment
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject* list = PyList_New(vec->num_envs);
+    if (!list) {
+        PyErr_SetString(PyExc_MemoryError, "Failed to allocate list");
+        return NULL;
+    }
+
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive* drive = (Drive*)vec->envs[i];
+        const char* scenario_id = (drive && drive->scenario_id)
+            ? drive->scenario_id
+            : "";
+        PyObject* py_str = PyUnicode_FromString(scenario_id);
+        PyList_SET_ITEM(list, i, py_str);  // steals reference
+    }
+
+    return list;
+}
+
 // Method table
 static PyMethodDef methods[] = {
     {"env_init", (PyCFunction)env_init, METH_VARARGS | METH_KEYWORDS, "Init environment with observation, action, reward, terminal, truncation arrays"},
@@ -770,6 +810,8 @@ static PyMethodDef methods[] = {
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
+    {"env_get_scenario_id", env_get_scenario_id, METH_VARARGS, "Get scenario_id of a single environment"},
+    {"vec_get_scenario_ids", vec_get_scenario_ids, METH_VARARGS, "Get scenario_ids for all vectorized envs"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}
 };

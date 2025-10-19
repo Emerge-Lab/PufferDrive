@@ -250,6 +250,10 @@ struct Drive {
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
     char* ini_file;
+    char* scenario_id;
+    int sdc_track_index;
+    int num_tracks_to_predict;
+    int* tracks_to_predict_indices;
 };
 
 void add_log(Drive* env) {
@@ -284,6 +288,33 @@ void add_log(Drive* env) {
 Entity* load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
+
+    // Read scenario_id
+    int scenario_id_length;
+    fread(&scenario_id_length, sizeof(int), 1, file);
+    if (scenario_id_length > 0) {
+        env->scenario_id = (char*)malloc((scenario_id_length + 1) * sizeof(char));
+        fread(env->scenario_id, sizeof(char), scenario_id_length, file);
+        env->scenario_id[scenario_id_length] = '\0';
+    } else {
+        env->scenario_id = NULL;
+    }
+
+    // Read sdc_track_index
+    fread(&env->sdc_track_index, sizeof(int), 1, file);
+
+    // Read tracks_to_predict
+    fread(&env->num_tracks_to_predict, sizeof(int), 1, file);
+    if (env->num_tracks_to_predict > 0) {
+        env->tracks_to_predict_indices = (int*)malloc(env->num_tracks_to_predict * sizeof(int));
+
+        for (int i = 0; i < env->num_tracks_to_predict; i++) {
+            fread(&env->tracks_to_predict_indices[i], sizeof(int), 1, file);
+        }
+    } else {
+        env->tracks_to_predict_indices = NULL;
+    }
+
     fread(&env->num_objects, sizeof(int), 1, file);
     fread(&env->num_roads, sizeof(int), 1, file);
     env->num_entities = env->num_objects + env->num_roads;
@@ -333,6 +364,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
     }
+
     fclose(file);
     return entities;
 }
