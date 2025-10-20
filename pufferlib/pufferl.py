@@ -547,6 +547,8 @@ class PuffeRL:
                         if config["show_human_logs"]:
                             cmd.append("--log-trajectories")
 
+                        if self.vecenv.driver_env.control_non_vehicles:
+                            cmd.append("--control-non-vehicles")
                         if self.vecenv.driver_env.goal_radius is not None:
                             cmd.extend(["--goal-radius", str(self.vecenv.driver_env.goal_radius)])
                         if config["render_map"] is not None:
