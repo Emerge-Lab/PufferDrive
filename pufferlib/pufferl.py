@@ -1155,16 +1155,12 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         # Roll out trained policy in the simulator to collect trajectories
         # Output is a dict with every element (e.g., "x") of shape: [num_agents, num_rollouts, num_steps]
-        simulated_trajs = evaluator.collect_simulated_trajectories(args, vecenv=vecenv, policy=policy)
+        simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv=vecenv, policy=policy)
 
-        print(len(simulated_trajs))
-        print(simulated_trajs.keys())
-        print(simulated_trajs["x"].shape)
-        print(simulated_trajs["scenario_id"])
-
-        import pdb
-
-        pdb.set_trace()
+        print(len(simulated_trajectories))
+        print(simulated_trajectories.keys())
+        print(simulated_trajectories["x"].shape)
+        print(simulated_trajectories["scenario_id"])
 
         # TODO(2) Prepare ground truth data
         # x_batch, y_batch, z_batch, heading_batch = evaluator.collect_ground_truth_data()
