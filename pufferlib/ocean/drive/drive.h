@@ -1365,11 +1365,6 @@ void init(Drive* env){
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
-
-    // Print warning if using JERK dynamics with dt != 0.3
-    if (env->dynamics_model == JERK && fabsf(env->dt - 0.3f) > 1e-5f) {
-        printf("Warning: JERK dynamics works best with dt=0.3 (current dt=%.2f)\n", env->dt);
-    }
 }
 
 void c_close(Drive* env){
