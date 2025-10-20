@@ -1,3 +1,18 @@
+## Logged performance metrics
+
+### Environment
+
+We log several performance metrics during training:
+
+- `score`: Goals reached cleanly (no collision before goal)
+- `perf`: Same as score
+- `collision_rate`: Binary flag (0 or 1) if agent hit another vehicle. Averaged across all controlled agents.
+- `offroad_rate`: Binary flag (0 or 1) if agent left road bounds. Averaged across all controlled agents.
+
+### Questions
+- Which agents are included in computing the metrics above?
+    - Only the first attempt at solving the scene. Respawned agents are excluded from logs.
+
 ## Assumptions for initializating agents
 
 ### Waymo Open Motion Dataset (WOMD)

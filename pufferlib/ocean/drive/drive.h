@@ -155,6 +155,7 @@ struct Entity {
     int current_lane_idx;
     int valid;
     int respawn_timestep;
+    int respawn_count;
     int collided_before_goal;
     int sampled_new_goal;
     int reached_goal_this_episode;
@@ -288,6 +289,12 @@ struct Drive {
 void add_log(Drive* env) {
     for(int i = 0; i < env->active_agent_count; i++){
         Entity* e = &env->entities[env->active_agent_indices[i]];
+
+        // Only log first attempts at solving the scene
+        if(e->respawn_count > 1) {
+            continue;
+        }
+
         if(e->reached_goal_this_episode){
             env->log.completion_rate += 1.0f;
         }
@@ -483,6 +490,7 @@ void set_start_position(Drive* env){
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
+        e->respawn_count = 0;
     }
     //EndDrawing();
 }
@@ -1759,6 +1767,7 @@ void c_reset(Drive* env){
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];
         env->entities[agent_idx].respawn_timestep = -1;
+        env->entities[agent_idx].respawn_count = 0;
         env->entities[agent_idx].collided_before_goal = 0;
         env->entities[agent_idx].reached_goal_this_episode = 0;
         env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
@@ -1896,6 +1905,7 @@ void c_step(Drive* env){
             int collision_state = env->entities[agent_idx].collision_state;
             if(reached_goal){
                 respawn_agent(env, agent_idx);
+                env->entities[agent_idx].respawn_count++;
                 //env->entities[agent_idx].x = -10000;
                 //env->entities[agent_idx].y = -10000;
                 //env->entities[agent_idx].respawn_timestep = env->timestep;
