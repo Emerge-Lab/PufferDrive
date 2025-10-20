@@ -1132,8 +1132,11 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print(len(simulated_trajs))
         print(simulated_trajs.keys())
         print(simulated_trajs["x"].shape)
+        print(simulated_trajs["scenario_id"])
 
-        # import pdb; pdb.set_trace()
+        import pdb
+
+        pdb.set_trace()
 
         # TODO(2) Prepare ground truth data
         # x_batch, y_batch, z_batch, heading_batch = evaluator.collect_ground_truth_data()

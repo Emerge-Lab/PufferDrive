@@ -34,6 +34,7 @@ class WOSACEvaluator:
         device = args["train"]["device"]
 
         trajectories = {
+            "scenario_id": driver.get_scenario_ids(),  # (num_envs,)
             "x": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
             "y": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
             "z": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
@@ -73,10 +74,6 @@ class WOSACEvaluator:
 
         if self.show_dashboard:
             self._display_dashboard(trajectories)
-
-        import pdb
-
-        pdb.set_trace()
 
         return trajectories
 
