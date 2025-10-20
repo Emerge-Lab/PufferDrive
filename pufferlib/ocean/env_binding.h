@@ -707,11 +707,13 @@ typedef struct
     int action_type;
     float reward_vehicle_collision;
     float reward_offroad_collision;
+    float reward_goal;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     float reward_ade;
     float goal_radius;
     int spawn_immunity_timer;
+    int use_goal_generation;
 } env_init_config;
 
 static int handler(
@@ -728,10 +730,18 @@ static int handler(
         } else {
             env_config->action_type = 1;
         }
+    } else if (MATCH("env", "use_goal_generation")) {
+        if (strcmp(value, "True") == 0) {
+            env_config->use_goal_generation = 1;
+        } else if (strcmp(value, "False") == 0) {
+            env_config->use_goal_generation = 0;
+        }
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {
         env_config->reward_offroad_collision = atof(value);
+    } else if (MATCH("env", "reward_goal")) {
+        env_config->reward_goal = atof(value);
     } else if (MATCH("env", "reward_goal_post_respawn")) {
         env_config->reward_goal_post_respawn = atof(value);
     } else if (MATCH("env", "reward_vehicle_collision_post_respawn")) {

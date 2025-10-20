@@ -146,10 +146,12 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->action_type = conf.action_type;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;
+    env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_vehicle_collision_post_respawn = conf.reward_vehicle_collision_post_respawn;
     env->reward_ade = conf.reward_ade;
     env->goal_radius = conf.goal_radius;
+    env->use_goal_generation = conf.use_goal_generation;
     env->spawn_immunity_timer = conf.spawn_immunity_timer;
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
@@ -165,17 +167,18 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
 }
 
 static int my_log(PyObject* dict, Log* log) {
+    assign_to_dict(dict, "n", log->n);
+    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
+    assign_to_dict(dict, "episode_length", log->episode_length);
+    assign_to_dict(dict, "collision_rate", log->collision_rate);
+    assign_to_dict(dict, "episode_return", log->episode_return);
+    assign_to_dict(dict, "clean_collision_rate", log->clean_collision_rate);
+    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
+    assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    assign_to_dict(dict, "completion_rate", log->completion_rate);
+    assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
     assign_to_dict(dict, "perf", log->perf);
     assign_to_dict(dict, "score", log->score);
-    assign_to_dict(dict, "episode_return", log->episode_return);
-    assign_to_dict(dict, "episode_length", log->episode_length);
-    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
-    assign_to_dict(dict, "collision_rate", log->collision_rate);
-    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
-    assign_to_dict(dict, "n", log->n);
-    assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
-    assign_to_dict(dict, "completion_rate", log->completion_rate);
-    assign_to_dict(dict, "clean_collision_rate", log->clean_collision_rate);
-    assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+
     return 0;
 }
