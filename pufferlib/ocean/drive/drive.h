@@ -449,10 +449,7 @@ void set_start_position(Drive* env){
         e->x = e->traj_x[0];
         e->y = e->traj_y[0];
         e->z = e->traj_z[0];
-        //printf("Entity %d is at (%f, %f, %f)\n", i, e->x, e->y, e->z);
-        //if (e->type < 4) {
-        //    DrawRectangle(200+2*e->x, 200+2*e->y, 2.0, 2.0, RED);
-        //}
+
         if(e->type > CYCLIST || e->type == 0){
             continue;
         }
