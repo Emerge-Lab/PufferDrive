@@ -53,8 +53,7 @@
 
 // grid cell size
 #define GRID_CELL_SIZE 5.0f
-#define MAX_ENTITIES_PER_CELL 10
-#define SLOTS_PER_CELL (MAX_ENTITIES_PER_CELL*2 + 1)
+#define MAX_ENTITIES_PER_CELL 30    // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
 // Max road segment observation entities
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 200
@@ -214,6 +213,31 @@ float compute_displacement_error(Entity* agent, int timestep) {
     return displacement;
 }
 
+typedef struct GridMapEntity GridMapEntity;
+struct GridMapEntity {
+    int entity_idx;
+    int geometry_idx;
+};
+
+typedef struct GridMap GridMap;
+struct GridMap {
+    float top_left_x;
+    float top_left_y;
+    float bottom_right_x;
+    float bottom_right_y;
+    int grid_cols;
+    int grid_rows;
+    int cell_size_x;
+    int cell_size_y;
+    int* cell_entities_count;  // number of entities in each cell of the GridMap
+    GridMapEntity** cells;  // list of gridEntities in each cell of the GridMap
+
+    // Extras/Optimizations
+    int vision_range;
+    int* neighbor_cache_count; // number of entities in each cells neighbor cache
+    GridMapEntity** neighbor_cache_entities; // preallocated array to hold neighbor entities
+};
+
 struct Drive {
     Client* client;
     float* observations;
@@ -239,14 +263,8 @@ struct Drive {
     int* expert_static_car_indices;
     int timestep;
     int dynamics_model;
-    float* map_corners;
-    int* grid_cells;  // holds entity ids and geometry index per cell
-    int grid_cols;
-    int grid_rows;
-    int vision_range;
+    GridMap* grid_map;
     int* neighbor_offsets;
-    int* neighbor_cache_entities;
-    int* neighbor_cache_indices;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_ade;
@@ -427,10 +445,7 @@ void set_start_position(Drive* env){
         e->x = e->traj_x[0];
         e->y = e->traj_y[0];
         e->z = e->traj_z[0];
-        //printf("Entity %d is at (%f, %f, %f)\n", i, e->x, e->y, e->z);
-        //if (e->type < 4) {
-        //    DrawRectangle(200+2*e->x, 200+2*e->y, 2.0, 2.0, RED);
-        //}
+
         if(e->type >3 || e->type == 0){
             continue;
         }
@@ -459,43 +474,40 @@ void set_start_position(Drive* env){
         e->respawn_timestep = -1;
     }
     //EndDrawing();
-    int x = 0;
-
-
 }
 
 int getGridIndex(Drive* env, float x1, float y1) {
-    if (env->map_corners[0] >= env->map_corners[2] || env->map_corners[1] >= env->map_corners[3]) {
-        printf("Invalid grid coordinates\n");
+    if (env->grid_map->top_left_x >= env->grid_map->bottom_right_x || env->grid_map->bottom_right_y >= env->grid_map->top_left_y) {
         return -1;  // Invalid grid coordinates
     }
-    float worldWidth = env->map_corners[2] - env->map_corners[0];   // Positive value
-    float worldHeight = env->map_corners[3] - env->map_corners[1];  // Positive value
-    int cellsX = (int)ceil(worldWidth / GRID_CELL_SIZE);  // Number of columns
-    int cellsY = (int)ceil(worldHeight / GRID_CELL_SIZE); // Number of rows
-    float relativeX = x1 - env->map_corners[0];  // Distance from left
-    float relativeY = y1 - env->map_corners[1];  // Distance from top
+
+    float relativeX = x1 - env->grid_map->top_left_x;  // Distance from left
+    float relativeY = y1 - env->grid_map->bottom_right_y;  // Distance from bottom
     int gridX = (int)(relativeX / GRID_CELL_SIZE);  // Column index
     int gridY = (int)(relativeY / GRID_CELL_SIZE);  // Row index
-    if (gridX < 0 || gridX >= cellsX || gridY < 0 || gridY >= cellsY) {
+    if (gridX < 0 || gridX >= env->grid_map->grid_cols || gridY < 0 || gridY >= env->grid_map->grid_rows) {
         return -1;  // Return -1 for out of bounds
     }
-    int index = (gridY*cellsX) + gridX;
+    int index = (gridY*env->grid_map->grid_cols) + gridX;
     return index;
 }
 
-void add_entity_to_grid(Drive* env, int grid_index, int entity_idx, int geometry_idx){
+void add_entity_to_grid(Drive* env, int grid_index, int entity_idx, int geometry_idx, int* cell_entities_insert_index){
     if(grid_index == -1){
         return;
     }
-    int base_index = grid_index * SLOTS_PER_CELL;
-    int count = env->grid_cells[base_index];
-    if(count>= MAX_ENTITIES_PER_CELL) return;
-    env->grid_cells[base_index + count*2 + 1] = entity_idx;
-    env->grid_cells[base_index + count*2 + 2] = geometry_idx;
-    env->grid_cells[base_index] = count + 1;
 
+    int count = cell_entities_insert_index[grid_index];
+    if(count >= env->grid_map->cell_entities_count[grid_index]) {
+        printf("Error: Exceeded precomputed entity count for grid cell %d. Current count: %d, Max count(Precomputed): %d\n", grid_index, count, env->grid_map->cell_entities_count[grid_index]);
+        return;
+    }
+
+    env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
+    env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
+    cell_entities_insert_index[grid_index] = count + 1;
 }
+
 
 void init_topology_graph(Drive* env){
     // Count ROAD_LANE entities
@@ -560,6 +572,9 @@ void init_topology_graph(Drive* env){
 }
 
 void init_grid_map(Drive* env){
+    // Allocate memory for the grid map structure
+    env->grid_map = (GridMap*)malloc(sizeof(GridMap));
+
     // Find top left and bottom right points of the map
     float top_left_x;
     float top_left_y;
@@ -581,33 +596,61 @@ void init_grid_map(Drive* env){
                 }
                 if(e->traj_x[j] < top_left_x) top_left_x = e->traj_x[j];
                 if(e->traj_x[j] > bottom_right_x) bottom_right_x = e->traj_x[j];
-                if(e->traj_y[j] < top_left_y) top_left_y = e->traj_y[j];
-                if(e->traj_y[j] > bottom_right_y) bottom_right_y = e->traj_y[j];
+                if(e->traj_y[j] > top_left_y) top_left_y = e->traj_y[j];
+                if(e->traj_y[j] < bottom_right_y) bottom_right_y = e->traj_y[j];
             }
         }
     }
 
-    env->map_corners = (float*)calloc(4, sizeof(float));
-    env->map_corners[0] = top_left_x;
-    env->map_corners[1] = top_left_y;
-    env->map_corners[2] = bottom_right_x;
-    env->map_corners[3] = bottom_right_y;
+    env->grid_map->top_left_x = top_left_x;
+    env->grid_map->top_left_y = top_left_y;
+    env->grid_map->bottom_right_x = bottom_right_x;
+    env->grid_map->bottom_right_y = bottom_right_y;
+    env->grid_map->cell_size_x = GRID_CELL_SIZE;
+    env->grid_map->cell_size_y = GRID_CELL_SIZE;
 
     // Calculate grid dimensions
     float grid_width = bottom_right_x - top_left_x;
-    float grid_height = bottom_right_y - top_left_y;
-    env->grid_cols = ceil(grid_width / GRID_CELL_SIZE);
-    env->grid_rows = ceil(grid_height / GRID_CELL_SIZE);
-    int grid_cell_count = env->grid_cols*env->grid_rows;
-    env->grid_cells = (int*)calloc(grid_cell_count*SLOTS_PER_CELL, sizeof(int));
-    // Populate grid cells
+    float grid_height = top_left_y - bottom_right_y;
+    env->grid_map->grid_cols = ceil(grid_width / GRID_CELL_SIZE);
+    env->grid_map->grid_rows = ceil(grid_height / GRID_CELL_SIZE);
+    int grid_cell_count = env->grid_map->grid_cols*env->grid_map->grid_rows;
+    env->grid_map->cells = (GridMapEntity**)calloc(grid_cell_count, sizeof(GridMapEntity*));
+    env->grid_map->cell_entities_count = (int*)calloc(grid_cell_count, sizeof(int));
+
+    // Calculate number of entities in each grid cell
     for(int i = 0; i < env->num_entities; i++){
         if(env->entities[i].type > 3 && env->entities[i].type < 7){
             for(int j = 0; j < env->entities[i].array_size - 1; j++){
                 float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
                 float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
                 int grid_index = getGridIndex(env, x_center, y_center);
-                add_entity_to_grid(env, grid_index, i, j);
+                env->grid_map->cell_entities_count[grid_index]++;
+            }
+        }
+    }
+    int cell_entities_insert_index[grid_cell_count];   // Helper array for insertion index
+    memset(cell_entities_insert_index, 0, grid_cell_count * sizeof(int));
+
+    // Initialize grid cells
+    for(int grid_index = 0; grid_index < grid_cell_count; grid_index++){
+        env->grid_map->cells[grid_index] = (GridMapEntity*)calloc(env->grid_map->cell_entities_count[grid_index], sizeof(GridMapEntity));
+    }
+    for(int i = 0;i<grid_cell_count;i++){
+        if(cell_entities_insert_index[i] != 0){
+            printf("Error: cell_entities_insert_index[%d] not zero during initialization.\n", i);
+            cell_entities_insert_index[i] = 0;
+        }
+    }
+
+    // Populate grid cells
+    for(int i = 0; i < env->num_entities; i++){
+        if(env->entities[i].type > 3 && env->entities[i].type < 7){         // NOTE: Only Road Edges, Lines, and Lanes in grid map
+            for(int j = 0; j < env->entities[i].array_size - 1; j++){
+                float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
+                float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
+                int grid_index = getGridIndex(env, x_center, y_center);
+                add_entity_to_grid(env, grid_index, i, j, cell_entities_insert_index);
             }
         }
     }
@@ -615,7 +658,7 @@ void init_grid_map(Drive* env){
 
 void init_neighbor_offsets(Drive* env) {
     // Allocate memory for the offsets
-    env->neighbor_offsets = (int*)calloc(env->vision_range*env->vision_range*2, sizeof(int));
+    env->neighbor_offsets = (int*)calloc(env->grid_map->vision_range*env->grid_map->vision_range*2, sizeof(int));
     // neighbor offsets in a spiral pattern
     int dx[] = {1, 0, -1, 0};
     int dy[] = {0, 1, 0, -1};
@@ -626,7 +669,7 @@ void init_neighbor_offsets(Drive* env) {
     int steps_taken = 0;   // Steps taken in current direction
     int segments_completed = 0; // Count of direction segments completed
     int total = 0; // Total offsets added
-    int max_offsets = env->vision_range*env->vision_range;
+    int max_offsets = env->grid_map->vision_range*env->grid_map->vision_range;
     // Start at center (0,0)
     int curr_idx = 0;
     env->neighbor_offsets[curr_idx++] = 0;  // x offset
@@ -638,7 +681,7 @@ void init_neighbor_offsets(Drive* env) {
         x += dx[dir];
         y += dy[dir];
         // Only add if within vision range bounds
-        if (abs(x) <= env->vision_range/2 && abs(y) <= env->vision_range/2) {
+        if (abs(x) <= env->grid_map->vision_range/2 && abs(y) <= env->grid_map->vision_range/2) {
             env->neighbor_offsets[curr_idx++] = x;
             env->neighbor_offsets[curr_idx++] = y;
             total++;
@@ -658,61 +701,74 @@ void init_neighbor_offsets(Drive* env) {
 
 void cache_neighbor_offsets(Drive* env){
     int count = 0;
-    int cell_count = env->grid_cols*env->grid_rows;
+    int cell_count = env->grid_map->grid_cols*env->grid_map->grid_rows;
+    env->grid_map->neighbor_cache_entities = (GridMapEntity**)calloc(cell_count, sizeof(GridMapEntity*));
+    env->grid_map->neighbor_cache_count = (int*)calloc(cell_count + 1, sizeof(int));
     for(int i = 0; i < cell_count; i++){
-        int cell_x = i % env->grid_cols;  // Convert to 2D coordinates
-        int cell_y = i / env->grid_cols;
-        env->neighbor_cache_indices[i] = count;
-        for(int j = 0; j< env->vision_range*env->vision_range; j++){
+        int cell_x = i % env->grid_map->grid_cols;  // Convert to 2D coordinates
+        int cell_y = i / env->grid_map->grid_cols;
+        int current_cell_neighbor_count = 0;
+        for(int j = 0; j < env->grid_map->vision_range*env->grid_map->vision_range; j++){
             int x = cell_x + env->neighbor_offsets[j*2];
             int y = cell_y + env->neighbor_offsets[j*2+1];
-            int grid_index = env->grid_cols*y + x;
-            if(x < 0 || x >= env->grid_cols || y < 0 || y >= env->grid_rows) continue;
-            int grid_count = env->grid_cells[grid_index*SLOTS_PER_CELL];
-            count += grid_count * 2;
+            int grid_index = env->grid_map->grid_cols*y + x;
+            if(x < 0 || x >= env->grid_map->grid_cols || y < 0 || y >= env->grid_map->grid_rows) continue;
+            int grid_count = env->grid_map->cell_entities_count[grid_index];
+            current_cell_neighbor_count += grid_count;
         }
+        env->grid_map->neighbor_cache_count[i] = current_cell_neighbor_count;
+        count += current_cell_neighbor_count;
+        if(current_cell_neighbor_count == 0) {
+            env->grid_map->neighbor_cache_entities[i] = NULL;
+            continue;
+        }
+        env->grid_map->neighbor_cache_entities[i] = (GridMapEntity*)calloc(current_cell_neighbor_count, sizeof(GridMapEntity));
     }
-    env->neighbor_cache_indices[cell_count] = count;
-    env->neighbor_cache_entities = (int*)calloc(count, sizeof(int));
+
+    env->grid_map->neighbor_cache_count[cell_count] = count;
     for(int i = 0; i < cell_count; i ++){
-        int neighbor_cache_base_index = 0;
-        int cell_x = i % env->grid_cols;  // Convert to 2D coordinates
-        int cell_y = i / env->grid_cols;
-        for(int j = 0; j<env->vision_range*env->vision_range; j++){
+        int cell_x = i % env->grid_map->grid_cols;  // Convert to 2D coordinates
+        int cell_y = i / env->grid_map->grid_cols;
+        int base_index = 0;
+        for(int j = 0; j < env->grid_map->vision_range*env->grid_map->vision_range; j++){
             int x = cell_x + env->neighbor_offsets[j*2];
             int y = cell_y + env->neighbor_offsets[j*2+1];
-            int grid_index = env->grid_cols*y + x;
-            if(x < 0 || x >= env->grid_cols || y < 0 || y >= env->grid_rows) continue;
-            int grid_count = env->grid_cells[grid_index*SLOTS_PER_CELL];
-            int base_index = env->neighbor_cache_indices[i];
-            int src_idx = grid_index*SLOTS_PER_CELL + 1;
-            int dst_idx = base_index + neighbor_cache_base_index;
-            // Copy grid_count pairs (entity_idx, geometry_idx) at once
-            memcpy(&env->neighbor_cache_entities[dst_idx],
-                &env->grid_cells[src_idx],
-                grid_count * 2 * sizeof(int));
+            int grid_index = env->grid_map->grid_cols*y + x;
+            if(x < 0 || x >= env->grid_map->grid_cols || y < 0 || y >= env->grid_map->grid_rows) continue;
+            int grid_count = env->grid_map->cell_entities_count[grid_index];
 
-            // Update index outside the loop
-            neighbor_cache_base_index += grid_count * 2;
+            // Skip if no entities or source is NULL
+            if(grid_count == 0 || env->grid_map->cells[grid_index] == NULL) {
+                continue;
+            }
+
+            int src_idx = grid_index;
+            int dst_idx = base_index;
+            // Copy grid_count pairs (entity_idx, geometry_idx) at once
+            memcpy(&env->grid_map->neighbor_cache_entities[i][dst_idx],
+                env->grid_map->cells[src_idx],
+                grid_count * sizeof(GridMapEntity));
+            // for(int k = 0; k < grid_count; k++){
+            //     env->grid_map->neighbor_cache_entities[i][dst_idx + k] = env->grid_map->cells[src_idx][k];
+            // }
+            base_index += grid_count;
         }
     }
 }
 
-int get_neighbor_cache_entities(Drive* env, int cell_idx, int* entities, int max_entities) {
-    if (cell_idx < 0 || cell_idx >= (env->grid_cols * env->grid_rows)) {
+int get_neighbor_cache_entities(Drive* env, int cell_idx, GridMapEntity* entities, int max_entities) {
+    GridMap* grid_map = env->grid_map;
+    if (cell_idx < 0 || cell_idx >= (grid_map->grid_cols * grid_map->grid_rows)) {
         return 0; // Invalid cell index
     }
-    int base_index = env->neighbor_cache_indices[cell_idx];
-    int end_index = env->neighbor_cache_indices[cell_idx + 1];
-    int count = end_index - base_index;
-    int pairs = count / 2;  // Entity ID and geometry ID pairs
+
+    int count = grid_map->neighbor_cache_count[cell_idx];
     // Limit to available space
-    if (pairs > max_entities) {
-        pairs = max_entities;
-        count = pairs * 2;
+    if (count > max_entities) {
+        count = max_entities;
     }
-    memcpy(entities, env->neighbor_cache_entities + base_index, count * sizeof(int));
-    return pairs;
+    memcpy(entities, grid_map->neighbor_cache_entities[cell_idx], count * sizeof(GridMapEntity));
+    return count;
 }
 
 void set_means(Drive* env) {
@@ -794,12 +850,12 @@ bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2])
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
-int checkNeighbors(Drive* env, float x, float y, int* entity_list, int max_size, const int (*local_offsets)[2], int offset_size) {
+int checkNeighbors(Drive* env, float x, float y, GridMapEntity* entity_list, int max_size, const int (*local_offsets)[2], int offset_size) {
     // Get the grid index for the given position (x, y)
     int index = getGridIndex(env, x, y);
     if (index == -1) return 0;  // Return 0 size if position invalid
     // Calculate 2D grid coordinates
-    int cellsX = env->grid_cols;
+    int cellsX = env->grid_map->grid_cols;
     int gridX = index % cellsX;
     int gridY = index / cellsX;
     int entity_list_count = 0;
@@ -808,16 +864,16 @@ int checkNeighbors(Drive* env, float x, float y, int* entity_list, int max_size,
         int nx = gridX + local_offsets[i][0];
         int ny = gridY + local_offsets[i][1];
         // Ensure the neighbor is within grid bounds
-        if(nx < 0 || nx >= env->grid_cols || ny < 0 || ny >= env->grid_rows) continue;
-        int neighborIndex = (ny * env->grid_cols + nx) * SLOTS_PER_CELL;
-        int count = env->grid_cells[neighborIndex];
+        if(nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows) continue;
+        int neighborIndex = ny * env->grid_map->grid_cols + nx;
+        int count = env->grid_map->cell_entities_count[neighborIndex];
         // Add entities from this cell to the list
         for (int j = 0; j < count && entity_list_count < max_size; j++) {
-            int entityId = env->grid_cells[neighborIndex + 1 + j*2];
-            int geometry_idx = env->grid_cells[neighborIndex + 2 + j*2];
-            entity_list[entity_list_count] = entityId;
-            entity_list[entity_list_count + 1] = geometry_idx;
-            entity_list_count += 2;
+            int entityId = env->grid_map->cells[neighborIndex][j].entity_idx;
+            int geometry_idx = env->grid_map->cells[neighborIndex][j].geometry_idx;
+            entity_list[entity_list_count].entity_idx = entityId;
+            entity_list[entity_list_count].geometry_idx = geometry_idx;
+            entity_list_count += 1;
         }
     }
     return entity_list_count;
@@ -1016,7 +1072,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     float half_width = agent->width/2.0f;
     float cos_heading = cosf(agent->heading);
     float sin_heading = sinf(agent->heading);
-    float min_distance = 100.0f;
+    float min_distance = (float)INT16_MAX;
 
     int closest_lane_entity_idx = -1;
     int closest_lane_geometry_idx = -1;
@@ -1027,18 +1083,17 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         corners[i][1] = agent->y + (offsets[i][0]*half_length*sin_heading + offsets[i][1]*half_width*cos_heading);
     }
 
-    int entity_list[MAX_ENTITIES_PER_CELL*2*25];  // Array big enough for all neighboring cells
-    int list_size = checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL*2*25, collision_offsets, 25);
-    for (int i = 0; i < list_size ; i+=2) {
-        if(entity_list[i] == -1) continue;
-        if(entity_list[i] == agent_idx) continue;
-
+    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*25];  // Array big enough for all neighboring cells
+    int list_size = checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL*25, collision_offsets, 25);
+    for (int i = 0; i < list_size ; i++) {
+        if(entity_list[i].entity_idx == -1) continue;
+        if(entity_list[i].entity_idx == agent_idx) continue;
         Entity* entity;
-        entity = &env->entities[entity_list[i]];
+        entity = &env->entities[entity_list[i].entity_idx];
 
         // Check for offroad collision with road edges
         if(entity->type == ROAD_EDGE) {
-            int geometry_idx = entity_list[i + 1];
+            int geometry_idx = entity_list[i].geometry_idx;
             float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
             float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
             for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
@@ -1054,8 +1109,8 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
         // Find closest point on the road centerline to the agent
         if(entity->type == ROAD_LANE) {
-            int entity_idx = entity_list[i];
-            int geometry_idx = entity_list[i + 1];
+            int entity_idx = entity_list[i].entity_idx;
+            int geometry_idx = entity_list[i].geometry_idx;
 
             float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
             float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
@@ -1204,8 +1259,6 @@ void set_active_agents(Drive* env){
 
 void remove_bad_trajectories(Drive* env){
     set_start_position(env);
-    int legal_agent_count = 0;
-    int legal_trajectories[env->active_agent_count];
     int collided_agents[env->active_agent_count];
     int collided_with_indices[env->active_agent_count];
     memset(collided_agents, 0, env->active_agent_count * sizeof(int));
@@ -1261,9 +1314,8 @@ void init(Drive* env){
     set_means(env);
     init_grid_map(env);
     if (env->use_goal_generation) init_topology_graph(env);
-    env->vision_range = 21;
+    env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
-    env->neighbor_cache_indices = (int*)calloc((env->grid_cols*env->grid_rows) + 1, sizeof(int));
     cache_neighbor_offsets(env);
     set_active_agents(env);
     remove_bad_trajectories(env);
@@ -1279,11 +1331,21 @@ void c_close(Drive* env){
     free(env->entities);
     free(env->active_agent_indices);
     free(env->logs);
-    free(env->map_corners);
-    free(env->grid_cells);
+    // GridMap cleanup
+    int grid_cell_count = env->grid_map->grid_cols*env->grid_map->grid_rows;
+    for(int grid_index = 0; grid_index < grid_cell_count; grid_index++){
+        free(env->grid_map->cells[grid_index]);
+    }
+    free(env->grid_map->cells);
+    free(env->grid_map->cell_entities_count);
     free(env->neighbor_offsets);
-    free(env->neighbor_cache_entities);
-    free(env->neighbor_cache_indices);
+
+    for(int i = 0; i < grid_cell_count; i++){
+        free(env->grid_map->neighbor_cache_entities[i]);
+    }
+    free(env->grid_map->neighbor_cache_entities);
+    free(env->grid_map->neighbor_cache_count);
+    free(env->grid_map);
     free(env->static_car_indices);
     free(env->expert_static_car_indices);
     freeTopologyGraph(env->topology_graph);
@@ -1294,16 +1356,10 @@ void c_close(Drive* env){
 void allocate(Drive* env){
     init(env);
     int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    // printf("max obs: %d\n", max_obs*env->active_agent_count);
-    // printf("num cars: %d\n", env->num_cars);
-    // printf("num static cars: %d\n", env->static_car_count);
-    // printf("active agent count: %d\n", env->active_agent_count);
-    // printf("num objects: %d\n", env->num_objects);
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
     env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
     env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
-    // printf("allocated\n");
 }
 
 void free_allocated(Drive* env){
@@ -1406,7 +1462,6 @@ void compute_observations(Drive* env) {
             obs[6] = 1;
             //continue;
         }
-        float ego_heading = ego_entity->heading;
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
         float ego_speed = sqrtf(ego_entity->vx*ego_entity->vx + ego_entity->vy*ego_entity->vy);
@@ -1475,13 +1530,29 @@ void compute_observations(Drive* env) {
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
         // map observations
-        int entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS*2];  // Array big enough for all neighboring cells
+        GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*25];
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
+
         int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
-        for(int k = 0; k < list_size; k++){
-            int entity_idx = entity_list[k*2];
-            int geometry_idx = entity_list[k*2+1];
+
+        for(int k = 0; k < list_size; k++) {
+            int entity_idx = entity_list[k].entity_idx;
+            int geometry_idx = entity_list[k].geometry_idx;
+
+            // Validate entity_idx before accessing
+            if(entity_idx < 0 || entity_idx >= env->num_entities) {
+                printf("ERROR: Invalid entity_idx %d (max: %d)\n", entity_idx, env->num_entities-1);
+                continue;
+            }
+
             Entity* entity = &env->entities[entity_idx];
+
+            // Validate geometry_idx before accessing
+            if(geometry_idx < 0 || geometry_idx >= entity->array_size) {
+                printf("ERROR: Invalid geometry_idx %d for entity %d (max: %d)\n",
+                       geometry_idx, entity_idx, entity->array_size-1);
+                continue;
+            }
             float start_x = entity->traj_x[geometry_idx];
             float start_y = entity->traj_y[geometry_idx];
             float end_x = entity->traj_x[geometry_idx+1];
@@ -1747,7 +1818,6 @@ void c_step(Drive* env){
             if(!env->entities[agent_idx].reached_goal_this_episode){
                 env->entities[agent_idx].collided_before_goal = 1;
             }
-            //printf("agent %d collided\n", agent_idx);
         }
 
         float distance_to_goal = relative_distance_2d(
@@ -1844,10 +1914,8 @@ Client* make_client(Drive* env){
         client->car_assignments[i] = (rand() % 4) + 1;
     }
     // Get initial target position from first active agent
-    float map_center_x = (env->map_corners[0] + env->map_corners[2]) / 2.0f;
-    float map_center_y = (env->map_corners[1] + env->map_corners[3]) / 2.0f;
     Vector3 target_pos = {
-       0,
+        0,
         0,  // Y is up
         1   // Z is depth
     };
@@ -2262,10 +2330,10 @@ void draw_road_edge(Drive* env, float start_x, float start_y, float end_x, float
 void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, int show_grid){
    // Draw a grid to help with orientation
     // DrawGrid(20, 1.0f);
-    DrawLine3D((Vector3){env->map_corners[0], env->map_corners[1], 0}, (Vector3){env->map_corners[2], env->map_corners[1], 0}, PUFF_CYAN);
-    DrawLine3D((Vector3){env->map_corners[0], env->map_corners[1], 0}, (Vector3){env->map_corners[0], env->map_corners[3], 0}, PUFF_CYAN);
-    DrawLine3D((Vector3){env->map_corners[2], env->map_corners[1], 0}, (Vector3){env->map_corners[2], env->map_corners[3], 0}, PUFF_CYAN);
-    DrawLine3D((Vector3){env->map_corners[0], env->map_corners[3], 0}, (Vector3){env->map_corners[2], env->map_corners[3], 0}, PUFF_CYAN);
+    DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->top_left_y, 0}, (Vector3){env->grid_map->bottom_right_x, env->grid_map->top_left_y, 0}, PUFF_CYAN);
+    DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0}, (Vector3){env->grid_map->top_left_x, env->grid_map->top_left_y, 0}, PUFF_CYAN);
+    DrawLine3D((Vector3){env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0}, (Vector3){env->grid_map->bottom_right_x, env->grid_map->top_left_y, 0}, PUFF_CYAN);
+    DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0}, (Vector3){env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0}, PUFF_CYAN);
     for(int i = 0; i < env->num_entities; i++) {
         // Draw cars
         if(env->entities[i].type == 1 || env->entities[i].type == 2) {
@@ -2287,7 +2355,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 }
             }
             // HIDE CARS ON RESPAWN - IMPORTANT TO KNOW VISUAL SETTING
-            if(!is_active_agent && !is_static_car || env->entities[i].respawn_timestep != -1){
+            if((!is_active_agent && !is_static_car) || env->entities[i].respawn_timestep != -1){
                 continue;
             }
             Vector3 position;
@@ -2495,10 +2563,10 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
     }
     if(show_grid) {
     // Draw grid cells using the stored bounds
-    float grid_start_x = env->map_corners[0];
-    float grid_start_y = env->map_corners[1];
-    for(int i = 0; i < env->grid_cols; i++) {
-        for(int j = 0; j < env->grid_rows; j++) {
+    float grid_start_x = env->grid_map->top_left_x;
+    float grid_start_y = env->grid_map->bottom_right_y;
+    for(int i = 0; i < env->grid_map->grid_cols; i++) {
+        for(int j = 0; j < env->grid_map->grid_rows; j++) {
             float x = grid_start_x + i*GRID_CELL_SIZE;
             float y = grid_start_y + j*GRID_CELL_SIZE;
             DrawCubeWires(
@@ -2637,8 +2705,8 @@ void c_render(Drive* env) {
         DrawText(TextFormat("Acceleration: %d", action_array[env->human_agent_idx][0]), 10, 110, 20, PUFF_WHITE);
         DrawText(TextFormat("Steering: %d", action_array[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
     }
-    DrawText(TextFormat("Grid Rows: %d", env->grid_rows), 10, 150, 20, PUFF_WHITE);
-    DrawText(TextFormat("Grid Cols: %d", env->grid_cols), 10, 170, 20, PUFF_WHITE);
+    DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, 150, 20, PUFF_WHITE);
+    DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, 170, 20, PUFF_WHITE);
     EndDrawing();
 }
 
