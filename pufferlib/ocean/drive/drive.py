@@ -28,6 +28,7 @@ class Drive(pufferlib.PufferEnv):
         num_agents=512,
         action_type="discrete",
         use_goal_generation=False,
+        control_non_vehicles=False,
         buf=None,
         seed=1,
         init_steps=0,
@@ -45,6 +46,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
+        self.control_non_vehicles = control_non_vehicles
         self.resample_frequency = resample_frequency
         self.num_obs = 7 + 63 * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
@@ -102,6 +104,7 @@ class Drive(pufferlib.PufferEnv):
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
+                control_non_vehicles=int(control_non_vehicles),
                 init_steps=init_steps,
             )
             env_ids.append(env_id)
@@ -155,6 +158,7 @@ class Drive(pufferlib.PufferEnv):
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                         ini_file="pufferlib/config/ocean/drive.ini",
+                        control_non_vehicles=int(self.control_non_vehicles),
                         init_steps=self.init_steps,
                     )
                     env_ids.append(env_id)
@@ -240,7 +244,7 @@ def save_map_binary(map_data, output_file):
             elif obj_type == "cyclist":
                 obj_type = 3
             f.write(struct.pack("i", obj_type))  # type
-            # f.write(struct.pack('i', obj.get('id', 0)))   # id
+            # f.write(struct.pack("i", obj.get("id", 0)))  # id
             f.write(struct.pack("i", trajectory_length))  # array_size
             # Write position arrays
             positions = obj.get("position", [])
@@ -318,7 +322,7 @@ def save_map_binary(map_data, output_file):
                 road_type = 10
             # Write base entity data
             f.write(struct.pack("i", road_type))  # type
-            # f.write(struct.pack('i', road.get('id', 0)))    # id
+            # f.write(struct.pack("i", road.get("id", 0)))  # id
             f.write(struct.pack("i", size))  # array_size
 
             # Write position arrays

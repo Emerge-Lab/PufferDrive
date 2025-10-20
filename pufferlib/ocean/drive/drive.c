@@ -482,7 +482,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps) {
+int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps) {
 
     // Use default if no map provided
     if (map_name == NULL) {
@@ -509,6 +509,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
         .goal_radius = goal_radius,
 	    .map_name = map_name,
         .spawn_immunity_timer = 50,
+        .control_non_vehicles = control_non_vehicles,
         .init_steps = init_steps,
     };
     allocate(&env);
@@ -661,6 +662,7 @@ int main(int argc, char* argv[]) {
     float goal_radius = 2.0f;
     int init_steps = 0;
     const char* map_name = NULL;
+    int control_non_vehicles = 0;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -691,6 +693,8 @@ int main(int argc, char* argv[]) {
                     frame_skip = 1; // Ensure valid value
                 }
             }
+        } else if (strcmp(argv[i], "--control-non-vehicles") == 0) {
+            control_non_vehicles = 1;
         } else if (strcmp(argv[i], "--goal-radius") == 0) {
             if (i + 1 < argc) {
                 goal_radius = atof(argv[i + 1]);
@@ -711,7 +715,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps);
+    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps);
     //demo();
     //performance_test();
     return 0;

@@ -714,6 +714,7 @@ typedef struct
     float goal_radius;
     int spawn_immunity_timer;
     int use_goal_generation;
+    int control_non_vehicles;
 } env_init_config;
 
 static int handler(
@@ -752,6 +753,8 @@ static int handler(
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
+    } else if (MATCH("env", "control_non_vehicles")) {
+        env_config->control_non_vehicles = atoi(value);
     } else {
         return 0;
     }

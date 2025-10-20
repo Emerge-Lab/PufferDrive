@@ -153,6 +153,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->goal_radius = conf.goal_radius;
     env->use_goal_generation = conf.use_goal_generation;
     env->spawn_immunity_timer = conf.spawn_immunity_timer;
+    env->control_non_vehicles = (int)unpack(kwargs, "control_non_vehicles");
+
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
