@@ -140,6 +140,9 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
     env->ini_file = unpack_str(kwargs, "ini_file");
     env_init_config conf;
+    memset(&conf, 0, sizeof(conf));
+    // default episode length if not overriden in ini
+    conf.episode_length = 91;
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
@@ -151,6 +154,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_ade = conf.reward_ade;
     env->goal_radius = conf.goal_radius;
     env->spawn_immunity_timer = conf.spawn_immunity_timer;
+    env->episode_length = conf.episode_length;
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
 

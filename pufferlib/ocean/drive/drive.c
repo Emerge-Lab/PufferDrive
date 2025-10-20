@@ -1,5 +1,7 @@
 #include <time.h>
 #include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
 #include "drive.h"
 #include "puffernet.h"
 #include <sys/wait.h>
@@ -91,7 +93,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
         Vector3 prev_point = {0};
         bool has_prev = false;
 
-        for(int j=0; j<TRAJECTORY_LENGTH; j++){
+        for(int j = 0; j < env->entities[idx].array_size; j++){
             float x = env->entities[idx].traj_x[j];
             float y = env->entities[idx].traj_y[j];
             float valid = env->entities[idx].traj_valid[j];
@@ -482,8 +484,35 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius) {
+static int parse_episode_length_from_ini(const char* ini_path) {
+    FILE* f = fopen(ini_path, "r");
+    if (!f) return -1;
+    char line[512];
+    int in_env = 0;
+    int episode_len = -1;
+    while (fgets(line, sizeof(line), f)) {
+        char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == ';' || *p == '#') continue;
+        if (*p == '[') {
+            in_env = (strstr(p, "[env]") != NULL);
+            continue;
+        }
+        if (!in_env) continue;
+        if (strstr(p, "episode_length") == p) {
+            char* eq = strchr(p, '=');
+            if (eq) {
+                int val = atoi(eq + 1);
+                if (val > 0) episode_len = val;
+            }
+            break;
+        }
+    }
+    fclose(f);
+    return episode_len;
+}
 
+int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius) {
     // Use default if no map provided
     if (map_name == NULL) {
         map_name = "resources/drive/binaries/map_000.bin";
@@ -510,6 +539,9 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 	    .map_name = map_name,
         .spawn_immunity_timer = 50
     };
+    int ini_episode = parse_episode_length_from_ini("pufferlib/config/ocean/drive.ini");
+    env.episode_length = (ini_episode > 0) ? ini_episode : 91;
+
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -540,7 +572,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
-    int frame_count = 91;
+    int frame_count = env.episode_length > 0 ? env.episode_length : 91;
     char filename[256];
     int log_trajectory = log_trajectories;
 
@@ -570,7 +602,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
-    }
+        }
 
     // Reset environment for agent view
     c_reset(&env);
@@ -593,7 +625,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
-    }
+        }
 
     double endTime = GetTime();
     double elapsedTime = endTime - startTime;
