@@ -5,22 +5,15 @@ import warnings
 from pathlib import Path
 from pufferlib.ocean.drive.drive import Drive
 
-# ===============================================================
 # CONFIGURATION
-# ===============================================================
 
 # Path where the history JSON will be stored
 # (relative to project root, regardless of where the test runs from)
 ROOT_DIR = Path(__file__).resolve().parents[2]  # goes up from tests/ to PufferDrive/
 DATA_FILE = ROOT_DIR / "pufferlib" / "resources" / "drive" / "simulator_perf_history.json"
 
-# ===============================================================
-# HELPER FUNCTIONS
-# ===============================================================
-
 
 def load_history():
-    """Load previous SPS values from JSON (if exists)."""
     if DATA_FILE.exists():
         with open(DATA_FILE, "r") as f:
             return json.load(f)
@@ -28,7 +21,6 @@ def load_history():
 
 
 def save_history(history):
-    """Save SPS history back to JSON."""
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(DATA_FILE, "w") as f:
         json.dump(history, f, indent=4)
@@ -41,11 +33,6 @@ def compute_baseline(history):
         # Not enough data to compute reliable stats yet
         return 0, 0
     return np.mean(sps_values), np.std(sps_values)
-
-
-# ===============================================================
-# MAIN TEST
-# ===============================================================
 
 
 def test_simulator_raw():
@@ -103,10 +90,6 @@ def test_simulator_raw():
         save_history(history)
         print("📈 Initialized baseline tracking.")
 
-
-# ===============================================================
-# ENTRY POINT
-# ===============================================================
 
 if __name__ == "__main__":
     test_simulator_raw()
