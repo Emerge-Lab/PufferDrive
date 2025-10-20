@@ -193,13 +193,25 @@ struct DriveNet {
     Multidiscrete* multidiscrete;
 };
 
-DriveNet* init_drivenet(Weights* weights, int num_agents) {
+DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
     DriveNet* net = calloc(1, sizeof(DriveNet));
     int hidden_size = 256;
     int input_size = 64;
 
+    // Determine action space size based on dynamics model
+    int action_size, logit_sizes[2];
+    if (dynamics_model == CLASSIC) {
+        action_size = 20;  // 7 + 13
+        logit_sizes[0] = 7;
+        logit_sizes[1] = 13;
+    } else {  // JERK
+        action_size = 7;   // 4 + 3
+        logit_sizes[0] = 4;
+        logit_sizes[1] = 3;
+    }
+
     net->num_agents = num_agents;
-    net->obs_self = calloc(num_agents*10, sizeof(float)); // 7 features
+    net->obs_self = calloc(num_agents*10, sizeof(float)); // 10 features
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
     net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
@@ -224,12 +236,11 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     net->gelu = make_gelu(num_agents, 3*input_size);
     net->shared_embedding = make_linear(weights, num_agents, input_size*3, hidden_size);
     net->relu = make_relu(num_agents, hidden_size);
-    net->actor = make_linear(weights, num_agents, hidden_size, 7);
+    net->actor = make_linear(weights, num_agents, hidden_size, action_size);
     net->value_fn = make_linear(weights, num_agents, hidden_size, 1);
     net->lstm = make_lstm(weights, num_agents, hidden_size, 256);
     memset(net->lstm->state_h, 0, num_agents*256*sizeof(float));
     memset(net->lstm->state_c, 0, num_agents*256*sizeof(float));
-    int logit_sizes[2] = {4, 3};
     net->multidiscrete = make_multidiscrete(num_agents, logit_sizes, 2);
     return net;
 }
@@ -383,6 +394,13 @@ void forward(DriveNet* net, float* observations, int* actions) {
     softmax_multidiscrete(net->multidiscrete, net->actor->output, actions);
 }
 void demo() {
+    // Read dynamics model from INI file
+    env_init_config conf;
+    const char* ini_file = "pufferlib/config/ocean/drive.ini";
+    if(ini_parse(ini_file, handler, &conf) < 0) {
+        printf("Warning: Could not load %s, using default dynamics model (JERK)\n", ini_file);
+        conf.dynamics_model = JERK;  // Default to JERK for existing weights
+    }
 
     Drive env = {
         .human_agent_idx = 0,
@@ -393,12 +411,13 @@ void demo() {
 	    .map_name = "resources/drive/binaries/map_000.bin",
         .spawn_immunity_timer = 50,
         .dt = 0.1f,
+        .dynamics_model = conf.dynamics_model,
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
     //Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;
@@ -500,6 +519,14 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     }
     fclose(map_file);
 
+    // Read dynamics model from INI file
+    env_init_config conf;
+    const char* ini_file = "pufferlib/config/ocean/drive.ini";
+    if(ini_parse(ini_file, handler, &conf) < 0) {
+        printf("Warning: Could not load %s, using default dynamics model (JERK)\n", ini_file);
+        conf.dynamics_model = JERK;  // Default to JERK for existing weights
+    }
+
     // Make env
     Drive env = {
         .reward_vehicle_collision = -0.1f,
@@ -509,6 +536,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 	    .map_name = map_name,
         .spawn_immunity_timer = 50,
         .dt = 0.1f,
+        .dynamics_model = conf.dynamics_model,
         .control_non_vehicles = control_non_vehicles
     };
     allocate(&env);
@@ -539,7 +567,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     // Load cpt into network
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 592776);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
     int frame_count = 91;
     char filename[256];

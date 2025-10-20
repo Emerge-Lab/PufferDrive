@@ -23,11 +23,12 @@ class Drive(pufferlib.PufferEnv):
         reward_ade=0.0,
         goal_radius=2.0,
         spawn_immunity_timer=30,
-        dt = 0.3,
+        dt=0.3,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
         action_type="discrete",
+        dynamics_model="classic",
         use_goal_generation=False,
         control_non_vehicles=False,
         buf=None,
@@ -49,19 +50,26 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.control_non_vehicles = control_non_vehicles
         self.resample_frequency = resample_frequency
+        self.dynamics_model = dynamics_model
 
         # Observation space calculation
-        ego_features = 10  
+        ego_features = 10
         partner_features = 7
         road_features = 7
         max_partner_objects = 63
         max_road_objects = 200
         self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
-        
+
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
+        # Action space depends on both action_type and dynamics_model
         if action_type == "discrete":
-            self.single_action_space = gymnasium.spaces.MultiDiscrete([4, 3])
+            if dynamics_model == "classic":
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+            elif dynamics_model == "jerk":
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([4, 3])
+            else:
+                raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         else:

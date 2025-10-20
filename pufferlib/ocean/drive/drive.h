@@ -34,6 +34,10 @@
 // Actions
 #define NOOP 0
 
+// Dynamics Models
+#define CLASSIC 0
+#define JERK 1
+
 // collision state
 #define NO_COLLISION 0
 #define VEHICLE_COLLISION 1
@@ -68,9 +72,13 @@
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
 
-// Jerk action space
+// Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
+
+// Classic action space (for CLASSIC dynamics model)
+static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
+static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f, 0.833f, 1.000f};
 
 static const float offsets[4][2] = {
         {-1, 1},  // top-left
@@ -271,6 +279,7 @@ struct Drive {
     int expert_static_car_count;
     int* expert_static_car_indices;
     int timestep;
+    int dynamics_model;
     GridMap* grid_map;
     int* neighbor_offsets;
     float reward_vehicle_collision;
@@ -1356,6 +1365,11 @@ void init(Drive* env){
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
+
+    // Print warning if using JERK dynamics with dt != 0.3
+    if (env->dynamics_model == JERK && fabsf(env->dt - 0.3f) > 1e-5f) {
+        printf("Warning: JERK dynamics works best with dt=0.3 (current dt=%.2f)\n", env->dt);
+    }
 }
 
 void c_close(Drive* env){
@@ -1430,105 +1444,163 @@ float reverse_normalize_value(float value, float min, float max){
 
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
-    
+
     if (agent->collision_state != 0) {
         return;
     }
-    
-    // Extract action components
-    float a_long, a_lat;
-    if (env->action_type == 1) { // continuous
-        float (*action_array_f)[2] = (float(*)[2])env->actions;
 
-        // Asymmetric scaling for longitudinal jerk to match discrete action space
-        // Discrete: JERK_LONG = [-15, -4, 0, 4] (more braking than acceleration)
-        float a_long_action = action_array_f[action_idx][0];  // [-1, 1]
-        if (a_long_action < 0) {
-            a_long = a_long_action * 15.0f;  // Negative: [-1, 0] → [-15, 0] (braking)
-        } else {
-            a_long = a_long_action * 4.0f;   // Positive: [0, 1] → [0, 4] (acceleration)
+    if (env->dynamics_model == CLASSIC) {
+        // Classic dynamics model
+        float acceleration = 0.0f;
+        float steering = 0.0f;
+
+        if (env->action_type == 1) { // continuous
+            float (*action_array_f)[2] = (float(*)[2])env->actions;
+            acceleration = action_array_f[action_idx][0];
+            steering = action_array_f[action_idx][1];
+        } else { // discrete
+            int (*action_array)[2] = (int(*)[2])env->actions;
+            int acceleration_index = action_array[action_idx][0];
+            int steering_index = action_array[action_idx][1];
+
+            acceleration = ACCELERATION_VALUES[acceleration_index];
+            steering = STEERING_VALUES[steering_index];
         }
 
-        // Symmetric scaling for lateral jerk
-        a_lat = action_array_f[action_idx][1] * 4.0f;
-    } else { // discrete
-        int (*action_array)[2] = (int(*)[2])env->actions;
-        int a_long_idx = action_array[action_idx][0];
-        int a_lat_idx = action_array[action_idx][1];
-        a_long = JERK_LONG[a_long_idx];
-        a_lat = JERK_LAT[a_lat_idx];
-    }
-    
-    // Calculate new acceleration
-    float a_long_new = agent->a_long + a_long * env->dt;
-    float a_lat_new = agent->a_lat + a_lat * env->dt;
-    
-    // Make it easy to stop with 0 accel
-    if (agent->a_long * a_long_new < 0) {
-        a_long_new = 0.0f;
+        // Current state
+        float x = agent->x;
+        float y = agent->y;
+        float heading = agent->heading;
+        float vx = agent->vx;
+        float vy = agent->vy;
+
+        // Calculate current speed
+        float speed = sqrtf(vx*vx + vy*vy);
+
+        // Update speed with acceleration
+        speed = speed + 0.5f*acceleration*env->dt;
+        speed = clipSpeed(speed);
+
+        // Compute yaw rate
+        float beta = tanh(.5*tanf(steering));
+
+        // New heading
+        float yaw_rate = (speed*cosf(beta)*tanf(steering)) / agent->length;
+
+        // New velocity
+        float new_vx = speed*cosf(heading + beta);
+        float new_vy = speed*sinf(heading + beta);
+
+        // Update position
+        x = x + (new_vx*env->dt);
+        y = y + (new_vy*env->dt);
+        heading = heading + yaw_rate*env->dt;
+
+        // Apply updates to the agent's state
+        agent->x = x;
+        agent->y = y;
+        agent->heading = heading;
+        agent->heading_x = cosf(heading);
+        agent->heading_y = sinf(heading);
+        agent->vx = new_vx;
+        agent->vy = new_vy;
     } else {
-        a_long_new = clip(a_long_new, -5.0f, 2.5f);
+        // JERK dynamics model
+        // Extract action components
+        float a_long, a_lat;
+        if (env->action_type == 1) { // continuous
+            float (*action_array_f)[2] = (float(*)[2])env->actions;
+
+            // Asymmetric scaling for longitudinal jerk to match discrete action space
+            // Discrete: JERK_LONG = [-15, -4, 0, 4] (more braking than acceleration)
+            float a_long_action = action_array_f[action_idx][0];  // [-1, 1]
+            if (a_long_action < 0) {
+                a_long = a_long_action * 15.0f;  // Negative: [-1, 0] → [-15, 0] (braking)
+            } else {
+                a_long = a_long_action * 4.0f;   // Positive: [0, 1] → [0, 4] (acceleration)
+            }
+
+            // Symmetric scaling for lateral jerk
+            a_lat = action_array_f[action_idx][1] * 4.0f;
+        } else { // discrete
+            int (*action_array)[2] = (int(*)[2])env->actions;
+            int a_long_idx = action_array[action_idx][0];
+            int a_lat_idx = action_array[action_idx][1];
+            a_long = JERK_LONG[a_long_idx];
+            a_lat = JERK_LAT[a_lat_idx];
+        }
+
+        // Calculate new acceleration
+        float a_long_new = agent->a_long + a_long * env->dt;
+        float a_lat_new = agent->a_lat + a_lat * env->dt;
+
+        // Make it easy to stop with 0 accel
+        if (agent->a_long * a_long_new < 0) {
+            a_long_new = 0.0f;
+        } else {
+            a_long_new = clip(a_long_new, -5.0f, 2.5f);
+        }
+
+        if (agent->a_lat * a_lat_new < 0) {
+            a_lat_new = 0.0f;
+        } else {
+            a_lat_new = clip(a_lat_new, -4.0f, 4.0f);
+        }
+
+        // Calculate new velocity
+        float v_dot_heading = agent->vx * agent->heading_x + agent->vy * agent->heading_y;
+        float signed_v = copysignf(sqrtf(agent->vx*agent->vx + agent->vy*agent->vy), v_dot_heading);
+        float v_new = signed_v + 0.5f * (a_long_new + agent->a_long) * env->dt;
+
+        // Make it easy to stop with 0 vel
+        if (signed_v * v_new < 0) {
+            v_new = 0.0f;
+        } else {
+            v_new = clip(v_new, -2.0f, 20.0f);
+        }
+
+        // Calculate new steering angle
+        float signed_curvature = a_lat_new / fmaxf(v_new * v_new, 1e-5f);
+        signed_curvature = copysignf(fmaxf(fabsf(signed_curvature), 1e-5f), signed_curvature);
+        float steering_angle = atanf(signed_curvature * agent->wheelbase);
+        float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
+        float new_steering_angle = clip(agent->steering_angle + delta_steer, -0.55f, 0.55f);
+
+        // Update curvature and accel to account for limited steering
+        signed_curvature = tanf(new_steering_angle) / agent->wheelbase;
+        a_lat_new = v_new * v_new * signed_curvature;
+
+        // Calculate resulting movement using bicycle dynamics
+        float d = 0.5f * (v_new + signed_v) * env->dt;
+        float theta = d * signed_curvature;
+        float dx_local, dy_local;
+
+        if (fabsf(signed_curvature) < 1e-5f || fabsf(theta) < 1e-5f) {
+            dx_local = d;
+            dy_local = 0.0f;
+        } else {
+            dx_local = sinf(theta) / signed_curvature;
+            dy_local = (1.0f - cosf(theta)) / signed_curvature;
+        }
+
+        float dx = dx_local * agent->heading_x - dy_local * agent->heading_y;
+        float dy = dx_local * agent->heading_y + dy_local * agent->heading_x;
+
+        // Update everything
+        agent->x += dx;
+        agent->y += dy;
+        agent->jerk_long = (a_long_new - agent->a_long) / env->dt;
+        agent->jerk_lat = (a_lat_new - agent->a_lat) / env->dt;
+        agent->a_long = a_long_new;
+        agent->a_lat = a_lat_new;
+        agent->heading = normalize_heading(agent->heading + theta);
+        agent->heading_x = cosf(agent->heading);
+        agent->heading_y = sinf(agent->heading);
+        agent->vx = v_new * agent->heading_x;
+        agent->vy = v_new * agent->heading_y;
+        agent->steering_angle = new_steering_angle;
     }
-    
-    if (agent->a_lat * a_lat_new < 0) {
-        a_lat_new = 0.0f;
-    } else {
-        a_lat_new = clip(a_lat_new, -4.0f, 4.0f);
-    }
-    
-    // Calculate new velocity
-    float v_dot_heading = agent->vx * agent->heading_x + agent->vy * agent->heading_y;
-    float signed_v = copysignf(sqrtf(agent->vx*agent->vx + agent->vy*agent->vy), v_dot_heading);
-    float v_new = signed_v + 0.5f * (a_long_new + agent->a_long) * env->dt;
-    
-    // Make it easy to stop with 0 vel
-    if (signed_v * v_new < 0) {
-        v_new = 0.0f;
-    } else {
-        v_new = clip(v_new, -2.0f, 20.0f);
-    }
-    
-    // Calculate new steering angle
-    float signed_curvature = a_lat_new / fmaxf(v_new * v_new, 1e-5f);
-    signed_curvature = copysignf(fmaxf(fabsf(signed_curvature), 1e-5f), signed_curvature);
-    float steering_angle = atanf(signed_curvature * agent->wheelbase);
-    float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
-    float new_steering_angle = clip(agent->steering_angle + delta_steer, -0.55f, 0.55f);
-    
-    // Update curvature and accel to account for limited steering
-    signed_curvature = tanf(new_steering_angle) / agent->wheelbase;
-    a_lat_new = v_new * v_new * signed_curvature;
-    
-    // Calculate resulting movement using bicycle dynamics
-    float d = 0.5f * (v_new + signed_v) * env->dt;
-    float theta = d * signed_curvature;
-    float dx_local, dy_local;
-    
-    if (fabsf(signed_curvature) < 1e-5f || fabsf(theta) < 1e-5f) {
-        dx_local = d;
-        dy_local = 0.0f;
-    } else {
-        dx_local = sinf(theta) / signed_curvature;
-        dy_local = (1.0f - cosf(theta)) / signed_curvature;
-    }
-    
-    float dx = dx_local * agent->heading_x - dy_local * agent->heading_y;
-    float dy = dx_local * agent->heading_y + dy_local * agent->heading_x;
-    
-    // Update everything
-    agent->x += dx;
-    agent->y += dy;
-    agent->jerk_long = (a_long_new - agent->a_long) / env->dt;
-    agent->jerk_lat = (a_lat_new - agent->a_lat) / env->dt;
-    agent->a_long = a_long_new;
-    agent->a_lat = a_lat_new;
-    agent->heading = normalize_heading(agent->heading + theta);
-    agent->heading_x = cosf(agent->heading);
-    agent->heading_y = sinf(agent->heading);
-    agent->vx = v_new * agent->heading_x;
-    agent->vy = v_new * agent->heading_y;
-    agent->steering_angle = new_steering_angle;
-    
+
     return;
 }
 

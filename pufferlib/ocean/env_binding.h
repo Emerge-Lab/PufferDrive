@@ -705,6 +705,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
 typedef struct
 {
     int action_type;
+    int dynamics_model;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_goal;
@@ -731,6 +732,14 @@ static int handler(
             env_config->action_type = 0;
         } else {
             env_config->action_type = 1;
+        }
+    } else if (MATCH("env", "dynamics_model")) {
+        if(strcmp(value, "\"classic\"") == 0) {
+            env_config->dynamics_model = 0;  // CLASSIC
+        } else if(strcmp(value, "\"jerk\"") == 0) {
+            env_config->dynamics_model = 1;  // JERK
+        } else {
+            env_config->dynamics_model = 0;  // Default to CLASSIC
         }
     } else if (MATCH("env", "use_goal_generation")) {
         if (strcmp(value, "True") == 0) {
