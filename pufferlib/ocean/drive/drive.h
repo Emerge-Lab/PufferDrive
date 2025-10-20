@@ -50,7 +50,7 @@
 
 // Max road segment observation entities
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 200
-#define MAX_CARS 64
+#define MAX_CARS 2
 // Observation Space Constants
 #define MAX_SPEED 100.0f
 #define MAX_VEH_LEN 30.0f
@@ -284,6 +284,8 @@ struct Drive {
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
     char* ini_file;
+    int lane_count;
+    int* lane_indices;
 };
 
 void add_log(Drive* env) {
@@ -388,68 +390,74 @@ void set_start_position(Drive* env){
             if (env->entities[i].type == 1) {
                 env->entities[i].x = -10000.0f;
                 env->entities[i].y = -10000.0f;
+                env->entities[i].valid = 0;
             }
         }
-        
-        // Place active agents one by one
+
+        // Check if lanes are available
+        if (env->lane_count == 0 || env->lane_indices == NULL) {
+            printf("Error: No lanes available for random_init mode\n");
+            return;
+        }
+
+        // Place active agents one by one - keep trying until ALL are placed
         srand(time(NULL));
         for (int j = 0; j < env->active_agent_count; j++) {
             int i = env->active_agent_indices[j];
             Entity* obj = &env->entities[i];
-            
+
             if (obj->type != 1) continue; // Only vehicles
-            
+
             // Random sample vehicle dimensions
             obj->length = random_range_float(3.0f, 5.0f);
             obj->width = random_range_float(1.5f, 3.0f);
             obj->width = clip(obj->width, 1.5f, obj->length);
             obj->height = 1.0f;
             obj->wheelbase = 0.6f * obj->length;
-            
-            // Try to place vehicle without collisions
+
+            // Keep trying until we successfully place this vehicle (no attempt limit)
             int collision_free = 0;
-            int max_attempts = 100;
-            int attempt = 0;
-            
-            while (!collision_free && attempt < max_attempts) {
+
+            while (!collision_free) {
                 // Random sample a lane
                 int lane_idx = random_range_int(0, env->lane_count - 1);
                 int entity_idx = env->lane_indices[lane_idx];
                 Entity* lane = &env->entities[entity_idx];
-                
-                // Place at start of lane (index 0)
-                obj->x = lane->traj_x[0];
-                obj->y = lane->traj_y[0];
-                obj->z = lane->traj_z[0];
-                
-                // Set heading from lane direction
-                float dx = lane->traj_x[1] - lane->traj_x[0];
-                float dy = lane->traj_y[1] - lane->traj_y[0];
+
+                // Place at random position along the lane (not just start)
+                // Use waypoints before the last one to ensure there's a next point for heading
+                int max_spawn_idx = lane->array_size - 2;
+                if (max_spawn_idx < 0) max_spawn_idx = 0;
+                int spawn_idx = random_range_int(0, max_spawn_idx);
+
+                obj->x = lane->traj_x[spawn_idx];
+                obj->y = lane->traj_y[spawn_idx];
+                obj->z = lane->traj_z[spawn_idx];
+
+                // Set heading from lane direction at this position
+                float dx = lane->traj_x[spawn_idx + 1] - lane->traj_x[spawn_idx];
+                float dy = lane->traj_y[spawn_idx + 1] - lane->traj_y[spawn_idx];
                 obj->heading = normalize_heading(atan2f(dy, dx));
                 obj->heading_x = cosf(obj->heading);
                 obj->heading_y = sinf(obj->heading);
-                
+
                 // Set goal to end of lane
                 int goal_idx = lane->array_size - 1;
                 obj->goal_position_x = lane->traj_x[goal_idx];
                 obj->goal_position_y = lane->traj_y[goal_idx];
                 obj->goal_position_z = lane->traj_z[goal_idx];
-                
+
                 // Check for collisions with already-placed vehicles
                 obj->collision_state = 0;
                 int collided_with = collision_check(env, i);
-                
+
                 if (collided_with == -1) {
                     collision_free = 1;
                 }
-                attempt++;
+                // If collision, loop continues and tries again with different lane/position
             }
-            
-            if (!collision_free) {
-                printf("Warning: Could not place vehicle %d without collision after %d attempts\n", i, max_attempts);
-            }
-            
-            // Initialize velocity and dynamics
+
+            // Vehicle successfully placed - initialize it
             obj->vx = 0.0f;
             obj->vy = 0.0f;
             obj->vz = 0.0f;
@@ -458,7 +466,7 @@ void set_start_position(Drive* env){
             obj->jerk_long = 0.0f;
             obj->jerk_lat = 0.0f;
             obj->steering_angle = 0.0f;
-            
+
             // Initialize state
             obj->valid = 1;
             obj->reached_goal_this_episode = 0;
@@ -466,7 +474,7 @@ void set_start_position(Drive* env){
             obj->respawn_timestep = -1;
             obj->cumulative_displacement = 0.0f;
             obj->displacement_sample_count = 0;
-            
+
             // Initialize metrics
             obj->metrics_array[COLLISION_IDX] = 0.0f;
             obj->metrics_array[OFFROAD_IDX] = 0.0f;
@@ -474,6 +482,8 @@ void set_start_position(Drive* env){
             obj->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
             obj->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
         }
+
+        // All vehicles successfully placed - active_agent_count stays as MAX_CARS
     } else {
         // Original trajectory-based initialization
         for(int i = 0; i < env->num_entities; i++){
@@ -1129,6 +1139,39 @@ void set_active_agents(Drive* env){
     if(env->num_agents ==0){
         env->num_agents = MAX_CARS;
     }
+
+    // Random initialization mode: all vehicles are active agents, no static or expert agents
+    if(env->random_init){
+        // Count vehicle entities and set all as active
+        for(int i = 0; i < env->num_objects && env->active_agent_count < MAX_CARS; i++){
+            if(env->entities[i].type == 1){ // Only vehicles
+                active_agent_indices[env->active_agent_count] = i;
+                env->entities[i].active_agent = 1;
+                env->active_agent_count++;
+            }
+        }
+
+        // Note: active_agent_count may be less than MAX_CARS due to limited vehicles in binary
+        // The actual count will be further reduced in set_start_position() if placement fails
+
+        env->num_cars = env->active_agent_count;
+        env->static_car_count = 0;
+        env->expert_static_car_count = 0;
+
+        // Allocate and copy indices
+        env->active_agent_indices = (int*)malloc(env->active_agent_count * sizeof(int));
+        for(int i=0; i<env->active_agent_count; i++){
+            env->active_agent_indices[i] = active_agent_indices[i];
+        }
+
+        // Allocate empty arrays for static cars
+        env->static_car_indices = (int*)malloc(1 * sizeof(int));
+        env->expert_static_car_indices = (int*)malloc(1 * sizeof(int));
+
+        return;
+    }
+
+    // Original trajectory-based mode
     int first_agent_id = env->num_objects-1;
     float distance_to_goal = valid_active_agent(env, first_agent_id);
     if(distance_to_goal){
@@ -1230,8 +1273,41 @@ void init(Drive* env){
     init_neighbor_offsets(env);
     env->neighbor_cache_indices = (int*)calloc((env->grid_cols*env->grid_rows) + 1, sizeof(int));
     cache_neighbor_offsets(env);
+
+    // Initialize lane indices for random_init mode (do this once)
+    if(env->random_init){
+        env->lane_count = 0;
+        // Count lanes first
+        for (int i = env->num_objects; i < env->num_entities; i++) {
+            if (env->entities[i].type == ROAD_LANE) {
+                env->lane_count++;
+            }
+        }
+        // Allocate and populate lane indices
+        if(env->lane_count > 0){
+            env->lane_indices = (int*)malloc(env->lane_count * sizeof(int));
+            int lane_idx = 0;
+            for (int i = env->num_objects; i < env->num_entities; i++) {
+                if (env->entities[i].type == ROAD_LANE) {
+                    env->lane_indices[lane_idx++] = i;
+                }
+            }
+        } else {
+            printf("Warning: No lanes found for random_init mode\n");
+            env->lane_indices = NULL;
+        }
+    } else {
+        env->lane_count = 0;
+        env->lane_indices = NULL;
+    }
+
     set_active_agents(env);
-    remove_bad_trajectories(env);
+
+    // Skip trajectory validation in random_init mode since we don't use trajectories
+    if(!env->random_init){
+        remove_bad_trajectories(env);
+    }
+
     set_start_position(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
 }
@@ -1250,6 +1326,9 @@ void c_close(Drive* env){
     free(env->neighbor_cache_indices);
     free(env->static_car_indices);
     free(env->expert_static_car_indices);
+    if(env->lane_indices != NULL) {
+        free(env->lane_indices);
+    }
     // free(env->map_name);
     free(env->ini_file);
 }
