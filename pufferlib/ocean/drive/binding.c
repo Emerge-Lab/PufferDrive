@@ -157,7 +157,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
 
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
-    int init_steps = unpack(kwargs, "init_steps");
+    int init_steps = conf.init_steps;
     char map_file[100];
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
     env->num_agents = max_agents;
