@@ -1313,6 +1313,10 @@ void set_active_agents(Drive* env){
         if (desired > MAX_AGENTS) desired = MAX_AGENTS;
         if (desired > capacity) desired = capacity;
 
+        if (desired <= 0) {
+            goto legacy_select;
+        }
+
         if (!env->deterministic_agent_selection) {
             fisher_yates_shuffle(b.candidates, b.candidates_count);
         }
@@ -1424,6 +1428,7 @@ void set_active_agents(Drive* env){
         }
     }
 
+legacy_select:
     if(env->num_agents == 0){
         env->num_agents = MAX_AGENTS;
     }
