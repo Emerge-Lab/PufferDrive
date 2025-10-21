@@ -91,7 +91,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
         Vector3 prev_point = {0};
         bool has_prev = false;
 
-        for(int j=0; j<TRAJECTORY_LENGTH; j++){
+        for(int j=env->init_steps; j<TRAJECTORY_LENGTH; j++){
             float x = env->entities[idx].traj_x[j];
             float y = env->entities[idx].traj_y[j];
             float valid = env->entities[idx].traj_valid[j];
@@ -482,7 +482,18 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius) {
+int eval_gif(const char* map_name,
+             int show_grid,
+             int obs_only,
+             int lasers,
+             int log_trajectories,
+             int frame_skip,
+             float goal_radius,
+             int control_non_vehicles,
+             int init_steps,
+             int control_all_agents,
+             int policy_agents_per_env,
+             int deterministic_selection) {
 
     // Use default if no map provided
     if (map_name == NULL) {
@@ -507,8 +518,13 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
         .reward_offroad_collision = -0.1f,
         .reward_ade = -0.0f,
         .goal_radius = goal_radius,
-	    .map_name = map_name,
-        .spawn_immunity_timer = 50
+        .map_name = map_name,
+        .spawn_immunity_timer = 50,
+        .control_non_vehicles = control_non_vehicles,
+        .init_steps = init_steps,
+        .control_all_agents = control_all_agents,
+        .policy_agents_per_env = policy_agents_per_env,
+        .deterministic_agent_selection = deterministic_selection
     };
     allocate(&env);
 
@@ -524,8 +540,8 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
 
     SetTargetFPS(6000);
 
-    float map_width = env.map_corners[2] - env.map_corners[0];
-    float map_height = env.map_corners[3] - env.map_corners[1];
+    float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
+    float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
     float scale = 6.0f; // Can be used to increase the video quality
@@ -540,7 +556,7 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
-    int frame_count = 91;
+    int frame_count = TRAJECTORY_LENGTH - init_steps;
     char filename[256];
     int log_trajectory = log_trajectories;
 
@@ -658,7 +674,12 @@ int main(int argc, char* argv[]) {
     int log_trajectories = 1;
     int frame_skip = 1;
     float goal_radius = 2.0f;
+    int init_steps = 0;
     const char* map_name = NULL;
+    int control_all_agents = 0;
+    int deterministic_selection = 0;
+    int policy_agents_per_env = -1;
+    int control_non_vehicles = 0;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -670,6 +691,17 @@ int main(int argc, char* argv[]) {
             lasers = 1;
         } else if (strcmp(argv[i], "--log-trajectories") == 0) {
             log_trajectories = 1;
+        } else if (strcmp(argv[i], "--init-steps") == 0) {
+            if (i + 1 < argc) {
+                init_steps = atoi(argv[i + 1]);
+                i++;
+                if (init_steps < 0) {
+                    init_steps = 0; // Ensure non-negative
+                }
+                if (init_steps > TRAJECTORY_LENGTH-1) {
+                    init_steps = TRAJECTORY_LENGTH-1; // Upper bound
+                }
+            }
         } else if (strcmp(argv[i], "--frame-skip") == 0) {
             if (i + 1 < argc) {
                 frame_skip = atoi(argv[i + 1]);
@@ -678,6 +710,8 @@ int main(int argc, char* argv[]) {
                     frame_skip = 1; // Ensure valid value
                 }
             }
+        } else if (strcmp(argv[i], "--control-non-vehicles") == 0) {
+            control_non_vehicles = 1;
         } else if (strcmp(argv[i], "--goal-radius") == 0) {
             if (i + 1 < argc) {
                 goal_radius = atof(argv[i + 1]);
@@ -695,10 +729,21 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Error: --map-name option requires a map file path\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--pure-self-play") == 0) {
+            control_all_agents = 1;
+        } else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {
+            if (i + 1 < argc) {
+                policy_agents_per_env = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--deterministic-selection") == 0) {
+            deterministic_selection = 1;
         }
     }
 
-    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius);
+    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip,
+             goal_radius, control_non_vehicles, init_steps,
+             control_all_agents, policy_agents_per_env, deterministic_selection);
     //demo();
     //performance_test();
     return 0;

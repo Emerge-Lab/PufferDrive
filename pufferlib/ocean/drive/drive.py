@@ -17,6 +17,7 @@ class Drive(pufferlib.PufferEnv):
         human_agent_idx=0,
         reward_vehicle_collision=-0.1,
         reward_offroad_collision=-0.1,
+        reward_goal=1.0,
         reward_goal_post_respawn=0.5,
         reward_vehicle_collision_post_respawn=-0.25,
         reward_ade=0.0,
@@ -26,8 +27,14 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
+        control_all_agents=False,
+        num_policy_controlled_agents=-1,
+        deterministic_agent_selection=False,
+        use_goal_generation=False,
+        control_non_vehicles=False,
         buf=None,
         seed=1,
+        init_steps=0,
     ):
         # env
         self.render_mode = render_mode
@@ -35,15 +42,19 @@ class Drive(pufferlib.PufferEnv):
         self.report_interval = report_interval
         self.reward_vehicle_collision = reward_vehicle_collision
         self.reward_offroad_collision = reward_offroad_collision
+        self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.reward_vehicle_collision_post_respawn = reward_vehicle_collision_post_respawn
         self.goal_radius = goal_radius
         self.reward_ade = reward_ade
         self.spawn_immunity_timer = spawn_immunity_timer
         self.human_agent_idx = human_agent_idx
+        self.control_non_vehicles = control_non_vehicles
+        self.use_goal_generation = use_goal_generation
         self.resample_frequency = resample_frequency
         self.num_obs = 7 + 63 * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+        self.init_steps = init_steps
 
         if action_type == "discrete":
             self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
@@ -67,7 +78,17 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
             )
-        agent_offsets, map_ids, num_envs = binding.shared(num_agents=num_agents, num_maps=num_maps)
+        self.control_all_agents = bool(control_all_agents)
+        self.num_policy_controlled_agents = int(num_policy_controlled_agents)
+        self.deterministic_agent_selection = bool(deterministic_agent_selection)
+
+        agent_offsets, map_ids, num_envs = binding.shared(
+            num_agents=num_agents,
+            num_maps=num_maps,
+            num_policy_controlled_agents=self.num_policy_controlled_agents,
+            control_all_agents=1 if self.control_all_agents else 0,
+            deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
+        )
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -88,14 +109,20 @@ class Drive(pufferlib.PufferEnv):
                 human_agent_idx=human_agent_idx,
                 reward_vehicle_collision=reward_vehicle_collision,
                 reward_offroad_collision=reward_offroad_collision,
+                reward_goal=reward_goal,
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_vehicle_collision_post_respawn=reward_vehicle_collision_post_respawn,
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
                 spawn_immunity_timer=spawn_immunity_timer,
+                control_all_agents=1 if self.control_all_agents else 0,
+                num_policy_controlled_agents=self.num_policy_controlled_agents,
+                deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
+                control_non_vehicles=int(control_non_vehicles),
+                init_steps=init_steps,
             )
             env_ids.append(env_id)
 
@@ -122,7 +149,13 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(num_agents=self.num_agents, num_maps=self.num_maps)
+                agent_offsets, map_ids, num_envs = binding.shared(
+                    num_agents=self.num_agents,
+                    num_maps=self.num_maps,
+                    num_policy_controlled_agents=self.num_policy_controlled_agents,
+                    control_all_agents=1 if self.control_all_agents else 0,
+                    deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
+                )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):
@@ -139,14 +172,20 @@ class Drive(pufferlib.PufferEnv):
                         human_agent_idx=self.human_agent_idx,
                         reward_vehicle_collision=self.reward_vehicle_collision,
                         reward_offroad_collision=self.reward_offroad_collision,
+                        reward_goal=self.reward_goal,
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_vehicle_collision_post_respawn=self.reward_vehicle_collision_post_respawn,
                         reward_ade=self.reward_ade,
                         goal_radius=self.goal_radius,
                         spawn_immunity_timer=self.spawn_immunity_timer,
+                        control_all_agents=1 if self.control_all_agents else 0,
+                        num_policy_controlled_agents=self.num_policy_controlled_agents,
+                        deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                         ini_file="pufferlib/config/ocean/drive.ini",
+                        control_non_vehicles=int(self.control_non_vehicles),
+                        init_steps=self.init_steps,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -281,7 +320,7 @@ def save_map_binary(map_data, output_file):
             elif obj_type == "cyclist":
                 obj_type = 3
             f.write(struct.pack("i", obj_type))  # type
-            f.write(struct.pack("i", obj.get("id", 0)))  # original object id
+            # f.write(struct.pack("i", obj.get("id", 0)))  # id
             f.write(struct.pack("i", trajectory_length))  # array_size
             # Write position arrays
             positions = obj.get("position", [])
@@ -359,7 +398,7 @@ def save_map_binary(map_data, output_file):
                 road_type = 10
             # Write base entity data
             f.write(struct.pack("i", road_type))  # type
-            f.write(struct.pack("i", road.get("id", 0)))  # id
+            # f.write(struct.pack("i", road.get("id", 0)))  # id
             f.write(struct.pack("i", size))  # array_size
 
             # Write position arrays
