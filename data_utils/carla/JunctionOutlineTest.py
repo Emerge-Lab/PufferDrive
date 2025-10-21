@@ -5,7 +5,7 @@ from matplotlib.path import Path
 from scipy.spatial import Delaunay
 
 from shapely.geometry import Point, LineString, MultiPolygon, Polygon
-from shapely.ops import unary_union, polygonize
+from shapely.ops import unary_union, polygonize, snap
 
 
 def create_y_junction_polylines():
@@ -41,7 +41,7 @@ def create_y_junction_polylines():
     right_top_edge = np.array([right_arm_outer[-1], [2, 20]])
 
     # Stopping line between left and right stems
-    stopping_line = np.array([[-2, 10], [2, 10]])
+    stopping_line = np.array([[-1.91, 10], [1.91, 10]])
 
     # An inner edge to connect the central island to the top openings
     inner_divider = np.array([[-2, 20], [0, 14], [2, 20]])
@@ -111,23 +111,92 @@ def create_alpha_shape(merged_lines, alpha):
     return MultiPolygon(alpha_polygons), "alpha_shape"
 
 
-def fuse_polygons_remove_internal_edges(polygons):
+def snap_lines_to_grid(lines, tolerance=0.01):
     """
-    Takes multiple polygons created by polygonize and fuses them into
-    a single polygon/multipolygon by taking the union and removing internal edges.
+    Snap line endpoints to a grid to ensure proper connections.
+    """
+    snapped_lines = []
+    for line in lines:
+        coords = np.array(line.coords)
+        # Round coordinates to grid
+        coords = np.round(coords / tolerance) * tolerance
+        snapped_lines.append(LineString(coords))
+    return snapped_lines
 
-    This preserves holes (like the central island) but removes internal dividers.
+
+def snap_lines_together(lines, tolerance=0.1):
+    """
+    Snap lines to each other to ensure connectivity.
+    """
+    if not lines:
+        return lines
+
+    # Start with first line as reference
+    snapped = [lines[0]]
+
+    for line in lines[1:]:
+        # Snap to all previously processed lines
+        for ref_line in snapped:
+            line = snap(line, ref_line, tolerance)
+        snapped.append(line)
+
+    return snapped
+
+
+def fuse_polygons_remove_internal_edges(list_of_polylines, snap_tolerance=0.001):
+    """
+    Improved version with snapping and cleaning.
+    """
+    if not list_of_polylines:
+        return None, "empty"
+
+    # Step 1: Create LineStrings
+    lines = [LineString(poly) for poly in list_of_polylines if len(poly) >= 2]
+
+    if not lines:
+        return None, "empty"
+
+    # Step 2: Snap to grid
+    snapped_lines = []
+    for line in lines:
+        coords = np.array(line.coords)
+        if snap_tolerance > 0:
+            coords = np.round(coords / snap_tolerance) * snap_tolerance
+        snapped_lines.append(LineString(coords))
+
+    # Step 3: Merge and polygonize
+    merged_lines = unary_union(snapped_lines)
+    polygons = list(polygonize(merged_lines))
+
+    if polygons:
+        # Step 4: Fuse and clean
+        fused = unary_union(polygons).buffer(0)
+        return fused, "precise"
+
+    # Fallback to alpha shape
+    return create_alpha_shape(merged_lines, alpha=snap_tolerance * 30)[0], "alpha_shape"
+
+
+def fuse_existing_polygons(polygons):
+    """
+    Fuses a list of Shapely Polygon objects into a single polygon/multipolygon.
+    Removes internal edges by taking the union.
+
+    Args:
+        polygons (list): List of Shapely Polygon objects
+
+    Returns:
+        Polygon or MultiPolygon: The fused geometry
     """
     if not polygons:
         return None
 
-    # Union all polygons - this will merge adjacent polygons and preserve holes
-    fused = unary_union(polygons)
-
+    # Simply take the union and clean
+    fused = unary_union(polygons).buffer(0)
     return fused
 
 
-def plot_junction(polylines, final_shape, test_points, results, method="precise"):
+def plot_junction(polylines, final_shape, test_points, results, method="precise", junction_id="Y-Junction"):
     """
     Visualizes the Y-junction using Matplotlib.
 
@@ -194,7 +263,7 @@ def plot_junction(polylines, final_shape, test_points, results, method="precise"
             label=label if label not in [sc.get_label() for sc in ax.collections] else "",
         )
 
-    ax.set_title("Y-Junction Outline Analysis", fontsize=16)
+    ax.set_title(f"Junction {junction_id} Outline Analysis", fontsize=16)
     ax.set_xlabel("X Coordinate")
     ax.set_ylabel("Y Coordinate")
     ax.set_aspect("equal", adjustable="box")
@@ -214,6 +283,8 @@ def main():
     list_of_polylines = create_y_junction_polylines()
 
     lines = [LineString(poly) for poly in list_of_polylines]
+    lines = snap_lines_together(lines, tolerance=0.1)
+    snapped_polylines = [np.array(line.coords) for line in lines]
     merged_lines = unary_union(lines)
     polygons = list(polygonize(merged_lines))
 
@@ -223,7 +294,7 @@ def main():
     if polygons:
         print("Success: The polylines formed a closed shape. Creating precise polygon.")
         # CHANGED: Fuse all polygons to remove internal edges
-        road_surface = fuse_polygons_remove_internal_edges(polygons)
+        road_surface = fuse_existing_polygons(polygons)
         print(f"Number of polygons before fusion: {len(polygons)}")
         print(f"Number of polygons after fusion: {len(getattr(road_surface, 'geoms', [road_surface]))}")
     else:
@@ -273,7 +344,7 @@ def main():
         status = "INSIDE" if result else "OUTSIDE"
         print(f"Query: Is point {point} in the road surface? -> {status}")
 
-    plot_junction(list_of_polylines, road_surface, test_points, results, method=method_used)
+    plot_junction(snapped_polylines, road_surface, test_points, results, method=method_used)
 
 
 if __name__ == "__main__":
