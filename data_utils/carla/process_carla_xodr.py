@@ -618,7 +618,7 @@ def generate_traj_data(
 ):
     # Calculate average speed (70% of max_speed)
     avg_speed = 0.7 * max_speed
-    avg_cons_pts_dist = resolution * (1 + np.sqrt(2)) / 2
+    avg_cons_pts_dist = resolution  # Only Resolution
     time_step_dur = episode_length / num_timestamps
     sampling_length = int((avg_speed * time_step_dur) / avg_cons_pts_dist)
 
@@ -725,14 +725,17 @@ def generate_traj_data(
             }
         )
 
-    # Change first waypoint with average velocity and avg heading keeping everything else same
+    # Change first waypoint with average velocity and heading from pos t=0 to pos t=1 keeping everything else same
+    mean_vx = np.mean([wp["velocity"]["x"] for wp in waypoints_list[1:]])
+    mean_vy = np.mean([wp["velocity"]["y"] for wp in waypoints_list[1:]])
+    pos0 = np.array(waypoints_list[0]["position"])
+    pos1 = np.array(waypoints_list[1]["position"])
+    heading = float(np.arctan2(pos1[1] - pos0[1], pos1[0] - pos0[0]))
+
     waypoints_list[0] = {
         "position": waypoints_list[0]["position"],
-        "velocity": {
-            "x": np.mean([wp["velocity"]["x"] for wp in waypoints_list[1:]]),
-            "y": np.mean([wp["velocity"]["y"] for wp in waypoints_list[1:]]),
-        },
-        "heading": np.mean([wp["heading"] for wp in waypoints_list[1:]]),
+        "velocity": {"x": mean_vx, "y": mean_vy},
+        "heading": heading,
         "lane_id": waypoints_list[0]["lane_id"],
         "lane_section_index": waypoints_list[0]["lane_section_index"],
         "road_id": waypoints_list[0]["road_id"],
@@ -752,7 +755,7 @@ def save_object_to_json(
 ):
     traj_data = generate_traj_data(road_link_map=road_link_map, resolution=resolution, all_geometries=all_geometries)
 
-    z = 1.0
+    z = 0.3
     headings = []
     positions = []
     velocities = []
@@ -874,13 +877,13 @@ def generate_data_each_map(
 
 
 if __name__ == "__main__":
-    town_names = ["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"]
-    # town_names = ['Town03']
-    input_json_base_path = "data_utils/carla"
+    # town_names = ["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"]
+    town_names = ["Town01"]
+    input_json_base_path = "data_utils/carla/carla"
     output_json_root_dir = "data/processed/carla_data"
-    carla_map_dir = "/scratch/pm3881/Carla-0.10.0-Linux-Shipping/CarlaUnreal/Content/Carla/Maps/OpenDrive"
+    carla_map_dir = "C:\\CarlaMaps"
     resolution = 0.1
-    num_data_per_map = 20
+    num_data_per_map = 16
     num_objects = 32
     make_only_first_agent_controllable = False
     start_with_zero_velocity = True
