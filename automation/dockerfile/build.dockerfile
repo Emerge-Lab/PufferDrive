@@ -59,4 +59,3 @@ COPY pyproject.toml setup.py setup.cfg MANIFEST.in ./
 COPY pufferlib ./pufferlib
 
 RUN pip install --no-cache-dir -e .
-
