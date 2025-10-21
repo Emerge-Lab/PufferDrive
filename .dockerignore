@@ -42,5 +42,9 @@ config/default.ini
 
 # Client side files
 automation/gcp_run_job.py
+
+experiments/
+wandb/
+
 *.dockerfile
 Dockerfile
