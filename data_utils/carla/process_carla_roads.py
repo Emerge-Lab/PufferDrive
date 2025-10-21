@@ -11,7 +11,7 @@ from pyxodr.road_objects.lane_section import LaneSection
 from pyxodr.road_objects.network import RoadNetwork
 from shapely.geometry import Point, LineString, MultiPolygon, Polygon
 from shapely.ops import unary_union, polygonize
-from JunctionOutlineTest import fuse_polygons_remove_internal_edges, plot_junction
+from JunctionOutlineTest import fuse_existing_polygons, plot_junction, snap_lines_together
 from enum import IntEnum
 import random
 import string
@@ -47,7 +47,7 @@ class MapType(IntEnum):
     NUM_TYPES = 21
 
 
-def save_lane_section_to_json(xodr_json, id, road_edges, road_lines, lanes, sidewalks=[]):
+def save_lane_section_to_json(xodr_json, id, road_edges, road_lines, lanes, road_id, junction_id):
     roads = xodr_json.get("roads", [])
     for road_edge in road_edges:
         # edge_polygon = Polygon(road_edge)
@@ -55,6 +55,8 @@ def save_lane_section_to_json(xodr_json, id, road_edges, road_lines, lanes, side
             "id": id,
             "map_element_id": int(MapType.ROAD_EDGE_BOUNDARY),
             "type": "road_edge",
+            "road_id": road_id,
+            "junction_id": junction_id,
             "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": 0.0} for pt in road_edge],
         }
         roads.append(edge_data)
@@ -64,6 +66,8 @@ def save_lane_section_to_json(xodr_json, id, road_edges, road_lines, lanes, side
             "id": id,
             "map_element_id": int(MapType.ROAD_LINE_BROKEN_SINGLE_WHITE),
             "type": "road_line",
+            "road_id": road_id,
+            "junction_id": junction_id,
             "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": 0.0} for pt in road_line],
         }
         roads.append(line_data)
@@ -73,19 +77,12 @@ def save_lane_section_to_json(xodr_json, id, road_edges, road_lines, lanes, side
             "id": id,
             "map_element_id": int(MapType.LANE_SURFACE_STREET),
             "type": "lane",
+            "road_id": road_id,
+            "junction_id": junction_id,
             "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": 0.0} for pt in lane],
         }
         roads.append(lane_data)
         id += 1
-    # for sidewalk in sidewalks:
-    #     sidewalk_data = {
-    #         "id": id,
-    #         "map_element_id": int(MapType.LANE_BIKE_LANE),
-    #         "type": "sidewalk",
-    #         "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": 0.0} for pt in sidewalk]
-    #     }
-    #     roads.append(sidewalk_data)
-    #     id += 1
     xodr_json["roads"] = roads
     return id
 
@@ -165,7 +162,7 @@ def generate_carla_road(
     dest_dir,
     max_samples,
     print_number_of_sample_truncations,
-    junction_filter_thresh=0.25,
+    junction_filter_thresh=0.3,
 ):
     global max_z, min_z
     src_file_path = os.path.join(source_dir, f"{town_name}.json")
@@ -203,7 +200,6 @@ def generate_carla_road(
             road_edges = []
             road_lines = []
             lanes = []
-            # sidwalks = []
 
             left_immediate_driveable = False
             right_immediate_driveable = False
@@ -239,15 +235,6 @@ def generate_carla_road(
             if add_lane_data:
                 lanes.append(get_lane_data(previous_lane, "CENTERLINE"))
                 road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
-            # elif add_edge_data:
-            # if previous_lane.type == 'sidewalk':
-            #     sidwalks.append(get_lane_data(previous_lane, "BOUNDARY"))
-
-            # print("LEFT STATS")
-            # print(f"Number of Road edges: {len(road_edges)}")
-            # print(f"Road lines: {len(road_lines)}")
-            # print(f"Lanes: {len(lanes)}")
-            # print(f"Sidewalks: {len(sidwalks)}")
 
             # Right Lanes
             add_lane_data = False
@@ -280,14 +267,6 @@ def generate_carla_road(
             if add_lane_data:
                 lanes.append(get_lane_data(previous_lane, "CENTERLINE"))
                 road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
-            # elif add_edge_data:
-            #     if previous_lane.type == 'sidewalk':
-            #         sidwalks.append(get_lane_data(previous_lane, "BOUNDARY"))
-
-            # print(f"Number of Road edges in {road_obj.id}: {len(road_edges)}")
-            # print(f"Road lines in {road_obj.id}: {len(road_lines)}")
-            # print(f"Lanes in {road_obj.id}: {len(lanes)}")
-            # print(f"Sidewalks in {road_obj.id}: {len(sidwalks)}")
 
             # If atleast one side has no immediate driveable lane add center as road edge
             if not left_immediate_driveable or not right_immediate_driveable:
@@ -306,15 +285,28 @@ def generate_carla_road(
                 junctions_map[junction_id]["road_edges"].append(road_edges)
                 road_edges = []
 
-            id = save_lane_section_to_json(xodr_json, id, road_edges, road_lines, lanes)
+            id = save_lane_section_to_json(
+                xodr_json,
+                id,
+                road_edges,
+                road_lines,
+                lanes,
+                road_obj.__getitem__("id"),
+                road_obj.__getitem__("junction"),
+            )
             roads_json_cnt[0].append(len(road_edges))
             roads_json_cnt[1].append(len(road_lines))
             roads_json_cnt[2].append(len(lanes))
         #     break
         # break
+
         # Add stop lines for junctions using predecessor and successor to junction info
         if road_obj.road_xml.get("junction") == "-1":
-            if road_obj.road_xml.findall("link")[0].findall("predecessor")[0].get("elementType") == "junction":
+            if (
+                len(road_obj.road_xml.findall("link")) > 0
+                and len(road_obj.road_xml.findall("link")[0].findall("predecessor")) > 0
+                and road_obj.road_xml.findall("link")[0].findall("predecessor")[0].get("elementType") == "junction"
+            ):
                 junction_id = road_obj.road_xml.findall("link")[0].findall("predecessor")[0].get("elementId")
                 if junction_id not in junctions_map:
                     junctions_map[junction_id] = {}
@@ -323,20 +315,32 @@ def generate_carla_road(
 
                 # Add stop lines
                 if len(road_obj.lane_sections) > 0 and len(road_obj.lane_sections[0].left_lanes) > 0:
+                    # Get the last driving lane on the left side
+                    for left_lane in road_obj.lane_sections[-1].left_lanes:
+                        if left_lane.type == "driving":
+                            last_driving_lane = left_lane
                     start_pt = road_obj.reference_line[0]
-                    end_pt = road_obj.lane_sections[0].left_lanes[-1].boundary_line[0]
+                    end_pt = last_driving_lane.boundary_line[0]
                     # Interpolate points between start_pt and end_pt at given resolution
                     points = interpolate_points(start_pt, end_pt, resolution)
                     junctions_map[junction_id]["stop_lines"].append(points)
 
                 if len(road_obj.lane_sections) > 0 and len(road_obj.lane_sections[0].right_lanes) > 0:
+                    # Get the last driving lane on the right side
+                    for right_lane in road_obj.lane_sections[-1].right_lanes:
+                        if right_lane.type == "driving":
+                            last_driving_lane = right_lane
                     start_pt = road_obj.reference_line[0]
-                    end_pt = road_obj.lane_sections[0].right_lanes[-1].boundary_line[0]
+                    end_pt = last_driving_lane.boundary_line[0]
                     # Interpolate points between start_pt and end_pt at given resolution
                     points = interpolate_points(start_pt, end_pt, resolution)
                     junctions_map[junction_id]["stop_lines"].append(points)
 
-            if road_obj.road_xml.findall("link")[0].findall("successor")[0].get("elementType") == "junction":
+            if (
+                len(road_obj.road_xml.findall("link")) > 0
+                and len(road_obj.road_xml.findall("link")[0].findall("successor")) > 0
+                and road_obj.road_xml.findall("link")[0].findall("successor")[0].get("elementType") == "junction"
+            ):
                 junction_id = road_obj.road_xml.findall("link")[0].findall("successor")[0].get("elementId")
                 if junction_id not in junctions_map:
                     junctions_map[junction_id] = {}
@@ -345,15 +349,23 @@ def generate_carla_road(
 
                 # Add stop lines
                 if len(road_obj.lane_sections) > 0 and len(road_obj.lane_sections[-1].left_lanes) > 0:
+                    # Get the last driving lane on the left side
+                    for left_lane in road_obj.lane_sections[-1].left_lanes:
+                        if left_lane.type == "driving":
+                            last_driving_lane = left_lane
                     start_pt = road_obj.reference_line[-1]
-                    end_pt = road_obj.lane_sections[-1].left_lanes[-1].boundary_line[-1]
+                    end_pt = last_driving_lane.boundary_line[-1]
                     # Interpolate points between start_pt and end_pt at given resolution
                     points = interpolate_points(start_pt, end_pt, resolution)
                     junctions_map[junction_id]["stop_lines"].append(points)
 
                 if len(road_obj.lane_sections) > 0 and len(road_obj.lane_sections[-1].right_lanes) > 0:
+                    # Get the last driving lane on the right side
+                    for right_lane in road_obj.lane_sections[-1].right_lanes:
+                        if right_lane.type == "driving":
+                            last_driving_lane = right_lane
                     start_pt = road_obj.reference_line[-1]
-                    end_pt = road_obj.lane_sections[-1].right_lanes[-1].boundary_line[-1]
+                    end_pt = last_driving_lane.boundary_line[-1]
                     # Interpolate points between start_pt and end_pt at given resolution
                     points = interpolate_points(start_pt, end_pt, resolution)
                     junctions_map[junction_id]["stop_lines"].append(points)
@@ -361,7 +373,11 @@ def generate_carla_road(
     # Now filter road edges in junction area by polygonizing
     for junction_id in junctions_map:
         list_of_polylines = get_listof_polylines_for_junction(junctions_map[junction_id])
-        lines = [LineString(poly) for poly in list_of_polylines]
+        # Filter out polylines with less than 2 points
+        valid_polylines = [poly for poly in list_of_polylines if len(poly) >= 2]
+        lines = [LineString(poly) for poly in valid_polylines]
+        lines = snap_lines_together(lines, tolerance=0.23)
+        snapped_polylines = [np.array(line.coords) for line in lines]
         merged_lines = unary_union(lines)
         polygons = list(polygonize(merged_lines))
 
@@ -370,11 +386,11 @@ def generate_carla_road(
 
         if polygons:
             # junction_surface = MultiPolygon(polygons)
-            junction_surface = fuse_polygons_remove_internal_edges(polygons)
-            # plot_junction(list_of_polylines, junction_surface, [], [], method_used)
+            junction_surface = fuse_existing_polygons(polygons)
+            if junction_id == "703":
+                print("Debugging junction 703")
+                plot_junction(snapped_polylines, junction_surface, [], [], method_used)
             road_edges_lists = junctions_map[junction_id].get("road_edges", [])
-            road_lines_lists = junctions_map[junction_id].get("road_lines", [])
-            lanes_lists = junctions_map[junction_id].get("lanes", [])
             filtered_road_edges = []
             filtered_road_lines = []
             filtered_lanes = []
@@ -388,7 +404,15 @@ def generate_carla_road(
                         print(
                             f"Filtered out road edge of junction {junction_id} with {len(road_edge)} points and {sum(results) / len(results)} inside."
                         )
-            id = save_lane_section_to_json(xodr_json, id, filtered_road_edges, filtered_road_lines, filtered_lanes)
+            id = save_lane_section_to_json(
+                xodr_json,
+                id,
+                filtered_road_edges,
+                filtered_road_lines,
+                filtered_lanes,
+                road_id=-1,
+                junction_id=junction_id,
+            )
             roads_json_cnt[0].append(sum_pts(filtered_road_edges))
             roads_json_cnt[1].append(sum_pts(filtered_road_lines))
             roads_json_cnt[2].append(sum_pts(filtered_lanes))
@@ -396,7 +420,7 @@ def generate_carla_road(
             print(f"Warning: Polylines do not form a closed shape junc_id = {junction_id}. Saving everything.")
             road_edges_lists = junctions_map[junction_id].get("road_edges", [])
             for road_edges in road_edges_lists:
-                id = save_lane_section_to_json(xodr_json, id, road_edges, [], [])
+                id = save_lane_section_to_json(xodr_json, id, road_edges, [], [], road_id=-1, junction_id=junction_id)
                 roads_json_cnt[0].append(len(road_edges))
 
     print(f"Total roads JSON count: {sum(roads_json_cnt[0]) + sum(roads_json_cnt[1]) + sum(roads_json_cnt[2])}")
@@ -411,7 +435,14 @@ def generate_carla_road(
 
 
 def generate_carla_roads(
-    town_names, source_dir, carla_map_dir, resolution, dest_dir, max_samples, print_number_of_sample_truncations
+    town_names,
+    source_dir,
+    carla_map_dir,
+    resolution,
+    dest_dir,
+    max_samples,
+    juncn_filter_thresholds,
+    print_number_of_sample_truncations,
 ):
     if type(resolution) == float:
         resolution = [resolution] * len(town_names)
@@ -420,6 +451,9 @@ def generate_carla_roads(
     elif len(resolution) != len(town_names):
         raise ValueError("Resolution must be of the same length as town_names.")
     for i, town in enumerate(town_names):
+        junction_filter_thresh = (
+            juncn_filter_thresholds[i] if i < len(juncn_filter_thresholds) else juncn_filter_thresholds[-1]
+        )
         print(f"Processing town: {town}")
         generate_carla_road(
             town,
@@ -429,17 +463,28 @@ def generate_carla_roads(
             dest_dir,
             max_samples,
             print_number_of_sample_truncations=print_number_of_sample_truncations,
+            junction_filter_thresh=junction_filter_thresh,
         )
 
 
 if __name__ == "__main__":
-    town_names = ["Town01"]
+    # town_names = ["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"]
+    town_names = ["Town07"]
     source_dir = "data_utils/carla/carla"
     dest_dir = "data_utils/carla/carla"
     carla_map_dir = "C:\CarlaMaps"
     resolution = 1.0  # [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]  # Meters
     max_samples = int(1e5)  # Max points to sample per reference line
     print_number_of_sample_truncations = True  # Enable to see the number of data points lost
+    # juncn_filter_thresholds = [0.3, 0.4, 1.0, 0.7, 0.35, 0.5, 0.375, 0.3]     # Final Filtering values, please don't change. Remember to backup towns before enabling for run
+    juncn_filter_thresholds = [0.375]
     generate_carla_roads(
-        town_names, source_dir, carla_map_dir, resolution, dest_dir, max_samples, print_number_of_sample_truncations
+        town_names,
+        source_dir,
+        carla_map_dir,
+        resolution,
+        dest_dir,
+        max_samples,
+        juncn_filter_thresholds,
+        print_number_of_sample_truncations,
     )
