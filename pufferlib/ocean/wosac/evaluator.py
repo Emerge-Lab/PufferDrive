@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 
 import pufferlib
 from pufferlib.ocean.drive.drive import Drive
+from pufferlib.ocean.wosac.metrics import compute_displacement_error, compute_collision_rate, compute_offroad_rate
 
 
 class WOSACEvaluator:
@@ -21,6 +22,7 @@ class WOSACEvaluator:
         self.num_steps = 91
         self.show_dashboard = config.get("wosac", {}).get("dashboard", False)
         self.num_rollouts = config.get("wosac", {}).get("num_rollouts", 32)
+        self.json_data_path = config.get("wosac", {}).get("json_data_path", "./wosac_data/")
 
     def collect_simulated_trajectories(self, args, vecenv, policy):
         """Roll out policy in vecenv and collect trajectories.
@@ -76,6 +78,169 @@ class WOSACEvaluator:
             self._display_dashboard(trajectories)
 
         return trajectories
+
+    def collect_ground_truth_trajectories(self, scenario_ids):
+        """Collect ground truth data for evaluation.
+
+        Args:
+            scenario_ids: Array of scenario IDs to load (from simulated trajectories)
+
+        Returns:
+            trajectories: dict with keys 'x', 'y', 'z', 'heading', 'id', 'scenario_id'
+                        each of shape (num_agents, 1, num_steps) for trajectory data
+        """
+        import json
+        from pathlib import Path
+
+        json_path = Path(self.json_data_path)
+
+        trajectories = {
+            "scenario_id": [],
+            "x": [],
+            "y": [],
+            "z": [],
+            "heading": [],
+            "id": [],
+            "valid": [],
+        }
+
+        # Process only the scenario_ids from simulated trajectories
+        for scenario_id in scenario_ids:
+            json_file = json_path / f"{scenario_id}.json"
+
+            if not json_file.exists():
+                raise FileNotFoundError(f"JSON file not found for scenario {scenario_id}: {json_file}")
+
+            with open(json_file, "r") as f:
+                data = json.load(f)
+
+            trajectories["scenario_id"].append(scenario_id)
+
+            # Extract objects (agents) from the JSON
+            objects = data.get("objects", [])
+
+            # Collect trajectory data for all agents in this scenario
+            for obj in objects:
+                positions = obj.get("position", [])
+
+                # Ensure we have exactly num_steps timesteps
+                x_trajectory = [p.get("x", 0.0) for p in positions]
+                y_trajectory = [p.get("y", 0.0) for p in positions]
+                z_trajectory = [p.get("z", 0.0) for p in positions]
+
+                # Pad to num_steps if needed
+                x_trajectory.extend([-1.0] * (self.num_steps - len(x_trajectory)))
+                y_trajectory.extend([-1.0] * (self.num_steps - len(y_trajectory)))
+                z_trajectory.extend([-1.0] * (self.num_steps - len(z_trajectory)))
+
+                trajectories["x"].append(x_trajectory[: self.num_steps])
+                trajectories["y"].append(y_trajectory[: self.num_steps])
+                trajectories["z"].append(z_trajectory[: self.num_steps])
+                trajectories["heading"].append(obj.get("heading", []))
+                trajectories["id"].append(obj.get("id", 0))
+
+                # Store valid flag
+                valid = obj.get("valid", [])
+                valid.extend([0] * (self.num_steps - len(valid)))
+                trajectories["valid"].append(valid[: self.num_steps])
+
+        trajectories["x"] = np.array(trajectories["x"], dtype=np.float32)[:, np.newaxis, :]
+        trajectories["y"] = np.array(trajectories["y"], dtype=np.float32)[:, np.newaxis, :]
+        trajectories["z"] = np.array(trajectories["z"], dtype=np.float32)[:, np.newaxis, :]
+        trajectories["heading"] = np.array(trajectories["heading"], dtype=np.float32)[:, np.newaxis, :]
+        trajectories["id"] = np.array(trajectories["id"], dtype=np.int32)[:, np.newaxis, np.newaxis]
+        trajectories["valid"] = np.array(trajectories["valid"], dtype=np.int32)[:, np.newaxis, :]
+        trajectories["scenario_id"] = np.array(trajectories["scenario_id"])
+
+        return trajectories
+
+    def compute_metrics(
+        self,
+        simulated_trajectories: Dict,
+        ground_truth_trajectories: Dict,
+    ) -> Dict:
+        """Compute evaluation metrics comparing simulated and ground truth trajectories.
+
+        Args:
+            simulated_trajectories: Dict with keys ['x', 'y', 'z', 'heading', 'id', 'scenario_id', 'valid']
+                                Each trajectory has shape (n_agents, n_rollouts, n_steps)
+            ground_truth_trajectories: Dict with same keys, shape (n_agents, 1, n_steps)
+
+        Returns:
+            Dictionary with scores per scenario_id containing:
+            - 'ade': Average displacement error
+            - 'collision_rate': Collision rate
+            - 'offroad_rate': Offroad rate (currently zeros as placeholder)
+        """
+        results = {}
+
+        scenario_ids = simulated_trajectories["scenario_id"]
+
+        # Match agents by ID between simulated and ground truth
+        sim_ids = simulated_trajectories["id"][:, 0, 0]  # (n_agents,)
+        gt_ids = ground_truth_trajectories["id"][:, 0, 0]  # (n_agents_gt,)
+
+        # Find indices where IDs match
+        matched_indices = []
+        for sim_idx, sim_id in enumerate(sim_ids):
+            gt_idx = np.where(gt_ids == sim_id)[0]
+            if len(gt_idx) > 0:
+                matched_indices.append((sim_idx, gt_idx[0]))
+
+        if not matched_indices:
+            # No matched agents, return empty results
+            for scenario_id in scenario_ids:
+                results[scenario_id] = {
+                    "ade": None,
+                    "collision_rate": None,
+                    "offroad_rate": None,
+                }
+            return results
+
+        sim_matched_idx, gt_matched_idx = zip(*matched_indices)
+        sim_matched_idx = np.array(sim_matched_idx)
+        gt_matched_idx = np.array(gt_matched_idx)
+
+        # Extract matched trajectories
+        pred_x = simulated_trajectories["x"][sim_matched_idx]
+        pred_y = simulated_trajectories["y"][sim_matched_idx]
+        pred_z = simulated_trajectories["z"][sim_matched_idx]
+        pred_heading = simulated_trajectories["heading"][sim_matched_idx]
+
+        gt_x = ground_truth_trajectories["x"][gt_matched_idx]
+        gt_y = ground_truth_trajectories["y"][gt_matched_idx]
+        gt_z = ground_truth_trajectories["z"][gt_matched_idx]
+        gt_valid = ground_truth_trajectories["valid"][gt_matched_idx]
+
+        # Use ground truth validity
+        valid = gt_valid
+
+        # Compute metrics
+        ade = compute_displacement_error(pred_x, pred_y, pred_z, gt_x, gt_y, gt_z, valid)
+        collision_per_step, collision_rate = compute_collision_rate(
+            pred_x,
+            pred_y,
+            pred_z,
+            simulated_trajectories.get("length", np.ones(pred_x.shape[0])),
+            simulated_trajectories.get("width", np.ones(pred_x.shape[0])),
+            simulated_trajectories.get("height", np.ones(pred_x.shape[0])),
+            pred_heading,
+            valid,
+        )
+        offroad_per_step, offroad_rate = compute_offroad_rate(pred_x, pred_y, pred_z, valid)
+
+        # Aggregate per scenario (all matched agents belong to same scenario for now)
+        scenario_id = scenario_ids[0]
+        results[scenario_id] = {
+            "ade": np.mean(ade),
+            "ade_per_agent": ade,
+            "collision_rate": np.mean(collision_rate),
+            "collision_rate_per_agent": collision_rate,
+            "offroad_rate": np.mean(offroad_rate),
+            "offroad_rate_per_agent": offroad_rate,
+        }
+
+        return results
 
     def _display_dashboard(self, trajectories):
         """Display sanity checks and visualizations for collected trajectories."""
@@ -391,16 +556,3 @@ class WOSACEvaluator:
             pass  # Non-interactive environment
 
         print("=" * 70 + "\n")
-
-    def collect_ground_truth_data(self):
-        """Collect ground truth data for evaluation."""
-        pass
-
-    def compute_metrics(self, x_hat, y_hat, z_hat, heading_hat):
-        """Compute evaluation metrics given predicted and ground truth data.
-
-        Args:
-            x_hat, y_hat, z_hat, heading_hat: Predicted data from the policy rollouts.
-            x, y, z, heading: Ground truth data.
-        """
-        pass

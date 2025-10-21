@@ -1141,7 +1141,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args["vec"] = dict(backend=backend, num_envs=1)
     # We never have more than 128 agents in WOMD scenes
     # TODO(dc): Figure out how to control a specific set of ids
-    args["env"]["num_agents"] = 1
+    args["env"]["num_agents"] = 6
 
     vecenv = vecenv or load_env(env_name, args)
 
@@ -1157,18 +1157,26 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         # Output is a dict with every element (e.g., "x") of shape: [num_agents, num_rollouts, num_steps]
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv=vecenv, policy=policy)
 
-        print(len(simulated_trajectories))
+        print(f"Simulated trajectories: \n")
         print(simulated_trajectories.keys())
         print(simulated_trajectories["x"].shape)
         print(simulated_trajectories["scenario_id"])
+        print(simulated_trajectories["id"].shape)
+        print("-----------------------------------\n")
 
-        # TODO(2) Prepare ground truth data
-        # x_batch, y_batch, z_batch, heading_batch = evaluator.collect_ground_truth_data()
+        # Prepare ground truth data in the same format
+        gt_trajectories = evaluator.collect_ground_truth_trajectories(simulated_trajectories["scenario_id"])
 
-        # TODO(3) Compute WOSAC metrics
-        # results = evaluator.compute_metrics(x_hat_batch, y_hat_batch, z_hat_batch, heading_hat_batch)
+        print(f"Human-replay trajectories: \n")
+        print(gt_trajectories.keys())
+        print(gt_trajectories["x"].shape)
+        print(gt_trajectories["scenario_id"])
+        print(gt_trajectories["id"].shape)
 
-        # return results
+        # Compute WOSAC metrics
+        results = evaluator.compute_metrics(simulated_trajectories, gt_trajectories)
+
+        return results
 
     ob, info = vecenv.reset()
     driver = vecenv.driver_env
