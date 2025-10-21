@@ -1383,7 +1383,7 @@ def load_policy(args, vecenv, env_name=""):
     return policy
 
 
-def load_config(env_name):
+def load_config(env_name, config_dir=None):
     parser = argparse.ArgumentParser(
         description=f":blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]"
         " demo options. Shows valid args for your env and policy",
@@ -1411,8 +1411,13 @@ def load_config(env_name):
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
     args = parser.parse_known_args()[0]
 
+    if config_dir is None:
+        puffer_dir = os.path.dirname(os.path.realpath(__file__))
+    else:
+        print("Using custom config dir:", config_dir)
+        puffer_dir = config_dir
+
     # Load defaults and config
-    puffer_dir = os.path.dirname(os.path.realpath(__file__))
     puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
     puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
     if env_name == "default":
