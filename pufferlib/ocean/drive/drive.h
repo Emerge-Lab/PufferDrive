@@ -291,7 +291,7 @@ void add_log(Drive* env) {
         Entity* e = &env->entities[env->active_agent_indices[i]];
 
         // Only log first attempts at solving the scene
-        if(e->respawn_count > 0) {
+        if(e->respawn_count > 1) {
             continue;
         }
 
