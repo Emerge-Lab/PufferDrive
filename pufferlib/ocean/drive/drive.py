@@ -320,7 +320,7 @@ def save_map_binary(map_data, output_file):
             elif obj_type == "cyclist":
                 obj_type = 3
             f.write(struct.pack("i", obj_type))  # type
-            # f.write(struct.pack("i", obj.get("id", 0)))  # id
+            f.write(struct.pack("i", obj.get("id", 0)))  # id
             f.write(struct.pack("i", trajectory_length))  # array_size
             # Write position arrays
             positions = obj.get("position", [])
@@ -398,7 +398,7 @@ def save_map_binary(map_data, output_file):
                 road_type = 10
             # Write base entity data
             f.write(struct.pack("i", road_type))  # type
-            # f.write(struct.pack("i", road.get("id", 0)))  # id
+            f.write(struct.pack("i", road.get("id", 0)))  # id
             f.write(struct.pack("i", size))  # array_size
 
             # Write position arrays
@@ -478,5 +478,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    test_performance()
-    # process_all_maps()
+    # test_performance()
+    process_all_maps()
