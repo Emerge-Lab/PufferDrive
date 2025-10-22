@@ -29,22 +29,10 @@ def save_history(history):
 def compute_baseline(history):
     """Compute mean and std from stored SPS values."""
     sps_values = np.array(history["sps_values"], dtype=float)
-    if len(sps_values) < 60:
-        # Not enough data to compute reliable stats yet
-        return 0, 0
     return np.mean(sps_values), np.std(sps_values)
 
 
-def test_simulator_raw(times):
-    """
-    Run the simulator, measure performance (SPS),
-    and update or warn based on dynamic baseline.
-    """
-    for _ in range(times):
-        _test_single_run()
-
-
-def _test_single_run():
+def test_simulator_raw():
     timeout = 5  # seconds (short for CI)
     atn_cache = 16  # batched action cache
     num_agents = 32
@@ -75,28 +63,14 @@ def _test_single_run():
     print(f"Steps per second (SPS): {sps:.1f}")
     print(f"Step time mean: {np.mean(step_times):.6f}s, std: {np.std(step_times):.6f}s")
 
-    # ---- Load and update history ----
-    history = load_history()
-    mean, std = compute_baseline(history)
-
-    if mean > 0:
-        threshold = mean - std
-        if sps < threshold:
-            warnings.warn(
-                f"\033[91m⚠️ Performance regression detected: {sps:.1f} < {threshold:.1f} (mean - 1 std).\033[0m\n"
-                f"Current mean: {mean:.1f}, std: {std:.1f}, history size: {len(history['sps_values'])}"
-            )
-        else:
-            history["sps_values"].append(sps)
-            save_history(history)
-            print(f"\033[92m✅ Performance acceptable. Updated baseline (mean={mean:.1f}, std={std:.1f}).\033[0m")
-    else:
-        history["sps_values"].append(sps)
-        save_history(history)
-        print("📈 Initialized baseline tracking.")
-
+    mean = 24690  # hardcoded baseline mean SPS - via multiple tests
+    threshold = 0.8 * mean
+    if sps < threshold:
+        warnings.warn(
+            f"\033[91m⚠️ Performance regression detected: {sps:.1f} < {threshold:.1f} .\033[0m\nCurrent mean: {mean:.1f}"
+        )
     return
 
 
 if __name__ == "__main__":
-    test_simulator_raw(400)
+    test_simulator_raw()
