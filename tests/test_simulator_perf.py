@@ -29,7 +29,7 @@ def save_history(history):
 def compute_baseline(history):
     """Compute mean and std from stored SPS values."""
     sps_values = np.array(history["sps_values"], dtype=float)
-    if len(sps_values) < 20:
+    if len(sps_values) < 60:
         # Not enough data to compute reliable stats yet
         return 0, 0
     return np.mean(sps_values), np.std(sps_values)
@@ -99,4 +99,4 @@ def _test_single_run():
 
 
 if __name__ == "__main__":
-    test_simulator_raw(100)
+    test_simulator_raw(400)
