@@ -186,6 +186,33 @@ class Drive(pufferlib.PufferEnv):
                 self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
+    def get_global_agent_state(self):
+        """Get current global state of all active agents.
+
+        Returns:
+            dict with keys 'x', 'y', 'z', 'heading', 'id' containing numpy arrays
+            of shape (num_active_agents,)
+        """
+        num_agents = self.num_agents
+
+        states = {
+            "x": np.zeros(num_agents, dtype=np.float32),
+            "y": np.zeros(num_agents, dtype=np.float32),
+            "z": np.zeros(num_agents, dtype=np.float32),
+            "heading": np.zeros(num_agents, dtype=np.float32),
+            "id": np.zeros(num_agents, dtype=np.int32),
+        }
+
+        binding.vec_get_global_agent_state(
+            self.c_envs, states["x"], states["y"], states["z"], states["heading"], states["id"]
+        )
+
+        return states
+
+    def get_scenario_ids(self):
+        """Get scenario hex IDs for all environments."""
+        return binding.vec_get_scenario_ids(self.c_envs)
+
     def render(self):
         binding.vec_render(self.c_envs, 0)
 
@@ -242,6 +269,29 @@ def save_map_binary(map_data, output_file):
     trajectory_length = 91
     """Saves map data in a binary format readable by C"""
     with open(output_file, "wb") as f:
+        # Get scenario_id
+        scenario_id = map_data.get("scenario_id", "")
+        scenario_id_bytes = scenario_id.encode("utf-8")
+
+        # Get metadata
+        metadata = map_data.get("metadata", {})
+        sdc_track_index = metadata.get("sdc_track_index", -1)  # -1 as default if not found
+        tracks_to_predict = metadata.get("tracks_to_predict", [])
+
+        # Write scenario_id (length + string bytes)
+        f.write(struct.pack("i", len(scenario_id_bytes)))
+        if len(scenario_id_bytes) > 0:
+            f.write(scenario_id_bytes)
+
+        # Write sdc_track_index
+        f.write(struct.pack("i", sdc_track_index))
+
+        # Write tracks_to_predict info (indices only)
+        f.write(struct.pack("i", len(tracks_to_predict)))
+        for track in tracks_to_predict:
+            track_index = track.get("track_index", -1)
+            f.write(struct.pack("i", track_index))
+
         # Count total entities
         print(len(map_data.get("objects", [])))
         print(len(map_data.get("roads", [])))
@@ -262,7 +312,7 @@ def save_map_binary(map_data, output_file):
             elif obj_type == "cyclist":
                 obj_type = 3
             f.write(struct.pack("i", obj_type))  # type
-            # f.write(struct.pack("i", obj.get("id", 0)))  # id
+            f.write(struct.pack("i", obj.get("id", 0)))  # id
             f.write(struct.pack("i", trajectory_length))  # array_size
             # Write position arrays
             positions = obj.get("position", [])
@@ -340,7 +390,7 @@ def save_map_binary(map_data, output_file):
                 road_type = 10
             # Write base entity data
             f.write(struct.pack("i", road_type))  # type
-            # f.write(struct.pack("i", road.get("id", 0)))  # id
+            f.write(struct.pack("i", road.get("id", 0)))  # id
             f.write(struct.pack("i", size))  # array_size
 
             # Write position arrays
@@ -376,7 +426,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed/training")
+    data_dir = Path("data/processed/validation/json")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -398,8 +448,11 @@ def process_all_maps():
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
 
-    env = Drive(num_agents=num_agents)
+    env = Drive(num_agents=num_agents, num_maps=1)
     env.reset()
+
+    # print(env.get_scenario_ids())
+
     tick = 0
     num_agents = 1024
     actions = np.stack(

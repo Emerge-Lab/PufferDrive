@@ -613,6 +613,90 @@ static PyObject* vec_close(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
+static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
+    if (PyTuple_Size(args) != 6) {
+        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 6 arguments");
+        return NULL;
+    }
+
+    Env* env = unpack_env(args);
+    if (!env) {
+        return NULL;
+    }
+
+    Drive* drive = (Drive*)env; // Cast to Drive*
+
+    // Get the numpy arrays from arguments
+    PyObject* x_arr = PyTuple_GetItem(args, 1);
+    PyObject* y_arr = PyTuple_GetItem(args, 2);
+    PyObject* z_arr = PyTuple_GetItem(args, 3);
+    PyObject* heading_arr = PyTuple_GetItem(args, 4);
+    PyObject* id_arr = PyTuple_GetItem(args, 5);
+
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
+        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(id_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+        return NULL;
+    }
+
+    float* x_data = (float*)PyArray_DATA((PyArrayObject*)x_arr);
+    float* y_data = (float*)PyArray_DATA((PyArrayObject*)y_arr);
+    float* z_data = (float*)PyArray_DATA((PyArrayObject*)z_arr);
+    float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
+    int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
+
+    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
+    if (PyTuple_Size(args) != 6) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 6 arguments");
+        return NULL;
+    }
+
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    // Get the numpy arrays from arguments
+    PyObject* x_arr = PyTuple_GetItem(args, 1);
+    PyObject* y_arr = PyTuple_GetItem(args, 2);
+    PyObject* z_arr = PyTuple_GetItem(args, 3);
+    PyObject* heading_arr = PyTuple_GetItem(args, 4);
+    PyObject* id_arr = PyTuple_GetItem(args, 5);  // ADD THIS LINE
+
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
+        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(id_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+        return NULL;
+    }
+
+    PyArrayObject* x_array = (PyArrayObject*)x_arr;
+    PyArrayObject* y_array = (PyArrayObject*)y_arr;
+    PyArrayObject* z_array = (PyArrayObject*)z_arr;
+    PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
+    PyArrayObject* id_array = (PyArrayObject*)id_arr;
+
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive* drive = (Drive*)vec->envs[i];
+
+        float* x_data = (float*)((char*)PyArray_DATA(x_array) + i * PyArray_STRIDE(x_array, 0));
+        float* y_data = (float*)((char*)PyArray_DATA(y_array) + i * PyArray_STRIDE(y_array, 0));
+        float* z_data = (float*)((char*)PyArray_DATA(z_array) + i * PyArray_STRIDE(z_array, 0));
+        float* heading_data = (float*)((char*)PyArray_DATA(heading_array) + i * PyArray_STRIDE(heading_array, 0));
+        int* id_data = (int*)((char*)PyArray_DATA(id_array) + i * PyArray_STRIDE(id_array, 0));
+
+        c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data);
+    }
+
+    Py_RETURN_NONE;
+}
+
 static double unpack(PyObject* kwargs, char* key) {
     PyObject* val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
@@ -667,6 +751,46 @@ static char* unpack_str(PyObject* kwargs, char* key) {
     return ret;
 }
 
+static PyObject* env_get_scenario_id(PyObject* self, PyObject* args) {
+    // Get scenario id from a single environment
+    Env* env = unpack_env(args);
+    if (!env) {
+        return NULL;
+    }
+
+    Drive* drive = (Drive*)env;
+    if (!drive->scenario_id) {
+        return PyUnicode_FromString("");
+    }
+
+    return PyUnicode_FromString(drive->scenario_id);
+}
+
+static PyObject* vec_get_scenario_ids(PyObject* self, PyObject* args) {
+    // Get all scenario_ids from a vectorized environment
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject* list = PyList_New(vec->num_envs);
+    if (!list) {
+        PyErr_SetString(PyExc_MemoryError, "Failed to allocate list");
+        return NULL;
+    }
+
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive* drive = (Drive*)vec->envs[i];
+        const char* scenario_id = (drive && drive->scenario_id)
+            ? drive->scenario_id
+            : "";
+        PyObject* py_str = PyUnicode_FromString(scenario_id);
+        PyList_SET_ITEM(list, i, py_str);  // steals reference
+    }
+
+    return list;
+}
+
 // Method table
 static PyMethodDef methods[] = {
     {"env_init", (PyCFunction)env_init, METH_VARARGS | METH_KEYWORDS, "Init environment with observation, action, reward, terminal, truncation arrays"},
@@ -684,6 +808,10 @@ static PyMethodDef methods[] = {
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
+    {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
+    {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
+    {"env_get_scenario_id", env_get_scenario_id, METH_VARARGS, "Get scenario_id of a single environment"},
+    {"vec_get_scenario_ids", vec_get_scenario_ids, METH_VARARGS, "Get scenario_ids for all vectorized envs"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}
 };

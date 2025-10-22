@@ -125,6 +125,7 @@ struct Log {
 typedef struct Entity Entity;
 struct Entity {
     int type;
+    int id;
     int array_size;
     float* traj_x;
     float* traj_y;
@@ -286,6 +287,10 @@ struct Drive {
     int logs_capacity;
     int use_goal_generation;
     char* ini_file;
+    char* scenario_id;
+    int sdc_track_index;
+    int num_tracks_to_predict;
+    int* tracks_to_predict_indices;
     int control_non_vehicles;
 };
 
@@ -456,6 +461,33 @@ void freeTopologyGraph(struct Graph* graph) {
 Entity* load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
+
+    // Read scenario_id
+    int scenario_id_length;
+    fread(&scenario_id_length, sizeof(int), 1, file);
+    if (scenario_id_length > 0) {
+        env->scenario_id = (char*)malloc((scenario_id_length + 1) * sizeof(char));
+        fread(env->scenario_id, sizeof(char), scenario_id_length, file);
+        env->scenario_id[scenario_id_length] = '\0';
+    } else {
+        env->scenario_id = NULL;
+    }
+
+    // Read sdc_track_index
+    fread(&env->sdc_track_index, sizeof(int), 1, file);
+
+    // Read tracks_to_predict
+    fread(&env->num_tracks_to_predict, sizeof(int), 1, file);
+    if (env->num_tracks_to_predict > 0) {
+        env->tracks_to_predict_indices = (int*)malloc(env->num_tracks_to_predict * sizeof(int));
+
+        for (int i = 0; i < env->num_tracks_to_predict; i++) {
+            fread(&env->tracks_to_predict_indices[i], sizeof(int), 1, file);
+        }
+    } else {
+        env->tracks_to_predict_indices = NULL;
+    }
+
     fread(&env->num_objects, sizeof(int), 1, file);
     fread(&env->num_roads, sizeof(int), 1, file);
     env->num_entities = env->num_objects + env->num_roads;
@@ -463,6 +495,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
     for (int i = 0; i < env->num_entities; i++) {
 	    // Read base entity data
         fread(&entities[i].type, sizeof(int), 1, file);
+        fread(&entities[i].id, sizeof(int), 1, file);
         fread(&entities[i].array_size, sizeof(int), 1, file);
         // Allocate arrays based on type
         int size = entities[i].array_size;
@@ -504,6 +537,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
     }
+
     fclose(file);
     return entities;
 }
@@ -1675,6 +1709,19 @@ float normalize_value(float value, float min, float max){
 
 float reverse_normalize_value(float value, float min, float max){
     return value*50.0f;
+}
+
+void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* id_out) {
+    for(int i = 0; i < env->active_agent_count; i++){
+        int agent_idx = env->active_agent_indices[i];
+        Entity* agent = &env->entities[agent_idx];
+        // For WOSAC, we need the original world coordinates, so we add the world means back
+        x_out[i] = agent->x + env->world_mean_x;
+        y_out[i] = agent->y + env->world_mean_y;
+        z_out[i] = agent->z;
+        heading_out[i] = agent->heading;
+        id_out[i] = agent->id;
+    }
 }
 
 void compute_observations(Drive* env) {

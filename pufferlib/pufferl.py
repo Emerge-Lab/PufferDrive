@@ -1123,14 +1123,52 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
 def eval(env_name, args=None, vecenv=None, policy=None):
     args = args or load_config(env_name)
+
+    wosac_enabled = args["wosac"]["enabled"]
     backend = args["vec"]["backend"]
     if backend != "PufferEnv":
         backend = "Serial"
 
     args["vec"] = dict(backend=backend, num_envs=1)
+    # We never have more than 128 agents in WOMD scenes
+    # TODO(dc): Figure out how to control a specific set of ids
+    args["env"]["num_agents"] = 6
+
     vecenv = vecenv or load_env(env_name, args)
 
     policy = policy or load_policy(args, vecenv, env_name)
+
+    if wosac_enabled:
+        print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
+        from pufferlib.ocean.wosac.evaluator import WOSACEvaluator
+
+        evaluator = WOSACEvaluator(args)
+
+        # Roll out trained policy in the simulator to collect trajectories
+        # Output is a dict with every element (e.g., "x") of shape: [num_agents, num_rollouts, num_steps]
+        simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv=vecenv, policy=policy)
+
+        print(f"Simulated trajectories: \n")
+        print(simulated_trajectories.keys())
+        print(simulated_trajectories["x"].shape)
+        print(simulated_trajectories["scenario_id"])
+        print(simulated_trajectories["id"].shape)
+        print("-----------------------------------\n")
+
+        # Prepare ground truth data in the same format
+        gt_trajectories = evaluator.collect_ground_truth_trajectories(simulated_trajectories["scenario_id"])
+
+        print(f"Human-replay trajectories: \n")
+        print(gt_trajectories.keys())
+        print(gt_trajectories["x"].shape)
+        print(gt_trajectories["scenario_id"])
+        print(gt_trajectories["id"].shape)
+
+        # Compute WOSAC metrics
+        results = evaluator.compute_metrics(simulated_trajectories, gt_trajectories)
+
+        return results
+
     ob, info = vecenv.reset()
     driver = vecenv.driver_env
     num_agents = vecenv.observation_space.shape[0]
@@ -1339,7 +1377,7 @@ def load_policy(args, vecenv, env_name=""):
     return policy
 
 
-def load_config(env_name):
+def load_config(env_name, config_dir=None):
     parser = argparse.ArgumentParser(
         description=f":blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]"
         " demo options. Shows valid args for your env and policy",
@@ -1367,8 +1405,13 @@ def load_config(env_name):
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
     args = parser.parse_known_args()[0]
 
+    if config_dir is None:
+        puffer_dir = os.path.dirname(os.path.realpath(__file__))
+    else:
+        print("Using custom config dir:", config_dir)
+        puffer_dir = config_dir
+
     # Load defaults and config
-    puffer_dir = os.path.dirname(os.path.realpath(__file__))
     puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
     puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
     if env_name == "default":
