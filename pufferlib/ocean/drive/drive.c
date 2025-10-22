@@ -392,7 +392,6 @@ void demo() {
         .reward_ade = -0.0f,
         .goal_radius = 2.0f,
 	    .map_name = "resources/drive/binaries/map_000.bin",
-        .spawn_immunity_timer = 50,
     };
     allocate(&env);
     c_reset(&env);
@@ -519,7 +518,6 @@ int eval_gif(const char* map_name,
         .reward_ade = -0.0f,
         .goal_radius = goal_radius,
         .map_name = map_name,
-        .spawn_immunity_timer = 50,
         .control_non_vehicles = control_non_vehicles,
         .init_steps = init_steps,
         .control_all_agents = control_all_agents,

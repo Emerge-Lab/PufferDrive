@@ -278,7 +278,6 @@ struct Drive {
     char* map_name;
     float world_mean_x;
     float world_mean_y;
-    int spawn_immunity_timer;
     float reward_goal;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
@@ -1243,8 +1242,6 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     if (!env->use_goal_generation) {
         int is_active_agent = env->entities[agent_idx].active_agent;
         int respawned = env->entities[agent_idx].respawn_timestep != -1;
-        int exceeded_spawn_immunity_agent = (env->timestep - env->entities[agent_idx].respawn_timestep) >= env->spawn_immunity_timer;
-
         if(collided == VEHICLE_COLLISION && is_active_agent == 1 && respawned){
             agent->collision_state = 0;
         }
@@ -1257,9 +1254,6 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
         // spawn immunity for collisions with other cars who just respawned
         int respawned_collided_with_car = env->entities[car_collided_with_index].respawn_timestep != -1;
-        int exceeded_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) >= env->spawn_immunity_timer;
-        int within_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) < env->spawn_immunity_timer;
-
         if (respawned_collided_with_car) {
             agent->collision_state = 0;
             agent->metrics_array[COLLISION_IDX] = 0.0f;

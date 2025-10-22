@@ -171,7 +171,6 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_ade = conf.reward_ade;
     env->goal_radius = conf.goal_radius;
     env->use_goal_generation = conf.use_goal_generation;
-    env->spawn_immunity_timer = conf.spawn_immunity_timer;
     env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
     env->control_all_agents = unpack(kwargs, "control_all_agents");
     env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
