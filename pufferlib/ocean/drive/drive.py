@@ -53,7 +53,14 @@ class Drive(pufferlib.PufferEnv):
         self.dynamics_model = dynamics_model
 
         # Observation space calculation
-        ego_features = 10
+        if dynamics_model == "classic":
+            ego_features = 7
+        elif dynamics_model == "jerk":
+            ego_features = 10
+        else:
+            raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+
+        self.ego_features = ego_features
         partner_features = 7
         road_features = 7
         max_partner_objects = 63

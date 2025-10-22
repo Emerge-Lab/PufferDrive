@@ -1398,7 +1398,8 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int max_obs = 10 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("num static cars: %d\n", env->static_car_count);
     // printf("active agent count: %d\n", env->active_agent_count);
     // printf("num objects: %d\n", env->num_objects);
@@ -1600,41 +1601,45 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
 }
 
 void compute_observations(Drive* env) {
-    int max_obs = 10 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
         float* obs = &observations[i][0];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];
         if(ego_entity->type > 3) break;
-        if(ego_entity->respawn_timestep != -1) {
-            obs[9] = 1;
-            //continue;
-        }
+
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
         float ego_speed = sqrtf(ego_entity->vx*ego_entity->vx + ego_entity->vy*ego_entity->vy);
+
         // Set goal distances
         float goal_x = ego_entity->goal_position_x - ego_entity->x;
         float goal_y = ego_entity->goal_position_y - ego_entity->y;
+
         // Rotate to ego vehicle's frame
         float rel_goal_x = goal_x*cos_heading + goal_y*sin_heading;
         float rel_goal_y = -goal_x*sin_heading + goal_y*cos_heading;
-        //obs[0] = normalize_value(rel_goal_x, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
-        //obs[1] = normalize_value(rel_goal_y, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
+
         obs[0] = rel_goal_x* 0.005f;
         obs[1] = rel_goal_y* 0.005f;
         obs[2] = ego_speed / MAX_SPEED;
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
-        obs[6] = ego_entity->steering_angle / M_PI;
-        obs[7] = ego_entity->a_long / 5.0f;
-        obs[8] = ego_entity->a_lat / 4.0f;
-        obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+
+        if (env->dynamics_model == JERK) {
+            obs[6] = ego_entity->steering_angle / M_PI;
+            obs[7] = ego_entity->a_long / 5.0f;
+            obs[8] = ego_entity->a_lat / 4.0f;
+            obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+        } else {
+            obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+        }
 
         // Relative Pos of other cars
-        int obs_idx = 10;  // Start after ego obs
+        int obs_idx = ego_dim;
         int cars_seen = 0;
         for(int j = 0; j < MAX_AGENTS; j++) {
             int index = -1;
