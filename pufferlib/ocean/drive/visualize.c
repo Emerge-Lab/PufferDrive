@@ -1,6 +1,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <math.h>
 #include <raylib.h>
 #include "rlgl.h"
@@ -195,7 +196,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int oracle_mode, int use_rc, int use_ec, int use_dc, const char* view_mode) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int oracle_mode, int use_rc, int use_ec, int use_dc, const char* view_mode, const char* output_topdown, const char* output_agent) {
 
     char map_buffer[100];
     if (map_name == NULL) {
@@ -284,16 +285,26 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     char filename_topdown[256];
     char filename_agent[256];
 
-    char policy_base[256];
-    strcpy(policy_base, policy_name);
-    *strrchr(policy_base, '.') = '\0';
+    if (output_topdown != NULL && output_agent != NULL) {
+        strcpy(filename_topdown, output_topdown);
+        strcpy(filename_agent, output_agent);
+    } else {
+        char policy_base[256];
+        strcpy(policy_base, policy_name);
+        *strrchr(policy_base, '.') = '\0';
 
-    char map[256];
-    strcpy(map, basename((char*)map_name));
-    *strrchr(map, '.') = '\0';
+        char map[256];
+        strcpy(map, basename((char*)map_name));
+        *strrchr(map, '.') = '\0';
 
-    sprintf(filename_topdown, "%s/gifs/%s_topdown.mp4", policy_base, map);
-    sprintf(filename_agent, "%s/gifs/%s_agent.mp4", policy_base, map);
+        // Create gifs directory if it doesn't exist
+        char gifs_dir[256];
+        sprintf(gifs_dir, "%s/gifs", policy_base);
+        mkdir(gifs_dir, 0755);
+
+        sprintf(filename_topdown, "%s/gifs/%s_topdown.mp4", policy_base, map);
+        sprintf(filename_agent, "%s/gifs/%s_agent.mp4", policy_base, map);
+    }
 
     // Determine which views to render
     bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
@@ -335,10 +346,10 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, env.actions);
             c_step(&env);
-            for(int i=0; i < env.active_agent_count; i++)
-            {
-                printf("Agent %d - %f %f %f %f %f\n", i, env.logs[i].perf, env.logs[i].episode_return, env.logs[i].collision_rate, env.logs[i].offroad_rate, env.logs[i].completion_rate);
-            }
+            // for(int i=0; i < env.active_agent_count; i++)
+            // {
+            //     printf("Agent %d - %f %f %f %f %f\n", i, env.logs[i].perf, env.logs[i].episode_return, env.logs[i].collision_rate, env.logs[i].offroad_rate, env.logs[i].completion_rate);
+            // }
         }
 
     }
@@ -400,6 +411,8 @@ int main(int argc, char* argv[]) {
     int use_ec = 1;
     int use_dc = 1;
     const char* view_mode = "both";  // "both", "topdown", "agent"
+    const char* output_topdown = NULL;
+    const char* output_agent = NULL;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -479,9 +492,19 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Error: --view option requires a value (both/topdown/agent)\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--output-topdown") == 0) {
+            if (i + 1 < argc) {
+                output_topdown = argv[i + 1];
+                i++;
+            }
+        } else if (strcmp(argv[i], "--output-agent") == 0) {
+            if (i + 1 < argc) {
+                output_agent = argv[i + 1];
+                i++;
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, oracle_mode, use_rc, use_ec, use_dc, view_mode);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, oracle_mode, use_rc, use_ec, use_dc, view_mode, output_topdown, output_agent);
     return 0;
 }

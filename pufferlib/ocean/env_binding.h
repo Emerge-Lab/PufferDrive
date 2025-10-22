@@ -578,14 +578,82 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
     int has_co_players = 0;  // Flag to check if any env has co-players
     #endif
     
+    // Initialize min/max values for proper aggregation
+    aggregate.min_collision_weight = INFINITY;
+    aggregate.min_offroad_weight = INFINITY;
+    aggregate.min_goal_weight = INFINITY;
+    aggregate.min_entropy_weight = INFINITY;
+    aggregate.min_discount_weight = INFINITY;
+    aggregate.max_collision_weight = -INFINITY;
+    aggregate.max_offroad_weight = -INFINITY;
+    aggregate.max_goal_weight = -INFINITY;
+    aggregate.max_entropy_weight = -INFINITY;
+    aggregate.max_discount_weight = -INFINITY;
+
     for (int i = 0; i < vec->num_envs; i++) {
         Env* env = vec->envs[i];
-        
-        // Aggregate regular logs
-        for (int j = 0; j < num_keys; j++) {
-            ((float*)&aggregate)[j] += ((float*)&env->log)[j];
-            ((float*)&env->log)[j] = 0.0f;
-        }
+
+        // Aggregate regular logs with special handling for min/max
+        aggregate.episode_return += env->log.episode_return;
+        aggregate.episode_length += env->log.episode_length;
+        aggregate.perf += env->log.perf;
+        aggregate.score += env->log.score;
+        aggregate.offroad_rate += env->log.offroad_rate;
+        aggregate.collision_rate += env->log.collision_rate;
+        aggregate.clean_collision_rate += env->log.clean_collision_rate;
+        aggregate.completion_rate += env->log.completion_rate;
+        aggregate.dnf_rate += env->log.dnf_rate;
+        aggregate.n += env->log.n;
+        aggregate.lane_alignment_rate += env->log.lane_alignment_rate;
+        aggregate.avg_displacement_error += env->log.avg_displacement_error;
+        aggregate.avg_collision_weight += env->log.avg_collision_weight;
+        aggregate.avg_offroad_weight += env->log.avg_offroad_weight;
+        aggregate.avg_goal_weight += env->log.avg_goal_weight;
+        aggregate.avg_entropy_weight += env->log.avg_entropy_weight;
+        aggregate.avg_discount_weight += env->log.avg_discount_weight;
+
+        // Handle min/max fields with proper min/max operations
+        if (env->log.min_collision_weight < aggregate.min_collision_weight)
+            aggregate.min_collision_weight = env->log.min_collision_weight;
+        if (env->log.max_collision_weight > aggregate.max_collision_weight)
+            aggregate.max_collision_weight = env->log.max_collision_weight;
+        if (env->log.min_offroad_weight < aggregate.min_offroad_weight)
+            aggregate.min_offroad_weight = env->log.min_offroad_weight;
+        if (env->log.max_offroad_weight > aggregate.max_offroad_weight)
+            aggregate.max_offroad_weight = env->log.max_offroad_weight;
+        if (env->log.min_goal_weight < aggregate.min_goal_weight)
+            aggregate.min_goal_weight = env->log.min_goal_weight;
+        if (env->log.max_goal_weight > aggregate.max_goal_weight)
+            aggregate.max_goal_weight = env->log.max_goal_weight;
+        if (env->log.min_entropy_weight < aggregate.min_entropy_weight)
+            aggregate.min_entropy_weight = env->log.min_entropy_weight;
+        if (env->log.max_entropy_weight > aggregate.max_entropy_weight)
+            aggregate.max_entropy_weight = env->log.max_entropy_weight;
+        if (env->log.min_discount_weight < aggregate.min_discount_weight)
+            aggregate.min_discount_weight = env->log.min_discount_weight;
+        if (env->log.max_discount_weight > aggregate.max_discount_weight)
+            aggregate.max_discount_weight = env->log.max_discount_weight;
+
+        // Sum count and total fields (don't average these)
+        aggregate.collision_weighted_reward_total += env->log.collision_weighted_reward_total;
+        aggregate.offroad_weighted_reward_total += env->log.offroad_weighted_reward_total;
+        aggregate.goal_weighted_reward_total += env->log.goal_weighted_reward_total;
+        aggregate.num_collision_events += env->log.num_collision_events;
+        aggregate.num_offroad_events += env->log.num_offroad_events;
+        aggregate.num_goal_events += env->log.num_goal_events;
+
+        // Reset env log
+        env->log = (Log){0};
+        env->log.min_collision_weight = INFINITY;
+        env->log.min_offroad_weight = INFINITY;
+        env->log.min_goal_weight = INFINITY;
+        env->log.min_entropy_weight = INFINITY;
+        env->log.min_discount_weight = INFINITY;
+        env->log.max_collision_weight = -INFINITY;
+        env->log.max_offroad_weight = -INFINITY;
+        env->log.max_goal_weight = -INFINITY;
+        env->log.max_entropy_weight = -INFINITY;
+        env->log.max_discount_weight = -INFINITY;
         
         // Runtime check for population play (only if this env type supports it)
         #if defined(DRIVE_ENV) || defined(HAS_CO_PLAYER_SUPPORT)
@@ -614,14 +682,28 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
     }
     #endif
 
-    // Average regular logs
+    // Average regular logs (only average fields that should be averaged)
     if (aggregate.n > 0.0f) {
         float n = aggregate.n;
-        for (int i = 0; i < num_keys; i++) {
-            ((float*)&aggregate)[i] /= n;
-        }
-        
-        // User populates dict with regular metrics
+
+        // Only average these fields - don't average counts, totals, or min/max
+        aggregate.episode_return /= n;
+        aggregate.episode_length /= n;
+        aggregate.perf /= n;
+        aggregate.score /= n;
+        aggregate.offroad_rate /= n;
+        aggregate.collision_rate /= n;
+        aggregate.clean_collision_rate /= n;
+        aggregate.completion_rate /= n;
+        aggregate.dnf_rate /= n;
+        aggregate.lane_alignment_rate /= n;
+        aggregate.avg_displacement_error /= n;
+        aggregate.avg_collision_weight /= n;
+        aggregate.avg_offroad_weight /= n;
+        aggregate.avg_goal_weight /= n;
+        aggregate.avg_entropy_weight /= n;
+        aggregate.avg_discount_weight /= n;
+
         my_log(dict, &aggregate);
         assign_to_dict(dict, "n", n);
     }

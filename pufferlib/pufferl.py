@@ -562,7 +562,7 @@ class PuffeRL:
                         env = os.environ.copy()
                         env["ASAN_OPTIONS"] = "exitcode=0"
 
-                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 640x360x24", "./visualize"]
 
                         # Add render configurations
                         if config["show_grid"]:
@@ -580,6 +580,16 @@ class PuffeRL:
                             map_path = config["render_map"]
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
+
+                        cmd.extend(["--oracle", "1" if self.vecenv.driver_env.oracle_mode else "0"])
+                        cmd.extend(["--use-rc", "1" if self.vecenv.driver_env.reward_conditioned else "0"])
+                        cmd.extend(["--use-ec", "1" if self.vecenv.driver_env.entropy_conditioned else "0"])
+                        cmd.extend(["--use-dc", "1" if self.vecenv.driver_env.discount_conditioned else "0"])
+
+                        # Add output paths for videos
+                        cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
+                        cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
                             cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env
@@ -1268,11 +1278,11 @@ def ensure_drive_binary():
     """Ensure the drive binary exists, build it once if necessary. This
     is required for rendering with raylib.
     """
-    if not os.path.exists("./drive"):
+    if not os.path.exists("./visualize"):
         print("Drive binary not found, building...")
         try:
             result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=300
+                ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
             )
 
             if result.returncode == 0:
