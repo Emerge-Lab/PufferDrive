@@ -554,6 +554,18 @@ class PuffeRL:
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
 
+                        # Add agent control flags from environment configuration
+                        if hasattr(self.vecenv.driver_env, 'init_steps') and self.vecenv.driver_env.init_steps > 0:
+                            cmd.extend(["--init-steps", str(self.vecenv.driver_env.init_steps)])
+                        if hasattr(self.vecenv.driver_env, 'control_non_vehicles') and self.vecenv.driver_env.control_non_vehicles:
+                            cmd.append("--control-non-vehicles")
+                        if hasattr(self.vecenv.driver_env, 'control_all_agents') and self.vecenv.driver_env.control_all_agents:
+                            cmd.append("--pure-self-play")
+                        if hasattr(self.vecenv.driver_env, 'policy_agents_per_env') and self.vecenv.driver_env.policy_agents_per_env > 0:
+                            cmd.extend(["--num-policy-controlled-agents", str(self.vecenv.driver_env.policy_agents_per_env)])
+                        if hasattr(self.vecenv.driver_env, 'deterministic_agent_selection') and self.vecenv.driver_env.deterministic_agent_selection:
+                            cmd.append("--deterministic-selection")
+
                         # Specify output paths for videos
                         cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
                         cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
