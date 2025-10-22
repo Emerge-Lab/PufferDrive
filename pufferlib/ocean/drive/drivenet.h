@@ -1,4 +1,5 @@
 #include <time.h>
+#include "drive.h"
 #include "puffernet.h"
 #include <math.h>
 #include <raylib.h>
@@ -10,6 +11,7 @@
 typedef struct DriveNet DriveNet;
 struct DriveNet {
     int num_agents;
+    int conditioning_dims;
     float* obs_self;
     float* obs_partner;
     float* obs_road;
@@ -41,13 +43,20 @@ struct DriveNet {
     Multidiscrete* multidiscrete;
 };
 
-DriveNet* init_drivenet(Weights* weights, int num_agents) {
+DriveNet* init_drivenet(Weights* weights, int num_agents, bool use_rc, bool use_ec, bool use_dc) {
     DriveNet* net = calloc(1, sizeof(DriveNet));
     int hidden_size = 256;
     int input_size = 64;
 
     net->num_agents = num_agents;
-    net->obs_self = calloc(num_agents*7, sizeof(float)); // 7 features
+    net->conditioning_dims = (use_rc ? 3 : 0) + (use_ec ? 1 : 0) + (use_dc ? 1 : 0);
+
+    int ego_obs_size = 7; // base features
+    if (use_rc) ego_obs_size += 3; // reward conditioning
+    if (use_ec) ego_obs_size += 1; // entropy conditioning
+    if (use_dc) ego_obs_size += 1; // discount conditioning
+
+    net->obs_self = calloc(num_agents*ego_obs_size, sizeof(float));
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
     net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
@@ -56,7 +65,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     net->road_linear_output_two = calloc(num_agents*200*input_size, sizeof(float));
     net->partner_layernorm_output = calloc(num_agents*63*input_size, sizeof(float));
     net->road_layernorm_output = calloc(num_agents*200*input_size, sizeof(float));
-    net->ego_encoder = make_linear(weights, num_agents, 7, input_size);
+    net->ego_encoder = make_linear(weights, num_agents, ego_obs_size, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->road_encoder = make_linear(weights, num_agents, 13, input_size);
@@ -116,23 +125,25 @@ void free_drivenet(DriveNet* net) {
 }
 
 void forward(DriveNet* net, float* observations, int* actions) {
+    int ego_obs_size = 7 + net->conditioning_dims;
+
     // Clear previous observations
-    memset(net->obs_self, 0, net->num_agents * 7 * sizeof(float));
+    memset(net->obs_self, 0, net->num_agents * ego_obs_size * sizeof(float));
     memset(net->obs_partner, 0, net->num_agents * 63 * 7 * sizeof(float));
     memset(net->obs_road, 0, net->num_agents * 200 * 13 * sizeof(float));
 
     // Reshape observations into 2D boards and additional features
-    float (*obs_self)[7] = (float (*)[7])net->obs_self;
+    float* obs_self = net->obs_self;
     float (*obs_partner)[63][7] = (float (*)[63][7])net->obs_partner;
     float (*obs_road)[200][13] = (float (*)[200][13])net->obs_road;
 
     for (int b = 0; b < net->num_agents; b++) {
-        int b_offset = b * (7 + 63*7 + 200*7);  // offset for each batch
-        int partner_offset = b_offset + 7;
-        int road_offset = b_offset + 7 + 63*7;
+        int b_offset = b * (ego_obs_size + 63*7 + 200*7);  // offset for each batch
+        int partner_offset = b_offset + ego_obs_size;
+        int road_offset = b_offset + ego_obs_size + 63*7;
         // Process self observation
-        for(int i = 0; i < 7; i++) {
-            obs_self[b][i] = observations[b_offset + i];
+        for(int i = 0; i < ego_obs_size; i++) {
+            obs_self[b*ego_obs_size + i] = observations[b_offset + i];
         }
 
         // Process partner observation
