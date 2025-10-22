@@ -279,7 +279,6 @@ struct Drive {
     float world_mean_y;
     float reward_goal;
     float reward_goal_post_respawn;
-    float reward_vehicle_collision_post_respawn;
     float goal_radius;
     int control_all_agents;
     int deterministic_agent_selection;
