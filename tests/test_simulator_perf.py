@@ -35,11 +35,16 @@ def compute_baseline(history):
     return np.mean(sps_values), np.std(sps_values)
 
 
-def test_simulator_raw():
+def test_simulator_raw(times):
     """
     Run the simulator, measure performance (SPS),
     and update or warn based on dynamic baseline.
     """
+    for _ in range(times):
+        _test_single_run()
+
+
+def _test_single_run():
     timeout = 5  # seconds (short for CI)
     atn_cache = 16  # batched action cache
     num_agents = 32
@@ -90,6 +95,8 @@ def test_simulator_raw():
         save_history(history)
         print("📈 Initialized baseline tracking.")
 
+    return
+
 
 if __name__ == "__main__":
-    test_simulator_raw()
+    test_simulator_raw(100)

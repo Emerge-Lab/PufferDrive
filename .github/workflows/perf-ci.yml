@@ -2,7 +2,9 @@ name: perf-ci
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ agupta/add-performance-tests ]
+  push:
+    branches: [ agupta/add-performance-tests ]
 
 jobs:
   test-performance:
