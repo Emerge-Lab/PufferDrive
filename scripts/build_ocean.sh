@@ -5,7 +5,12 @@
 ENV=$1
 MODE=${2:-local}
 PLATFORM="$(uname -s)"
-SRC_DIR="pufferlib/ocean/$ENV"
+
+if [ "$ENV" = "visualize" ]; then
+    SRC_DIR="pufferlib/ocean/drive"
+else
+    SRC_DIR="pufferlib/ocean/$ENV"
+fi
 WEB_OUTPUT_DIR="build_web/$ENV"
 RAYLIB_NAME='raylib-5.5_macos'
 BOX2D_NAME='box2d-macos-arm64'
