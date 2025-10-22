@@ -1,4 +1,5 @@
 #include <time.h>
+#include "drive.h"
 #include "puffernet.h"
 #include <math.h>
 #include <raylib.h>
@@ -48,6 +49,18 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
     int input_size = 64;
 
     int ego_dim = (dynamics_model == JERK) ? 10 : 7;
+
+    net->conditioning_dims = (use_rc ? 3 : 0) + (use_ec ? 1 : 0) + (use_dc ? 1 : 0);
+
+
+    if (use_rc) ego_obs_size += 3; // reward conditioning
+    if (use_ec) ego_obs_size += 1; // entropy conditioning
+    if (use_dc) ego_obs_size += 1; // discount conditioning
+
+    int ego_dim += net->conditioning_dims;
+
+
+
 
     // Determine action space size based on dynamics model
     int action_size, logit_sizes[2];
