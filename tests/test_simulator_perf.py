@@ -13,25 +13,6 @@ ROOT_DIR = Path(__file__).resolve().parents[2]  # goes up from tests/ to PufferD
 DATA_FILE = ROOT_DIR / "pufferlib" / "resources" / "drive" / "simulator_perf_history.json"
 
 
-def load_history():
-    if DATA_FILE.exists():
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {"sps_values": []}
-
-
-def save_history(history):
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(DATA_FILE, "w") as f:
-        json.dump(history, f, indent=4)
-
-
-def compute_baseline(history):
-    """Compute mean and std from stored SPS values."""
-    sps_values = np.array(history["sps_values"], dtype=float)
-    return np.mean(sps_values), np.std(sps_values)
-
-
 def test_simulator_raw():
     timeout = 5  # seconds (short for CI)
     atn_cache = 16  # batched action cache
