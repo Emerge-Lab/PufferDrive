@@ -1637,10 +1637,6 @@ float normalize_value(float value, float min, float max){
     return (value - min) / (max - min);
 }
 
-float reverse_normalize_value(float value, float min, float max){
-    return value*50.0f;
-}
-
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
 
