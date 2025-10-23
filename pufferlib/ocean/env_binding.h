@@ -711,6 +711,8 @@ typedef struct
     float reward_goal_post_respawn;
     float reward_ade;
     float goal_radius;
+    int collision_behaviour;
+    int offroad_behaviour;
     int use_goal_generation;
     int control_non_vehicles;
 } env_init_config;
@@ -747,6 +749,10 @@ static int handler(
         env_config->reward_ade = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
+    } else if(MATCH("env", "collision_behaviour")){
+        env_config->collision_behaviour = atoi(value);
+    } else if(MATCH("env", "offroad_behaviour")){
+        env_config->offroad_behaviour = atoi(value);
     } else if (MATCH("env", "control_non_vehicles")) {
         env_config->control_non_vehicles = atoi(value);
     } else {

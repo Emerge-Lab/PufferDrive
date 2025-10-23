@@ -75,6 +75,8 @@
 #define MAX_RG_COORD 1000.0f
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
+#define STOP_AGENT 1
+#define REMOVE_AGENT 2
 
 // Acceleration Values
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f,  1.3330f,  2.6670f,  4.0000f};
@@ -165,6 +167,8 @@ struct Entity {
     float cumulative_displacement;
     int displacement_sample_count;
     float goal_radius;
+    int stopped; // 0/1 -> freeze if set
+    int removed; //0/1 -> remove from sim if set
 };
 
 void free_entity(Entity* entity){
@@ -286,6 +290,8 @@ struct Drive {
     int logs_capacity;
     int use_goal_generation;
     char* ini_file;
+    int collision_behaviour; //0 = none, 1=stop, 2 = remove
+    int offroad_behaviour; //0 = none, 1=stop, 2 = remove
     int control_non_vehicles;
 };
 
@@ -556,6 +562,8 @@ void set_start_position(Drive* env){
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
+	e->stopped = 0;
+        e->removed = 0;
     }
     //EndDrawing();
 }
@@ -1237,6 +1245,29 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
     agent->collision_state = collided;
 
+    // spawn immunity for collisions with other agent cars as agent_idx respawns
+    int is_active_agent = env->entities[agent_idx].active_agent;
+    int respawned = env->entities[agent_idx].respawn_timestep != -1;
+
+    if(collided == VEHICLE_COLLISION && is_active_agent == 1 && respawned){
+        agent->collision_state = 0;
+    }
+
+    if(collided == OFFROAD) {
+        agent->metrics_array[OFFROAD_IDX] = 1.0f;
+        return;
+    }
+    if(car_collided_with_index == -1) return;
+
+    // spawn immunity for collisions with other cars who just respawned
+    int respawned_collided_with_car = env->entities[car_collided_with_index].respawn_timestep != -1;
+
+    if (respawned_collided_with_car) {
+        agent->collision_state = 0;
+        agent->metrics_array[COLLISION_IDX] = 0.0f;
+    }
+
+
     return;
 }
 
@@ -1611,6 +1642,14 @@ float normalize_heading(float heading){
 }
 
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
+    Entity* agent = &env->entities[agent_idx];
+    if (agent->removed) return;
+    if (agent->stopped) {
+        agent->vx = 0.0f;
+        agent->vy = 0.0f;
+        return;
+    }
+
     if(env->dynamics_model == CLASSIC){
         Entity* agent = &env->entities[agent_idx];
         float acceleration = 0.0f;
@@ -1963,6 +2002,8 @@ void c_reset(Drive* env){
         env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
         env->entities[agent_idx].cumulative_displacement = 0.0f;
         env->entities[agent_idx].displacement_sample_count = 0;
+	    env->entities[agent_idx].stopped = 0;
+        env->entities[agent_idx].removed = 0;
 
         if (env->use_goal_generation) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
@@ -1991,6 +2032,8 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].cumulative_displacement = 0.0f;
     env->entities[agent_idx].displacement_sample_count = 0;
     env->entities[agent_idx].respawn_timestep = env->timestep;
+    env->entities[agent_idx].stopped = 0;
+    env->entities[agent_idx].removed = 0;
 }
 
 void c_step(Drive* env){
