@@ -14,13 +14,13 @@ def test_drive_render():
     print("Testing PufferDrive rendering...")
 
     # Check if drive binary exists
-    if not os.path.exists("./drive"):
+    if not os.path.exists("./visualize"):
         print("Drive binary not found, attempting to build...")
         try:
             result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=600
+                ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=600
             )
-            if result.returncode != 0 or not os.path.exists("./drive"):
+            if result.returncode != 0 or not os.path.exists("./visualize"):
                 print(f"Build failed: {result.stderr}")
                 return False
         except Exception as e:
@@ -49,7 +49,7 @@ def test_drive_render():
         # Run the renderer with xvfb and frame skip for faster testing
         print("Running renderer.")
         result = subprocess.run(
-            ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive", "--frame-skip", "10"],
+            ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize", "--frame-skip", "10"],
             capture_output=True,
             text=True,
             timeout=600,
