@@ -1,167 +1,17 @@
 #include <time.h>
-#include <unistd.h>
 #include "drive.h"
 #include "puffernet.h"
-#include <sys/wait.h>
 #include <math.h>
 #include <raylib.h>
-#include "rlgl.h"
 #include <stdlib.h>
 #include <stdio.h>
-#include "error.h"
-
-typedef struct {
-    int pipefd[2];
-    pid_t pid;
-} VideoRecorder;
-
-bool OpenVideo(VideoRecorder *recorder, const char *output_filename, int width, int height) {
-    if (pipe(recorder->pipefd) == -1) {
-        fprintf(stderr, "Failed to create pipe\n");
-        return false;
-    }
-
-    recorder->pid = fork();
-    if (recorder->pid == -1) {
-        fprintf(stderr, "Failed to fork\n");
-        return false;
-    }
-
-    char size_str[64];
-    snprintf(size_str, sizeof(size_str), "%dx%d", width, height);
-
-    if (recorder->pid == 0) { // Child process: run ffmpeg
-        close(recorder->pipefd[1]);
-        dup2(recorder->pipefd[0], STDIN_FILENO);
-        close(recorder->pipefd[0]);
-        execlp("ffmpeg", "ffmpeg",
-               "-y",
-               "-f", "rawvideo",
-               "-pix_fmt", "rgba",
-               "-s", size_str,
-               "-r", "30",
-               "-i", "-",
-               "-c:v", "libx264",
-               "-pix_fmt", "yuv420p",
-               "-preset", "fast",
-               "-crf", "18",
-               "-loglevel", "error",
-               output_filename,
-               NULL);
-        TraceLog(LOG_ERROR, "Failed to launch ffmpeg");
-        return false;
-    }
-
-    close(recorder->pipefd[0]); // Close read end in parent
-    return true;
-}
-
-void WriteFrame(VideoRecorder *recorder, int width, int height) {
-    unsigned char *screen_data = rlReadScreenPixels(width, height);
-    write(recorder->pipefd[1], screen_data, width * height * 4 * sizeof(*screen_data));
-    RL_FREE(screen_data);
-}
-
-void CloseVideo(VideoRecorder *recorder) {
-    close(recorder->pipefd[1]);
-    waitpid(recorder->pid, NULL, 0);
-}
-
-void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid) {
-
-    BeginDrawing();
-
-    // Top-down orthographic camera
-    Camera3D camera = {0};
-    camera.position = (Vector3){ 0.0f, 0.0f, 500.0f };  // above the scene
-    camera.target   = (Vector3){ 0.0f, 0.0f, 0.0f };  // look at origin
-    camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
-    camera.fovy     = map_height;
-    camera.projection = CAMERA_ORTHOGRAPHIC;
-
-    Color road = (Color){35, 35, 37, 255};
-    ClearBackground(road);
-    BeginMode3D(camera);
-    rlEnableDepthTest();
-
-    // Draw human replay trajectories if enabled
-    if(log_trajectories){
-    for(int i=0; i<env->active_agent_count; i++){
-        int idx = env->active_agent_indices[i];
-        Vector3 prev_point = {0};
-        bool has_prev = false;
-
-        for(int j=env->init_steps; j<TRAJECTORY_LENGTH; j++){
-            float x = env->entities[idx].traj_x[j];
-            float y = env->entities[idx].traj_y[j];
-            float valid = env->entities[idx].traj_valid[j];
-
-            if(!valid) {
-                has_prev = false;
-                continue;
-            }
-
-            Vector3 curr_point = {x, y, 0.5f};
-
-            if(has_prev) {
-                DrawLine3D(prev_point, curr_point, Fade(LIGHTGREEN, 0.6f));
-            }
-
-            prev_point = curr_point;
-            has_prev = true;
-        }
-    }
-}
-
-    // Draw agent trajs
-    if(trajectories){
-        for(int i=0; i<frame_count; i++){
-            DrawSphere((Vector3){path[i*2], path[i*2 +1], 0.8f}, 0.5f, YELLOW);
-        }
-    }
-
-    // Draw scene
-    draw_scene(env, client, 1, obs, lasers, show_grid);
-    EndMode3D();
-    EndDrawing();
-}
-
-void renderAgentView(Drive* env, Client* client, int map_height, int obs_only, int lasers, int show_grid) {
-    // Agent perspective camera following the selected agent
-    int agent_idx = env->active_agent_indices[env->human_agent_idx];
-    Entity* agent = &env->entities[agent_idx];
-
-    BeginDrawing();
-
-    Camera3D camera = {0};
-    // Position camera behind and above the agent
-    camera.position = (Vector3){
-        agent->x - (25.0f * cosf(agent->heading)),
-        agent->y - (25.0f * sinf(agent->heading)),
-        15.0f
-    };
-    camera.target = (Vector3){
-        agent->x + 40.0f * cosf(agent->heading),
-        agent->y + 40.0f * sinf(agent->heading),
-        1.0f
-    };
-    camera.up = (Vector3){ 0.0f, 0.0f, 1.0f };
-    camera.fovy = 45.0f;
-    camera.projection = CAMERA_PERSPECTIVE;
-
-    Color road = (Color){35, 35, 37, 255};
-
-    ClearBackground(road);
-    BeginMode3D(camera);
-    rlEnableDepthTest();
-    draw_scene(env, client, 0, obs_only, lasers, show_grid); // mode=0 for agent view
-    EndMode3D();
-    EndDrawing();
-}
+#include <string.h>
+#include <assert.h>
 
 typedef struct DriveNet DriveNet;
 struct DriveNet {
     int num_agents;
+    int conditioning_dims;
     float* obs_self;
     float* obs_partner;
     float* obs_road;
@@ -193,13 +43,20 @@ struct DriveNet {
     Multidiscrete* multidiscrete;
 };
 
-DriveNet* init_drivenet(Weights* weights, int num_agents) {
+DriveNet* init_drivenet(Weights* weights, int num_agents, bool use_rc, bool use_ec, bool use_dc) {
     DriveNet* net = calloc(1, sizeof(DriveNet));
     int hidden_size = 256;
     int input_size = 64;
 
     net->num_agents = num_agents;
-    net->obs_self = calloc(num_agents*7, sizeof(float)); // 7 features
+    net->conditioning_dims = (use_rc ? 3 : 0) + (use_ec ? 1 : 0) + (use_dc ? 1 : 0);
+
+    int ego_obs_size = 7; // base features
+    if (use_rc) ego_obs_size += 3; // reward conditioning
+    if (use_ec) ego_obs_size += 1; // entropy conditioning
+    if (use_dc) ego_obs_size += 1; // discount conditioning
+
+    net->obs_self = calloc(num_agents*ego_obs_size, sizeof(float));
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
     net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
@@ -208,7 +65,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     net->road_linear_output_two = calloc(num_agents*200*input_size, sizeof(float));
     net->partner_layernorm_output = calloc(num_agents*63*input_size, sizeof(float));
     net->road_layernorm_output = calloc(num_agents*200*input_size, sizeof(float));
-    net->ego_encoder = make_linear(weights, num_agents, 7, input_size);
+    net->ego_encoder = make_linear(weights, num_agents, ego_obs_size, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->road_encoder = make_linear(weights, num_agents, 13, input_size);
@@ -268,23 +125,25 @@ void free_drivenet(DriveNet* net) {
 }
 
 void forward(DriveNet* net, float* observations, int* actions) {
+    int ego_obs_size = 7 + net->conditioning_dims;
+
     // Clear previous observations
-    memset(net->obs_self, 0, net->num_agents * 7 * sizeof(float));
+    memset(net->obs_self, 0, net->num_agents * ego_obs_size * sizeof(float));
     memset(net->obs_partner, 0, net->num_agents * 63 * 7 * sizeof(float));
     memset(net->obs_road, 0, net->num_agents * 200 * 13 * sizeof(float));
 
     // Reshape observations into 2D boards and additional features
-    float (*obs_self)[7] = (float (*)[7])net->obs_self;
+    float* obs_self = net->obs_self;
     float (*obs_partner)[63][7] = (float (*)[63][7])net->obs_partner;
     float (*obs_road)[200][13] = (float (*)[200][13])net->obs_road;
 
     for (int b = 0; b < net->num_agents; b++) {
-        int b_offset = b * (7 + 63*7 + 200*7);  // offset for each batch
-        int partner_offset = b_offset + 7;
-        int road_offset = b_offset + 7 + 63*7;
+        int b_offset = b * (ego_obs_size + 63*7 + 200*7);  // offset for each batch
+        int partner_offset = b_offset + ego_obs_size;
+        int road_offset = b_offset + ego_obs_size + 63*7;
         // Process self observation
-        for(int i = 0; i < 7; i++) {
-            obs_self[b][i] = observations[b_offset + i];
+        for(int i = 0; i < ego_obs_size; i++) {
+            obs_self[b*ego_obs_size + i] = observations[b_offset + i];
         }
 
         // Process partner observation
@@ -381,368 +240,4 @@ void forward(DriveNet* net, float* observations, int* actions) {
 
     // Get action by taking argmax of actor output
     softmax_multidiscrete(net->multidiscrete, net->actor->output, actions);
-}
-void demo() {
-
-    Drive env = {
-        .dynamics_model = CLASSIC,
-        .human_agent_idx = 0,
-        .reward_vehicle_collision = -0.1f,
-        .reward_offroad_collision = -0.1f,
-        .reward_ade = -0.0f,
-        .goal_radius = 2.0f,
-	    .map_name = "resources/drive/binaries/map_000.bin",
-    };
-    allocate(&env);
-    c_reset(&env);
-    c_render(&env);
-    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
-    //Client* client = make_client(&env);
-    int accel_delta = 2;
-    int steer_delta = 4;
-    while (!WindowShouldClose()) {
-        // Handle camera controls
-        int (*actions)[2] = (int(*)[2])env.actions;
-        forward(net, env.observations, env.actions);
-        if (IsKeyDown(KEY_LEFT_SHIFT)) {
-            actions[env.human_agent_idx][0] = 3;
-            actions[env.human_agent_idx][1] = 6;
-            if(IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)){
-                actions[env.human_agent_idx][0] += accel_delta;
-                // Cap acceleration to maximum of 6
-                if(actions[env.human_agent_idx][0] > 6) {
-                    actions[env.human_agent_idx][0] = 6;
-                }
-            }
-            if(IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)){
-                actions[env.human_agent_idx][0] -= accel_delta;
-                // Cap acceleration to minimum of 0
-                if(actions[env.human_agent_idx][0] < 0) {
-                    actions[env.human_agent_idx][0] = 0;
-                }
-            }
-            if(IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)){
-                actions[env.human_agent_idx][1] += steer_delta;
-                // Cap steering to minimum of 0
-                if(actions[env.human_agent_idx][1] < 0) {
-                    actions[env.human_agent_idx][1] = 0;
-                }
-            }
-            if(IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)){
-                actions[env.human_agent_idx][1] -= steer_delta;
-                // Cap steering to maximum of 12
-                if(actions[env.human_agent_idx][1] > 12) {
-                    actions[env.human_agent_idx][1] = 12;
-                }
-            }
-            if(IsKeyPressed(KEY_TAB)){
-                env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
-            }
-        }
-        c_step(&env);
-       c_render(&env);
-    }
-
-    close_client(env.client);
-    free_allocated(&env);
-    free_drivenet(net);
-    free(weights);
-}
-
-
-static int run_cmd(const char *cmd) {
-    int rc = system(cmd);
-    if (rc != 0) {
-        fprintf(stderr, "[ffmpeg] command failed (%d): %s\n", rc, cmd);
-    }
-    return rc;
-}
-
-// Make a high-quality GIF from numbered PNG frames like frame_000.png
-static int make_gif_from_frames(const char *pattern, int fps,
-                                const char *palette_path,
-                                const char *out_gif) {
-    char cmd[1024];
-
-    // 1) Generate palette (no quotes needed for simple filter)
-    //    NOTE: if your frames start at 000, you don't need -start_number.
-    snprintf(cmd, sizeof(cmd),
-             "ffmpeg -y -framerate %d -i %s -vf palettegen %s",
-             fps, pattern, palette_path);
-    if (run_cmd(cmd) != 0) return -1;
-
-    // 2) Use palette to encode the GIF
-    snprintf(cmd, sizeof(cmd),
-             "ffmpeg -y -framerate %d -i %s -i %s -lavfi paletteuse -loop 0 %s",
-             fps, pattern, palette_path, out_gif);
-    if (run_cmd(cmd) != 0) return -1;
-
-    return 0;
-}
-
-int eval_gif(const char* map_name,
-             int show_grid,
-             int obs_only,
-             int lasers,
-             int log_trajectories,
-             int frame_skip,
-             float goal_radius,
-             int control_non_vehicles,
-             int init_steps,
-             int control_all_agents,
-             int policy_agents_per_env,
-             int deterministic_selection) {
-
-    // Use default if no map provided
-    if (map_name == NULL) {
-        map_name = "resources/drive/binaries/map_000.bin";
-    }
-
-    if (frame_skip <= 0) {
-        frame_skip = 1;  // Default: render every frame
-    }
-
-    // Check if map file exists
-    FILE* map_file = fopen(map_name, "rb");
-    if (map_file == NULL) {
-        RAISE_FILE_ERROR(map_name);
-    }
-    fclose(map_file);
-
-    // Make env
-    Drive env = {
-        .dynamics_model = CLASSIC,
-        .reward_vehicle_collision = -0.1f,
-        .reward_offroad_collision = -0.1f,
-        .reward_ade = -0.0f,
-        .goal_radius = goal_radius,
-        .map_name = map_name,
-        .control_non_vehicles = control_non_vehicles,
-        .init_steps = init_steps,
-        .control_all_agents = control_all_agents,
-        .policy_agents_per_env = policy_agents_per_env,
-        .deterministic_agent_selection = deterministic_selection
-    };
-    allocate(&env);
-
-    // Set which vehicle to focus on for obs mode
-    env.human_agent_idx = 0;
-
-    c_reset(&env);
-    // Make client for rendering
-    Client* client = (Client*)calloc(1, sizeof(Client));
-    env.client = client;
-
-    SetConfigFlags(FLAG_WINDOW_HIDDEN);
-
-    SetTargetFPS(6000);
-
-    float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
-    float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
-
-    printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 6.0f; // Can be used to increase the video quality
-
-    // Calculate video width and height; round to nearest even number
-    int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
-    int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
-    InitWindow(img_width, img_height, "Puffer Drive");
-    SetConfigFlags(FLAG_MSAA_4X_HINT);
-
-    // Load cpt into network
-    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
-
-    int frame_count = TRAJECTORY_LENGTH - init_steps;
-    char filename[256];
-    int log_trajectory = log_trajectories;
-
-    printf("Starting video recording...\n");
-
-    // Create video recorders
-    VideoRecorder topdown_recorder;
-    if (!OpenVideo(&topdown_recorder, "resources/drive/output_topdown.mp4", img_width, img_height)) {
-        CloseWindow();
-        return -1;
-    }
-
-    int rendered_frames = 0;
-    double startTime = GetTime();
-
-    // Generate top-down view video
-    printf("Recording top-down view...\n");
-
-    for(int i = 0; i < frame_count; i++) {
-        // Only render every frame_skip frames
-        if (i % frame_skip == 0) {
-            renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid);
-            WriteFrame(&topdown_recorder, img_width, img_height);
-            rendered_frames++;
-        }
-
-            int (*actions)[2] = (int(*)[2])env.actions;
-            forward(net, env.observations, env.actions);
-            c_step(&env);
-    }
-
-    // Reset environment for agent view
-    c_reset(&env);
-    CloseVideo(&topdown_recorder);
-
-    VideoRecorder agent_recorder;
-    if (!OpenVideo(&agent_recorder, "resources/drive/output_agent.mp4", img_width, img_height)) {
-        CloseWindow();
-        return -1;
-    }
-
-    for(int i = 0; i < frame_count; i++) {
-
-        if (i % frame_skip == 0) {
-            renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
-            WriteFrame(&agent_recorder, img_width, img_height);
-            rendered_frames++;
-        }
-
-            int (*actions)[2] = (int(*)[2])env.actions;
-            forward(net, env.observations, env.actions);
-            c_step(&env);
-    }
-
-    double endTime = GetTime();
-    double elapsedTime = endTime - startTime;
-    double writeFPS = (elapsedTime > 0) ? rendered_frames / elapsedTime : 0;
-
-    printf("Wrote %d frames in %.2f seconds (%.2f FPS)\n",
-           rendered_frames, elapsedTime, writeFPS);
-
-    // Close video recorders
-    CloseVideo(&agent_recorder);
-    CloseWindow();
-
-    // Clean up resources
-    free(client);
-    free_allocated(&env);
-    free_drivenet(net);
-    free(weights);
-    return 0;
-}
-
-void performance_test() {
-    long test_time = 10;
-    Drive env = {
-        .dynamics_model = CLASSIC,
-        .human_agent_idx = 0,
-	    .map_name = "resources/drive/binaries/map_000.bin"
-    };
-    clock_t start_time, end_time;
-    double cpu_time_used;
-    start_time = clock();
-    allocate(&env);
-    c_reset(&env);
-    end_time = clock();
-    cpu_time_used = ((double) (end_time - start_time)) / CLOCKS_PER_SEC;
-    printf("Init time: %f\n", cpu_time_used);
-
-    long start = time(NULL);
-    int i = 0;
-    int (*actions)[2] = (int(*)[2])env.actions;
-
-    while (time(NULL) - start < test_time) {
-        // Set random actions for all agents
-        for(int j = 0; j < env.active_agent_count; j++) {
-            int accel = rand() % 7;
-            int steer = rand() % 13;
-            actions[j][0] = accel;  // -1, 0, or 1
-            actions[j][1] = steer;  // Random steering
-        }
-
-        c_step(&env);
-        i++;
-    }
-    long end = time(NULL);
-    printf("SPS: %ld\n", (i*env.active_agent_count) / (end - start));
-    free_allocated(&env);
-}
-
-int main(int argc, char* argv[]) {
-    int show_grid = 0;
-    int obs_only = 0;
-    int lasers = 0;
-    int log_trajectories = 1;
-    int frame_skip = 1;
-    float goal_radius = 2.0f;
-    int init_steps = 0;
-    const char* map_name = NULL;
-    int control_all_agents = 0;
-    int deterministic_selection = 0;
-    int policy_agents_per_env = -1;
-    int control_non_vehicles = 0;
-
-    // Parse command line arguments
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--show-grid") == 0) {
-            show_grid = 1;
-        } else if (strcmp(argv[i], "--obs-only") == 0) {
-            obs_only = 1;
-        } else if (strcmp(argv[i], "--lasers") == 0) {
-            lasers = 1;
-        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
-            log_trajectories = 1;
-        } else if (strcmp(argv[i], "--init-steps") == 0) {
-            if (i + 1 < argc) {
-                init_steps = atoi(argv[i + 1]);
-                i++;
-                if (init_steps < 0) {
-                    init_steps = 0; // Ensure non-negative
-                }
-                if (init_steps > TRAJECTORY_LENGTH-1) {
-                    init_steps = TRAJECTORY_LENGTH-1; // Upper bound
-                }
-            }
-        } else if (strcmp(argv[i], "--frame-skip") == 0) {
-            if (i + 1 < argc) {
-                frame_skip = atoi(argv[i + 1]);
-                i++; // Skip the next argument since we consumed it
-                if (frame_skip <= 0) {
-                    frame_skip = 1; // Ensure valid value
-                }
-            }
-        } else if (strcmp(argv[i], "--control-non-vehicles") == 0) {
-            control_non_vehicles = 1;
-        } else if (strcmp(argv[i], "--goal-radius") == 0) {
-            if (i + 1 < argc) {
-                goal_radius = atof(argv[i + 1]);
-                i++;
-                if (goal_radius <= 0) {
-                    goal_radius = 2.0f; // Ensure valid value
-                }
-            }
-        } else if (strcmp(argv[i], "--map-name") == 0) {
-            // Check if there's a next argument for the map path
-            if (i + 1 < argc) {
-                map_name = argv[i + 1];
-                i++; // Skip the next argument since we used it as map path
-            } else {
-                fprintf(stderr, "Error: --map-name option requires a map file path\n");
-                return 1;
-            }
-        } else if (strcmp(argv[i], "--pure-self-play") == 0) {
-            control_all_agents = 1;
-        } else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {
-            if (i + 1 < argc) {
-                policy_agents_per_env = atoi(argv[i + 1]);
-                i++;
-            }
-        } else if (strcmp(argv[i], "--deterministic-selection") == 0) {
-            deterministic_selection = 1;
-        }
-    }
-
-    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip,
-             goal_radius, control_non_vehicles, init_steps,
-             control_all_agents, policy_agents_per_env, deterministic_selection);
-    //demo();
-    //performance_test();
-    return 0;
 }

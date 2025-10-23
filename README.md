@@ -98,12 +98,12 @@ conda install -c conda-forge ffmpeg
 
 1. Build the application:
 ```bash
-bash scripts/build_ocean.sh drive local
+bash scripts/build_ocean.sh visualize local
 ```
 
 2. Run with virtual display:
 ```bash
-xvfb-run -s "-screen 0 1280x720x24" ./drive
+xvfb-run -s "-screen 0 1280x720x24" ./visualize
 ```
 
 The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color depth.

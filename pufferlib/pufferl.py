@@ -358,13 +358,24 @@ class PuffeRL:
 
             shape = self.values.shape
             advantages = torch.zeros(shape, device=device)
+
+            if hasattr(self.vecenv.driver_env, 'discount_conditioned') and self.vecenv.driver_env.discount_conditioned:
+                disc_idx = 7  # base ego obs
+                if self.vecenv.driver_env.reward_conditioned:
+                    disc_idx += 3
+                if self.vecenv.driver_env.entropy_conditioned:
+                    disc_idx += 1
+                gammas = self.observations[:, 0, disc_idx].to(device).contiguous()
+            else:
+                gammas = torch.full((self.segments,), config["gamma"], device=device, dtype=torch.float32)
+
             advantages = compute_puff_advantage(
                 self.values,
                 self.rewards,
                 self.terminals,
                 self.ratio,
                 advantages,
-                config["gamma"],
+                gammas,
                 config["gae_lambda"],
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
@@ -412,13 +423,17 @@ class PuffeRL:
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
             adv = advantages[idx]
+            if hasattr(self.vecenv.driver_env, 'discount_conditioned') and self.vecenv.driver_env.discount_conditioned:
+                mb_gammas = gammas[idx]
+            else:
+                mb_gammas = torch.full((len(idx),), config["gamma"], device=device, dtype=torch.float32)
             adv = compute_puff_advantage(
                 mb_values,
                 mb_rewards,
                 mb_terminals,
                 ratio,
                 adv,
-                config["gamma"],
+                mb_gammas,
                 config["gae_lambda"],
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
@@ -437,9 +452,19 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
-            entropy_loss = entropy.mean()
-
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            # Entropy-weighted loss if entropy conditioning is enabled
+            if hasattr(self.vecenv.driver_env, 'entropy_conditioned') and self.vecenv.driver_env.entropy_conditioned:
+                mb_obs_flat = mb_obs.reshape(-1, mb_obs.shape[-1])
+                if self.vecenv.driver_env.reward_conditioned:
+                    ent_weights = mb_obs_flat[:, 10]  # Position 10: after ego(7) + RC(3)
+                else:
+                    ent_weights = mb_obs_flat[:, 7]   # Position 7: after ego(7)
+                ent_weights = ent_weights.reshape(entropy.shape)
+                entropy_loss = -(entropy * ent_weights).mean()
+                loss = pg_loss + config["vf_coef"] * v_loss + entropy_loss
+            else:
+                entropy_loss = entropy.mean()
+                loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -449,7 +474,7 @@ class PuffeRL:
             profile("train_misc", epoch)
             losses["policy_loss"] += pg_loss.item() / self.total_minibatches
             losses["value_loss"] += v_loss.item() / self.total_minibatches
-            losses["entropy"] += entropy_loss.item() / self.total_minibatches
+            losses["entropy"] += entropy.mean().item() / self.total_minibatches
             losses["old_approx_kl"] += old_approx_kl.item() / self.total_minibatches
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
@@ -535,7 +560,7 @@ class PuffeRL:
                         env = os.environ.copy()
                         env["ASAN_OPTIONS"] = "exitcode=0"
 
-                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive"]
+                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
                         # Add render configurations
                         if config["show_grid"]:
@@ -553,10 +578,22 @@ class PuffeRL:
                             cmd.extend(["--goal-radius", str(self.vecenv.driver_env.goal_radius)])
                         if self.vecenv.driver_env.init_steps > 0:
                             cmd.extend(["--init-steps", str(self.vecenv.driver_env.init_steps)])
+
+                        if hasattr(self.vecenv.driver_env, 'reward_conditioned'):
+                            cmd.extend(["--use-rc", "1" if self.vecenv.driver_env.reward_conditioned else "0"])
+                        if hasattr(self.vecenv.driver_env, 'entropy_conditioned'):
+                            cmd.extend(["--use-ec", "1" if self.vecenv.driver_env.entropy_conditioned else "0"])
+                        if hasattr(self.vecenv.driver_env, 'discount_conditioned'):
+                            cmd.extend(["--use-dc", "1" if self.vecenv.driver_env.discount_conditioned else "0"])
+
                         if config["render_map"] is not None:
                             map_path = config["render_map"]
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
+
+                        # Specify output paths for videos
+                        cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
+                        cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
 
                         env_cfg = getattr(self, "vecenv", None)
                         env_cfg = getattr(env_cfg, "driver_env", None)
@@ -1255,27 +1292,27 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
 
 def ensure_drive_binary():
-    """Ensure the drive binary exists, build it once if necessary. This
+    """Ensure the visualize binary exists, build it once if necessary. This
     is required for rendering with raylib.
     """
-    if not os.path.exists("./drive"):
-        print("Drive binary not found, building...")
+    if not os.path.exists("./visualize"):
+        print("Visualize binary not found, building...")
         try:
             result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=300
+                ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
             )
 
             if result.returncode == 0:
-                print("Successfully built drive binary")
+                print("Successfully built visualize binary")
             else:
                 print(f"Build failed: {result.stderr}")
-                raise RuntimeError("Failed to build drive binary for rendering")
+                raise RuntimeError("Failed to build visualize binary for rendering")
         except subprocess.TimeoutExpired:
             raise RuntimeError("Build timed out")
         except Exception as e:
             raise RuntimeError(f"Build error: {e}")
     else:
-        print("Drive binary found, ready for rendering")
+        print("Visualize binary found, ready for rendering")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):

@@ -171,6 +171,7 @@ pufferlib/resources/drive/binaries/
 
 # Compiled drive binary in root
 /drive
+/visualize
 # But allow drive directories
 !*/drive/
 *.exe
