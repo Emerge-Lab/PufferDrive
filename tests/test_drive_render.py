@@ -49,7 +49,7 @@ def test_drive_render():
         # Run the renderer with xvfb and frame skip for faster testing
         print("Running renderer.")
         result = subprocess.run(
-            ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize", "--frame-skip", "10"],
+            ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize", "--frame-skip", "10", "--map-name", "resources/drive/binaries/map_000.bin"],
             capture_output=True,
             text=True,
             timeout=600,
