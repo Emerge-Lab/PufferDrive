@@ -46,9 +46,10 @@ def test_simulator_raw():
 
     mean = 24690  # hardcoded baseline mean SPS - via multiple tests
     threshold = 0.8 * mean
-    if sps < threshold:
-        warnings.warn(
-            f"\033[91m⚠️ Performance regression detected: {sps:.1f} < {threshold:.1f} .\033[0m\nCurrent mean: {mean:.1f}"
+    if sps < 3 * threshold:
+        raise RuntimeError(
+            f"\033[91m❌ Performance regression detected: {sps:.1f} < {threshold:.1f}.\033[0m\n"
+            f"Expected mean: {mean:.1f}, got {sps:.1f}"
         )
     return
 
