@@ -17,10 +17,10 @@ When `control_non_vehicles=True`, these same conditions apply, but the environme
 
 ## Termination conditions (`done`)
 
-Episodes are never truncated before reaching `episode_len`. The `use_goal_generation` argument controls agent behavior after reaching a goal early:
+Episodes are never truncated before reaching `episode_len`. The `goal_behaviour` argument controls agent behavior after reaching a goal early:
 
-* **`use_goal_generation=False` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
-* **`use_goal_generation=True`:** Agents receive new goals indefinitely after reaching each goal.
+* **`goal_behaviour=False` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
+* **`goal_behaviour=True`:** Agents receive new goals indefinitely after reaching each goal.
 
 ## Logged performance metrics
 

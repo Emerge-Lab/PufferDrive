@@ -73,6 +73,13 @@
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
+//GOAL BEHAVIOUR
+
+
+#define GOAL_RESPAWN 0
+#define GOAL_GENERATE_NEW 1
+#define GOAL_STOP 2
+
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
@@ -304,7 +311,7 @@ struct Drive {
     int deterministic_agent_selection;
     int policy_agents_per_env;
     int logs_capacity;
-    int use_goal_generation;
+    int goal_behaviour; //0 = respawn, 1 = generate_new_goals, 2 = stop
     char* ini_file;
     int collision_behaviour; //0 = none, 1=stop, 2 = remove
     int offroad_behaviour; //0 = none, 1=stop, 2 = remove
@@ -1634,7 +1641,7 @@ void init(Drive* env){
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
-    if (env->use_goal_generation) init_topology_graph(env);
+    if (env->goal_behaviour==GOAL_GENERATE_NEW) init_topology_graph(env);
     env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
@@ -2183,7 +2190,7 @@ void c_reset(Drive* env){
 	    env->entities[agent_idx].stopped = 0;
         env->entities[agent_idx].removed = 0;
 
-        if (env->use_goal_generation) {
+        if (env->goal_behaviour==GOAL_GENERATE_NEW) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
             env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
             env->entities[agent_idx].sampled_new_goal = 0;
@@ -2290,7 +2297,7 @@ void c_step(Drive* env){
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
 	    }
 
-        if (env->use_goal_generation && env->entities[agent_idx].sampled_new_goal) {
+        if (env->goal_behaviour==GOAL_GENERATE_NEW && env->entities[agent_idx].sampled_new_goal) {
             compute_new_goal(env, agent_idx);
         }
 
@@ -2307,13 +2314,23 @@ void c_step(Drive* env){
         env->logs[i].avg_displacement_error = current_ade;
     }
 
-    if (!env->use_goal_generation) {
+    if (env->goal_behaviour==GOAL_RESPAWN) {
         for(int i = 0; i < env->active_agent_count; i++){
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
             if(reached_goal){
                 respawn_agent(env, agent_idx);
                 env->entities[agent_idx].respawn_count++;
+            }
+        }
+    }
+    else if (env->goal_behaviour==GOAL_STOP) {
+        for(int i = 0; i < env->active_agent_count; i++){
+            int agent_idx = env->active_agent_indices[i];
+            int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
+            if(reached_goal){
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
             }
         }
     }
