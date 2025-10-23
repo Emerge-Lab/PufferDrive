@@ -196,7 +196,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, int use_rc, int use_ec, int use_dc, const char* view_mode, const char* output_topdown, const char* output_agent) {
 
     char map_buffer[100];
     if (map_name == NULL) {
@@ -264,7 +264,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, use_rc, use_ec, use_dc);
 
     int frame_count = 91;
     int log_trajectory = log_trajectories;
@@ -384,6 +384,9 @@ int main(int argc, char* argv[]) {
     int deterministic_selection = 0;
     int policy_agents_per_env = -1;
     int control_non_vehicles = 0;
+    int use_rc = 0;
+    int use_ec = 0;
+    int use_dc = 0;
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
@@ -475,9 +478,24 @@ int main(int argc, char* argv[]) {
             }
         } else if (strcmp(argv[i], "--deterministic-selection") == 0) {
             deterministic_selection = 1;
+        } else if (strcmp(argv[i], "--use-rc") == 0) {
+            if (i + 1 < argc) {
+                use_rc = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--use-ec") == 0) {
+            if (i + 1 < argc) {
+                use_ec = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--use-dc") == 0) {
+            if (i + 1 < argc) {
+                use_dc = atoi(argv[i + 1]);
+                i++;
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, use_rc, use_ec, use_dc, view_mode, output_topdown, output_agent);
     return 0;
 }
