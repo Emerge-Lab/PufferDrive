@@ -506,6 +506,8 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
         .reward_ade = -0.0f,
+	.collision_behaviour = 0,
+	.offroad_behaviour = 0,
         .goal_radius = goal_radius,
 	    .map_name = map_name,
         .spawn_immunity_timer = 50
