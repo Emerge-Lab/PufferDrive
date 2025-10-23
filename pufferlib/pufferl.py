@@ -557,6 +557,21 @@ class PuffeRL:
                             map_path = config["render_map"]
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
+
+                        env_cfg = getattr(self, "vecenv", None)
+                        env_cfg = getattr(env_cfg, "driver_env", None)
+                        if env_cfg is not None:
+                            if getattr(env_cfg, "control_all_agents", False):
+                                cmd.append("--pure-self-play")
+                            n_policy = getattr(env_cfg, "num_policy_controlled_agents", -1)
+                            try:
+                                n_policy = int(n_policy)
+                            except (TypeError, ValueError):
+                                n_policy = -1
+                            if n_policy > 0:
+                                cmd += ["--num-policy-controlled-agents", str(n_policy)]
+                            if getattr(env_cfg, "deterministic_agent_selection", False):
+                                cmd.append("--deterministic-selection")
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
                             cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env

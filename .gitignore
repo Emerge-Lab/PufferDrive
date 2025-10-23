@@ -176,3 +176,10 @@ pufferlib/resources/drive/binaries/
 *.exe
 *.out
 *.app
+artifacts/
+pufferlib/resources/drive/output_agent.gif pufferlib/resources/drive/output.gif pufferlib/resources/drive/output_topdown.gif
+
+# Local artifacts and outputs
+artifacts/
+# Local drive renders
+pufferlib/resources/drive/output*.gif
