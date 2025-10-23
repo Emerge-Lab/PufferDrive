@@ -39,14 +39,35 @@ struct Weights {
 void _load_weights(const char* filename, float* weights, size_t num_weights) {
     FILE* file = fopen(filename, "rb");
     if (!file) {
-        perror("Error opening file");
+        fprintf(stderr, "Error: Could not open weights file: %s\n", filename);
+        exit(1);
     }
+
+    // Get file size
     fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
     rewind(file);
+
+    // Check if file size matches expected weight count
+    size_t expected_size = num_weights * sizeof(float);
+    if (file_size != expected_size) {
+        fclose(file);
+        fprintf(stderr, "Error: Weight file size mismatch!\n");
+        fprintf(stderr, "  File: %s\n", filename);
+        fprintf(stderr, "  Expected: %zu bytes (%zu weights)\n", expected_size, num_weights);
+        fprintf(stderr, "  Actual:   %ld bytes (%ld weights)\n", file_size, file_size / sizeof(float));
+        fprintf(stderr, "\nThis likely means the weights were exported with a different dynamics model.\n");
+        fprintf(stderr, "Check that your dynamics_model in the INI file matches the model used during training.\n");
+        exit(1);
+    }
+
     size_t read_size = fread(weights, sizeof(float), num_weights, file);
     fclose(file);
     if (read_size != num_weights) {
-        perror("Error reading file");
+        fprintf(stderr, "Error: Failed to read weights from file: %s\n", filename);
+        fprintf(stderr, "  Expected to read: %zu weights\n", num_weights);
+        fprintf(stderr, "  Actually read:    %zu weights\n", read_size);
+        exit(1);
     }
 }
 

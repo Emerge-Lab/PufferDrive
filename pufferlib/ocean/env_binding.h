@@ -705,12 +705,14 @@ PyMODINIT_FUNC PyInit_binding(void) {
 typedef struct
 {
     int action_type;
+    int dynamics_model;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_goal;
     float reward_goal_post_respawn;
     float reward_ade;
     float goal_radius;
+    float dt;
     int use_goal_generation;
     int control_non_vehicles;
 } env_init_config;
@@ -728,6 +730,14 @@ static int handler(
             env_config->action_type = 0;
         } else {
             env_config->action_type = 1;
+        }
+    } else if (MATCH("env", "dynamics_model")) {
+        if(strcmp(value, "\"classic\"") == 0) {
+            env_config->dynamics_model = 0;  // CLASSIC
+        } else if(strcmp(value, "\"jerk\"") == 0) {
+            env_config->dynamics_model = 1;  // JERK
+        } else {
+            env_config->dynamics_model = 0;  // Default to CLASSIC
         }
     } else if (MATCH("env", "use_goal_generation")) {
         if (strcmp(value, "True") == 0) {
@@ -747,10 +757,12 @@ static int handler(
         env_config->reward_ade = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
+    } else if (MATCH("env", "dt")) {
+        env_config->dt = atof(value);
     } else if (MATCH("env", "control_non_vehicles")) {
         env_config->control_non_vehicles = atoi(value);
     } else {
-        return 0;
+       return 0;
     }
     return 1;
 }
