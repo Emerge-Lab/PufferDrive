@@ -463,8 +463,8 @@ void demo() {
     env_init_config conf;
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
     if(ini_parse(ini_file, handler, &conf) < 0) {
-        printf("Warning: Could not load %s, using default dynamics model (JERK)\n", ini_file);
-        conf.dynamics_model = JERK;  // Default to JERK for existing weights
+        fprintf(stderr, "Error: Could not load %s. Cannot determine dynamics model.\n", ini_file);
+        exit(1);
     }
 
     Drive env = {
@@ -481,7 +481,8 @@ void demo() {
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
+    int weight_count = (env.dynamics_model == JERK) ? 592776 : 595925;
+    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", weight_count);
     DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
     //Client* client = make_client(&env);
     int accel_delta = 2;
@@ -588,8 +589,8 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     env_init_config conf;
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
     if(ini_parse(ini_file, handler, &conf) < 0) {
-        printf("Warning: Could not load %s, using default dynamics model (JERK)\n", ini_file);
-        conf.dynamics_model = JERK;  // Default to JERK for existing weights
+        fprintf(stderr, "Error: Could not load %s. Cannot determine dynamics model.\n", ini_file);
+        exit(1);
     }
 
     // Make env
@@ -631,7 +632,8 @@ int eval_gif(const char* map_name, int show_grid, int obs_only, int lasers, int 
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
     // Load cpt into network
-    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", 592776);
+    int weight_count = (env.dynamics_model == JERK) ? 592776 : 595925;
+    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", weight_count);
     DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
     int frame_count = 91;

@@ -1238,27 +1238,27 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
 
 def ensure_drive_binary():
-    """Ensure the drive binary exists, build it once if necessary. This
-    is required for rendering with raylib.
-    """
-    if not os.path.exists("./drive"):
-        print("Drive binary not found, building...")
-        try:
-            result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=300
-            )
+    """Rebuild the drive binary to match current configuration."""
+    # Remove existing binary if it exists
+    if os.path.exists("./drive"):
+        print("Removing existing drive binary...")
+        os.remove("./drive")
 
-            if result.returncode == 0:
-                print("Successfully built drive binary")
-            else:
-                print(f"Build failed: {result.stderr}")
-                raise RuntimeError("Failed to build drive binary for rendering")
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Build timed out")
-        except Exception as e:
-            raise RuntimeError(f"Build error: {e}")
-    else:
-        print("Drive binary found, ready for rendering")
+    print("Building drive binary...")
+    try:
+        result = subprocess.run(
+            ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=300
+        )
+
+        if result.returncode == 0:
+            print("Successfully built drive binary")
+        else:
+            print(f"Build failed: {result.stderr}")
+            raise RuntimeError("Failed to build drive binary for rendering")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Build timed out")
+    except Exception as e:
+        raise RuntimeError(f"Build error: {e}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
