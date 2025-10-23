@@ -196,12 +196,12 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps) {
 
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
-        int random_map = rand() % 100;
+        int random_map = rand() % num_maps;
         sprintf(map_buffer, "resources/drive/binaries/map_%03d.bin", random_map); // random map file
         map_name = map_buffer;
     }
@@ -384,6 +384,7 @@ int main(int argc, char* argv[]) {
     int deterministic_selection = 0;
     int policy_agents_per_env = -1;
     int control_non_vehicles = 0;
+    int num_maps = 100; 
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
@@ -475,9 +476,14 @@ int main(int argc, char* argv[]) {
             }
         } else if (strcmp(argv[i], "--deterministic-selection") == 0) {
             deterministic_selection = 1;
+        } else if (strcmp(argv[i], "--num-maps") == 0) {
+            if (i + 1 < argc) {
+                num_maps = atoi(argv[i + 1]);
+                i++;
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps);
     return 0;
 }
