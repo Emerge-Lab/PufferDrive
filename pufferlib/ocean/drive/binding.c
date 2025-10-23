@@ -484,6 +484,22 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
     env->dt = conf.dt;
     env->control_non_vehicles = (int)unpack(kwargs, "control_non_vehicles");
+
+    // Conditioning parameters
+    env->use_rc = (bool)unpack(kwargs, "use_rc");
+    env->use_ec = (bool)unpack(kwargs, "use_ec");
+    env->use_dc = (bool)unpack(kwargs, "use_dc");
+    env->collision_weight_lb = (float)unpack(kwargs, "collision_weight_lb");
+    env->collision_weight_ub = (float)unpack(kwargs, "collision_weight_ub");
+    env->offroad_weight_lb = (float)unpack(kwargs, "offroad_weight_lb");
+    env->offroad_weight_ub = (float)unpack(kwargs, "offroad_weight_ub");
+    env->goal_weight_lb = (float)unpack(kwargs, "goal_weight_lb");
+    env->goal_weight_ub = (float)unpack(kwargs, "goal_weight_ub");
+    env->entropy_weight_lb = (float)unpack(kwargs, "entropy_weight_lb");
+    env->entropy_weight_ub = (float)unpack(kwargs, "entropy_weight_ub");
+    env->discount_weight_lb = (float)unpack(kwargs, "discount_weight_lb");
+    env->discount_weight_ub = (float)unpack(kwargs, "discount_weight_ub");
+
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int population_play = unpack(kwargs, "population_play");

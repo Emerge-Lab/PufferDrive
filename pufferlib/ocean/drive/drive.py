@@ -39,6 +39,17 @@ class Drive(pufferlib.PufferEnv):
         deterministic_agent_selection=False,
         use_goal_generation=False,
         control_non_vehicles=False,
+        condition_type="none",
+        collision_weight_lb=-0.5,
+        collision_weight_ub=-0.5,
+        offroad_weight_lb=-0.2,
+        offroad_weight_ub=-0.2,
+        goal_weight_lb=1.0,
+        goal_weight_ub=1.0,
+        entropy_weight_lb=0.001,
+        entropy_weight_ub=0.001,
+        discount_weight_lb=0.98,
+        discount_weight_ub=0.98,
         buf=None,
         ini_file="pufferlib/config/ocean/drive.ini",
         seed=1,
@@ -111,6 +122,26 @@ class Drive(pufferlib.PufferEnv):
         # Action space setup
         self.num_ego_agents = num_ego_agents
 
+
+        # Conditioning setup
+        self.condition_type = condition_type
+        self.reward_conditioned = condition_type in ("reward", "all")
+        self.entropy_conditioned = condition_type in ("entropy", "all")
+        self.discount_conditioned = condition_type in ("discount", "all")
+
+        self.collision_weight_lb = collision_weight_lb if self.reward_conditioned else reward_vehicle_collision
+        self.collision_weight_ub = collision_weight_ub if self.reward_conditioned else reward_vehicle_collision
+        self.offroad_weight_lb = offroad_weight_lb if self.reward_conditioned else reward_offroad_collision
+        self.offroad_weight_ub = offroad_weight_ub if self.reward_conditioned else reward_offroad_collision
+        self.goal_weight_lb = goal_weight_lb if self.reward_conditioned else 1.0
+        self.goal_weight_ub = goal_weight_ub if self.reward_conditioned else 1.0
+        self.entropy_weight_lb = entropy_weight_lb
+        self.entropy_weight_ub = entropy_weight_ub
+        self.discount_weight_lb = discount_weight_lb
+        self.discount_weight_ub = discount_weight_ub
+
+        conditioning_dims = (3 if self.reward_conditioned else 0) + (1 if self.entropy_conditioned else 0) + (1 if self.discount_conditioned else 0)
+        self.num_obs = 7 + conditioning_dims + 63 * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.population_play = population_play
         self.num_agents_const = num_agents
@@ -304,6 +335,19 @@ class Drive(pufferlib.PufferEnv):
                 ini_file=self.ini_file,
                 control_non_vehicles=int(control_non_vehicles),
                 init_steps=init_steps,
+                use_rc=self.reward_conditioned,
+                use_ec=self.entropy_conditioned,
+                use_dc=self.discount_conditioned,
+                collision_weight_lb=self.collision_weight_lb,
+                collision_weight_ub=self.collision_weight_ub,
+                offroad_weight_lb=self.offroad_weight_lb,
+                offroad_weight_ub=self.offroad_weight_ub,
+                goal_weight_lb=self.goal_weight_lb,
+                goal_weight_ub=self.goal_weight_ub,
+                entropy_weight_lb=self.entropy_weight_lb,
+                entropy_weight_ub=self.entropy_weight_ub,
+                discount_weight_lb=self.discount_weight_lb,
+                discount_weight_ub=self.discount_weight_ub,
                 adaptive_driving=self.adaptive_driving_agent,
                 k_scenarios=self.k_scenarios,
             )
@@ -492,7 +536,19 @@ class Drive(pufferlib.PufferEnv):
                         num_policy_controlled_agents=self.num_policy_controlled_agents,
                         deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                         map_id=map_ids[i],
-                        use_rc=False,
+                        use_rc=self.reward_conditioned,
+                        use_ec=self.entropy_conditioned,
+                        use_dc=self.discount_conditioned,
+                        collision_weight_lb=self.collision_weight_lb,
+                        collision_weight_ub=self.collision_weight_ub,
+                        offroad_weight_lb=self.offroad_weight_lb,
+                        offroad_weight_ub=self.offroad_weight_ub,
+                        goal_weight_lb=self.goal_weight_lb,
+                        goal_weight_ub=self.goal_weight_ub,
+                        entropy_weight_lb=self.entropy_weight_lb,
+                        entropy_weight_ub=self.entropy_weight_ub,
+                        discount_weight_lb=self.discount_weight_lb,
+                        discount_weight_ub=self.discount_weight_ub,
                         max_agents=nxt - cur,
                         collision_weight_lb=self.reward_vehicle_collision,
                         collision_weight_ub=self.reward_vehicle_collision,
