@@ -20,8 +20,8 @@ __host__ __device__ void puff_advantage_row_cuda(float* values, float* rewards, 
 }
 
 void vtrace_check_cuda(torch::Tensor values, torch::Tensor rewards,
-        torch::Tensor dones, torch::Tensor importance, torch::Tensor advantages,
-        int num_steps, int horizon) {
+        torch::Tensor dones, torch::Tensor importance, torch::Tensor advantages, 
+        torch::Tensor gammas, int num_steps, int horizon) {
 
     // Validate input tensors
     torch::Device device = values.device();
@@ -35,11 +35,17 @@ void vtrace_check_cuda(torch::Tensor values, torch::Tensor rewards,
             t.contiguous();
         }
     }
+    // Validate gammas tensor
+    TORCH_CHECK(gammas.dim() == 1, "Gammas must be 1D");
+    TORCH_CHECK(gammas.size(0) == num_steps, "Gammas size must match num_steps");
+    TORCH_CHECK(gammas.dtype() == torch::kFloat32, "Gammas must be float32");
+    TORCH_CHECK(gammas.is_cuda(), "Gammas must be on GPU");
+    TORCH_CHECK(gammas.is_contiguous(), "Gammas must be contiguous");
 }
 
  // [num_steps, horizon]
 __global__ void puff_advantage_kernel(float* values, float* rewards,
-        float* dones, float* importance, float* advantages, float gamma,
+        float* dones, float* importance, float* advantages, float* gammas,
         float lambda, float rho_clip, float c_clip, int num_steps, int horizon) {
     int row = blockIdx.x*blockDim.x + threadIdx.x;
     if (row >= num_steps) {
@@ -47,12 +53,12 @@ __global__ void puff_advantage_kernel(float* values, float* rewards,
     }
     int offset = row*horizon;
     puff_advantage_row_cuda(values + offset, rewards + offset, dones + offset,
-        importance + offset, advantages + offset, gamma, lambda, rho_clip, c_clip, horizon);
+        importance + offset, advantages + offset, gammas[row], lambda, rho_clip, c_clip, horizon);
 }
 
 void compute_puff_advantage_cuda(torch::Tensor values, torch::Tensor rewards,
         torch::Tensor dones, torch::Tensor importance, torch::Tensor advantages,
-        double gamma, double lambda, double rho_clip, double c_clip) {
+        torch::Tensor gammas, double lambda, double rho_clip, double c_clip) {
     int num_steps = values.size(0);
     int horizon = values.size(1);
     vtrace_check_cuda(values, rewards, dones, importance, advantages, num_steps, horizon);
@@ -67,7 +73,7 @@ void compute_puff_advantage_cuda(torch::Tensor values, torch::Tensor rewards,
         dones.data_ptr<float>(),
         importance.data_ptr<float>(),
         advantages.data_ptr<float>(),
-        gamma,
+        gammas.data_ptr<float>(),
         lambda,
         rho_clip,
         c_clip,
