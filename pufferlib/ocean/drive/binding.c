@@ -162,6 +162,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
+    env->collision_behaviour = conf.collision_behaviour;
+    env->offroad_behaviour = conf.offroad_behaviour;
     if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) {
         conf.scenario_length = (int)unpack(kwargs, "scenario_length");
     }
