@@ -58,6 +58,9 @@
 #define GRID_CELL_SIZE 5.0f
 #define MAX_ENTITIES_PER_CELL 30    // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
+// Value State Representation info
+#define VALUE_STATE_REPRESENTATION_RESOLUTION 1.0f  // 1 meter per cell
+
 // Max road segment observation entities
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 200
 #define MAX_AGENTS 64
@@ -243,6 +246,19 @@ struct GridMap {
     GridMapEntity** neighbor_cache_entities; // preallocated array to hold neighbor entities
 };
 
+typedef struct ValueStateMap ValueStateMap;
+struct ValueStateMap {
+    float top_left_x;
+    float top_left_y;
+    float bottom_right_x;
+    float bottom_right_y;
+    int cols;
+    int rows;
+    int cell_size_x;
+    int cell_size_y;
+    float** cells;  // 2D array of floats representing the value state representation
+};
+
 struct Drive {
     Client* client;
     float* observations;
@@ -270,6 +286,7 @@ struct Drive {
     int init_steps;
     int dynamics_model;
     GridMap* grid_map;
+    ValueStateMap* value_state_map;
     int* neighbor_offsets;
     float reward_vehicle_collision;
     float reward_offroad_collision;
@@ -652,6 +669,64 @@ void init_topology_graph(Drive* env){
                 env->topology_graph->array[i] = node;
             }
         }
+    }
+}
+
+// Fills coords[0]=gridX, coords[1]=gridY; returns 1 on success, 0 on failure/out-of-bounds
+int getValueStateIndex(Drive* env, float x1, float y1, int coords[2]) {
+    if (!env || !env->value_state_map || coords == NULL) return 0;
+
+    if (env->value_state_map->top_left_x >= env->value_state_map->bottom_right_x ||
+        env->value_state_map->bottom_right_y >= env->value_state_map->top_left_y) {
+        coords[0] = -10000;
+        coords[1] = -10000;
+        return 0;  // Invalid map bounds
+    }
+
+    float relativeX = x1 - env->value_state_map->top_left_x;   // Distance from left
+    float relativeY = y1 - env->value_state_map->bottom_right_y; // Distance from bottom
+
+    int gridX = (int)(relativeX / VALUE_STATE_REPRESENTATION_RESOLUTION);  // Column index
+    int gridY = (int)(relativeY / VALUE_STATE_REPRESENTATION_RESOLUTION);  // Row index
+
+    if (gridX < 0 || gridX >= env->value_state_map->cols || gridY < 0 || gridY >= env->value_state_map->rows) {
+        coords[0] = -10000;
+        coords[1] = -10000;
+        return 0;  // Out of bounds
+    }
+
+    coords[0] = gridX;
+    coords[1] = gridY;
+    return 1;
+}
+
+void init_value_state_representation_map(Drive* env){
+    float top_left_x = env->grid_map->top_left_x;
+    float top_left_y = env->grid_map->top_left_y;
+    float bottom_right_x = env->grid_map->bottom_right_x;
+    float bottom_right_y = env->grid_map->bottom_right_y;
+
+    float width = bottom_right_x - top_left_x;
+    float height = bottom_right_y - top_left_y;
+
+    int cols = (int)(width / VALUE_STATE_REPRESENTATION_RESOLUTION) + 1;
+    int rows = (int)(height / VALUE_STATE_REPRESENTATION_RESOLUTION) + 1;
+
+    // Initialize Value State Representation Map
+    env->value_state_map = (ValueStateMap*)malloc(sizeof(ValueStateMap));
+    env->value_state_map->top_left_x = top_left_x;;
+    env->value_state_map->top_left_y = top_left_y;
+    env->value_state_map->bottom_right_x = bottom_right_x;
+    env->value_state_map->bottom_right_y = bottom_right_y;
+    env->value_state_map->cell_size_x = VALUE_STATE_REPRESENTATION_RESOLUTION;
+    env->value_state_map->cell_size_y = VALUE_STATE_REPRESENTATION_RESOLUTION;
+    env->value_state_map->cols = cols;
+    env->value_state_map->rows = rows;
+
+    // Allocate 2D array for value state representation
+    env->value_state_map->cells = (float**)malloc(rows * sizeof(float*));
+    for(int i = 0; i < rows; i++){
+        env->value_state_map->cells[i] = (float*)calloc(cols, sizeof(float));
     }
 }
 
@@ -1539,6 +1614,7 @@ void init(Drive* env){
     env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
+    init_value_state_representation_map(env);
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
@@ -1973,6 +2049,56 @@ void c_reset(Drive* env){
         compute_agent_metrics(env, agent_idx);
     }
     compute_observations(env);
+}
+
+float generateRandomFloat(float min, float max) {
+    // Generate a random integer between 0 and RAND_MAX
+    float random_normalized = (float)rand() / (float)RAND_MAX;
+    // Scale and shift the normalized random number to the desired range
+    return min + random_normalized * (max - min);
+}
+
+void c_reset_to(Drive* env, int reset_agent_idx){
+    // Get Reset point as random from max to min on either dimension
+    int reset_x = generateRandomFloat(env->grid_map->bottom_right_x, env->grid_map->top_left_x);
+    int reset_y = generateRandomFloat(env->grid_map->top_left_y, env->grid_map->bottom_right_y);
+
+    // TODO: Use the value state representation to populate values probably?
+    int coords[2];
+    int result = getValueStateIndex(env, reset_x, reset_y, coords);
+    if(result == 0){
+        fprintf(stderr, "c_reset_to: ERROR - Unable to find valid reset position within map boundaries (%d, %d)\n", reset_x, reset_y);
+        return;
+    }
+
+    set_start_position(env);
+    for(int x = 0;x<env->active_agent_count; x++){
+        env->logs[x] = (Log){0};
+        int agent_idx = env->active_agent_indices[x];
+        env->entities[agent_idx].respawn_timestep = -1;
+        env->entities[agent_idx].collided_before_goal = 0;
+        env->entities[agent_idx].reached_goal_this_episode = 0;
+        env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
+        env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
+        env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
+        env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+        env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
+        env->entities[agent_idx].cumulative_displacement = 0.0f;
+        env->entities[agent_idx].displacement_sample_count = 0;
+
+        if (env->use_goal_generation) {
+            env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
+            env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
+            env->entities[agent_idx].sampled_new_goal = 0;
+        }
+
+        compute_agent_metrics(env, agent_idx);
+    }
+    compute_observations(env);
+    int ego_agent_idx = env->active_agent_indices[reset_agent_idx];
+
+    env->entities[ego_agent_idx].x = reset_x;
+    env->entities[ego_agent_idx].y = reset_y;
 }
 
 void respawn_agent(Drive* env, int agent_idx){

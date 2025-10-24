@@ -122,6 +122,11 @@ class Drive(pufferlib.PufferEnv):
 
         self.c_envs = binding.vectorize(*env_ids)
 
+    def reset_to(self, idx, seed=0):
+        binding.vec_reset_to(self.c_envs, seed, idx)
+        self.tick = 0
+        return self.observations, []
+
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0

@@ -480,6 +480,39 @@ static PyObject* vectorize(PyObject* self, PyObject* args) {
     return PyLong_FromVoidPtr(vec);
 }
 
+static PyObject* vec_reset_to(PyObject* self, PyObject* args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_reset_to requires 3 arguments");
+        return NULL;
+    }
+
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject* seed_arg = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "seed must be an integer");
+        return NULL;
+    }
+    int seed = PyLong_AsLong(seed_arg);
+
+    PyObject* idx_arg = PyTuple_GetItem(args, 2);
+    if (!PyObject_TypeCheck(idx_arg, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "idx must be an integer");
+        return NULL;
+    }
+    int idx = PyLong_AsLong(idx_arg);
+
+    for (int i = 0; i < vec->num_envs; i++) {
+        // Assumes each process has the same number of environments
+        srand(i + seed*vec->num_envs);
+        c_reset_to(vec->envs[i], idx);
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject* vec_reset(PyObject* self, PyObject* args) {
     if (PyTuple_Size(args) != 2) {
         PyErr_SetString(PyExc_TypeError, "vec_reset requires 2 arguments");
@@ -679,6 +712,7 @@ static PyMethodDef methods[] = {
     {"vectorize", vectorize, METH_VARARGS, "Make a vector of environment handles"},
     {"vec_init", (PyCFunction)vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
     {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
+    {"vec_reset_to", vec_reset_to, METH_VARARGS, "Reset the vector of environments to specific indices for ego agent"},
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},

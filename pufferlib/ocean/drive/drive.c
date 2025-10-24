@@ -573,6 +573,8 @@ int eval_gif(const char* map_name,
     // Generate top-down view video
     printf("Recording top-down view...\n");
 
+    int reset_to_freq = 10;
+
     for(int i = 0; i < frame_count; i++) {
         // Only render every frame_skip frames
         if (i % frame_skip == 0) {
@@ -581,9 +583,13 @@ int eval_gif(const char* map_name,
             rendered_frames++;
         }
 
-            int (*actions)[2] = (int(*)[2])env.actions;
-            forward(net, env.observations, env.actions);
-            c_step(&env);
+        if( (i > 0) && (i % reset_to_freq == 0)) {
+            c_reset_to(&env, 0);
+            continue;
+        }
+        int (*actions)[2] = (int(*)[2])env.actions;
+        forward(net, env.observations, env.actions);
+        c_step(&env);
     }
 
     // Reset environment for agent view
