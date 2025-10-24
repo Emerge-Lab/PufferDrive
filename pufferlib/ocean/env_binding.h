@@ -586,12 +586,17 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
         return dict;
     }
 
+    // Save num_goals_reached before averaging
+    float total_goals_reached = aggregate.num_goals_reached;
+
     // Average
     float n = aggregate.n;
     //printf("N: %f\n", n);
     for (int i = 0; i < num_keys; i++) {
         ((float*)&aggregate)[i] /= n;
     }
+
+    aggregate.num_goals_reached = total_goals_reached;
 
     // User populates dict
     my_log(dict, &aggregate);
