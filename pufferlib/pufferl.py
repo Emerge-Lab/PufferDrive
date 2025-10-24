@@ -75,22 +75,12 @@ class PuffeRL:
         obs_space = vecenv.single_observation_space
         atn_space = vecenv.single_action_space
         total_agents = vecenv.num_agents
-<<<<<<< HEAD
         self.population_play = getattr(vecenv, "population_play", False)
         if self.population_play:
             total_ego_agents = vecenv.num_ego_agents
             agents_for_calc = total_ego_agents
             batch_size = vecenv.driver_env.num_ego_agents * config["bptt_horizon"] * vecenv.num_workers
             config["batch_size"] = batch_size  ## this is dynamic and based on ego agents
-=======
-        population_play = getattr(vecenv, "population_play", False)
-        if population_play:
-            total_ego_agents = vecenv.num_ego_agents
-            agents_for_calc = total_ego_agents
-            batch_size = vecenv.driver_env.num_ego_agents * config["bptt_horizon"] * vecenv.num_workers
-            config["batch_size"] = batch_size
-
->>>>>>> 93701fe6 (Cleaning because files were tests were failing)
         else:
             agents_for_calc = total_agents
 
@@ -109,11 +99,7 @@ class PuffeRL:
         horizon = config["bptt_horizon"]
         segments = batch_size // horizon
         self.segments = segments
-<<<<<<< HEAD
         if not self.population_play:
-=======
-        if not vecenv.population_play:
->>>>>>> 93701fe6 (Cleaning because files were tests were failing)
             if total_agents > segments:
                 raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
 
@@ -141,11 +127,7 @@ class PuffeRL:
         self.ratio = torch.ones(segments, horizon, device=device)
         self.importance = torch.ones(segments, horizon, device=device)
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
-<<<<<<< HEAD
         if self.population_play:
-=======
-        if population_play:
->>>>>>> 93701fe6 (Cleaning because files were tests were failing)
             self.ep_indices = torch.arange(total_ego_agents, device=device, dtype=torch.int32)
         else:
             self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
@@ -159,12 +141,7 @@ class PuffeRL:
         # LSTM
         if config["use_rnn"]:
             h = policy.hidden_size
-<<<<<<< HEAD
-            if self.population_play:
-=======
-
             if getattr(vecenv.driver_env, "population_play", False):
->>>>>>> 93701fe6 (Cleaning because files were tests were failing)
                 n = vecenv.ego_agents_per_batch  # Use ego agents per batch
                 num_chunks = total_ego_agents // n
                 self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(num_chunks)}
@@ -298,27 +275,16 @@ class PuffeRL:
         device = config["device"]
 
         if config["use_rnn"]:
-            if self.population_play:
-                for k in self.lstm_h:
-                    self.lstm_h[k] = torch.zeros(self.lstm_h[k].shape, device=device)
-                    self.lstm_c[k] = torch.zeros(self.lstm_c[k].shape, device=device)
-            else:
-                for k in self.lstm_h:
-                    shape = (self.vecenv.driver_env.num_ego_agents, self.lstm_h[k].shape[1])
-                    self.lstm_h[k] = torch.zeros(shape, device=device)
-                    self.lstm_c[k] = torch.zeros(shape, device=device)
+            for k in self.lstm_h:
+                self.lstm_h[k] = torch.zeros(self.lstm_h[k].shape, device=device)
+                self.lstm_c[k] = torch.zeros(self.lstm_c[k].shape, device=device)       
 
         self.full_rows = 0
         while self.full_rows < self.segments:
             profile("env", epoch)
             o, r, d, t, info, env_id, mask = self.vecenv.recv()
-
-<<<<<<< HEAD
             if self.population_play:
                 batch_size = self.vecenv.batch_size
-=======
-            if self.vecenv.population_play:
->>>>>>> 93701fe6 (Cleaning because files were tests were failing)
                 ego_ids = info[-1]
 
                 if batch_size > 1:
@@ -615,7 +581,7 @@ class PuffeRL:
                             policy=self.uncompiled_policy,
                             path=bin_path,
                             silent=True,
-                            silent=True,
+
                         )
 
                     except Exception as e:
