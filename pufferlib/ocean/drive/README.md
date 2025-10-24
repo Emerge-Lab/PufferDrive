@@ -60,7 +60,7 @@ This value represents the fraction of agents that collided at least once during 
 
 As a result, cases **A** and **B** below would yield identical off-road and collision rates:
 
-![alt text](examples_a_b.png)
+![alt text](../../resources/drive/examples_a_b.png)
 
 Since these metrics do not capture *multiple* events per agent, we also log the total number of collision and off-road events per episode across all agents.
 
@@ -78,7 +78,7 @@ Consider an episode of 91 steps where an agent is initialized relatively close t
 2. **Second attempt:** reaches the goal without collision
 3. **Third attempt:** reaches the goal but collides along the way
 
-![alt text](collision_at_third_attempt.png)
+![alt text](../../resources/drive/collision_at_third_attempt.png)
 
 The highlighted trajectory shows the first attempt. In this case, the recorded score is `0.0` — a single collision invalidates the score for the entire episode.
 
