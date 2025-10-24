@@ -92,35 +92,8 @@ The highlighted trajectory shows the first attempt. In this case, the recorded s
 
 Same logic holds as above.
 
-### Remark 2: Effect of respawning on learning
 
-Agents receive different goal rewards depending on whether the goal is reached before or after a respawn.
-
-The default settings in `drive.ini` are:
-```
-reward_goal = 1.0
-reward_goal_post_respawn = 0.25
-```
-
-This logic is implemented here:
-```C
-if (distance_to_goal < env->goal_radius) {
-    if (env->entities[agent_idx].respawn_timestep != -1) {
-        env->rewards[i] += env->reward_goal_post_respawn;
-        env->logs[i].episode_return += env->reward_goal_post_respawn;
-    } else {
-        env->rewards[i] += env->reward_goal;
-        env->logs[i].episode_return += env->reward_goal;
-        env->entities[agent_idx].sampled_new_goal = 1;
-        env->logs[i].num_goals_reached += 1;
-    }
-}
-```
-
-I think this introduces stochasticity that the agent cannot observe: it has no notion of which attempt it is on. For consistency, I think it is better to use a single unified goal reward.
-
-
-### Remark 3: Inconsistency between `metrics_array` and `offroad_rate` variables
+### Remark 2: Inconsistency between `metrics_array` and `offroad_rate` variables
 
 This issue is not harmful at the moment but worth noting for future dev.
 
