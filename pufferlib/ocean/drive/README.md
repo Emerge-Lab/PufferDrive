@@ -64,7 +64,7 @@ As a result, cases **A** and **B** below would yield identical off-road and coll
 
 Since these metrics do not capture *multiple* events per agent, we also log the total number of collision and off-road events per episode across all agents.
 
-### Remark 1: Effect of Respawning on Metrics
+### Remark 1: Effect of respawning on metrics
 
 By default, agents are reset to their initial position when they reach their goal before the episode ends. Upon respawn, `respawn_timestep` is updated from `-1` to the current step index.
 
