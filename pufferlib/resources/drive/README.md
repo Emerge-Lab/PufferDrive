@@ -72,13 +72,13 @@ This raises the question: **how does repeated respawning affect aggregated metri
 
 #### `score`
 
-Consider an episode of 91 steps where an agent reaches its goal three times:
+Consider an episode of 91 steps where an agent is initialized relatively close to the goal position and reaches its goal three times:
 
 1. **First attempt:** reaches the goal without collision
 2. **Second attempt:** reaches the goal without collision
 3. **Third attempt:** reaches the goal but collides along the way
 
-![alt text](collision_at_third_attempt-1.png)
+![alt text](collision_at_third_attempt.png)
 
 The highlighted trajectory shows the first attempt. In this case, the recorded score is `0.0` — a single collision invalidates the score for the entire episode.
 
@@ -119,7 +119,7 @@ I think this introduces stochasticity that the agent cannot observe: it has no n
 
 ### Remark 3: Inconsistency Between `metrics_array` and `offroad_rate` Variables
 
-This issue is not harmful but worth noting before we forget.
+This issue is not harmful at the moment but worth noting for future dev.
 
 There are currently two separate systems for tracking collisions, which are slightly inconsistent:
 
