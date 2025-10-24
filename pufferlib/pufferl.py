@@ -535,7 +535,7 @@ class PuffeRL:
                         env = os.environ.copy()
                         env["ASAN_OPTIONS"] = "exitcode=0"
 
-                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive"]
+                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
                         # Add render configurations
                         if config["show_grid"]:
@@ -558,6 +558,10 @@ class PuffeRL:
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
 
+                        # Specify output paths for videos
+                        cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
+                        cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+
                         env_cfg = getattr(self, "vecenv", None)
                         env_cfg = getattr(env_cfg, "driver_env", None)
                         if env_cfg is not None:
@@ -572,6 +576,9 @@ class PuffeRL:
                                 cmd += ["--num-policy-controlled-agents", str(n_policy)]
                             if getattr(env_cfg, "deterministic_agent_selection", False):
                                 cmd.append("--deterministic-selection")
+                            if getattr(env_cfg, "num_maps", False):
+                                cmd.extend(["--num-maps", str(env_cfg.num_maps)])
+
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
                             cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env
@@ -1255,27 +1262,27 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
 
 def ensure_drive_binary():
-    """Ensure the drive binary exists, build it once if necessary. This
+    """Ensure the visualize binary exists, build it once if necessary. This
     is required for rendering with raylib.
     """
-    if not os.path.exists("./drive"):
-        print("Drive binary not found, building...")
+    if not os.path.exists("./visualize"):
+        print("Visualize binary not found, building...")
         try:
             result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=300
+                ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
             )
 
             if result.returncode == 0:
-                print("Successfully built drive binary")
+                print("Successfully built visualize binary")
             else:
                 print(f"Build failed: {result.stderr}")
-                raise RuntimeError("Failed to build drive binary for rendering")
+                raise RuntimeError("Failed to build visualize binary for rendering")
         except subprocess.TimeoutExpired:
             raise RuntimeError("Build timed out")
         except Exception as e:
             raise RuntimeError(f"Build error: {e}")
     else:
-        print("Drive binary found, ready for rendering")
+        print("Visualize binary found, ready for rendering")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
