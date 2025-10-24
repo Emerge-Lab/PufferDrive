@@ -7,11 +7,6 @@ from pufferlib.ocean.drive.drive import Drive
 
 # CONFIGURATION
 
-# Path where the history JSON will be stored
-# (relative to project root, regardless of where the test runs from)
-ROOT_DIR = Path(__file__).resolve().parents[2]  # goes up from tests/ to PufferDrive/
-DATA_FILE = ROOT_DIR / "pufferlib" / "resources" / "drive" / "simulator_perf_history.json"
-
 
 def test_simulator_raw():
     timeout = 5  # seconds (short for CI)
