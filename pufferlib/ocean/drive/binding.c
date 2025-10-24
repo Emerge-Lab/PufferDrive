@@ -545,7 +545,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     // fflush(stdout);
 
     env->population_play = population_play;
-    
+
 =======
 >>>>>>> 93701fe6 (Cleaning because files were tests were failing)
     if (env->population_play) {

@@ -13,7 +13,6 @@ import sys
 import psutil
 
 
-
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
@@ -48,7 +47,7 @@ class Drive(pufferlib.PufferEnv):
         co_player_policy=None,
         co_player_rnn_name=None,
         co_player_rnn=None,
-        num_ego_agents = 512, 
+        num_ego_agents=512,
         init_steps=0,
     ):
         # env

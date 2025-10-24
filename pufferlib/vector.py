@@ -29,7 +29,7 @@ def recv_precheck(vecenv):
 def send_precheck(vecenv, actions):
     if vecenv.flag != SEND:
         raise pufferlib.APIUsageError("Call (async) reset + recv before sending")
-    
+
     actions = np.asarray(actions)
     if not vecenv.initialized:
         vecenv.initialized = True
@@ -219,8 +219,8 @@ def _worker_process(
     buf["masks"][:] = True
 
     if population_play:
-        ego_shape = (num_workers, num_envs * num_ego_agents) 
-        atn_arr = np.ndarray((*ego_shape,*atn_shape), dtype=atn_dtype, buffer=shm["ego_actions"])[worker_idx]
+        ego_shape = (num_workers, num_envs * num_ego_agents)
+        atn_arr = np.ndarray((*ego_shape, *atn_shape), dtype=atn_dtype, buffer=shm["ego_actions"])[worker_idx]
         buf["ego_actions"] = atn_arr
 
     if is_native and num_envs == 1:
@@ -228,7 +228,6 @@ def _worker_process(
     else:
         envs = Serial(env_creators, env_args, env_kwargs, num_envs, buf=buf, seed=seed * num_envs)
 
-    
     semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
     start = time.time()
@@ -349,7 +348,7 @@ class Multiprocessing:
         atn_ctype = np.ctypeslib.as_ctypes_type(atn_dtype)
 
         self.single_observation_space = driver_env.single_observation_space
-        self.single_action_space = driver_env.single_action_space          
+        self.single_action_space = driver_env.single_action_space
         self.action_space = pufferlib.spaces.joint_space(self.single_action_space, self.agents_per_batch)
 
         self.observation_space = pufferlib.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
@@ -410,8 +409,6 @@ class Multiprocessing:
         )
         self.buf["semaphores"][:] = MAIN
 
-
-
         from multiprocessing import Pipe, Process
 
         self.send_pipes, w_recv_pipes = zip(*[Pipe() for _ in range(num_workers)])
@@ -434,7 +431,7 @@ class Multiprocessing:
                     atn_shape,
                     atn_dtype,
                     envs_per_worker,
-                    driver_env.num_agents ,
+                    driver_env.num_agents,
                     num_workers,
                     i,
                     w_send_pipes[i],
@@ -744,6 +741,7 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
     import pufferlib
 
     import pufferlib
+
     if num_envs < 1:
         raise pufferlib.APIUsageError("num_envs must be at least 1")
     if num_envs != int(num_envs):
@@ -842,56 +840,56 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
         import gymnasium
         from pufferlib.ocean.torch import Drive
         import pufferlib.models
-    
+
         co_player_policy = env_k["co_player_policy"]
-    
+
         input_size = co_player_policy.get("input_size", 256)
         hidden_size = co_player_policy.get("hidden_size", 256)
-        num_obs = 7 + 63 * 7 + 200 * 7 ## normal observations
-        num_obs += co_player_policy.get("num_conditioning_vars",0) ## conditioning observations  eg. goal weight, off road weight etc
-    
+        num_obs = 7 + 63 * 7 + 200 * 7  ## normal observations
+        num_obs += co_player_policy.get(
+            "num_conditioning_vars", 0
+        )  ## conditioning observations  eg. goal weight, off road weight etc
+
         temp_env = SimpleNamespace(
             single_action_space=gymnasium.spaces.MultiDiscrete([7, 13]),
-            single_observation_space = gymnasium.spaces.Box(
-        low=-1, high=1, shape=(num_obs,), dtype=np.float32
-        )
+            single_observation_space=gymnasium.spaces.Box(low=-1, high=1, shape=(num_obs,), dtype=np.float32),
         )
 
         base_policy = Drive(temp_env, input_size=input_size, hidden_size=hidden_size)
-        
+
         policy = pufferlib.models.LSTMWrapper(
             temp_env,
             base_policy,
-            input_size=hidden_size,  
-            hidden_size=hidden_size,  
-
+            input_size=hidden_size,
+            hidden_size=hidden_size,
         )
 
         checkpoint_path = env_k["co_player_policy_path"]
 
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-        
-        state_dict = torch.load(checkpoint_path, map_location='cpu')
+
+        state_dict = torch.load(checkpoint_path, map_location="cpu")
 
         policy.load_state_dict(state_dict, strict=True)
         policy.eval()
         print("Co player policy loaded", flush=True)
 
-        torch.set_num_threads(1) # NOTE this is the only way I could get co-player policies to work inside environment evaluation
+        torch.set_num_threads(
+            1
+        )  # NOTE this is the only way I could get co-player policies to work inside environment evaluation
         torch.set_num_interop_threads(1)
-        import  os
+        import os
 
-        os.environ['OMP_NUM_THREADS'] = '1'
-        os.environ['MKL_NUM_THREADS'] = '1'
-        os.environ['NUMEXPR_NUM_THREADS'] = '1'
-        
+        os.environ["OMP_NUM_THREADS"] = "1"
+        os.environ["MKL_NUM_THREADS"] = "1"
+        os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
         # Disable MKL if available
         try:
             torch.backends.mkl.enabled = False
         except:
             pass
-        
 
         for i in range(len(env_kwargs)):
             env_kwargs[i]["co_player_policy"] = policy

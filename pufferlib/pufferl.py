@@ -277,7 +277,7 @@ class PuffeRL:
         if config["use_rnn"]:
             for k in self.lstm_h:
                 self.lstm_h[k] = torch.zeros(self.lstm_h[k].shape, device=device)
-                self.lstm_c[k] = torch.zeros(self.lstm_c[k].shape, device=device)       
+                self.lstm_c[k] = torch.zeros(self.lstm_c[k].shape, device=device)
 
         self.full_rows = 0
         while self.full_rows < self.segments:
@@ -581,7 +581,6 @@ class PuffeRL:
                             policy=self.uncompiled_policy,
                             path=bin_path,
                             silent=True,
-
                         )
 
                     except Exception as e:
