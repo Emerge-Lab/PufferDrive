@@ -384,7 +384,7 @@ int main(int argc, char* argv[]) {
     int deterministic_selection = 0;
     int policy_agents_per_env = -1;
     int control_non_vehicles = 0;
-    int num_maps = 100; 
+    int num_maps = 100;
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
