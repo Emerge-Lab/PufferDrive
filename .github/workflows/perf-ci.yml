@@ -1,0 +1,24 @@
+name: perf-ci
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-performance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt install -y build-essential
+          python -m pip install -e .
+          python setup.py build_ext --inplace --force
+
+      - name: Test simulator performance
+        run: python tests/test_simulator_perf.py
+        timeout-minutes: 8
