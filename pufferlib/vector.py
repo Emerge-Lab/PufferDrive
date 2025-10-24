@@ -835,18 +835,20 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
     # TODO: First step action space check
     env_k = env_kwargs[0]
-    if env_k["population_play"]:
+    if env_k.get("population_play", False):
         import torch
         import os
         from types import SimpleNamespace
         import gymnasium
         from pufferlib.ocean.torch import Drive
         import pufferlib.models
-        
-        input_size = env_k["co_player_policy"]["input_size"]
-        hidden_size = env_k["co_player_policy"]["hidden_size"]
+    
+        co_player_policy = env_k["co_player_policy"]
+    
+        input_size = co_player_policy.get("input_size", 256)
+        hidden_size = co_player_policy.get("hidden_size", 256)
         num_obs = 7 + 63 * 7 + 200 * 7 ## normal observations
-        num_obs += env_k["co_player_policy"]["num_conditioning_vars"] ## conditioning observations  eg. goal weight, off road weight etc
+        num_obs += co_player_policy.get("num_conditioning_vars",0) ## conditioning observations  eg. goal weight, off road weight etc
     
         temp_env = SimpleNamespace(
             single_action_space=gymnasium.spaces.MultiDiscrete([7, 13]),
