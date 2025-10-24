@@ -117,7 +117,7 @@ if (distance_to_goal < env->goal_radius) {
 I think this introduces stochasticity that the agent cannot observe: it has no notion of which attempt it is on. For consistency, I think it is better to use a single unified goal reward.
 
 
-### Remark 3: Inconsistency Between `metrics_array` and `offroad_rate` Variables
+### Remark 3: Inconsistency between `metrics_array` and `offroad_rate` variables
 
 This issue is not harmful at the moment but worth noting for future dev.
 
