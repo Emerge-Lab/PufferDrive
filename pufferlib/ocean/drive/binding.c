@@ -202,5 +202,7 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "active_agent_count", log->active_agent_count);
     assign_to_dict(dict, "expert_static_car_count", log->expert_static_car_count);
     assign_to_dict(dict, "static_car_count", log->static_car_count);
+    assign_to_dict(dict, "avg_offroad_per_agent", log->avg_offroad_per_agent);
+    assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
     return 0;
 }

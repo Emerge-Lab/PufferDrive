@@ -119,6 +119,8 @@ struct Log {
     float active_agent_count;
     float expert_static_car_count;
     float static_car_count;
+    float avg_offroad_per_agent;
+    float avg_collisions_per_agent;
 };
 
 typedef struct Entity Entity;
@@ -368,6 +370,10 @@ void add_log(Drive* env) {
         env->log.offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
         env->log.collision_rate += collided;
+        float avg_offroad_per_agent = env->logs[i].avg_offroad_per_agent;
+        env->log.avg_offroad_per_agent += avg_offroad_per_agent;
+        float avg_collisions_per_agent = env->logs[i].avg_collisions_per_agent;
+        env->log.avg_collisions_per_agent += avg_collisions_per_agent;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
         if(e->reached_goal_this_episode && !e->collided_before_goal){
@@ -2034,11 +2040,13 @@ void c_step(Drive* env){
                 env->rewards[i] = env->reward_vehicle_collision;
                 env->logs[i].episode_return += env->reward_vehicle_collision;
                 env->logs[i].collision_rate = 1.0f;
+                env->logs[i].avg_collisions_per_agent += 1.0f;
             }
             else if(collision_state == OFFROAD){
                 env->rewards[i] = env->reward_offroad_collision;
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].episode_return += env->reward_offroad_collision;
+                env->logs[i].avg_offroad_per_agent += 1.0f;
             }
             if(!env->entities[agent_idx].reached_goal_this_episode){
                 env->entities[agent_idx].collided_before_goal = 1;

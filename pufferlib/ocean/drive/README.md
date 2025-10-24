@@ -62,7 +62,16 @@ As a result, cases **A** and **B** below would yield identical off-road and coll
 
 ![alt text](../../resources/drive/examples_a_b.png)
 
-Since these metrics do not capture *multiple* events per agent, we also log the total number of collision and off-road events per episode across all agents.
+
+Since these metrics do not capture *multiple* events per agent, we also log the **average number of collision and off-road events per episode**. This is computed as:
+
+$$
+c^{avg}_{\text{collision}} = \frac{\text{total number of collision events across all agents and environments}}{N}
+$$
+
+where ( N ) is the total number of controlled agents.
+For example, an `avg_collisions_per_agent` value of 4 indicates that, on average, each agent collides four times per episode.
+
 
 ### Remark 1: Effect of respawning on metrics
 

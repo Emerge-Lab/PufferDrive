@@ -121,7 +121,6 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
-        print(f"Creating Drive env with {self.num_envs} sub-environments, total {self.num_agents} agents.")
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
