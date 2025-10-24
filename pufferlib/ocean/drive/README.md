@@ -66,19 +66,18 @@ $$
 c^{avg}_{\text{collision}} = \frac{\text{total number of collision events across all agents and environments}}{N}
 $$
 
-where ( N ) is the total number of controlled agents.
+where $N$ is the total number of controlled agents.
 For example, an `avg_collisions_per_agent` value of 4 indicates that, on average, each agent collides four times per episode.
 
-
-### Remark 1: Effect of respawning on metrics
+### Effect of respawning on metrics
 
 By default, agents are reset to their initial position when they reach their goal before the episode ends. Upon respawn, `respawn_timestep` is updated from `-1` to the current step index.
 
 This raises the question: **how does repeated respawning affect aggregated metrics?**
 
-To begin, note that the environment a bit different before and after respawn. After an agent respawns, all other agents are "removed" from the environment. As a result, collisions with other agents cannot occur post-respawn.
+To begin, note that the environment is a bit different before and after respawn. After an agent respawns, all other agents are "removed" from the environment. As a result, collisions with other agents cannot occur post-respawn.
 
-This effectively transforms the scenario into a single-agent environment, simplifying the task since the agent no longer needs to coordinate or avoid interactions with others.
+This effectively transforms the scenario into a single-agent environment, simplifying the task since the agent no longer needs to coordinate with others.
 
 ![alt text](../../resources/drive/pre_and_post_respawn.png)
 
@@ -97,22 +96,3 @@ The highlighted trajectory shows the first attempt. In this case, the recorded s
 #### `offroad_rate` and `collision_rate`
 
 Same logic holds as above.
-
-
-### Remark 2: Inconsistency between `metrics_array` and `offroad_rate` variables
-
-This issue is not harmful at the moment but worth noting for future dev.
-
-There are currently two separate systems for tracking collisions, which are slightly inconsistent:
-
-* **`env->logs[i].collision_rate` / `offroad_rate` (in `Log` struct)**
-
-  * Actively used to track collisions and off-road events
-  * Set to `1.0` when such events occur
-  * Used in aggregation and reporting
-
-* **`metrics_array[COLLISION_IDX]` / `[OFFROAD_IDX]` (in `Entity` struct)**
-
-  * Reset to `0` on respawn
-  * Never updated to non-zero values anywhere in the code
-  * Never actually used in aggregation or logging
