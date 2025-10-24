@@ -70,19 +70,23 @@ By default, agents are reset to their initial position when they reach their goa
 
 This raises the question: **how does repeated respawning affect aggregated metrics?**
 
+To begin, note that the environment a bit different before and after respawn. After an agent respawns, all other agents are "removed" from the environment. As a result, collisions with other agents cannot occur post-respawn.
+
+This effectively transforms the scenario into a single-agent environment, simplifying the task since the agent no longer needs to coordinate or avoid interactions with others.
+
+![alt text](../../resources/drive/pre_and_post_respawn.png)
+
 #### `score`
 
 Consider an episode of 91 steps where an agent is initialized relatively close to the goal position and reaches its goal three times:
 
-1. **First attempt:** reaches the goal without collision
-2. **Second attempt:** reaches the goal without collision
-3. **Third attempt:** reaches the goal but collides along the way
+1. **First attempt:** reaches the goal without collisions
+2. **Second attempt:** reaches the goal without collisions
+3. **Third attempt:** reaches the goal but goes off-road along the way
 
-![alt text](../../resources/drive/collision_at_third_attempt.png)
+![alt text](../../resources/drive/realistic_collision_event_post_respawn.png)
 
-The highlighted trajectory shows the first attempt. In this case, the recorded score is `0.0` — a single collision invalidates the score for the entire episode.
-
-This behavior is desired: the score metric is unforgiving.
+The highlighted trajectory shows the first attempt. In this case, the recorded score is `0.0` — a single off-road event invalidates the score for the entire episode. This behavior is desired: the score metric is unforgiving.
 
 #### `offroad_rate` and `collision_rate`
 
@@ -99,7 +103,6 @@ reward_goal_post_respawn = 0.25
 ```
 
 This logic is implemented here:
-
 ```C
 if (distance_to_goal < env->goal_radius) {
     if (env->entities[agent_idx].respawn_timestep != -1) {
