@@ -56,14 +56,11 @@ r^{agg}_{\text{collision}} = \frac{\mathbb{I}[\text{collided in episode}]}{N}
 $$
 
 where $N$ is the number of controlled agents.
-This value represents the fraction of agents that collided at least once during the episode.
-
-As a result, cases **A** and **B** below would yield identical off-road and collision rates:
+This value represents the fraction of agents that collided at least once during the episode. So, cases **A** and **B** below would yield identical off-road and collision rates:
 
 ![alt text](../../resources/drive/examples_a_b.png)
 
-
-Since these metrics do not capture *multiple* events per agent, we also log the **average number of collision and off-road events per episode**. This is computed as:
+Since these metrics do not capture *multiple* events per agent, we additionally log the **average number of collision and off-road events per episode**. This is computed as:
 
 $$
 c^{avg}_{\text{collision}} = \frac{\text{total number of collision events across all agents and environments}}{N}
