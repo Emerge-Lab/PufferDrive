@@ -38,7 +38,7 @@ def test_drive_render():
 
     # Create dummy weights file
     os.makedirs("resources/drive", exist_ok=True)
-    dummy_weights = np.random.randn(10000).astype(np.float32)
+    dummy_weights = np.random.randn(700000).astype(np.float32)
     dummy_weights.tofile(weights_path)
 
     try:

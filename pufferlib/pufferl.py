@@ -577,7 +577,7 @@ class PuffeRL:
                             if getattr(env_cfg, "deterministic_agent_selection", False):
                                 cmd.append("--deterministic-selection")
                             if getattr(env_cfg, "num_maps", False):
-                                cmd.extend(["--num-maps", str(num_maps)])
+                                cmd.extend(["--num-maps", str(env_cfg.num_maps)])
 
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
