@@ -588,7 +588,7 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
 
     // Average
     float n = aggregate.n;
-    printf("N: %f\n", n);
+    //printf("N: %f\n", n);
     for (int i = 0; i < num_keys; i++) {
         ((float*)&aggregate)[i] /= n;
     }

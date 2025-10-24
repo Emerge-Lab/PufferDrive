@@ -107,7 +107,6 @@ typedef struct AdjListNode AdjListNode;
 struct Log {
     float episode_return;
     float episode_length;
-    float perf;
     float score;
     float offroad_rate;
     float collision_rate;
@@ -373,7 +372,6 @@ void add_log(Drive* env) {
         env->log.num_goals_reached += num_goals_reached;
         if(e->reached_goal_this_episode && !e->collided_before_goal){
             env->log.score += 1.0f;
-            env->log.perf += 1.0f;
         }
         if(!offroad && !collided && !e->reached_goal_this_episode){
             env->log.dnf_rate += 1.0f;

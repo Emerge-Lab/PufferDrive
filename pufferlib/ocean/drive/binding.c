@@ -198,7 +198,6 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
     assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
-    assign_to_dict(dict, "perf", log->perf);
     assign_to_dict(dict, "score", log->score);
     assign_to_dict(dict, "active_agent_count", log->active_agent_count);
     assign_to_dict(dict, "expert_static_car_count", log->expert_static_car_count);
