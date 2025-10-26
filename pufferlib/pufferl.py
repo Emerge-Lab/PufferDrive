@@ -578,6 +578,8 @@ class PuffeRL:
                                 cmd.append("--deterministic-selection")
                             if getattr(env_cfg, "num_maps", False):
                                 cmd.extend(["--num-maps", str(env_cfg.num_maps)])
+                            if getattr(env_cfg, "scenario_length", None):
+                                cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
 
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(

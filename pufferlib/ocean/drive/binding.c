@@ -158,9 +158,16 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
     env->ini_file = unpack_str(kwargs, "ini_file");
-    env_init_config conf;
+    env_init_config conf = {0};
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) {
+        conf.scenario_length = (int)unpack(kwargs, "scenario_length");
+    }
+    if (conf.scenario_length <= 0) {
+        PyErr_SetString(PyExc_ValueError, "scenario_length must be > 0 (set in INI or kwargs)");
+        return -1;
     }
     env->action_type = conf.action_type;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
@@ -169,6 +176,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_ade = conf.reward_ade;
     env->goal_radius = conf.goal_radius;
+    env->scenario_length = conf.scenario_length;
     env->use_goal_generation = conf.use_goal_generation;
     env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
     env->control_all_agents = unpack(kwargs, "control_all_agents");
