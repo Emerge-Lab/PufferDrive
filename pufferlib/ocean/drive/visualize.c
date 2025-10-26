@@ -10,7 +10,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include "error.h"
-#include "drive.c"
+#include "drivenet.h"
 #include "libgen.h"
 
 typedef struct {
