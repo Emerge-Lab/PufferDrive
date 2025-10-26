@@ -28,7 +28,6 @@
 #define DRIVEWAY 10
 
 // Default trajectory length if not overridden
-#define TRAJECTORY_LENGTH_DEFAULT 91
 #define INVALID_POSITION_SENTINEL -10000.0f
 
 // Minimum distance to goal position
