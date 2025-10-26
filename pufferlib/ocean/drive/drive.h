@@ -27,8 +27,7 @@
 #define SPEED_BUMP 9
 #define DRIVEWAY 10
 
-// Trajectory Length
-#define TRAJECTORY_LENGTH 91
+#define INVALID_POSITION -10000.0f
 
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
@@ -206,7 +205,7 @@ float compute_displacement_error(Entity* agent, int timestep) {
     float ref_x = agent->traj_x[timestep];
     float ref_y = agent->traj_y[timestep];
 
-    if (ref_x == -10000.0f || ref_y == -10000.0f) {
+    if (ref_x == INVALID_POSITION || ref_y == INVALID_POSITION) {
         return 0.0f;
     }
 
@@ -286,6 +285,7 @@ struct Drive {
     int logs_capacity;
     int use_goal_generation;
     char* ini_file;
+    int scenario_length;
     int control_non_vehicles;
 };
 
@@ -670,8 +670,8 @@ void init_grid_map(Drive* env){
             // Check all points in the trajectory for road elements
             Entity* e = &env->entities[i];
             for(int j = 0; j < e->array_size; j++){
-                if(e->traj_x[j] == -10000) continue;
-                if(e->traj_y[j] == -10000) continue;
+                if(e->traj_x[j] == INVALID_POSITION) continue;
+                if(e->traj_y[j] == INVALID_POSITION) continue;
                 if(!first_valid_point) {
                     top_left_x = bottom_right_x = e->traj_x[j];
                     top_left_y = bottom_right_y = e->traj_y[j];
@@ -884,7 +884,7 @@ void set_means(Drive* env) {
     for (int i = 0; i < env->num_entities; i++) {
         if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST || env->entities[i].type >= 4) {
             for (int j = 0; j < env->entities[i].array_size; j++) {
-                if(env->entities[i].traj_x[j] == -10000) continue;
+                if(env->entities[i].traj_x[j] == INVALID_POSITION) continue;
                 env->entities[i].traj_x[j] -= mean_x;
                 env->entities[i].traj_y[j] -= mean_y;
             }
@@ -897,10 +897,29 @@ void set_means(Drive* env) {
 
 void move_expert(Drive* env, float* actions, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
-    agent->x = agent->traj_x[env->timestep];
-    agent->y = agent->traj_y[env->timestep];
-    agent->z = agent->traj_z[env->timestep];
-    agent->heading = agent->traj_heading[env->timestep];
+    int t = env->timestep;
+    if (t < 0 || t >= agent->array_size) {
+        agent->x = INVALID_POSITION;
+        agent->y = INVALID_POSITION;
+        agent->z = 0.0f;
+        agent->heading = 0.0f;
+        agent->heading_x = 1.0f;
+        agent->heading_y = 0.0f;
+        return;
+    }
+    if (agent->traj_valid && agent->traj_valid[t] == 0) {
+        agent->x = INVALID_POSITION;
+        agent->y = INVALID_POSITION;
+        agent->z = 0.0f;
+        agent->heading = 0.0f;
+        agent->heading_x = 1.0f;
+        agent->heading_y = 0.0f;
+        return;
+    }
+    agent->x = agent->traj_x[t];
+    agent->y = agent->traj_y[t];
+    agent->z = agent->traj_z[t];
+    agent->heading = agent->traj_heading[t];
     agent->heading_x = cosf(agent->heading);
     agent->heading_y = sinf(agent->heading);
 }
@@ -1032,7 +1051,7 @@ int check_aabb_collision(Entity* car1, Entity* car2) {
 int collision_check(Drive* env, int agent_idx) {
     Entity* agent = &env->entities[agent_idx];
 
-    if(agent->x == -10000.0f ) return -1;
+    if(agent->x == INVALID_POSITION ) return -1;
 
     int car_collided_with_index = -1;
 
@@ -1140,7 +1159,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
     reset_agent_metrics(env, agent_idx);
 
-    if(agent->x == -10000.0f ) return; // invalid agent position
+    if(agent->x == INVALID_POSITION ) return; // invalid agent position
 
     // Compute displacement error
     float displacement_error = compute_displacement_error(agent, env->timestep);
@@ -1485,14 +1504,14 @@ void remove_bad_trajectories(Drive* env){
         collided_with_indices[i] = -1;
     }
     // move experts through trajectories to check for collisions and remove as illegal agents
-    for(int t = 0; t < TRAJECTORY_LENGTH; t++){
+    for(int t = 0; t < env->scenario_length; t++){
         for(int i = 0; i < env->active_agent_count; i++){
             int agent_idx = env->active_agent_indices[i];
             move_expert(env, env->actions, agent_idx);
         }
         for(int i = 0; i < env->expert_static_car_count; i++){
             int expert_idx = env->expert_static_car_indices[i];
-            if(env->entities[expert_idx].x == -10000) continue;
+            if(env->entities[expert_idx].x == INVALID_POSITION) continue;
             move_expert(env, env->actions, expert_idx);
         }
         // check collisions
@@ -1513,8 +1532,8 @@ void remove_bad_trajectories(Drive* env){
         for(int j = 0; j < env->static_car_count; j++){
             int static_car_idx = env->static_car_indices[j];
             if(static_car_idx != collided_with_indices[i]) continue;
-            env->entities[static_car_idx].traj_x[0] = -10000;
-            env->entities[static_car_idx].traj_y[0] = -10000;
+            env->entities[static_car_idx].traj_x[0] = INVALID_POSITION;
+            env->entities[static_car_idx].traj_y[0] = INVALID_POSITION;
         }
     }
     env->timestep = 0;
@@ -1997,7 +2016,7 @@ void c_step(Drive* env){
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
-    if(env->timestep == TRAJECTORY_LENGTH){
+    if(env->timestep == env->scenario_length){
         add_log(env);
 	    c_reset(env);
         return;
@@ -2006,7 +2025,7 @@ void c_step(Drive* env){
     // Move statix experts
     for (int i = 0; i < env->expert_static_car_count; i++) {
         int expert_idx = env->expert_static_car_indices[i];
-        if(env->entities[expert_idx].x == -10000.0f) continue;
+        if(env->entities[expert_idx].x == INVALID_POSITION) continue;
         move_expert(env, env->actions, expert_idx);
     }
     // Process actions for all active agents
@@ -2835,7 +2854,7 @@ void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTe
             if(log_trajectories){
                 for(int i=0; i<env->active_agent_count;i++){
                     int idx = env->active_agent_indices[i];
-                    for(int j=0; j<TRAJECTORY_LENGTH;j++){
+                    for(int j=0; j<env->entities[idx].array_size;j++){
                         float x = env->entities[idx].traj_x[j];
                         float y = env->entities[idx].traj_y[j];
                         float valid = env->entities[idx].traj_valid[j];
