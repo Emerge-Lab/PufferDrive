@@ -27,7 +27,6 @@
 #define SPEED_BUMP 9
 #define DRIVEWAY 10
 
-// Default trajectory length if not overridden
 #define INVALID_POSITION_SENTINEL -10000.0f
 
 // Minimum distance to goal position
