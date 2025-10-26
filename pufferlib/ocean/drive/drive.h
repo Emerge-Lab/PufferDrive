@@ -1298,12 +1298,35 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     int is_active_agent = env->entities[agent_idx].active_agent;
     int respawned = env->entities[agent_idx].respawn_timestep != -1;
 
-    if(collided == VEHICLE_COLLISION && is_active_agent == 1 && respawned){
-        agent->collision_state = 0;
+    if(collided == VEHICLE_COLLISION){
+        if(env->collision_behaviour==STOP_AGENT && !agent->stopped){ //Stop
+            agent->stopped = 1;
+            agent->vx=agent->vy = 0.0f;
+        }
+        else if(env->collision_behaviour==REMOVE_AGENT && !agent->removed){
+            Entity* car_collided = &env->entities[car_collided_with_index];
+            agent->removed = 1;
+            car_collided->removed = 1;
+            agent->x = agent->y = -10000.0f;
+            car_collided->x = car_collided->y = -10000.0f;
+            agent->valid = 0;
+            car_collided->valid = 0;
+        }
+        if(is_active_agent ==1 && respawned){
+            agent->collision_state = 0;
+        }
     }
-
-    if(collided == OFFROAD) {
+    if(collided == OFFROAD){
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
+        if(env->offroad_behaviour==STOP_AGENT  && !agent->stopped){ //Stop
+            agent->stopped = 1;
+            agent->vx=agent->vy = 0.0f;
+        }
+        else if(env->offroad_behaviour==REMOVE_AGENT && !agent->removed){
+            agent->removed = 1;
+            agent->x = agent->y = -10000.0f;
+            agent->valid = 0;
+        }
         return;
     }
     if(car_collided_with_index == -1) return;
