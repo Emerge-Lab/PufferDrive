@@ -12,11 +12,16 @@
 #include "error.h"
 #include "drive.c"
 #include "libgen.h"
+#include <../../inih-r62/ini.h>
 
 typedef struct {
     int pipefd[2];
     pid_t pid;
 } VideoRecorder;
+
+typedef struct {
+    int scenario_length;
+} ScenarioConfig;
 
 bool OpenVideo(VideoRecorder *recorder, const char *output_filename, int width, int height) {
     if (pipe(recorder->pipefd) == -1) {
@@ -196,34 +201,25 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-static int parse_episode_length_from_ini(const char* ini_path) {
-    FILE* f = fopen(ini_path, "r");
-    if (!f) {
-        return -1;
-    }
-    char line[512];
-    int in_env = 0;
-    int episode_len = -1;
-    while (fgets(line, sizeof(line), f)) {
-        char* p = line;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == ';' || *p == '#') continue;
-        if (*p == '[') {
-            in_env = (strstr(p, "[env]") != NULL);
-            continue;
-        }
-        if (!in_env) continue;
-        if (strncmp(p, "episode_length", strlen("episode_length")) == 0) {
-            char* eq = strchr(p, '=');
-            if (eq) {
-                int val = atoi(eq + 1);
-                if (val > 0) episode_len = val;
-            }
-            break;
+static int scenario_length_handler(void* user, const char* section, const char* name, const char* value) {
+    ScenarioConfig* config = (ScenarioConfig*)user;
+    #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
+    if (MATCH("env", "scenario_length")) {
+        int parsed = atoi(value);
+        if (parsed > 0) {
+            config->scenario_length = parsed;
         }
     }
-    fclose(f);
-    return episode_len;
+    #undef MATCH
+    return 1;
+}
+
+static int load_scenario_length_from_ini(const char* ini_path) {
+    ScenarioConfig cfg = { .scenario_length = TRAJECTORY_LENGTH_DEFAULT };
+    if (ini_parse(ini_path, scenario_length_handler, &cfg) < 0) {
+        fprintf(stderr, "Failed to load %s; falling back to default scenario length %d\n", ini_path, TRAJECTORY_LENGTH_DEFAULT);
+    }
+    return cfg.scenario_length;
 }
 
 int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps) {
@@ -266,8 +262,8 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .policy_agents_per_env = policy_agents_per_env,
         .deterministic_agent_selection = deterministic_selection
     };
-    int ini_episode = parse_episode_length_from_ini("pufferlib/config/ocean/drive.ini");
-    env.episode_length = (ini_episode > 0) ? ini_episode : TRAJECTORY_LENGTH_DEFAULT;
+    int ini_scenario = load_scenario_length_from_ini("pufferlib/config/ocean/drive.ini");
+    env.scenario_length = (ini_scenario > 0) ? ini_scenario : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -298,7 +294,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     printf("Active agents in map: %d\n", env.active_agent_count);
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
-    int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
+    int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     int log_trajectory = log_trajectories;
     char filename_topdown[256];
     char filename_agent[256];
