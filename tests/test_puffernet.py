@@ -277,22 +277,20 @@ def test_nmmo3(batch_size=1, input_size=512, hidden_size=512):
     from pufferlib.ocean import env_creator
 
     env = env_creator("puffer_drive")(num_maps=1)
-    input_torch = torch.arange(4*env.num_obs)% 7
+    input_torch = torch.arange(4 * env.num_obs) % 7
     input_torch = input_torch.view(4, -1).float()
 
     model = Drive(env, hidden_size=hidden_size)
     model = Recurrent(env, policy=model, input_size=input_size, hidden_size=hidden_size)
 
-    #state_dict = torch.load("nmmo3_642b.pt")
-    #state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-    #model.load_state_dict(state_dict)
+    # state_dict = torch.load("nmmo3_642b.pt")
+    # state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+    # model.load_state_dict(state_dict)
 
     state = {
         "lstm_h": torch.zeros(batch_size, hidden_size),
         "lstm_c": torch.zeros(batch_size, hidden_size),
     }
-
-    breakpoint()
     output = model.forward_eval(input_torch, state)
     pass
 
