@@ -111,7 +111,6 @@ struct Log {
     float score;
     float offroad_rate;
     float collision_rate;
-    float clean_collision_rate;
     float num_goals_reached;
     float completion_rate;
     float dnf_rate;
@@ -279,10 +278,8 @@ struct Drive {
     char* map_name;
     float world_mean_x;
     float world_mean_y;
-    int spawn_immunity_timer;
     float reward_goal;
     float reward_goal_post_respawn;
-    float reward_vehicle_collision_post_respawn;
     float goal_radius;
     int control_all_agents;
     int deterministic_agent_selection;
@@ -374,8 +371,6 @@ void add_log(Drive* env) {
         env->log.offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
         env->log.collision_rate += collided;
-        int clean_collided = env->logs[i].clean_collision_rate;
-        env->log.clean_collision_rate += clean_collided;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
         if(e->reached_goal_this_episode && !e->collided_before_goal){
@@ -1075,6 +1070,8 @@ int collision_check(Drive* env, int agent_idx) {
 
     int car_collided_with_index = -1;
 
+    if (agent->respawn_timestep != -1) return car_collided_with_index; // Skip respawning entities
+
     for(int i = 0; i < MAX_AGENTS; i++){
         int index = -1;
         if(i < env->active_agent_count){
@@ -1085,6 +1082,7 @@ int collision_check(Drive* env, int agent_idx) {
         if(index == -1) continue;
         if(index == agent_idx) continue;
         Entity* entity = &env->entities[index];
+        if (entity->respawn_timestep != -1) continue; // Skip respawning entities
         float x1 = entity->x;
         float y1 = entity->y;
         float dist = ((x1 - agent->x)*(x1 - agent->x) + (y1 - agent->y)*(y1 - agent->y));
@@ -1273,33 +1271,6 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
     agent->collision_state = collided;
 
-    // spawn immunity for collisions with other agent cars as agent_idx respawns
-    if (!env->use_goal_generation) {
-        int is_active_agent = env->entities[agent_idx].active_agent;
-        int respawned = env->entities[agent_idx].respawn_timestep != -1;
-        int exceeded_spawn_immunity_agent = (env->timestep - env->entities[agent_idx].respawn_timestep) >= env->spawn_immunity_timer;
-
-        if(collided == VEHICLE_COLLISION && is_active_agent == 1 && respawned){
-            agent->collision_state = 0;
-        }
-
-        if(collided == OFFROAD) {
-            agent->metrics_array[OFFROAD_IDX] = 1.0f;
-            return;
-        }
-        if(car_collided_with_index == -1) return;
-
-        // spawn immunity for collisions with other cars who just respawned
-        int respawned_collided_with_car = env->entities[car_collided_with_index].respawn_timestep != -1;
-        int exceeded_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) >= env->spawn_immunity_timer;
-        int within_spawn_immunity_collided_with_car = (env->timestep - env->entities[car_collided_with_index].respawn_timestep) < env->spawn_immunity_timer;
-
-        if (respawned_collided_with_car) {
-            agent->collision_state = 0;
-            agent->metrics_array[COLLISION_IDX] = 0.0f;
-        }
-    }
-
     return;
 }
 
@@ -1346,6 +1317,10 @@ void set_active_agents(Drive* env){
         int desired = b.candidates_count;
         if (desired > MAX_AGENTS) desired = MAX_AGENTS;
         if (desired > capacity) desired = capacity;
+
+        if (desired <= 0) {
+            goto legacy_select;
+        }
 
         if (!env->deterministic_agent_selection) {
             fisher_yates_shuffle(b.candidates, b.candidates_count);
@@ -1458,6 +1433,7 @@ void set_active_agents(Drive* env){
         }
     }
 
+legacy_select:
     if(env->num_agents == 0){
         env->num_agents = MAX_AGENTS;
     }
@@ -2097,15 +2073,9 @@ void c_step(Drive* env){
         int collision_state = env->entities[agent_idx].collision_state;
 
         if(collision_state > 0){
-            if(collision_state == VEHICLE_COLLISION && env->entities[agent_idx].respawn_timestep == -1){
-                if(env->entities[agent_idx].respawn_timestep != -1) {
-                    env->rewards[i] = env->reward_vehicle_collision_post_respawn;
-                    env->logs[i].episode_return += env->reward_vehicle_collision_post_respawn;
-                } else {
-                    env->rewards[i] = env->reward_vehicle_collision;
-                    env->logs[i].episode_return += env->reward_vehicle_collision;
-                    env->logs[i].clean_collision_rate = 1.0f;
-                }
+            if(collision_state == VEHICLE_COLLISION){
+                env->rewards[i] = env->reward_vehicle_collision;
+                env->logs[i].episode_return += env->reward_vehicle_collision;
                 env->logs[i].collision_rate = 1.0f;
             }
             else if(collision_state == OFFROAD){
@@ -2159,12 +2129,8 @@ void c_step(Drive* env){
         for(int i = 0; i < env->active_agent_count; i++){
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
-            int collision_state = env->entities[agent_idx].collision_state;
             if(reached_goal){
                 respawn_agent(env, agent_idx);
-                //env->entities[agent_idx].x = -10000;
-                //env->entities[agent_idx].y = -10000;
-                //env->entities[agent_idx].respawn_timestep = env->timestep;
             }
         }
     }

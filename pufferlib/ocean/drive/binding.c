@@ -167,11 +167,9 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
-    env->reward_vehicle_collision_post_respawn = conf.reward_vehicle_collision_post_respawn;
     env->reward_ade = conf.reward_ade;
     env->goal_radius = conf.goal_radius;
     env->use_goal_generation = conf.use_goal_generation;
-    env->spawn_immunity_timer = conf.spawn_immunity_timer;
     env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
     env->control_all_agents = unpack(kwargs, "control_all_agents");
     env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
@@ -195,7 +193,6 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "episode_length", log->episode_length);
     assign_to_dict(dict, "collision_rate", log->collision_rate);
     assign_to_dict(dict, "episode_return", log->episode_return);
-    assign_to_dict(dict, "clean_collision_rate", log->clean_collision_rate);
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
