@@ -89,9 +89,6 @@ FLAGS=(
 )
 
 EXTRA_SOURCES=()
-if [ "$ENV" = "visualize" ]; then
-    EXTRA_SOURCES+=("inih-r62/ini.c")
-fi
 
 FLAGS+=("$SRC_DIR/$ENV.c")
 if [ ${#EXTRA_SOURCES[@]} -gt 0 ]; then

@@ -12,18 +12,12 @@
 #include "error.h"
 #include "drive.c"
 #include "libgen.h"
-#include <../../inih-r62/ini.h>
-
 #define TRAJECTORY_LENGTH_DEFAULT 91
 
 typedef struct {
     int pipefd[2];
     pid_t pid;
 } VideoRecorder;
-
-typedef struct {
-    int scenario_length;
-} ScenarioConfig;
 
 bool OpenVideo(VideoRecorder *recorder, const char *output_filename, int width, int height) {
     if (pipe(recorder->pipefd) == -1) {
@@ -203,26 +197,6 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-static int scenario_length_handler(void* user, const char* section, const char* name, const char* value) {
-    ScenarioConfig* config = (ScenarioConfig*)user;
-    #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
-    if (MATCH("env", "scenario_length")) {
-        int parsed = atoi(value);
-        if (parsed > 0) {
-            config->scenario_length = parsed;
-        }
-    }
-    #undef MATCH
-    return 1;
-}
-
-static int load_scenario_length_from_ini(const char* ini_path) {
-    ScenarioConfig cfg = { .scenario_length = TRAJECTORY_LENGTH_DEFAULT };
-    if (ini_parse(ini_path, scenario_length_handler, &cfg) < 0) {
-        fprintf(stderr, "Failed to load %s; falling back to default scenario length %d\n", ini_path, TRAJECTORY_LENGTH_DEFAULT);
-    }
-    return cfg.scenario_length;
-}
 
 int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override) {
 
@@ -264,12 +238,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .policy_agents_per_env = policy_agents_per_env,
         .deterministic_agent_selection = deterministic_selection
     };
-    if (scenario_length_override > 0) {
-        env.scenario_length = scenario_length_override;
-    } else {
-        int ini_scenario = load_scenario_length_from_ini("pufferlib/config/ocean/drive.ini");
-        env.scenario_length = (ini_scenario > 0) ? ini_scenario : TRAJECTORY_LENGTH_DEFAULT;
-    }
+    env.scenario_length = (scenario_length_override > 0) ? scenario_length_override : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
