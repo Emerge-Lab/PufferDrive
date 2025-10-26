@@ -230,4 +230,3 @@ void forward(DriveNet* net, float* observations, int* actions) {
     // Get action by taking argmax of actor output
     softmax_multidiscrete(net->multidiscrete, net->actor->output, actions);
 }
-

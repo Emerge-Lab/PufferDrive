@@ -83,7 +83,7 @@ void demo() {
                 if(actions[env.human_agent_idx][1] > 12) {
                     actions[env.human_agent_idx][1] = 12;
                 }
-            }   
+            }
             if(IsKeyPressed(KEY_TAB)){
                 env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
             }
@@ -118,7 +118,7 @@ void performance_test() {
     long start = time(NULL);
     int i = 0;
     int (*actions)[2] = (int(*)[2])env.actions;
-    
+
     while (time(NULL) - start < test_time) {
         // Set random actions for all agents
         for(int j = 0; j < env.active_agent_count; j++) {
@@ -127,7 +127,7 @@ void performance_test() {
             actions[j][0] = accel;  // -1, 0, or 1
             actions[j][1] = steer;  // Random steering
         }
-        
+
         c_step(&env);
         i++;
     }
