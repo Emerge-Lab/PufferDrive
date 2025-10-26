@@ -86,16 +86,7 @@ FLAGS=(
     -I./$BOX2D_NAME/include
     -I./$BOX2D_NAME/src
     -I./pufferlib/extensions
-)
-
-EXTRA_SOURCES=()
-
-FLAGS+=("$SRC_DIR/$ENV.c")
-if [ ${#EXTRA_SOURCES[@]} -gt 0 ]; then
-    FLAGS+=("${EXTRA_SOURCES[@]}")
-fi
-FLAGS+=(
-    -o "$ENV"
+    "$SRC_DIR/$ENV.c" -o "$ENV"
     $LINK_ARCHIVES
     -lm
     -lpthread

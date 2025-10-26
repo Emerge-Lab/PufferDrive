@@ -27,7 +27,7 @@
 #define SPEED_BUMP 9
 #define DRIVEWAY 10
 
-#define INVALID_POSITION_SENTINEL -10000.0f
+#define INVALID_POSITION -10000.0f
 
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
@@ -205,7 +205,7 @@ float compute_displacement_error(Entity* agent, int timestep) {
     float ref_x = agent->traj_x[timestep];
     float ref_y = agent->traj_y[timestep];
 
-    if (ref_x == INVALID_POSITION_SENTINEL || ref_y == INVALID_POSITION_SENTINEL) {
+    if (ref_x == INVALID_POSITION || ref_y == INVALID_POSITION) {
         return 0.0f;
     }
 
@@ -670,8 +670,8 @@ void init_grid_map(Drive* env){
             // Check all points in the trajectory for road elements
             Entity* e = &env->entities[i];
             for(int j = 0; j < e->array_size; j++){
-                if(e->traj_x[j] == INVALID_POSITION_SENTINEL) continue;
-                if(e->traj_y[j] == INVALID_POSITION_SENTINEL) continue;
+                if(e->traj_x[j] == INVALID_POSITION) continue;
+                if(e->traj_y[j] == INVALID_POSITION) continue;
                 if(!first_valid_point) {
                     top_left_x = bottom_right_x = e->traj_x[j];
                     top_left_y = bottom_right_y = e->traj_y[j];
@@ -884,7 +884,7 @@ void set_means(Drive* env) {
     for (int i = 0; i < env->num_entities; i++) {
         if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST || env->entities[i].type >= 4) {
             for (int j = 0; j < env->entities[i].array_size; j++) {
-                if(env->entities[i].traj_x[j] == INVALID_POSITION_SENTINEL) continue;
+                if(env->entities[i].traj_x[j] == INVALID_POSITION) continue;
                 env->entities[i].traj_x[j] -= mean_x;
                 env->entities[i].traj_y[j] -= mean_y;
             }
@@ -899,8 +899,8 @@ void move_expert(Drive* env, float* actions, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
     int t = env->timestep;
     if (t < 0 || t >= agent->array_size) {
-        agent->x = INVALID_POSITION_SENTINEL;
-        agent->y = INVALID_POSITION_SENTINEL;
+        agent->x = INVALID_POSITION;
+        agent->y = INVALID_POSITION;
         agent->z = 0.0f;
         agent->heading = 0.0f;
         agent->heading_x = 1.0f;
@@ -908,8 +908,8 @@ void move_expert(Drive* env, float* actions, int agent_idx){
         return;
     }
     if (agent->traj_valid && agent->traj_valid[t] == 0) {
-        agent->x = INVALID_POSITION_SENTINEL;
-        agent->y = INVALID_POSITION_SENTINEL;
+        agent->x = INVALID_POSITION;
+        agent->y = INVALID_POSITION;
         agent->z = 0.0f;
         agent->heading = 0.0f;
         agent->heading_x = 1.0f;
@@ -1051,7 +1051,7 @@ int check_aabb_collision(Entity* car1, Entity* car2) {
 int collision_check(Drive* env, int agent_idx) {
     Entity* agent = &env->entities[agent_idx];
 
-    if(agent->x == INVALID_POSITION_SENTINEL ) return -1;
+    if(agent->x == INVALID_POSITION ) return -1;
 
     int car_collided_with_index = -1;
 
@@ -1159,7 +1159,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
     reset_agent_metrics(env, agent_idx);
 
-    if(agent->x == INVALID_POSITION_SENTINEL ) return; // invalid agent position
+    if(agent->x == INVALID_POSITION ) return; // invalid agent position
 
     // Compute displacement error
     float displacement_error = compute_displacement_error(agent, env->timestep);
@@ -1511,7 +1511,7 @@ void remove_bad_trajectories(Drive* env){
         }
         for(int i = 0; i < env->expert_static_car_count; i++){
             int expert_idx = env->expert_static_car_indices[i];
-            if(env->entities[expert_idx].x == INVALID_POSITION_SENTINEL) continue;
+            if(env->entities[expert_idx].x == INVALID_POSITION) continue;
             move_expert(env, env->actions, expert_idx);
         }
         // check collisions
@@ -1532,8 +1532,8 @@ void remove_bad_trajectories(Drive* env){
         for(int j = 0; j < env->static_car_count; j++){
             int static_car_idx = env->static_car_indices[j];
             if(static_car_idx != collided_with_indices[i]) continue;
-            env->entities[static_car_idx].traj_x[0] = INVALID_POSITION_SENTINEL;
-            env->entities[static_car_idx].traj_y[0] = INVALID_POSITION_SENTINEL;
+            env->entities[static_car_idx].traj_x[0] = INVALID_POSITION;
+            env->entities[static_car_idx].traj_y[0] = INVALID_POSITION;
         }
     }
     env->timestep = 0;
@@ -2025,7 +2025,7 @@ void c_step(Drive* env){
     // Move statix experts
     for (int i = 0; i < env->expert_static_car_count; i++) {
         int expert_idx = env->expert_static_car_indices[i];
-        if(env->entities[expert_idx].x == INVALID_POSITION_SENTINEL) continue;
+        if(env->entities[expert_idx].x == INVALID_POSITION) continue;
         move_expert(env, env->actions, expert_idx);
     }
     // Process actions for all active agents
