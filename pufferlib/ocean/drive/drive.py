@@ -33,6 +33,7 @@ class Drive(pufferlib.PufferEnv):
         buf=None,
         seed=1,
         init_steps=0,
+        init_mode="default",
     ):
         # env
         self.render_mode = render_mode
@@ -51,6 +52,7 @@ class Drive(pufferlib.PufferEnv):
         self.num_obs = 7 + 63 * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.init_steps = init_steps
+        self.init_mode = init_mode
 
         if action_type == "discrete":
             self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
@@ -85,6 +87,15 @@ class Drive(pufferlib.PufferEnv):
             control_all_agents=1 if self.control_all_agents else 0,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
         )
+        self.init_mode = (
+            0
+            if init_mode == "default"
+            else 1
+            if init_mode == "tracks_to_predict"
+            else 2
+            if init_mode == "all_agents"
+            else 0
+        )
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -117,6 +128,7 @@ class Drive(pufferlib.PufferEnv):
                 ini_file="pufferlib/config/ocean/drive.ini",
                 control_non_vehicles=int(control_non_vehicles),
                 init_steps=init_steps,
+                init_mode=self.init_mode,
             )
             env_ids.append(env_id)
 
@@ -178,6 +190,7 @@ class Drive(pufferlib.PufferEnv):
                         ini_file="pufferlib/config/ocean/drive.ini",
                         control_non_vehicles=int(self.control_non_vehicles),
                         init_steps=self.init_steps,
+                        init_mode=self.init_mode,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)

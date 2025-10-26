@@ -12,8 +12,6 @@
 #include <time.h>
 #include "error.h"
 
-
-
 // Entity Types
 #define NONE 0
 #define VEHICLE 1
@@ -26,6 +24,10 @@
 #define CROSSWALK 8
 #define SPEED_BUMP 9
 #define DRIVEWAY 10
+
+// Initialization modes
+#define INIT_DEFAULT 0
+#define INIT_TRACKS_TO_PREDICT 1
 
 // Trajectory Length
 #define TRAJECTORY_LENGTH 91
@@ -42,7 +44,7 @@
 #define DELTA_LOCAL 2
 #define STATE_DYNAMICS 3
 
-// collision state
+// Collision state
 #define NO_COLLISION 0
 #define VEHICLE_COLLISION 1
 #define OFFROAD 2
@@ -54,7 +56,7 @@
 #define LANE_ALIGNED_IDX 3
 #define AVG_DISPLACEMENT_ERROR_IDX 4
 
-// grid cell size
+// Grid cell size
 #define GRID_CELL_SIZE 5.0f
 #define MAX_ENTITIES_PER_CELL 30    // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
@@ -292,6 +294,7 @@ struct Drive {
     int num_tracks_to_predict;
     int* tracks_to_predict_indices;
     int control_non_vehicles;
+    char* init_mode;
 };
 
 typedef struct {
