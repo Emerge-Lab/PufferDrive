@@ -62,14 +62,14 @@ class Drive(pufferlib.PufferEnv):
         self._action_type_flag = 0 if action_type == "discrete" else 1
 
         # Check if resources directory exists
-        binary_path = "resources/drive/binaries/map_000.bin"
+        binary_path = "resources/drive/binaries/CARLA/map_000.bin"
         if not os.path.exists(binary_path):
             raise FileNotFoundError(
                 f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
             )
 
         # Check maps availability
-        available_maps = len([name for name in os.listdir("resources/drive/binaries") if name.endswith(".bin")])
+        available_maps = len([name for name in os.listdir("resources/drive/binaries/CARLA") if name.endswith(".bin")])
         if num_maps > available_maps:
             raise ValueError(
                 f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
@@ -372,11 +372,11 @@ def process_all_maps():
     from pathlib import Path
 
     # Create the binaries directory if it doesn't exist
-    binary_dir = Path("resources/drive/binaries")
+    binary_dir = Path("resources/drive/binaries/CARLA")
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed/training")
+    data_dir = Path("data/processed/training/CARLA")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
