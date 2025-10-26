@@ -562,7 +562,7 @@ void set_start_position(Drive* env){
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
-	e->stopped = 0;
+	    e->stopped = 0;
         e->removed = 0;
     }
     //EndDrawing();
