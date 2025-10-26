@@ -1506,8 +1506,7 @@ void remove_bad_trajectories(Drive* env){
         collided_with_indices[i] = -1;
     }
     // move experts through trajectories to check for collisions and remove as illegal agents
-    int horizon = env->scenario_length > 0 ? env->scenario_length : TRAJECTORY_LENGTH_DEFAULT;
-    for(int t = 0; t < horizon; t++){
+    for(int t = 0; t < env->scenario_length; t++){
         for(int i = 0; i < env->active_agent_count; i++){
             int agent_idx = env->active_agent_indices[i];
             move_expert(env, env->actions, agent_idx);
@@ -2019,8 +2018,7 @@ void c_step(Drive* env){
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
-    int horizon = env->scenario_length > 0 ? env->scenario_length : TRAJECTORY_LENGTH_DEFAULT;
-    if(env->timestep == horizon){
+    if(env->timestep == env->scenario_length){
         add_log(env);
 	    c_reset(env);
         return;
