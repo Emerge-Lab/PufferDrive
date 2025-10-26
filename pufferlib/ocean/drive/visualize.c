@@ -247,7 +247,9 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .init_steps = conf.init_steps,
         .control_all_agents = conf.control_all_agents,
         .policy_agents_per_env = conf.num_policy_controlled_agents,
-        .deterministic_agent_selection = conf.deterministic_agent_selection
+        .deterministic_agent_selection = conf.deterministic_agent_selection,
+        .collision_behaviour = 0,
+        .offroad_behaviour = 0,
     };
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
