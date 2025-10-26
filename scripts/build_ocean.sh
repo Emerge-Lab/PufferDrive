@@ -86,7 +86,19 @@ FLAGS=(
     -I./$BOX2D_NAME/include
     -I./$BOX2D_NAME/src
     -I./pufferlib/extensions
-    "$SRC_DIR/$ENV.c" -o "$ENV"
+)
+
+EXTRA_SOURCES=()
+if [ "$ENV" = "visualize" ]; then
+    EXTRA_SOURCES+=("inih-r62/ini.c")
+fi
+
+FLAGS+=("$SRC_DIR/$ENV.c")
+if [ ${#EXTRA_SOURCES[@]} -gt 0 ]; then
+    FLAGS+=("${EXTRA_SOURCES[@]}")
+fi
+FLAGS+=(
+    -o "$ENV"
     $LINK_ARCHIVES
     -lm
     -lpthread
