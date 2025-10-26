@@ -163,12 +163,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
-    if (conf.scenario_length <= 0) {
-        PyErr_Format(PyExc_ValueError,
-                     "scenario_length must be defined (>0) in %s",
-                     env->ini_file ? env->ini_file : "drive.ini");
-        return 1;
-    }
+    if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) conf.scenario_length = (int)unpack(kwargs, "scenario_length");
     env->action_type = conf.action_type;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;

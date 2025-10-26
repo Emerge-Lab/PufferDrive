@@ -14,6 +14,8 @@
 #include "libgen.h"
 #include <../../inih-r62/ini.h>
 
+#define TRAJECTORY_LENGTH_DEFAULT 91
+
 typedef struct {
     int pipefd[2];
     pid_t pid;
@@ -222,7 +224,7 @@ static int load_scenario_length_from_ini(const char* ini_path) {
     return cfg.scenario_length;
 }
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override) {
 
     char map_buffer[100];
     if (map_name == NULL) {
@@ -262,8 +264,12 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .policy_agents_per_env = policy_agents_per_env,
         .deterministic_agent_selection = deterministic_selection
     };
-    int ini_scenario = load_scenario_length_from_ini("pufferlib/config/ocean/drive.ini");
-    env.scenario_length = (ini_scenario > 0) ? ini_scenario : TRAJECTORY_LENGTH_DEFAULT;
+    if (scenario_length_override > 0) {
+        env.scenario_length = scenario_length_override;
+    } else {
+        int ini_scenario = load_scenario_length_from_ini("pufferlib/config/ocean/drive.ini");
+        env.scenario_length = (ini_scenario > 0) ? ini_scenario : TRAJECTORY_LENGTH_DEFAULT;
+    }
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -413,6 +419,7 @@ int main(int argc, char* argv[]) {
     int policy_agents_per_env = -1;
     int control_non_vehicles = 0;
     int num_maps = 100;
+    int scenario_length_cli = -1;
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
@@ -509,9 +516,14 @@ int main(int argc, char* argv[]) {
                 num_maps = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--scenario-length") == 0) {
+            if (i + 1 < argc) {
+                scenario_length_cli = atoi(argv[i + 1]);
+                i++;
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli);
     return 0;
 }
