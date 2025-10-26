@@ -250,6 +250,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .deterministic_agent_selection = conf.deterministic_agent_selection,
         .collision_behaviour = 0,
         .offroad_behaviour = 0,
+        .goal_behaviour = 0,
     };
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
