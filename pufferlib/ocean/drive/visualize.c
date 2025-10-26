@@ -234,7 +234,9 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .init_steps = init_steps,
         .control_all_agents = control_all_agents,
         .policy_agents_per_env = policy_agents_per_env,
-        .deterministic_agent_selection = deterministic_selection
+        .deterministic_agent_selection = deterministic_selection,
+        .collision_behaviour = 0,
+        .offroad_behaviour = 0,
     };
     allocate(&env);
 
