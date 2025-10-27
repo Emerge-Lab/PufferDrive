@@ -136,8 +136,7 @@ void demo() {
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    int weight_count = (env.dynamics_model == JERK) ? 592776 : 595925;
-    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin", weight_count);
+    Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
     //Client* client = make_client(&env);
     int accel_delta = 2;

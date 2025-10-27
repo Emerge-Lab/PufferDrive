@@ -355,7 +355,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     int log_trajectory = log_trajectories;
