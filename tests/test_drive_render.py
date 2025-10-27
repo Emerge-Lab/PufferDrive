@@ -14,13 +14,13 @@ def test_drive_render():
     print("Testing PufferDrive rendering...")
 
     # Check if drive binary exists
-    if not os.path.exists("./drive"):
+    if not os.path.exists("./visualize"):
         print("Drive binary not found, attempting to build...")
         try:
             result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=600
+                ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=600
             )
-            if result.returncode != 0 or not os.path.exists("./drive"):
+            if result.returncode != 0 or not os.path.exists("./visualize"):
                 print(f"Build failed: {result.stderr}")
                 return False
         except Exception as e:
@@ -38,7 +38,7 @@ def test_drive_render():
 
     # Create dummy weights file
     os.makedirs("resources/drive", exist_ok=True)
-    dummy_weights = np.random.randn(10000).astype(np.float32)
+    dummy_weights = np.random.randn(700000).astype(np.float32)
     dummy_weights.tofile(weights_path)
 
     try:
@@ -49,7 +49,23 @@ def test_drive_render():
         # Run the renderer with xvfb and frame skip for faster testing
         print("Running renderer.")
         result = subprocess.run(
-            ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive", "--frame-skip", "10"],
+            [
+                "xvfb-run",
+                "-a",
+                "-s",
+                "-screen 0 1280x720x24",
+                "./visualize",
+                "--frame-skip",
+                "10",
+                "--map-name",
+                "resources/drive/binaries/map_000.bin",
+                "--output-topdown",
+                "resources/drive/output_topdown.mp4",
+                "--output-agent",
+                "resources/drive/output_agent.mp4",
+                "--view",
+                "topdown",
+            ],
             capture_output=True,
             text=True,
             timeout=600,
@@ -86,7 +102,7 @@ def test_drive_render():
             os.rename(backup_path, weights_path)
 
         # Clean up generated outputs
-        for output_file in ["resources/drive/output_topdown.gif", "resources/drive/output_agent.gif"]:
+        for output_file in ["resources/drive/output_topdown.mp4", "resources/drive/output_agent.mp4"]:
             if os.path.exists(output_file):
                 os.remove(output_file)
 

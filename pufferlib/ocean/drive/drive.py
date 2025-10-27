@@ -21,7 +21,8 @@ class Drive(pufferlib.PufferEnv):
         reward_goal_post_respawn=0.5,
         reward_ade=0.0,
         goal_radius=2.0,
-        dt=0.3,
+        dt=0.1,
+        scenario_length=None,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
@@ -48,6 +49,7 @@ class Drive(pufferlib.PufferEnv):
         self.goal_radius = goal_radius
         self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
+        self.scenario_length = scenario_length
         self.control_non_vehicles = control_non_vehicles
         self.use_goal_generation = use_goal_generation
         self.resample_frequency = resample_frequency
@@ -135,6 +137,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
                 dt=dt,
+                scenario_length=(int(scenario_length) if scenario_length is not None else None),
                 control_all_agents=1 if self.control_all_agents else 0,
                 num_policy_controlled_agents=self.num_policy_controlled_agents,
                 deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
@@ -197,6 +200,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_ade=self.reward_ade,
                         goal_radius=self.goal_radius,
                         dt=self.dt,
+                        scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
                         control_all_agents=1 if self.control_all_agents else 0,
                         num_policy_controlled_agents=self.num_policy_controlled_agents,
                         deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
