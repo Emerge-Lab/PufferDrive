@@ -35,7 +35,7 @@ class Drive(pufferlib.PufferEnv):
         buf=None,
         seed=1,
         init_steps=0,
-        init_mode="controllable_vehicles",
+        init_mode="control_vehicles",
     ):
         # env
         self.dt = dt
@@ -70,7 +70,19 @@ class Drive(pufferlib.PufferEnv):
         self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.init_steps = init_steps
-        self.init_mode = init_mode
+        self.init_mode_str = init_mode
+
+        if self.init_mode_str == "control_vehicles":
+            self.init_mode = 0
+        elif self.init_mode_str == "control_agents":
+            self.init_mode = 1
+        elif self.init_mode_str == "control_tracks_to_predict":
+            self.init_mode = 2
+        else:
+            raise ValueError(
+                f"init_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.init_mode_str}"
+            )
+        print(f"@ DRIVE INIT MODE: {self.init_mode_str} ({self.init_mode})")
 
         if action_type == "discrete":
             if dynamics_model == "classic":
@@ -108,17 +120,6 @@ class Drive(pufferlib.PufferEnv):
             num_policy_controlled_agents=self.num_policy_controlled_agents,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
         )
-
-        if init_mode == "controllable_vehicles":
-            self.init_mode = 0
-        elif init_mode == "tracks_to_predict":
-            self.init_mode = 1
-        elif init_mode == "controllable_agents":
-            self.init_mode = 2
-        else:
-            raise ValueError(
-                f"init_mode must be one of 'controllable_vehicles', 'tracks_to_predict', or 'controllable_agents'. Got: {init_mode}"
-            )
 
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
@@ -348,6 +349,7 @@ def save_map_binary(map_data, output_file):
             if obj_type == "vehicle":
                 obj_type = 1
             elif obj_type == "pedestrian":
+                print("pedestrian")
                 obj_type = 2
             elif obj_type == "cyclist":
                 obj_type = 3
@@ -466,7 +468,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed/validation/json")
+    data_dir = Path("data/processed/validation/json_selected")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -485,16 +487,15 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=0.0001, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=0.0001, atn_cache=1024, num_agents=12):
     import time
 
-    env = Drive(num_agents=num_agents, num_maps=1)
+    env = Drive(num_agents=num_agents, num_maps=1, init_mode="control_agents", init_steps=75)
     env.reset()
 
     # print(env.get_scenario_ids())
 
     tick = 0
-    num_agents = 1024
     actions = np.stack(
         [np.random.randint(0, space.n + 1, (atn_cache, num_agents)) for space in env.single_action_space], axis=-1
     )
