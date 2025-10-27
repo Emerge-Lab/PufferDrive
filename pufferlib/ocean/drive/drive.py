@@ -25,7 +25,6 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
-        control_all_agents=False,
         num_policy_controlled_agents=-1,
         deterministic_agent_selection=False,
         use_goal_generation=False,
@@ -76,7 +75,6 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
             )
-        self.control_all_agents = bool(control_all_agents)
         self.num_policy_controlled_agents = int(num_policy_controlled_agents)
         self.deterministic_agent_selection = bool(deterministic_agent_selection)
 
@@ -84,16 +82,15 @@ class Drive(pufferlib.PufferEnv):
             num_agents=num_agents,
             num_maps=num_maps,
             num_policy_controlled_agents=self.num_policy_controlled_agents,
-            control_all_agents=1 if self.control_all_agents else 0,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
         )
         self.init_mode = (
             0
-            if init_mode == "default"
+            if init_mode == "controllable_vehicles"
             else 1
             if init_mode == "tracks_to_predict"
             else 2
-            if init_mode == "all_agents"
+            if init_mode == "controllable_agents"
             else 0
         )
         self.num_agents = num_agents
@@ -120,7 +117,6 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
-                control_all_agents=1 if self.control_all_agents else 0,
                 num_policy_controlled_agents=self.num_policy_controlled_agents,
                 deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                 map_id=map_ids[i],
@@ -159,7 +155,6 @@ class Drive(pufferlib.PufferEnv):
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     num_policy_controlled_agents=self.num_policy_controlled_agents,
-                    control_all_agents=1 if self.control_all_agents else 0,
                     deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                 )
                 env_ids = []
@@ -182,7 +177,6 @@ class Drive(pufferlib.PufferEnv):
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_ade=self.reward_ade,
                         goal_radius=self.goal_radius,
-                        control_all_agents=1 if self.control_all_agents else 0,
                         num_policy_controlled_agents=self.num_policy_controlled_agents,
                         deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                         map_id=map_ids[i],
