@@ -183,6 +183,7 @@ MAKE_FUNCTIONS = {
     "drive": "Drive",
     "spaces": make_spaces,
     "multiagent": make_multiagent,
+    "adaptive_driving_agent": "AdaptiveDrivingAgent",
 }
 
 

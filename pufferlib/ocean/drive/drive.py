@@ -49,6 +49,7 @@ class Drive(pufferlib.PufferEnv):
         co_player_rnn=None,
         num_ego_agents=512,
         init_steps=0,
+        k_scenarios = 0,
     ):
         # env
         self.dt = dt
@@ -84,6 +85,8 @@ class Drive(pufferlib.PufferEnv):
         self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
 
         self.num_ego_agents = num_ego_agents
+
+        print(f"DEBUG: scario length: {scenario_length}", flush = True)
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.population_play = population_play
@@ -192,12 +195,7 @@ class Drive(pufferlib.PufferEnv):
 
             self.local_co_player_ids = local_co_player_ids
             self.local_ego_ids = local_ego_ids
-            print(f"local ego ids {self.local_ego_ids}", flush=True)
-            print(f"local co player ids {self.local_co_player_ids}", flush=True)
-            print(f"ego ids {self.ego_ids}", flush=True)
-            print(f"co player ids {self.co_player_ids}", flush=True)
-            print(f"num ego agents {len(self.ego_ids)}", flush=True)
-            print(f"num co players {len(self.co_player_ids)}", flush=True)
+
         else:
             agent_offsets, map_ids, num_envs = my_shared_tuple
             self.num_agents = self.num_agents_const
@@ -218,6 +216,7 @@ class Drive(pufferlib.PufferEnv):
             else:
                 self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=np.int32)
 
+        print(f"DEBUG: scenario lenght: {self.scenario_length}")
         # Create environments
         env_ids = []
         for i in range(num_envs):

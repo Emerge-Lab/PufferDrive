@@ -71,6 +71,10 @@ class PuffeRL:
         # torch.manual_seed(seed)
 
         # Vecenv info
+        self.adaptive_driving_agent = getattr(vecenv.driver_env, "env_name", None)  == "adaptive_driving_agent"
+        if self.adaptive_driving_agent:
+            config["bptt_horizon"] = vecenv.driver_env.episode_length
+
         vecenv.async_reset(seed)
         obs_space = vecenv.single_observation_space
         atn_space = vecenv.single_action_space
@@ -155,6 +159,11 @@ class PuffeRL:
         minibatch_size = config["minibatch_size"]
         max_minibatch_size = config["max_minibatch_size"]
         self.minibatch_size = min(minibatch_size, max_minibatch_size)
+
+        if self.adaptive_driving_agent:
+            minibatch_size = 1024 * horizon
+            self.minibatch_size = minibatch_size
+
         if minibatch_size > max_minibatch_size and minibatch_size % max_minibatch_size != 0:
             raise pufferlib.APIUsageError(
                 f"minibatch_size {minibatch_size} > max_minibatch_size {max_minibatch_size} must divide evenly"
@@ -1459,6 +1468,7 @@ def load_config(env_name):
         p.read(puffer_default_config)
     else:
         for path in glob.glob(puffer_config_dir, recursive=True):
+            print(f"config {[puffer_default_config, path]}")
             p = configparser.ConfigParser()
             p.read([puffer_default_config, path])
             if env_name in p["base"]["env_name"].split():
