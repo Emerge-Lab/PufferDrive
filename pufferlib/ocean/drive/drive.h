@@ -359,7 +359,6 @@ static void scan_vehicles_initial(const Drive* env, SelectionBuckets* out, int c
     }
 }
 void add_log(Drive* env) {
-    //printf("Adding log for env with %d active agents.\n", env->active_agent_count);
     for(int i = 0; i < env->active_agent_count; i++){
         Entity* e = &env->entities[env->active_agent_indices[i]];
 
@@ -1978,7 +1977,6 @@ void c_reset(Drive* env){
     env->timestep = env->init_steps;
     set_start_position(env);
     for(int x = 0;x<env->active_agent_count; x++){
-        //printf("Resetting agent %d\n", x);
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];
         env->entities[agent_idx].respawn_timestep = -1;
