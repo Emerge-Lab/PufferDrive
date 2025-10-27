@@ -31,6 +31,11 @@ typedef struct {
     float dt;
     int use_goal_generation;
     int control_non_vehicles;
+    int scenario_length;
+    int init_steps;
+    int control_all_agents;
+    int num_policy_controlled_agents;
+    int deterministic_agent_selection;
 } env_init_config;
 
 // INI file parser handler
@@ -71,6 +76,16 @@ static int handler(void* config, const char* section, const char* name, const ch
         env_config->dt = atof(value);
     } else if (MATCH("env", "control_non_vehicles")) {
         env_config->control_non_vehicles = (strcmp(value, "True") == 0) ? 1 : 0;
+    } else if (MATCH("env", "scenario_length")) {
+        env_config->scenario_length = atoi(value);
+    } else if (MATCH("env", "init_steps")) {
+        env_config->init_steps = atoi(value);
+    } else if (MATCH("env", "control_all_agents")) {
+        env_config->control_all_agents = (strcmp(value, "True") == 0) ? 1 : 0;
+    } else if (MATCH("env", "num_policy_controlled_agents")) {
+        env_config->num_policy_controlled_agents = atoi(value);
+    } else if (MATCH("env", "deterministic_agent_selection")) {
+        env_config->deterministic_agent_selection = (strcmp(value, "True") == 0) ? 1 : 0;
     }
 
     #undef MATCH
@@ -305,12 +320,13 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .dt = conf.dt,
 	      .map_name = (char*)map_name,
         .control_non_vehicles = conf.control_non_vehicles,
-        .init_steps = init_steps,
-        .control_all_agents = control_all_agents,
-        .policy_agents_per_env = policy_agents_per_env,
-        .deterministic_agent_selection = deterministic_selection
+        .init_steps = conf.init_steps,
+        .control_all_agents = conf.control_all_agents,
+        .policy_agents_per_env = conf.num_policy_controlled_agents,
+        .deterministic_agent_selection = conf.deterministic_agent_selection
     };
-    env.scenario_length = (scenario_length_override > 0) ? scenario_length_override : TRAJECTORY_LENGTH_DEFAULT;
+    env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
+                          (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode

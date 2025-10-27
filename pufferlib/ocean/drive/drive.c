@@ -18,6 +18,11 @@ typedef struct {
     float dt;
     int use_goal_generation;
     int control_non_vehicles;
+    int scenario_length;
+    int init_steps;
+    int control_all_agents;
+    int num_policy_controlled_agents;
+    int deterministic_agent_selection;
 } env_init_config;
 
 // INI file parser handler
@@ -58,6 +63,16 @@ static int handler(void* config, const char* section, const char* name, const ch
         env_config->dt = atof(value);
     } else if (MATCH("env", "control_non_vehicles")) {
         env_config->control_non_vehicles = (strcmp(value, "True") == 0) ? 1 : 0;
+    } else if (MATCH("env", "scenario_length")) {
+        env_config->scenario_length = atoi(value);
+    } else if (MATCH("env", "init_steps")) {
+        env_config->init_steps = atoi(value);
+    } else if (MATCH("env", "control_all_agents")) {
+        env_config->control_all_agents = (strcmp(value, "True") == 0) ? 1 : 0;
+    } else if (MATCH("env", "num_policy_controlled_agents")) {
+        env_config->num_policy_controlled_agents = atoi(value);
+    } else if (MATCH("env", "deterministic_agent_selection")) {
+        env_config->deterministic_agent_selection = (strcmp(value, "True") == 0) ? 1 : 0;
     }
 
     #undef MATCH
@@ -95,22 +110,28 @@ void test_drivenet() {
 }
 
 void demo() {
-    // Read dynamics model from INI file
-    env_init_config conf;
+    // Read configuration from INI file
+    env_init_config conf = {0};
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
     if(ini_parse(ini_file, handler, &conf) < 0) {
-        fprintf(stderr, "Error: Could not load %s. Cannot determine dynamics model.\n", ini_file);
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         exit(1);
     }
 
     Drive env = {
         .human_agent_idx = 0,
-        .reward_vehicle_collision = -0.1f,
-        .reward_offroad_collision = -0.1f,
-        .goal_radius = 2.0f,
-	    .map_name = "resources/drive/binaries/map_000.bin",
-        .dt = 0.1f,
         .dynamics_model = conf.dynamics_model,
+        .reward_vehicle_collision = conf.reward_vehicle_collision,
+        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_ade = conf.reward_ade,
+        .goal_radius = conf.goal_radius,
+        .dt = conf.dt,
+	    .map_name = "resources/drive/binaries/map_000.bin",
+        .control_non_vehicles = conf.control_non_vehicles,
+        .init_steps = conf.init_steps,
+        .control_all_agents = conf.control_all_agents,
+        .policy_agents_per_env = conf.num_policy_controlled_agents,
+        .deterministic_agent_selection = conf.deterministic_agent_selection,
     };
     allocate(&env);
     c_reset(&env);
@@ -171,11 +192,29 @@ void demo() {
 }
 
 void performance_test() {
+    // Read configuration from INI file
+    env_init_config conf = {0};
+    const char* ini_file = "pufferlib/config/ocean/drive.ini";
+    if(ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        exit(1);
+    }
+
     long test_time = 10;
     Drive env = {
         .human_agent_idx = 0,
-        .goal_radius = 2.0f,
-	    .map_name = "resources/drive/binaries/map_000.bin"
+        .dynamics_model = conf.dynamics_model,
+        .reward_vehicle_collision = conf.reward_vehicle_collision,
+        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_ade = conf.reward_ade,
+        .goal_radius = conf.goal_radius,
+        .dt = conf.dt,
+	    .map_name = "resources/drive/binaries/map_000.bin",
+        .control_non_vehicles = conf.control_non_vehicles,
+        .init_steps = conf.init_steps,
+        .control_all_agents = conf.control_all_agents,
+        .policy_agents_per_env = conf.num_policy_controlled_agents,
+        .deterministic_agent_selection = conf.deterministic_agent_selection,
     };
     clock_t start_time, end_time;
     double cpu_time_used;
