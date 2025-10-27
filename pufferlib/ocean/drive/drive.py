@@ -32,11 +32,10 @@ class Drive(pufferlib.PufferEnv):
         control_all_agents=False,
         num_policy_controlled_agents=-1,
         deterministic_agent_selection=False,
-        control_non_vehicles=False,
         buf=None,
         seed=1,
         init_steps=0,
-        init_mode="default",
+        init_mode="controllable_vehicles",
     ):
         # env
         self.dt = dt
@@ -51,7 +50,6 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
-        self.control_non_vehicles = control_non_vehicles
         self.goal_behaviour = goal_behaviour
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
@@ -110,15 +108,18 @@ class Drive(pufferlib.PufferEnv):
             num_policy_controlled_agents=self.num_policy_controlled_agents,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
         )
-        self.init_mode = (
-            0
-            if init_mode == "controllable_vehicles"
-            else 1
-            if init_mode == "tracks_to_predict"
-            else 2
-            if init_mode == "controllable_agents"
-            else 0
-        )
+
+        if init_mode == "controllable_vehicles":
+            self.init_mode = 0
+        elif init_mode == "tracks_to_predict":
+            self.init_mode = 1
+        elif init_mode == "controllable_agents":
+            self.init_mode = 2
+        else:
+            raise ValueError(
+                f"init_mode must be one of 'controllable_vehicles', 'tracks_to_predict', or 'controllable_agents'. Got: {init_mode}"
+            )
+
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -152,7 +153,6 @@ class Drive(pufferlib.PufferEnv):
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
-                control_non_vehicles=int(control_non_vehicles),
                 init_steps=init_steps,
                 init_mode=self.init_mode,
             )
@@ -216,7 +216,6 @@ class Drive(pufferlib.PufferEnv):
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
                         ini_file="pufferlib/config/ocean/drive.ini",
-                        control_non_vehicles=int(self.control_non_vehicles),
                         init_steps=self.init_steps,
                         init_mode=self.init_mode,
                     )
@@ -486,7 +485,7 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=0.0001, atn_cache=1024, num_agents=1024):
     import time
 
     env = Drive(num_agents=num_agents, num_maps=1)
@@ -511,5 +510,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()
