@@ -130,7 +130,6 @@ class Drive(pufferlib.PufferEnv):
                 raise ValueError(
                     f"num ego agents ({num_ego_agents}) exceeds the number of total agents ({num_agents}))"
                 )
-            
 
         self.control_all_agents = bool(control_all_agents)
         self.num_policy_controlled_agents = int(num_policy_controlled_agents)
@@ -142,9 +141,8 @@ class Drive(pufferlib.PufferEnv):
             num_policy_controlled_agents=self.num_policy_controlled_agents,
             control_all_agents=1 if self.control_all_agents else 0,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
-            population_play = population_play, 
-            num_ego_agents = self.num_ego_agents,
-            
+            population_play=population_play,
+            num_ego_agents=self.num_ego_agents,
         )
 
         if self.population_play:
@@ -194,12 +192,12 @@ class Drive(pufferlib.PufferEnv):
 
             self.local_co_player_ids = local_co_player_ids
             self.local_ego_ids = local_ego_ids
-            print(f"local ego ids {self.local_ego_ids}", flush = True )
-            print(f"local co player ids {self.local_co_player_ids}", flush = True)
-            print(f"ego ids {self.ego_ids}", flush = True )
-            print(f"co player ids {self.co_player_ids}", flush = True)
-            print(f"num ego agents {len(self.ego_ids)}",flush=True)
-            print(f"num co players {len(self.co_player_ids)}", flush = True)
+            print(f"local ego ids {self.local_ego_ids}", flush=True)
+            print(f"local co player ids {self.local_co_player_ids}", flush=True)
+            print(f"ego ids {self.ego_ids}", flush=True)
+            print(f"co player ids {self.co_player_ids}", flush=True)
+            print(f"num ego agents {len(self.ego_ids)}", flush=True)
+            print(f"num co players {len(self.co_player_ids)}", flush=True)
         else:
             agent_offsets, map_ids, num_envs = my_shared_tuple
             self.num_agents = self.num_agents_const
@@ -210,7 +208,6 @@ class Drive(pufferlib.PufferEnv):
         self.control_all_agents = bool(control_all_agents)
         self.num_policy_controlled_agents = int(num_policy_controlled_agents)
         self.deterministic_agent_selection = bool(deterministic_agent_selection)
-
 
         super().__init__(buf=buf)
         if self.population_play:
@@ -315,15 +312,14 @@ class Drive(pufferlib.PufferEnv):
             if will_resample:
                 binding.vec_close(self.c_envs)
                 my_shared_tuple = binding.shared(
-                        num_agents=self.num_agents,
-                        num_maps=self.num_maps,
-                        num_policy_controlled_agents=self.num_policy_controlled_agents,
-                        control_all_agents=1 if self.control_all_agents else 0,
-                        deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
-                        population_play = self.population_play, 
-                        num_ego_agents = self.num_ego_agents,
-            
-                        )
+                    num_agents=self.num_agents,
+                    num_maps=self.num_maps,
+                    num_policy_controlled_agents=self.num_policy_controlled_agents,
+                    control_all_agents=1 if self.control_all_agents else 0,
+                    deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
+                    population_play=self.population_play,
+                    num_ego_agents=self.num_ego_agents,
+                )
 
                 if self.population_play:
                     agent_offsets, map_ids, num_envs, ego_ids, co_player_ids = my_shared_tuple

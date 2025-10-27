@@ -102,7 +102,7 @@ class PuffeRL:
         if not self.population_play:
             if total_agents > segments:
                 raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
-            
+
         device = config["device"]
         self.observations = torch.zeros(
             segments,
