@@ -153,7 +153,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->use_goal_generation = conf.use_goal_generation;
     env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
     env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
-    env->control_non_vehicles = (int)unpack(kwargs, "control_non_vehicles");
+    env->init_mode = (int)unpack(kwargs, "init_mode");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");

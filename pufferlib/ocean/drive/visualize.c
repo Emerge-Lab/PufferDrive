@@ -196,7 +196,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps) {
 
     char map_buffer[100];
     if (map_name == NULL) {
@@ -229,11 +229,11 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .reward_offroad_collision = -0.2f,
         .reward_ade = -0.0f,
         .goal_radius = goal_radius,
-	      .map_name = (char*)map_name,
-        .control_non_vehicles = control_non_vehicles,
+	    .map_name = (char*)map_name,
         .init_steps = init_steps,
         .policy_agents_per_env = policy_agents_per_env,
         .deterministic_agent_selection = deterministic_selection
+        //TODO: Add init mode
     };
     allocate(&env);
 
@@ -381,7 +381,7 @@ int main(int argc, char* argv[]) {
     const char* policy_name = "resources/drive/puffer_drive_weights.bin";
     int deterministic_selection = 0;
     int policy_agents_per_env = -1;
-    int control_non_vehicles = 0;
+    int init_mode = 0;
     int num_maps = 100;
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
@@ -463,8 +463,20 @@ int main(int argc, char* argv[]) {
                     init_steps = 0;
                 }
             }
-        } else if (strcmp(argv[i], "--control-non-vehicles") == 0) {
-            control_non_vehicles = 1;
+        } else if (strcmp(argv[i], "--init-mode") == 0) {
+            if (i + 1 < argc) {
+                if (strcmp(argv[i + 1], "controllable_vehicles") == 0) {
+                    init_mode = 0;
+                } else if (strcmp(argv[i + 1], "tracks_to_predict") == 0) {
+                    init_mode = 1;
+                } else if (strcmp(argv[i + 1], "controllable_agents") == 0) {
+                    init_mode = 2;
+                } else {
+                    fprintf(stderr, "Error: --init-mode must be one of 'controllable_vehicles', 'tracks_to_predict', or 'controllable_agents'\n");
+                    return 1;
+                }
+                i++;
+            }
         } else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {
             if (i + 1 < argc) {
                 policy_agents_per_env = atoi(argv[i + 1]);
@@ -480,6 +492,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_mode, init_steps, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps);
     return 0;
 }
