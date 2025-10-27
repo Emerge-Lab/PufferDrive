@@ -1,7 +1,14 @@
 #include "drive.h"
+#include "drivenet.h"
+#include <Python.h>
+
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
+
+static PyObject* test_forward(PyObject* self, PyObject* args, PyObject* kwargs);
+#define MY_METHODS {"test_forward", (PyCFunction)test_forward, METH_VARARGS | METH_KEYWORDS, "Test forward pass"}
+
 #include "../env_binding.h"
 
 static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
@@ -211,4 +218,41 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "expert_static_car_count", log->expert_static_car_count);
     assign_to_dict(dict, "static_car_count", log->static_car_count);
     return 0;
+}
+
+static PyObject* test_forward(PyObject* self, PyObject* args, PyObject* kwargs) {
+    PyObject* obs_obj = PyDict_GetItemString(kwargs, "observations");
+    const char* weights_file = unpack_str(kwargs, "weights_file");
+
+    PyArrayObject* obs_array = (PyArrayObject*)obs_obj;
+    int batch_size = PyArray_DIM(obs_array, 0);
+    float* observations = (float*)PyArray_DATA(obs_array);
+
+    Weights* weights = load_weights(weights_file);
+    if (!weights) {
+        PyErr_SetString(PyExc_RuntimeError, "Failed to load weights");
+        return NULL;
+    }
+
+    DriveNet* net = init_drivenet(weights, batch_size);
+
+    npy_intp action_dims[2] = {batch_size, 2};
+    npy_intp logit_dims[2] = {batch_size, 20};  // 20 = 7 + 13 (steering + speed logits)
+
+    PyObject* actions_array = PyArray_SimpleNew(2, action_dims, NPY_INT32);
+    PyObject* logits_array = PyArray_SimpleNew(2, logit_dims, NPY_FLOAT32);
+
+    int* actions = (int*)PyArray_DATA((PyArrayObject*)actions_array);
+    float* logits = (float*)PyArray_DATA((PyArrayObject*)logits_array);
+
+    forward(net, observations, actions);
+    memcpy(logits, net->actor->output, batch_size * 20 * sizeof(float));
+
+    free_drivenet(net);
+    free(weights);
+
+    PyObject* result = PyTuple_New(2);
+    PyTuple_SetItem(result, 0, actions_array);
+    PyTuple_SetItem(result, 1, logits_array);
+    return result;
 }
