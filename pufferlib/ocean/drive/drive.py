@@ -130,17 +130,25 @@ class Drive(pufferlib.PufferEnv):
                 raise ValueError(
                     f"num ego agents ({num_ego_agents}) exceeds the number of total agents ({num_agents}))"
                 )
-        self.resample_iteration = 0
+            
 
-        binding_tuple = binding.shared(
+        self.control_all_agents = bool(control_all_agents)
+        self.num_policy_controlled_agents = int(num_policy_controlled_agents)
+        self.deterministic_agent_selection = bool(deterministic_agent_selection)
+
+        my_shared_tuple = binding.shared(
             num_agents=num_agents,
             num_maps=num_maps,
-            population_play=population_play,
-            num_ego_agents=self.num_ego_agents,
+            num_policy_controlled_agents=self.num_policy_controlled_agents,
+            control_all_agents=1 if self.control_all_agents else 0,
+            deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
+            population_play = population_play, 
+            num_ego_agents = self.num_ego_agents,
+            
         )
 
         if self.population_play:
-            agent_offsets, map_ids, num_envs, ego_ids, co_player_ids = binding_tuple
+            agent_offsets, map_ids, num_envs, ego_ids, co_player_ids = my_shared_tuple
 
             self.ego_ids = [item for sublist in ego_ids for item in sublist]
             self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
@@ -161,28 +169,39 @@ class Drive(pufferlib.PufferEnv):
             self.total_agents = self.num_co_players + self.num_ego_agents
             self.num_agents = self.total_agents
 
-            self.num_agents = self.total_agents
-
             self.co_player_policy_name = co_player_policy_name
             self.co_player_rnn_name = co_player_rnn_name
             self.co_player_policy = co_player_policy
             self.set_co_player_state()
 
             # Build per-environment ID lists
-            local_co_player_ids = []
-            for i in range(num_envs):
-                env_start = agent_offsets[i]
-                local_co_player_ids.append([cid - env_start for cid in co_player_ids[i]])
-
             local_ego_ids = []
             for i in range(num_envs):
-                env_start = agent_offsets[i]
-                local_ego_ids.append([eid - env_start for eid in ego_ids[i]])
+                if len(ego_ids[i]) > 0:
+                    min_id_in_world = min(ego_ids[i] + co_player_ids[i])
+                    local_ego_ids.append([eid - min_id_in_world for eid in ego_ids[i]])
+                else:
+                    min_id_in_world = min(co_player_ids[i])
+                    local_ego_ids.append([])
+
+            local_co_player_ids = []
+            for i in range(num_envs):
+                if len(ego_ids[i]) > 0:
+                    min_id_in_world = min(ego_ids[i] + co_player_ids[i])
+                else:
+                    min_id_in_world = min(co_player_ids[i])
+                local_co_player_ids.append([cid - min_id_in_world for cid in co_player_ids[i]])
 
             self.local_co_player_ids = local_co_player_ids
             self.local_ego_ids = local_ego_ids
+            print(f"local ego ids {self.local_ego_ids}", flush = True )
+            print(f"local co player ids {self.local_co_player_ids}", flush = True)
+            print(f"ego ids {self.ego_ids}", flush = True )
+            print(f"co player ids {self.co_player_ids}", flush = True)
+            print(f"num ego agents {len(self.ego_ids)}",flush=True)
+            print(f"num co players {len(self.co_player_ids)}", flush = True)
         else:
-            agent_offsets, map_ids, num_envs = binding_tuple
+            agent_offsets, map_ids, num_envs = my_shared_tuple
             self.num_agents = self.num_agents_const
             self.ego_ids = [i for i in range(agent_offsets[-1])]
             local_co_player_ids = [[] for i in range(num_envs)]
@@ -192,17 +211,6 @@ class Drive(pufferlib.PufferEnv):
         self.num_policy_controlled_agents = int(num_policy_controlled_agents)
         self.deterministic_agent_selection = bool(deterministic_agent_selection)
 
-        agent_offsets, map_ids, num_envs = binding.shared(
-            num_agents=num_agents,
-            num_maps=num_maps,
-            num_policy_controlled_agents=self.num_policy_controlled_agents,
-            control_all_agents=1 if self.control_all_agents else 0,
-            deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
-        )
-        self.num_agents = num_agents
-        self.agent_offsets = agent_offsets
-        self.map_ids = map_ids
-        self.num_envs = num_envs
 
         super().__init__(buf=buf)
         if self.population_play:
@@ -305,17 +313,20 @@ class Drive(pufferlib.PufferEnv):
             self.tick = 0
             will_resample = 1
             if will_resample:
-                self.resample_iteration += 1
                 binding.vec_close(self.c_envs)
-                binding_tuple = binding.shared(
-                    num_agents=self.num_agents_const,
-                    num_maps=self.num_maps,
-                    population_play=self.population_play,
-                    num_ego_agents=self.num_ego_agents,
-                )
+                my_shared_tuple = binding.shared(
+                        num_agents=self.num_agents,
+                        num_maps=self.num_maps,
+                        num_policy_controlled_agents=self.num_policy_controlled_agents,
+                        control_all_agents=1 if self.control_all_agents else 0,
+                        deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
+                        population_play = self.population_play, 
+                        num_ego_agents = self.num_ego_agents,
+            
+                        )
 
                 if self.population_play:
-                    agent_offsets, map_ids, num_envs, ego_ids, co_player_ids = binding_tuple
+                    agent_offsets, map_ids, num_envs, ego_ids, co_player_ids = my_shared_tuple
                     self.ego_ids = [item for sublist in ego_ids for item in sublist]
                     self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
 
@@ -343,7 +354,7 @@ class Drive(pufferlib.PufferEnv):
 
                 else:
                     # Non-population play mode stays the same
-                    agent_offsets, map_ids, num_envs = binding_tuple
+                    agent_offsets, map_ids, num_envs = my_shared_tuple
                     self.num_agents = self.num_agents_const
                     self.ego_ids = [i for i in range(agent_offsets[-1])]
                     local_co_player_ids = [[] for i in range(num_envs)]

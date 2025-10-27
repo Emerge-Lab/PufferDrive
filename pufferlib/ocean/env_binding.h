@@ -563,7 +563,6 @@ static int assign_to_dict(PyObject* dict, char* key, float value) {
 }
 
 
-
 static PyObject* vec_log(PyObject* self, PyObject* args) {
     VecEnv* vec = unpack_vecenv(args);
     if (!vec) {
@@ -643,24 +642,25 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
         }
 
         // Add co-player metrics directly
-        assign_to_dict(dict, "ego_co_player_ratio", aggregate.n /co_player_n);
+        assign_to_dict(dict, "ego_co_player_ratio", aggregate.n / co_player_n);
         assign_to_dict(dict, "co_player_completion_rate", co_player_aggregate.co_player_completion_rate);
         assign_to_dict(dict, "co_player_collision_rate", co_player_aggregate.co_player_collision_rate);
         assign_to_dict(dict, "co_player_offroad_rate", co_player_aggregate.co_player_offroad_rate);
         assign_to_dict(dict, "co_player_clean_collision_rate", co_player_aggregate.co_player_clean_collision_rate);
+        assign_to_dict(dict, "co_player_num_goals_reached", co_player_aggregate.co_player_num_goals_reached);  
         assign_to_dict(dict, "co_player_score", co_player_aggregate.co_player_score);
         assign_to_dict(dict, "co_player_perf", co_player_aggregate.co_player_perf);
         assign_to_dict(dict, "co_player_dnf_rate", co_player_aggregate.co_player_dnf_rate);
         assign_to_dict(dict, "co_player_episode_length", co_player_aggregate.co_player_episode_length);
         assign_to_dict(dict, "co_player_episode_return", co_player_aggregate.co_player_episode_return);
+        assign_to_dict(dict, "co_player_lane_alignment_rate", co_player_aggregate.co_player_lane_alignment_rate); 
+        assign_to_dict(dict, "co_player_avg_displacement_error", co_player_aggregate.co_player_avg_displacement_error); 
         assign_to_dict(dict, "co_player_n", co_player_n);
     }
     #endif
 
     return dict;
 }
-
-
 
 
 static PyObject* vec_close(PyObject* self, PyObject* args) {

@@ -151,7 +151,8 @@ int eval_gif(const char* map_name,
              int lasers,
              int log_trajectories,
              int frame_skip,
-             float goal_radius, int population_play,
+             float goal_radius, 
+             int population_play,
              int control_non_vehicles,
              int init_steps,
              int control_all_agents,
@@ -186,27 +187,33 @@ int eval_gif(const char* map_name,
         .init_steps = init_steps,
         .control_all_agents = control_all_agents,
         .policy_agents_per_env = policy_agents_per_env,
-        .deterministic_agent_selection = deterministic_selection,
-        .population_play = population_play,
+        .deterministic_agent_selection = deterministic_selection
     };
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
-
-    // Set which vehicle to focus on for obs mode
     env.human_agent_idx = 0;
 
-
     c_reset(&env);
-
-    printf("DEBUG: Environment initialized, active_agent_count=%d\n", env.active_agent_count);
-    fflush(stdout);
-
     // Make client for rendering
     Client* client = (Client*)calloc(1, sizeof(Client));
     env.client = client;
 
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
+
+    SetTargetFPS(6000);
+
+    float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
+    float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
+
+    printf("Map size: %.1fx%.1f\n", map_width, map_height);
+    float scale = 6.0f; // Can be used to increase the video quality
+    
+    // Calculate video width and height; round to nearest even number
+    int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
+    int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
+    InitWindow(img_width, img_height, "Puffer Drive");
+    SetConfigFlags(FLAG_MSAA_4X_HINT);
     SetTargetFPS(6000);
 
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -214,9 +221,7 @@ int eval_gif(const char* map_name,
 
     int ego_agent_id = rand() % env.active_agent_count;
     int num_co_players = env.active_agent_count - 1;
-
-    printf("DEBUG: ego_agent_id=%d, num_co_players=%d\n", ego_agent_id, num_co_players);
-    fflush(stdout);
+    int max_obs = 7 + 63*7 + 200*13; // 7 self features, 63 objects with 7 features, 200 road points with 13 features
 
     for (int i = 0; i < env.active_agent_count; i++) {
 
@@ -229,20 +234,6 @@ int eval_gif(const char* map_name,
             env.entities[env.active_agent_indices[i]].is_co_player = false;
         }
     }
-
-    float map_width = env.map_corners[2] - env.map_corners[0];
-    float map_height = env.map_corners[3] - env.map_corners[1];
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-
-    printf("Map size: %.1fx%.1f, max_obs=%d\n", map_width, map_height, max_obs);
-    fflush(stdout);
-
-    float scale = 6.0f;
-
-    int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
-    int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
-    InitWindow(img_width, img_height, "Puffer Drive");
-    SetConfigFlags(FLAG_MSAA_4X_HINT);
 
     Weights* weights = NULL;
     Weights* co_player_policy_weights = NULL;
@@ -265,11 +256,7 @@ int eval_gif(const char* map_name,
         printf("DEBUG: Loading co-player network...\n");
         fflush(stdout);
 
-<<<<<<< HEAD
         co_player_policy_weights = load_weights("resources/drive/puffer_drive_co_player.bin", 595925);
-=======
-        co_player_policy_weights = load_weights("resources/drive/puffer_drive_weights.bin", 595925);
->>>>>>> 93701fe6 (Cleaning because files were tests were failing)
         co_player_net = init_drivenet(co_player_policy_weights, num_co_players);
 
         printf("DEBUG: Allocating action and observation buffers...\n");
@@ -583,11 +570,6 @@ int main(int argc, char* argv[]) {
             }
         }else if (strcmp(argv[i], "--population-play") == 0) {
             population_play = 1;
-        }
-
-    }
-
-    eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, population_play);
         } else if (strcmp(argv[i], "--pure-self-play") == 0) {
             control_all_agents = 1;
         } else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {
@@ -601,7 +583,7 @@ int main(int argc, char* argv[]) {
     }
 
     eval_gif(map_name, show_grid, obs_only, lasers, log_trajectories, frame_skip,
-             goal_radius, control_non_vehicles, init_steps,
+             goal_radius,population_play, control_non_vehicles, init_steps,
              control_all_agents, policy_agents_per_env, deterministic_selection);
     //demo();
     //performance_test();

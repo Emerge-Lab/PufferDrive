@@ -67,8 +67,7 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
     return 0;
 }
 
-static PyObject* my_shared_self_play(PyObject* self, PyObject* args, PyObject* kwargs){
-static PyObject* my_shared_self_play(PyObject* self, PyObject* args, PyObject* kwargs){
+static PyObject* my_shared_self_play(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -135,8 +134,6 @@ static PyObject* my_shared_self_play(PyObject* self, PyObject* args, PyObject* k
     //Py_DECREF(agent_offsets);
     //Py_DECREF(map_ids);
     // create a tuple
-    printf("Total: %d agents across %d worlds\n", total_agent_count, env_count);
-    printf("Total: %d agents across %d worlds\n", total_agent_count, env_count);
     PyObject* tuple = PyTuple_New(3);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
@@ -156,12 +153,7 @@ static PyObject* my_shared_self_play(PyObject* self, PyObject* args, PyObject* k
     free(temp_envs);
     */
     // return agent_offsets;
-
-
 }
-
-
-
 
 static double* unpack_float_array(PyObject* kwargs, char* key, Py_ssize_t* out_size) {
     PyObject* val = PyDict_GetItemString(kwargs, key);
@@ -452,7 +444,6 @@ static PyObject* my_shared_population_play(PyObject* self, PyObject* args, PyObj
     return tuple;
 }
 
-
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 
     int population_play = unpack(kwargs, "population_play");
@@ -496,58 +487,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int population_play = unpack(kwargs, "population_play");
-    // printf("population play in init: %d\n", population_play);
-    // fflush(stdout);
-
     env->population_play = population_play;
 
-<<<<<<< HEAD
-    if (env->population_play) {
-        env->num_co_players = unpack(kwargs, "num_co_players");
-        double* co_player_ids_d = unpack_float_array(kwargs, "co_player_ids", &env->num_co_players);
-        if (co_player_ids_d != NULL && env->num_co_players > 0) {
-            env->co_player_ids = (int*)malloc(env->num_co_players * sizeof(int));
-            for (int i = 0; i < env->num_co_players; i++) {
-                env->co_player_ids[i] = (int)co_player_ids_d[i];
-            }
-            free(co_player_ids_d);
-        } else {
-            env->co_player_ids = NULL;
-            env->num_co_players = 0;
-        }
-
-        // Handle ego agents - always as an array
-        env->num_ego_agents = unpack(kwargs, "num_ego_agents");
-        if (env->num_ego_agents > 0) {
-            double* ego_agent_ids_d = unpack_float_array(kwargs, "ego_agent_ids", &env->num_ego_agents);
-            if (ego_agent_ids_d != NULL) {
-                env->ego_agent_ids = (int*)malloc(env->num_ego_agents * sizeof(int));
-                for (int i = 0; i < env->num_ego_agents; i++) {
-                    env->ego_agent_ids[i] = (int)ego_agent_ids_d[i];
-                }
-                free(ego_agent_ids_d);
-            } else {
-                env->ego_agent_ids = NULL;
-                env->num_ego_agents = 0;
-            }
-        } else {
-            env->ego_agent_ids = NULL;
-            env->num_ego_agents = 0;
-        }
-    } else {
-        // Non-population play mode - set defaults
-        env->num_ego_agents = 0;
-        env->ego_agent_ids = NULL;
-    }
-
-    int population_play = unpack(kwargs, "population_play");
-    // printf("population play in init: %d\n", population_play);
-    // fflush(stdout);
-
-    env->population_play = population_play;
-
-=======
->>>>>>> 93701fe6 (Cleaning because files were tests were failing)
     if (env->population_play) {
         env->num_co_players = unpack(kwargs, "num_co_players");
         double* co_player_ids_d = unpack_float_array(kwargs, "co_player_ids", &env->num_co_players);
