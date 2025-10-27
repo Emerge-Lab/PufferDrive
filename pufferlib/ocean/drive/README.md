@@ -29,7 +29,7 @@ We record multiple performance metrics during training, aggregated over all *act
 - `score`: Goals reached cleanly (goal was achieved without collision or going off-road)
 - `collision_rate`: Binary flag (0 or 1) if agent hit another vehicle.
 - `offroad_rate`: Binary flag (0 or 1) if agent left road bounds.
-- `completion_rate`: Did the agent reach the goal this episode (even if it collided or went off-road)?
+- `completion_rate`: Whether the agent reached its goal in this episode (even if it collided or went off-road).
 
 
 ### Metric aggregation
