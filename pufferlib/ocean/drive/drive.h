@@ -1849,8 +1849,9 @@ void compute_observations(Drive* env) {
 
         if (env->dynamics_model == JERK) {
             obs[6] = ego_entity->steering_angle / M_PI;
-            obs[7] = ego_entity->a_long / 5.0f;
-            obs[8] = ego_entity->a_lat / 4.0f;
+            // Asymmetric normalization for a_long to match action space
+            obs[7] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
+            obs[8] = ego_entity->a_lat / JERK_LAT[2];
             obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
         } else {
             obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
