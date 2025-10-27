@@ -554,6 +554,9 @@ class PuffeRL:
                             map_path = config["render_map"]
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
+                        # add init mode
+                        if self.vecenv.driver_env.init_mode is not None:
+                            cmd.extend(["--init-mode", str(self.vecenv.driver_env.init_mode)])
 
                         # Specify output paths for videos
                         cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])

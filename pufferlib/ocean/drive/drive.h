@@ -26,9 +26,9 @@
 #define DRIVEWAY 10
 
 // Initialization modes
-#define INIT_VEHICLES 0
-#define INIT_ALL_AGENTS 1
-#define INIT_TRACKS_TO_PREDICT_ONLY 2
+#define CONTROL_VEHICLES 0
+#define CONTROL_AGENTS 1
+#define CONTROL_TRACKS_TO_PREDICT 2
 
 // Trajectory Length
 #define TRAJECTORY_LENGTH 91
@@ -295,32 +295,6 @@ struct Drive {
     int* tracks_to_predict_indices;
     int init_mode;
 };
-
-typedef struct {
-    int candidates[MAX_AGENTS];
-    int candidates_count;
-    int forced_experts[MAX_AGENTS];
-    int forced_experts_count;
-    int statics[MAX_AGENTS];
-    int statics_count;
-} SelectionBuckets;
-
-static inline void push_capped(int* arr, int* count, int val, int cap) {
-    if (*count < cap) {
-        arr[(*count)++] = val;
-    }
-}
-
-static inline float ego_goal_distance_t0(const Entity* e) {
-    // Requires traj_* arrays and goal position
-    float cos_heading = cosf(e->traj_heading[0]);
-    float sin_heading = sinf(e->traj_heading[0]);
-    float goal_x = e->goal_position_x - e->traj_x[0];
-    float goal_y = e->goal_position_y - e->traj_y[0];
-    float rel_goal_x = goal_x * cos_heading + goal_y * sin_heading;
-    float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
-    return relative_distance_2d(0, 0, rel_goal_x, rel_goal_y);
-}
 
 static inline int vehicle_eligible_t0(const Entity* e) {
     if (e->traj_valid == NULL || e->traj_valid[0] != 1) return 0;
@@ -1292,17 +1266,21 @@ void set_active_agents(Drive* env){
         env->num_controllable_agents = 0;
     }
 
+    //printf("%d\n", env->init_mode);
+
     // Iterate through entities to find controllable agents
     for(int i = 0; i < env->num_objects-1 && env->num_controllable_agents < MAX_AGENTS; i++){
 
         // Check if the entity type is controllable
         int is_type_controllable;
-        if (env->init_mode == INIT_VEHICLES) {
+        if (env->init_mode == CONTROL_VEHICLES) {
             is_type_controllable = (env->entities[i].type == VEHICLE);
+            //printf("init mode is vehicles only\n");
         } else {
             is_type_controllable = (env->entities[i].type == VEHICLE) ||
                                    (env->entities[i].type == PEDESTRIAN) ||
                                    (env->entities[i].type == CYCLIST);
+            //printf("init mode is agents\n");
         }
 
         if(!is_type_controllable) continue;
@@ -1312,7 +1290,9 @@ void set_active_agents(Drive* env){
 
         env->num_controllable_agents++;
 
-        printf("Entity %d: Type %d, Controllable %d\n", i, env->entities[i].type, is_type_controllable);
+        // if (env->entities[i].type != VEHICLE) {
+        //     printf("Entity %d: Type %d, Controllable %d\n", i, env->entities[i].type, is_type_controllable);
+        // }
 
         // Return current distance to goal if agent meets other conditions
         float distance_to_goal = valid_active_agent(env, i);
