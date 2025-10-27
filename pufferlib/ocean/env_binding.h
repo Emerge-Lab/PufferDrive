@@ -841,6 +841,7 @@ typedef struct
     float goal_radius;
     int use_goal_generation;
     int init_mode;
+    int scenario_length;
 } env_init_config;
 
 static int handler(
@@ -875,6 +876,8 @@ static int handler(
         env_config->reward_ade = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
+    } else if (MATCH("env", "scenario_length")) {
+        env_config->scenario_length = atoi(value);
     } else if (MATCH("env", "init_mode")) {
         env_config->init_mode = atoi(value);
     } else {

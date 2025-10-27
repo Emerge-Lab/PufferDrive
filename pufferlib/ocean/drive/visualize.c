@@ -10,8 +10,10 @@
 #include <string.h>
 #include <stdbool.h>
 #include "error.h"
-#include "drive.c"
+#include "drive.h"
+#include "drivenet.h"
 #include "libgen.h"
+#define TRAJECTORY_LENGTH_DEFAULT 91
 
 typedef struct {
     int pipefd[2];
@@ -98,7 +100,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
         Vector3 prev_point = {0};
         bool has_prev = false;
 
-        for(int j=0; j<TRAJECTORY_LENGTH; j++){
+        for(int j = 0; j < env->entities[idx].array_size; j++){
             float x = env->entities[idx].traj_x[j];
             float y = env->entities[idx].traj_y[j];
             float valid = env->entities[idx].traj_valid[j];
@@ -196,7 +198,8 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int init_mode) {
+
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode) {
 
     char map_buffer[100];
     if (map_name == NULL) {
@@ -235,6 +238,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .deterministic_agent_selection = deterministic_selection,
         .init_mode = init_mode,
     };
+    env.scenario_length = (scenario_length_override > 0) ? scenario_length_override : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -265,7 +269,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     printf("Active agents in map: %d\n", env.active_agent_count);
     DriveNet* net = init_drivenet(weights, env.active_agent_count);
 
-    int frame_count = 91;
+    int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     int log_trajectory = log_trajectories;
     char filename_topdown[256];
     char filename_agent[256];
@@ -382,6 +386,7 @@ int main(int argc, char* argv[]) {
     int deterministic_selection = 0;
     int policy_agents_per_env = -1;
     int num_maps = 100;
+    int scenario_length_cli = -1;
     int init_mode = 0;
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
@@ -489,9 +494,14 @@ int main(int argc, char* argv[]) {
                 num_maps = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--scenario-length") == 0) {
+            if (i + 1 < argc) {
+                scenario_length_cli = atoi(argv[i + 1]);
+                i++;
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps, init_mode);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode);
     return 0;
 }
