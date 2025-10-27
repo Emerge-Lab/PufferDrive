@@ -41,4 +41,3 @@ jobs:
       - name: Run render test
         run: python tests/test_drivenet.py
         timeout-minutes: 15
-

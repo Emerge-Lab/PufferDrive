@@ -12,18 +12,18 @@ def test_drivenet(
     pt_file="resources/drive/puffer_drive_weights.pt",
     bin_file="resources/drive/puffer_drive_weights.bin",
     batch_size=4,
-    seed=42
+    seed=42,
 ):
     """Compare logits from PyTorch and C implementations."""
 
-    assert os.path.exists(bin_file), f"{bin_file} not found" 
-    assert os.path.exists(pt_file), f"{pt_file} not found" 
+    assert os.path.exists(bin_file), f"{bin_file} not found"
+    assert os.path.exists(pt_file), f"{pt_file} not found"
 
     env = env_creator("puffer_drive")(num_maps=1, num_agents=batch_size, scenario_length=91)
     policy = Drive(env, input_size=64, hidden_size=256)
     model = Recurrent(env, policy=policy, input_size=256, hidden_size=256)
 
-    state_dict = torch.load(pt_file, map_location='cpu')
+    state_dict = torch.load(pt_file, map_location="cpu")
     model.load_state_dict(state_dict)
     model.eval()
 
