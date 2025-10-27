@@ -38,6 +38,6 @@ jobs:
       - name: Compile C extensions
         run: python setup.py build_ext --inplace --force
 
-      - name: Run render test
+      - name: Run Forward pass
         run: python tests/test_drivenet.py
         timeout-minutes: 15
