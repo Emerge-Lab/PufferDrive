@@ -565,8 +565,6 @@ class PuffeRL:
                         env_cfg = getattr(self, "vecenv", None)
                         env_cfg = getattr(env_cfg, "driver_env", None)
                         if env_cfg is not None:
-                            if getattr(env_cfg, "control_all_agents", False):
-                                cmd.append("--pure-self-play")
                             n_policy = getattr(env_cfg, "num_policy_controlled_agents", -1)
                             try:
                                 n_policy = int(n_policy)

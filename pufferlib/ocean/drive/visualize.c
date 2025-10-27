@@ -400,7 +400,6 @@ int main(int argc, char* argv[]) {
     int init_steps = 0;
     const char* map_name = NULL;
     const char* policy_name = "resources/drive/puffer_drive_weights.bin";
-    int control_all_agents = 0;
     int deterministic_selection = 0;
     int policy_agents_per_env = -1;
     int control_non_vehicles = 0;
@@ -488,8 +487,6 @@ int main(int argc, char* argv[]) {
             }
         } else if (strcmp(argv[i], "--control-non-vehicles") == 0) {
             control_non_vehicles = 1;
-        } else if (strcmp(argv[i], "--pure-self-play") == 0) {
-            control_all_agents = 1;
         } else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {
             if (i + 1 < argc) {
                 policy_agents_per_env = atoi(argv[i + 1]);
@@ -510,6 +507,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli);
     return 0;
 }
