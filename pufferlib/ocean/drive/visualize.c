@@ -13,7 +13,69 @@
 #include "drive.h"
 #include "drivenet.h"
 #include "libgen.h"
+#include "ini.h"
 #define TRAJECTORY_LENGTH_DEFAULT 91
+
+// Config struct for parsing INI files
+typedef struct {
+    int action_type;
+    int dynamics_model;
+    float reward_vehicle_collision;
+    float reward_offroad_collision;
+    float reward_goal;
+    float reward_goal_post_respawn;
+    float reward_vehicle_collision_post_respawn;
+    float reward_ade;
+    float goal_radius;
+    int spawn_immunity_timer;
+    float dt;
+    int use_goal_generation;
+    int control_non_vehicles;
+} env_init_config;
+
+// INI file parser handler
+static int handler(void* config, const char* section, const char* name, const char* value) {
+    env_init_config* env_config = (env_init_config*)config;
+    #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
+
+    if (MATCH("env", "action_type")) {
+        env_config->action_type = (strcmp(value, "\"discrete\"") == 0) ? 0 : 1;
+    } else if (MATCH("env", "dynamics_model")) {
+        if (strcmp(value, "\"classic\"") == 0 || strcmp(value, "classic") == 0) {
+            env_config->dynamics_model = 0;  // CLASSIC
+        } else if (strcmp(value, "\"jerk\"") == 0 || strcmp(value, "jerk") == 0) {
+            env_config->dynamics_model = 1;  // JERK
+        } else {
+            printf("Warning: Unknown dynamics_model value '%s', defaulting to JERK\n", value);
+            env_config->dynamics_model = 1;  // Default to JERK
+        }
+    } else if (MATCH("env", "use_goal_generation")) {
+        env_config->use_goal_generation = (strcmp(value, "True") == 0) ? 1 : 0;
+    } else if (MATCH("env", "reward_vehicle_collision")) {
+        env_config->reward_vehicle_collision = atof(value);
+    } else if (MATCH("env", "reward_offroad_collision")) {
+        env_config->reward_offroad_collision = atof(value);
+    } else if (MATCH("env", "reward_goal")) {
+        env_config->reward_goal = atof(value);
+    } else if (MATCH("env", "reward_goal_post_respawn")) {
+        env_config->reward_goal_post_respawn = atof(value);
+    } else if (MATCH("env", "reward_vehicle_collision_post_respawn")) {
+        env_config->reward_vehicle_collision_post_respawn = atof(value);
+    } else if (MATCH("env", "reward_ade")) {
+        env_config->reward_ade = atof(value);
+    } else if (MATCH("env", "goal_radius")) {
+        env_config->goal_radius = atof(value);
+    } else if (MATCH("env", "spawn_immunity_timer")) {
+        env_config->spawn_immunity_timer = atoi(value);
+    } else if (MATCH("env", "dt")) {
+        env_config->dt = atof(value);
+    } else if (MATCH("env", "control_non_vehicles")) {
+        env_config->control_non_vehicles = (strcmp(value, "True") == 0) ? 1 : 0;
+    }
+
+    #undef MATCH
+    return 1;
+}
 
 typedef struct {
     int pipefd[2];
@@ -201,6 +263,14 @@ static int make_gif_from_frames(const char *pattern, int fps,
 
 int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override) {
 
+    // Parse configuration from INI file
+    env_init_config conf = {0};  // Initialize to zero
+    const char* ini_file = "pufferlib/config/ocean/drive.ini";
+    if(ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        return -1;
+    }
+
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
@@ -227,13 +297,14 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     fclose(policy_file);
 
     Drive env = {
-        .dynamics_model = CLASSIC,
-        .reward_vehicle_collision = -0.5f,
-        .reward_offroad_collision = -0.2f,
-        .reward_ade = -0.0f,
-        .goal_radius = goal_radius,
+        .dynamics_model = conf.dynamics_model,
+        .reward_vehicle_collision = conf.reward_vehicle_collision,
+        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_ade = conf.reward_ade,
+        .goal_radius = conf.goal_radius,
+        .dt = conf.dt,
 	      .map_name = (char*)map_name,
-        .control_non_vehicles = control_non_vehicles,
+        .control_non_vehicles = conf.control_non_vehicles,
         .init_steps = init_steps,
         .control_all_agents = control_all_agents,
         .policy_agents_per_env = policy_agents_per_env,
