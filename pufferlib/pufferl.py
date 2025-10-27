@@ -1145,6 +1145,10 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
+    # Rebuild visualize binary if saving frames (for C-based rendering)
+    if args["save_frames"] > 0:
+        ensure_drive_binary()
+
     state = {}
     if args["train"]["use_rnn"]:
         state = dict(
