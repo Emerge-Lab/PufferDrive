@@ -470,18 +470,9 @@ int main(int argc, char* argv[]) {
             }
         } else if (strcmp(argv[i], "--init-mode") == 0) {
             if (i + 1 < argc) {
-                if (strcmp(argv[i + 1], "controllable_vehicles") == 0) {
-                    init_mode = 0;
-                } else if (strcmp(argv[i + 1], "controllable_agents") == 0) {
-                    init_mode = 1;
-                } else if (strcmp(argv[i + 1], "tracks_to_predict") == 0) {
-                    init_mode = 2;
-                } else {
-                    fprintf(stderr, "Error: --init-mode must be one of 'controllable_vehicles', 'tracks_to_predict', or 'controllable_agents'\n");
-                    return 1;
+                init_mode = atoi(argv[i + 1]);
                 }
                 i++;
-            }
         } else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {
             if (i + 1 < argc) {
                 policy_agents_per_env = atoi(argv[i + 1]);

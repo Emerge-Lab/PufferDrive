@@ -554,7 +554,6 @@ class PuffeRL:
                             map_path = config["render_map"]
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
-                        # add init mode
                         if self.vecenv.driver_env.init_mode is not None:
                             cmd.extend(["--init-mode", str(self.vecenv.driver_env.init_mode)])
 
@@ -614,7 +613,7 @@ class PuffeRL:
                                     print(f"Video generation completed but {source_vid} not found")
 
                         else:
-                            print(f"C rendering failed with exit code {result.returncode}: {result.stderr}")
+                            print(f"C rendering failed with exit code {result.returncode}: {result.stdout}")
 
                     except subprocess.TimeoutExpired:
                         print("C rendering timed out")
