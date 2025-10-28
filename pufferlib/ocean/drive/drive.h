@@ -2712,6 +2712,35 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
 
     EndMode3D();
 
+    if (env->init_mode == CONTROL_TRACKS_TO_PREDICT && mode == 1) {
+
+        float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
+        float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+        float pixels_per_world_unit = client->height / map_height;
+
+        for (int i = 0; i < env->active_agent_count; i++) {
+            // Ignore respawned agents
+            if (env->entities[i].respawn_timestep != -1) {
+                continue;
+            }
+            int agent_idx = env->active_agent_indices[i];
+            int womd_track_idx = env->tracks_to_predict_indices[i];
+
+            float raw_x = -env->entities[agent_idx].x * pixels_per_world_unit;
+            float raw_y = env->entities[agent_idx].y * pixels_per_world_unit;
+
+            int screen_x = (int)raw_x + client->width/2 + 20;
+            int screen_y = (int)raw_y + client->height/2 - 25;
+
+            if (screen_x >= 0 && screen_x <= client->width &&
+                screen_y >= 0 && screen_y <= client->height) {
+                char text[32];
+                snprintf(text, sizeof(text), "%d", womd_track_idx);
+                int text_width = MeasureText(text, 20);
+                DrawText(text, screen_x - text_width/2, screen_y, 20, PUFF_WHITE);
+            }
+        }
+    }
 }
 
 void saveTopDownImage(Drive* env, Client* client, const char *filename, RenderTexture2D target, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid){

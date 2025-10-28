@@ -76,7 +76,7 @@ void CloseVideo(VideoRecorder *recorder) {
     waitpid(recorder->pid, NULL, 0);
 }
 
-void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid) {
+void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid, int img_width, int img_height) {
 
     BeginDrawing();
 
@@ -87,6 +87,9 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
     camera.fovy     = map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
+
+    client->width = img_width;
+    client->height = img_height;
 
     Color road = (Color){35, 35, 37, 255};
     ClearBackground(road);
@@ -324,7 +327,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         printf("Recording topdown view...\n");
         for(int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
-                renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid);
+                renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid, img_width, img_height);
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
             }
