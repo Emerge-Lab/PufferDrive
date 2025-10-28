@@ -359,7 +359,7 @@ class PuffeRL:
             shape = self.values.shape
             advantages = torch.zeros(shape, device=device)
 
-            if hasattr(self.vecenv.driver_env, 'discount_conditioned') and self.vecenv.driver_env.discount_conditioned:
+            if hasattr(self.vecenv.driver_env, "discount_conditioned") and self.vecenv.driver_env.discount_conditioned:
                 disc_idx = 7  # base ego obs
                 if self.vecenv.driver_env.reward_conditioned:
                     disc_idx += 3
@@ -423,7 +423,7 @@ class PuffeRL:
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
             adv = advantages[idx]
-            if hasattr(self.vecenv.driver_env, 'discount_conditioned') and self.vecenv.driver_env.discount_conditioned:
+            if hasattr(self.vecenv.driver_env, "discount_conditioned") and self.vecenv.driver_env.discount_conditioned:
                 mb_gammas = gammas[idx]
             else:
                 mb_gammas = torch.full((len(idx),), config["gamma"], device=device, dtype=torch.float32)
@@ -453,12 +453,12 @@ class PuffeRL:
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
             # Entropy-weighted loss if entropy conditioning is enabled
-            if hasattr(self.vecenv.driver_env, 'entropy_conditioned') and self.vecenv.driver_env.entropy_conditioned:
+            if hasattr(self.vecenv.driver_env, "entropy_conditioned") and self.vecenv.driver_env.entropy_conditioned:
                 mb_obs_flat = mb_obs.reshape(-1, mb_obs.shape[-1])
                 if self.vecenv.driver_env.reward_conditioned:
                     ent_weights = mb_obs_flat[:, 10]  # Position 10: after ego(7) + RC(3)
                 else:
-                    ent_weights = mb_obs_flat[:, 7]   # Position 7: after ego(7)
+                    ent_weights = mb_obs_flat[:, 7]  # Position 7: after ego(7)
                 ent_weights = ent_weights.reshape(entropy.shape)
                 entropy_loss = -(entropy * ent_weights).mean()
                 loss = pg_loss + config["vf_coef"] * v_loss + entropy_loss
@@ -579,11 +579,11 @@ class PuffeRL:
                         if self.vecenv.driver_env.init_steps > 0:
                             cmd.extend(["--init-steps", str(self.vecenv.driver_env.init_steps)])
 
-                        if hasattr(self.vecenv.driver_env, 'reward_conditioned'):
+                        if hasattr(self.vecenv.driver_env, "reward_conditioned"):
                             cmd.extend(["--use-rc", "1" if self.vecenv.driver_env.reward_conditioned else "0"])
-                        if hasattr(self.vecenv.driver_env, 'entropy_conditioned'):
+                        if hasattr(self.vecenv.driver_env, "entropy_conditioned"):
                             cmd.extend(["--use-ec", "1" if self.vecenv.driver_env.entropy_conditioned else "0"])
-                        if hasattr(self.vecenv.driver_env, 'discount_conditioned'):
+                        if hasattr(self.vecenv.driver_env, "discount_conditioned"):
                             cmd.extend(["--use-dc", "1" if self.vecenv.driver_env.discount_conditioned else "0"])
 
                         if config["render_map"] is not None:
@@ -592,15 +592,29 @@ class PuffeRL:
                                 cmd.extend(["--map-name", map_path])
 
                         # Add agent control flags from environment configuration
-                        if hasattr(self.vecenv.driver_env, 'init_steps') and self.vecenv.driver_env.init_steps > 0:
+                        if hasattr(self.vecenv.driver_env, "init_steps") and self.vecenv.driver_env.init_steps > 0:
                             cmd.extend(["--init-steps", str(self.vecenv.driver_env.init_steps)])
-                        if hasattr(self.vecenv.driver_env, 'control_non_vehicles') and self.vecenv.driver_env.control_non_vehicles:
+                        if (
+                            hasattr(self.vecenv.driver_env, "control_non_vehicles")
+                            and self.vecenv.driver_env.control_non_vehicles
+                        ):
                             cmd.append("--control-non-vehicles")
-                        if hasattr(self.vecenv.driver_env, 'control_all_agents') and self.vecenv.driver_env.control_all_agents:
+                        if (
+                            hasattr(self.vecenv.driver_env, "control_all_agents")
+                            and self.vecenv.driver_env.control_all_agents
+                        ):
                             cmd.append("--pure-self-play")
-                        if hasattr(self.vecenv.driver_env, 'policy_agents_per_env') and self.vecenv.driver_env.policy_agents_per_env > 0:
-                            cmd.extend(["--num-policy-controlled-agents", str(self.vecenv.driver_env.policy_agents_per_env)])
-                        if hasattr(self.vecenv.driver_env, 'deterministic_agent_selection') and self.vecenv.driver_env.deterministic_agent_selection:
+                        if (
+                            hasattr(self.vecenv.driver_env, "policy_agents_per_env")
+                            and self.vecenv.driver_env.policy_agents_per_env > 0
+                        ):
+                            cmd.extend(
+                                ["--num-policy-controlled-agents", str(self.vecenv.driver_env.policy_agents_per_env)]
+                            )
+                        if (
+                            hasattr(self.vecenv.driver_env, "deterministic_agent_selection")
+                            and self.vecenv.driver_env.deterministic_agent_selection
+                        ):
                             cmd.append("--deterministic-selection")
 
                         # Specify output paths for videos
