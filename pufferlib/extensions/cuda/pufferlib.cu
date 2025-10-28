@@ -20,7 +20,7 @@ __host__ __device__ void puff_advantage_row_cuda(float* values, float* rewards, 
 }
 
 void vtrace_check_cuda(torch::Tensor values, torch::Tensor rewards,
-        torch::Tensor dones, torch::Tensor importance, torch::Tensor advantages, 
+        torch::Tensor dones, torch::Tensor importance, torch::Tensor advantages,
         torch::Tensor gammas, int num_steps, int horizon) {
 
     // Validate input tensors

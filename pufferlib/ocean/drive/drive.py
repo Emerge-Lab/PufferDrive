@@ -140,7 +140,11 @@ class Drive(pufferlib.PufferEnv):
         self.discount_weight_lb = discount_weight_lb
         self.discount_weight_ub = discount_weight_ub
 
-        conditioning_dims = (3 if self.reward_conditioned else 0) + (1 if self.entropy_conditioned else 0) + (1 if self.discount_conditioned else 0)
+        conditioning_dims = (
+            (3 if self.reward_conditioned else 0)
+            + (1 if self.entropy_conditioned else 0)
+            + (1 if self.discount_conditioned else 0)
+        )
         self.num_obs = 7 + conditioning_dims + 63 * 7 + 200 * 7
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.population_play = population_play
