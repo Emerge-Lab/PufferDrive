@@ -242,7 +242,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
-	      .map_name = (char*)map_name,
+	    .map_name = (char*)map_name,
         .control_non_vehicles = conf.control_non_vehicles,
         .init_steps = conf.init_steps,
         .control_all_agents = conf.control_all_agents,
