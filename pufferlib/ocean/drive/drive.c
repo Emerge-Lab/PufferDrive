@@ -1,7 +1,7 @@
 #include "drive.h"
 #include "drivenet.h"
 #include <string.h>
-#include "../env_binding.h"
+#include "../env_config.h"
 
 // Use this test if the network changes to ensure that the forward pass
 // matches the torch implementation to the 3rd or ideally 4th decimal place

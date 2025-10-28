@@ -13,7 +13,7 @@
 #include "drive.h"
 #include "drivenet.h"
 #include "libgen.h"
-#include "../env_binding.h"
+#include "../env_config.h"
 #define TRAJECTORY_LENGTH_DEFAULT 91
 
 typedef struct {

@@ -151,20 +151,20 @@ void forward(DriveNet* net, float* observations, int* actions) {
         // Process partner observation
         for(int i = 0; i < 63; i++) {
             for(int j = 0; j < 7; j++) {
-                obs_partner[b][i][j] = observations[partner_offset + i*7 + j];
+                net->obs_partner[b*63*7 + i*7 + j] = observations[partner_offset + i*7 + j];
             }
         }
 
         // Process road observation
         for(int i = 0; i < 200; i++) {
             for(int j = 0; j < 7; j++) {
-                obs_road[b][i][j] = observations[road_offset + i*7 + j];
+                net->obs_road[b*200*13 + i*13 + j] = observations[road_offset + i*7 + j];
             }
             for(int j = 0; j < 7; j++) {
                 if(j == observations[road_offset+i*7 + 6]) {
-                    obs_road[b][i][6 + j] = 1.0f;
+                    net->obs_road[b*200*13 + i*13 + 6 + j] = 1.0f;
                 } else {
-                    obs_road[b][i][6 + j] = 0.0f;
+                    net->obs_road[b*200*13 + i*13 + 6 + j] = 0.0f;
                 }
             }
         }
