@@ -55,7 +55,7 @@ class Drive(pufferlib.PufferEnv):
         self.init_steps = init_steps
 
         if action_type == "discrete":
-            self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+            self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 13,])
         elif action_type == "continuous":
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         else:

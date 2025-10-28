@@ -77,8 +77,8 @@ DriveNet* init_drivenet(Weights* weights, int num_agents) {
     net->lstm = make_lstm(weights, num_agents, hidden_size, 256);
     memset(net->lstm->state_h, 0, num_agents*256*sizeof(float));
     memset(net->lstm->state_c, 0, num_agents*256*sizeof(float));
-    int logit_sizes[2] = {7, 13};
-    net->multidiscrete = make_multidiscrete(num_agents, logit_sizes, 2);
+    int logit_sizes[1] = {7 * 13};
+    net->multidiscrete = make_multidiscrete(num_agents, logit_sizes, 1);
     return net;
 }
 
