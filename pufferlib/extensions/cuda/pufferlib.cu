@@ -61,7 +61,7 @@ void compute_puff_advantage_cuda(torch::Tensor values, torch::Tensor rewards,
         torch::Tensor gammas, double lambda, double rho_clip, double c_clip) {
     int num_steps = values.size(0);
     int horizon = values.size(1);
-    vtrace_check_cuda(values, rewards, dones, importance, advantages, num_steps, horizon);
+    vtrace_check_cuda(values, rewards, dones, importance, advantages, gammas, num_steps, horizon);
     TORCH_CHECK(values.is_cuda(), "All tensors must be on GPU");
 
     int threads_per_block = 256;

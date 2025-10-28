@@ -474,7 +474,7 @@ class PuffeRL:
             profile("train_misc", epoch)
             losses["policy_loss"] += pg_loss.item() / self.total_minibatches
             losses["value_loss"] += v_loss.item() / self.total_minibatches
-            losses["entropy"] += entropy.mean().item() / self.total_minibatches
+            losses["entropy"] += entropy_loss.item() / self.total_minibatches
             losses["old_approx_kl"] += old_approx_kl.item() / self.total_minibatches
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches

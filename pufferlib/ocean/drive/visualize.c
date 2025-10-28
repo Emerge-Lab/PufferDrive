@@ -10,7 +10,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include "error.h"
-#include "drive.h"
 #include "drivenet.h"
 #include "libgen.h"
 #define TRAJECTORY_LENGTH_DEFAULT 91
@@ -491,6 +490,8 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--scenario-length") == 0) {
             if (i + 1 < argc) {
                 scenario_length_cli = atoi(argv[i + 1]);
+                i++;
+            }
         } else if (strcmp(argv[i], "--use-rc") == 0) {
             if (i + 1 < argc) {
                 use_rc = atoi(argv[i + 1]);
@@ -510,5 +511,5 @@ int main(int argc, char* argv[]) {
     }
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, use_rc, use_ec, use_dc, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli);
-    return 0;
+      return 0;
 }
