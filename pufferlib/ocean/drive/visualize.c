@@ -10,7 +10,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include "error.h"
-#include "drive.h"
 #include "drivenet.h"
 #include "libgen.h"
 #include "../env_config.h"
@@ -766,6 +765,8 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--scenario-length") == 0) {
             if (i + 1 < argc) {
                 scenario_length_cli = atoi(argv[i + 1]);
+                i++;
+            }
         } else if (strcmp(argv[i], "--use-rc") == 0) {
             if (i + 1 < argc) {
                 use_rc = atoi(argv[i + 1]);
