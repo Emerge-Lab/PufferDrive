@@ -1275,7 +1275,7 @@ void set_active_agents(Drive* env){
     }
     int first_agent_id = env->num_objects-1;
     float distance_to_goal = valid_active_agent(env, first_agent_id);
-    if(distance_to_goal){
+    if(env->init_mode == CONTROL_TRACKS_TO_PREDICT || distance_to_goal){
         env->active_agent_count = 1;
         active_agent_indices[0] = first_agent_id;
         env->entities[first_agent_id].active_agent = 1;
@@ -1290,31 +1290,41 @@ void set_active_agents(Drive* env){
     // Iterate through entities to find controllable agents
     for(int i = 0; i < env->num_objects-1 && env->num_controllable_agents < MAX_AGENTS; i++){
 
-        // Check if the entity type is controllable
-        int is_type_controllable;
-        if (env->init_mode == CONTROL_VEHICLES) {
-            is_type_controllable = (env->entities[i].type == VEHICLE);
-            //printf("init mode is vehicles only\n");
+        // Check if entity should be considered based on init_mode
+        int should_consider = 0;
+
+        if (env->init_mode == CONTROL_TRACKS_TO_PREDICT) {
+            // Check if this entity is in tracks_to_predict_indices
+            for (int j = 0; j < env->num_tracks_to_predict; j++) {
+                if (env->tracks_to_predict_indices[j] == i) {
+                    should_consider = 1;
+                    //printf("controlling track %d\n", i);
+                    break;
+                }
+            }
         } else {
-            is_type_controllable = (env->entities[i].type == VEHICLE) ||
-                                   (env->entities[i].type == PEDESTRIAN) ||
-                                   (env->entities[i].type == CYCLIST);
-            //printf("init mode is agents\n");
+            if (env->init_mode == CONTROL_VEHICLES) {
+                should_consider = (env->entities[i].type == VEHICLE);
+            } else {
+                should_consider = (env->entities[i].type == VEHICLE) ||
+                                  (env->entities[i].type == PEDESTRIAN) ||
+                                  (env->entities[i].type == CYCLIST);
+            }
         }
 
-        if(!is_type_controllable) continue;
+        if(!should_consider) continue;
 
         // Check if agent has valid trajectory point at the initial timestep
         if(env->entities[i].traj_valid[env->init_steps] != 1) continue;
 
         env->num_controllable_agents++;
 
-        // if (env->entities[i].type != VEHICLE) {
-        //     printf("Entity %d: Type %d, Controllable %d\n", i, env->entities[i].type, is_type_controllable);
-        // }
-
-        // Return current distance to goal if agent meets other conditions
-        float distance_to_goal = valid_active_agent(env, i);
+        // Determine if agent should be active or static
+        if (env->init_mode != CONTROL_TRACKS_TO_PREDICT) {
+            distance_to_goal = valid_active_agent(env, i);
+        } else {
+            distance_to_goal = 1.0f; // All considered agents are active in this mode
+        }
         if(distance_to_goal > 0){
             active_agent_indices[env->active_agent_count] = i;
             env->active_agent_count++;
@@ -1330,6 +1340,7 @@ void set_active_agents(Drive* env){
             }
         }
     }
+    //printf("Active agents: %d, Static cars: %d, Expert static cars: %d\n", env->active_agent_count, env->static_car_count, env->expert_static_car_count);
     // set up initial active agents
     env->active_agent_indices = (int*)malloc(env->active_agent_count * sizeof(int));
     env->static_car_indices = (int*)malloc(env->static_car_count * sizeof(int));
@@ -1413,7 +1424,9 @@ void init(Drive* env){
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
-    remove_bad_trajectories(env);
+    if (env->init_mode != CONTROL_TRACKS_TO_PREDICT) {
+        remove_bad_trajectories(env);
+    }
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
@@ -1563,6 +1576,7 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
 
 void compute_observations(Drive* env) {
     int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    //printf("Computing observations for %d active agents\n", env->active_agent_count);
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {

@@ -93,6 +93,7 @@ class Drive(pufferlib.PufferEnv):
         agent_offsets, map_ids, num_envs = binding.shared(
             num_agents=num_agents,
             num_maps=num_maps,
+            init_mode=self.init_mode,
             num_policy_controlled_agents=self.num_policy_controlled_agents,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
         )
@@ -158,6 +159,7 @@ class Drive(pufferlib.PufferEnv):
                 agent_offsets, map_ids, num_envs = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
+                    init_mode=self.init_mode,
                     num_policy_controlled_agents=self.num_policy_controlled_agents,
                     deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                 )
@@ -409,6 +411,7 @@ def save_map_binary(map_data, output_file):
             for coord in ["x", "y", "z"]:
                 for point in geometry:
                     f.write(struct.pack("f", float(point.get(coord, 0.0))))
+
             # Write scalar fields
             f.write(struct.pack("f", float(road.get("width", 0.0))))
             f.write(struct.pack("f", float(road.get("length", 0.0))))
@@ -460,10 +463,12 @@ def process_all_maps():
 def test_performance(timeout=0.0001, atn_cache=1024, num_agents=12):
     import time
 
-    env = Drive(num_agents=num_agents, num_maps=1, init_mode="control_agents", init_steps=75)
+    env = Drive(
+        num_agents=num_agents, num_maps=1, init_mode="control_tracks_to_predict", init_steps=2, scenario_length=91
+    )
     env.reset()
 
-    # print(env.get_scenario_ids())
+    print(env.get_scenario_ids())
 
     tick = 0
     actions = np.stack(
@@ -481,5 +486,5 @@ def test_performance(timeout=0.0001, atn_cache=1024, num_agents=12):
 
 
 if __name__ == "__main__":
-    test_performance()
-    # process_all_maps()
+    # test_performance()
+    process_all_maps()
