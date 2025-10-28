@@ -845,14 +845,26 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
         input_size = co_player_policy.get("input_size", 256)
         hidden_size = co_player_policy.get("hidden_size", 256)
-        num_obs = 7 + 63 * 7 + 200 * 7  ## normal observations
-        num_obs += co_player_policy.get(
-            "num_conditioning_vars", 0
-        )  ## conditioning observations  eg. goal weight, off road weight etc
-
+        
+        # Get conditioning type from env_k
+        condition_type = env_k.get("co_player_condition_type", "none")
+        reward_conditioned = condition_type in ("reward", "all")
+        entropy_conditioned = condition_type in ("entropy", "all")
+        discount_conditioned = condition_type in ("discount", "all")
+        
+        # Calculate conditioning dimensions
+        conditioning_dims = (3 if reward_conditioned else 0) + \
+                        (1 if entropy_conditioned else 0) + \
+                        (1 if discount_conditioned else 0)
+        
+        # Base observations + conditioning observations
+        num_obs = 7 + conditioning_dims + 63 * 7 + 200 * 7
         temp_env = SimpleNamespace(
             single_action_space=gymnasium.spaces.MultiDiscrete([7, 13]),
             single_observation_space=gymnasium.spaces.Box(low=-1, high=1, shape=(num_obs,), dtype=np.float32),
+            reward_conditioned = reward_conditioned,
+            entropy_conditioned = entropy_conditioned,
+            discount_conditioned = discount_conditioned,
         )
 
         base_policy = Drive(temp_env, input_size=input_size, hidden_size=hidden_size)
@@ -873,8 +885,11 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
         policy.load_state_dict(state_dict, strict=True)
         policy.eval()
-        print("Co player policy loaded", flush=True)
-
+        print(f"Co player policy loaded with {conditioning_dims} conditioning dims (condition_type={condition_type})", flush=True)
+        
+        # Store policy and conditioning info in env_k
+        env_k["co_player_policy"] = policy
+        env_k["co_player_condition_type"] = condition_type
         torch.set_num_threads(
             1
         )  # NOTE this is the only way I could get co-player policies to work inside environment evaluation

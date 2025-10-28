@@ -40,13 +40,28 @@ class Drive(pufferlib.PufferEnv):
         use_goal_generation=False,
         control_non_vehicles=False,
         buf=None,
+        ini_file = "pufferlib/config/ocean/drive.ini",
         seed=1,
+        condition_type="none",
+        collision_weight_lb=-0.5,
+        collision_weight_ub=-0.5,
+        offroad_weight_lb=-0.2,
+        offroad_weight_ub=-0.2,
+        goal_weight_lb=1.0,
+        goal_weight_ub=1.0,
+        entropy_weight_lb=0.001,
+        entropy_weight_ub=0.001,
+        discount_weight_lb=0.98,
+        discount_weight_ub=0.98,
+
         population_play=False,
         co_player_policy_path=None,
         co_player_policy_name=None,
         co_player_policy=None,
         co_player_rnn_name=None,
         co_player_rnn=None,
+        co_player_condition_type = None,
+
         num_ego_agents=512,
         init_steps=0,
         k_scenarios = 0,
@@ -85,8 +100,8 @@ class Drive(pufferlib.PufferEnv):
         self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
 
         self.num_ego_agents = num_ego_agents
-
-        print(f"DEBUG: scario length: {scenario_length}", flush = True)
+        self.ini_file = ini_file
+        self.ini_file
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.population_play = population_play
@@ -133,10 +148,32 @@ class Drive(pufferlib.PufferEnv):
                 raise ValueError(
                     f"num ego agents ({num_ego_agents}) exceeds the number of total agents ({num_agents}))"
                 )
+            
+        self.condition_type = condition_type
+        self.reward_conditioned = condition_type in ("reward", "all")
+        self.entropy_conditioned = condition_type in ("entropy", "all")
+        self.discount_conditioned = condition_type in ("discount", "all")
+
+        self.co_player_condition_type = co_player_condition_type
+        self.co_player_reward_conditioned = co_player_condition_type in ("reward", "all")
+        self.co_player_entropy_conditioned = co_player_condition_type in ("entropy", "all")
+        self.co_player_discount_conditioned = co_player_condition_type in ("discount", "all")
+
+        self.collision_weight_lb = collision_weight_lb if self.reward_conditioned else reward_vehicle_collision
+        self.collision_weight_ub = collision_weight_ub if self.reward_conditioned else reward_vehicle_collision
+        self.offroad_weight_lb = offroad_weight_lb if self.reward_conditioned else reward_offroad_collision
+        self.offroad_weight_ub = offroad_weight_ub if self.reward_conditioned else reward_offroad_collision
+        self.goal_weight_lb = goal_weight_lb if self.reward_conditioned else 1.0
+        self.goal_weight_ub = goal_weight_ub if self.reward_conditioned else 1.0
+        self.entropy_weight_lb = entropy_weight_lb
+        self.entropy_weight_ub = entropy_weight_ub
+        self.discount_weight_lb = discount_weight_lb
+        self.discount_weight_ub = discount_weight_ub
 
         self.control_all_agents = bool(control_all_agents)
         self.num_policy_controlled_agents = int(num_policy_controlled_agents)
         self.deterministic_agent_selection = bool(deterministic_agent_selection)
+        self.condition_type = condition_type
 
         my_shared_tuple = binding.shared(
             num_agents=num_agents,
@@ -150,6 +187,8 @@ class Drive(pufferlib.PufferEnv):
 
         if self.population_play:
             agent_offsets, map_ids, num_envs, ego_ids, co_player_ids = my_shared_tuple
+
+            self.num_envs = num_envs
 
             self.ego_ids = [item for sublist in ego_ids for item in sublist]
             self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
@@ -174,6 +213,9 @@ class Drive(pufferlib.PufferEnv):
             self.co_player_rnn_name = co_player_rnn_name
             self.co_player_policy = co_player_policy
             self.set_co_player_state()
+
+            if self.co_player_condition_type is not None and self.co_player_condition_type != "none":
+                self._initialize_co_player_conditioning()
 
             # Build per-environment ID lists
             local_ego_ids = []
@@ -216,7 +258,6 @@ class Drive(pufferlib.PufferEnv):
             else:
                 self.co_player_actions = np.zeros(co_player_atn_space.shape, dtype=np.int32)
 
-        print(f"DEBUG: scenario lenght: {self.scenario_length}")
         # Create environments
         env_ids = []
         for i in range(num_envs):
@@ -256,7 +297,7 @@ class Drive(pufferlib.PufferEnv):
                 co_player_ids=local_co_player_ids[i],
                 ego_agent_ids=local_ego_ids[i],
                 num_ego_agents=len(local_ego_ids[i]),
-                ini_file="pufferlib/config/ocean/drive.ini",
+                ini_file=self.ini_file,
                 control_non_vehicles=int(control_non_vehicles),
                 init_steps=init_steps,
             )
@@ -267,6 +308,11 @@ class Drive(pufferlib.PufferEnv):
     def get_co_player_actions(self):
         with torch.no_grad():
             co_player_obs = self.observations[self.co_player_ids]
+            
+            # Add conditioning to co-player observations if needed
+            if self.co_player_condition_type != "none":
+                co_player_obs = self._add_co_player_conditioning(co_player_obs)
+
             co_player_obs = torch.as_tensor(co_player_obs)
             logits, value = self.co_player_policy.forward_eval(co_player_obs, self.state)
             co_player_action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
@@ -278,6 +324,53 @@ class Drive(pufferlib.PufferEnv):
             lstm_h=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
             lstm_c=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
         )
+
+    def _add_co_player_conditioning(self, observations):
+        """Add pre-sampled conditioning variables to co-player observations"""
+        if not (self.co_player_reward_conditioned or self.co_player_entropy_conditioned or self.co_player_discount_conditioned):
+            return observations
+        
+        conditioning_values = []
+        for i in range(self.num_envs):
+            num_co_players_in_env = len(self.local_co_player_ids[i])
+            if num_co_players_in_env == 0:
+                continue
+
+            for _ in range(num_co_players_in_env):
+                conditioning_values.append(self.env_conditioning[i])
+        
+        conditioning_array = np.stack(conditioning_values, axis=0)
+
+        obs_with_conditioning = np.concatenate([
+            observations[:, :7],  # First 7 base observations
+            conditioning_array,    # Conditioning variables
+            observations[:, 7:]    # Rest of observations
+        ], axis=1)
+        
+        return obs_with_conditioning
+
+    def _initialize_co_player_conditioning(self):
+        """Sample and store conditioning values for each environment"""
+        self.env_conditioning = []
+        
+        for i in range(self.num_envs):
+            env_cond = []
+            
+            if self.co_player_reward_conditioned:
+                collision_weight = np.random.uniform(self.collision_weight_lb, self.collision_weight_ub)
+                offroad_weight = np.random.uniform(self.offroad_weight_lb, self.offroad_weight_ub)
+                goal_weight = np.random.uniform(self.goal_weight_lb, self.goal_weight_ub)
+                env_cond.extend([collision_weight, offroad_weight, goal_weight])
+            
+            if self.co_player_entropy_conditioned:
+                entropy_weight = np.random.uniform(self.entropy_weight_lb, self.entropy_weight_ub)
+                env_cond.append(entropy_weight)
+            
+            if self.co_player_discount_conditioned:
+                discount_weight = np.random.uniform(self.discount_weight_lb, self.discount_weight_ub)
+                env_cond.append(discount_weight)
+            
+            self.env_conditioning.append(np.array(env_cond, dtype=np.float32))
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -325,6 +418,8 @@ class Drive(pufferlib.PufferEnv):
                     self.ego_ids = [item for sublist in ego_ids for item in sublist]
                     self.co_player_ids = [item for sublist in co_player_ids for item in sublist]
 
+                    self.num_envs = num_envs
+
                     self.num_ego_agents = len(self.ego_ids)
                     self.num_co_players = len(self.co_player_ids)
                     self.num_agents = self.total_agents = self.num_co_players + self.num_ego_agents
@@ -346,6 +441,8 @@ class Drive(pufferlib.PufferEnv):
 
                     self.local_co_player_ids = local_co_player_ids
                     self.local_ego_ids = local_ego_ids
+                    if self.co_player_condition_type is not None and self.co_player_condition_type != "none":
+                        self._initialize_co_player_conditioning()
 
                 else:
                     # Non-population play mode stays the same
@@ -394,7 +491,7 @@ class Drive(pufferlib.PufferEnv):
                         co_player_ids=local_co_player_ids[i],
                         ego_agent_ids=local_ego_ids[i],
                         num_ego_agents=len(local_ego_ids[i]),
-                        ini_file="pufferlib/config/ocean/drive.ini",
+                        ini_file= self.ini_file,
                         control_non_vehicles=int(self.control_non_vehicles),
                         init_steps=self.init_steps,
                     )
