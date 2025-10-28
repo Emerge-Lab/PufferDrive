@@ -403,10 +403,10 @@ int main(int argc, char* argv[]) {
     const char* policy_name = "resources/drive/puffer_drive_weights.bin";
     int deterministic_selection = 0;
     int policy_agents_per_env = -1;
+    int num_maps = 1;
     int num_maps = 100;
     int init_mode = 0;
     int scenario_length_cli = -1;
-
     const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
     const char* output_agent = NULL;
