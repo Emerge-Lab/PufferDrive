@@ -106,7 +106,6 @@ typedef struct AdjListNode AdjListNode;
 struct Log {
     float episode_return;
     float episode_length;
-    float perf;
     float score;
     float offroad_rate;
     float collision_rate;
@@ -125,6 +124,8 @@ struct Log {
     float avg_goal_weight;
     float avg_entropy_weight;
     float avg_discount_weight;
+    float avg_offroad_per_agent;
+    float avg_collisions_per_agent;
 };
 
 typedef struct Entity Entity;
@@ -162,6 +163,7 @@ struct Entity {
     int current_lane_idx;
     int valid;
     int respawn_timestep;
+    int respawn_count;
     int collided_before_goal;
     int sampled_new_goal;
     int reached_goal_this_episode;
@@ -386,6 +388,7 @@ static void scan_vehicles_initial(const Drive* env, SelectionBuckets* out, int c
 void add_log(Drive* env) {
     for(int i = 0; i < env->active_agent_count; i++){
         Entity* e = &env->entities[env->active_agent_indices[i]];
+
         if(e->reached_goal_this_episode){
             env->log.completion_rate += 1.0f;
         }
@@ -393,11 +396,14 @@ void add_log(Drive* env) {
         env->log.offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
         env->log.collision_rate += collided;
+        float avg_offroad_per_agent = env->logs[i].avg_offroad_per_agent;
+        env->log.avg_offroad_per_agent += avg_offroad_per_agent;
+        float avg_collisions_per_agent = env->logs[i].avg_collisions_per_agent;
+        env->log.avg_collisions_per_agent += avg_collisions_per_agent;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
         if(e->reached_goal_this_episode && !e->collided_before_goal){
             env->log.score += 1.0f;
-            env->log.perf += 1.0f;
         }
         if(!offroad && !collided && !e->reached_goal_this_episode){
             env->log.dnf_rate += 1.0f;
@@ -583,6 +589,7 @@ void set_start_position(Drive* env){
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
+        e->respawn_count = 0;
     }
     //EndDrawing();
 }
@@ -2084,6 +2091,7 @@ void c_reset(Drive* env){
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];
         env->entities[agent_idx].respawn_timestep = -1;
+        env->entities[agent_idx].respawn_count = 0;
         env->entities[agent_idx].collided_before_goal = 0;
         env->entities[agent_idx].reached_goal_this_episode = 0;
         env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
@@ -2160,11 +2168,13 @@ void c_step(Drive* env){
                 env->rewards[i] = env->reward_vehicle_collision;
                 env->logs[i].episode_return += env->reward_vehicle_collision;
                 env->logs[i].collision_rate = 1.0f;
+                env->logs[i].avg_collisions_per_agent += 1.0f;
             }
             else if(collision_state == OFFROAD){
                 env->rewards[i] = env->reward_offroad_collision;
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].episode_return += env->reward_offroad_collision;
+                env->logs[i].avg_offroad_per_agent += 1.0f;
             }
             if(!env->entities[agent_idx].reached_goal_this_episode){
                 env->entities[agent_idx].collided_before_goal = 1;
@@ -2176,6 +2186,7 @@ void c_step(Drive* env){
                 env->entities[agent_idx].y,
                 env->entities[agent_idx].goal_position_x,
                 env->entities[agent_idx].goal_position_y);
+
         // Reward agent if it is within X meters of goal
         if(distance_to_goal < env->goal_radius){
             if(env->entities[agent_idx].respawn_timestep != -1){
@@ -2214,6 +2225,7 @@ void c_step(Drive* env){
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
             if(reached_goal){
                 respawn_agent(env, agent_idx);
+                env->entities[agent_idx].respawn_count++;
             }
         }
     }
