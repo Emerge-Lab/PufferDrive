@@ -1304,13 +1304,11 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
             agent->vx=agent->vy = 0.0f;
         }
         else if(env->collision_behaviour==REMOVE_AGENT && !agent->removed){
-            Entity* car_collided = &env->entities[car_collided_with_index];
+            Entity* agent_collided = &env->entities[car_collided_with_index];
             agent->removed = 1;
-            car_collided->removed = 1;
+            agent_collided->removed = 1;
             agent->x = agent->y = -10000.0f;
-            car_collided->x = car_collided->y = -10000.0f;
-            agent->valid = 0;
-            car_collided->valid = 0;
+            agent_collided->x = agent_collided->y = -10000.0f;
         }
         if(is_active_agent ==1 && respawned){
             agent->collision_state = 0;
@@ -1325,7 +1323,6 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         else if(env->offroad_behaviour==REMOVE_AGENT && !agent->removed){
             agent->removed = 1;
             agent->x = agent->y = -10000.0f;
-            agent->valid = 0;
         }
         return;
     }
