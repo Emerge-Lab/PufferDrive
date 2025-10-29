@@ -19,67 +19,70 @@ class WOSACEvaluator:
 
     def __init__(self, config: Dict):
         self.config = config
-        self.num_steps = 91
+        self.num_steps = 91  # Hardcoded for WOSAC (9.1s at 10Hz)
+        self.init_steps = 10  # Initial steps to skip (1s)
+        self.sim_steps = self.num_steps - self.init_steps
         self.show_dashboard = config.get("wosac", {}).get("dashboard", False)
         self.num_rollouts = config.get("wosac", {}).get("num_rollouts", 32)
         self.json_data_path = config.get("wosac", {}).get("json_data_path", "./wosac_data/")
+        self.num_scenarios = config.get("wosac", {}).get("num_scenarios", 2)
+        self.sample_method = config.get("wosac", {}).get("sample_method", "random")
 
-    def collect_simulated_trajectories(self, args, vecenv, policy):
-        """Roll out policy in vecenv and collect trajectories.
-        Returns:
-            trajectories: dict with keys 'x', 'y', 'z', 'heading' each of shape
-                (num_agents, num_rollouts, num_steps)
-        """
+        self.scenario_ids = self.sample_scenarios()
+        self.total_wosac_agents = self.count_controllable_wosac_agents()
 
-        driver = vecenv.driver_env
-        num_agents = vecenv.observation_space.shape[0]
-        device = args["train"]["device"]
+    def sample_scenarios(self):
+        """Get ground-truth dataset info for evaluation."""
+        import os
+        from pathlib import Path
 
-        trajectories = {
-            "scenario_id": driver.get_scenario_ids(),  # (num_envs,)
-            "x": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
-            "y": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
-            "z": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
-            "heading": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.float32),
-            "id": np.zeros((num_agents, self.num_rollouts, self.num_steps), dtype=np.int32),
-        }
+        json_path = Path(self.json_data_path)
+        scenario_ids = []
+        all_files = list(json_path.glob("*.json"))
+        all_scenario_ids = [f.stem for f in all_files]
 
-        for rollout_idx in range(self.num_rollouts):
-            obs, info = vecenv.reset()
-            state = {}
-            if args["train"]["use_rnn"]:
-                state = dict(
-                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-                )
+        if self.sample_method == "random":
+            scenario_ids = np.random.choice(all_scenario_ids, size=self.num_scenarios, replace=True).tolist()
+        elif self.sample_method == "first_k":
+            scenario_ids = all_scenario_ids[: self.num_scenarios]
+        else:
+            raise ValueError(f"Unknown sample_method: {self.sample_method}")
+        return scenario_ids
 
-            for time_idx in range(self.num_steps):
-                # Get global state
-                agent_state = driver.get_global_agent_state()
-                trajectories["x"][:, rollout_idx, time_idx] = agent_state["x"]
-                trajectories["y"][:, rollout_idx, time_idx] = agent_state["y"]
-                trajectories["z"][:, rollout_idx, time_idx] = agent_state["z"]
-                trajectories["heading"][:, rollout_idx, time_idx] = agent_state["heading"]
-                trajectories["id"][:, rollout_idx, time_idx] = agent_state["id"]
+    def count_controllable_wosac_agents(self):
+        """Count total number of controllable WOSAC agents based on ground truth data."""
 
-                # Step policy
-                with torch.no_grad():
-                    ob_tensor = torch.as_tensor(obs).to(device)
-                    logits, value = policy.forward_eval(ob_tensor, state)
-                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                    action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
+        import json
+        from pathlib import Path
 
-                if isinstance(logits, torch.distributions.Normal):
-                    action_np = np.clip(action_np, vecenv.action_space.low, vecenv.action_space.high)
+        json_path = Path(self.json_data_path)
+        total_agents = 0
 
-                obs, _, _, _, _ = vecenv.step(action_np)
+        for scenario_id in self.scenario_ids:
+            print(f"Loading scenario ID: {scenario_id}")
+            json_file = json_path / f"{scenario_id}.json"
 
-        if self.show_dashboard:
-            self._display_dashboard(trajectories)
+            if not json_file.exists():
+                raise FileNotFoundError(f"JSON file not found for scenario {scenario_id}: {json_file}")
 
-        return trajectories
+            with open(json_file, "r") as f:
+                data = json.load(f)
 
-    def collect_ground_truth_trajectories(self, scenario_ids):
+            # Extract objects (agents) from the JSON
+            objects = data.get("objects", [])
+
+            # Count controllable agents
+            tracks_to_predict_indices = [
+                data["metadata"]["tracks_to_predict"][i]["track_index"]
+                for i in range(len(data["metadata"]["tracks_to_predict"]))
+            ]
+
+            total_agents += len(tracks_to_predict_indices)
+            print(f"  • Controllable agents in this scenario: {len(tracks_to_predict_indices)}")
+
+        return total_agents
+
+    def collect_ground_truth_trajectories(self):
         """Collect ground truth data for evaluation.
 
         Args:
@@ -105,7 +108,7 @@ class WOSACEvaluator:
         }
 
         # Process only the scenario_ids from simulated trajectories
-        for scenario_id in scenario_ids:
+        for scenario_id in self.scenario_ids:
             json_file = json_path / f"{scenario_id}.json"
 
             if not json_file.exists():
@@ -150,13 +153,69 @@ class WOSACEvaluator:
                     valid.extend([0] * (self.num_steps - len(valid)))
                     trajectories["valid"].append(valid[: self.num_steps])
 
-        trajectories["x"] = np.array(trajectories["x"], dtype=np.float32)[:, np.newaxis, :]
-        trajectories["y"] = np.array(trajectories["y"], dtype=np.float32)[:, np.newaxis, :]
-        trajectories["z"] = np.array(trajectories["z"], dtype=np.float32)[:, np.newaxis, :]
-        trajectories["heading"] = np.array(trajectories["heading"], dtype=np.float32)[:, np.newaxis, :]
+        trajectories["x"] = np.array(trajectories["x"], dtype=np.float32)[:, np.newaxis, self.init_steps :]
+        trajectories["y"] = np.array(trajectories["y"], dtype=np.float32)[:, np.newaxis, self.init_steps :]
+        trajectories["z"] = np.array(trajectories["z"], dtype=np.float32)[:, np.newaxis, self.init_steps :]
+        trajectories["heading"] = np.array(trajectories["heading"], dtype=np.float32)[:, np.newaxis, self.init_steps :]
         trajectories["id"] = np.array(trajectories["id"], dtype=np.int32)[:, np.newaxis, np.newaxis]
-        trajectories["valid"] = np.array(trajectories["valid"], dtype=np.int32)[:, np.newaxis, :]
+        trajectories["valid"] = np.array(trajectories["valid"], dtype=np.int32)[:, np.newaxis, self.init_steps :]
         trajectories["scenario_id"] = np.array(trajectories["scenario_id"])
+
+        return trajectories
+
+    def collect_simulated_trajectories(self, args, vecenv, policy):
+        """Roll out policy in vecenv and collect trajectories.
+        Returns:
+            trajectories: dict with keys 'x', 'y', 'z', 'heading' each of shape
+                (num_agents, num_rollouts, num_steps)
+        """
+
+        driver = vecenv.driver_env
+        num_agents = vecenv.observation_space.shape[0]
+        device = args["train"]["device"]
+
+        trajectories = {
+            "scenario_id": driver.get_scenario_ids(),  # (num_envs,)
+            "x": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "y": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "z": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "heading": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
+        }
+
+        for rollout_idx in range(self.num_rollouts):
+            obs, info = vecenv.reset()
+            state = {}
+            if args["train"]["use_rnn"]:
+                state = dict(
+                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+                )
+
+            for time_idx in range(self.sim_steps):
+                print(time_idx)
+                # Get global state
+                agent_state = driver.get_global_agent_state()
+                trajectories["x"][:, rollout_idx, time_idx] = agent_state["x"]
+                trajectories["y"][:, rollout_idx, time_idx] = agent_state["y"]
+                trajectories["z"][:, rollout_idx, time_idx] = agent_state["z"]
+                trajectories["heading"][:, rollout_idx, time_idx] = agent_state["heading"]
+                trajectories["id"][:, rollout_idx, time_idx] = agent_state["id"]
+
+                # Step policy
+                with torch.no_grad():
+                    ob_tensor = torch.as_tensor(obs).to(device)
+                    logits, value = policy.forward_eval(ob_tensor, state)
+                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                    action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+                if isinstance(logits, torch.distributions.Normal):
+                    action_np = np.clip(action_np, vecenv.action_space.low, vecenv.action_space.high)
+
+                obs, _, _, _, _ = vecenv.step(action_np)
+
+        if self.show_dashboard:
+            self._display_dashboard(trajectories)
 
         return trajectories
 

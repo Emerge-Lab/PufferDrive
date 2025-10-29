@@ -5,6 +5,8 @@
 import contextlib
 import warnings
 
+from matplotlib import colors
+
 warnings.filterwarnings("error", category=RuntimeWarning)
 
 import os
@@ -1136,19 +1138,22 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         backend = "Serial"
 
     args["vec"] = dict(backend=backend, num_envs=1)
-    # We never have more than 128 agents in WOMD scenes
-    # TODO(dc): Figure out how to control a specific set of ids
-    args["env"]["num_agents"] = 4
-
-    vecenv = vecenv or load_env(env_name, args)
-
-    policy = policy or load_policy(args, vecenv, env_name)
 
     if wosac_enabled:
         print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
         from pufferlib.ocean.wosac.evaluator import WOSACEvaluator
 
         evaluator = WOSACEvaluator(args)
+
+        # Prepare ground truth data in the same format
+        gt_trajectories = evaluator.collect_ground_truth_trajectories()
+
+        # TODO: Count total number of wosac agents based on GT data
+        args["env"]["num_agents"] = evaluator.total_wosac_agents
+
+        vecenv = vecenv or load_env(env_name, args)
+
+        policy = policy or load_policy(args, vecenv, env_name)
 
         # Roll out trained policy in the simulator to collect trajectories
         # Output is a dict with every element (e.g., "x") of shape: [num_agents, num_rollouts, num_steps]
@@ -1161,9 +1166,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print(simulated_trajectories["id"].shape)
         print("-----------------------------------\n")
 
-        # Prepare ground truth data in the same format
-        gt_trajectories = evaluator.collect_ground_truth_trajectories(simulated_trajectories["scenario_id"])
-
         print(f"Human-replay trajectories: \n")
         print(gt_trajectories.keys())
         print(gt_trajectories["x"].shape)
@@ -1173,7 +1175,40 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         import pdb
 
         pdb.set_trace()
-        # Compute WOSAC metrics
+
+        import matplotlib.pyplot as plt
+
+        fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+
+        agent_idx = 0  # Visualize the first agent
+        axs[0].set_title(f"Agent ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
+        axs[0].scatter(
+            simulated_trajectories["x"][agent_idx, :, :],
+            simulated_trajectories["y"][agent_idx, :, :],
+            color="b",
+            alpha=0.1,
+            label="Simulated",
+        )
+        axs[0].scatter(
+            gt_trajectories["x"][agent_idx, :, :],
+            gt_trajectories["y"][agent_idx, :, :],
+            color="g",
+            label="Ground Truth",
+        )
+        axs[0].set_xlabel("X Position")
+        axs[0].set_ylabel("Y Position")
+        axs[0].legend()
+
+        time_steps = list(range(evaluator.sim_steps))
+        for r in range(evaluator.num_rollouts):
+            axs[1].plot(
+                time_steps, simulated_trajectories["heading"][agent_idx, r, :], color="b", alpha=0.1, label="Simulated"
+            )
+        axs[1].plot(time_steps, gt_trajectories["heading"][agent_idx, :, :].T, color="g", label="Ground Truth")
+        axs[1].set_xlabel("Time Step")
+        plt.savefig("trajectory_comparison.png")
+
+        # Analyze simulated trajectories
         results = evaluator.compute_metrics(simulated_trajectories, gt_trajectories)
 
         return results
