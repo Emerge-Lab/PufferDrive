@@ -120,29 +120,35 @@ class WOSACEvaluator:
             objects = data.get("objects", [])
 
             # Collect trajectory data for all agents in this scenario
-            for obj in objects:
-                positions = obj.get("position", [])
+            tracks_to_predict_indices = [
+                data["metadata"]["tracks_to_predict"][i]["track_index"]
+                for i in range(len(data["metadata"]["tracks_to_predict"]))
+            ]
 
-                # Ensure we have exactly num_steps timesteps
-                x_trajectory = [p.get("x", 0.0) for p in positions]
-                y_trajectory = [p.get("y", 0.0) for p in positions]
-                z_trajectory = [p.get("z", 0.0) for p in positions]
+            for track_idx, obj in enumerate(objects):
+                if track_idx in tracks_to_predict_indices:
+                    positions = obj.get("position", [])
 
-                # Pad to num_steps if needed
-                x_trajectory.extend([-1.0] * (self.num_steps - len(x_trajectory)))
-                y_trajectory.extend([-1.0] * (self.num_steps - len(y_trajectory)))
-                z_trajectory.extend([-1.0] * (self.num_steps - len(z_trajectory)))
+                    # Ensure we have exactly num_steps timesteps
+                    x_trajectory = [p.get("x", 0.0) for p in positions]
+                    y_trajectory = [p.get("y", 0.0) for p in positions]
+                    z_trajectory = [p.get("z", 0.0) for p in positions]
 
-                trajectories["x"].append(x_trajectory[: self.num_steps])
-                trajectories["y"].append(y_trajectory[: self.num_steps])
-                trajectories["z"].append(z_trajectory[: self.num_steps])
-                trajectories["heading"].append(obj.get("heading", []))
-                trajectories["id"].append(obj.get("id", 0))
+                    # Pad to num_steps if needed
+                    x_trajectory.extend([-1.0] * (self.num_steps - len(x_trajectory)))
+                    y_trajectory.extend([-1.0] * (self.num_steps - len(y_trajectory)))
+                    z_trajectory.extend([-1.0] * (self.num_steps - len(z_trajectory)))
 
-                # Store valid flag
-                valid = obj.get("valid", [])
-                valid.extend([0] * (self.num_steps - len(valid)))
-                trajectories["valid"].append(valid[: self.num_steps])
+                    trajectories["x"].append(x_trajectory[: self.num_steps])
+                    trajectories["y"].append(y_trajectory[: self.num_steps])
+                    trajectories["z"].append(z_trajectory[: self.num_steps])
+                    trajectories["heading"].append(obj.get("heading", []))
+                    trajectories["id"].append(obj.get("id", 0))
+
+                    # Store valid flag
+                    valid = obj.get("valid", [])
+                    valid.extend([0] * (self.num_steps - len(valid)))
+                    trajectories["valid"].append(valid[: self.num_steps])
 
         trajectories["x"] = np.array(trajectories["x"], dtype=np.float32)[:, np.newaxis, :]
         trajectories["y"] = np.array(trajectories["y"], dtype=np.float32)[:, np.newaxis, :]
