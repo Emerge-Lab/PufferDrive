@@ -232,7 +232,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .reward_offroad_collision = -0.2f,
         .reward_ade = -0.0f,
         .goal_radius = goal_radius,
-	      .map_name = (char*)map_name,
+	    .map_name = (char*)map_name,
         .control_non_vehicles = control_non_vehicles,
         .init_steps = init_steps,
         .control_all_agents = control_all_agents,
