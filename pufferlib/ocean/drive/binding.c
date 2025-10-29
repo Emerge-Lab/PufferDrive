@@ -84,6 +84,25 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         Drive* env = calloc(1, sizeof(Drive));
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
+        PyObject* obj = NULL;
+        obj = kwargs ? PyDict_GetItemString(kwargs, "num_policy_controlled_agents") : NULL;
+        if (obj && PyLong_Check(obj)) {
+            env->policy_agents_per_env = (int)PyLong_AsLong(obj);
+        } else {
+            env->policy_agents_per_env = -1;
+        }
+        obj = kwargs ? PyDict_GetItemString(kwargs, "control_all_agents") : NULL;
+        if (obj && PyLong_Check(obj)) {
+            env->control_all_agents = (int)PyLong_AsLong(obj);
+        } else {
+            env->control_all_agents = 0;
+        }
+        obj = kwargs ? PyDict_GetItemString(kwargs, "deterministic_agent_selection") : NULL;
+        if (obj && PyLong_Check(obj)) {
+            env->deterministic_agent_selection = (int)PyLong_AsLong(obj);
+        } else {
+            env->deterministic_agent_selection = 0;
+        }
         set_active_agents(env);
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);
@@ -139,41 +158,59 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
     env->ini_file = unpack_str(kwargs, "ini_file");
-    env_init_config conf;
+    env_init_config conf = {0};
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) {
+        conf.scenario_length = (int)unpack(kwargs, "scenario_length");
+    }
+    if (conf.scenario_length <= 0) {
+        PyErr_SetString(PyExc_ValueError, "scenario_length must be > 0 (set in INI or kwargs)");
+        return -1;
     }
     env->action_type = conf.action_type;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;
+    env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
-    env->reward_vehicle_collision_post_respawn = conf.reward_vehicle_collision_post_respawn;
     env->reward_ade = conf.reward_ade;
     env->goal_radius = conf.goal_radius;
-    env->spawn_immunity_timer = conf.spawn_immunity_timer;
+    env->scenario_length = conf.scenario_length;
+    env->use_goal_generation = conf.use_goal_generation;
+    env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
+    env->control_all_agents = unpack(kwargs, "control_all_agents");
+    env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
+    env->control_non_vehicles = (int)unpack(kwargs, "control_non_vehicles");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
-
+    int init_steps = unpack(kwargs, "init_steps");
     char map_file[100];
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
     env->num_agents = max_agents;
     env->map_name = strdup(map_file);
+    env->init_steps = init_steps;
+    env->timestep = init_steps;
     init(env);
     return 0;
 }
 
 static int my_log(PyObject* dict, Log* log) {
-    assign_to_dict(dict, "perf", log->perf);
-    assign_to_dict(dict, "score", log->score);
-    assign_to_dict(dict, "episode_return", log->episode_return);
-    assign_to_dict(dict, "episode_length", log->episode_length);
-    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
-    assign_to_dict(dict, "collision_rate", log->collision_rate);
-    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "n", log->n);
-    assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
-    assign_to_dict(dict, "completion_rate", log->completion_rate);
-    assign_to_dict(dict, "clean_collision_rate", log->clean_collision_rate);
+    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
+    assign_to_dict(dict, "episode_length", log->episode_length);
+    assign_to_dict(dict, "collision_rate", log->collision_rate);
+    assign_to_dict(dict, "episode_return", log->episode_return);
+    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    //assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
+    assign_to_dict(dict, "completion_rate", log->completion_rate);
+    assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
+    assign_to_dict(dict, "score", log->score);
+    // assign_to_dict(dict, "active_agent_count", log->active_agent_count);
+    // assign_to_dict(dict, "expert_static_car_count", log->expert_static_car_count);
+    // assign_to_dict(dict, "static_car_count", log->static_car_count);
+    assign_to_dict(dict, "avg_offroad_per_agent", log->avg_offroad_per_agent);
+    assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
     return 0;
 }

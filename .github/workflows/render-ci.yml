@@ -7,7 +7,13 @@ on:
     branches: [ main ]
 
 jobs:
+  cleanup-before:
+    uses: ./.github/workflows/_cleanup.yml
+    with:
+      when: "before"
+
   test-render:
+    needs: cleanup-before
     name: test-render - ubuntu-latest
     runs-on: ubuntu-latest
     steps:
@@ -28,7 +34,11 @@ jobs:
         run: python -m pip install -U pip
 
       - name: Install pufferlib
-        run: pip install -e .
+        run: |
+          pip install -e .[cpu] --no-cache-dir
+        env:
+          TMPDIR: ${{ runner.temp }}/build
+          PIP_NO_CACHE_DIR: 1
 
       - name: Compile C extensions
         run: python setup.py build_ext --inplace --force

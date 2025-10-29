@@ -50,7 +50,19 @@ void _load_weights(const char* filename, float* weights, size_t num_weights) {
     }
 }
 
-Weights* load_weights(const char* filename, size_t num_weights) {
+Weights* load_weights(const char* filename) {
+    FILE* file = fopen(filename, "rb");
+    if (!file) {
+        perror("Error opening weights file");
+        return NULL;
+    }
+    fseek(file, 0, SEEK_END);
+    size_t file_size = ftell(file);
+    fclose(file);
+
+    size_t num_weights = file_size / sizeof(float);
+    printf("Loading %zu weights from %s\n", num_weights, filename);
+
     Weights* weights = calloc(1, sizeof(Weights) + num_weights*sizeof(float));
     weights->data = (float*)(weights + 1);
     _load_weights(filename, weights->data, num_weights);
@@ -76,7 +88,7 @@ void _relu(float* input, float* output, int size) {
 
 void _gelu(float* input, float* output, int size) {
     for (int i = 0; i < size; i++) {
-        output[i] = 0.5f*input[i]*(1 + tanhf(0.6628526501011142 * (input[i] + 0.044715f*input[i]*input[i]*input[i])));
+        output[i] = 0.5f*input[i]*(1 + tanhf(0.7978845608028654 * (input[i] + 0.044715f*input[i]*input[i]*input[i])));
     }
 }
 
