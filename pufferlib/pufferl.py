@@ -1138,7 +1138,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args["vec"] = dict(backend=backend, num_envs=1)
     # We never have more than 128 agents in WOMD scenes
     # TODO(dc): Figure out how to control a specific set of ids
-    args["env"]["num_agents"] = 6
+    args["env"]["num_agents"] = 4
 
     vecenv = vecenv or load_env(env_name, args)
 
@@ -1170,6 +1170,9 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print(gt_trajectories["scenario_id"])
         print(gt_trajectories["id"].shape)
 
+        import pdb
+
+        pdb.set_trace()
         # Compute WOSAC metrics
         results = evaluator.compute_metrics(simulated_trajectories, gt_trajectories)
 
