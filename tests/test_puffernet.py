@@ -272,7 +272,7 @@ def test_puffernet_argmax_multidiscrete(batch_size=16, logit_sizes=[5, 7, 2]):
     assert_near(output_puffer, output_torch.numpy())
 
 
-def test_nmmo3(batch_size=1, input_size=512, hidden_size=512):
+def test_drive(batch_size=1, input_size=512, hidden_size=512):
     from pufferlib.ocean.torch import Drive, Recurrent
     from pufferlib.ocean import env_creator
 
@@ -291,23 +291,21 @@ def test_nmmo3(batch_size=1, input_size=512, hidden_size=512):
         "lstm_h": torch.zeros(batch_size, hidden_size),
         "lstm_c": torch.zeros(batch_size, hidden_size),
     }
-
-    breakpoint()
     output = model.forward_eval(input_torch, state)
     pass
 
 
 if __name__ == "__main__":
-    test_nmmo3()
-    exit()
-    test_puffernet_relu()
-    test_puffernet_sigmoid()
-    test_puffernet_linear_layer()
-    test_puffernet_convolution_layer()
-    test_puffernet_convolution_3d_layer()
-    test_puffernet_lstm()
-    test_puffernet_embedding()
-    test_puffernet_layernorm()
-    test_puffernet_one_hot()
-    test_puffernet_cat_dim1()
-    test_puffernet_argmax_multidiscrete()
+    test_drive()
+    # exit()
+    # test_puffernet_relu()
+    # test_puffernet_sigmoid()
+    # test_puffernet_linear_layer()
+    # test_puffernet_convolution_layer()
+    # test_puffernet_convolution_3d_layer()
+    # test_puffernet_lstm()
+    # test_puffernet_embedding()
+    # test_puffernet_layernorm()
+    # test_puffernet_one_hot()
+    # test_puffernet_cat_dim1()
+    # test_puffernet_argmax_multidiscrete()
