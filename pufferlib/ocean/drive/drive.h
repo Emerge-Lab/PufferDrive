@@ -107,6 +107,8 @@ struct Log {
     float episode_return;
     float episode_length;
     float score;
+    float distance_weighted_score;
+    float total_goal_distance;
     float offroad_rate;
     float collision_rate;
     float num_goals_reached;
@@ -375,8 +377,12 @@ void add_log(Drive* env) {
         env->log.avg_collisions_per_agent += avg_collisions_per_agent;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
+        float goal_distance = ego_goal_distance_t0(e);
+        env->log.total_goal_distance += goal_distance;
         if(e->reached_goal_this_episode && !e->collided_before_goal){
             env->log.score += 1.0f;
+            float goal_distance = ego_goal_distance_t0(e);
+            env->log.distance_weighted_score += 1.0f * goal_distance;
         }
         if(!offroad && !collided && !e->reached_goal_this_episode){
             env->log.dnf_rate += 1.0f;
