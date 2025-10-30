@@ -74,6 +74,11 @@
 #define REMOVE_AGENT 2
 
 //GOAL BEHAVIOUR
+#define GOAL_RESPAWN 0
+#define GOAL_GENERATE_NEW 1
+#define GOAL_STOP 2
+
+//GOAL BEHAVIOUR
 
 
 #define GOAL_RESPAWN 0
@@ -2297,9 +2302,16 @@ void c_step(Drive* env){
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
 	    }
 
-        if (env->goal_behaviour==GOAL_GENERATE_NEW && env->entities[agent_idx].sampled_new_goal) {
-            compute_new_goal(env, agent_idx);
+        if(env->entities[agent_idx].sampled_new_goal){
+            if (env->goal_behaviour==GOAL_GENERATE_NEW) {
+                compute_new_goal(env, agent_idx);
+            }
+            else if (env->goal_behaviour==GOAL_STOP) {
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
+            }
         }
+
 
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
