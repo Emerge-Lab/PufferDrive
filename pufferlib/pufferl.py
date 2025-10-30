@@ -1259,12 +1259,16 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
     weights = np.concatenate(weights)
     if path is None:
-        path = f"{args['env_name']}_weights.bin"
+        path = f"pufferlib/resources/drive/{args['env_name']}_weights.bin"
 
     weights.tofile(path)
 
     if not silent:
         print(f"Saved {len(weights)} weights to {path}")
+
+    # Clean up vectorized environment to allow clean exit
+    if vecenv is not None:
+        vecenv.close()
 
 
 def ensure_drive_binary():
