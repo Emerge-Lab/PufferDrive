@@ -578,7 +578,7 @@ void set_start_position(Drive* env){
         e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
         e->respawn_count = 0;
-        
+
         // Dynamics
         e->a_long = 0.0f;
         e->a_lat = 0.0f;
@@ -2433,7 +2433,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
-    int obs_idx = 10;  // Start after ego obs 
+    int obs_idx = 10;  // Start after ego obs
     for(int j = 0; j < MAX_AGENTS - 1; j++) {
         if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 7;  // Move to next agent observation
