@@ -124,27 +124,36 @@ struct Log {
 
 typedef struct Entity Entity;
 struct Entity {
+    // Entity identification and size
     int type;
     int array_size;
+
+    // Trajectory/geometry arrays
     float* traj_x;
     float* traj_y;
     float* traj_z;
-    float* traj_vx;
-    float* traj_vy;
-    float* traj_vz;
-    float* traj_heading;
-    int* traj_valid;
+    float* traj_vx;       // NULL for roads
+    float* traj_vy;       // NULL for roads
+    float* traj_vz;       // NULL for roads
+    float* traj_heading;  // NULL for roads
+    int* traj_valid;      // NULL for roads
+
+    // Physical dimensions
     float width;
     float length;
     float height;
+
+    // Goal positions
     float goal_position_x;
     float goal_position_y;
     float goal_position_z;
-    float init_goal_x;
-    float init_goal_y;
+    float init_goal_x;    // Initialized from goal_position
+    float init_goal_y;    // Initialized from goal_position
+
+    // Expert marking
     int mark_as_expert;
-    int collision_state;
-    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, avg_displacement_error]
+
+    // Position state
     float x;
     float y;
     float z;
@@ -154,10 +163,12 @@ struct Entity {
     float heading;
     float heading_x;
     float heading_y;
-    int current_lane_idx;
     int valid;
-    int respawn_timestep;
-    int respawn_count;
+    int current_lane_idx;
+
+    // Metrics and status tracking
+    int collision_state;
+    float metrics_array[5]; // [collision, offroad, reached_goal, lane_aligned, avg_displacement_error]
     int collided_before_goal;
     int sampled_new_goal;
     int reached_goal_this_episode;
@@ -165,6 +176,11 @@ struct Entity {
     int active_agent;
     float cumulative_displacement;
     int displacement_sample_count;
+
+    // Respawn tracking
+    int respawn_timestep;
+    int respawn_count;
+
     float goal_radius;
 };
 
