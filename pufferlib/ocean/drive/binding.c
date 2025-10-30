@@ -83,7 +83,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-        env->entities = load_map_binary(map_file, env);
+        load_map_binary(map_file, env);
         PyObject* obj = NULL;
         obj = kwargs ? PyDict_GetItemString(kwargs, "num_policy_controlled_agents") : NULL;
         if (obj && PyLong_Check(obj)) {
@@ -112,10 +112,13 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         PyList_SetItem(agent_offsets, env_count, offset);
         total_agent_count += env->active_agent_count;
         env_count++;
-        for(int j=0;j<env->num_entities;j++) {
-            free_entity(&env->entities[j]);
-        }
-        free(env->entities);
+
+        for(int j=0;j<env->num_agents;j++) free_dynamic_agent(&env->dynamic_agents[j]);
+        for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+        for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+        free(env->dynamic_agents);
+        free(env->road_elements);
+        free(env->traffic_elements);
         free(env->active_agent_indices);
         free(env->static_car_indices);
         free(env->expert_static_car_indices);

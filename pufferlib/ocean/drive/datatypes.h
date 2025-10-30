@@ -63,6 +63,11 @@ struct RoadMapElement {
     float* dir_x;
     float* dir_y;
     float* dir_z;
+
+    // Lane specific info
+    int entry;
+    int exit;
+    float speed_limit;
 };
 
 struct TrafficControlElement {
@@ -72,7 +77,7 @@ struct TrafficControlElement {
     float x;
     float y;
     float z;
-    int* state;
+    int* states;
     int controlled_lane;
 };
 
@@ -100,5 +105,5 @@ void free_road_element(struct RoadMapElement* element){
 }
 
 void free_traffic_element(struct TrafficControlElement* element){
-    free(element->state);
+    free(element->states);
 }
