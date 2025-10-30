@@ -1171,14 +1171,9 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print(gt_trajectories["x"].shape)
         print(gt_trajectories["scenario_id"])
         print(gt_trajectories["id"].shape)
-
-        import pdb
-
-        pdb.set_trace()
-
         import matplotlib.pyplot as plt
 
-        fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+        fig, axs = plt.subplots(1, 2, figsize=(12, 4))
 
         agent_idx = 0  # Visualize the first agent
         axs[0].set_title(f"Agent ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
@@ -1195,10 +1190,32 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             color="g",
             label="Ground Truth",
         )
+        axs[0].scatter(
+            gt_trajectories["x"][agent_idx, 0, 0],
+            gt_trajectories["y"][agent_idx, 0, 0],
+            color="purple",
+            marker="*",
+            s=200,
+            label="GT start",
+            zorder=5,
+            alpha=0.5,
+        )
+
+        axs[0].scatter(
+            simulated_trajectories["x"][agent_idx, :, 0],
+            simulated_trajectories["y"][agent_idx, :, 0],
+            color="purple",
+            marker="*",
+            s=200,
+            label="Agent start",
+            zorder=5,
+            alpha=0.5,
+        )
         axs[0].set_xlabel("X Position")
         axs[0].set_ylabel("Y Position")
         axs[0].legend()
 
+        axs[1].set_title(f"Heading timeseries; ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
         time_steps = list(range(evaluator.sim_steps))
         for r in range(evaluator.num_rollouts):
             axs[1].plot(

@@ -3,12 +3,13 @@
 import torch
 import time
 import numpy as np
+from pprint import pprint
 from typing import Dict, Optional
 import matplotlib.pyplot as plt
 
 import pufferlib
 from pufferlib.ocean.drive.drive import Drive
-from pufferlib.ocean.wosac.metrics import compute_displacement_error, compute_collision_rate, compute_offroad_rate
+from pufferlib.ocean.wosac.metrics import compute_displacement_error
 
 
 class WOSACEvaluator:
@@ -193,7 +194,6 @@ class WOSACEvaluator:
                 )
 
             for time_idx in range(self.sim_steps):
-                print(time_idx)
                 # Get global state
                 agent_state = driver.get_global_agent_state()
                 trajectories["x"][:, rollout_idx, time_idx] = agent_state["x"]
@@ -224,7 +224,7 @@ class WOSACEvaluator:
         simulated_trajectories: Dict,
         ground_truth_trajectories: Dict,
     ) -> Dict:
-        """Compute evaluation metrics comparing simulated and ground truth trajectories.
+        """Compute realism metrics comparing simulated and ground truth trajectories.
 
         Args:
             simulated_trajectories: Dict with keys ['x', 'y', 'z', 'heading', 'id', 'scenario_id', 'valid']
@@ -234,8 +234,6 @@ class WOSACEvaluator:
         Returns:
             Dictionary with scores per scenario_id containing:
             - 'ade': Average displacement error
-            - 'collision_rate': Collision rate
-            - 'offroad_rate': Offroad rate (currently zeros as placeholder)
         """
         results = {}
 
@@ -253,14 +251,7 @@ class WOSACEvaluator:
                 matched_indices.append((sim_idx, gt_idx[0]))
 
         if not matched_indices:
-            # No matched agents, return empty results
-            for scenario_id in scenario_ids:
-                results[scenario_id] = {
-                    "ade": None,
-                    "collision_rate": None,
-                    "offroad_rate": None,
-                }
-            return results
+            raise ValueError("No matching agents found between simulated and ground truth trajectories.")
 
         sim_matched_idx, gt_matched_idx = zip(*matched_indices)
         sim_matched_idx = np.array(sim_matched_idx)
@@ -277,34 +268,45 @@ class WOSACEvaluator:
         gt_z = ground_truth_trajectories["z"][gt_matched_idx]
         gt_valid = ground_truth_trajectories["valid"][gt_matched_idx]
 
-        # Use ground truth validity
-        valid = gt_valid
+        # Create mapping from ground truth agent index to scenario_id
+        gt_scenario_map = {}
+        cumulative_agents = 0
+        for scenario_idx, scenario_id in enumerate(ground_truth_trajectories["scenario_id"]):
+            # Count agents in this scenario from ground truth
+            num_agents_in_scenario = np.sum(ground_truth_trajectories["scenario_id"] == scenario_id)
+            for local_agent_idx in range(num_agents_in_scenario):
+                gt_scenario_map[cumulative_agents + local_agent_idx] = scenario_id
+            cumulative_agents += num_agents_in_scenario
+
+        agent_scenario_ids = np.array([gt_scenario_map[gt_idx] for gt_idx in gt_matched_idx])
 
         # Compute metrics
-        ade = compute_displacement_error(pred_x, pred_y, pred_z, gt_x, gt_y, gt_z, valid)
-        collision_per_step, collision_rate = compute_collision_rate(
-            pred_x,
-            pred_y,
-            pred_z,
-            simulated_trajectories.get("length", np.ones(pred_x.shape[0])),
-            simulated_trajectories.get("width", np.ones(pred_x.shape[0])),
-            simulated_trajectories.get("height", np.ones(pred_x.shape[0])),
-            pred_heading,
-            valid,
-        )
-        offroad_per_step, offroad_rate = compute_offroad_rate(pred_x, pred_y, pred_z, valid)
+        ade, min_ade = compute_displacement_error(pred_x, pred_y, gt_x, gt_y, gt_valid)
 
-        # Aggregate per scenario (all matched agents belong to same scenario for now)
-        scenario_id = scenario_ids[0]
-        results[scenario_id] = {
-            "ade": np.mean(ade),
-            "ade_per_agent": ade,
-            "collision_rate": np.mean(collision_rate),
-            "collision_rate_per_agent": collision_rate,
-            "offroad_rate": np.mean(offroad_rate),
-            "offroad_rate_per_agent": offroad_rate,
-        }
+        # TODO: Add other metrics
+        # Ref: https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/trajectory_features.py
 
+        # TODO: Meta-score is weighted combination of all individual scores
+
+        # Aggregate agent scores by scenario
+        for scenario_id in np.unique(agent_scenario_ids):
+            mask = agent_scenario_ids == scenario_id
+            ade_scenario = ade[mask]
+            min_ade_scenario = min_ade[mask]
+
+            # TODO: store agent id
+            results[scenario_id] = {
+                "ade": np.mean(ade_scenario),
+                "min_ade": np.mean(min_ade_scenario),
+                "ade_per_agent": ade_scenario,
+                "min_ade_per_agent": min_ade_scenario,
+            }
+
+            pprint(results)
+
+        import pdb
+
+        pdb.set_trace()
         return results
 
     def _display_dashboard(self, trajectories):

@@ -82,7 +82,6 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"init_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.init_mode_str}"
             )
-        print(f"@ DRIVE INIT MODE: {self.init_mode_str} ({self.init_mode})")
 
         if action_type == "discrete":
             if dynamics_model == "classic":
