@@ -65,6 +65,7 @@ class Drive(pufferlib.PufferEnv):
         num_ego_agents=512,
         init_steps=0,
         k_scenarios = 0,
+        adaptive_driving_agent = False,
     ):
         # env
         self.dt = dt
@@ -102,6 +103,9 @@ class Drive(pufferlib.PufferEnv):
         self.num_ego_agents = num_ego_agents
         self.ini_file = ini_file
         self.ini_file
+
+        print(f"DEBUG: in drive resample frequency is ", self.resample_frequency, flush=True)
+        
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.population_play = population_play
@@ -174,6 +178,9 @@ class Drive(pufferlib.PufferEnv):
         self.num_policy_controlled_agents = int(num_policy_controlled_agents)
         self.deterministic_agent_selection = bool(deterministic_agent_selection)
         self.condition_type = condition_type
+
+        self.adaptive_driving_agent = int(adaptive_driving_agent)
+        self.k_scenarios = int(k_scenarios)
 
         my_shared_tuple = binding.shared(
             num_agents=num_agents,
@@ -300,6 +307,8 @@ class Drive(pufferlib.PufferEnv):
                 ini_file=self.ini_file,
                 control_non_vehicles=int(control_non_vehicles),
                 init_steps=init_steps,
+                adaptive_driving= self.adaptive_driving_agent,
+                k_scenarios = self.k_scenarios ,
             )
             env_ids.append(env_id)
 
@@ -384,6 +393,7 @@ class Drive(pufferlib.PufferEnv):
         self.terminals[:] = 0
         self.tick += 1
 
+        print(f"step: {self.tick}, process: {os.getpid()}", flush= True)
         self.actions[self.ego_ids] = actions
 
         if self.population_play:
@@ -494,6 +504,8 @@ class Drive(pufferlib.PufferEnv):
                         ini_file= self.ini_file,
                         control_non_vehicles=int(self.control_non_vehicles),
                         init_steps=self.init_steps,
+                        adaptive_driving= self.adaptive_driving_agent,
+                        k_scenarios = self.k_scenarios ,
                     )
 
                     env_ids.append(env_id)

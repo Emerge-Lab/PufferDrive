@@ -487,7 +487,24 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int population_play = unpack(kwargs, "population_play");
+    int adaptive_driving = unpack(kwargs, "adaptive_driving");
+    int k_scenarios = unpack(kwargs, "k_scenarios");
+
+    
+    env->adaptive_driving_agent = adaptive_driving;
+
+
+
+    if (env->adaptive_driving_agent) {
+        env->k_scenarios = k_scenarios;
+        env->current_scenario = 0;
+    } else {
+        env->k_scenarios = 0;
+    }
+
+    
     env->population_play = population_play;
+
 
     if (env->population_play) {
         env->num_co_players = unpack(kwargs, "num_co_players");
@@ -526,6 +543,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
         env->num_ego_agents = 0;
         env->ego_agent_ids = NULL;
     }
+
     int init_steps = unpack(kwargs, "init_steps");
     char map_file[100];
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
