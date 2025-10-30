@@ -287,13 +287,15 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         strcpy(map, basename((char*)map_name));
         *strrchr(map, '.') = '\0';
 
-        // Create gifs directory if it doesn't exist
-        char gifs_dir[256];
-        sprintf(gifs_dir, "%s/gifs", policy_base);
-        mkdir(gifs_dir, 0755);
+        // Create video directory if it doesn't exist
+        char video_dir[256];
+        sprintf(video_dir, "%s/video", policy_base);
+        char mkdir_cmd[512];
+        snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", video_dir);
+        system(mkdir_cmd);
 
-        sprintf(filename_topdown, "%s/gifs/%s_topdown.mp4", policy_base, map);
-        sprintf(filename_agent, "%s/gifs/%s_agent.mp4", policy_base, map);
+        sprintf(filename_topdown, "%s/video/%s_topdown.mp4", policy_base, map);
+        sprintf(filename_agent, "%s/video/%s_agent.mp4", policy_base, map);
     }
 
     bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
