@@ -13,21 +13,6 @@
 #include "error.h"
 #include "datatypes.h"
 
-
-
-// Entity Types
-#define NONE 0
-#define VEHICLE 1
-#define PEDESTRIAN 2
-#define CYCLIST 3
-#define ROAD_LANE 4
-#define ROAD_LINE 5
-#define ROAD_EDGE 6
-#define STOP_SIGN 7
-#define CROSSWALK 8
-#define SPEED_BUMP 9
-#define DRIVEWAY 10
-
 // GridMapEntity types
 #define ENTITY_TYPE_DYNAMIC_AGENT 1
 #define ENTITY_TYPE_ROAD_ELEMENT 2
@@ -308,7 +293,7 @@ static void scan_vehicles_initial(const Drive* env, SelectionBuckets* out, int c
         if (control_all_agents) {
             push_capped(out->candidates, &out->candidates_count, i, MAX_AGENTS);
         } else {
-            if (e->mark_as_expert == 1) {
+            if (agent->mark_as_expert == 1) {
                 push_capped(out->forced_experts, &out->forced_experts_count, i, MAX_AGENTS);
             } else {
                 push_capped(out->candidates, &out->candidates_count, i, MAX_AGENTS);
@@ -425,8 +410,8 @@ int load_map_binary(const char* filename, Drive* drive) {
     }
 
     // Read header
-    int num_agents, num_roads, num_traffic;
-    if (fread(&num_agents, sizeof(int), 1, file) != 1 ||
+    int num_dynamic_agents, num_roads, num_traffic;
+    if (fread(&num_dynamic_agents, sizeof(int), 1, file) != 1 ||
         fread(&num_roads, sizeof(int), 1, file) != 1 ||
         fread(&num_traffic, sizeof(int), 1, file) != 1) {
         fprintf(stderr, "Error: Failed to read header\n");
@@ -435,16 +420,16 @@ int load_map_binary(const char* filename, Drive* drive) {
     }
 
     printf("Loading: %d agents, %d roads, %d traffic controls\n",
-           num_agents, num_roads, num_traffic);
+           num_dynamic_agents, num_roads, num_traffic);
 
     // Populate Drive struct counts
-    drive->num_dynamic_agents = num_agents;
+    drive->num_dynamic_agents = num_dynamic_agents;
     drive->num_road_elements = num_roads;
     drive->num_traffic_elements = num_traffic;
 
     // Allocate arrays
-    if (num_agents > 0) {
-        drive->dynamic_agents = (DynamicAgent*)calloc(num_agents, sizeof(DynamicAgent));
+    if (num_dynamic_agents > 0) {
+        drive->dynamic_agents = (DynamicAgent*)calloc(num_dynamic_agents, sizeof(DynamicAgent));
         if (!drive->dynamic_agents) {
             fprintf(stderr, "Error: Failed to allocate dynamic_agents\n");
             fclose(file);
@@ -473,7 +458,7 @@ int load_map_binary(const char* filename, Drive* drive) {
     // ========================================================================
     // Read DynamicAgents
     // ========================================================================
-    for (int i = 0; i < num_agents; i++) {
+    for (int i = 0; i < num_dynamic_agents; i++) {
         DynamicAgent* agent = &drive->dynamic_agents[i];
 
         // Read ID, type, trajectory_length
@@ -577,6 +562,13 @@ int load_map_binary(const char* filename, Drive* drive) {
             fread(&agent->goal_position_y, sizeof(float), 1, file) != 1 ||
             fread(&agent->goal_position_z, sizeof(float), 1, file) != 1) {
             fprintf(stderr, "Error: Failed to read agent %d goal position\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read mark_as_expert
+        if (fread(&agent->mark_as_expert, sizeof(int), 1, file) != 1) {
+            fprintf(stderr, "Error: Failed to read agent %d mark_as_expert\n", i);
             fclose(file);
             return -1;
         }
@@ -784,7 +776,7 @@ void init_topology_graph(Drive* env){
     // Count ROAD_LANE entities in road_elements
     int road_lane_count = 0;
     for(int i = 0; i < env->num_road_elements; i++){
-        if(env->road_elements[i].type == ROAD_LANE){
+        if(is_drivable_road_lane(env->road_elements[i].type)){
             road_lane_count++;
         }
     }
@@ -799,7 +791,7 @@ void init_topology_graph(Drive* env){
 
     // Connect ROAD_LANE entities based on geometric connectivity
     for(int i = 0; i < env->num_road_elements; i++){
-        if(env->road_elements[i].type != ROAD_LANE) continue;
+        if(!is_drivable_road_lane(env->road_elements[i].type)) continue;
 
         RoadMapElement* lane_i = &env->road_elements[i];
         if(lane_i->segment_length < 2) continue; // Need at least 2 points
@@ -813,7 +805,7 @@ void init_topology_graph(Drive* env){
 
         // Find lanes that start near this lane's end
         for(int j = 0; j < env->num_road_elements; j++){
-            if(i == j || env->road_elements[j].type != ROAD_LANE) continue;
+            if(i == j || !is_drivable_road_lane(env->road_elements[j].type)) continue;
 
             RoadMapElement* lane_j = &env->road_elements[j];
             if(lane_j->segment_length < 2) continue;
@@ -853,24 +845,22 @@ void init_grid_map(Drive* env){
     float bottom_right_y;
     int first_valid_point = 0;
     for(int i = 0; i < env->num_road_elements; i++){
-        if(env->road_elements[i].type > 3 && env->road_elements[i].type < 7){
-            // Check all points in the geometry for road elements (ROAD_LANE, ROAD_LINE, ROAD_EDGE)
-            RoadMapElement* element = &env->road_elements[i];
-            for(int j = 0; j < element->segment_length; j++){
-                if(element->x[j] == INVALID_POSITION) continue;
-                if(element->y[j] == INVALID_POSITION) continue;
-                if(!first_valid_point) {
-                    top_left_x = bottom_right_x = element->x[j];
-                    top_left_y = bottom_right_y = element->y[j];
-                    first_valid_point = true;
-                    continue;
-                }
-                if(element->x[j] < top_left_x) top_left_x = element->x[j];
-                if(element->x[j] > bottom_right_x) bottom_right_x = element->x[j];
-                if(element->y[j] > top_left_y) top_left_y = element->y[j];
-                if(element->y[j] < bottom_right_y) bottom_right_y = element->y[j];
+        // Check all points in the geometry for road elements (ROAD_LANE, ROAD_LINE, ROAD_EDGE)
+        RoadMapElement* element = &env->road_elements[i];
+        for(int j = 0; j < element->segment_length; j++){
+            if(element->x[j] == INVALID_POSITION) continue;
+            if(element->y[j] == INVALID_POSITION) continue;
+            if(!first_valid_point) {
+                top_left_x = bottom_right_x = element->x[j];
+                top_left_y = bottom_right_y = element->y[j];
+                first_valid_point = true;
+                continue;
             }
-        }
+            if(element->x[j] < top_left_x) top_left_x = element->x[j];
+            if(element->x[j] > bottom_right_x) bottom_right_x = element->x[j];
+            if(element->y[j] > top_left_y) top_left_y = element->y[j];
+            if(element->y[j] < bottom_right_y) bottom_right_y = element->y[j];
+            }
     }
 
     env->grid_map->top_left_x = top_left_x;
@@ -891,15 +881,14 @@ void init_grid_map(Drive* env){
 
     // Calculate number of entities in each grid cell
     for(int i = 0; i < env->num_road_elements; i++){
-        if(env->road_elements[i].type > 3 && env->road_elements[i].type < 7){
-            for(int j = 0; j < env->road_elements[i].segment_length - 1; j++){
-                float x_center = (env->road_elements[i].x[j] + env->road_elements[i].x[j+1]) / 2;
-                float y_center = (env->road_elements[i].y[j] + env->road_elements[i].y[j+1]) / 2;
-                int grid_index = getGridIndex(env, x_center, y_center);
-                env->grid_map->cell_entities_count[grid_index]++;
-            }
+        for(int j = 0; j < env->road_elements[i].segment_length - 1; j++){
+            float x_center = (env->road_elements[i].x[j] + env->road_elements[i].x[j+1]) / 2;
+            float y_center = (env->road_elements[i].y[j] + env->road_elements[i].y[j+1]) / 2;
+            int grid_index = getGridIndex(env, x_center, y_center);
+            env->grid_map->cell_entities_count[grid_index]++;
         }
     }
+
     int cell_entities_insert_index[grid_cell_count];   // Helper array for insertion index
     memset(cell_entities_insert_index, 0, grid_cell_count * sizeof(int));
 
@@ -916,13 +905,11 @@ void init_grid_map(Drive* env){
 
     // Populate grid cells
     for(int i = 0; i < env->num_road_elements; i++){
-        if(env->road_elements[i].type > 3 && env->road_elements[i].type < 7){         // NOTE: Only Road Edges, Lines, and Lanes in grid map
-            for(int j = 0; j < env->road_elements[i].segment_length - 1; j++){
-                float x_center = (env->road_elements[i].x[j] + env->road_elements[i].x[j+1]) / 2;
-                float y_center = (env->road_elements[i].y[j] + env->road_elements[i].y[j+1]) / 2;
-                int grid_index = getGridIndex(env, x_center, y_center);
-                add_entity_to_grid(env, grid_index, ENTITY_TYPE_ROAD_ELEMENT, i, j, cell_entities_insert_index);
-            }
+        for(int j = 0; j < env->road_elements[i].segment_length - 1; j++){
+            float x_center = (env->road_elements[i].x[j] + env->road_elements[i].x[j+1]) / 2;
+            float y_center = (env->road_elements[i].y[j] + env->road_elements[i].y[j+1]) / 2;
+            int grid_index = getGridIndex(env, x_center, y_center);
+            add_entity_to_grid(env, grid_index, ENTITY_TYPE_ROAD_ELEMENT, i, j, cell_entities_insert_index);
         }
     }
 }
@@ -1435,7 +1422,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         int geometry_idx = entity_list[i].geometry_idx;
 
         // Check for offroad collision with road edges
-        if(element->type == ROAD_EDGE) {
+        if(is_road_edge(element->type)) {
             float start[2] = {element->x[geometry_idx], element->y[geometry_idx]};
             float end[2] = {element->x[geometry_idx + 1], element->y[geometry_idx + 1]};
             for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
@@ -1450,7 +1437,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         if (collided == OFFROAD) break;
 
         // Find closest point on the road centerline to the agent
-        if(element->type == ROAD_LANE) {
+        if(is_drivable_road_lane(element->type)) {
             int elem_idx = entity_list[i].entity_idx;
 
             float start[2] = {element->x[geometry_idx], element->y[geometry_idx]};
@@ -1660,7 +1647,7 @@ legacy_select:
     if(env->num_agents == 0){
         env->num_agents = MAX_AGENTS;
     }
-    int first_agent_id = env->num_dynamic_agents-1;
+    int first_agent_id = env->num_objects-1;
     float distance_to_goal = valid_active_agent(env, first_agent_id);
     if(distance_to_goal){
         env->active_agent_count = 1;
@@ -1671,8 +1658,7 @@ legacy_select:
         env->active_agent_count = 0;
         env->num_controllable_agents = 0;
     }
-    for(int i = 0; i < env->num_dynamic_agents-1 && env->num_controllable_agents < MAX_AGENTS; i++){
-
+    for(int i = 0; i < env->num_dynamic_agents - 1 && env->num_controllable_agents < MAX_AGENTS; i++){
         // Check if the entity type is controllable
         int is_type_controllable;
         if (env->control_non_vehicles) {
@@ -1707,16 +1693,17 @@ legacy_select:
             }
         }
     }
+
     // set up initial active agents
     env->active_agent_indices = (int*)malloc(env->active_agent_count * sizeof(int));
     env->static_car_indices = (int*)malloc(env->static_car_count * sizeof(int));
     env->expert_static_car_indices = (int*)malloc(env->expert_static_car_count * sizeof(int));
+
     for(int i=0;i<env->active_agent_count;i++){
         env->active_agent_indices[i] = active_agent_indices[i];
     };
     for(int i=0;i<env->static_car_count;i++){
         env->static_car_indices[i] = static_car_indices[i];
-
     }
     for(int i=0;i<env->expert_static_car_count;i++){
         env->expert_static_car_indices[i] = expert_static_car_indices[i];
@@ -2083,7 +2070,7 @@ void compute_observations(Drive* env) {
             obs[obs_idx + 3] = width / MAX_ROAD_SCALE;
             obs[obs_idx + 4] = cos_angle;
             obs[obs_idx + 5] = sin_angle;
-            obs[obs_idx + 6] = element->type - 4.0f;
+            obs[obs_idx + 6] = normalize_road_type(element->type);
             obs_idx += 7;
         }
         int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 7;
@@ -2716,7 +2703,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         Color lineColor = BLUE;  // Default color
         int entity_type = (int)agent_obs[entity_idx + 6];
         // Choose color based on entity type
-        if(entity_type+4 != ROAD_EDGE){
+        if(!is_road_edge(entity_type+4)){
             continue;
         }
         lineColor = PUFF_CYAN;
@@ -3084,13 +3071,11 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 1
             };
             Color lineColor = GRAY;
-            if (element->type == ROAD_LANE) lineColor = GRAY;
-            else if (element->type == ROAD_LINE) lineColor = BLUE;
-            else if (element->type == ROAD_EDGE) lineColor = WHITE;
+
+            if (is_road_lane(element->type)) lineColor = GRAY;
+            else if (is_road_line(element->type)) lineColor = BLUE;
+            else if (is_road_edge(element->type)) lineColor = WHITE;
             else if (element->type == DRIVEWAY) lineColor = RED;
-            if(element->type != ROAD_EDGE){
-                continue;
-            }
             if(!IsKeyDown(KEY_LEFT_CONTROL) && obs_only==0){
                 draw_road_edge(env, start.x, start.y, end.x, end.y);
             }
