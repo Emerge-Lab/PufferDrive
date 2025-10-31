@@ -490,7 +490,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     int adaptive_driving = unpack(kwargs, "adaptive_driving");
     int k_scenarios = unpack(kwargs, "k_scenarios");
 
-    
+
     env->adaptive_driving_agent = adaptive_driving;
 
 
@@ -502,7 +502,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
         env->k_scenarios = 0;
     }
 
-    
+
     env->population_play = population_play;
 
 

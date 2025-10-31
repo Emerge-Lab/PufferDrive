@@ -214,7 +214,7 @@ struct Adaptive_Agent_Log {
     float* active_agent_count;
     float* expert_static_car_count;
     float* static_car_count;
-    
+
     // Delta metrics: last scenario - first scenario (single values per agent)
     float delta_completion_rate;
     float delta_score;
@@ -226,7 +226,7 @@ struct Adaptive_Agent_Log {
     float delta_lane_alignment_rate;
     float delta_avg_displacement_error;
     float delta_episode_return;
-    
+
     int num_scenarios;
 };
 
@@ -505,12 +505,12 @@ void freeTopologyGraph(struct Graph* graph) {
     free(graph);
 }
 
-void add_log(Drive* env) { 
+void add_log(Drive* env) {
     int scenario;
     if  (env->adaptive_driving_agent && env->ada_logs != NULL) {
         scenario = env->current_scenario % env->k_scenarios;
     }
-    
+
     for (int i = 0; i < env->active_agent_count; i++) {
         Entity* e = &env->entities[env->active_agent_indices[i]];
 
@@ -589,7 +589,7 @@ void add_log(Drive* env) {
                     if (fabs(first_completion) < 0.0001f) {
                         env->ada_logs[i]->delta_completion_rate = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_completion_rate = 
+                        env->ada_logs[i]->delta_completion_rate =
                             (last_completion - first_completion) / first_completion * 100.0f;
                     }
 
@@ -599,7 +599,7 @@ void add_log(Drive* env) {
                     if (fabs(first_score) < 0.0001f) {
                         env->ada_logs[i]->delta_score = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_score = 
+                        env->ada_logs[i]->delta_score =
                             (last_score - first_score) / first_score * 100.0f;
                     }
 
@@ -609,7 +609,7 @@ void add_log(Drive* env) {
                     if (fabs(first_perf) < 0.0001f) {
                         env->ada_logs[i]->delta_perf = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_perf = 
+                        env->ada_logs[i]->delta_perf =
                             (last_perf - first_perf) / first_perf * 100.0f;
                     }
 
@@ -619,7 +619,7 @@ void add_log(Drive* env) {
                     if (fabs(first_collision) < 0.0001f) {
                         env->ada_logs[i]->delta_collision_rate = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_collision_rate = 
+                        env->ada_logs[i]->delta_collision_rate =
                             (last_collision - first_collision) / first_collision * 100.0f;
                     }
 
@@ -629,7 +629,7 @@ void add_log(Drive* env) {
                     if (fabs(first_offroad) < 0.0001f) {
                         env->ada_logs[i]->delta_offroad_rate = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_offroad_rate = 
+                        env->ada_logs[i]->delta_offroad_rate =
                             (last_offroad - first_offroad) / first_offroad * 100.0f;
                     }
 
@@ -639,7 +639,7 @@ void add_log(Drive* env) {
                     if (fabs(first_goals) < 0.0001f) {
                         env->ada_logs[i]->delta_num_goals_reached = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_num_goals_reached = 
+                        env->ada_logs[i]->delta_num_goals_reached =
                             (last_goals - first_goals) / first_goals * 100.0f;
                     }
 
@@ -649,7 +649,7 @@ void add_log(Drive* env) {
                     if (fabs(first_dnf) < 0.0001f) {
                         env->ada_logs[i]->delta_dnf_rate = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_dnf_rate = 
+                        env->ada_logs[i]->delta_dnf_rate =
                             (last_dnf - first_dnf) / first_dnf * 100.0f;
                     }
 
@@ -659,31 +659,31 @@ void add_log(Drive* env) {
                     if (fabs(first_lane) < 0.0001f) {
                         env->ada_logs[i]->delta_lane_alignment_rate = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_lane_alignment_rate = 
+                        env->ada_logs[i]->delta_lane_alignment_rate =
                             (last_lane - first_lane) / first_lane * 100.0f;
                     }
 
                     // Average displacement error (SUM metric - needs normalization)
-                    float first_ade = (first_n != 0.0f) ? 
+                    float first_ade = (first_n != 0.0f) ?
                         env->ada_logs[i]->avg_displacement_error[first] / first_n : 0.0f;
-                    float last_ade = (last_n != 0.0f) ? 
+                    float last_ade = (last_n != 0.0f) ?
                         env->ada_logs[i]->avg_displacement_error[last] / last_n : 0.0f;
                     if (fabs(first_ade) < 0.0001f) {
                         env->ada_logs[i]->delta_avg_displacement_error = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_avg_displacement_error = 
+                        env->ada_logs[i]->delta_avg_displacement_error =
                             (last_ade - first_ade) / first_ade * 100.0f;
                     }
 
                     // Episode return (SUM metric - needs normalization)
-                    float first_return = (first_n != 0.0f) ? 
+                    float first_return = (first_n != 0.0f) ?
                         env->ada_logs[i]->episode_return[first] / first_n : 0.0f;
-                    float last_return = (last_n != 0.0f) ? 
+                    float last_return = (last_n != 0.0f) ?
                         env->ada_logs[i]->episode_return[last] / last_n : 0.0f;
                     if (fabs(first_return) < 0.0001f) {
                         env->ada_logs[i]->delta_episode_return = 0.0f;
                     } else {
-                        env->ada_logs[i]->delta_episode_return = 
+                        env->ada_logs[i]->delta_episode_return =
                             (last_return - first_return) / fabs(first_return) * 100.0f;
                     }
                 }
@@ -1873,9 +1873,9 @@ void init_goal_positions(Drive* env){
 // Initialization function
 Adaptive_Agent_Log* create_adaptive_agent_log(int num_scenarios) {
     Adaptive_Agent_Log* log = (Adaptive_Agent_Log*)calloc(1, sizeof(Adaptive_Agent_Log));
-    
+
     log->num_scenarios = num_scenarios;
-    
+
     // Allocate all arrays
     log->episode_return = (float*)calloc(num_scenarios, sizeof(float));
     log->episode_length = (float*)calloc(num_scenarios, sizeof(float));
@@ -1892,7 +1892,7 @@ Adaptive_Agent_Log* create_adaptive_agent_log(int num_scenarios) {
     log->active_agent_count = (float*)calloc(num_scenarios, sizeof(float));
     log->expert_static_car_count = (float*)calloc(num_scenarios, sizeof(float));
     log->static_car_count = (float*)calloc(num_scenarios, sizeof(float));
-    
+
     return log;
 }
 
@@ -1945,7 +1945,7 @@ void init(Drive* env){
 
 void free_adaptive_agent_log(Adaptive_Agent_Log* log) {
     if (!log) return;
-    
+
     free(log->episode_return);
     free(log->episode_length);
     free(log->perf);
@@ -1961,7 +1961,7 @@ void free_adaptive_agent_log(Adaptive_Agent_Log* log) {
     free(log->active_agent_count);
     free(log->expert_static_car_count);
     free(log->static_car_count);
-    
+
     free(log);
 }
 
@@ -2551,7 +2551,7 @@ void c_step(Drive* env){
         if (env->adaptive_driving_agent){
             env->current_scenario += 1;
         }
- 
+
         return;
     }
 
@@ -3240,7 +3240,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 // --- Draw the car  ---
 
                 Vector3 carPos = { position.x, position.y, position.z };
-                Color car_color = GRAY;                
+                Color car_color = GRAY;
                 if (env->population_play){
                     if (is_active_agent && env->entities[i].is_ego){
                         car_color = BLUE;

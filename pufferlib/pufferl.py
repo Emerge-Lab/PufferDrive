@@ -71,7 +71,7 @@ class PuffeRL:
         # torch.manual_seed(seed)
 
         # Vecenv info
-        self.adaptive_driving_agent = getattr(vecenv.driver_env, "env_name", None)  == "adaptive_driving_agent"
+        self.adaptive_driving_agent = getattr(vecenv.driver_env, "env_name", None) == "adaptive_driving_agent"
         if self.adaptive_driving_agent:
             config["bptt_horizon"] = vecenv.driver_env.episode_length
 
@@ -569,7 +569,7 @@ class PuffeRL:
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
         if self.render and self.epoch % self.render_interval == 0:
-            print("Attempting render", flush = True)
+            print("Attempting render", flush=True)
             run_id = self.logger.run_id
             model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
 

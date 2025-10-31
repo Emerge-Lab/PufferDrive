@@ -1,6 +1,7 @@
 from pufferlib.ocean.drive import Drive
 import pufferlib
 
+
 class AdaptiveDrivingAgent(Drive):
     def __init__(self, **kwargs):
         self.env_name = "adaptive_driving_agent"
@@ -10,7 +11,6 @@ class AdaptiveDrivingAgent(Drive):
         kwargs["adaptive_driving_agent"] = True
         resample_frequency = self.k_scenarios * self.scenario_length
         kwargs["resample_frequency"] = resample_frequency
-        self.episode_length =  resample_frequency
-        print(f"resample frequency is ", kwargs["resample_frequency"], flush = True )
+        self.episode_length = resample_frequency
+        print(f"resample frequency is ", kwargs["resample_frequency"], flush=True)
         super().__init__(**kwargs)
-

@@ -40,7 +40,7 @@ class Drive(pufferlib.PufferEnv):
         use_goal_generation=False,
         control_non_vehicles=False,
         buf=None,
-        ini_file = "pufferlib/config/ocean/drive.ini",
+        ini_file="pufferlib/config/ocean/drive.ini",
         seed=1,
         condition_type="none",
         collision_weight_lb=-0.5,
@@ -53,19 +53,17 @@ class Drive(pufferlib.PufferEnv):
         entropy_weight_ub=0.001,
         discount_weight_lb=0.98,
         discount_weight_ub=0.98,
-
         population_play=False,
         co_player_policy_path=None,
         co_player_policy_name=None,
         co_player_policy=None,
         co_player_rnn_name=None,
         co_player_rnn=None,
-        co_player_condition_type = None,
-
+        co_player_condition_type=None,
         num_ego_agents=512,
         init_steps=0,
-        k_scenarios = 0,
-        adaptive_driving_agent = False,
+        k_scenarios=0,
+        adaptive_driving_agent=False,
     ):
         # env
         self.dt = dt
@@ -105,7 +103,6 @@ class Drive(pufferlib.PufferEnv):
         self.ini_file
 
         print(f"DEBUG: in drive resample frequency is ", self.resample_frequency, flush=True)
-        
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.population_play = population_play
@@ -152,7 +149,7 @@ class Drive(pufferlib.PufferEnv):
                 raise ValueError(
                     f"num ego agents ({num_ego_agents}) exceeds the number of total agents ({num_agents}))"
                 )
-            
+
         self.condition_type = condition_type
         self.reward_conditioned = condition_type in ("reward", "all")
         self.entropy_conditioned = condition_type in ("entropy", "all")
@@ -307,8 +304,8 @@ class Drive(pufferlib.PufferEnv):
                 ini_file=self.ini_file,
                 control_non_vehicles=int(control_non_vehicles),
                 init_steps=init_steps,
-                adaptive_driving= self.adaptive_driving_agent,
-                k_scenarios = self.k_scenarios ,
+                adaptive_driving=self.adaptive_driving_agent,
+                k_scenarios=self.k_scenarios,
             )
             env_ids.append(env_id)
 
@@ -317,7 +314,7 @@ class Drive(pufferlib.PufferEnv):
     def get_co_player_actions(self):
         with torch.no_grad():
             co_player_obs = self.observations[self.co_player_ids]
-            
+
             # Add conditioning to co-player observations if needed
             if self.co_player_condition_type != "none":
                 co_player_obs = self._add_co_player_conditioning(co_player_obs)
@@ -336,9 +333,13 @@ class Drive(pufferlib.PufferEnv):
 
     def _add_co_player_conditioning(self, observations):
         """Add pre-sampled conditioning variables to co-player observations"""
-        if not (self.co_player_reward_conditioned or self.co_player_entropy_conditioned or self.co_player_discount_conditioned):
+        if not (
+            self.co_player_reward_conditioned
+            or self.co_player_entropy_conditioned
+            or self.co_player_discount_conditioned
+        ):
             return observations
-        
+
         conditioning_values = []
         for i in range(self.num_envs):
             num_co_players_in_env = len(self.local_co_player_ids[i])
@@ -347,38 +348,41 @@ class Drive(pufferlib.PufferEnv):
 
             for _ in range(num_co_players_in_env):
                 conditioning_values.append(self.env_conditioning[i])
-        
+
         conditioning_array = np.stack(conditioning_values, axis=0)
 
-        obs_with_conditioning = np.concatenate([
-            observations[:, :7],  # First 7 base observations
-            conditioning_array,    # Conditioning variables
-            observations[:, 7:]    # Rest of observations
-        ], axis=1)
-        
+        obs_with_conditioning = np.concatenate(
+            [
+                observations[:, :7],  # First 7 base observations
+                conditioning_array,  # Conditioning variables
+                observations[:, 7:],  # Rest of observations
+            ],
+            axis=1,
+        )
+
         return obs_with_conditioning
 
     def _initialize_co_player_conditioning(self):
         """Sample and store conditioning values for each environment"""
         self.env_conditioning = []
-        
+
         for i in range(self.num_envs):
             env_cond = []
-            
+
             if self.co_player_reward_conditioned:
                 collision_weight = np.random.uniform(self.collision_weight_lb, self.collision_weight_ub)
                 offroad_weight = np.random.uniform(self.offroad_weight_lb, self.offroad_weight_ub)
                 goal_weight = np.random.uniform(self.goal_weight_lb, self.goal_weight_ub)
                 env_cond.extend([collision_weight, offroad_weight, goal_weight])
-            
+
             if self.co_player_entropy_conditioned:
                 entropy_weight = np.random.uniform(self.entropy_weight_lb, self.entropy_weight_ub)
                 env_cond.append(entropy_weight)
-            
+
             if self.co_player_discount_conditioned:
                 discount_weight = np.random.uniform(self.discount_weight_lb, self.discount_weight_ub)
                 env_cond.append(discount_weight)
-            
+
             self.env_conditioning.append(np.array(env_cond, dtype=np.float32))
 
     def reset(self, seed=0):
@@ -393,7 +397,7 @@ class Drive(pufferlib.PufferEnv):
         self.terminals[:] = 0
         self.tick += 1
 
-        print(f"step: {self.tick}, process: {os.getpid()}", flush= True)
+        print(f"step: {self.tick}, process: {os.getpid()}", flush=True)
         self.actions[self.ego_ids] = actions
 
         if self.population_play:
@@ -501,11 +505,11 @@ class Drive(pufferlib.PufferEnv):
                         co_player_ids=local_co_player_ids[i],
                         ego_agent_ids=local_ego_ids[i],
                         num_ego_agents=len(local_ego_ids[i]),
-                        ini_file= self.ini_file,
+                        ini_file=self.ini_file,
                         control_non_vehicles=int(self.control_non_vehicles),
                         init_steps=self.init_steps,
-                        adaptive_driving= self.adaptive_driving_agent,
-                        k_scenarios = self.k_scenarios ,
+                        adaptive_driving=self.adaptive_driving_agent,
+                        k_scenarios=self.k_scenarios,
                     )
 
                     env_ids.append(env_id)

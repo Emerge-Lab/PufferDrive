@@ -625,7 +625,7 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
         #if defined(DRIVE_ENV) || defined(HAS_ADAPTIVE_AGENT_SUPPORT)
         if (env->adaptive_driving_agent && env->ada_logs != NULL) {
             has_adaptive_agents = 1;
-            
+
             // Aggregate delta metrics across all agents in this environment
             for (int a = 0; a < env->active_agent_count; a++) {
                 ada_delta_completion_rate += env->ada_logs[a]->delta_completion_rate;
@@ -638,7 +638,7 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
                 ada_delta_lane_alignment_rate += env->ada_logs[a]->delta_lane_alignment_rate;
                 ada_delta_avg_displacement_error += env->ada_logs[a]->delta_avg_displacement_error;
                 ada_delta_episode_return += env->ada_logs[a]->delta_episode_return;
-                
+
                 ada_agent_count++;
             }
         }
@@ -709,7 +709,7 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
     // Average and add adaptive agent delta metrics if they exist
     if (has_adaptive_agents && ada_agent_count > 0) {
         float n = (float)ada_agent_count;
-        
+
         assign_to_dict(dict, "ada_delta_completion_rate", ada_delta_completion_rate / n);
         assign_to_dict(dict, "ada_delta_score", ada_delta_score / n);
         assign_to_dict(dict, "ada_delta_perf", ada_delta_perf / n);

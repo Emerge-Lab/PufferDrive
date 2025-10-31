@@ -30,7 +30,7 @@ void create_directory_recursive(const char* path) {
     len = strlen(tmp);
     if (tmp[len - 1] == '/')
         tmp[len - 1] = 0;
-    
+
     for (p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = 0;
@@ -218,24 +218,24 @@ static int make_gif_from_frames(const char *pattern, int fps,
 
     return 0;
 }
-int eval_gif(const char* map_name, 
-             const char* policy_name, 
-             int show_grid, 
-             int obs_only, 
-             int lasers, 
-             int log_trajectories, 
-             int frame_skip, 
-             float goal_radius, 
+int eval_gif(const char* map_name,
+             const char* policy_name,
+             int show_grid,
+             int obs_only,
+             int lasers,
+             int log_trajectories,
+             int frame_skip,
+             float goal_radius,
              int population_play,
-             int control_non_vehicles, 
-             int init_steps, 
-             int control_all_agents, 
-             int policy_agents_per_env, 
-             int deterministic_selection, 
-             const char* view_mode, 
-             const char* output_topdown, 
-             const char* output_agent, 
-             int num_maps, 
+             int control_non_vehicles,
+             int init_steps,
+             int control_all_agents,
+             int policy_agents_per_env,
+             int deterministic_selection,
+             const char* view_mode,
+             const char* output_topdown,
+             const char* output_agent,
+             int num_maps,
              int scenario_length_override) {
 
 
@@ -337,10 +337,10 @@ int eval_gif(const char* map_name,
         srand(ts.tv_nsec);
         ego_agent_id = rand() % env.active_agent_count;
         num_co_players = env.active_agent_count - 1;
-        
-        printf("Population play enabled: ego_agent_id=%d, num_co_players=%d, total_agents=%d\n", 
+
+        printf("Population play enabled: ego_agent_id=%d, num_co_players=%d, total_agents=%d\n",
                ego_agent_id, num_co_players, env.active_agent_count);
-        
+
         for (int i = 0; i < env.active_agent_count; i++) {
             if (i != ego_agent_id) {
                 env.entities[env.active_agent_indices[i]].is_ego = false;
@@ -397,14 +397,14 @@ int eval_gif(const char* map_name,
         ego_actions = (int*)calloc(1*2, sizeof(int));
         co_player_obs = (float*)calloc(num_co_players*max_obs, sizeof(float));
         ego_agent_obs = (float*)calloc(1*max_obs, sizeof(float));
-        
+
         if (!co_player_actions || !ego_actions || !co_player_obs || !ego_agent_obs) {
             printf("ERROR: Failed to allocate memory for population play\n");
             return -1;
         }
-        
+
         printf("Population play memory allocated successfully\n");
-        printf("DEBUG: max_obs=%d, ego_agent_id=%d, offset=%d\n", 
+        printf("DEBUG: max_obs=%d, ego_agent_id=%d, offset=%d\n",
                max_obs, ego_agent_id, ego_agent_id * max_obs);
         fflush(stdout);
     } else {
@@ -475,7 +475,7 @@ int eval_gif(const char* map_name,
 
     if (render_topdown) {
         printf("Recording topdown view...\n");
-        printf("DEBUG: frame_count=%d, population_play=%d, ego_agent_id=%d\n", 
+        printf("DEBUG: frame_count=%d, population_play=%d, ego_agent_id=%d\n",
                frame_count, population_play, ego_agent_id);
         printf("DEBUG: active_agent_count=%d, max_obs=%d\n", env.active_agent_count, max_obs);
         fflush(stdout);
@@ -499,11 +499,11 @@ int eval_gif(const char* map_name,
                 }
             }
             int (*actions)[2] = (int(*)[2])env.actions;
-            
+
             if (population_play) {
                 if (i == 0) {
                     printf("DEBUG: Starting population play logic\n");
-                    printf("DEBUG: ego_agent_id=%d, max_obs=%d, active_agent_count=%d\n", 
+                    printf("DEBUG: ego_agent_id=%d, max_obs=%d, active_agent_count=%d\n",
                            ego_agent_id, max_obs, env.active_agent_count);
                     printf("DEBUG: Expected total obs buffer size: %d floats (%zu bytes)\n",
                            env.active_agent_count * max_obs,
@@ -519,28 +519,28 @@ int eval_gif(const char* map_name,
                         printf("ERROR: ego_agent_obs is NULL!\n");
                         return -1;
                     }
-                    
+
                     // Check if ego_agent_id is within bounds
                     if (ego_agent_id >= env.active_agent_count) {
                         printf("ERROR: ego_agent_id (%d) >= active_agent_count (%d)!\n",
                                ego_agent_id, env.active_agent_count);
                         return -1;
                     }
-                    
-                    printf("DEBUG: About to copy ego observation (offset=%d, size=%zu bytes)\n", 
+
+                    printf("DEBUG: About to copy ego observation (offset=%d, size=%zu bytes)\n",
                            ego_agent_id * max_obs, max_obs * sizeof(float));
                     fflush(stdout);
-                    
+
                     printf("DEBUG: Computing source pointer...\n");
                     fflush(stdout);
                     int obs_offset = ego_agent_id * max_obs;
                     printf("DEBUG: obs_offset = %d\n", obs_offset);
                     fflush(stdout);
-                    
+
                     float* src_ptr = &env.observations[obs_offset];
                     printf("DEBUG: Source address: %p\n", (void*)src_ptr);
                     fflush(stdout);
-                    
+
                     printf("DEBUG: Attempting to read first observation value...\n");
                     fflush(stdout);
                     float test_val = env.observations[obs_offset];
@@ -596,7 +596,7 @@ int eval_gif(const char* map_name,
                 rendered_frames++;
             }
             int (*actions)[2] = (int(*)[2])env.actions;
-            
+
             if (population_play) {
                 memcpy(ego_agent_obs, &env.observations[ego_agent_id * max_obs], max_obs * sizeof(float));
 
@@ -662,7 +662,7 @@ int eval_gif(const char* map_name,
     // Clean up resources
     free(client);
     free_allocated(&env);
-    
+
     return 0;
 }
 int main(int argc, char* argv[]) {
