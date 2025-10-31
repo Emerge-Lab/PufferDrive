@@ -419,9 +419,6 @@ int load_map_binary(const char* filename, Drive* drive) {
         return -1;
     }
 
-    printf("Loading: %d agents, %d roads, %d traffic controls\n",
-           num_dynamic_agents, num_roads, num_traffic);
-
     // Populate Drive struct counts
     drive->num_dynamic_agents = num_dynamic_agents;
     drive->num_road_elements = num_roads;
@@ -703,39 +700,38 @@ void set_start_position(Drive* env){
         if (step >= agent->trajectory_length) step = agent->trajectory_length - 1;
         if (step < 0) step = 0;
 
-        e->x = e->traj_x[step];
-        e->y = e->traj_y[step];
-        e->z = e->traj_z[step];
+        // Initialize simulation trajectory from logged trajectory at init_steps
+        agent->sim_x = agent->log_trajectory_x[step];
+        agent->sim_y = agent->log_trajectory_y[step];
+        agent->sim_z = agent->log_trajectory_z[step];
+        agent->sim_heading = agent->log_heading[step];
+        agent->sim_valid = agent->log_valid[step];
 
-        if(e->type > CYCLIST || e->type == 0){
+        if(agent->type >= CYCLIST || agent->type == 0){
             continue;
         }
+
         if(is_active == 0){
-            e->vx = 0;
-            e->vy = 0;
-            e->vz = 0;
-            e->collided_before_goal = 0;
+            agent->sim_vx = 0.0f;
+            agent->sim_vy = 0.0f;
+            agent->collided_before_goal = 0;
         } else {
-            e->vx = e->traj_vx[env->init_steps];
-            e->vy = e->traj_vy[env->init_steps];
-            e->vz = e->traj_vz[env->init_steps];
+            agent->sim_vx = agent->log_velocity_x[step];
+            agent->sim_vy = agent->log_velocity_y[step];
         }
-        e->heading = e->traj_heading[env->init_steps];
-        e->heading_x = cosf(e->heading);
-        e->heading_y = sinf(e->heading);
-        e->valid = e->traj_valid[env->init_steps];
-        e->collision_state = 0;
-        e->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
-        e->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
-        e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
-        e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
-        e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
-        e->cumulative_displacement = 0.0f;
-        e->displacement_sample_count = 0;
-        e->respawn_timestep = -1;
-        e->respawn_count = 0;
+
+        // Initialize metrics and state
+        agent->collision_state = 0;
+        agent->metrics_array[COLLISION_IDX] = 0.0f;
+        agent->metrics_array[OFFROAD_IDX] = 0.0f;
+        agent->metrics_array[REACHED_GOAL_IDX] = 0.0f;
+        agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+        agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
+        agent->cumulative_displacement = 0.0f;
+        agent->displacement_sample_count = 0;
+        agent->respawn_timestep = -1;
+        agent->respawn_count = 0;
     }
-    //EndDrawing();
 }
 
 int getGridIndex(Drive* env, float x1, float y1) {
@@ -1394,8 +1390,8 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     float agent_x = agent->sim_x;
     float agent_y = agent->sim_y;
     float agent_heading = agent->sim_heading;
-    float half_length = agent->length[t]/2.0f;
-    float half_width = agent->width[t]/2.0f;
+    float half_length = agent->length[0]/2.0f;
+    float half_width = agent->width[0]/2.0f;
     float cos_heading = cosf(agent_heading);
     float sin_heading = sinf(agent_heading);
     float min_distance = (float)INT16_MAX;
@@ -1489,14 +1485,13 @@ int valid_active_agent(Drive* env, int agent_idx){
     int trajectory_length = agent->trajectory_length;
     float goal_x = agent->goal_position_x - agent->log_trajectory_x[0];
     float goal_y = agent->goal_position_y - agent->log_trajectory_y[0];
+
     // Rotate to ego vehicle's frame
     float rel_goal_x = goal_x*cos_heading + goal_y*sin_heading;
     float rel_goal_y = -goal_x*sin_heading + goal_y*cos_heading;
     float distance_to_goal = relative_distance_2d(0, 0, rel_goal_x, rel_goal_y);
-    // Shrink agent size
-    env->entities[agent_idx].width *= 0.7f;
-    env->entities[agent_idx].length *= 0.7f;
-    if(distance_to_goal >= MIN_DISTANCE_TO_GOAL && env->entities[agent_idx].mark_as_expert == 0 && env->active_agent_count < env->num_agents){
+
+    if(distance_to_goal >= MIN_DISTANCE_TO_GOAL && agent->mark_as_expert == 0 && env->active_agent_count < env->num_agents){
         return distance_to_goal;
     }
     return 0;
@@ -1647,7 +1642,7 @@ legacy_select:
     if(env->num_agents == 0){
         env->num_agents = MAX_AGENTS;
     }
-    int first_agent_id = env->num_objects-1;
+    int first_agent_id = env->num_dynamic_agents-1;
     float distance_to_goal = valid_active_agent(env, first_agent_id);
     if(distance_to_goal){
         env->active_agent_count = 1;
@@ -1892,7 +1887,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         // compute yaw rate
         float beta = tanh(.5*tanf(steering));
         // new heading
-        float yaw_rate = (speed*cosf(beta)*tanf(steering)) / agent->length[t];
+        float yaw_rate = (speed*cosf(beta)*tanf(steering)) / agent->length[0];
         // new velocity
         float new_vx = speed*cosf(heading + beta);
         float new_vy = speed*sinf(heading + beta);
