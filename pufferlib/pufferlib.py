@@ -46,8 +46,8 @@ def set_buffers(env, buf=None):
         env.truncations = buf["truncations"]
         env.masks = buf["masks"]
         env.actions = buf["actions"]
-        if env.population_play:
-            env.ego_actions = buf["ego_actions"]
+        # if env.population_play:
+        #     env.ego_actions = buf["ego_actions"]
 
 
 class PufferEnv:

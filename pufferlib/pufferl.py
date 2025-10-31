@@ -569,6 +569,7 @@ class PuffeRL:
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
         if self.render and self.epoch % self.render_interval == 0:
+            print("Attempting render", flush = True)
             run_id = self.logger.run_id
             model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
 

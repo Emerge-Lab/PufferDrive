@@ -505,8 +505,11 @@ void freeTopologyGraph(struct Graph* graph) {
     free(graph);
 }
 
-void add_log(Drive* env) {
-    int scenario = env->current_scenario % env->k_scenarios;
+void add_log(Drive* env) { 
+    int scenario;
+    if  (env->adaptive_driving_agent && env->ada_logs != NULL) {
+        scenario = env->current_scenario % env->k_scenarios;
+    }
     
     for (int i = 0; i < env->active_agent_count; i++) {
         Entity* e = &env->entities[env->active_agent_indices[i]];
@@ -3237,7 +3240,8 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 // --- Draw the car  ---
 
                 Vector3 carPos = { position.x, position.y, position.z };
-                Color car_color = GRAY;                if (env->population_play){
+                Color car_color = GRAY;                
+                if (env->population_play){
                     if (is_active_agent && env->entities[i].is_ego){
                         car_color = BLUE;
                     }
