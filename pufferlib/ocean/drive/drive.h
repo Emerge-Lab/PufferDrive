@@ -216,7 +216,6 @@ struct Drive {
     DynamicAgent* dynamic_agents;
     RoadMapElement* road_elements;
     TrafficControlElement* traffic_elements;
-    void* entities_base_ptr;  // Base pointer for deallocation
     Graph* topology_graph;
     int num_dynamic_agents;
     int num_road_elements;
@@ -418,59 +417,282 @@ void freeTopologyGraph(struct Graph* graph) {
 }
 
 
-Entity* load_map_binary(const char* filename, Drive* env) {
+int load_map_binary(const char* filename, Drive* drive) {
     FILE* file = fopen(filename, "rb");
-    if (!file) return NULL;
-    fread(&env->num_objects, sizeof(int), 1, file);
-    fread(&env->num_roads, sizeof(int), 1, file);
-    env->num_entities = env->num_objects + env->num_roads;
-    Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
-    for (int i = 0; i < env->num_entities; i++) {
-	    // Read base entity data
-        fread(&entities[i].type, sizeof(int), 1, file);
-        fread(&entities[i].array_size, sizeof(int), 1, file);
-        // Allocate arrays based on type
-        int size = entities[i].array_size;
-        entities[i].traj_x = (float*)malloc(size * sizeof(float));
-        entities[i].traj_y = (float*)malloc(size * sizeof(float));
-        entities[i].traj_z = (float*)malloc(size * sizeof(float));
-        if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
-            // Allocate arrays for object-specific data
-            entities[i].traj_vx = (float*)malloc(size * sizeof(float));
-            entities[i].traj_vy = (float*)malloc(size * sizeof(float));
-            entities[i].traj_vz = (float*)malloc(size * sizeof(float));
-            entities[i].traj_heading = (float*)malloc(size * sizeof(float));
-            entities[i].traj_valid = (int*)malloc(size * sizeof(int));
-        } else {
-            // Roads don't use these arrays
-            entities[i].traj_vx = NULL;
-            entities[i].traj_vy = NULL;
-            entities[i].traj_vz = NULL;
-            entities[i].traj_heading = NULL;
-            entities[i].traj_valid = NULL;
-        }
-        // Read array data
-        fread(entities[i].traj_x, sizeof(float), size, file);
-        fread(entities[i].traj_y, sizeof(float), size, file);
-        fread(entities[i].traj_z, sizeof(float), size, file);
-        if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
-            fread(entities[i].traj_vx, sizeof(float), size, file);
-            fread(entities[i].traj_vy, sizeof(float), size, file);
-            fread(entities[i].traj_vz, sizeof(float), size, file);
-            fread(entities[i].traj_heading, sizeof(float), size, file);
-            fread(entities[i].traj_valid, sizeof(int), size, file);
-        }
-        // Read remaining scalar fields
-        fread(&entities[i].width, sizeof(float), 1, file);
-        fread(&entities[i].length, sizeof(float), 1, file);
-        fread(&entities[i].height, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_x, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_y, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_z, sizeof(float), 1, file);
-        fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
+    if (!file) {
+        fprintf(stderr, "Error: Could not open file %s\n", filename);
+        return -1;
     }
+
+    // Read header
+    int num_agents, num_roads, num_traffic;
+    if (fread(&num_agents, sizeof(int), 1, file) != 1 ||
+        fread(&num_roads, sizeof(int), 1, file) != 1 ||
+        fread(&num_traffic, sizeof(int), 1, file) != 1) {
+        fprintf(stderr, "Error: Failed to read header\n");
+        fclose(file);
+        return -1;
+    }
+
+    printf("Loading: %d agents, %d roads, %d traffic controls\n",
+           num_agents, num_roads, num_traffic);
+
+    // Populate Drive struct counts
+    drive->num_dynamic_agents = num_agents;
+    drive->num_road_elements = num_roads;
+    drive->num_traffic_elements = num_traffic;
+
+    // Allocate arrays
+    if (num_agents > 0) {
+        drive->dynamic_agents = (DynamicAgent*)calloc(num_agents, sizeof(DynamicAgent));
+        if (!drive->dynamic_agents) {
+            fprintf(stderr, "Error: Failed to allocate dynamic_agents\n");
+            fclose(file);
+            return -1;
+        }
+    }
+
+    if (num_roads > 0) {
+        drive->road_elements = (RoadMapElement*)calloc(num_roads, sizeof(RoadMapElement));
+        if (!drive->road_elements) {
+            fprintf(stderr, "Error: Failed to allocate road_elements\n");
+            fclose(file);
+            return -1;
+        }
+    }
+
+    if (num_traffic > 0) {
+        drive->traffic_elements = (TrafficControlElement*)calloc(num_traffic, sizeof(TrafficControlElement));
+        if (!drive->traffic_elements) {
+            fprintf(stderr, "Error: Failed to allocate traffic_elements\n");
+            fclose(file);
+            return -1;
+        }
+    }
+
+    // ========================================================================
+    // Read DynamicAgents
+    // ========================================================================
+    for (int i = 0; i < num_agents; i++) {
+        DynamicAgent* agent = &drive->dynamic_agents[i];
+
+        // Read ID, type, trajectory_length
+        if (fread(&agent->id, sizeof(int), 1, file) != 1 ||
+            fread(&agent->type, sizeof(int), 1, file) != 1 ||
+            fread(&agent->trajectory_length, sizeof(int), 1, file) != 1) {
+            fprintf(stderr, "Error: Failed to read agent %d header\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        int tlen = agent->trajectory_length;
+
+        // Allocate trajectory arrays
+        agent->log_trajectory_x = (float*)malloc(tlen * sizeof(float));
+        agent->log_trajectory_y = (float*)malloc(tlen * sizeof(float));
+        agent->log_trajectory_z = (float*)malloc(tlen * sizeof(float));
+        agent->log_heading = (float*)malloc(tlen * sizeof(float));
+        agent->log_velocity_x = (float*)malloc(tlen * sizeof(float));
+        agent->log_velocity_y = (float*)malloc(tlen * sizeof(float));
+        agent->length = (float*)malloc(tlen * sizeof(float));
+        agent->width = (float*)malloc(tlen * sizeof(float));
+        agent->height = (float*)malloc(tlen * sizeof(float));
+        agent->log_valid = (int*)malloc(tlen * sizeof(int));
+
+        if (!agent->log_trajectory_x || !agent->log_trajectory_y || !agent->log_trajectory_z ||
+            !agent->log_heading || !agent->log_velocity_x || !agent->log_velocity_y ||
+            !agent->length || !agent->width || !agent->height || !agent->log_valid) {
+            fprintf(stderr, "Error: Failed to allocate agent %d arrays\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read trajectory data - TRANSPOSED format
+        if (fread(agent->log_trajectory_x, sizeof(float), tlen, file) != (size_t)tlen ||
+            fread(agent->log_trajectory_y, sizeof(float), tlen, file) != (size_t)tlen ||
+            fread(agent->log_trajectory_z, sizeof(float), tlen, file) != (size_t)tlen) {
+            fprintf(stderr, "Error: Failed to read agent %d trajectory\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read heading
+        if (fread(agent->log_heading, sizeof(float), tlen, file) != (size_t)tlen) {
+            fprintf(stderr, "Error: Failed to read agent %d heading\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read velocity (2D only - no z component per datatypes.h)
+        if (fread(agent->log_velocity_x, sizeof(float), tlen, file) != (size_t)tlen ||
+            fread(agent->log_velocity_y, sizeof(float), tlen, file) != (size_t)tlen) {
+            fprintf(stderr, "Error: Failed to read agent %d velocity\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read dimensions
+        if (fread(agent->length, sizeof(float), tlen, file) != (size_t)tlen ||
+            fread(agent->width, sizeof(float), tlen, file) != (size_t)tlen ||
+            fread(agent->height, sizeof(float), tlen, file) != (size_t)tlen) {
+            fprintf(stderr, "Error: Failed to read agent %d dimensions\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read valid
+        if (fread(agent->log_valid, sizeof(int), tlen, file) != (size_t)tlen) {
+            fprintf(stderr, "Error: Failed to read agent %d valid\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read routes
+        int num_route_ints;
+        if (fread(&num_route_ints, sizeof(int), 1, file) != 1) {
+            fprintf(stderr, "Error: Failed to read agent %d num_route_ints\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        if (num_route_ints > 0) {
+            agent->routes = (int*)malloc(num_route_ints * sizeof(int));
+            if (!agent->routes) {
+                fprintf(stderr, "Error: Failed to allocate agent %d routes\n", i);
+                fclose(file);
+                return -1;
+            }
+
+            if (fread(agent->routes, sizeof(int), num_route_ints, file) != (size_t)num_route_ints) {
+                fprintf(stderr, "Error: Failed to read agent %d routes\n", i);
+                fclose(file);
+                return -1;
+            }
+        } else {
+            agent->routes = NULL;
+        }
+
+        // Read goal position
+        if (fread(&agent->goal_position_x, sizeof(float), 1, file) != 1 ||
+            fread(&agent->goal_position_y, sizeof(float), 1, file) != 1 ||
+            fread(&agent->goal_position_z, sizeof(float), 1, file) != 1) {
+            fprintf(stderr, "Error: Failed to read agent %d goal position\n", i);
+            fclose(file);
+            return -1;
+        }
+    }
+
+    // ========================================================================
+    // Read RoadMapElements
+    // ========================================================================
+    for (int i = 0; i < num_roads; i++) {
+        RoadMapElement* road = &drive->road_elements[i];
+
+        // Read ID, type, segment_length
+        if (fread(&road->id, sizeof(int), 1, file) != 1 ||
+            fread(&road->type, sizeof(int), 1, file) != 1 ||
+            fread(&road->segment_length, sizeof(int), 1, file) != 1) {
+            fprintf(stderr, "Error: Failed to read road %d header\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        int slen = road->segment_length;
+
+        // Allocate geometry arrays
+        road->x = (float*)malloc(slen * sizeof(float));
+        road->y = (float*)malloc(slen * sizeof(float));
+        road->z = (float*)malloc(slen * sizeof(float));
+        road->dir_x = (float*)malloc(slen * sizeof(float));
+        road->dir_y = (float*)malloc(slen * sizeof(float));
+        road->dir_z = (float*)malloc(slen * sizeof(float));
+
+        if (!road->x || !road->y || !road->z ||
+            !road->dir_x || !road->dir_y || !road->dir_z) {
+            fprintf(stderr, "Error: Failed to allocate road %d arrays\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read geometry - TRANSPOSED format
+        if (fread(road->x, sizeof(float), slen, file) != (size_t)slen ||
+            fread(road->y, sizeof(float), slen, file) != (size_t)slen ||
+            fread(road->z, sizeof(float), slen, file) != (size_t)slen) {
+            fprintf(stderr, "Error: Failed to read road %d geometry\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read direction vectors
+        if (fread(road->dir_x, sizeof(float), slen, file) != (size_t)slen ||
+            fread(road->dir_y, sizeof(float), slen, file) != (size_t)slen ||
+            fread(road->dir_z, sizeof(float), slen, file) != (size_t)slen) {
+            fprintf(stderr, "Error: Failed to read road %d directions\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read entry, exit, speed_limit
+        if (fread(&road->entry, sizeof(int), 1, file) != 1 ||
+            fread(&road->exit, sizeof(int), 1, file) != 1 ||
+            fread(&road->speed_limit, sizeof(float), 1, file) != 1) {
+            fprintf(stderr, "Error: Failed to read road %d metadata\n", i);
+            fclose(file);
+            return -1;
+        }
+    }
+
+    // ========================================================================
+    // Read TrafficControlElements
+    // ========================================================================
+    for (int i = 0; i < num_traffic; i++) {
+        TrafficControlElement* traffic = &drive->traffic_elements[i];
+
+        // Read ID, type, state_length
+        if (fread(&traffic->id, sizeof(int), 1, file) != 1 ||
+            fread(&traffic->type, sizeof(int), 1, file) != 1 ||
+            fread(&traffic->state_length, sizeof(int), 1, file) != 1) {
+            fprintf(stderr, "Error: Failed to read traffic %d header\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read position
+        if (fread(&traffic->x, sizeof(float), 1, file) != 1 ||
+            fread(&traffic->y, sizeof(float), 1, file) != 1 ||
+            fread(&traffic->z, sizeof(float), 1, file) != 1) {
+            fprintf(stderr, "Error: Failed to read traffic %d position\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        int state_len = traffic->state_length;
+
+        // Allocate states array
+        traffic->states = (int*)malloc(state_len * sizeof(int));
+        if (!traffic->states) {
+            fprintf(stderr, "Error: Failed to allocate traffic %d states\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read states
+        if (fread(traffic->states, sizeof(int), state_len, file) != (size_t)state_len) {
+            fprintf(stderr, "Error: Failed to read traffic %d states\n", i);
+            fclose(file);
+            return -1;
+        }
+
+        // Read controlled_lane
+        if (fread(&traffic->controlled_lane, sizeof(int), 1, file) != 1) {
+            fprintf(stderr, "Error: Failed to read traffic %d controlled_lane\n", i);
+            fclose(file);
+            return -1;
+        }
+    }
+
     fclose(file);
-    return entities;
+    return 0;  // Success
 }
 
 void set_start_position(Drive* env){
@@ -1584,20 +1806,9 @@ void init(Drive* env){
 }
 
 void c_close(Drive* env){
-    // Free dynamic agents
-    for(int i = 0; i < env->num_dynamic_agents; i++){
-        free_dynamic_agent(&env->dynamic_agents[i]);
-    }
-    // Free road elements
-    for(int i = 0; i < env->num_road_elements; i++){
-        free_road_element(&env->road_elements[i]);
-    }
-    // Free traffic control elements
-    for(int i = 0; i < env->num_traffic_elements; i++){
-        free_traffic_element(&env->traffic_elements[i]);
-    }
-    // Free the contiguous memory block
-    free(env->entities_base_ptr);
+    for(int i = 0; i < env->num_dynamic_agents; i++) free_dynamic_agent(&env->dynamic_agents[i]);
+    for(int i = 0; i < env->num_road_elements; i++) free_road_element(&env->road_elements[i]);
+    for(int i = 0; i < env->num_traffic_elements; i++) free_traffic_element(&env->traffic_elements[i]);
     free(env->active_agent_indices);
     free(env->logs);
     // GridMap cleanup

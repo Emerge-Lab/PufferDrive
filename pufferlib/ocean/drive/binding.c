@@ -113,7 +113,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         total_agent_count += env->active_agent_count;
         env_count++;
 
-        for(int j=0;j<env->num_agents;j++) free_dynamic_agent(&env->dynamic_agents[j]);
+        for(int j=0;j<env->num_dynamic_agents;j++) free_dynamic_agent(&env->dynamic_agents[j]);
         for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
         for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
         free(env->dynamic_agents);

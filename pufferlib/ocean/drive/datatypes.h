@@ -85,9 +85,9 @@ void free_dynamic_agent(struct DynamicAgent* agent){
     free(agent->log_trajectory_x);
     free(agent->log_trajectory_y);
     free(agent->log_trajectory_z);
+    free(agent->log_heading);
     free(agent->log_velocity_x);
     free(agent->log_velocity_y);
-    free(agent->log_heading);
     free(agent->log_valid);
     free(agent->length);
     free(agent->width);
