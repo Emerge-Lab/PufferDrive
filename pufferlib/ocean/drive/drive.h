@@ -2409,7 +2409,8 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int max_obs = 10 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
