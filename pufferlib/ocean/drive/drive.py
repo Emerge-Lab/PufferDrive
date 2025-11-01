@@ -31,9 +31,12 @@ class Drive(pufferlib.PufferEnv):
         deterministic_agent_selection=False,
         use_goal_generation=False,
         control_non_vehicles=False,
+        road_points=200,
+        other_objects=63,
         buf=None,
         seed=1,
         init_steps=0,
+
     ):
         # env
         self.render_mode = render_mode
@@ -50,7 +53,7 @@ class Drive(pufferlib.PufferEnv):
         self.control_non_vehicles = control_non_vehicles
         self.use_goal_generation = use_goal_generation
         self.resample_frequency = resample_frequency
-        self.num_obs = 7 + 63 * 7 + 200 * 7
+        self.num_obs = 7 + 7*other_objects + 7+road_points
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.init_steps = init_steps
 
