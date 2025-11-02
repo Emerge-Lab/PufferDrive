@@ -117,6 +117,7 @@ class Drive(pufferlib.PufferEnv):
             num_agents=num_agents,
             num_maps=num_maps,
             init_mode=self.init_mode,
+            init_steps=init_steps,
             num_policy_controlled_agents=self.num_policy_controlled_agents,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
         )
@@ -186,6 +187,7 @@ class Drive(pufferlib.PufferEnv):
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     init_mode=self.init_mode,
+                    init_steps=self.init_steps,
                     num_policy_controlled_agents=self.num_policy_controlled_agents,
                     deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                 )
@@ -251,9 +253,36 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
-    def get_scenario_ids(self):
-        """Get scenario hex IDs for all environments."""
-        return binding.vec_get_scenario_ids(self.c_envs)
+    def get_ground_truth_trajectories(self):
+        """Get ground truth trajectories for all active agents.
+
+        Returns:
+            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id', containing numpy arrays.
+        """
+        num_agents = self.num_agents
+
+        trajectories = {
+            "x": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.float32),
+            "y": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.float32),
+            "z": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.float32),
+            "heading": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.float32),
+            "valid": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.int32),
+            "id": np.zeros((num_agents, 1), dtype=np.int32),
+        }
+
+        print(f"Getting ground truth trajectories for {num_agents} agents... {self.c_envs}")
+
+        binding.vec_get_global_ground_truth_trajectories(
+            self.c_envs,
+            trajectories["x"],
+            trajectories["y"],
+            trajectories["z"],
+            trajectories["heading"],
+            trajectories["valid"],
+            trajectories["id"],
+        )
+
+        return trajectories
 
     def render(self):
         binding.vec_render(self.c_envs, 0)
@@ -307,23 +336,14 @@ def simplify_polyline(geometry, polyline_reduction_threshold):
     return [geometry[i] for i in range(num_points) if not skip[i]]
 
 
-def save_map_binary(map_data, output_file):
+def save_map_binary(map_data, output_file, unique_map_id):
     trajectory_length = 91
     """Saves map data in a binary format readable by C"""
     with open(output_file, "wb") as f:
-        # Get scenario_id
-        scenario_id = map_data.get("scenario_id", "")
-        scenario_id_bytes = scenario_id.encode("utf-8")
-
         # Get metadata
         metadata = map_data.get("metadata", {})
         sdc_track_index = metadata.get("sdc_track_index", -1)  # -1 as default if not found
         tracks_to_predict = metadata.get("tracks_to_predict", [])
-
-        # Write scenario_id (length + string bytes)
-        f.write(struct.pack("i", len(scenario_id_bytes)))
-        if len(scenario_id_bytes) > 0:
-            f.write(scenario_id_bytes)
 
         # Write sdc_track_index
         f.write(struct.pack("i", sdc_track_index))
@@ -345,6 +365,9 @@ def save_map_binary(map_data, output_file):
         # f.write(struct.pack('i', num_entities))
         # Write objects
         for obj in map_data.get("objects", []):
+            # Write unique map id
+            # f.write(struct.pack("i", unique_map_id))
+
             # Write base entity data
             obj_type = obj.get("type", 1)
             if obj_type == "vehicle":
@@ -405,6 +428,8 @@ def save_map_binary(map_data, output_file):
 
         # Write roads
         for idx, road in enumerate(map_data.get("roads", [])):
+            # f.write(struct.pack("i", unique_map_id))
+
             geometry = road.get("geometry", [])
             road_type = road.get("map_element_id", 0)
             road_type_word = road.get("type", 0)
@@ -452,13 +477,13 @@ def save_map_binary(map_data, output_file):
             f.write(struct.pack("i", road.get("mark_as_expert", 0)))
 
 
-def load_map(map_name, binary_output=None):
+def load_map(map_name, unique_map_id, binary_output=None):
     """Loads a JSON map and optionally saves it as binary"""
     with open(map_name, "r") as f:
         map_data = json.load(f)
 
     if binary_output:
-        save_map_binary(map_data, binary_output)
+        save_map_binary(map_data, binary_output, unique_map_id)
 
 
 def process_all_maps():
@@ -484,7 +509,7 @@ def process_all_maps():
 
         print(f"Processing {map_path.name} -> {binary_file}")
         # try:
-        load_map(str(map_path), str(binary_path))
+        load_map(str(map_path), i, str(binary_path))
         # except Exception as e:
         #     print(f"Error processing {map_path.name}: {e}")
 
@@ -496,8 +521,6 @@ def test_performance(timeout=0.0001, atn_cache=1024, num_agents=12):
         num_agents=num_agents, num_maps=1, init_mode="control_tracks_to_predict", init_steps=2, scenario_length=91
     )
     env.reset()
-
-    print(env.get_scenario_ids())
 
     tick = 0
     actions = np.stack(
@@ -511,9 +534,15 @@ def test_performance(timeout=0.0001, atn_cache=1024, num_agents=12):
         tick += 1
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
+
+    gt = env.get_ground_truth_trajectories()
+    pred = env.get_global_agent_state()
+
+    # import pdb; pdb.set_trace()
+
     env.close()
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()

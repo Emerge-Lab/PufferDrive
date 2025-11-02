@@ -138,6 +138,7 @@ struct Log {
 
 typedef struct Entity Entity;
 struct Entity {
+    //int scenario_id;
     int type;
     int id;
     int array_size;
@@ -431,16 +432,6 @@ Entity* load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
 
-    // Read scenario_id
-    int scenario_id_length;
-    fread(&scenario_id_length, sizeof(int), 1, file);
-    if (scenario_id_length > 0) {
-        env->scenario_id = (char*)malloc((scenario_id_length + 1) * sizeof(char));
-        fread(env->scenario_id, sizeof(char), scenario_id_length, file);
-        env->scenario_id[scenario_id_length] = '\0';
-    } else {
-        env->scenario_id = NULL;
-    }
 
     // Read sdc_track_index
     fread(&env->sdc_track_index, sizeof(int), 1, file);
@@ -463,6 +454,9 @@ Entity* load_map_binary(const char* filename, Drive* env) {
     Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
     for (int i = 0; i < env->num_entities; i++) {
 	    // Read base entity data
+        // fread(&entities[i].scenario_id, sizeof(int), 1, file);
+        // printf("scenario_id: %d\n", entities[i].scenario_id);
+
         fread(&entities[i].type, sizeof(int), 1, file);
         fread(&entities[i].id, sizeof(int), 1, file);
         fread(&entities[i].array_size, sizeof(int), 1, file);
@@ -1346,19 +1340,12 @@ void set_active_agents(Drive* env){
     if(env->num_agents ==0){
         env->num_agents = MAX_AGENTS;
     }
-    int first_agent_id = env->num_objects-1;
-    float distance_to_goal = valid_active_agent(env, first_agent_id);
-    if(env->init_mode == CONTROL_TRACKS_TO_PREDICT || distance_to_goal){
-        env->active_agent_count = 1;
-        active_agent_indices[0] = first_agent_id;
-        env->entities[first_agent_id].active_agent = 1;
-        env->num_controllable_agents = 1;
-    } else {
-        env->active_agent_count = 0;
-        env->num_controllable_agents = 0;
-    }
 
-    //printf("%d\n", env->init_mode);
+    env->active_agent_count = 0;
+    env->num_controllable_agents = 0;
+
+    printf("%d\n", env->init_mode);
+
 
     // Iterate through entities to find controllable agents
     for(int i = 0; i < env->num_objects-1 && env->num_controllable_agents < MAX_AGENTS; i++){
@@ -1393,6 +1380,7 @@ void set_active_agents(Drive* env){
         env->num_controllable_agents++;
 
         // Determine if agent should be active or static
+        float distance_to_goal = 0;
         if (env->init_mode != CONTROL_TRACKS_TO_PREDICT) {
             distance_to_goal = valid_active_agent(env, i);
         } else {
@@ -1413,7 +1401,7 @@ void set_active_agents(Drive* env){
             }
         }
     }
-    //printf("Active agents: %d, Static cars: %d, Expert static cars: %d\n", env->active_agent_count, env->static_car_count, env->expert_static_car_count);
+    printf("Active agents: %d, Static cars: %d, Expert static cars: %d\n", env->active_agent_count, env->static_car_count, env->expert_static_car_count);
     // set up initial active agents
     env->active_agent_indices = (int*)malloc(env->active_agent_count * sizeof(int));
     env->static_car_indices = (int*)malloc(env->static_car_count * sizeof(int));
@@ -1428,6 +1416,11 @@ void set_active_agents(Drive* env){
     for(int i=0;i<env->expert_static_car_count;i++){
         env->expert_static_car_indices[i] = expert_static_car_indices[i];
     }
+
+    if(env->active_agent_count == 0){
+        printf("Error: No active agents found in the environment.\n");
+    }
+
     return;
 }
 
@@ -1494,6 +1487,7 @@ void init(Drive* env){
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     env->logs_capacity = 0;
+    printf("@INIT calling set_active_agents\n");
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
     if (env->init_mode != CONTROL_TRACKS_TO_PREDICT) {
@@ -1755,6 +1749,30 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
     }
 }
 
+void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* valid_out, int* id_out) {
+    printf("Active agent count: %d\n", env->active_agent_count);
+    for(int i = 0; i < env->active_agent_count; i++){
+        int agent_idx = env->active_agent_indices[i];
+        Entity* agent = &env->entities[agent_idx];
+
+        // Store agent ID
+        id_out[i] = agent->id;
+
+        for(int t = env->init_steps; t < agent->array_size; t++){
+            printf("Agent %d, Time %d, array size %d, init steps %d\n", i, t, agent->array_size, env->init_steps);
+            int out_idx = i * (agent->array_size - env->init_steps) + (t - env->init_steps);
+            printf("Out idx: %d\n", out_idx);
+
+            // Add world means back to get original world coordinates
+            x_out[out_idx] = agent->traj_x[t] + env->world_mean_x;
+            y_out[out_idx] = agent->traj_y[t] + env->world_mean_y;
+            z_out[out_idx] = agent->traj_z[t];
+            heading_out[out_idx] = agent->traj_heading[t];
+            valid_out[out_idx] = agent->traj_valid[t];
+        }
+    }
+}
+
 void compute_observations(Drive* env) {
     int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
@@ -1995,7 +2013,7 @@ void compute_new_goal(Drive* env, int agent_idx) {
         lane = &env->entities[current_entity];
 
         int start_idx = first_lane ? initial_segment_idx : 1;
-        // Ensure start_idx is at least 1 to avoid accessing traj_x[i-1] with i=0
+        // Ensure start_idx is at least 1 _to avoid accessing traj_x[i-1] with i=0
         if (start_idx < 1) start_idx = 1;
         first_lane = 0;
 
@@ -2099,7 +2117,7 @@ void c_step(Drive* env){
         return;
     }
 
-    // Move statix experts
+    // Move static experts
     for (int i = 0; i < env->expert_static_car_count; i++) {
         int expert_idx = env->expert_static_car_indices[i];
         if(env->entities[expert_idx].x == INVALID_POSITION) continue;
