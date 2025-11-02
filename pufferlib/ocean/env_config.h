@@ -40,7 +40,7 @@ static int handler(
     #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
 
     if (MATCH("env", "action_type")) {
-        if (strcmp(value, "\"discrete\"") == 0 || strcmp(value, "discrete") == 0) {
+        if (strcmp(value, "\"discrete\"") == 0 ||strcmp(value, "discrete") == 0) {
             env_config->action_type = 0;  // DISCRETE
         } else if (strcmp(value, "\"continuous\"") == 0 || strcmp(value, "continuous") == 0) {
             env_config->action_type = 1;  // CONTINUOUS
