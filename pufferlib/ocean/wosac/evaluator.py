@@ -109,9 +109,6 @@ class WOSACEvaluator:
             Dictionary with scores per scenario_id
         """
         # Ensure the id order matches exactly for simulated and ground truth
-        import pdb
-
-        pdb.set_trace()
         assert np.array_equal(simulated_trajectories["id"][:, 0:1, 0], ground_truth_trajectories["id"]), (
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
@@ -132,30 +129,23 @@ class WOSACEvaluator:
         # Dynamics features
         # Compute the log-likelihoods of speed features
         # TODO: Linear speed
-
         # TODO: Angular speed
-
-        # Create agent_id -> scenario_id mapping
-        # agent_to_scenario = self.map_agent_id_to_scenario(ground_truth_trajectories)
 
         # Get agent IDs and scenario IDs
         agent_ids = ground_truth_trajectories["id"]
-
-        import pdb
-
-        pdb.set_trace()
+        scenario_ids = ground_truth_trajectories["scenario_id"]
 
         df = pd.DataFrame(
             {
-                "agent_id": agent_ids,
-                #'id': scenario_ids,
+                "agent_id": agent_ids.flatten(),
+                "scenario_id": scenario_ids.flatten(),
                 "ade": ade,
                 "min_ade": min_ade,
             }
         )
 
         # Aggregate results per scenario_id
-        results = df.groupby("scenario_id")["ade", "min_ade"].mean()
+        results = df.groupby("scenario_id")[["ade", "min_ade"]].mean()
 
         pprint(results)
 
