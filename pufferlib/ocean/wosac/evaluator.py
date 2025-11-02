@@ -3,6 +3,7 @@
 import torch
 import time
 import numpy as np
+import pandas as pd
 from pprint import pprint
 from typing import Dict, Optional
 import matplotlib.pyplot as plt
@@ -25,158 +26,27 @@ class WOSACEvaluator:
         self.sim_steps = self.num_steps - self.init_steps
         self.show_dashboard = config.get("wosac", {}).get("dashboard", False)
         self.num_rollouts = config.get("wosac", {}).get("num_rollouts", 32)
-        self.json_data_path = config.get("wosac", {}).get("json_data_path", "./wosac_data/")
-        self.num_scenarios = config.get("wosac", {}).get("num_scenarios", 2)
-        self.sample_method = config.get("wosac", {}).get("sample_method", "random")
 
-        self.scenario_ids = self.sample_scenarios()
-        self.total_wosac_agents = self.count_controllable_wosac_agents()
-
-    def sample_scenarios(self):
-        """Get ground-truth dataset info for evaluation."""
-        import os
-        from pathlib import Path
-
-        json_path = Path(self.json_data_path)
-        scenario_ids = []
-        all_files = list(json_path.glob("*.json"))
-        all_scenario_ids = [f.stem for f in all_files]
-
-        if self.sample_method == "random":
-            scenario_ids = np.random.choice(all_scenario_ids, size=self.num_scenarios, replace=True).tolist()
-        elif self.sample_method == "first_k":
-            scenario_ids = all_scenario_ids[: self.num_scenarios]
-        else:
-            raise ValueError(f"Unknown sample_method: {self.sample_method}")
-        return scenario_ids
-
-    def count_controllable_wosac_agents(self):
-        """Count total number of controllable WOSAC agents based on ground truth data."""
-
-        import json
-        from pathlib import Path
-
-        json_path = Path(self.json_data_path)
-        total_agents = 0
-
-        for scenario_id in self.scenario_ids:
-            print(f"Loading scenario ID: {scenario_id}")
-            json_file = json_path / f"{scenario_id}.json"
-
-            if not json_file.exists():
-                raise FileNotFoundError(f"JSON file not found for scenario {scenario_id}: {json_file}")
-
-            with open(json_file, "r") as f:
-                data = json.load(f)
-
-            # Extract objects (agents) from the JSON
-            objects = data.get("objects", [])
-
-            # Count controllable agents
-            tracks_to_predict_indices = [
-                data["metadata"]["tracks_to_predict"][i]["track_index"]
-                for i in range(len(data["metadata"]["tracks_to_predict"]))
-            ]
-
-            total_agents += len(tracks_to_predict_indices)
-            print(f"  • Controllable agents in this scenario: {len(tracks_to_predict_indices)}")
-
-        return total_agents
-
-    def collect_ground_truth_trajectories(self):
+    def collect_ground_truth_trajectories(self, puffer_env):
         """Collect ground truth data for evaluation.
-
-        Args:
-            scenario_ids: Array of scenario IDs to load (from simulated trajectories)
-
         Returns:
-            trajectories: dict with keys 'x', 'y', 'z', 'heading', 'id', 'scenario_id'
+            trajectories: dict with keys 'x', 'y', 'z', 'heading', 'id'
                         each of shape (num_agents, 1, num_steps) for trajectory data
         """
-        import json
-        from pathlib import Path
+        return puffer_env.get_ground_truth_trajectories()
 
-        json_path = Path(self.json_data_path)
-
-        trajectories = {
-            "scenario_id": [],
-            "x": [],
-            "y": [],
-            "z": [],
-            "heading": [],
-            "id": [],
-            "valid": [],
-        }
-
-        # Process only the scenario_ids from simulated trajectories
-        for scenario_id in self.scenario_ids:
-            json_file = json_path / f"{scenario_id}.json"
-
-            if not json_file.exists():
-                raise FileNotFoundError(f"JSON file not found for scenario {scenario_id}: {json_file}")
-
-            with open(json_file, "r") as f:
-                data = json.load(f)
-
-            trajectories["scenario_id"].append(scenario_id)
-
-            # Extract objects (agents) from the JSON
-            objects = data.get("objects", [])
-
-            # Collect trajectory data for all agents in this scenario
-            tracks_to_predict_indices = [
-                data["metadata"]["tracks_to_predict"][i]["track_index"]
-                for i in range(len(data["metadata"]["tracks_to_predict"]))
-            ]
-
-            for track_idx, obj in enumerate(objects):
-                if track_idx in tracks_to_predict_indices:
-                    positions = obj.get("position", [])
-
-                    # Ensure we have exactly num_steps timesteps
-                    x_trajectory = [p.get("x", 0.0) for p in positions]
-                    y_trajectory = [p.get("y", 0.0) for p in positions]
-                    z_trajectory = [p.get("z", 0.0) for p in positions]
-
-                    # Pad to num_steps if needed
-                    x_trajectory.extend([-1.0] * (self.num_steps - len(x_trajectory)))
-                    y_trajectory.extend([-1.0] * (self.num_steps - len(y_trajectory)))
-                    z_trajectory.extend([-1.0] * (self.num_steps - len(z_trajectory)))
-
-                    trajectories["x"].append(x_trajectory[: self.num_steps])
-                    trajectories["y"].append(y_trajectory[: self.num_steps])
-                    trajectories["z"].append(z_trajectory[: self.num_steps])
-                    trajectories["heading"].append(obj.get("heading", []))
-                    trajectories["id"].append(obj.get("id", 0))
-
-                    # Store valid flag
-                    valid = obj.get("valid", [])
-                    valid.extend([0] * (self.num_steps - len(valid)))
-                    trajectories["valid"].append(valid[: self.num_steps])
-
-        trajectories["x"] = np.array(trajectories["x"], dtype=np.float32)[:, np.newaxis, self.init_steps :]
-        trajectories["y"] = np.array(trajectories["y"], dtype=np.float32)[:, np.newaxis, self.init_steps :]
-        trajectories["z"] = np.array(trajectories["z"], dtype=np.float32)[:, np.newaxis, self.init_steps :]
-        trajectories["heading"] = np.array(trajectories["heading"], dtype=np.float32)[:, np.newaxis, self.init_steps :]
-        trajectories["id"] = np.array(trajectories["id"], dtype=np.int32)[:, np.newaxis, np.newaxis]
-        trajectories["valid"] = np.array(trajectories["valid"], dtype=np.int32)[:, np.newaxis, self.init_steps :]
-        trajectories["scenario_id"] = np.array(trajectories["scenario_id"])
-
-        return trajectories
-
-    def collect_simulated_trajectories(self, args, vecenv, policy):
-        """Roll out policy in vecenv and collect trajectories.
+    def collect_simulated_trajectories(self, args, puffer_env, policy):
+        """Roll out policy in env and collect trajectories.
         Returns:
             trajectories: dict with keys 'x', 'y', 'z', 'heading' each of shape
                 (num_agents, num_rollouts, num_steps)
         """
 
-        driver = vecenv.driver_env
-        num_agents = vecenv.observation_space.shape[0]
+        driver = puffer_env.driver_env
+        num_agents = puffer_env.observation_space.shape[0]
         device = args["train"]["device"]
 
         trajectories = {
-            "scenario_id": driver.get_scenario_ids(),  # (num_envs,)
             "x": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "y": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "z": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
@@ -185,7 +55,8 @@ class WOSACEvaluator:
         }
 
         for rollout_idx in range(self.num_rollouts):
-            obs, info = vecenv.reset()
+            print(f"Collecting rollout {rollout_idx + 1}/{self.num_rollouts}...")
+            obs, info = puffer_env.reset()
             state = {}
             if args["train"]["use_rnn"]:
                 state = dict(
@@ -207,12 +78,12 @@ class WOSACEvaluator:
                     ob_tensor = torch.as_tensor(obs).to(device)
                     logits, value = policy.forward_eval(ob_tensor, state)
                     action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                    action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
+                    action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
                 if isinstance(logits, torch.distributions.Normal):
-                    action_np = np.clip(action_np, vecenv.action_space.low, vecenv.action_space.high)
+                    action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-                obs, _, _, _, _ = vecenv.step(action_np)
+                obs, _, _, _, _ = puffer_env.step(action_np)
 
         if self.show_dashboard:
             self._display_dashboard(trajectories)
@@ -221,92 +92,73 @@ class WOSACEvaluator:
 
     def compute_metrics(
         self,
-        simulated_trajectories: Dict,
         ground_truth_trajectories: Dict,
+        simulated_trajectories: Dict,
     ) -> Dict:
         """Compute realism metrics comparing simulated and ground truth trajectories.
 
         Args:
-            simulated_trajectories: Dict with keys ['x', 'y', 'z', 'heading', 'id', 'scenario_id', 'valid']
+            ground_truth_trajectories: Dict with keys ['x', 'y', 'z', 'heading', 'id']
                                 Each trajectory has shape (n_agents, n_rollouts, n_steps)
-            ground_truth_trajectories: Dict with same keys, shape (n_agents, 1, n_steps)
+            simulated_trajectories: Dict with same keys plus 'scenario_id'
+                                shape (n_agents, n_steps) for trajectories
+                                shape (n_agents,) for id
+                                list of length n_agents for scenario_id
 
         Returns:
-            Dictionary with scores per scenario_id containing:
-            - 'ade': Average displacement error
+            Dictionary with scores per scenario_id
         """
-        results = {}
+        # Ensure the id order matches exactly for simulated and ground truth
+        import pdb
 
-        scenario_ids = simulated_trajectories["scenario_id"]
+        pdb.set_trace()
+        assert np.array_equal(simulated_trajectories["id"][:, 0:1, 0], ground_truth_trajectories["id"]), (
+            "Agent IDs don't match between simulated and ground truth trajectories"
+        )
 
-        # Match agents by ID between simulated and ground truth
-        sim_ids = simulated_trajectories["id"][:, 0, 0]  # (n_agents,)
-        gt_ids = ground_truth_trajectories["id"][:, 0, 0]  # (n_agents_gt,)
-
-        # Find indices where IDs match
-        matched_indices = []
-        for sim_idx, sim_id in enumerate(sim_ids):
-            gt_idx = np.where(gt_ids == sim_id)[0]
-            if len(gt_idx) > 0:
-                matched_indices.append((sim_idx, gt_idx[0]))
-
-        if not matched_indices:
-            raise ValueError("No matching agents found between simulated and ground truth trajectories.")
-
-        sim_matched_idx, gt_matched_idx = zip(*matched_indices)
-        sim_matched_idx = np.array(sim_matched_idx)
-        gt_matched_idx = np.array(gt_matched_idx)
-
-        # Extract matched trajectories
-        pred_x = simulated_trajectories["x"][sim_matched_idx]
-        pred_y = simulated_trajectories["y"][sim_matched_idx]
-        pred_z = simulated_trajectories["z"][sim_matched_idx]
-        pred_heading = simulated_trajectories["heading"][sim_matched_idx]
-
-        gt_x = ground_truth_trajectories["x"][gt_matched_idx]
-        gt_y = ground_truth_trajectories["y"][gt_matched_idx]
-        gt_z = ground_truth_trajectories["z"][gt_matched_idx]
-        gt_valid = ground_truth_trajectories["valid"][gt_matched_idx]
-
-        # Create mapping from ground truth agent index to scenario_id
-        gt_scenario_map = {}
-        cumulative_agents = 0
-        for scenario_idx, scenario_id in enumerate(ground_truth_trajectories["scenario_id"]):
-            # Count agents in this scenario from ground truth
-            num_agents_in_scenario = np.sum(ground_truth_trajectories["scenario_id"] == scenario_id)
-            for local_agent_idx in range(num_agents_in_scenario):
-                gt_scenario_map[cumulative_agents + local_agent_idx] = scenario_id
-            cumulative_agents += num_agents_in_scenario
-
-        agent_scenario_ids = np.array([gt_scenario_map[gt_idx] for gt_idx in gt_matched_idx])
+        # Extract trajectories
+        pred_x = simulated_trajectories["x"]
+        pred_y = simulated_trajectories["y"]
+        gt_x = ground_truth_trajectories["x"]
+        gt_y = ground_truth_trajectories["y"]
+        gt_valid = ground_truth_trajectories["valid"]
 
         # Compute metrics
+
+        # Average Displacement Error (ADE) and minADE
+        # Note: This metric is not included in the scoring meta-metric, as per WOSAC rules.
         ade, min_ade = compute_displacement_error(pred_x, pred_y, gt_x, gt_y, gt_valid)
 
-        # TODO: Add other metrics
-        # Ref: https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/trajectory_features.py
+        # Dynamics features
+        # Compute the log-likelihoods of speed features
+        # TODO: Linear speed
 
-        # TODO: Meta-score is weighted combination of all individual scores
+        # TODO: Angular speed
 
-        # Aggregate agent scores by scenario
-        for scenario_id in np.unique(agent_scenario_ids):
-            mask = agent_scenario_ids == scenario_id
-            ade_scenario = ade[mask]
-            min_ade_scenario = min_ade[mask]
+        # Create agent_id -> scenario_id mapping
+        # agent_to_scenario = self.map_agent_id_to_scenario(ground_truth_trajectories)
 
-            # TODO: store agent id
-            results[scenario_id] = {
-                "ade": np.mean(ade_scenario),
-                "min_ade": np.mean(min_ade_scenario),
-                "ade_per_agent": ade_scenario,
-                "min_ade_per_agent": min_ade_scenario,
-            }
-
-            pprint(results)
+        # Get agent IDs and scenario IDs
+        agent_ids = ground_truth_trajectories["id"]
 
         import pdb
 
         pdb.set_trace()
+
+        df = pd.DataFrame(
+            {
+                "agent_id": agent_ids,
+                #'id': scenario_ids,
+                "ade": ade,
+                "min_ade": min_ade,
+            }
+        )
+
+        # Aggregate results per scenario_id
+        results = df.groupby("scenario_id")["ade", "min_ade"].mean()
+
+        pprint(results)
+
         return results
 
     def _display_dashboard(self, trajectories):

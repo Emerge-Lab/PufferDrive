@@ -71,6 +71,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
     int init_mode = unpack(kwargs, "init_mode");
+    int init_steps = unpack(kwargs, "init_steps");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
@@ -84,8 +85,10 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
+        env->init_steps = init_steps;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
+        printf("@MYSHARED: calling set_active_agents\n");
         set_active_agents(env);
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);
