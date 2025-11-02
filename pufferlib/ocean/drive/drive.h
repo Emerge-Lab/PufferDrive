@@ -138,7 +138,7 @@ struct Log {
 
 typedef struct Entity Entity;
 struct Entity {
-    //int scenario_id;
+    int scenario_id;
     int type;
     int id;
     int array_size;
@@ -454,8 +454,8 @@ Entity* load_map_binary(const char* filename, Drive* env) {
     Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
     for (int i = 0; i < env->num_entities; i++) {
 	    // Read base entity data
-        // fread(&entities[i].scenario_id, sizeof(int), 1, file);
-        // printf("scenario_id: %d\n", entities[i].scenario_id);
+        fread(&entities[i].scenario_id, sizeof(int), 1, file);
+        //printf("scenario_id: %d\n", entities[i].scenario_id);
 
         fread(&entities[i].type, sizeof(int), 1, file);
         fread(&entities[i].id, sizeof(int), 1, file);
@@ -1344,9 +1344,6 @@ void set_active_agents(Drive* env){
     env->active_agent_count = 0;
     env->num_controllable_agents = 0;
 
-    printf("%d\n", env->init_mode);
-
-
     // Iterate through entities to find controllable agents
     for(int i = 0; i < env->num_objects-1 && env->num_controllable_agents < MAX_AGENTS; i++){
 
@@ -1487,7 +1484,6 @@ void init(Drive* env){
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     env->logs_capacity = 0;
-    printf("@INIT calling set_active_agents\n");
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
     if (env->init_mode != CONTROL_TRACKS_TO_PREDICT) {
@@ -1749,7 +1745,7 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
     }
 }
 
-void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* valid_out, int* id_out) {
+void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* valid_out, int* id_out, int* scenario_id_out) {
     printf("Active agent count: %d\n", env->active_agent_count);
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
@@ -1757,11 +1753,12 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
 
         // Store agent ID
         id_out[i] = agent->id;
+        scenario_id_out[i] = agent->scenario_id;
 
         for(int t = env->init_steps; t < agent->array_size; t++){
             printf("Agent %d, Time %d, array size %d, init steps %d\n", i, t, agent->array_size, env->init_steps);
             int out_idx = i * (agent->array_size - env->init_steps) + (t - env->init_steps);
-            printf("Out idx: %d\n", out_idx);
+            //printf("Out idx: %d\n", out_idx);
 
             // Add world means back to get original world coordinates
             x_out[out_idx] = agent->traj_x[t] + env->world_mean_x;

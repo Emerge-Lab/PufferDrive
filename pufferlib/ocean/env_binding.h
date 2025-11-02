@@ -697,8 +697,8 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
 }
 
 static PyObject* get_ground_truth_trajectories(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 6 arguments");
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 7 arguments");
         return NULL;
     }
 
@@ -716,10 +716,11 @@ static PyObject* get_ground_truth_trajectories(PyObject* self, PyObject* args) {
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
     PyObject* valid_arr = PyTuple_GetItem(args, 5);
     PyObject* id_arr = PyTuple_GetItem(args, 6);
+    PyObject* scenario_id_arr = PyTuple_GetItem(args, 7);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
         !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr)) {
+        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -730,15 +731,16 @@ static PyObject* get_ground_truth_trajectories(PyObject* self, PyObject* args) {
     float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
     int* valid_data = (int*)PyArray_DATA((PyArrayObject*)valid_arr);
     int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
+    int* scenario_id_data = (int*)PyArray_DATA((PyArrayObject*)scenario_id_arr);
 
-    c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data);
+    c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data, scenario_id_data);
 
     Py_RETURN_NONE;
 }
 
 static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 7) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 7 arguments");
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 8 arguments");
         return NULL;
     }
 
@@ -754,10 +756,11 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
     PyObject* valid_arr = PyTuple_GetItem(args, 5);
     PyObject* id_arr = PyTuple_GetItem(args, 6);
+    PyObject* scenario_id_arr = PyTuple_GetItem(args, 7);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
         !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr)) {
+        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -768,6 +771,7 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
     PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
     PyArrayObject* valid_array = (PyArrayObject*)valid_arr;
     PyArrayObject* id_array = (PyArrayObject*)id_arr;
+    PyArrayObject* scenario_id_array = (PyArrayObject*)scenario_id_arr;
 
     for (int i = 0; i < vec->num_envs; i++) {
         Drive* drive = (Drive*)vec->envs[i];
@@ -778,8 +782,9 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
         float* heading_data = (float*)((char*)PyArray_DATA(heading_array) + i * PyArray_STRIDE(heading_array, 0));
         int* valid_data = (int*)((char*)PyArray_DATA(valid_array) + i * PyArray_STRIDE(valid_array, 0));
         int* id_data = (int*)((char*)PyArray_DATA(id_array) + i * PyArray_STRIDE(id_array, 0));
+        int* scenario_id_data = (int*)((char*)PyArray_DATA(scenario_id_array) + i * PyArray_STRIDE(scenario_id_array, 0));
 
-        c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data);
+        c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data, scenario_id_data);
     }
 
     Py_RETURN_NONE;

@@ -268,6 +268,7 @@ class Drive(pufferlib.PufferEnv):
             "heading": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.float32),
             "valid": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.int32),
             "id": np.zeros((num_agents, 1), dtype=np.int32),
+            "scenario_id": np.zeros((num_agents, 1), dtype=np.int32),
         }
 
         print(f"Getting ground truth trajectories for {num_agents} agents... {self.c_envs}")
@@ -280,6 +281,7 @@ class Drive(pufferlib.PufferEnv):
             trajectories["heading"],
             trajectories["valid"],
             trajectories["id"],
+            trajectories["scenario_id"],
         )
 
         return trajectories
@@ -366,7 +368,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
         # Write objects
         for obj in map_data.get("objects", []):
             # Write unique map id
-            # f.write(struct.pack("i", unique_map_id))
+            f.write(struct.pack("i", unique_map_id))
 
             # Write base entity data
             obj_type = obj.get("type", 1)
@@ -428,7 +430,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
 
         # Write roads
         for idx, road in enumerate(map_data.get("roads", [])):
-            # f.write(struct.pack("i", unique_map_id))
+            f.write(struct.pack("i", unique_map_id))
 
             geometry = road.get("geometry", [])
             road_type = road.get("map_element_id", 0)
