@@ -40,7 +40,14 @@ static int handler(
     #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
 
     if (MATCH("env", "action_type")) {
-        env_config->action_type = (strcmp(value, "\"discrete\"") == 0) ? 0 : 1;
+        if (strcmp(value, "\"discrete\"") == 0 || strcmp(value, "discrete") == 0) {
+            env_config->action_type = 0;  // DISCRETE
+        } else if (strcmp(value, "\"continuous\"") == 0 || strcmp(value, "continuous") == 0) {
+            env_config->action_type = 1;  // CONTINUOUS
+        } else {
+            printf("Warning: Unknown action_type value '%s', defaulting to DISCRETE\n", value);
+            env_config->action_type = 0;  // Default to DISCRETE
+        }
     } else if (MATCH("env", "dynamics_model")) {
         if (strcmp(value, "\"classic\"") == 0 || strcmp(value, "classic") == 0) {
             env_config->dynamics_model = 0;  // CLASSIC
