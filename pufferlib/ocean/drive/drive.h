@@ -710,7 +710,7 @@ void set_start_position(Drive* env){
         agent->sim_width = agent->log_width[step];
         agent->sim_height = agent->log_height[step];
 
-        if(agent->type >= CYCLIST || agent->type == 0) {
+        if(agent->type == 0) {
             continue;
         }
 
@@ -1934,10 +1934,8 @@ void compute_observations(Drive* env) {
         float* obs = &observations[i][0];
         DynamicAgent* ego_entity = &env->dynamic_agents[env->active_agent_indices[i]];
 
-        if(ego_entity->type > 3) break;
         if(ego_entity->respawn_timestep != -1) {
             obs[6] = 1;
-            //continue;
         }
         float ego_heading = ego_entity->sim_heading;
         float cos_heading = cosf(ego_heading);
