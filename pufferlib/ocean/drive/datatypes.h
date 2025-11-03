@@ -47,7 +47,6 @@ struct DynamicAgent {
     float goal_position_x;
     float goal_position_y;
     float goal_position_z;
-    float goal_radius;
     float init_goal_x;    // Initialized from goal_position
     float init_goal_y;    // Initialized from goal_position
 
