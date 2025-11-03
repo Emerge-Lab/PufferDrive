@@ -177,3 +177,15 @@ int normalize_road_type(int type){
         return -1;
     }
 }
+
+int unnormalize_road_type(int norm_type){
+    if(norm_type == 0){
+        return LANE_SURFACE_STREET;
+    } else if(norm_type == 1){
+        return ROAD_LINE_BROKEN_SINGLE_WHITE;
+    } else if(norm_type == 2){
+        return ROAD_EDGE_BOUNDARY;
+    } else {
+        return -1; // Invalid
+    }
+}
