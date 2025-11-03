@@ -230,12 +230,15 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .reward_offroad_collision = -0.2f,
         .reward_ade = -0.0f,
         .goal_radius = goal_radius,
-	    .map_name = (char*)map_name,
+	      .map_name = (char*)map_name,
         .control_non_vehicles = control_non_vehicles,
         .init_steps = init_steps,
         .control_all_agents = control_all_agents,
         .policy_agents_per_env = policy_agents_per_env,
-        .deterministic_agent_selection = deterministic_selection
+        .deterministic_agent_selection = deterministic_selection,
+        .use_rc = use_rc,
+        .use_ec = use_ec,
+        .use_dc = use_dc,
     };
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
