@@ -1144,7 +1144,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     if wosac_enabled:
         print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
-        from pufferlib.ocean.wosac.evaluator import WOSACEvaluator
+        from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
         import matplotlib.pyplot as plt
 
         evaluator = WOSACEvaluator(args)
