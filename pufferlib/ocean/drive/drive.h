@@ -884,6 +884,7 @@ void init_grid_map(Drive* env){
             float x_center = (env->road_elements[i].x[j] + env->road_elements[i].x[j+1]) / 2;
             float y_center = (env->road_elements[i].y[j] + env->road_elements[i].y[j+1]) / 2;
             int grid_index = getGridIndex(env, x_center, y_center);
+            if (grid_index == -1) continue;  // Skip out-of-bounds entities
             env->grid_map->cell_entities_count[grid_index]++;
         }
     }
@@ -1049,6 +1050,7 @@ void set_means(Drive* env) {
     for (int i = 0; i < env->num_road_elements; i++) {
         RoadMapElement* element = &env->road_elements[i];
         for (int j = 0; j < element->segment_length; j++) {
+            if(element->x[j] == INVALID_POSITION) continue;
             point_count++;
             mean_x += (element->x[j] - mean_x) / point_count;
             mean_y += (element->y[j] - mean_y) / point_count;
@@ -1783,6 +1785,7 @@ void init(Drive* env){
     env->timestep = 0;
     load_map_binary(env->map_name, env);
     env->dynamics_model = CLASSIC;
+    init_goal_positions(env);
     set_means(env);
     init_grid_map(env);
     if (env->use_goal_generation) init_topology_graph(env);
@@ -1794,7 +1797,6 @@ void init(Drive* env){
     env->logs_capacity = env->active_agent_count;
     remove_bad_trajectories(env);
     set_start_position(env);
-    init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
 }
 
@@ -2039,7 +2041,7 @@ void compute_observations(Drive* env) {
             RoadMapElement* element = &env->road_elements[entity_idx];
 
             // Validate geometry_idx before accessing
-            if(geometry_idx < 0 || geometry_idx >= element->segment_length) {
+            if(geometry_idx < 0 || geometry_idx > element->segment_length) {
                 printf("ERROR: Invalid geometry_idx %d for road element %d (max: %d)\n",
                        geometry_idx, entity_idx, element->segment_length-1);
                 continue;
