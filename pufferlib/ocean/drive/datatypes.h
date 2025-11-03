@@ -58,6 +58,7 @@ struct DynamicAgent {
 struct RoadMapElement {
     int id;
     int type;
+
     int segment_length;
     float* x;
     float* y;
@@ -75,11 +76,12 @@ struct RoadMapElement {
 struct TrafficControlElement {
     int id;
     int type;
+
     int state_length;
+    int* states;
     float x;
     float y;
     float z;
-    int* states;
     int controlled_lane;
 };
 
@@ -111,6 +113,7 @@ void free_traffic_element(struct TrafficControlElement* element){
 }
 
 
+#define UNKNOWN 0
 // -- AGENT TYPE
 #define VEHICLE 1
 #define PEDESTRIAN 2
@@ -118,7 +121,6 @@ void free_traffic_element(struct TrafficControlElement* element){
 #define OTHER 4
 
 // -- ROAD TYPE
-#define LANE_UNKNOWN 0
 #define LANE_FREEWAY 1
 #define LANE_SURFACE_STREET 2
 #define LANE_BIKE_LANE 3

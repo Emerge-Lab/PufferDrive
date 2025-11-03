@@ -710,7 +710,7 @@ void set_start_position(Drive* env){
         agent->sim_width = agent->log_width[step];
         agent->sim_height = agent->log_height[step];
 
-        if(agent->type == 0) {
+        if(agent->type == UNKNOWN) {
             continue;
         }
 
