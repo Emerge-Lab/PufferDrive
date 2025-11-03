@@ -4,10 +4,12 @@ from torch.backends import cudnn
 from torch import nn
 import torch
 import torch.nn.functional as F
+import torch.utils.cpp_extension
 
 import pufferlib
 import pufferlib.models
 
+from pufferlib import _C
 from pufferlib.models import Default as Policy  # noqa: F401
 from pufferlib.models import Convolutional as Conv  # noqa: F401
 
@@ -19,6 +21,28 @@ MAX_ROAD_OBJECTS = 200
 ROAD_FEATURES = 7
 ROAD_FEATURES_AFTER_ONEHOT = 13
 PARTNER_FEATURES = 7
+
+class LinearMaxKernels(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, weight, bias):
+        out = torch.ops.pufferlib.linear_max_fused(x, weight, bias)
+        ctx.save_for_backward(x, weight)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        x, weight = ctx.saved_tensors
+        grad_x, grad_weight, grad_bias = torch.ops.pufferlib.linear_max_fused_backward(grad_out.contiguous(), x, weight)
+        return grad_x, grad_weight, grad_bias
+
+class LinearMax(torch.nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.empty(hidden_size, input_size).normal_(mean=0.0, std=input_size**-0.5))
+        self.bias = torch.nn.Parameter(torch.zeros(hidden_size))
+
+    def forward(self, x):
+        return LinearMaxKernels.apply(x, self.weight, self.bias)
 
 
 @triton.jit
@@ -198,6 +222,7 @@ class Drive(nn.Module):
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
+        # TODO: Switch to LinearMax after adding tf32
         self.road_encoder = nn.Sequential(
             FusedLinearMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),
             nn.LayerNorm(input_size),
