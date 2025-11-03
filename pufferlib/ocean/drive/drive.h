@@ -856,7 +856,7 @@ void init_grid_map(Drive* env){
             if(element->x[j] > bottom_right_x) bottom_right_x = element->x[j];
             if(element->y[j] > top_left_y) top_left_y = element->y[j];
             if(element->y[j] < bottom_right_y) bottom_right_y = element->y[j];
-            }
+        }
     }
 
     env->grid_map->top_left_x = top_left_x;
@@ -2707,9 +2707,9 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         Color lineColor = BLUE;  // Default color
         int entity_type = (int)agent_obs[entity_idx + 6];
         // Choose color based on entity type
-        if(!is_road_edge(entity_type+4)){
-            continue;
-        }
+        int unnormalized_type = unnormalize_road_type(entity_type);
+        if(!is_road_edge(unnormalized_type)) continue;
+
         lineColor = PUFF_CYAN;
         // For road segments, draw line between start and end points
         float x_middle = agent_obs[entity_idx] * 50;
@@ -2838,230 +2838,224 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
     for(int i = 0; i < env->num_dynamic_agents; i++) {
         DynamicAgent* agent = &env->dynamic_agents[i];
         // Draw objects
-        if(agent->type == VEHICLE || agent->type == PEDESTRIAN || agent->type == CYCLIST) {
-            // Check if this vehicle is an active agent
-            bool is_active_agent = false;
-            bool is_static_car = false;
-            int agent_index = -1;
-            for(int j = 0; j < env->active_agent_count; j++) {
-                if(env->active_agent_indices[j] == i) {
-                    is_active_agent = true;
-                    agent_index = j;
-                    break;
-                }
+        // Check if this vehicle is an active agent
+        bool is_active_agent = false;
+        bool is_static_car = false;
+        int agent_index = -1;
+        for(int j = 0; j < env->active_agent_count; j++) {
+            if(env->active_agent_indices[j] == i) {
+                is_active_agent = true;
+                agent_index = j;
+                break;
             }
-            for(int j = 0; j < env->static_car_count; j++) {
-                if(env->static_car_indices[j] == i) {
-                    is_static_car = true;
-                    break;
-                }
+        }
+        for(int j = 0; j < env->static_car_count; j++) {
+            if(env->static_car_indices[j] == i) {
+                is_static_car = true;
+                break;
             }
-            // HIDE CARS ON RESPAWN - IMPORTANT TO KNOW VISUAL SETTING
-            if((!is_active_agent && !is_static_car) || agent->respawn_timestep != -1){
+        }
+        // HIDE CARS ON RESPAWN - IMPORTANT TO KNOW VISUAL SETTING
+        if((!is_active_agent && !is_static_car) || agent->respawn_timestep != -1){
+            continue;
+        }
+        Vector3 position;
+        float heading;
+        position = (Vector3){
+            agent->sim_x,
+            agent->sim_y,
+            1
+        };
+        heading = agent->sim_heading;
+        // Create size vector
+        Vector3 size = {
+            agent->sim_length,
+            agent->sim_width,
+            agent->sim_height
+        };
+
+        bool is_expert = (!is_active_agent) && (agent->mark_as_expert == 1);
+
+        // Save current transform
+        if(mode==1){
+            float cos_heading = cosf(heading);
+            float sin_heading = sinf(heading);
+
+            // Calculate half dimensions
+            float half_len = agent->sim_length * 0.5f;
+            float half_width = agent->sim_width * 0.5f;
+
+            // Calculate the four corners of the collision box
+            Vector3 corners[4] = {
+                (Vector3){
+                    position.x + (half_len * cos_heading - half_width * sin_heading),
+                    position.y + (half_len * sin_heading + half_width * cos_heading),
+                    position.z
+                },
+
+
+                (Vector3){
+                    position.x + (half_len * cos_heading + half_width * sin_heading),
+                    position.y + (half_len * sin_heading - half_width * cos_heading),
+                    position.z
+                },
+                (Vector3){
+                    position.x + (-half_len * cos_heading + half_width * sin_heading),
+                    position.y + (-half_len * sin_heading - half_width * cos_heading),
+                    position.z
+                },
+                (Vector3){
+                    position.x + (-half_len * cos_heading - half_width * sin_heading),
+                    position.y + (-half_len * sin_heading + half_width * cos_heading),
+                    position.z
+                },
+
+
+            };
+
+            if(agent_index == env->human_agent_idx && !agent->metrics_array[REACHED_GOAL_IDX]) {
+                draw_agent_obs(env, agent_index, mode, obs_only, lasers);
+            }
+            if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
                 continue;
             }
-            Vector3 position;
-            float heading;
-            position = (Vector3){
-                agent->sim_x,
-                agent->sim_y,
-                1
-            };
-            heading = agent->sim_heading;
-            // Create size vector
-            Vector3 size = {
-                agent->sim_length,
-                agent->sim_width,
-                agent->sim_height
+
+            // --- Draw the car  ---
+
+            Vector3 carPos = { position.x, position.y, position.z };
+            Color car_color = GRAY;              // default for static
+            if (is_expert) car_color = GOLD;      // expert replay
+            if (is_active_agent) car_color = BLUE; // policy-controlled
+            if (is_active_agent && agent->collision_state > 0) car_color = RED;
+            rlSetLineWidth(3.0f);
+            for (int j = 0; j < 4; j++) {
+                DrawLine3D(corners[j], corners[(j+1)%4], car_color);
+            }
+            // --- Draw a heading arrow pointing forward ---
+            Vector3 arrowStart = position;
+            Vector3 arrowEnd = {
+                position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
+                position.y + sin_heading * half_len * 1.5f,
+                position.z
             };
 
-            bool is_expert = (!is_active_agent) && (agent->mark_as_expert == 1);
+            DrawLine3D(arrowStart, arrowEnd, car_color);
+            DrawSphere(arrowEnd, 0.2f, car_color);  // arrow tip
 
-            // Save current transform
-            if(mode==1){
+        }
+        else {
+            rlPushMatrix();
+            // Translate to position, rotate around Y axis, then draw
+            rlTranslatef(position.x, position.y, position.z);
+            rlRotatef(heading*RAD2DEG, 0.0f, 0.0f, 1.0f);  // Convert radians to degrees
+            // Determine color based on status
+            Color object_color = PUFF_BACKGROUND2;  // fill color unused for model tint
+            Color outline_color = PUFF_CYAN;        // not used for model tint
+            Model car_model = client->cars[5];
+            if(is_active_agent){
+                car_model = client->cars[client->car_assignments[i %64]];
+            }
+            if(agent_index == env->human_agent_idx){
+                object_color = PUFF_CYAN;
+                outline_color = PUFF_WHITE;
+            }
+            if(is_active_agent && agent->collision_state > 0) {
+                car_model = client->cars[0];  // Collided agent
+            }
+            // Draw obs for human selected agent
+            if(agent_index == env->human_agent_idx && !agent->metrics_array[REACHED_GOAL_IDX]) {
+                draw_agent_obs(env, agent_index, mode, obs_only, lasers);
+            }
+            // Draw cube for cars static and active
+            // Calculate scale factors based on desired size and model dimensions
+
+            BoundingBox bounds = GetModelBoundingBox(car_model);
+            Vector3 model_size = {
+                bounds.max.x - bounds.min.x,
+                bounds.max.y - bounds.min.y,
+                bounds.max.z - bounds.min.z
+            };
+            Vector3 scale = {
+                size.x / model_size.x,
+                size.y / model_size.y,
+                size.z / model_size.z
+            };
+            if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
+                rlPopMatrix();
+                continue;
+            }
+
+            DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, WHITE);
+            {
                 float cos_heading = cosf(heading);
                 float sin_heading = sinf(heading);
-
-                // Calculate half dimensions
                 float half_len = agent->sim_length * 0.5f;
                 float half_width = agent->sim_width * 0.5f;
-
-                // Calculate the four corners of the collision box
                 Vector3 corners[4] = {
-                    (Vector3){
-                        position.x + (half_len * cos_heading - half_width * sin_heading),
-                        position.y + (half_len * sin_heading + half_width * cos_heading),
-                        position.z
-                    },
-
-
-                    (Vector3){
-                        position.x + (half_len * cos_heading + half_width * sin_heading),
-                        position.y + (half_len * sin_heading - half_width * cos_heading),
-                        position.z
-                    },
-                   (Vector3){
-                        position.x + (-half_len * cos_heading + half_width * sin_heading),
-                        position.y + (-half_len * sin_heading - half_width * cos_heading),
-                        position.z
-                    },
-                   (Vector3){
-                        position.x + (-half_len * cos_heading - half_width * sin_heading),
-                        position.y + (-half_len * sin_heading + half_width * cos_heading),
-                        position.z
-                    },
-
-
+                    (Vector3){ 0 + ( half_len * cos_heading - half_width * sin_heading), 0 + ( half_len * sin_heading + half_width * cos_heading), 0 },
+                    (Vector3){ 0 + ( half_len * cos_heading + half_width * sin_heading), 0 + ( half_len * sin_heading - half_width * cos_heading), 0 },
+                    (Vector3){ 0 + (-half_len * cos_heading + half_width * sin_heading), 0 + (-half_len * sin_heading - half_width * cos_heading), 0 },
+                    (Vector3){ 0 + (-half_len * cos_heading - half_width * sin_heading), 0 + (-half_len * sin_heading + half_width * cos_heading), 0 },
                 };
-
-                if(agent_index == env->human_agent_idx && !agent->metrics_array[REACHED_GOAL_IDX]) {
-                    draw_agent_obs(env, agent_index, mode, obs_only, lasers);
-                }
-                if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
-                    continue;
-                }
-
-                // --- Draw the car  ---
-
-                Vector3 carPos = { position.x, position.y, position.z };
-                Color car_color = GRAY;              // default for static
-                if (is_expert) car_color = GOLD;      // expert replay
-                if (is_active_agent) car_color = BLUE; // policy-controlled
-                if (is_active_agent && agent->collision_state > 0) car_color = RED;
-                rlSetLineWidth(3.0f);
+                Color wire_color = GRAY;                 // static
+                if (!is_active_agent && agent->mark_as_expert == 1) wire_color = GOLD;  // expert replay
+                if (is_active_agent) wire_color = BLUE;   // policy
+                if (is_active_agent && agent->collision_state > 0) wire_color = RED;
+                rlSetLineWidth(2.0f);
                 for (int j = 0; j < 4; j++) {
-                    DrawLine3D(corners[j], corners[(j+1)%4], car_color);
+                    DrawLine3D(corners[j], corners[(j+1)%4], wire_color);
                 }
-                // --- Draw a heading arrow pointing forward ---
-                Vector3 arrowStart = position;
-                Vector3 arrowEnd = {
-                    position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
-                    position.y + sin_heading * half_len * 1.5f,
-                    position.z
-                };
-
-                DrawLine3D(arrowStart, arrowEnd, car_color);
-                DrawSphere(arrowEnd, 0.2f, car_color);  // arrow tip
-
             }
-            else {
-                rlPushMatrix();
-                // Translate to position, rotate around Y axis, then draw
-                rlTranslatef(position.x, position.y, position.z);
-                rlRotatef(heading*RAD2DEG, 0.0f, 0.0f, 1.0f);  // Convert radians to degrees
-                // Determine color based on status
-                Color object_color = PUFF_BACKGROUND2;  // fill color unused for model tint
-                Color outline_color = PUFF_CYAN;        // not used for model tint
-                Model car_model = client->cars[5];
-                if(is_active_agent){
-                    car_model = client->cars[client->car_assignments[i %64]];
-                }
-                if(agent_index == env->human_agent_idx){
-                    object_color = PUFF_CYAN;
-                    outline_color = PUFF_WHITE;
-                }
-                if(is_active_agent && agent->collision_state > 0) {
-                    car_model = client->cars[0];  // Collided agent
-                }
-                // Draw obs for human selected agent
-                if(agent_index == env->human_agent_idx && !agent->metrics_array[REACHED_GOAL_IDX]) {
-                    draw_agent_obs(env, agent_index, mode, obs_only, lasers);
-                }
-                // Draw cube for cars static and active
-                // Calculate scale factors based on desired size and model dimensions
+            rlPopMatrix();
+        }
 
-                BoundingBox bounds = GetModelBoundingBox(car_model);
-                Vector3 model_size = {
-                    bounds.max.x - bounds.min.x,
-                    bounds.max.y - bounds.min.y,
-                    bounds.max.z - bounds.min.z
-                };
-                Vector3 scale = {
-                    size.x / model_size.x,
-                    size.y / model_size.y,
-                    size.z / model_size.z
-                };
-                if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
-                    rlPopMatrix();
-                    continue;
-                }
-
-                DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, WHITE);
-                {
-                    float cos_heading = cosf(heading);
-                    float sin_heading = sinf(heading);
-                    float half_len = agent->sim_length * 0.5f;
-                    float half_width = agent->sim_width * 0.5f;
-                    Vector3 corners[4] = {
-                        (Vector3){ 0 + ( half_len * cos_heading - half_width * sin_heading), 0 + ( half_len * sin_heading + half_width * cos_heading), 0 },
-                        (Vector3){ 0 + ( half_len * cos_heading + half_width * sin_heading), 0 + ( half_len * sin_heading - half_width * cos_heading), 0 },
-                        (Vector3){ 0 + (-half_len * cos_heading + half_width * sin_heading), 0 + (-half_len * sin_heading - half_width * cos_heading), 0 },
-                        (Vector3){ 0 + (-half_len * cos_heading - half_width * sin_heading), 0 + (-half_len * sin_heading + half_width * cos_heading), 0 },
-                    };
-                    Color wire_color = GRAY;                 // static
-                    if (!is_active_agent && agent->mark_as_expert == 1) wire_color = GOLD;  // expert replay
-                    if (is_active_agent) wire_color = BLUE;   // policy
-                    if (is_active_agent && agent->collision_state > 0) wire_color = RED;
-                    rlSetLineWidth(2.0f);
-                    for (int j = 0; j < 4; j++) {
-                        DrawLine3D(corners[j], corners[(j+1)%4], wire_color);
-                    }
-                }
-                rlPopMatrix();
+        // FPV Camera Control
+        if(IsKeyDown(KEY_SPACE) && env->human_agent_idx== agent_index){
+            if(agent->metrics_array[REACHED_GOAL_IDX]){
+                env->human_agent_idx = rand() % env->active_agent_count;
             }
+            Vector3 camera_position = (Vector3){
+                    position.x - (25.0f * cosf(heading)),
+                    position.y - (25.0f * sinf(heading)),
+                    position.z + 15
+            };
 
-            // FPV Camera Control
-            if(IsKeyDown(KEY_SPACE) && env->human_agent_idx== agent_index){
-                if(agent->metrics_array[REACHED_GOAL_IDX]){
-                    env->human_agent_idx = rand() % env->active_agent_count;
-                }
-                Vector3 camera_position = (Vector3){
-                        position.x - (25.0f * cosf(heading)),
-                        position.y - (25.0f * sinf(heading)),
-                        position.z + 15
-                };
+            Vector3 camera_target = (Vector3){
+                position.x + 40.0f * cosf(heading),
+                position.y + 40.0f * sinf(heading),
+                position.z - 5.0f
+            };
+            client->camera.position = camera_position;
+            client->camera.target = camera_target;
+            client->camera.up = (Vector3){0, 0, 1};
+        }
+        if(IsKeyReleased(KEY_SPACE)){
+            client->camera.position = client->default_camera_position;
+            client->camera.target = client->default_camera_target;
+            client->camera.up = (Vector3){0, 0, 1};
+        }
+        // Draw goal position for active agents
 
-                Vector3 camera_target = (Vector3){
-                    position.x + 40.0f * cosf(heading),
-                    position.y + 40.0f * sinf(heading),
-                    position.z - 5.0f
-                };
-                client->camera.position = camera_position;
-                client->camera.target = camera_target;
-                client->camera.up = (Vector3){0, 0, 1};
-            }
-            if(IsKeyReleased(KEY_SPACE)){
-                client->camera.position = client->default_camera_position;
-                client->camera.target = client->default_camera_target;
-                client->camera.up = (Vector3){0, 0, 1};
-            }
-            // Draw goal position for active agents
+        if(!is_active_agent || agent->sim_valid == 0) {
+            continue;
+        }
+        if(!IsKeyDown(KEY_LEFT_CONTROL) && obs_only==0){
+            DrawSphere((Vector3){
+                agent->goal_position_x,
+                agent->goal_position_y,
+                1
+            }, 0.5f, DARKGREEN);
 
-            if(!is_active_agent || agent->sim_valid == 0) {
-                continue;
-            }
-            if(!IsKeyDown(KEY_LEFT_CONTROL) && obs_only==0){
-                DrawSphere((Vector3){
-                    agent->goal_position_x,
-                    agent->goal_position_y,
-                    1
-                }, 0.5f, DARKGREEN);
-
-                DrawCircle3D((Vector3){
-                    agent->goal_position_x,
-                    agent->goal_position_y,
-                    0.1f
-                }, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
-            }
+            DrawCircle3D((Vector3){
+                agent->goal_position_x,
+                agent->goal_position_y,
+                0.1f
+            }, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
         }
 
     }
     for (int i = 0; i < env->num_road_elements; i++) {
         RoadMapElement* element = &env->road_elements[i];
-        // Draw road elements
-        if(element->type <=3 && element->type >= 7){
-            continue;
-        }
 
         for(int j = 0; j < element->segment_length - 1; j++) {
             Vector3 start = {
@@ -3085,18 +3079,19 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
             }
         }
     }
+
     if(show_grid) {
-    // Draw grid cells using the stored bounds
-    float grid_start_x = env->grid_map->top_left_x;
-    float grid_start_y = env->grid_map->bottom_right_y;
-    for(int i = 0; i < env->grid_map->grid_cols; i++) {
-        for(int j = 0; j < env->grid_map->grid_rows; j++) {
-            float x = grid_start_x + i*GRID_CELL_SIZE;
-            float y = grid_start_y + j*GRID_CELL_SIZE;
-            DrawCubeWires(
-                (Vector3){x + GRID_CELL_SIZE/2, y + GRID_CELL_SIZE/2, 1},
-                GRID_CELL_SIZE, GRID_CELL_SIZE, 0.1f, PUFF_BACKGROUND2);
-        }
+        // Draw grid cells using the stored bounds
+        float grid_start_x = env->grid_map->top_left_x;
+        float grid_start_y = env->grid_map->bottom_right_y;
+        for(int i = 0; i < env->grid_map->grid_cols; i++) {
+            for(int j = 0; j < env->grid_map->grid_rows; j++) {
+                float x = grid_start_x + i*GRID_CELL_SIZE;
+                float y = grid_start_y + j*GRID_CELL_SIZE;
+                DrawCubeWires(
+                    (Vector3){x + GRID_CELL_SIZE/2, y + GRID_CELL_SIZE/2, 1},
+                    GRID_CELL_SIZE, GRID_CELL_SIZE, 0.1f, PUFF_BACKGROUND2);
+            }
         }
     }
 
