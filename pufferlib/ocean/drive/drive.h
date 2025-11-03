@@ -1581,7 +1581,7 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
         scenario_id_out[i] = agent->scenario_id;
 
         for(int t = env->init_steps; t < agent->array_size; t++){
-            printf("Agent %d, Time %d, array size %d, init steps %d\n", i, t, agent->array_size, env->init_steps);
+            //printf("Agent %d, Time %d, array size %d, init steps %d\n", i, t, agent->array_size, env->init_steps);
             int out_idx = i * (agent->array_size - env->init_steps) + (t - env->init_steps);
             //printf("Out idx: %d\n", out_idx);
 

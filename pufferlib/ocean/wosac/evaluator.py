@@ -55,7 +55,7 @@ class WOSACEvaluator:
         }
 
         for rollout_idx in range(self.num_rollouts):
-            print(f"Collecting rollout {rollout_idx + 1}/{self.num_rollouts}...")
+            print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
             obs, info = puffer_env.reset()
             state = {}
             if args["train"]["use_rnn"]:
@@ -120,7 +120,7 @@ class WOSACEvaluator:
         gt_y = ground_truth_trajectories["y"]
         gt_valid = ground_truth_trajectories["valid"]
 
-        # Compute metrics
+        # Compute realism metrics
 
         # Average Displacement Error (ADE) and minADE
         # Note: This metric is not included in the scoring meta-metric, as per WOSAC rules.
@@ -128,8 +128,7 @@ class WOSACEvaluator:
 
         # Dynamics features
         # Compute the log-likelihoods of speed features
-        # TODO: Linear speed
-        # TODO: Angular speed
+        # Linear speed
 
         # Get agent IDs and scenario IDs
         agent_ids = ground_truth_trajectories["id"]
@@ -147,9 +146,60 @@ class WOSACEvaluator:
         # Aggregate results per scenario_id
         results = df.groupby("scenario_id")[["ade", "min_ade"]].mean()
 
-        pprint(results)
+        print(results)
 
         return results
+
+    def _quick_sanity_check(self, gt_trajectories, simulated_trajectories):
+        fig, axs = plt.subplots(1, 2, figsize=(12, 4))
+        agent_idx = 0  # Visualize the first agent
+        axs[0].set_title(f"Agent ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
+        axs[0].scatter(
+            simulated_trajectories["x"][agent_idx, :, :],
+            simulated_trajectories["y"][agent_idx, :, :],
+            color="b",
+            alpha=0.1,
+            label="Simulated",
+        )
+        axs[0].scatter(
+            gt_trajectories["x"][agent_idx, :, :],
+            gt_trajectories["y"][agent_idx, :, :],
+            color="g",
+            label="Ground Truth",
+        )
+        axs[0].scatter(
+            gt_trajectories["x"][agent_idx, 0, 0],
+            gt_trajectories["y"][agent_idx, 0, 0],
+            color="purple",
+            marker="*",
+            s=200,
+            label="GT start",
+            zorder=5,
+            alpha=0.5,
+        )
+        axs[0].scatter(
+            simulated_trajectories["x"][agent_idx, :, 0],
+            simulated_trajectories["y"][agent_idx, :, 0],
+            color="purple",
+            marker="*",
+            s=200,
+            label="Agent start",
+            zorder=5,
+            alpha=0.5,
+        )
+        axs[0].set_xlabel("X Position")
+        axs[0].set_ylabel("Y Position")
+        axs[0].legend()
+
+        axs[1].set_title(f"Heading timeseries; ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
+        time_steps = list(range(self.sim_steps))
+        for r in range(self.num_rollouts):
+            axs[1].plot(
+                time_steps, simulated_trajectories["heading"][agent_idx, r, :], color="b", alpha=0.1, label="Simulated"
+            )
+        axs[1].plot(time_steps, gt_trajectories["heading"][agent_idx, :, :].T, color="g", label="Ground Truth")
+        axs[1].set_xlabel("Time Step")
+        plt.savefig("trajectory_comparison.png")
 
     def _display_dashboard(self, trajectories):
         """Display sanity checks and visualizations for collected trajectories."""

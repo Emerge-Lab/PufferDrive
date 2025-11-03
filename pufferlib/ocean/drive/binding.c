@@ -88,7 +88,6 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         env->init_steps = init_steps;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
-        printf("@MYSHARED: calling set_active_agents\n");
         set_active_agents(env);
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);

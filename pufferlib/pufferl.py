@@ -1134,7 +1134,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     wosac_enabled = args["wosac"]["enabled"]
     backend = args["vec"]["backend"]
-    print(backend)
     assert backend == "PufferEnv", "WOSAC evaluation only supports PufferEnv backend."
 
     args["vec"] = dict(backend=backend, num_envs=1)
@@ -1150,64 +1149,13 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         evaluator = WOSACEvaluator(args)
 
-        vecenv.get_ground_truth_trajectories()
-
         # Collect ground truth trajectories from the dataset
         gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
 
         # Roll out trained policy in the simulator
-        # import pdb; pdb.set_trace()
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
 
-        # fig, axs = plt.subplots(1, 2, figsize=(12, 4))
-        # agent_idx = 0  # Visualize the first agent
-        # axs[0].set_title(f"Agent ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
-        # axs[0].scatter(
-        #     simulated_trajectories["x"][agent_idx, :, :],
-        #     simulated_trajectories["y"][agent_idx, :, :],
-        #     color="b",
-        #     alpha=0.1,
-        #     label="Simulated",
-        # )
-        # axs[0].scatter(
-        #     gt_trajectories["x"][agent_idx, :, :],
-        #     gt_trajectories["y"][agent_idx, :, :],
-        #     color="g",
-        #     label="Ground Truth",
-        # )
-        # axs[0].scatter(
-        #     gt_trajectories["x"][agent_idx, 0, 0],
-        #     gt_trajectories["y"][agent_idx, 0, 0],
-        #     color="purple",
-        #     marker="*",
-        #     s=200,
-        #     label="GT start",
-        #     zorder=5,
-        #     alpha=0.5,
-        # )
-        # axs[0].scatter(
-        #     simulated_trajectories["x"][agent_idx, :, 0],
-        #     simulated_trajectories["y"][agent_idx, :, 0],
-        #     color="purple",
-        #     marker="*",
-        #     s=200,
-        #     label="Agent start",
-        #     zorder=5,
-        #     alpha=0.5,
-        # )
-        # axs[0].set_xlabel("X Position")
-        # axs[0].set_ylabel("Y Position")
-        # axs[0].legend()
-
-        # axs[1].set_title(f"Heading timeseries; ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
-        # time_steps = list(range(evaluator.sim_steps))
-        # for r in range(evaluator.num_rollouts):
-        #     axs[1].plot(
-        #         time_steps, simulated_trajectories["heading"][agent_idx, r, :], color="b", alpha=0.1, label="Simulated"
-        #     )
-        # axs[1].plot(time_steps, gt_trajectories["heading"][agent_idx, :, :].T, color="g", label="Ground Truth")
-        # axs[1].set_xlabel("Time Step")
-        # plt.savefig("trajectory_comparison.png")
+        evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
 
         # Analyze and compute metrics
         results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories)

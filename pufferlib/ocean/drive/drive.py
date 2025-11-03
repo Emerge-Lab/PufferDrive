@@ -241,8 +241,6 @@ class Drive(pufferlib.PufferEnv):
             "scenario_id": np.zeros((num_agents, 1), dtype=np.int32),
         }
 
-        print(f"Getting ground truth trajectories for {num_agents} agents... {self.c_envs}")
-
         binding.vec_get_global_ground_truth_trajectories(
             self.c_envs,
             trajectories["x"],
@@ -516,5 +514,5 @@ def test_performance(timeout=0.0001, atn_cache=1024, num_agents=12):
 
 
 if __name__ == "__main__":
-    test_performance()
-    # process_all_maps()
+    # test_performance()
+    process_all_maps()
