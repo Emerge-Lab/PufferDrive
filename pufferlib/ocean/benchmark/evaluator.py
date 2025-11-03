@@ -9,8 +9,8 @@ from typing import Dict, Optional
 import matplotlib.pyplot as plt
 
 import pufferlib
-from pufferlib.ocean.drive.drive import Drive
-from pufferlib.ocean.wosac.metrics import compute_displacement_error
+from pufferlib.ocean.benchmark import metrics
+from pufferlib.ocean.benchmark import estimators
 
 
 class WOSACEvaluator:
@@ -20,6 +20,7 @@ class WOSACEvaluator:
     """
 
     def __init__(self, config: Dict):
+        # TODO: Pass wosac.ini as config
         self.config = config
         self.num_steps = 91  # Hardcoded for WOSAC (9.1s at 10Hz)
         self.init_steps = 10  # Initial steps to skip (1s)
@@ -105,6 +106,8 @@ class WOSACEvaluator:
                                 shape (n_agents,) for id
                                 list of length n_agents for scenario_id
 
+        Note: z-position not used in current metrics.
+
         Returns:
             Dictionary with scores per scenario_id
         """
@@ -114,21 +117,42 @@ class WOSACEvaluator:
         )
 
         # Extract trajectories
-        pred_x = simulated_trajectories["x"]
-        pred_y = simulated_trajectories["y"]
-        gt_x = ground_truth_trajectories["x"]
-        gt_y = ground_truth_trajectories["y"]
-        gt_valid = ground_truth_trajectories["valid"]
+        sim_x = simulated_trajectories["x"]
+        sim_y = simulated_trajectories["y"]
+        sim_heading = simulated_trajectories["heading"]
+        ref_x = ground_truth_trajectories["x"]
+        ref_y = ground_truth_trajectories["y"]
+        ref_heading = ground_truth_trajectories["heading"]
+        ref_valid = ground_truth_trajectories["valid"]
+
+        # Compute features
+        # Kinematics-related features
+        sim_linear_speed, sim_linear_accel, sim_angular_speed, sim_angular_accel = metrics.compute_kinematic_features(
+            sim_x, sim_y, sim_heading
+        )
+
+        ref_linear_speed, ref_linear_accel, ref_angular_speed, ref_angular_accel = metrics.compute_kinematic_features(
+            ref_x, ref_y, ref_heading
+        )
 
         # Compute realism metrics
-
         # Average Displacement Error (ADE) and minADE
         # Note: This metric is not included in the scoring meta-metric, as per WOSAC rules.
-        ade, min_ade = compute_displacement_error(pred_x, pred_y, gt_x, gt_y, gt_valid)
+        ade, min_ade = metrics.compute_displacement_error(sim_x, sim_y, ref_x, ref_y, ref_valid)
 
-        # Dynamics features
-        # Compute the log-likelihoods of speed features
-        # Linear speed
+        # Log-likelihood metrics
+        # Kinematic features log-likelihoods
+        linear_speed_log_likelihood = estimators.log_likelihood_estimate_timeseries(
+            log_values=ref_linear_speed,
+            sim_values=sim_linear_speed,
+            treat_timesteps_independently=True,
+            min_val=0.0,
+            max_val=25.0,
+            num_bins=10,
+            sanity_check=True,
+        )
+
+        breakpoint()
 
         # Get agent IDs and scenario IDs
         agent_ids = ground_truth_trajectories["id"]
