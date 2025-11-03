@@ -706,8 +706,11 @@ void set_start_position(Drive* env){
         agent->sim_z = agent->log_trajectory_z[step];
         agent->sim_heading = agent->log_heading[step];
         agent->sim_valid = agent->log_valid[step];
+        agent->sim_length = agent->log_length[step];
+        agent->sim_width = agent->log_width[step];
+        agent->sim_height = agent->log_height[step];
 
-        if(agent->type >= CYCLIST || agent->type == 0){
+        if(agent->type >= CYCLIST || agent->type == 0) {
             continue;
         }
 
