@@ -900,7 +900,7 @@ class Profile:
             return
 
         if torch.cuda.is_available():
-           torch.cuda.synchronize()
+            torch.cuda.synchronize()
 
         tick = time.time()
         if len(self.stack) != 0 and not nest:
