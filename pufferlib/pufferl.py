@@ -899,8 +899,8 @@ class Profile:
         if epoch % self.frequency != 0:
             return
 
-        # if torch.cuda.is_available():
-        #    torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         tick = time.time()
         if len(self.stack) != 0 and not nest:
