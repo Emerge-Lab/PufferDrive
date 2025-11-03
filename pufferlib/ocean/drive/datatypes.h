@@ -10,18 +10,21 @@ struct DynamicAgent {
     float* log_heading;
     float* log_velocity_x;
     float* log_velocity_y;
+    float* log_length;
+    float* log_width;
+    float* log_height;
     int* log_valid;
-    float* length;
-    float* width;
-    float* height;
 
-    // Simulation state (current timestep only - scalars, not arrays)
+    // Simulation state
     float sim_x;
     float sim_y;
     float sim_z;
     float sim_heading;
     float sim_vx;
     float sim_vy;
+    float sim_length;
+    float sim_width;
+    float sim_height;
     int sim_valid;
 
     // Route information
@@ -88,10 +91,10 @@ void free_dynamic_agent(struct DynamicAgent* agent){
     free(agent->log_heading);
     free(agent->log_velocity_x);
     free(agent->log_velocity_y);
+    free(agent->log_length);
+    free(agent->log_width);
+    free(agent->log_height);
     free(agent->log_valid);
-    free(agent->length);
-    free(agent->width);
-    free(agent->height);
     free(agent->routes);
 }
 

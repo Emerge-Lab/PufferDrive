@@ -476,14 +476,14 @@ int load_map_binary(const char* filename, Drive* drive) {
         agent->log_heading = (float*)malloc(tlen * sizeof(float));
         agent->log_velocity_x = (float*)malloc(tlen * sizeof(float));
         agent->log_velocity_y = (float*)malloc(tlen * sizeof(float));
-        agent->length = (float*)malloc(tlen * sizeof(float));
-        agent->width = (float*)malloc(tlen * sizeof(float));
-        agent->height = (float*)malloc(tlen * sizeof(float));
+        agent->log_length = (float*)malloc(tlen * sizeof(float));
+        agent->log_width = (float*)malloc(tlen * sizeof(float));
+        agent->log_height = (float*)malloc(tlen * sizeof(float));
         agent->log_valid = (int*)malloc(tlen * sizeof(int));
 
         if (!agent->log_trajectory_x || !agent->log_trajectory_y || !agent->log_trajectory_z ||
             !agent->log_heading || !agent->log_velocity_x || !agent->log_velocity_y ||
-            !agent->length || !agent->width || !agent->height || !agent->log_valid) {
+            !agent->log_length || !agent->log_width || !agent->log_height || !agent->log_valid) {
             fprintf(stderr, "Error: Failed to allocate agent %d arrays\n", i);
             fclose(file);
             return -1;
@@ -514,9 +514,9 @@ int load_map_binary(const char* filename, Drive* drive) {
         }
 
         // Read dimensions
-        if (fread(agent->length, sizeof(float), tlen, file) != (size_t)tlen ||
-            fread(agent->width, sizeof(float), tlen, file) != (size_t)tlen ||
-            fread(agent->height, sizeof(float), tlen, file) != (size_t)tlen) {
+        if (fread(agent->log_length, sizeof(float), tlen, file) != (size_t)tlen ||
+            fread(agent->log_width, sizeof(float), tlen, file) != (size_t)tlen ||
+            fread(agent->log_height, sizeof(float), tlen, file) != (size_t)tlen) {
             fprintf(stderr, "Error: Failed to read agent %d dimensions\n", i);
             fclose(file);
             return -1;
@@ -1098,6 +1098,9 @@ void move_expert(Drive* env, float* actions, int agent_idx){
         agent->sim_vx = 0.0f;
         agent->sim_vy = 0.0f;
         agent->sim_valid = 0;
+        agent->sim_length = 0.0f;
+        agent->sim_width = 0.0f;
+        agent->sim_height = 0.0f;
         return;
     }
     if (agent->log_valid && agent->log_valid[t] == 0) {
@@ -1108,6 +1111,9 @@ void move_expert(Drive* env, float* actions, int agent_idx){
         agent->sim_vx = 0.0f;
         agent->sim_vy = 0.0f;
         agent->sim_valid = 0;
+        agent->sim_length = 0.0f;
+        agent->sim_width = 0.0f;
+        agent->sim_height = 0.0f;
         return;
     }
 
@@ -1118,6 +1124,9 @@ void move_expert(Drive* env, float* actions, int agent_idx){
     agent->sim_heading = agent->log_heading[t];
     agent->sim_vx = agent->log_velocity_x[t];
     agent->sim_vy = agent->log_velocity_y[t];
+    agent->sim_length = agent->log_length[t];
+    agent->sim_width = agent->log_width[t];
+    agent->sim_height = agent->log_height[t];
     agent->sim_valid = agent->log_valid[t];
 }
 
@@ -1196,10 +1205,10 @@ int check_aabb_collision(DynamicAgent* car1, DynamicAgent* car2, int timestep) {
     float sin2 = sinf(heading2);
 
     // Calculate half dimensions at current timestep
-    float half_len1 = car1->length[timestep] * 0.5f;
-    float half_width1 = car1->width[timestep] * 0.5f;
-    float half_len2 = car2->length[timestep] * 0.5f;
-    float half_width2 = car2->width[timestep] * 0.5f;
+    float half_len1 = car1->sim_length * 0.5f;
+    float half_width1 = car1->sim_width * 0.5f;
+    float half_len2 = car2->sim_length * 0.5f;
+    float half_width2 = car2->sim_width * 0.5f;
 
     // Calculate car1's corners in world space
     float car1_corners[4][2] = {
@@ -1390,8 +1399,8 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     float agent_x = agent->sim_x;
     float agent_y = agent->sim_y;
     float agent_heading = agent->sim_heading;
-    float half_length = agent->length[0]/2.0f;
-    float half_width = agent->width[0]/2.0f;
+    float half_length = agent->sim_length/2.0f;
+    float half_width = agent->sim_width/2.0f;
     float cos_heading = cosf(agent_heading);
     float sin_heading = sinf(agent_heading);
     float min_distance = (float)INT16_MAX;
@@ -1482,7 +1491,6 @@ int valid_active_agent(Drive* env, int agent_idx){
 
     float cos_heading = cosf(agent->log_heading[0]);
     float sin_heading = sinf(agent->log_heading[0]);
-    int trajectory_length = agent->trajectory_length;
     float goal_x = agent->goal_position_x - agent->log_trajectory_x[0];
     float goal_y = agent->goal_position_y - agent->log_trajectory_y[0];
 
@@ -1851,7 +1859,7 @@ float normalize_heading(float heading){
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     if(env->dynamics_model == CLASSIC){
         DynamicAgent* agent = &env->dynamic_agents[agent_idx];
-        int t = env->timestep;
+
         float acceleration = 0.0f;
         float steering = 0.0f;
 
@@ -1874,6 +1882,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         float heading = agent->sim_heading;
         float vx = agent->sim_vx;
         float vy = agent->sim_vy;
+        float length = agent->sim_length;
 
         // Calculate current speed
         float speed = sqrtf(vx*vx + vy*vy);
@@ -1887,7 +1896,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         // compute yaw rate
         float beta = tanh(.5*tanf(steering));
         // new heading
-        float yaw_rate = (speed*cosf(beta)*tanf(steering)) / agent->length[0];
+        float yaw_rate = (speed*cosf(beta)*tanf(steering)) / length;
         // new velocity
         float new_vx = speed*cosf(heading + beta);
         float new_vy = speed*sinf(heading + beta);
@@ -1921,7 +1930,7 @@ void compute_observations(Drive* env) {
     for(int i = 0; i < env->active_agent_count; i++) {
         float* obs = &observations[i][0];
         DynamicAgent* ego_entity = &env->dynamic_agents[env->active_agent_indices[i]];
-        int t = env->timestep;
+
         if(ego_entity->type > 3) break;
         if(ego_entity->respawn_timestep != -1) {
             obs[6] = 1;
@@ -1947,8 +1956,8 @@ void compute_observations(Drive* env) {
         obs[1] = rel_goal_y* 0.005f;
         //obs[2] = ego_speed / MAX_SPEED;
         obs[2] = ego_speed * 0.01f;
-        obs[3] = ego_entity->width[t] / MAX_VEH_WIDTH;
-        obs[4] = ego_entity->length[t] / MAX_VEH_LEN;
+        obs[3] = ego_entity->sim_width / MAX_VEH_WIDTH;
+        obs[4] = ego_entity->sim_length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
 
         // Relative Pos of other cars
@@ -1980,8 +1989,8 @@ void compute_observations(Drive* env) {
             // Store observations with correct indexing
             obs[obs_idx] = rel_x * 0.02f;
             obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = other_entity->width[t] / MAX_VEH_WIDTH;
-            obs[obs_idx + 3] = other_entity->length[t] / MAX_VEH_LEN;
+            obs[obs_idx + 2] = other_entity->sim_width / MAX_VEH_WIDTH;
+            obs[obs_idx + 3] = other_entity->sim_length / MAX_VEH_LEN;
             // relative heading
             float other_heading = other_entity->sim_heading;
             float other_cos = cosf(other_heading);
@@ -2861,9 +2870,9 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
             heading = agent->sim_heading;
             // Create size vector
             Vector3 size = {
-                agent->length[t],
-                agent->width[t],
-                agent->height[t]
+                agent->sim_length,
+                agent->sim_width,
+                agent->sim_height
             };
 
             bool is_expert = (!is_active_agent) && (agent->mark_as_expert == 1);
@@ -2874,8 +2883,8 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 float sin_heading = sinf(heading);
 
                 // Calculate half dimensions
-                float half_len = agent->length[t] * 0.5f;
-                float half_width = agent->width[t] * 0.5f;
+                float half_len = agent->sim_length * 0.5f;
+                float half_width = agent->sim_width * 0.5f;
 
                 // Calculate the four corners of the collision box
                 Vector3 corners[4] = {
@@ -2981,8 +2990,8 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 {
                     float cos_heading = cosf(heading);
                     float sin_heading = sinf(heading);
-                    float half_len = agent->length[t] * 0.5f;
-                    float half_width = agent->width[t] * 0.5f;
+                    float half_len = agent->sim_length * 0.5f;
+                    float half_width = agent->sim_width * 0.5f;
                     Vector3 corners[4] = {
                         (Vector3){ 0 + ( half_len * cos_heading - half_width * sin_heading), 0 + ( half_len * sin_heading + half_width * cos_heading), 0 },
                         (Vector3){ 0 + ( half_len * cos_heading + half_width * sin_heading), 0 + ( half_len * sin_heading - half_width * cos_heading), 0 },
