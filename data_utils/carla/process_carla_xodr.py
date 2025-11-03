@@ -606,15 +606,82 @@ def check_geometry(point, all_geometries):
     return True
 
 
+class AABB:
+    def __init__(self, center_point, length, width, height):
+        """
+        Axis-aligned bounding box defined by center and extents.
+        Compute the 8 cuboid corners then derive x/y/z ranges from them.
+        """
+        self.center_point = np.asarray(center_point, dtype=float)
+        if self.center_point.size == 2:
+            # assume z = 0 if omitted
+            self.center_point = np.append(self.center_point, 0.0)
+
+        # Take max of extents in 2D
+        self.length = max(float(length), float(width))
+        self.width = self.length
+        self.height = float(height)
+
+        # Double the extents to prevent collision with any orientation
+        self.length = 2.0 * float(self.length)
+        self.width = 2.0 * float(self.width)
+        self.height = 2.0 * float(self.height)
+
+        # half-extents
+        half = np.array([self.length / 2.0, self.width / 2.0, self.height / 2.0], dtype=float)
+
+        # 8 corner signs: all combinations of +/-1
+        signs = np.array([[sx, sy, sz] for sx in (-1.0, 1.0) for sy in (-1.0, 1.0) for sz in (-1.0, 1.0)], dtype=float)
+
+        # corners shape (8,3)
+        self.corners = self.center_point + signs * half
+
+        # min/max from corners (robust even if inputs were swapped)
+        self.min_point = np.min(self.corners, axis=0)
+        self.max_point = np.max(self.corners, axis=0)
+
+        self.x_range = [float(self.min_point[0]), float(self.max_point[0])]
+        self.y_range = [float(self.min_point[1]), float(self.max_point[1])]
+        self.z_range = [float(self.min_point[2]), float(self.max_point[2])]
+
+    def intersects(self, other):
+        # Check for overlap in all three axes
+        overlap_x = (self.x_range[0] <= other.x_range[1]) and (self.x_range[1] >= other.x_range[0])
+        overlap_y = (self.y_range[0] <= other.y_range[1]) and (self.y_range[1] >= other.y_range[0])
+        overlap_z = (self.z_range[0] <= other.z_range[1]) and (self.z_range[1] >= other.z_range[0])
+
+        return overlap_x and overlap_y and overlap_z
+
+
+def AABB_unit_test():
+    center = [0.0, 0.0, 0.0]
+    length = 2.0
+    width = 4.0
+    height = 6.0
+    aabb = AABB(center, length, width, height)
+    assert np.allclose(aabb.min_point, [-4.0, -4.0, -6.0])
+    assert np.allclose(aabb.max_point, [4.0, 4.0, 6.0])
+    assert np.allclose(aabb.corners[0], [-4.0, -4.0, -6.0])
+    assert np.allclose(aabb.corners[7], [4.0, 4.0, 6.0])
+    print("AABB unit test passed.")
+
+
 def generate_traj_data(
+    start_object_aabbs,  # To prevent init collisions
     road_link_map,
     num_timestamps=90,
     resolution=0.1,
     episode_length=9,
-    max_speed=10,
+    max_speed=2,
     random_sampling_variation=1,
-    resample=True,
+    init_resample=True,
+    lane_change_resample=True,
     all_geometries=[],
+    obj_length=4.5,
+    obj_width=2.0,
+    obj_height=1.8,
+    num_attempts=50,
+    initial_velocity=None,  # If None, use calculated velocity; otherwise set to this value (m/s)
 ):
     # Calculate average speed (70% of max_speed)
     avg_speed = 0.7 * max_speed
@@ -622,29 +689,55 @@ def generate_traj_data(
     time_step_dur = episode_length / num_timestamps
     sampling_length = int((avg_speed * time_step_dur) / avg_cons_pts_dist)
 
-    # # Calculate junction speed (20% of max_speed)
-    # junction_speed = 0.2 * max_speed
-
-    # Pick a random lane_link_key
+    num_samples = 0
+    # Pick a random start_lane_key
     while True:
+        if num_samples > 1000:
+            print("Failed to find a free spot after 1000 samples, returning None")
+            return None
+        num_samples += 1
         road_link_keys = list(road_link_map.keys())
         start_key = random.choice(road_link_keys)
         lane_link_keys = list(road_link_map[start_key].lane_links_map.keys())
         if lane_link_keys != []:
-            if resample:
+            if init_resample:
+                start_lane_key = random.choice(lane_link_keys)
+                lane_link_obj = road_link_map[start_key].lane_links_map[start_lane_key]
+                found_free_spot = False
+                for attempt in range(num_attempts):
+                    idx = random.randint(0, len(lane_link_obj.lane_centerpoints) - 1)
+                    check_AABB = AABB(lane_link_obj.lane_centerpoints[idx], obj_length, obj_width, obj_height)
+                    if not any(check_AABB.intersects(aabb) for aabb in start_object_aabbs):
+                        # print(f"Found free spot at attempt {attempt} on lane link {start_lane_key} of road link {start_key}")
+                        found_free_spot = True
+                        break
+                if found_free_spot:
+                    break
+                # if no free spot found need to choose a different lane link
+            else:
                 start_lane_key = random.choice(lane_link_keys)
                 lane_link_obj = road_link_map[start_key].lane_links_map[start_lane_key]
                 if not lane_link_obj.is_sampled:
                     # print(f"Starting: RoadLink key: {start_key}\n LaneLink key: {start_lane_key}")
-                    break
-            else:
-                start_lane_key = random.choice(lane_link_keys)
-                lane_link_obj = road_link_map[start_key].lane_links_map[start_lane_key]
+                    found_free_spot = False
+                    for attempt in range(num_attempts):
+                        idx = random.randint(0, len(lane_link_obj.lane_centerpoints) - 1)
+                        check_AABB = AABB(lane_link_obj.lane_centerpoints[idx], obj_length, obj_width, obj_height)
+                        if not any(check_AABB.intersects(aabb) for aabb in start_object_aabbs):
+                            # print(f"Found free spot at attempt {attempt} on lane link {start_lane_key} of road link {start_key}")
+                            found_free_spot = True
+                            break
+                        else:
+                            pass
+                    if found_free_spot:
+                        break
+                    # if no free spot found need to choose a different lane link
 
     waypoints_list = []
     current_lane_link = lane_link_obj
     current_lane_link.is_sampled = True
-    idx = random.randint(0, len(current_lane_link.lane_centerpoints) - 1)
+
+    start_object_aabbs.append(AABB(current_lane_link.lane_centerpoints[idx], obj_length, obj_width, obj_height))
     # if check_geometry(current_lane_link.lane_centerpoints[idx], all_geometries) == False:
     #     print(f"Waypoint {current_lane_link.lane_centerpoints[idx]}, lane: {current_lane_link.lane_id}, Lane_Section: {current_lane_link.lane_section_index} Road: {current_lane_link.road_id} not in all_geometries")
     waypoints_list.append(
@@ -664,7 +757,9 @@ def generate_traj_data(
         if change_lane:
             # Pick a random outgoing edge
             if current_lane_link.outgoing_edges:
-                if resample:
+                if lane_change_resample:
+                    current_lane_link = random.choice(current_lane_link.outgoing_edges)
+                else:
                     # Filter outgoing_edges with is_sampled == False
                     unsampled_edges = [
                         edge for edge in current_lane_link.outgoing_edges if not getattr(edge, "is_sampled", False)
@@ -675,8 +770,7 @@ def generate_traj_data(
                         current_lane_link = random.choice(current_lane_link.outgoing_edges)
                     current_lane_link.is_sampled = True
                     idx = 0  # Lane connection width is zero so reset at start
-                else:
-                    current_lane_link = random.choice(current_lane_link.outgoing_edges)
+
             else:
                 # No outgoing edge, stop trajectory
                 print("No outgoing edge, stopping trajectory")
@@ -725,12 +819,19 @@ def generate_traj_data(
             }
         )
 
-    # Change first waypoint with average velocity and heading from pos t=0 to pos t=1 keeping everything else same
-    mean_vx = np.mean([wp["velocity"]["x"] for wp in waypoints_list[1:]])
-    mean_vy = np.mean([wp["velocity"]["y"] for wp in waypoints_list[1:]])
+    # Change first waypoint with velocity and heading from pos t=0 to pos t=1 keeping everything else same
     pos0 = np.array(waypoints_list[0]["position"])
     pos1 = np.array(waypoints_list[1]["position"])
     heading = float(np.arctan2(pos1[1] - pos0[1], pos1[0] - pos0[0]))
+
+    if initial_velocity is None:
+        # Use average velocity from rest of trajectory
+        mean_vx = np.mean([wp["velocity"]["x"] for wp in waypoints_list[1:]])
+        mean_vy = np.mean([wp["velocity"]["y"] for wp in waypoints_list[1:]])
+    else:
+        # Use configured initial velocity along the heading direction
+        mean_vx = initial_velocity * np.cos(heading)
+        mean_vy = initial_velocity * np.sin(heading)
 
     waypoints_list[0] = {
         "position": waypoints_list[0]["position"],
@@ -748,12 +849,29 @@ def save_object_to_json(
     xodr_json,
     road_link_map,
     id,
+    start_object_aabbs,
     resolution=0.1,
     object_type="vehicle",
     all_geometries=[],
-    start_with_zero_velocity=True,
+    initial_velocity=None,  # If None, use calculated velocity; if 0.0 start at rest; otherwise set to this value (m/s)
+    init_resample=True,
+    lane_change_resample=True,
+    obj_length=4.5,
+    obj_width=2.0,
+    obj_height=1.8,
 ):
-    traj_data = generate_traj_data(road_link_map=road_link_map, resolution=resolution, all_geometries=all_geometries)
+    traj_data = generate_traj_data(
+        start_object_aabbs,
+        road_link_map=road_link_map,
+        resolution=resolution,
+        init_resample=init_resample,
+        lane_change_resample=lane_change_resample,
+        all_geometries=all_geometries,
+        obj_length=obj_length,
+        obj_width=obj_width,
+        obj_height=obj_height,
+        initial_velocity=initial_velocity,
+    )
 
     z = 0.3
     headings = []
@@ -763,16 +881,16 @@ def save_object_to_json(
         x = traj["position"][0]
         y = traj["position"][1]
         positions.append({"x": float(x), "y": float(y), "z": float(z)})
-        v_x = 0.0 if start_with_zero_velocity and i == 0 else traj["velocity"]["x"]
-        v_y = 0.0 if start_with_zero_velocity and i == 0 else traj["velocity"]["y"]
+        v_x = traj["velocity"]["x"]
+        v_y = traj["velocity"]["y"]
         velocities.append({"x": float(v_x), "y": float(v_y)})
         headings.append(float(traj["heading"]))
 
     object_data = {
         "position": list(positions),
-        "width": 2.0,
-        "length": 4.5,
-        "height": 1.8,
+        "width": obj_width,
+        "length": obj_length,
+        "height": obj_height,
         "id": id,
         "heading": list(headings),
         "velocity": list(velocities),
@@ -801,7 +919,9 @@ def generate_data_each_map(
     num_data_per_map,
     num_objects,
     make_only_first_agent_controllable,
-    start_with_zero_velocity=True,
+    initial_velocity=None,  # If None, use calculated velocity; if 0.0 start at rest; otherwise set to this value (m/s)
+    init_resample=True,
+    lane_change_resample=True,
 ):
     os.makedirs(output_json_root_dir, exist_ok=True)
     for town_name in town_names:
@@ -829,7 +949,7 @@ def generate_data_each_map(
             add_incoming_outgoing_edges(road_network, roads, road_link_map)
 
             # Test linkage
-            test_linkage(road_link_map)
+            # test_linkage(road_link_map)
 
             with open(input_json_path, "r") as f:
                 xodr_json = json.load(f)
@@ -845,15 +965,21 @@ def generate_data_each_map(
 
             xodr_json["objects"] = []
 
+            # Start AABBs to prevent init collisions or extreme closeness
+            start_object_aabbs = []
+
             for i in range(num_objects):
                 id = i + 1
                 save_object_to_json(
                     xodr_json,
                     road_link_map,
                     id,
+                    start_object_aabbs,
                     resolution=resolution,
                     all_geometries=all_geometries,
-                    start_with_zero_velocity=start_with_zero_velocity,
+                    initial_velocity=initial_velocity,
+                    init_resample=init_resample,
+                    lane_change_resample=lane_change_resample,
                 )
 
             # Make first agent only controllable
@@ -877,8 +1003,9 @@ def generate_data_each_map(
 
 
 if __name__ == "__main__":
+    AABB_unit_test()
     # town_names = ["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"]
-    town_names = ["Town01"]
+    town_names = ["Town01", "Town02", "Town05", "Town10HD"]
     input_json_base_path = "data_utils/carla/carla"
     output_json_root_dir = "data/processed/carla_data"
     carla_map_dir = "C:\\CarlaMaps"
@@ -886,7 +1013,9 @@ if __name__ == "__main__":
     num_data_per_map = 16
     num_objects = 32
     make_only_first_agent_controllable = False
-    start_with_zero_velocity = True
+    initial_velocity = 0.0  # Set to None for mean velocity(m/s)
+    init_resample = False  # Resampling init lane
+    lane_change_resample = False  # Resampling lane change lane
     generate_data_each_map(
         town_names,
         carla_map_dir,
@@ -896,5 +1025,7 @@ if __name__ == "__main__":
         num_data_per_map,
         num_objects=num_objects,
         make_only_first_agent_controllable=make_only_first_agent_controllable,
-        start_with_zero_velocity=start_with_zero_velocity,
+        initial_velocity=initial_velocity,
+        init_resample=init_resample,
+        lane_change_resample=lane_change_resample,
     )

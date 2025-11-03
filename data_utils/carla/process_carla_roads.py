@@ -200,6 +200,7 @@ def generate_carla_road(
             road_edges = []
             road_lines = []
             lanes = []
+            lane_ids_for_edges = []  # Track which lanes contributed to road_edges
 
             left_immediate_driveable = False
             right_immediate_driveable = False
@@ -221,6 +222,7 @@ def generate_carla_road(
                     # Add outer edge as road edge
                     elif add_edge_data:
                         road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                        lane_ids_for_edges.append(previous_lane.id)
                     add_lane_data = True
                     add_edge_data = False
                 else:
@@ -228,6 +230,7 @@ def generate_carla_road(
                     if add_lane_data and i != 0:
                         lanes.append(get_lane_data(previous_lane, "CENTERLINE"))
                         road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                        lane_ids_for_edges.append(previous_lane.id)
                     add_edge_data = True
                     add_lane_data = False
                 previous_lane = left_lane
@@ -235,6 +238,7 @@ def generate_carla_road(
             if add_lane_data:
                 lanes.append(get_lane_data(previous_lane, "CENTERLINE"))
                 road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                lane_ids_for_edges.append(previous_lane.id)
 
             # Right Lanes
             add_lane_data = False
@@ -253,6 +257,7 @@ def generate_carla_road(
                     # Add outer edge as road edge
                     elif add_edge_data:
                         road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                        lane_ids_for_edges.append(previous_lane.id)
                     add_lane_data = True
                     add_edge_data = False
                 else:
@@ -260,6 +265,7 @@ def generate_carla_road(
                     if add_lane_data and i != 0:
                         lanes.append(get_lane_data(previous_lane, "CENTERLINE"))
                         road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                        lane_ids_for_edges.append(previous_lane.id)
                     add_edge_data = True
                     add_lane_data = False
                 previous_lane = right_lane
@@ -267,22 +273,33 @@ def generate_carla_road(
             if add_lane_data:
                 lanes.append(get_lane_data(previous_lane, "CENTERLINE"))
                 road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                lane_ids_for_edges.append(previous_lane.id)
 
             # If atleast one side has no immediate driveable lane add center as road edge
             if not left_immediate_driveable or not right_immediate_driveable:
                 road_edges.append(lane_section.lane_section_reference_line)
+                lane_ids_for_edges.append(0)  # Center lane has ID 0 in OpenDRIVE
             else:
                 road_lines.append(lane_section.lane_section_reference_line)
 
             if len(road_lines) == 0 and len(lanes) == 0:
                 road_edges = []
+                lane_ids_for_edges = []
             if road_obj.__getitem__("junction") != "-1":
                 junction_id = road_obj.__getitem__("junction")
                 if junction_id not in junctions_map:
                     junctions_map[junction_id] = {}
                 if "road_edges" not in junctions_map[junction_id]:
                     junctions_map[junction_id]["road_edges"] = []
+                if "road_ids" not in junctions_map[junction_id]:
+                    junctions_map[junction_id]["road_ids"] = []
+                if "lane_ids" not in junctions_map[junction_id]:
+                    junctions_map[junction_id]["lane_ids"] = []
+
+                # Store road edges with their metadata
                 junctions_map[junction_id]["road_edges"].append(road_edges)
+                junctions_map[junction_id]["road_ids"].append(road_obj.__getitem__("id"))
+                junctions_map[junction_id]["lane_ids"].append(lane_ids_for_edges)
                 road_edges = []
 
             id = save_lane_section_to_json(
@@ -387,9 +404,15 @@ def generate_carla_road(
         if polygons:
             # junction_surface = MultiPolygon(polygons)
             junction_surface = fuse_existing_polygons(polygons)
-            if junction_id == "703":
-                print("Debugging junction 703")
-                plot_junction(snapped_polylines, junction_surface, [], [], method_used)
+            if junction_id == "":
+                print("Debugging junction 268")
+                # Extract road_ids and lane_ids for annotation
+                road_ids = junctions_map[junction_id].get("road_ids", [])
+                lane_ids = junctions_map[junction_id].get("lane_ids", [])
+                metadata = {"road_ids": road_ids, "lane_ids": lane_ids}
+                plot_junction(
+                    snapped_polylines, junction_surface, [], [], method_used, junction_id=junction_id, metadata=metadata
+                )
             road_edges_lists = junctions_map[junction_id].get("road_edges", [])
             filtered_road_edges = []
             filtered_road_lines = []
@@ -399,11 +422,32 @@ def generate_carla_road(
                 for road_edge in road_edges:
                     results = [junction_surface.contains(Point(p)) for p in road_edge]
                     if sum(results) / len(results) <= junction_filter_thresh:
-                        filtered_road_edges.append(road_edge)
+                        filtered_road_edge = [p for p in road_edge if not junction_surface.contains(Point(p))]
+                        filtered_road_edges.append(filtered_road_edge)
                     else:
                         print(
                             f"Filtered out road edge of junction {junction_id} with {len(road_edge)} points and {sum(results) / len(results)} inside."
                         )
+            if junction_id == "":
+                print("After filtering junction 703")
+                # Extract road_ids and lane_ids for annotation
+                road_ids = junctions_map[junction_id].get("road_ids", [])
+                lane_ids = junctions_map[junction_id].get("lane_ids", [])
+                metadata = {"road_ids": road_ids, "lane_ids": lane_ids}
+                # Flatten filtered_road_edges to list of points for visualization
+                test_points_flat = []
+                for edge in filtered_road_edges:
+                    test_points_flat.extend(edge)
+                # Just plot first few points to avoid clutter
+                plot_junction(
+                    snapped_polylines,
+                    junction_surface,
+                    test_points_flat[:20],
+                    [False] * len(test_points_flat[:20]),
+                    method_used,
+                    junction_id=junction_id,
+                    metadata=metadata,
+                )
             id = save_lane_section_to_json(
                 xodr_json,
                 id,
@@ -469,15 +513,16 @@ def generate_carla_roads(
 
 if __name__ == "__main__":
     # town_names = ["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"]
-    town_names = ["Town07"]
+    town_names = ["Town04"]
     source_dir = "data_utils/carla/carla"
     dest_dir = "data_utils/carla/carla"
     carla_map_dir = "C:\CarlaMaps"
     resolution = 1.0  # [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]  # Meters
     max_samples = int(1e5)  # Max points to sample per reference line
     print_number_of_sample_truncations = True  # Enable to see the number of data points lost
-    # juncn_filter_thresholds = [0.3, 0.4, 1.0, 0.7, 0.35, 0.5, 0.375, 0.3]     # Final Filtering values, please don't change. Remember to backup towns before enabling for run
-    juncn_filter_thresholds = [0.375]
+    # juncn_filter_thresholds = [0.3, 0.4, 1.0, 0.7, 0.35, 0.5, 0.375, 0.3]     # Final Filtering values(Complete deletion of road_edge style filtering), please don't change. Remember to backup towns before enabling for run
+    # juncn_filter_thresholds = [0.3, 0.4, 1.0, 0.7, 0.35, 0.7, 0.7, 0.3]       # Final Filtering values(Keeping out-of-polygonizable area style filtering), please don't change. Remember to backup towns before enabling for run
+    juncn_filter_thresholds = [1.0]
     generate_carla_roads(
         town_names,
         source_dir,

@@ -196,7 +196,9 @@ def fuse_existing_polygons(polygons):
     return fused
 
 
-def plot_junction(polylines, final_shape, test_points, results, method="precise", junction_id="Y-Junction"):
+def plot_junction(
+    polylines, final_shape, test_points, results, method="precise", junction_id="Y-Junction", metadata=None
+):
     """
     Visualizes the Y-junction using Matplotlib.
 
@@ -206,11 +208,13 @@ def plot_junction(polylines, final_shape, test_points, results, method="precise"
         test_points (list): List of (x, y) tuples for query points.
         results (list): List of booleans indicating if a point is inside.
         method (str): The method used to generate the final_shape.
+        junction_id (str): ID for the junction title.
+        metadata (dict): Optional dict with 'road_ids' and 'lane_ids' lists for annotation.
     """
     fig, ax = plt.subplots(figsize=(10, 12))
 
     # 1. Plot the original polylines as dashed lines
-    for poly in polylines:
+    for i, poly in enumerate(polylines):
         ax.plot(
             poly[:, 0],
             poly[:, 1],
@@ -219,6 +223,25 @@ def plot_junction(polylines, final_shape, test_points, results, method="precise"
             alpha=0.7,
             label="Original Polylines" if "Original" not in [l.get_label() for l in ax.get_lines()] else "",
         )
+
+        # Annotate with road_id and lane_id if metadata is provided
+        if metadata and "road_ids" in metadata and "lane_ids" in metadata:
+            if i < len(metadata["road_ids"]):
+                # Place annotation at the midpoint of the polyline
+                mid_idx = len(poly) // 2
+                if mid_idx < len(poly):
+                    road_id = metadata["road_ids"][i]
+                    lane_id = metadata["lane_ids"][i]
+                    ax.annotate(
+                        f"R:{road_id}\nL:{lane_id}",
+                        (poly[mid_idx, 0], poly[mid_idx, 1]),
+                        fontsize=7,
+                        color="darkred",
+                        weight="bold",
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7, edgecolor="darkred"),
+                        ha="center",
+                        va="center",
+                    )
 
     # 2. Plot the final polygon shape (handling holes correctly)
     if final_shape and not final_shape.is_empty:
