@@ -360,7 +360,11 @@ class PuffeRL:
             advantages = torch.zeros(shape, device=device)
 
             if hasattr(self.vecenv.driver_env, "discount_conditioned") and self.vecenv.driver_env.discount_conditioned:
-                disc_idx = 7  # base ego obs
+                if hasattr(self.vecenv.driver_env, "dynamics_model") and self.vecenv.driver_env.dynamics_model = "jerk":
+                    disc_idx = 7  # base ego obs
+                else:
+                    disc_idx = 10  # base ego obs
+
                 if self.vecenv.driver_env.reward_conditioned:
                     disc_idx += 3
                 if self.vecenv.driver_env.entropy_conditioned:
@@ -455,10 +459,16 @@ class PuffeRL:
             # Entropy-weighted loss if entropy conditioning is enabled
             if hasattr(self.vecenv.driver_env, "entropy_conditioned") and self.vecenv.driver_env.entropy_conditioned:
                 mb_obs_flat = mb_obs.reshape(-1, mb_obs.shape[-1])
-                if self.vecenv.driver_env.reward_conditioned:
-                    ent_weights = mb_obs_flat[:, 10]  # Position 10: after ego(7) + RC(3)
+
+                if hasattr(self.vecenv.driver_env, "dynamics_model") and self.vecenv.driver_env.dynamics_model = "jerk":
+                    ent_idx = 7  # base ego obs
                 else:
-                    ent_weights = mb_obs_flat[:, 7]  # Position 7: after ego(7)
+                    ent_idx = 10  # base ego obs
+
+                if self.vecenv.driver_env.reward_conditioned:
+                    ent_idx += 3
+
+                ent_weights = mb_obs_flat[:, ent_idx]  # after ego(7/10) + RC(3) 
                 ent_weights = ent_weights.reshape(entropy.shape)
                 entropy_loss = -(entropy * ent_weights).mean()
                 loss = pg_loss + config["vf_coef"] * v_loss + entropy_loss
@@ -1204,6 +1214,10 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
+    # Rebuild visualize binary if saving frames (for C-based rendering)
+    if args["save_frames"] > 0:
+        ensure_drive_binary()
+
     state = {}
     if args["train"]["use_rnn"]:
         state = dict(
@@ -1314,7 +1328,7 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
     weights = np.concatenate(weights)
     if path is None:
-        path = f"{args['env_name']}_weights.bin"
+        path = f"pufferlib/resources/drive/{args['env_name']}_weights.bin"
 
     weights.tofile(path)
 
@@ -1323,27 +1337,28 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
 
 def ensure_drive_binary():
-    """Ensure the visualize binary exists, build it once if necessary. This
-    is required for rendering with raylib.
+    """Delete existing visualize binary and rebuild it. This ensures the
+    binary is always up-to-date with the latest code changes.
     """
-    if not os.path.exists("./visualize"):
-        print("Visualize binary not found, building...")
-        try:
-            result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
-            )
+    if os.path.exists("./visualize"):
+        print("Removing existing visualize binary...")
+        os.remove("./visualize")
 
-            if result.returncode == 0:
-                print("Successfully built visualize binary")
-            else:
-                print(f"Build failed: {result.stderr}")
-                raise RuntimeError("Failed to build visualize binary for rendering")
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Build timed out")
-        except Exception as e:
-            raise RuntimeError(f"Build error: {e}")
-    else:
-        print("Visualize binary found, ready for rendering")
+    print("Building visualize binary...")
+    try:
+        result = subprocess.run(
+            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
+        )
+
+        if result.returncode == 0:
+            print("Successfully built visualize binary")
+        else:
+            print(f"Build failed: {result.stderr}")
+            raise RuntimeError("Failed to build visualize binary for rendering")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Build timed out")
+    except Exception as e:
+        raise RuntimeError(f"Build error: {e}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):

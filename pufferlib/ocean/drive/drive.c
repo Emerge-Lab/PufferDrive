@@ -1,5 +1,7 @@
 #include "drive.h"
 #include "drivenet.h"
+#include <string.h>
+#include "../env_config.h"
 
 // Use this test if the network changes to ensure that the forward pass
 // matches the torch implementation to the 3rd or ideally 4th decimal place
@@ -32,20 +34,34 @@ void test_drivenet() {
 }
 
 void demo() {
+    // Read configuration from INI file
+    env_init_config conf = {0};
+    const char* ini_file = "pufferlib/config/ocean/drive.ini";
+    if(ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        exit(1);
+    }
 
     Drive env = {
-        .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
-        .reward_vehicle_collision = -0.1f,
-        .reward_offroad_collision = -0.1f,
-        .goal_radius = 2.0f,
+        .dynamics_model = conf.dynamics_model,
+        .reward_vehicle_collision = conf.reward_vehicle_collision,
+        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_ade = conf.reward_ade,
+        .goal_radius = conf.goal_radius,
+        .dt = conf.dt,
 	    .map_name = "resources/drive/binaries/map_000.bin",
+        .control_non_vehicles = conf.control_non_vehicles,
+        .init_steps = conf.init_steps,
+        .control_all_agents = conf.control_all_agents,
+        .policy_agents_per_env = conf.num_policy_controlled_agents,
+        .deterministic_agent_selection = conf.deterministic_agent_selection,
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
-    DriveNet* net = init_drivenet(weights, env.active_agent_count);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
     //Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;
@@ -99,12 +115,29 @@ void demo() {
 }
 
 void performance_test() {
+    // Read configuration from INI file
+    env_init_config conf = {0};
+    const char* ini_file = "pufferlib/config/ocean/drive.ini";
+    if(ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        exit(1);
+    }
+
     long test_time = 10;
     Drive env = {
-        .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
-        .goal_radius = 2.0f,
-	    .map_name = "resources/drive/binaries/map_000.bin"
+        .dynamics_model = conf.dynamics_model,
+        .reward_vehicle_collision = conf.reward_vehicle_collision,
+        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_ade = conf.reward_ade,
+        .goal_radius = conf.goal_radius,
+        .dt = conf.dt,
+	    .map_name = "resources/drive/binaries/map_000.bin",
+        .control_non_vehicles = conf.control_non_vehicles,
+        .init_steps = conf.init_steps,
+        .control_all_agents = conf.control_all_agents,
+        .policy_agents_per_env = conf.num_policy_controlled_agents,
+        .deterministic_agent_selection = conf.deterministic_agent_selection,
     };
     clock_t start_time, end_time;
     double cpu_time_used;

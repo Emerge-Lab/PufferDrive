@@ -12,6 +12,7 @@
 #include "error.h"
 #include "drivenet.h"
 #include "libgen.h"
+#include "../env_config.h"
 #define TRAJECTORY_LENGTH_DEFAULT 91
 
 typedef struct {
@@ -199,6 +200,14 @@ static int make_gif_from_frames(const char *pattern, int fps,
 
 int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, int use_rc, int use_ec, int use_dc, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override) {
 
+    // Parse configuration from INI file
+    env_init_config conf = {0};  // Initialize to zero
+    const char* ini_file = "pufferlib/config/ocean/drive.ini";
+    if(ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        return -1;
+    }
+
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
@@ -225,11 +234,12 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     fclose(policy_file);
 
     Drive env = {
-        .dynamics_model = CLASSIC,
+        .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = -0.5f,
         .reward_offroad_collision = -0.2f,
         .reward_ade = -0.0f,
         .goal_radius = goal_radius,
+        .dt = conf.dt,
 	      .map_name = (char*)map_name,
         .control_non_vehicles = control_non_vehicles,
         .init_steps = init_steps,
@@ -240,7 +250,8 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .use_ec = use_ec,
         .use_dc = use_dc,
     };
-    env.scenario_length = (scenario_length_override > 0) ? scenario_length_override : TRAJECTORY_LENGTH_DEFAULT;
+    env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
+                          (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -269,7 +280,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count, use_rc, use_ec, use_dc);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, use_rc, use_ec, use_dc);
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     int log_trajectory = log_trajectories;
@@ -288,13 +299,15 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         strcpy(map, basename((char*)map_name));
         *strrchr(map, '.') = '\0';
 
-        // Create gifs directory if it doesn't exist
-        char gifs_dir[256];
-        sprintf(gifs_dir, "%s/gifs", policy_base);
-        mkdir(gifs_dir, 0755);
+        // Create video directory if it doesn't exist
+        char video_dir[256];
+        sprintf(video_dir, "%s/video", policy_base);
+        char mkdir_cmd[512];
+        snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", video_dir);
+        system(mkdir_cmd);
 
-        sprintf(filename_topdown, "%s/gifs/%s_topdown.mp4", policy_base, map);
-        sprintf(filename_agent, "%s/gifs/%s_agent.mp4", policy_base, map);
+        sprintf(filename_topdown, "%s/video/%s_topdown.mp4", policy_base, map);
+        sprintf(filename_agent, "%s/video/%s_agent.mp4", policy_base, map);
     }
 
     bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);

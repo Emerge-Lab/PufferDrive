@@ -76,7 +76,7 @@ For more training data compatible with PufferDrive, see [ScenarioMax](https://gi
 
 ## Headless server setup
 
-Run the Raylib visualizer on a headless server and export as GIF.
+Run the Raylib visualizer on a headless server and export as .mp4. This will rollout the pre-trained policy in the env.
 
 ### Install dependencies
 
@@ -108,6 +108,12 @@ xvfb-run -s "-screen 0 1280x720x24" ./visualize
 
 The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color depth.
 
+---
+
+> To force a rebuild, you can delete the cached compiled executable binary using `rm ./visualize`.
+
+---
+
 ### Output
 
-The visualizer will automatically generate a GIF file from the rendered frames.
+The visualizer will automatically generate two videos from the rendered frames.
