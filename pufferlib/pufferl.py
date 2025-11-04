@@ -1266,10 +1266,6 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
     if not silent:
         print(f"Saved {len(weights)} weights to {path}")
 
-    # Clean up vectorized environment to allow clean exit
-    if vecenv is not None:
-        vecenv.close()
-
 
 def ensure_drive_binary():
     """Delete existing visualize binary and rebuild it. This ensures the

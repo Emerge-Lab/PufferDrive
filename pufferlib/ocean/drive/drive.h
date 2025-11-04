@@ -1679,6 +1679,9 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
             float (*action_array_f)[2] = (float(*)[2])env->actions;
             acceleration = action_array_f[action_idx][0];
             steering = action_array_f[action_idx][1];
+
+            acceleration *= ACCELERATION_VALUES[6];
+            steering *= STEERING_VALUES[12];
         } else { // discrete
             int (*action_array)[2] = (int(*)[2])env->actions;
             int acceleration_index = action_array[action_idx][0];
