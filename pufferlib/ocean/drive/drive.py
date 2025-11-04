@@ -113,6 +113,7 @@ class Drive(pufferlib.PufferEnv):
         self.num_policy_controlled_agents = int(num_policy_controlled_agents)
         self.deterministic_agent_selection = bool(deterministic_agent_selection)
 
+        # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             num_agents=num_agents,
             num_maps=num_maps,
@@ -495,7 +496,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed/validation/json_selected")
+    data_dir = Path("data/processed/validation/json")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -514,12 +515,10 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=0.0001, atn_cache=1024, num_agents=345):
+def test_performance(timeout=0.0001, atn_cache=1024, num_agents=100):
     import time
 
-    env = Drive(
-        num_agents=num_agents, num_maps=100, init_mode="control_tracks_to_predict", init_steps=10, scenario_length=91
-    )
+    env = Drive(num_agents=num_agents, num_maps=1000, init_mode="control_vehicles", init_steps=10, scenario_length=91)
     env.reset()
 
     tick = 0
@@ -539,5 +538,5 @@ def test_performance(timeout=0.0001, atn_cache=1024, num_agents=345):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()

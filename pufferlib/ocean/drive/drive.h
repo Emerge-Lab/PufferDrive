@@ -1329,71 +1329,59 @@ int valid_active_agent(Drive* env, int agent_idx){
 }
 
 void set_active_agents(Drive* env){
+
+    // Initialize
     env->active_agent_count = 0;
     env->static_car_count = 0;
-    env->num_controllable_agents = 1;
     env->expert_static_car_count = 0;
+    env->num_controllable_agents = 0;
     int active_agent_indices[MAX_AGENTS];
     int static_car_indices[MAX_AGENTS];
     int expert_static_car_indices[MAX_AGENTS];
 
-    //printf("Setting active agents with init mode %d\n", env->init_mode);
-
-    if(env->num_agents ==0){
+    if(env->num_agents == 0){
         env->num_agents = MAX_AGENTS;
     }
-    int first_agent_id = env->num_objects-1;
-    float distance_to_goal = valid_active_agent(env, first_agent_id);
-    if(distance_to_goal){
-        env->active_agent_count = 1;
-        active_agent_indices[0] = first_agent_id;
-        env->entities[first_agent_id].active_agent = 1;
-        env->num_controllable_agents = 1;
-    } else {
-        env->active_agent_count = 0;
-        env->num_controllable_agents = 0;
-    }
-    env->active_agent_count = 0;
-    env->num_controllable_agents = 0;
-    // Iterate through entities to find controllable agents
+
+    // Iterate through entities to find controllable candidate agents
     for(int i = 0; i < env->num_objects-1 && env->num_controllable_agents < MAX_AGENTS; i++){
 
-        // Check if entity should be considered based on init_mode
-        int should_consider = 0;
+        int candidate = 0;
 
         if (env->init_mode == CONTROL_TRACKS_TO_PREDICT) {
-            // Check if this entity is in tracks_to_predict_indices
+            // Control agent based on tracks_to_predict flag and bypass other rules
             for (int j = 0; j < env->num_tracks_to_predict; j++) {
-                if (env->tracks_to_predict_indices[j] == i) {
-                    should_consider = 1;
-                    //printf("controlling track %d\n", i);
-                    break;
+                if (env->tracks_to_predict_indices[j] == i && (env->entities[i].traj_valid[env->init_steps] == 1)) {
+                    candidate = 1;
                 }
             }
         } else {
             if (env->init_mode == CONTROL_VEHICLES) {
-                should_consider = (env->entities[i].type == VEHICLE);
+                candidate = (env->entities[i].type == VEHICLE);
+
             } else {
-                should_consider = (env->entities[i].type == VEHICLE) ||
+                candidate = (env->entities[i].type == VEHICLE) ||
                                   (env->entities[i].type == PEDESTRIAN) ||
                                   (env->entities[i].type == CYCLIST);
             }
+            candidate = candidate && (env->entities[i].traj_valid[env->init_steps] == 1);
+
         }
 
-        if(!should_consider) continue;
+        if(!candidate) continue;
 
-        // Check if agent has valid trajectory point at the initial timestep
-        if(env->entities[i].traj_valid[env->init_steps] != 1) continue;
+        //printf("entity %d of type %d is a valid candidate\n", i, env->entities[i].type);
 
         env->num_controllable_agents++;
 
         // Determine if agent should be active or static
         float distance_to_goal = 0;
-        if (env->init_mode != CONTROL_TRACKS_TO_PREDICT) {
-            distance_to_goal = valid_active_agent(env, i);
+        if (env->init_mode == CONTROL_TRACKS_TO_PREDICT && env->active_agent_count < env->num_agents) {
+            distance_to_goal = 1.0f;
         } else {
-            distance_to_goal = 1.0f; // All considered agents are active in this mode
+            distance_to_goal = valid_active_agent(env, i);
         }
+
         if(distance_to_goal > 0){
             active_agent_indices[env->active_agent_count] = i;
             env->active_agent_count++;
@@ -1402,7 +1390,7 @@ void set_active_agents(Drive* env){
             static_car_indices[env->static_car_count] = i;
             env->static_car_count++;
             env->entities[i].active_agent = 0;
-            if(env->entities[i].mark_as_expert == 1 || (distance_to_goal >=2.0f && env->active_agent_count == env->num_agents)){
+            if(env->entities[i].mark_as_expert == 1 || (distance_to_goal >= MIN_DISTANCE_TO_GOAL && env->active_agent_count == env->num_agents)){
                 expert_static_car_indices[env->expert_static_car_count] = i;
                 env->expert_static_car_count++;
                 env->entities[i].mark_as_expert = 1;
@@ -1410,7 +1398,7 @@ void set_active_agents(Drive* env){
         }
     }
     //printf("Active agents: %d, Static cars: %d, Expert static cars: %d\n", env->active_agent_count, env->static_car_count, env->expert_static_car_count);
-    // set up initial active agents
+    // Set up initial active agents
     env->active_agent_indices = (int*)malloc(env->active_agent_count * sizeof(int));
     env->static_car_indices = (int*)malloc(env->static_car_count * sizeof(int));
     env->expert_static_car_indices = (int*)malloc(env->expert_static_car_count * sizeof(int));
@@ -1426,7 +1414,7 @@ void set_active_agents(Drive* env){
     }
 
     if(env->active_agent_count == 0){
-        printf("Error: No active agents found in the environment.\n");
+        printf("Warning: No active agents found in the environment.\n");
     }
 
     return;
