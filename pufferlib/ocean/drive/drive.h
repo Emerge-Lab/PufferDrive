@@ -1698,8 +1698,11 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         float vx = agent->vx;
         float vy = agent->vy;
 
+        float cos_heading = cosf(heading);
+        float sin_heading = sinf(heading);
+
         // Calculate current speed
-        float speed = sqrtf(vx*vx + vy*vy);
+        float speed = vx * cos_heading + vy * sin_heading;
 
         // Update speed with acceleration
         speed = speed + 0.5f*acceleration*env->dt;
