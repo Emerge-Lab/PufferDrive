@@ -64,6 +64,13 @@ static int handler(
     return 1;
 }
 
+void free_configurator(drive_config *config) {
+    if(config->action_type) free((void*)config->action_type);
+    if(config->key4) free((void*)config->key4);
+    if(config->key5) free((void*)config->key5);
+    if(config->key7) free((void*)config->key7);
+}
+
 int test_values() {
     drive_config config;
     if (ini_parse("test_drive.ini", handler, &config) < 0) return 1;
@@ -73,7 +80,7 @@ int test_values() {
     assert(config.input_size == 64);
     assert(config.hidden_size == 256);
     printf("test_values passed.\n");
-    if(config.action_type) free((void*)config.action_type);
+    free_configurator(&config);
     return 0;
 }
 
@@ -85,6 +92,7 @@ int test_full_line_comment() {
     assert(config.key3 != 3);
     assert(config.key31 != 3.1);
     printf("test_full_line_comment passed.\n");
+    free_configurator(&config);
     return 0;
 }
 
@@ -94,7 +102,7 @@ int test_inline_comment() {
     assert(strcmp(config.key5, "five") == 0);
     assert(config.key6 == 6);
     printf("test_inline_comment passed.\n");
-    if(config.key5) free((void*)config.key5);
+    free_configurator(&config);
     return 0;
 }
 
@@ -103,10 +111,11 @@ int test_problematic_inline_comment() {
     if (ini_parse("test_drive.ini", handler, &config) < 0) return 1;
     // assert(strcmp(config.key4, "four") == 0); // should pass if comments where eluded
     assert(strcmp(config.key4, "four # and more") == 0);
-    if(config.key4) free((void*)config.key4);
     // assert(strcmp(config.key7, "seven ; seven") == 0); // was expected to pass, actually fails
     assert(strcmp(config.key7, "seven") == 0); // was expected to fail, actually pass
-    if(config.key7) free((void*)config.key7);
+    printf("test_problematic_inline_comment passed.\n");
+    free_configurator(&config);
+    return 0;
 }
 
 int main(int argc, char* argv[]) {
