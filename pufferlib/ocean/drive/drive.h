@@ -555,7 +555,6 @@ void add_log(Drive* env) {
 
             if (e->reached_goal_this_episode && !e->collided_before_goal) {
                 env->log.score += 1.0f;
-                env->log.perf += 1.0f;
             }
 
             if (!offroad && !collided && !e->reached_goal_this_episode) {
@@ -690,7 +689,6 @@ void add_log(Drive* env) {
                             (last_lane - first_lane) / first_lane * 100.0f;
                     }
 
-                    // Average displacement error (SUM metric - needs normalization)
                     float first_ade = (first_n != 0.0f) ?
                         env->ada_logs[i]->avg_displacement_error[first] / first_n : 0.0f;
                     float last_ade = (last_n != 0.0f) ?
@@ -702,7 +700,6 @@ void add_log(Drive* env) {
                             (last_ade - first_ade) / first_ade * 100.0f;
                     }
 
-                    // Episode return (SUM metric - needs normalization)
                     float first_return = (first_n != 0.0f) ?
                         env->ada_logs[i]->episode_return[first] / first_n : 0.0f;
                     float last_return = (last_n != 0.0f) ?

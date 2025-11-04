@@ -108,6 +108,7 @@ class PuffeRL:
                 raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
 
         device = config["device"]
+        print(f"DEBUG: segments: {segments}, horizon: {horizon}", flush = True)
         self.observations = torch.zeros(
             segments,
             horizon,
@@ -156,13 +157,16 @@ class PuffeRL:
                 self.lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
 
         # Minibatching & gradient accumulation
-        minibatch_size = config["minibatch_size"]
+        if self.adaptive_driving_agent:
+            minibatch_size = config["minibatch_multiplier"] * horizon
+            self.minibatch_size = minibatch_size
+        else:
+            minibatch_size = config["minibatch_size"]
+
         max_minibatch_size = config["max_minibatch_size"]
         self.minibatch_size = min(minibatch_size, max_minibatch_size)
 
-        if self.adaptive_driving_agent:
-            minibatch_size = 1024 * horizon
-            self.minibatch_size = minibatch_size
+        
 
         if minibatch_size > max_minibatch_size and minibatch_size % max_minibatch_size != 0:
             raise pufferlib.APIUsageError(
@@ -215,7 +219,6 @@ class PuffeRL:
             raise ValueError(f"Unknown optimizer: {config['optimizer']}")
 
         self.optimizer = optimizer
-        sys.stdout.flush()
         # Logging
         self.logger = logger
         if logger is None:
@@ -365,14 +368,11 @@ class PuffeRL:
                 l = self.ep_lengths[env_id.start].item()
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
-                sys.stdout.flush()
-
                 if config["cpu_offload"]:
                     self.observations[batch_rows, l] = o
                 else:
                     self.observations[batch_rows, l] = o_device
 
-                sys.stdout.flush()
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
                 self.rewards[batch_rows, l] = r
@@ -695,6 +695,36 @@ class PuffeRL:
                             and self.vecenv.driver_env.deterministic_agent_selection
                         ):
                             cmd.append("--deterministic-selection")
+
+                        # Add k_scenarios parameter
+                        render_config = config.get("render_config", {})
+                        if isinstance(render_config, dict) and "k_scenarios" in render_config:
+                            cmd.extend(["--k-scenarios", str(render_config["k_scenarios"])])
+
+                        # Add ego agent conditioning weights
+                        if isinstance(render_config, dict):
+                            if "ego_collision_weight" in render_config:
+                                cmd.extend(["--ego-collision", str(render_config["ego_collision_weight"])])
+                            if "ego_offroad_weight" in render_config:
+                                cmd.extend(["--ego-offroad", str(render_config["ego_offroad_weight"])])
+                            if "ego_goal_weight" in render_config:
+                                cmd.extend(["--ego-goal", str(render_config["ego_goal_weight"])])
+                            if "ego_entropy_weight" in render_config:
+                                cmd.extend(["--ego-entropy", str(render_config["ego_entropy_weight"])])
+                            if "ego_discount_weight" in render_config:
+                                cmd.extend(["--ego-discount", str(render_config["ego_discount_weight"])])
+
+                            # Add co-player conditioning weights
+                            if "co_player_collision_weight" in render_config:
+                                cmd.extend(["--co-player-collision", str(render_config["co_player_collision_weight"])])
+                            if "co_player_offroad_weight" in render_config:
+                                cmd.extend(["--co-player-offroad", str(render_config["co_player_offroad_weight"])])
+                            if "co_player_goal_weight" in render_config:
+                                cmd.extend(["--co-player-goal", str(render_config["co_player_goal_weight"])])
+                            if "co_player_entropy_weight" in render_config:
+                                cmd.extend(["--co-player-entropy", str(render_config["co_player_entropy_weight"])])
+                            if "co_player_discount_weight" in render_config:
+                                cmd.extend(["--co-player-discount", str(render_config["co_player_discount_weight"])])
 
                         # Specify output paths for videos
                         cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])

@@ -443,7 +443,6 @@ static PyObject* my_shared_population_play(PyObject* self, PyObject* args, PyObj
 
     return tuple;
 }
-
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 
     int population_play = unpack(kwargs, "population_play");

@@ -339,3 +339,149 @@ class ConvSequence(nn.Module):
     def get_output_shape(self):
         _c, h, w = self._input_shape
         return (self._out_channels, (h + 1) // 2, (w + 1) // 2)
+
+
+class TransformerWrapper(nn.Module):
+    def __init__(self, env, policy, input_size=128, hidden_size=128, 
+                 num_layers=2, num_heads=4, dropout=0.1, max_seq_len=128):
+        """Wraps your policy with a Transformer without letting you shoot yourself in the
+        foot with bad transpose and shape operations. This saves much pain.
+        Requires that your policy define encode_observations and decode_actions.
+        See the Default policy for an example."""
+        super().__init__()
+        self.obs_shape = env.single_observation_space.shape
+
+        self.policy = policy
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.max_seq_len = max_seq_len
+        self.is_continuous = self.policy.is_continuous
+
+        for name, param in self.named_parameters():
+            if "layer_norm" in name or "norm" in name:
+                continue
+            if "bias" in name:
+                nn.init.constant_(param, 0)
+            elif "weight" in name and param.ndim >= 2:
+                nn.init.orthogonal_(param, 1.0)
+
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_size,
+            nhead=num_heads,
+            dim_feedforward=hidden_size * 4,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=False
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # For tracking sequence position during inference
+        self.register_buffer('pos_encodings', self._generate_positional_encodings(max_seq_len, hidden_size))
+
+    def _generate_positional_encodings(self, max_len, d_model):
+        """Generate sinusoidal positional encodings"""
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe
+
+    def forward_eval(self, observations, state):
+        """Forward function for inference. Maintains a rolling context window."""
+        hidden = self.policy.encode_observations(observations, state=state)
+        
+        # Get past context from state
+        past_hidden = state.get("transformer_hidden", None)
+        seq_pos = state.get("seq_pos", 0)
+        
+        # Add current observation to context
+        if past_hidden is not None:
+            # Append new hidden state to past context
+            context = torch.cat([past_hidden, hidden.unsqueeze(1)], dim=1)
+            # Keep only last max_seq_len items
+            if context.shape[1] > self.max_seq_len:
+                context = context[:, -self.max_seq_len:, :]
+                seq_pos = self.max_seq_len - 1
+            else:
+                seq_pos = min(seq_pos + 1, self.max_seq_len - 1)
+        else:
+            context = hidden.unsqueeze(1)
+            seq_pos = 0
+        
+        # Add positional encoding
+        batch_size, seq_len, _ = context.shape
+        pos_enc = self.pos_encodings[:seq_len, :].unsqueeze(0).expand(batch_size, -1, -1)
+        context = context + pos_enc
+        
+        # Pass through transformer
+        transformed = self.transformer(context)
+        
+        # Take the last position as output
+        output = transformed[:, -1, :]
+        
+        # Update state
+        state["hidden"] = output
+        state["transformer_hidden"] = context.detach()
+        state["seq_pos"] = seq_pos
+        
+        logits, values = self.policy.decode_actions(output)
+        return logits, values
+
+    def forward(self, observations, state):
+        """Forward function for training. Processes full sequences efficiently."""
+        x = observations
+        past_hidden = state.get("transformer_hidden", None)
+
+        x_shape, space_shape = x.shape, self.obs_shape
+        x_n, space_n = len(x_shape), len(space_shape)
+        if x_shape[-space_n:] != space_shape:
+            raise ValueError("Invalid input tensor shape", x.shape)
+
+        if x_n == space_n + 1:
+            B, TT = x_shape[0], 1
+        elif x_n == space_n + 2:
+            B, TT = x_shape[:2]
+        else:
+            raise ValueError("Invalid input tensor shape", x.shape)
+
+        x = x.reshape(B * TT, *space_shape)
+        hidden = self.policy.encode_observations(x, state)
+        assert hidden.shape == (B * TT, self.input_size)
+
+        hidden = hidden.reshape(B, TT, self.input_size)
+        
+        # Add past context if available
+        if past_hidden is not None:
+            hidden = torch.cat([past_hidden, hidden], dim=1)
+            # Trim to max sequence length
+            if hidden.shape[1] > self.max_seq_len:
+                hidden = hidden[:, -self.max_seq_len:, :]
+        
+        seq_len = hidden.shape[1]
+        
+        # Add positional encodings
+        pos_enc = self.pos_encodings[:seq_len, :].unsqueeze(0).expand(B, -1, -1)
+        hidden = hidden + pos_enc
+        
+        # Pass through transformer
+        transformed = self.transformer(hidden)
+        transformed = transformed.float()
+        
+        # Take only the new timesteps (not the past context)
+        if past_hidden is not None:
+            past_len = past_hidden.shape[1]
+            transformed = transformed[:, past_len:, :]
+        
+        flat_hidden = transformed.reshape(B * TT, self.hidden_size)
+        logits, values = self.policy.decode_actions(flat_hidden)
+        values = values.reshape(B, TT)
+        
+        # Update state - store the full context for next iteration
+        state["hidden"] = transformed
+        state["transformer_hidden"] = hidden.detach()
+        
+        return logits, values
