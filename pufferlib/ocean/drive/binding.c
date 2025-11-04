@@ -227,6 +227,7 @@ static int my_log(PyObject* dict, Log* log) {
 static PyObject* test_forward(PyObject* self, PyObject* args, PyObject* kwargs) {
     PyObject* obs_obj = PyDict_GetItemString(kwargs, "observations");
     const char* weights_file = unpack_str(kwargs, "weights_file");
+    const int dynamics_model = unpack(kwargs, "dynamics_model");
 
     PyArrayObject* obs_array = (PyArrayObject*)obs_obj;
     int batch_size = PyArray_DIM(obs_array, 0);
@@ -238,7 +239,7 @@ static PyObject* test_forward(PyObject* self, PyObject* args, PyObject* kwargs) 
         return NULL;
     }
 
-    DriveNet* net = init_drivenet(weights, batch_size);
+    DriveNet* net = init_drivenet(weights, batch_size, dynamics_model);
 
     npy_intp action_dims[2] = {batch_size, 2};
     npy_intp logit_dims[2] = {batch_size, 20};  // 20 = 7 + 13 (steering + speed logits)

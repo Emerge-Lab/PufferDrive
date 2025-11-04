@@ -46,7 +46,7 @@ def test_drivenet(
     logits_torch = torch.cat(actions_torch, dim=1).cpu().numpy()
 
     # C forward pass
-    _, logits_c = binding.test_forward(observations=obs, weights_file=bin_file)
+    _, logits_c = binding.test_forward(observations=obs, weights_file=bin_file, dynamics_model=0)
 
     diff = np.abs(logits_torch - logits_c)
     max_diff = diff.max()
