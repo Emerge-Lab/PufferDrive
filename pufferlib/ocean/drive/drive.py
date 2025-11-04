@@ -101,7 +101,12 @@ class Drive(pufferlib.PufferEnv):
         road_features = 7
         max_partner_objects = 63
         max_road_objects = 200
-        self.num_obs = base_ego_dims + conditioning_dims max_partner_objects * partner_features + max_road_objects * road_features
+        self.num_obs = (
+            base_ego_dims
+            + conditioning_dims
+            + max_partner_objects * partner_features
+            + max_road_objects * road_features
+        )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.init_steps = init_steps

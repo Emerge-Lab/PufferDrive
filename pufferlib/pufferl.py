@@ -360,7 +360,10 @@ class PuffeRL:
             advantages = torch.zeros(shape, device=device)
 
             if hasattr(self.vecenv.driver_env, "discount_conditioned") and self.vecenv.driver_env.discount_conditioned:
-                if hasattr(self.vecenv.driver_env, "dynamics_model") and self.vecenv.driver_env.dynamics_model = "jerk":
+                if (
+                    hasattr(self.vecenv.driver_env, "dynamics_model")
+                    and self.vecenv.driver_env.dynamics_model == "jerk"
+                ):
                     disc_idx = 7  # base ego obs
                 else:
                     disc_idx = 10  # base ego obs
@@ -460,7 +463,10 @@ class PuffeRL:
             if hasattr(self.vecenv.driver_env, "entropy_conditioned") and self.vecenv.driver_env.entropy_conditioned:
                 mb_obs_flat = mb_obs.reshape(-1, mb_obs.shape[-1])
 
-                if hasattr(self.vecenv.driver_env, "dynamics_model") and self.vecenv.driver_env.dynamics_model = "jerk":
+                if (
+                    hasattr(self.vecenv.driver_env, "dynamics_model")
+                    and self.vecenv.driver_env.dynamics_model == "jerk"
+                ):
                     ent_idx = 7  # base ego obs
                 else:
                     ent_idx = 10  # base ego obs
