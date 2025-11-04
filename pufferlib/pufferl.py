@@ -468,7 +468,7 @@ class PuffeRL:
                 if self.vecenv.driver_env.reward_conditioned:
                     ent_idx += 3
 
-                ent_weights = mb_obs_flat[:, ent_idx]  # after ego(7/10) + RC(3) 
+                ent_weights = mb_obs_flat[:, ent_idx]  # after ego(7/10) + RC(3)
                 ent_weights = ent_weights.reshape(entropy.shape)
                 entropy_loss = -(entropy * ent_weights).mean()
                 loss = pg_loss + config["vf_coef"] * v_loss + entropy_loss
