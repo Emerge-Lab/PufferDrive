@@ -106,6 +106,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         free(env->expert_static_car_indices);
         free(env);
     }
+    //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
     if(total_agent_count >= num_agents){
         total_agent_count = num_agents;
     }
@@ -115,29 +116,11 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     // resize lists
     PyObject* resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject* resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-    //
-    //Py_DECREF(agent_offsets);
-    //Py_DECREF(map_ids);
-    // create a tuple
     PyObject* tuple = PyTuple_New(3);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
     return tuple;
-
-    //Py_DECREF(num);
-    /*
-    for(int i = 0;i<num_envs; i++) {
-        for(int j=0;j<temp_envs[i].num_entities;j++) {
-            free_entity(&temp_envs[i].entities[j]);
-        }
-        free(temp_envs[i].entities);
-        free(temp_envs[i].active_agent_indices);
-        free(temp_envs[i].static_car_indices);
-    }
-    free(temp_envs);
-    */
-    // return agent_offsets;
 }
 
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {

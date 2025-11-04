@@ -2,14 +2,14 @@
 
 ## Usage
 
-Standard WOSAC evaluation
+WOSAC evaluation with random policy
 ```bash
 puffer eval puffer_drive --wosac.enabled True
 ```
 
-Run WOSAC with additional sanity checks
+WOSAC evaluation with your checkpoint
 ```bash
-puffer eval puffer_drive --wosac.enabled True --wosac.dashboard True
+puffer eval puffer_drive --wosac.enabled True --load-model-path <your-trained-policy>.pt
 ```
 
 ## Links
@@ -31,8 +31,8 @@ Steps [for every scene]:
 2. Obtain log data → (n_agents, 1, n_steps)
 3. Obtain features from (x, y, z, heading tuples)
 4. Compute log-likelihood metrics from features
-    a. Flatten across time (assume independence) → (n_agents, n_rollouts * n_steps)
-    b. Use the per-agent simulated features to construct a probability distribution
-    c. Take the per-agent log values and find the bin that is closed for each
-    d. Take log of the probability for each bin → (n_agents, n_steps)
+    - a. Flatten across time (assume independence) → (n_agents, n_rollouts * n_steps)
+    - b. Use the per-agent simulated features to construct a probability distribution
+    - c. Take the per-agent ground-truth values and find the bin that is closed for each
+    - d. Take log of the probability for each bin → (n_agents, n_steps)
 5. Likelihood score is exp(sum(log_probs)) → (n_agents, 1) \in [0, 1]
