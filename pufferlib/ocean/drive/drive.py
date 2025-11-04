@@ -275,7 +275,13 @@ class Drive(pufferlib.PufferEnv):
             lstm_h=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
             lstm_c=torch.zeros(self.num_co_players, self.co_player_policy.hidden_size),
         )
-    
+
+    def set_agent_weights(self, env_idx, active_idx, collision_weight, offroad_weight,
+                         goal_weight, entropy_weight, discount_weight):
+        binding.vec_set_weights(self.c_envs, env_idx, active_idx, float(collision_weight),
+                               float(offroad_weight), float(goal_weight),
+                               float(entropy_weight), float(discount_weight))
+
     def get_co_player_actions(self):
         if self.co_player_policy is None:
             return None

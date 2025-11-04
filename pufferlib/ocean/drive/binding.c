@@ -463,3 +463,28 @@ int my_co_player_log(PyObject* dict, Co_Player_Log* log) {
     assign_to_dict(dict, "co_player_n", log->co_player_n);
     return 0;
 }
+
+static PyObject* vec_set_weights(PyObject* self, PyObject* args) {
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) return NULL;
+
+    int env_idx = PyLong_AsLong(PyTuple_GetItem(args, 1));
+    int active_idx = PyLong_AsLong(PyTuple_GetItem(args, 2));
+    Env* env = vec->envs[env_idx];
+
+    float collision_w = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 3));
+    float offroad_w = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 4));
+    float goal_w = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 5));
+    float entropy_w = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 6));
+    float discount_w = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 7));
+
+    if (env->use_rc) {
+        env->collision_weights[active_idx] = collision_w;
+        env->offroad_weights[active_idx] = offroad_w;
+        env->goal_weights[active_idx] = goal_w;
+    }
+    if (env->use_ec) env->entropy_weights[active_idx] = entropy_w;
+    if (env->use_dc) env->discount_weights[active_idx] = discount_w;
+
+    Py_RETURN_NONE;
+}

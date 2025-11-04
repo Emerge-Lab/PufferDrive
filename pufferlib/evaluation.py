@@ -14,21 +14,29 @@ from pufferlib.ocean.torch import Drive, Recurrent
 
 def evaluate_oracle_policy(
     policy_path,
+    co_player_policy_path=None,
     num_maps=10,
     num_rollouts=10,
     num_workers=8,
     oracle_mode=True,
     condition_type="none",
     device="cuda",
+    ego_preset="cautious",
 ):
 
     num_agents = 64
+
+    ego_presets = {
+        "cautious": {"collision": -1.0, "offroad": -0.4, "goal": 0.0, "entropy": 0.001, "discount": 0.95},
+        "aggressive": {"collision": 0.0, "offroad": 0.0, "goal": 1.0, "entropy": 0.001, "discount": 0.95},
+    }
+    ego_config = ego_presets[ego_preset]
 
     collision_weights = [-1.0, 0.0]
     offroad_weights = [-0.4, 0.0]
     goal_weights = [0.0, 1.0]
     entropy_weights = [0.0, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1]
-    discount_weights = [0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0]
+    discount_weights = list(np.linspace(0.1, 1.0, 10))  # [0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0]
 
     cautious = [-1.0, -0.4, 0.0]
     aggressive = [0.0, 0.0, 1.0]
@@ -68,6 +76,18 @@ def evaluate_oracle_policy(
     state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
     policy.load_state_dict(state_dict)
     policy.eval()
+
+    co_player_policy = None
+    if co_player_policy_path is not None:
+        print("Loading co-player policy...")
+        co_player_base_policy = Drive(temp_env, input_size=64, hidden_size=256)
+        co_player_policy = Recurrent(temp_env, co_player_base_policy, input_size=256, hidden_size=256).to(device)
+        co_player_state_dict = torch.load(co_player_policy_path, map_location=device)
+        co_player_state_dict = {k.replace("module.", ""): v for k, v in co_player_state_dict.items()}
+        co_player_policy.load_state_dict(co_player_state_dict)
+        co_player_policy.eval()
+        print("Co-player policy loaded successfully")
+
     temp_env.close()
 
     print("Policy loaded successfully\n")
@@ -86,6 +106,7 @@ def evaluate_oracle_policy(
             pbar.set_description(f"[{combo_str}]")
 
             # Run num_rollouts environments in parallel
+            population_play = co_player_policy is not None
             env_kwargs = {
                 "num_agents": num_agents,
                 "num_maps": num_maps,
@@ -101,9 +122,11 @@ def evaluate_oracle_policy(
                 "discount_weight_ub": dw,
                 "oracle_mode": oracle_mode,
                 "condition_type": condition_type,
-                "population_play": False,
+                "population_play": population_play,
                 "report_interval": 1,  # Report every step for metrics
             }
+            if co_player_policy is not None:
+                env_kwargs["co_player_policy"] = co_player_policy
 
             vecenv = pufferlib.vector.make(
                 make_env,
@@ -114,7 +137,33 @@ def evaluate_oracle_policy(
             )
 
             obs, _ = vecenv.reset()
-            total_agents = num_agents * num_rollouts
+
+            driver_env = vecenv.driver_env
+
+            if population_play:
+                # In population play, set all ego agents to fixed conditioning
+                for ego_id in driver_env.ego_ids:
+                    # Find which env this ego belongs to
+                    for env_idx in range(num_rollouts):
+                        env_start = driver_env.agent_offsets[env_idx]
+                        env_end = driver_env.agent_offsets[env_idx + 1]
+                        if env_start <= ego_id < env_end:
+                            active_idx = ego_id - env_start
+                            driver_env.set_agent_weights(env_idx, active_idx, ego_config["collision"],
+                                ego_config["offroad"], ego_config["goal"], ego_config["entropy"], ego_config["discount"])
+                            break
+            # else:
+            #     # In single policy mode, set one random agent per env to fixed conditioning
+            #     agent_offsets = driver_env.agent_offsets
+            #     for env_idx in range(num_rollouts):
+            #         env_active_count = agent_offsets[env_idx + 1] - agent_offsets[env_idx]
+            #         if env_active_count > 0:
+            #             ego_idx = np.random.randint(0, env_active_count)
+            #             driver_env.set_agent_weights(env_idx, ego_idx, ego_config["collision"],
+            #                 ego_config["offroad"], ego_config["goal"], ego_config["entropy"], ego_config["discount"])
+
+            total_agents = obs.shape[0]
+            # print("Total Agents", total_agents)
 
             state = {
                 "lstm_h": torch.zeros(total_agents, policy.hidden_size, device=device),
@@ -209,6 +258,8 @@ if __name__ == "__main__":
         description="Evaluate oracle policy in homogeneous behavioral environments"
     )
     parser.add_argument("--policy-name", type=str, required=True, help="Path to trained model checkpoint (.pt file)",)
+    parser.add_argument("--co-player-policy-name", type=str, default=None, help="Path to co-player model checkpoint (.pt file) for population play",)
+    parser.add_argument("--ego-preset", type=str, default="cautious", choices=["cautious", "aggressive"], help="Ego agent conditioning preset",)
     parser.add_argument("--num-maps", type=int, default=100, help="Number of maps to evaluate on",)
     parser.add_argument("--num-rollouts", type=int, default=16, help="Number of independent rollouts per conditioning combination",)
     parser.add_argument("--num-workers", type=int, default=16, help="Number of parallel workers for environment vectorization",)
@@ -219,10 +270,12 @@ if __name__ == "__main__":
 
     evaluate_oracle_policy(
         policy_path=args.policy_name,
+        co_player_policy_path=args.co_player_policy_name,
         num_maps=args.num_maps,
         num_rollouts=args.num_rollouts,
         num_workers=args.num_workers,
         oracle_mode=args.oracle,
         condition_type=args.condition_type,
         device=args.device,
+        ego_preset=args.ego_preset,
     )

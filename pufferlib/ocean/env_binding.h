@@ -843,6 +843,8 @@ static char* unpack_str(PyObject* kwargs, char* key) {
     return ret;
 }
 
+static PyObject* vec_set_weights(PyObject* self, PyObject* args);
+
 // Method table
 static PyMethodDef methods[] = {
     {"env_init", (PyCFunction)env_init, METH_VARARGS | METH_KEYWORDS, "Init environment with observation, action, reward, terminal, truncation arrays"},
@@ -860,6 +862,7 @@ static PyMethodDef methods[] = {
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
+    {"vec_set_weights", vec_set_weights, METH_VARARGS, "Set agent conditioning weights"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}
 };
