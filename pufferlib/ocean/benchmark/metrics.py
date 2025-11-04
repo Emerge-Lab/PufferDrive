@@ -160,31 +160,54 @@ def compute_kinematic_features(
     return linear_speed, linear_accel, dh, d2h
 
 
-def compute_kinematic_validity(valid: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Return validity arrays for speeds and accelerations.
+def _wrap_angle(angle: np.ndarray) -> np.ndarray:
+    """Wraps angles in the range [-pi, pi]."""
+    return (angle + np.pi) % (2 * np.pi) - np.pi
 
-    Since we compute speed and acceleration directly from x/y/z/heading as
-    central differences, we need to make sure to properly transform the validity
-    arrays to match the new fields. The requirement is for both the steps used to
-    compute the difference to be valid in order for the result to be valid.
-    This is applied once for speeds and twice for accelerations, following the
-    same strategy used to compute the kinematic fields.
+
+def compute_kinematic_validity(valid: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Return validity tensors for speeds and accelerations.
+
+    Computes validity using central logical_and: element [i] is valid only if
+    both elements [i-1] and [i+1] are valid. Applied once for speeds and twice
+    for accelerations.
 
     Args:
         valid: A boolean array of shape (..., num_steps) containing whether a
             certain object is valid at that step.
 
     Returns:
-        speed_validity: A validity array that applies to speeds fields, where
-            `central_logical_and` is applied once.
-        acceleration_validity: A validity array that applies to acceleration
-            fields, where `central_logical_and` is applied twice.
+        speed_validity: A validity array for speed fields (central_and applied once).
+        acceleration_validity: A validity array for acceleration fields (central_and applied twice).
     """
-    speed_validity = central_logical_and(valid, pad_value=False)
-    acceleration_validity = central_logical_and(speed_validity, pad_value=False)
+    # First application for speeds
+    pad_shape = (*valid.shape[:-1], 1)
+    pad_tensor = np.full(pad_shape, False)
+    speed_validity = np.concatenate([pad_tensor, np.logical_and(valid[..., 2:], valid[..., :-2]), pad_tensor], axis=-1)
+
+    # Second application for accelerations
+    pad_tensor = np.full(pad_shape, False)
+    acceleration_validity = np.concatenate(
+        [pad_tensor, np.logical_and(speed_validity[..., 2:], speed_validity[..., :-2]), pad_tensor], axis=-1
+    )
+
     return speed_validity, acceleration_validity
 
 
-def _wrap_angle(angle: np.ndarray) -> np.ndarray:
-    """Wraps angles in the range [-pi, pi]."""
-    return (angle + np.pi) % (2 * np.pi) - np.pi
+def _reduce_average_with_validity(tensor: np.ndarray, validity: np.ndarray) -> float:
+    """Returns the tensor's average, only selecting valid items.
+
+    Args:
+        tensor: A float array of any shape.
+        validity: A boolean array of the same shape as `tensor`.
+
+    Returns:
+        A float containing the average of the valid elements of `tensor`.
+    """
+    if tensor.shape != validity.shape:
+        raise ValueError(
+            f"Shapes of `tensor` and `validity` must be the same. (Actual: {tensor.shape}, {validity.shape})."
+        )
+    cond_sum = np.sum(np.where(validity, tensor, np.zeros_like(tensor)))
+    valid_sum = np.sum(validity.astype(np.float32))
+    return cond_sum / valid_sum

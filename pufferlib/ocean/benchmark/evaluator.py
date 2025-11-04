@@ -20,7 +20,6 @@ class WOSACEvaluator:
     """
 
     def __init__(self, config: Dict):
-        # TODO: Pass wosac.ini as config
         self.config = config
         self.num_steps = 91  # Hardcoded for WOSAC (9.1s at 10Hz)
         self.init_steps = 10  # Initial steps to skip (1s)
@@ -135,6 +134,11 @@ class WOSACEvaluator:
             ref_x, ref_y, ref_heading
         )
 
+        # Get the log speed (linear and angular) validity. Since this is computed by
+        # a delta between steps i-1 and i+1, we verify that both of these are
+        # valid (logical and).
+        speed_validity, acceleration_validity = metrics.compute_kinematic_validity(ref_valid)
+
         # Compute realism metrics
         # Average Displacement Error (ADE) and minADE
         # Note: This metric is not included in the scoring meta-metric, as per WOSAC rules.
@@ -152,6 +156,15 @@ class WOSACEvaluator:
             sanity_check=True,
         )
 
+        # Compute final normalized scores
+        # Each of these metrics is in [0, 1], higher is better
+
+        # Input: [num_agents, num_steps]
+        # TODO: Check inputs/outputs from ll func above
+        speed_likelihood = np.exp(
+            metrics._reduce_average_with_validity(linear_speed_log_likelihood, speed_validity[:, 0, :])
+        )
+
         breakpoint()
 
         # Get agent IDs and scenario IDs
@@ -164,6 +177,7 @@ class WOSACEvaluator:
                 "scenario_id": scenario_ids.flatten(),
                 "ade": ade,
                 "min_ade": min_ade,
+                "likelihood_speed": speed_likelihood,
             }
         )
 

@@ -29,6 +29,7 @@ def histogram_estimate(
         Shape (n_agents, sample_size) - log-likelihood of each log sample
         under the corresponding sim distribution
     """
+
     n_agents, log_sample_size = log_samples.shape
 
     # Clip samples to valid range
