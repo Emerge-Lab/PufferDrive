@@ -1337,20 +1337,22 @@ void set_active_agents(Drive* env){
     int static_car_indices[MAX_AGENTS];
     int expert_static_car_indices[MAX_AGENTS];
 
+    //printf("Setting active agents with init mode %d\n", env->init_mode);
+
     if(env->num_agents ==0){
         env->num_agents = MAX_AGENTS;
     }
-    // int first_agent_id = env->num_objects-1;
-    // float distance_to_goal = valid_active_agent(env, first_agent_id);
-    // if(distance_to_goal){
-    //     env->active_agent_count = 1;
-    //     active_agent_indices[0] = first_agent_id;
-    //     env->entities[first_agent_id].active_agent = 1;
-    //     env->num_controllable_agents = 1;
-    // } else {
-    //     env->active_agent_count = 0;
-    //     env->num_controllable_agents = 0;
-    // }
+    int first_agent_id = env->num_objects-1;
+    float distance_to_goal = valid_active_agent(env, first_agent_id);
+    if(distance_to_goal){
+        env->active_agent_count = 1;
+        active_agent_indices[0] = first_agent_id;
+        env->entities[first_agent_id].active_agent = 1;
+        env->num_controllable_agents = 1;
+    } else {
+        env->active_agent_count = 0;
+        env->num_controllable_agents = 0;
+    }
     env->active_agent_count = 0;
     env->num_controllable_agents = 0;
     // Iterate through entities to find controllable agents

@@ -194,20 +194,21 @@ def compute_kinematic_validity(valid: np.ndarray) -> Tuple[np.ndarray, np.ndarra
     return speed_validity, acceleration_validity
 
 
-def _reduce_average_with_validity(tensor: np.ndarray, validity: np.ndarray) -> float:
+def _reduce_average_with_validity(tensor: np.ndarray, validity: np.ndarray, axis: int = None) -> np.ndarray:
     """Returns the tensor's average, only selecting valid items.
 
     Args:
         tensor: A float array of any shape.
         validity: A boolean array of the same shape as `tensor`.
+        axis: The axis or axes along which to average. If None, averages over all axes.
 
     Returns:
-        A float containing the average of the valid elements of `tensor`.
+        A float or array containing the average of the valid elements of `tensor`.
     """
     if tensor.shape != validity.shape:
         raise ValueError(
             f"Shapes of `tensor` and `validity` must be the same. (Actual: {tensor.shape}, {validity.shape})."
         )
-    cond_sum = np.sum(np.where(validity, tensor, np.zeros_like(tensor)))
-    valid_sum = np.sum(validity.astype(np.float32))
+    cond_sum = np.sum(np.where(validity, tensor, np.zeros_like(tensor)), axis=axis, keepdims=False)
+    valid_sum = np.sum(validity.astype(np.float32), axis=axis, keepdims=False)
     return cond_sum / valid_sum

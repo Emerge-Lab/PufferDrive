@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional
 
+np.set_printoptions(suppress=True)
+
 
 def histogram_estimate(
     log_samples: np.ndarray,
@@ -23,14 +25,13 @@ def histogram_estimate(
         num_bins: Number of histogram bins
         additive_smoothing: Pseudocount for Laplace smoothing (default: 0.1)
         sanity_check: If True, plot visualization for debugging
-        plot_idx: Which batch index to plot if sanity_check=True
 
     Returns:
         Shape (n_agents, sample_size) - log-likelihood of each log sample
         under the corresponding sim distribution
     """
 
-    n_agents, log_sample_size = log_samples.shape
+    n_agents, sample_size = sim_samples.shape
 
     # Clip samples to valid range
     log_samples_clipped = np.clip(log_samples, min_val, max_val)
@@ -39,29 +40,22 @@ def histogram_estimate(
     # Create bin edges
     edges = np.linspace(min_val, max_val, num_bins + 1)
 
-    # Build histogram for each agent from sim samples
-    # sim_counts shape: (n_agents, num_bins)
+    # Create histogram for each agent from sim samples
     sim_counts = np.array([np.histogram(sim_samples_clipped[i], bins=edges)[0] for i in range(n_agents)])
 
     # Apply smoothing and normalize to probabilities
     sim_counts = sim_counts.astype(float) + additive_smoothing
     sim_probs = sim_counts / sim_counts.sum(axis=1, keepdims=True)
 
-    # For each log sample, create a histogram to identify which bin it belongs to
-    # Flatten log samples: (n_agents * log_sample_size, 1)
-    log_values_flat = log_samples_clipped.reshape(-1, 1)
+    # Find which bin each log sample belongs to
+    # digitize returns values in [1, num_bins], so subtract 1 for 0-indexing
+    # right=False means bins are [left, right) except last bin which is [left, right]
+    log_bins = np.digitize(log_samples_clipped, edges, right=False) - 1
 
-    # Build histogram for each flattened log sample
-    # log_counts shape: (n_agents * log_sample_size, num_bins)
-    log_counts = np.array([np.histogram(log_values_flat[i], bins=edges)[0] for i in range(n_agents * log_sample_size)])
+    # Clip to valid bin indices (handles edge case where value == max_val)
+    log_bins = np.clip(log_bins, 0, num_bins - 1)
 
-    # Find which bin each log sample belongs to (argmax over bins)
-    log_bins = np.argmax(log_counts, axis=1)
-
-    # Reshape to (n_agents, log_sample_size)
-    log_bins = log_bins.reshape(n_agents, log_sample_size)
-
-    # For each agent and log sample, get the log probability from the sim distribution
+    # Get log probabilities for each sample
     agent_indices = np.arange(n_agents)[:, None]
     log_probs = np.log(sim_probs[agent_indices, log_bins])
 
@@ -79,7 +73,7 @@ def log_likelihood_estimate_timeseries(
     sanity_check: bool = False,
     plot_agent_idx: int = 0,
 ) -> np.ndarray:
-    """Computes log-likelihood estimates for time-series simulated features.
+    """Computes log-likelihood estimates for time-series simulated features on a per-agent basis.
 
     Args:
         log_values: Shape (n_agents, 1, n_steps)
@@ -94,7 +88,9 @@ def log_likelihood_estimate_timeseries(
         plot_rollouts: How many rollouts to show if sanity_check=True
 
     Returns:
-        Shape (n_agents, n_steps) - log-likelihood estimates
+        A tensor of shape (n_objects, n_steps) containing the log probability
+        estimates of the log features under the simulated distribution of the same
+        feature.
     """
     n_agents, n_rollouts, n_steps = sim_values.shape
 
@@ -105,8 +101,7 @@ def log_likelihood_estimate_timeseries(
 
         # Compute log-likelihoods
         log_probs = histogram_estimate(log_flat, sim_flat, min_val, max_val, num_bins, additive_smoothing)
-        # Reshape back: (n_agents, n_steps)
-        log_probs_reshaped = log_probs.reshape(n_agents, n_steps)
+
     else:
         raise NotImplementedError("Currently not supported.")
 
@@ -114,7 +109,7 @@ def log_likelihood_estimate_timeseries(
     if sanity_check:
         _plot_histogram_sanity_check(log_flat, sim_flat, log_probs, plot_agent_idx)
 
-    return log_probs_reshaped
+    return log_probs
 
 
 def _plot_histogram_sanity_check(
@@ -125,40 +120,41 @@ def _plot_histogram_sanity_check(
 ):
     """Plot data as sanity check."""
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    for idx in range(log_samples.shape[0]):
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        fig.suptitle(f"Histogram Log-Likelihood Sanity Check for Agent {idx}")
 
-    # Plot 1: Simulated distribution (histogram)
-    axes[0].hist(sim_samples[idx], density=True, alpha=0.7, color="blue")
-    axes[0].set_xlabel("Value")
-    axes[0].set_ylabel("Density")
-    axes[0].set_title("Simulated distribution")
-    axes[0].grid(alpha=0.3)
+        # Plot 1: Simulated distribution (histogram)
+        axes[0].hist(sim_samples[idx], density=True, alpha=0.7, color="blue")
+        axes[0].set_xlabel("Value")
+        axes[0].set_ylabel("Density")
+        axes[0].set_title("Simulated distribution")
+        axes[0].grid(alpha=0.3)
 
-    # Plot 2: Ground-truth values overlaid on simulated
-    axes[1].hist(sim_samples[idx], density=True, alpha=0.5, color="blue", label="Simulated")
-    axes[1].scatter(
-        log_samples[idx],
-        np.zeros_like(log_samples[idx]),
-        color="red",
-        marker="|",
-        s=200,
-        linewidths=2,
-        label="Ground-truth",
-        zorder=5,
-    )
-    axes[1].set_xlabel("Value")
-    axes[1].set_ylabel("Density")
-    axes[1].set_title("Ground-truth vs Simulated")
-    axes[1].legend()
-    axes[1].grid(alpha=0.3)
+        # Plot 2: Ground-truth values overlaid on simulated
+        axes[1].hist(sim_samples[idx], density=True, alpha=0.5, color="blue", label="Simulated")
+        axes[1].scatter(
+            log_samples[idx],
+            np.zeros_like(log_samples[idx]),
+            color="green",
+            marker="|",
+            s=200,
+            linewidths=2,
+            label="Ground-truth",
+            zorder=5,
+        )
+        axes[1].set_xlabel("Value")
+        axes[1].set_ylabel("Density")
+        axes[1].set_title("Ground-truth vs Simulated")
+        axes[1].legend()
+        axes[1].grid(alpha=0.3)
 
-    # Plot 3: Log-likelihood values
-    axes[2].scatter(log_samples[idx], log_probs[idx], alpha=0.7, color="green")
-    axes[2].set_xlabel("Ground-truth Value")
-    axes[2].set_ylabel("Log-likelihood")
-    axes[2].set_title("Log-likelihood of Ground-truth")
-    axes[2].grid(alpha=0.3)
-    axes[2].axhline(y=0, color="k", linestyle="--", alpha=0.3)
+        # Plot 3: Log-likelihood values
+        axes[2].hist(log_samples[idx], alpha=0.7, color="orange")
+        axes[2].set_ylabel("Log-likelihood")
+        axes[2].set_title("Log-likelihood of Ground-truth")
+        axes[2].grid(alpha=0.3)
+        axes[2].axhline(y=0, color="k", linestyle="--", alpha=0.3)
 
-    plt.tight_layout()
-    plt.savefig(f"histogram_sanity_check_agent_{idx}.png")
+        plt.tight_layout()
+        plt.savefig(f"histogram_sanity_check_agent_{idx}.png")

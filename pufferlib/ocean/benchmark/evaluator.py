@@ -160,12 +160,13 @@ class WOSACEvaluator:
         # Each of these metrics is in [0, 1], higher is better
 
         # Input: [num_agents, num_steps]
-        # TODO: Check inputs/outputs from ll func above
         speed_likelihood = np.exp(
-            metrics._reduce_average_with_validity(linear_speed_log_likelihood, speed_validity[:, 0, :])
+            metrics._reduce_average_with_validity(
+                linear_speed_log_likelihood,
+                speed_validity[:, 0, :],
+                axis=1,  # Average over time steps
+            )
         )
-
-        breakpoint()
 
         # Get agent IDs and scenario IDs
         agent_ids = ground_truth_trajectories["id"]
@@ -182,11 +183,15 @@ class WOSACEvaluator:
         )
 
         # Aggregate results per scenario_id
-        results = df.groupby("scenario_id")[["ade", "min_ade"]].mean()
+        scene_level_results = df.groupby("scenario_id")[["ade", "min_ade", "likelihood_speed"]].mean()
 
-        print(results)
+        print(f"\n Scene-level results:\n")
+        print(scene_level_results)
 
-        return results
+        print(f"\n Full agent-level results:\n")
+        print(df)
+
+        return scene_level_results
 
     def _quick_sanity_check(self, gt_trajectories, simulated_trajectories):
         fig, axs = plt.subplots(1, 2, figsize=(12, 4))

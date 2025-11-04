@@ -1138,6 +1138,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     args["vec"] = dict(backend=backend, num_envs=1)
     args["env"]["num_agents"] = args["wosac"]["num_total_wosac_agents"] if wosac_enabled else 1
+    args["env"]["init_mode"] = args["wosac"]["init_mode"] if wosac_enabled else args["env"]["init_mode"]
 
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
