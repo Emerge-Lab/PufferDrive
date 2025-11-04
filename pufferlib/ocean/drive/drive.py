@@ -484,11 +484,11 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=0.0001, atn_cache=1024, num_agents=12):
+def test_performance(timeout=0.0001, atn_cache=1024, num_agents=345):
     import time
 
     env = Drive(
-        num_agents=num_agents, num_maps=1, init_mode="control_tracks_to_predict", init_steps=2, scenario_length=91
+        num_agents=num_agents, num_maps=100, init_mode="control_tracks_to_predict", init_steps=10, scenario_length=91
     )
     env.reset()
 
@@ -504,11 +504,6 @@ def test_performance(timeout=0.0001, atn_cache=1024, num_agents=12):
         tick += 1
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
-
-    gt = env.get_ground_truth_trajectories()
-    pred = env.get_global_agent_state()
-
-    # import pdb; pdb.set_trace()
 
     env.close()
 

@@ -1133,7 +1133,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args = args or load_config(env_name)
 
     wosac_enabled = args["wosac"]["enabled"]
-    backend = args["vec"]["backend"]
+    backend = args["wosac"]["backend"] if wosac_enabled else args["vec"]["backend"]
     assert backend == "PufferEnv", "WOSAC evaluation only supports PufferEnv backend."
 
     args["vec"] = dict(backend=backend, num_envs=1)
@@ -1145,7 +1145,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     if wosac_enabled:
         print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
-        import matplotlib.pyplot as plt
 
         evaluator = WOSACEvaluator(args)
 

@@ -1273,10 +1273,19 @@ void set_active_agents(Drive* env){
     if(env->num_agents ==0){
         env->num_agents = MAX_AGENTS;
     }
-
+    // int first_agent_id = env->num_objects-1;
+    // float distance_to_goal = valid_active_agent(env, first_agent_id);
+    // if(distance_to_goal){
+    //     env->active_agent_count = 1;
+    //     active_agent_indices[0] = first_agent_id;
+    //     env->entities[first_agent_id].active_agent = 1;
+    //     env->num_controllable_agents = 1;
+    // } else {
+    //     env->active_agent_count = 0;
+    //     env->num_controllable_agents = 0;
+    // }
     env->active_agent_count = 0;
     env->num_controllable_agents = 0;
-
     // Iterate through entities to find controllable agents
     for(int i = 0; i < env->num_objects-1 && env->num_controllable_agents < MAX_AGENTS; i++){
 
@@ -1331,7 +1340,7 @@ void set_active_agents(Drive* env){
             }
         }
     }
-    printf("Active agents: %d, Static cars: %d, Expert static cars: %d\n", env->active_agent_count, env->static_car_count, env->expert_static_car_count);
+    //printf("Active agents: %d, Static cars: %d, Expert static cars: %d\n", env->active_agent_count, env->static_car_count, env->expert_static_car_count);
     // set up initial active agents
     env->active_agent_indices = (int*)malloc(env->active_agent_count * sizeof(int));
     env->static_car_indices = (int*)malloc(env->static_car_count * sizeof(int));
@@ -1571,7 +1580,7 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
 }
 
 void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* valid_out, int* id_out, int* scenario_id_out) {
-    printf("Active agent count: %d\n", env->active_agent_count);
+    //printf("Active agent count: %d\n", env->active_agent_count);
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
