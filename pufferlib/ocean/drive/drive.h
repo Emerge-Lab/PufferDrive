@@ -1293,9 +1293,7 @@ void set_active_agents(Drive* env){
                 candidate = (env->entities[i].type == VEHICLE);
 
             } else {
-                candidate = (env->entities[i].type == VEHICLE) ||
-                                  (env->entities[i].type == PEDESTRIAN) ||
-                                  (env->entities[i].type == CYCLIST);
+                candidate = (env->entities[i].type == VEHICLE) || (env->entities[i].type == PEDESTRIAN) || (env->entities[i].type == CYCLIST);
             }
             candidate = candidate && (env->entities[i].traj_valid[env->init_steps] == 1);
 
