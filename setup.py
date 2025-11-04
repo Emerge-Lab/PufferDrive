@@ -324,7 +324,7 @@ if not NO_TRAIN:
         "rich_argparse",
         "imageio",
         "pyro-ppl",
-        "heavyball",
+        "heavyball<2.0.0",
         "neptune",
         "wandb",
     ]

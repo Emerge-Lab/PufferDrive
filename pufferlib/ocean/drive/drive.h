@@ -12,8 +12,6 @@
 #include <time.h>
 #include "error.h"
 
-
-
 // Entity Types
 #define NONE 0
 #define VEHICLE 1
@@ -37,9 +35,7 @@
 
 // Dynamics Models
 #define CLASSIC 0
-#define INVERTIBLE_BICYLE 1
-#define DELTA_LOCAL 2
-#define STATE_DYNAMICS 3
+#define JERK 1
 
 // collision state
 #define NO_COLLISION 0
@@ -75,11 +71,14 @@
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
 
-// Acceleration Values
-static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f,  1.3330f,  2.6670f,  4.0000f};
-// static const float STEERING_VALUES[13] = {-3.1420f, -2.6180f, -2.0940f, -1.5710f, -1.0470f, -0.5240f,  0.0000f,  0.5240f,
-//          1.0470f,  1.5710f,  2.0940f,  2.6180f,  3.1420f};
+// Jerk action space (for JERK dynamics model)
+static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
+static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
+
+// Classic action space (for CLASSIC dynamics model)
+static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
 static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f, 0.833f, 1.000f};
+
 static const float offsets[4][2] = {
         {-1, 1},  // top-left
         {1, 1},   // top-right
@@ -166,6 +165,14 @@ struct Entity {
     float cumulative_displacement;
     int displacement_sample_count;
     float goal_radius;
+
+    // Jerk dynamics
+    float a_long;
+    float a_lat;
+    float jerk_long;
+    float jerk_lat;
+    float steering_angle;
+    float wheelbase;
 };
 
 void free_entity(Entity* entity){
@@ -180,6 +187,7 @@ void free_entity(Entity* entity){
     free(entity->traj_valid);
 }
 
+// Utility functions
 float relative_distance(float a, float b){
     float distance = sqrtf(powf(a - b, 2));
     return distance;
@@ -190,6 +198,12 @@ float relative_distance_2d(float x1, float y1, float x2, float y2){
     float dy = y2 - y1;
     float distance = sqrtf(dx*dx + dy*dy);
     return distance;
+}
+
+float clip(float value, float min, float max) {
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
 }
 
 float compute_displacement_error(Entity* agent, int timestep) {
@@ -278,6 +292,7 @@ struct Drive {
     char* map_name;
     float world_mean_x;
     float world_mean_y;
+    float dt;
     float reward_goal;
     float reward_goal_post_respawn;
     float goal_radius;
@@ -563,6 +578,14 @@ void set_start_position(Drive* env){
         e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
         e->respawn_count = 0;
+
+        // Dynamics
+        e->a_long = 0.0f;
+        e->a_lat = 0.0f;
+        e->jerk_long = 0.0f;
+        e->jerk_lat = 0.0f;
+        e->steering_angle = 0.0f;
+        e->wheelbase = 0.6f * e->length;
     }
     //EndDrawing();
 }
@@ -1558,7 +1581,6 @@ void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
     env->entities = load_map_binary(env->map_name, env);
-    env->dynamics_model = CLASSIC;
     set_means(env);
     init_grid_map(env);
     if (env->use_goal_generation) init_topology_graph(env);
@@ -1605,7 +1627,8 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("num static cars: %d\n", env->static_car_count);
     // printf("active agent count: %d\n", env->active_agent_count);
     // printf("num objects: %d\n", env->num_objects);
@@ -1636,9 +1659,19 @@ float normalize_heading(float heading){
     return heading;
 }
 
+float normalize_value(float value, float min, float max){
+    return (value - min) / (max - min);
+}
+
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
-    if(env->dynamics_model == CLASSIC){
-        Entity* agent = &env->entities[agent_idx];
+    Entity* agent = &env->entities[agent_idx];
+
+    if (agent->collision_state != 0) {
+        return;
+    }
+
+    if (env->dynamics_model == CLASSIC) {
+        // Classic dynamics model
         float acceleration = 0.0f;
         float steering = 0.0f;
 
@@ -1646,6 +1679,9 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
             float (*action_array_f)[2] = (float(*)[2])env->actions;
             acceleration = action_array_f[action_idx][0];
             steering = action_array_f[action_idx][1];
+
+            acceleration *= ACCELERATION_VALUES[6];
+            steering *= STEERING_VALUES[12];
         } else { // discrete
             int (*action_array)[2] = (int(*)[2])env->actions;
             int acceleration_index = action_array[action_idx][0];
@@ -1665,24 +1701,25 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         // Calculate current speed
         float speed = sqrtf(vx*vx + vy*vy);
 
-        // Time step (adjust as needed)
-        const float dt = 0.1f;
         // Update speed with acceleration
-        speed = speed + 0.5f*acceleration*dt;
-        // if (speed < 0) speed = 0;  // Prevent going backward
+        speed = speed + 0.5f*acceleration*env->dt;
         speed = clipSpeed(speed);
-        // compute yaw rate
+
+        // Compute yaw rate
         float beta = tanh(.5*tanf(steering));
-        // new heading
+
+        // New heading
         float yaw_rate = (speed*cosf(beta)*tanf(steering)) / agent->length;
-        // new velocity
+
+        // New velocity
         float new_vx = speed*cosf(heading + beta);
         float new_vy = speed*sinf(heading + beta);
+
         // Update position
-        x = x + (new_vx*dt);
-        y = y + (new_vy*dt);
-        heading = heading + yaw_rate*dt;
-        // heading = normalize_heading(heading);
+        x = x + (new_vx*env->dt);
+        y = y + (new_vy*env->dt);
+        heading = heading + yaw_rate*env->dt;
+
         // Apply updates to the agent's state
         agent->x = x;
         agent->y = y;
@@ -1691,51 +1728,147 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         agent->heading_y = sinf(heading);
         agent->vx = new_vx;
         agent->vy = new_vy;
+    } else {
+        // JERK dynamics model
+        // Extract action components
+        float a_long, a_lat;
+        if (env->action_type == 1) { // continuous
+            float (*action_array_f)[2] = (float(*)[2])env->actions;
+
+            // Asymmetric scaling for longitudinal jerk to match discrete action space
+            // Discrete: JERK_LONG = [-15, -4, 0, 4] (more braking than acceleration)
+            float a_long_action = action_array_f[action_idx][0];  // [-1, 1]
+            if (a_long_action < 0) {
+                a_long = a_long_action * (-JERK_LONG[0]);  // Negative: [-1, 0] → [-15, 0] (braking)
+            } else {
+                a_long = a_long_action * JERK_LONG[3];   // Positive: [0, 1] → [0, 4] (acceleration)
+            }
+
+            // Symmetric scaling for lateral jerk
+            a_lat = action_array_f[action_idx][1] * JERK_LAT[2];
+        } else { // discrete
+            int (*action_array)[2] = (int(*)[2])env->actions;
+            int a_long_idx = action_array[action_idx][0];
+            int a_lat_idx = action_array[action_idx][1];
+            a_long = JERK_LONG[a_long_idx];
+            a_lat = JERK_LAT[a_lat_idx];
+        }
+
+        // Calculate new acceleration
+        float a_long_new = agent->a_long + a_long * env->dt;
+        float a_lat_new = agent->a_lat + a_lat * env->dt;
+
+        // Make it easy to stop with 0 accel
+        if (agent->a_long * a_long_new < 0) {
+            a_long_new = 0.0f;
+        } else {
+            a_long_new = clip(a_long_new, -5.0f, 2.5f);
+        }
+
+        if (agent->a_lat * a_lat_new < 0) {
+            a_lat_new = 0.0f;
+        } else {
+            a_lat_new = clip(a_lat_new, -4.0f, 4.0f);
+        }
+
+        // Calculate new velocity
+        float v_dot_heading = agent->vx * agent->heading_x + agent->vy * agent->heading_y;
+        float signed_v = copysignf(sqrtf(agent->vx*agent->vx + agent->vy*agent->vy), v_dot_heading);
+        float v_new = signed_v + 0.5f * (a_long_new + agent->a_long) * env->dt;
+
+        // Make it easy to stop with 0 vel
+        if (signed_v * v_new < 0) {
+            v_new = 0.0f;
+        } else {
+            v_new = clip(v_new, -2.0f, 20.0f);
+        }
+
+        // Calculate new steering angle
+        float signed_curvature = a_lat_new / fmaxf(v_new * v_new, 1e-5f);
+        signed_curvature = copysignf(fmaxf(fabsf(signed_curvature), 1e-5f), signed_curvature);
+        float steering_angle = atanf(signed_curvature * agent->wheelbase);
+        float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
+        float new_steering_angle = clip(agent->steering_angle + delta_steer, -0.55f, 0.55f);
+
+        // Update curvature and accel to account for limited steering
+        signed_curvature = tanf(new_steering_angle) / agent->wheelbase;
+        a_lat_new = v_new * v_new * signed_curvature;
+
+        // Calculate resulting movement using bicycle dynamics
+        float d = 0.5f * (v_new + signed_v) * env->dt;
+        float theta = d * signed_curvature;
+        float dx_local, dy_local;
+
+        if (fabsf(signed_curvature) < 1e-5f || fabsf(theta) < 1e-5f) {
+            dx_local = d;
+            dy_local = 0.0f;
+        } else {
+            dx_local = sinf(theta) / signed_curvature;
+            dy_local = (1.0f - cosf(theta)) / signed_curvature;
+        }
+
+        float dx = dx_local * agent->heading_x - dy_local * agent->heading_y;
+        float dy = dx_local * agent->heading_y + dy_local * agent->heading_x;
+
+        // Update everything
+        agent->x += dx;
+        agent->y += dy;
+        agent->jerk_long = (a_long_new - agent->a_long) / env->dt;
+        agent->jerk_lat = (a_lat_new - agent->a_lat) / env->dt;
+        agent->a_long = a_long_new;
+        agent->a_lat = a_lat_new;
+        agent->heading = normalize_heading(agent->heading + theta);
+        agent->heading_x = cosf(agent->heading);
+        agent->heading_y = sinf(agent->heading);
+        agent->vx = v_new * agent->heading_x;
+        agent->vy = v_new * agent->heading_y;
+        agent->steering_angle = new_steering_angle;
     }
+
     return;
 }
 
-float normalize_value(float value, float min, float max){
-    return (value - min) / (max - min);
-}
-
-float reverse_normalize_value(float value, float min, float max){
-    return value*50.0f;
-}
-
 void compute_observations(Drive* env) {
-    int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
         float* obs = &observations[i][0];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];
         if(ego_entity->type > 3) break;
-        if(ego_entity->respawn_timestep != -1) {
-            obs[6] = 1;
-            //continue;
-        }
+
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
         float ego_speed = sqrtf(ego_entity->vx*ego_entity->vx + ego_entity->vy*ego_entity->vy);
+
         // Set goal distances
         float goal_x = ego_entity->goal_position_x - ego_entity->x;
         float goal_y = ego_entity->goal_position_y - ego_entity->y;
+
         // Rotate to ego vehicle's frame
         float rel_goal_x = goal_x*cos_heading + goal_y*sin_heading;
         float rel_goal_y = -goal_x*sin_heading + goal_y*cos_heading;
-        //obs[0] = normalize_value(rel_goal_x, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
-        //obs[1] = normalize_value(rel_goal_y, MIN_REL_GOAL_COORD, MAX_REL_GOAL_COORD);
+
         obs[0] = rel_goal_x* 0.005f;
         obs[1] = rel_goal_y* 0.005f;
-        //obs[2] = ego_speed / MAX_SPEED;
-        obs[2] = ego_speed * 0.01f;
+        obs[2] = ego_speed / MAX_SPEED;
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
 
+        if (env->dynamics_model == JERK) {
+            obs[6] = ego_entity->steering_angle / M_PI;
+            // Asymmetric normalization for a_long to match action space
+            obs[7] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
+            obs[8] = ego_entity->a_lat / JERK_LAT[2];
+            obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+        } else {
+            obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+        }
+
         // Relative Pos of other cars
-        int obs_idx = 7;  // Start after goal distances
+        int obs_idx = ego_dim;
         int cars_seen = 0;
         for(int j = 0; j < MAX_AGENTS; j++) {
             int index = -1;
@@ -2018,6 +2151,11 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].cumulative_displacement = 0.0f;
     env->entities[agent_idx].displacement_sample_count = 0;
     env->entities[agent_idx].respawn_timestep = env->timestep;
+    env->entities[agent_idx].a_long = 0.0f;
+    env->entities[agent_idx].a_lat = 0.0f;
+    env->entities[agent_idx].jerk_long = 0.0f;
+    env->entities[agent_idx].jerk_lat = 0.0f;
+    env->entities[agent_idx].steering_angle = 0.0f;
 }
 
 void c_step(Drive* env){
@@ -2274,7 +2412,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = 10 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
@@ -2298,7 +2436,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
-    int obs_idx = 7;  // Start after goal distances
+    int obs_idx = 10;  // Start after ego obs
     for(int j = 0; j < MAX_AGENTS - 1; j++) {
         if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 7;  // Move to next agent observation

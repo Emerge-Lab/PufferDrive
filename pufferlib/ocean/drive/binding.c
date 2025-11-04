@@ -177,6 +177,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
         return -1;
     }
     env->action_type = conf.action_type;
+    env->dynamics_model = conf.dynamics_model;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
@@ -188,6 +189,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
     env->control_all_agents = unpack(kwargs, "control_all_agents");
     env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
+    env->dt = conf.dt;
     env->control_non_vehicles = (int)unpack(kwargs, "control_non_vehicles");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");

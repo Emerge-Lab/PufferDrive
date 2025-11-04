@@ -1145,6 +1145,10 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
+    # Rebuild visualize binary if saving frames (for C-based rendering)
+    if args["save_frames"] > 0:
+        ensure_drive_binary()
+
     state = {}
     if args["train"]["use_rnn"]:
         state = dict(
@@ -1255,7 +1259,7 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
     weights = np.concatenate(weights)
     if path is None:
-        path = f"{args['env_name']}_weights.bin"
+        path = f"pufferlib/resources/drive/{args['env_name']}_weights.bin"
 
     weights.tofile(path)
 
@@ -1264,27 +1268,28 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
 
 def ensure_drive_binary():
-    """Ensure the visualize binary exists, build it once if necessary. This
-    is required for rendering with raylib.
+    """Delete existing visualize binary and rebuild it. This ensures the
+    binary is always up-to-date with the latest code changes.
     """
-    if not os.path.exists("./visualize"):
-        print("Visualize binary not found, building...")
-        try:
-            result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
-            )
+    if os.path.exists("./visualize"):
+        print("Removing existing visualize binary...")
+        os.remove("./visualize")
 
-            if result.returncode == 0:
-                print("Successfully built visualize binary")
-            else:
-                print(f"Build failed: {result.stderr}")
-                raise RuntimeError("Failed to build visualize binary for rendering")
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Build timed out")
-        except Exception as e:
-            raise RuntimeError(f"Build error: {e}")
-    else:
-        print("Visualize binary found, ready for rendering")
+    print("Building visualize binary...")
+    try:
+        result = subprocess.run(
+            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
+        )
+
+        if result.returncode == 0:
+            print("Successfully built visualize binary")
+        else:
+            print(f"Build failed: {result.stderr}")
+            raise RuntimeError("Failed to build visualize binary for rendering")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Build timed out")
+    except Exception as e:
+        raise RuntimeError(f"Build error: {e}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
