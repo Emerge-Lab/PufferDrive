@@ -558,6 +558,8 @@ class PuffeRL:
                                 cmd.extend(["--map-name", map_path])
                         if self.vecenv.driver_env.init_mode is not None:
                             cmd.extend(["--init-mode", str(self.vecenv.driver_env.init_mode)])
+                        if self.vecenv.driver_env.control_mode is not None:
+                            cmd.extend(["--control-mode", str(self.vecenv.driver_env.control_mode)])
 
                         # Specify output paths for videos
                         cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
@@ -1139,6 +1141,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args["vec"] = dict(backend=backend, num_envs=1)
     args["env"]["num_agents"] = args["wosac"]["num_total_wosac_agents"] if wosac_enabled else 1
     args["env"]["init_mode"] = args["wosac"]["init_mode"] if wosac_enabled else args["env"]["init_mode"]
+    args["env"]["control_mode"] = args["wosac"]["control_mode"] if wosac_enabled else args["env"]["control_mode"]
 
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
