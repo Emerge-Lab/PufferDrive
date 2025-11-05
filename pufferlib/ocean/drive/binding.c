@@ -108,7 +108,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         free(env->expert_static_agent_indices);
         free(env);
     }
-    //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
+    printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
     if(total_agent_count >= num_agents){
         total_agent_count = num_agents;
     }

@@ -242,18 +242,18 @@ class Drive(pufferlib.PufferEnv):
         """Get ground truth trajectories for all active agents.
 
         Returns:
-            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id', containing numpy arrays.
+            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id', 'scenario_id' containing numpy arrays.
         """
         num_agents = self.num_agents
 
         trajectories = {
-            "x": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.float32),
-            "y": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.float32),
-            "z": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.float32),
-            "heading": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.float32),
-            "valid": np.zeros((num_agents, 1, self.scenario_length - self.init_steps), dtype=np.int32),
-            "id": np.zeros((num_agents, 1), dtype=np.int32),
-            "scenario_id": np.zeros((num_agents, 1), dtype=np.int32),
+            "x": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
+            "y": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
+            "z": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
+            "heading": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
+            "valid": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.int32),
+            "id": np.zeros(num_agents, dtype=np.int32),
+            "scenario_id": np.zeros(num_agents, dtype=np.int32),
         }
 
         binding.vec_get_global_ground_truth_trajectories(
@@ -266,6 +266,9 @@ class Drive(pufferlib.PufferEnv):
             trajectories["id"],
             trajectories["scenario_id"],
         )
+
+        for key in trajectories:
+            trajectories[key] = trajectories[key][:, None]
 
         return trajectories
 
@@ -499,14 +502,14 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=0.0001, atn_cache=1024, num_agents=4):
+def test_performance(timeout=0.0001, atn_cache=1024, num_agents=5):
     import time
 
     env = Drive(
         num_agents=num_agents,
         num_maps=1,
         control_mode="control_vehicles",
-        init_mode="create_only_controlled",  # "create_only_controlled",create_all_valid
+        init_mode="create_all_valid",  # "create_only_controlled",create_all_valid
         init_steps=0,
         scenario_length=91,
     )

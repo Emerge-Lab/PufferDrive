@@ -681,18 +681,30 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
     PyArrayObject* id_array = (PyArrayObject*)id_arr;
 
+    // Get base pointers to the arrays
+    float* x_base = (float*)PyArray_DATA(x_array);
+    float* y_base = (float*)PyArray_DATA(y_array);
+    float* z_base = (float*)PyArray_DATA(z_array);
+    float* heading_base = (float*)PyArray_DATA(heading_array);
+    int* id_base = (int*)PyArray_DATA(id_array);
+
+    // Iterate through environments and write to correct offsets
+    int offset = 0;
     for (int i = 0; i < vec->num_envs; i++) {
         Drive* drive = (Drive*)vec->envs[i];
 
-        float* x_data = (float*)((char*)PyArray_DATA(x_array) + i * PyArray_STRIDE(x_array, 0));
-        float* y_data = (float*)((char*)PyArray_DATA(y_array) + i * PyArray_STRIDE(y_array, 0));
-        float* z_data = (float*)((char*)PyArray_DATA(z_array) + i * PyArray_STRIDE(z_array, 0));
-        float* heading_data = (float*)((char*)PyArray_DATA(heading_array) + i * PyArray_STRIDE(heading_array, 0));
-        int* id_data = (int*)((char*)PyArray_DATA(id_array) + i * PyArray_STRIDE(id_array, 0));
+        // Write to the arrays at the current offset
+        c_get_global_agent_state(drive,
+                                &x_base[offset],
+                                &y_base[offset],
+                                &z_base[offset],
+                                &heading_base[offset],
+                                &id_base[offset]);
 
-        c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data);
-
+        // Move offset forward by the number of agents in this environment
+        offset += drive->active_agent_count;
     }
+
     Py_RETURN_NONE;
 }
 
@@ -773,23 +785,42 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
     PyArrayObject* id_array = (PyArrayObject*)id_arr;
     PyArrayObject* scenario_id_array = (PyArrayObject*)scenario_id_arr;
 
+    // Get base pointers to the arrays
+    float* x_base = (float*)PyArray_DATA(x_array);
+    float* y_base = (float*)PyArray_DATA(y_array);
+    float* z_base = (float*)PyArray_DATA(z_array);
+    float* heading_base = (float*)PyArray_DATA(heading_array);
+    int* valid_base = (int*)PyArray_DATA(valid_array);
+    int* id_base = (int*)PyArray_DATA(id_array);
+    int* scenario_id_base = (int*)PyArray_DATA(scenario_id_array);
+
+    // Get number of timesteps from array shape
+    npy_intp* x_shape = PyArray_DIMS(x_array);
+    int num_timesteps = x_shape[1];  // Second dimension for 2D arrays
+
+    // Iterate through environments and write to correct offsets
+    int agent_offset = 0;  // Offset for 1D arrays (id, scenario_id)
+    int traj_offset = 0;   // Offset for 2D arrays (x, y, z, heading, valid)
+
     for (int i = 0; i < vec->num_envs; i++) {
         Drive* drive = (Drive*)vec->envs[i];
 
-        float* x_data = (float*)((char*)PyArray_DATA(x_array) + i * PyArray_STRIDE(x_array, 0));
-        float* y_data = (float*)((char*)PyArray_DATA(y_array) + i * PyArray_STRIDE(y_array, 0));
-        float* z_data = (float*)((char*)PyArray_DATA(z_array) + i * PyArray_STRIDE(z_array, 0));
-        float* heading_data = (float*)((char*)PyArray_DATA(heading_array) + i * PyArray_STRIDE(heading_array, 0));
-        int* valid_data = (int*)((char*)PyArray_DATA(valid_array) + i * PyArray_STRIDE(valid_array, 0));
-        int* id_data = (int*)((char*)PyArray_DATA(id_array) + i * PyArray_STRIDE(id_array, 0));
-        int* scenario_id_data = (int*)((char*)PyArray_DATA(scenario_id_array) + i * PyArray_STRIDE(scenario_id_array, 0));
+        c_get_global_ground_truth_trajectories(drive,
+                                              &x_base[traj_offset],
+                                              &y_base[traj_offset],
+                                              &z_base[traj_offset],
+                                              &heading_base[traj_offset],
+                                              &valid_base[traj_offset],
+                                              &id_base[agent_offset],
+                                              &scenario_id_base[agent_offset]);
 
-        c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data, scenario_id_data);
+        // Move offsets forward
+        agent_offset += drive->active_agent_count;
+        traj_offset += drive->active_agent_count * num_timesteps;
     }
 
     Py_RETURN_NONE;
 }
-
 static double unpack(PyObject* kwargs, char* key) {
     PyObject* val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
