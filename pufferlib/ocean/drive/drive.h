@@ -1319,7 +1319,7 @@ void set_active_agents(Drive* env){
         Entity* entity = &env->entities[i];
 
         // Skip if not valid at initialization
-        if (!entity->traj_valid || !entity->traj_valid[env->init_steps]) {
+        if (entity->traj_valid[env->init_steps] != 1) {
             continue;
         }
 
