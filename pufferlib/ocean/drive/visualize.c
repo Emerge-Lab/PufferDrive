@@ -202,7 +202,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
 }
 
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode) {
 
     char map_buffer[100];
     if (map_name == NULL) {
@@ -240,6 +240,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .policy_agents_per_env = policy_agents_per_env,
         .deterministic_agent_selection = deterministic_selection,
         .init_mode = init_mode,
+        .control_mode = control_mode,
     };
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
@@ -392,7 +393,8 @@ int main(int argc, char* argv[]) {
     int policy_agents_per_env = -1;
     int num_maps = 1;
     int scenario_length_cli = -1;
-    int init_mode = 2;
+    int init_mode = 0;
+    int control_mode = 2;
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
@@ -478,7 +480,13 @@ int main(int argc, char* argv[]) {
                 init_mode = atoi(argv[i + 1]);
                 }
                 i++;
-        } else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {
+        } else if (strcmp(argv[i], "--control-mode") == 0) {
+            if (i + 1 < argc) {
+                control_mode = atoi(argv[i + 1]);
+                }
+                i++;
+        }
+        else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {
             if (i + 1 < argc) {
                 policy_agents_per_env = atoi(argv[i + 1]);
                 i++;
@@ -498,6 +506,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode);
     return 0;
 }

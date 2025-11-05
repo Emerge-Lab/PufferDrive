@@ -2,7 +2,7 @@
 
 ### Waymo Open Motion Dataset (WOMD)
 
-The `init_mode` argument determines which agents are controlled by the policy. It supports the following options: `controllable_vehicles` (default), `controllable_agents` and `tracks_to_predict` (womd only).
+The `control_mode` argument determines which agents are controlled by the policy. It supports the following options: `controllable_vehicles` (default), `controllable_agents` and `tracks_to_predict` (womd only).
 
 
 > `controllable_vehicles`: The environment only creates and controls **vehicles** that meet the following conditions:

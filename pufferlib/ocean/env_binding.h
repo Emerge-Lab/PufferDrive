@@ -894,6 +894,7 @@ typedef struct
     float goal_radius;
     int use_goal_generation;
     int init_mode;
+    int control_mode;
     int scenario_length;
 } env_init_config;
 
@@ -933,6 +934,8 @@ static int handler(
         env_config->scenario_length = atoi(value);
     } else if (MATCH("env", "init_mode")) {
         env_config->init_mode = atoi(value);
+    } else if (MATCH("env", "control_mode")) {
+        env_config->control_mode = atoi(value);
     } else {
         return 0;
     }

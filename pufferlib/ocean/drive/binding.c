@@ -71,6 +71,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
     int init_mode = unpack(kwargs, "init_mode");
+    int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
@@ -85,6 +86,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
+        env->control_mode = control_mode;
         env->init_steps = init_steps;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
@@ -149,6 +151,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
     env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
     env->init_mode = (int)unpack(kwargs, "init_mode");
+    env->control_mode = (int)unpack(kwargs, "control_mode");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");

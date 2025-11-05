@@ -28,6 +28,10 @@
 #define INVALID_POSITION -10000.0f
 
 // Initialization modes
+#define INIT_ALL_VALID 0
+#define INIT_ONLY_CONTROLLABLE_AGENTS 1
+
+// Control modes
 #define CONTROL_VEHICLES 0
 #define CONTROL_AGENTS 1
 #define CONTROL_TRACKS_TO_PREDICT 2
@@ -296,6 +300,7 @@ struct Drive {
     int num_tracks_to_predict;
     int* tracks_to_predict_indices;
     int init_mode;
+    int control_mode;
 };
 
 static inline int vehicle_eligible_t0(const Entity* e) {
@@ -1243,31 +1248,62 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
     return;
 }
 
-int valid_active_agent(Drive* env, int agent_idx){
-    float cos_heading = cosf(env->entities[agent_idx].traj_heading[0]);
-    float sin_heading = sinf(env->entities[agent_idx].traj_heading[0]);
-    float goal_x = env->entities[agent_idx].goal_position_x - env->entities[agent_idx].traj_x[0];
-    float goal_y = env->entities[agent_idx].goal_position_y - env->entities[agent_idx].traj_y[0];
-    // Rotate to ego vehicle's frame
-    float rel_goal_x = goal_x*cos_heading + goal_y*sin_heading;
-    float rel_goal_y = -goal_x*sin_heading + goal_y*cos_heading;
-    float distance_to_goal = relative_distance_2d(0, 0, rel_goal_x, rel_goal_y);
-    // Shrink agent size
-    env->entities[agent_idx].width *= 0.7f;
-    env->entities[agent_idx].length *= 0.7f;
-    if(distance_to_goal >= MIN_DISTANCE_TO_GOAL && env->entities[agent_idx].mark_as_expert == 0 && env->active_agent_count < env->num_agents){
-        return distance_to_goal;
+bool should_control_agent(Drive* env, int agent_idx){
+
+    // Check if we have room for more agents or are already at capacity
+    if (env->active_agent_count >= env->num_agents) {
+        return false;
     }
-    return 0;
+
+    Entity* entity = &env->entities[agent_idx];
+
+    // Shrink agent size for collision checking
+    entity->width *= 0.7f;
+    entity->length *= 0.7f;
+
+    // Special mode: control only agents in prediction track list
+    if (env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
+        for (int j = 0; j < env->num_tracks_to_predict; j++) {
+            if (env->tracks_to_predict_indices[j] == agent_idx) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Standard mode: check type, distance to goal, and expert status
+    bool type_is_controllable = false;
+    if (env->control_mode == CONTROL_VEHICLES) {
+        type_is_controllable = (entity->type == VEHICLE);
+    } else {  // CONTROL_AGENTS mode
+        type_is_controllable = (entity->type == VEHICLE || entity->type == PEDESTRIAN || entity->type == CYCLIST);
+    }
+
+    if (!type_is_controllable || entity->mark_as_expert) {
+        return false;
+    }
+
+    // Check distance to goal in agent's local frame
+    float cos_heading = cosf(entity->traj_heading[0]);
+    float sin_heading = sinf(entity->traj_heading[0]);
+    float goal_dx = entity->goal_position_x - entity->traj_x[0];
+    float goal_dy = entity->goal_position_y - entity->traj_y[0];
+
+    // Transform to agent's local frame
+    float local_goal_x = goal_dx * cos_heading + goal_dy * sin_heading;
+    float local_goal_y = -goal_dx * sin_heading + goal_dy * cos_heading;
+    float distance_to_goal = relative_distance_2d(0, 0, local_goal_x, local_goal_y);
+
+    return distance_to_goal >= MIN_DISTANCE_TO_GOAL;
 }
 
 void set_active_agents(Drive* env){
 
     // Initialize
-    env->active_agent_count = 0; // Agents that we control
-    env->static_agent_count = 0; // Agents that we create but don't control
-    env->expert_static_agent_count = 0;
-    env->num_actors = 0; // Total number of actors
+    env->active_agent_count = 0; // Policy-controlled agents
+    env->static_agent_count = 0; // Non-moving background agents
+    env->expert_static_agent_count = 0; // Expert replay agents (non-controlled)
+    env->num_actors = 0; // Total agents created
 
     int active_agent_indices[MAX_AGENTS];
     int static_agent_indices[MAX_AGENTS];
@@ -1277,52 +1313,44 @@ void set_active_agents(Drive* env){
         env->num_agents = MAX_AGENTS;
     }
 
-    // Iterate through entities to find controllable candidate agents
+    // Iterate through entities to find agents to create and/or control
     for(int i = 0; i < env->num_objects-1 && env->num_actors < MAX_AGENTS; i++){
 
-        int candidate = 0;
+        Entity* entity = &env->entities[i];
 
-        if (env->init_mode == CONTROL_TRACKS_TO_PREDICT) {
-            // Control agent based on tracks_to_predict flag and bypass other rules
-            for (int j = 0; j < env->num_tracks_to_predict; j++) {
-                if (env->tracks_to_predict_indices[j] == i && (env->entities[i].traj_valid[env->init_steps] == 1)) {
-                    candidate = 1;
-                }
-            }
-        } else {
-            if (env->init_mode == CONTROL_VEHICLES) {
-                candidate = (env->entities[i].type == VEHICLE);
-
-            } else {
-                candidate = (env->entities[i].type == VEHICLE) || (env->entities[i].type == PEDESTRIAN) || (env->entities[i].type == CYCLIST);
-            }
-            candidate = candidate && (env->entities[i].traj_valid[env->init_steps] == 1);
-
+        // Skip if not valid at initialization
+        if (!entity->traj_valid || !entity->traj_valid[env->init_steps]) {
+            continue;
         }
 
-        if(!candidate) continue;
+        // Determine if entity should be created
+        bool should_create = false;
+        if (env->init_mode == INIT_ALL_VALID) {
+            should_create = true;  // All valid entities
+        } else if (env->control_mode == CONTROL_VEHICLES) {
+            should_create = (entity->type == VEHICLE);
+        } else {  // Control all agents
+            should_create = (entity->type == VEHICLE || entity->type == PEDESTRIAN || entity->type == CYCLIST);
+        }
 
-        //printf("entity %d of type %d is a valid candidate\n", i, env->entities[i].type);
+        if (!should_create) continue;
 
         env->num_actors++;
 
-        // Determine if agent should be active or static
-        float distance_to_goal = 0;
-        if (env->init_mode == CONTROL_TRACKS_TO_PREDICT && env->active_agent_count < env->num_agents) {
-            distance_to_goal = 1.0f;
-        } else {
-            distance_to_goal = valid_active_agent(env, i);
-        }
+        // Determine if this agent should be policy-controlled
+        bool is_controlled = false;
 
-        if(distance_to_goal > 0){
+        is_controlled = should_control_agent(env, i);
+
+        if(is_controlled){
             active_agent_indices[env->active_agent_count] = i;
             env->active_agent_count++;
             env->entities[i].active_agent = 1;
-        } else {
+        } else if (env->init_mode != INIT_ONLY_CONTROLLABLE_AGENTS) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->entities[i].active_agent = 0;
-            if(env->entities[i].mark_as_expert == 1 || (distance_to_goal >= MIN_DISTANCE_TO_GOAL && env->active_agent_count == env->num_agents)){
+            if(env->entities[i].mark_as_expert == 1 || env->active_agent_count == env->num_agents) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
                 env->entities[i].mark_as_expert = 1;
@@ -1348,6 +1376,9 @@ void set_active_agents(Drive* env){
     if(env->active_agent_count == 0){
         printf("Warning: No active agents found in the environment.\n");
     }
+
+    // printf("Created %d active agents, %d static agents (%d expert)\n",
+    //        env->active_agent_count, env->static_agent_count, env->expert_static_agent_count);
 
     return;
 }
@@ -1418,7 +1449,7 @@ void init(Drive* env){
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
-    if (env->init_mode != CONTROL_TRACKS_TO_PREDICT) {
+    if (env->control_mode != CONTROL_TRACKS_TO_PREDICT) {
         remove_bad_trajectories(env);
     }
     set_start_position(env);
@@ -2736,7 +2767,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
 
     EndMode3D();
 
-    if (env->init_mode == CONTROL_TRACKS_TO_PREDICT && mode == 1) {
+    if (env->control_mode == CONTROL_TRACKS_TO_PREDICT && mode == 1) {
 
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;

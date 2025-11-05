@@ -32,7 +32,8 @@ class Drive(pufferlib.PufferEnv):
         buf=None,
         seed=1,
         init_steps=0,
-        init_mode="control_vehicles",
+        init_mode="create_all_valid",
+        control_mode="control_vehicles",
     ):
         # env
         self.render_mode = render_mode
@@ -52,16 +53,25 @@ class Drive(pufferlib.PufferEnv):
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.init_steps = init_steps
         self.init_mode_str = init_mode
+        self.control_mode_str = control_mode
 
-        if self.init_mode_str == "control_vehicles":
-            self.init_mode = 0
-        elif self.init_mode_str == "control_agents":
-            self.init_mode = 1
-        elif self.init_mode_str == "control_tracks_to_predict":
-            self.init_mode = 2
+        if self.control_mode_str == "control_vehicles":
+            self.control_mode = 0
+        elif self.control_mode_str == "control_agents":
+            self.control_mode = 1
+        elif self.control_mode_str == "control_tracks_to_predict":
+            self.control_mode = 2
         else:
             raise ValueError(
                 f"init_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.init_mode_str}"
+            )
+        if self.init_mode_str == "create_all_valid":
+            self.init_mode = 0
+        elif self.init_mode_str == "create_only_controlled":
+            self.init_mode = 1
+        else:
+            raise ValueError(
+                f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
             )
 
         if action_type == "discrete":
@@ -94,6 +104,7 @@ class Drive(pufferlib.PufferEnv):
             num_agents=num_agents,
             num_maps=num_maps,
             init_mode=self.init_mode,
+            control_mode=self.control_mode,
             init_steps=init_steps,
             num_policy_controlled_agents=self.num_policy_controlled_agents,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
@@ -131,6 +142,7 @@ class Drive(pufferlib.PufferEnv):
                 ini_file="pufferlib/config/ocean/drive.ini",
                 init_steps=init_steps,
                 init_mode=self.init_mode,
+                control_mode=self.control_mode,
             )
             env_ids.append(env_id)
 
@@ -161,6 +173,7 @@ class Drive(pufferlib.PufferEnv):
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     init_mode=self.init_mode,
+                    control_mode=self.control_mode,
                     init_steps=self.init_steps,
                     num_policy_controlled_agents=self.num_policy_controlled_agents,
                     deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
@@ -193,6 +206,7 @@ class Drive(pufferlib.PufferEnv):
                         ini_file="pufferlib/config/ocean/drive.ini",
                         init_steps=self.init_steps,
                         init_mode=self.init_mode,
+                        control_mode=self.control_mode,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -485,10 +499,17 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=0.0001, atn_cache=1024, num_agents=100):
+def test_performance(timeout=0.0001, atn_cache=1024, num_agents=4):
     import time
 
-    env = Drive(num_agents=num_agents, num_maps=3, init_mode="control_vehicles", init_steps=10, scenario_length=91)
+    env = Drive(
+        num_agents=num_agents,
+        num_maps=1,
+        control_mode="control_vehicles",
+        init_mode="create_only_controlled",  # "create_only_controlled",create_all_valid
+        init_steps=0,
+        scenario_length=91,
+    )
     env.reset()
 
     tick = 0
