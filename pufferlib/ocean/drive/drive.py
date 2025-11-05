@@ -496,7 +496,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed/validation/json")
+    data_dir = Path("data/processed/validation/json_selected")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -518,7 +518,7 @@ def process_all_maps():
 def test_performance(timeout=0.0001, atn_cache=1024, num_agents=100):
     import time
 
-    env = Drive(num_agents=num_agents, num_maps=1000, init_mode="control_vehicles", init_steps=10, scenario_length=91)
+    env = Drive(num_agents=num_agents, num_maps=3, init_mode="control_vehicles", init_steps=10, scenario_length=91)
     env.reset()
 
     tick = 0
