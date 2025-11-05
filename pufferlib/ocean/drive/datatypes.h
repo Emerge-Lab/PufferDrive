@@ -145,10 +145,10 @@ void free_traffic_element(struct TrafficControlElement* element){
 #define DRIVEWAY 34
 
 // -- TRAFFIC CONTROL TYPE
-// TRAFFIC_LIGHT: 40,
-// STOP_SIGN: 41,
-// YIELD_SIGN: 42,
-// SPEED_LIMIT_SIGN: 43,
+// TRAFFIC_LIGHT: 1,
+// STOP_SIGN: 2,
+// YIELD_SIGN: 3,
+// SPEED_LIMIT_SIGN: 4,
 
 
 int is_road_lane(int type){
