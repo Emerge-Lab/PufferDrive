@@ -78,13 +78,6 @@
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
 
-//GOAL BEHAVIOUR
-
-
-#define GOAL_RESPAWN 0
-#define GOAL_GENERATE_NEW 1
-#define GOAL_STOP 2
-
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
