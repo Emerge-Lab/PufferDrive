@@ -22,8 +22,6 @@ typedef struct
     int offroad_behaviour;
     int spawn_immunity_timer;
     float dt;
-    int collision_behaviour;
-    int offroad_behaviour;
     int goal_behaviour;
     int control_non_vehicles;
     int scenario_length;
