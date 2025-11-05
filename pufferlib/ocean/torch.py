@@ -22,6 +22,7 @@ ROAD_FEATURES = 7
 ROAD_FEATURES_AFTER_ONEHOT = 13
 PARTNER_FEATURES = 7
 
+
 class LinearMaxKernels(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, bias):
@@ -34,6 +35,7 @@ class LinearMaxKernels(torch.autograd.Function):
         x, weight = ctx.saved_tensors
         grad_x, grad_weight, grad_bias = torch.ops.pufferlib.linear_max_fused_backward(grad_out.contiguous(), x, weight)
         return grad_x, grad_weight, grad_bias
+
 
 class LinearMax(torch.nn.Module):
     def __init__(self, input_size, hidden_size):
@@ -224,13 +226,13 @@ class Drive(nn.Module):
 
         # TODO: Switch to LinearMax after adding tf32
         self.road_encoder = nn.Sequential(
-            FusedLinearMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),
+            LinearMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             # pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
         self.partner_encoder = nn.Sequential(
-            FusedLinearMax(PARTNER_FEATURES, input_size),
+            LinearMax(PARTNER_FEATURES, input_size),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             # pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
