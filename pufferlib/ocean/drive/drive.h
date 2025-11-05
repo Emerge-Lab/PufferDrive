@@ -909,6 +909,7 @@ void init_grid_map(Drive* env){
             float x_center = (env->road_elements[i].x[j] + env->road_elements[i].x[j+1]) / 2;
             float y_center = (env->road_elements[i].y[j] + env->road_elements[i].y[j+1]) / 2;
             int grid_index = getGridIndex(env, x_center, y_center);
+            if (grid_index == -1) continue;  // Skip out-of-bounds entities
             add_entity_to_grid(env, grid_index, ENTITY_TYPE_ROAD_ELEMENT, i, j, cell_entities_insert_index);
         }
     }
