@@ -1994,15 +1994,13 @@ void compute_observations(Drive* env) {
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
+        obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
 
         if (env->dynamics_model == JERK) {
-            obs[6] = ego_entity->steering_angle / M_PI;
+            obs[7] = ego_entity->steering_angle / M_PI;
             // Asymmetric normalization for a_long to match action space
-            obs[7] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
-            obs[8] = ego_entity->a_lat / JERK_LAT[2];
-            obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-        } else {
-            obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[8] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
+            obs[9] = ego_entity->a_lat / JERK_LAT[2];
         }
 
         int obs_idx = (env->dynamics_model == JERK) ? 10 : 7;
