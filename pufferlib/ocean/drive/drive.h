@@ -70,6 +70,8 @@
 #define MAX_RG_COORD 1000.0f
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
+#define STOP_AGENT 1
+#define REMOVE_AGENT 2
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
@@ -165,6 +167,8 @@ struct Entity {
     float cumulative_displacement;
     int displacement_sample_count;
     float goal_radius;
+    int stopped; // 0/1 -> freeze if set
+    int removed; //0/1 -> remove from sim if set
 
     // Jerk dynamics
     float a_long;
@@ -302,6 +306,8 @@ struct Drive {
     int logs_capacity;
     int use_goal_generation;
     char* ini_file;
+    int collision_behaviour; //0 = none, 1=stop, 2 = remove
+    int offroad_behaviour; //0 = none, 1=stop, 2 = remove
     int scenario_length;
     int control_non_vehicles;
 };
@@ -577,6 +583,8 @@ void set_start_position(Drive* env){
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
         e->respawn_timestep = -1;
+	    e->stopped = 0;
+        e->removed = 0;
         e->respawn_count = 0;
 
         // Dynamics
@@ -1286,6 +1294,49 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
     agent->collision_state = collided;
 
+    // spawn immunity for collisions with other agent cars as agent_idx respawns
+    int is_active_agent = env->entities[agent_idx].active_agent;
+    int respawned = env->entities[agent_idx].respawn_timestep != -1;
+
+    if(collided == VEHICLE_COLLISION){
+        if(env->collision_behaviour==STOP_AGENT && !agent->stopped){ //Stop
+            agent->stopped = 1;
+            agent->vx=agent->vy = 0.0f;
+        }
+        else if(env->collision_behaviour==REMOVE_AGENT && !agent->removed){
+            Entity* agent_collided = &env->entities[car_collided_with_index];
+            agent->removed = 1;
+            agent_collided->removed = 1;
+            agent->x = agent->y = -10000.0f;
+            agent_collided->x = agent_collided->y = -10000.0f;
+        }
+        if(is_active_agent ==1 && respawned){
+            agent->collision_state = 0;
+        }
+    }
+    if(collided == OFFROAD){
+        agent->metrics_array[OFFROAD_IDX] = 1.0f;
+        if(env->offroad_behaviour==STOP_AGENT  && !agent->stopped){ //Stop
+            agent->stopped = 1;
+            agent->vx=agent->vy = 0.0f;
+        }
+        else if(env->offroad_behaviour==REMOVE_AGENT && !agent->removed){
+            agent->removed = 1;
+            agent->x = agent->y = -10000.0f;
+        }
+        return;
+    }
+    if(car_collided_with_index == -1) return;
+
+    // spawn immunity for collisions with other cars who just respawned
+    int respawned_collided_with_car = env->entities[car_collided_with_index].respawn_timestep != -1;
+
+    if (respawned_collided_with_car) {
+        agent->collision_state = 0;
+        agent->metrics_array[COLLISION_IDX] = 0.0f;
+    }
+
+
     return;
 }
 
@@ -1665,6 +1716,12 @@ float normalize_value(float value, float min, float max){
 
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
+    if (agent->removed) return;
+    if (agent->stopped) {
+        agent->vx = 0.0f;
+        agent->vy = 0.0f;
+        return;
+    }
 
     if (agent->collision_state != 0) {
         return;
@@ -2123,6 +2180,8 @@ void c_reset(Drive* env){
         env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
         env->entities[agent_idx].cumulative_displacement = 0.0f;
         env->entities[agent_idx].displacement_sample_count = 0;
+	    env->entities[agent_idx].stopped = 0;
+        env->entities[agent_idx].removed = 0;
 
         if (env->use_goal_generation) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
@@ -2151,6 +2210,8 @@ void respawn_agent(Drive* env, int agent_idx){
     env->entities[agent_idx].cumulative_displacement = 0.0f;
     env->entities[agent_idx].displacement_sample_count = 0;
     env->entities[agent_idx].respawn_timestep = env->timestep;
+    env->entities[agent_idx].stopped = 0;
+    env->entities[agent_idx].removed = 0;
     env->entities[agent_idx].a_long = 0.0f;
     env->entities[agent_idx].a_lat = 0.0f;
     env->entities[agent_idx].jerk_long = 0.0f;
