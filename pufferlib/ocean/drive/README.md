@@ -19,8 +19,9 @@ When `control_non_vehicles=True`, these same conditions apply, but the environme
 
 Episodes are never truncated before reaching `episode_len`. The `goal_behaviour` argument controls agent behavior after reaching a goal early:
 
-* **`goal_behaviour=False` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
-* **`goal_behaviour=True`:** Agents receive new goals indefinitely after reaching each goal.
+* **`goal_behaviour=0` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
+* **`goal_behaviour=1`:** Agents receive new goals indefinitely after reaching each goal.
+* **`goal_behaviour=2`:** Agents stop after reaching their goal.
 
 ## Logged performance metrics
 
