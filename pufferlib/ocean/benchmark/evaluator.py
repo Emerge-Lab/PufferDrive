@@ -19,7 +19,7 @@ class WOSACEvaluator:
     def __init__(self, config: Dict):
         self.config = config
         self.num_steps = 91  # Hardcoded for WOSAC (9.1s at 10Hz)
-        self.init_steps = 10  # Initial steps to skip (1s)
+        self.init_steps = config.get("wosac", {}).get("init_steps", 0)
         self.sim_steps = self.num_steps - self.init_steps
         self.show_dashboard = config.get("wosac", {}).get("dashboard", False)
         self.num_rollouts = config.get("wosac", {}).get("num_rollouts", 32)
@@ -117,6 +117,8 @@ class WOSACEvaluator:
         ref_y = ground_truth_trajectories["y"]
         ref_heading = ground_truth_trajectories["heading"]
         ref_valid = ground_truth_trajectories["valid"]
+
+        breakpoint()
 
         # Compute features
         # Kinematics-related features
