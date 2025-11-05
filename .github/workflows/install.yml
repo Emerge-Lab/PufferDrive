@@ -22,26 +22,17 @@ jobs:
         with:
           extra_args: --all-files --show-diff-on-failure
 
-  cleanup-before:
-    uses: ./.github/workflows/_cleanup.yml
-    with:
-      when: "before"
-
   test:
     name: test ${{ matrix.py }} - ${{ matrix.os }} - ${{ matrix.env }}
-    needs: [pre-commit, cleanup-before]
+    needs: pre-commit
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-        py:
-          - "3.11"
-          - "3.10"
-        env:
-          - pip
+        os: [ubuntu-latest, macos-latest]
+        py: ["3.11", "3.10"]
+        env: ["pip"]
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -61,21 +52,31 @@ jobs:
         with:
           python-version: ${{ matrix.py }}
 
+      - name: Check disk space (before cleanup)
+        if: runner.os == 'Linux'
+        run: df -h
+
+      - name: Free up disk space (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
+          echo "After cleanup:"
+          df -h
+
       - name: Upgrade pip
         run: python -m pip install -U pip
 
       - name: Check disk space (before install)
+        if: runner.os == 'Linux'
         run: df -h
-
-      - name: Check disk usage (top 30 dirs)
-        run: du -h -d 2 / | sort -hr | head -n 30
 
       - name: Install pufferlib
         run: pip install -e .
 
-  cleanup-after:
-    if: always()
-    needs: test
-    uses: ./.github/workflows/_cleanup.yml
-    with:
-      when: "after"
+      - name: Check disk space (after install)
+        if: runner.os == 'Linux'
+        run: df -h
