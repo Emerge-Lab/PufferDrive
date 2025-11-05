@@ -249,6 +249,8 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .use_rc = use_rc,
         .use_ec = use_ec,
         .use_dc = use_dc,
+        .collision_behaviour = 0,
+        .offroad_behaviour = 0,
     };
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
