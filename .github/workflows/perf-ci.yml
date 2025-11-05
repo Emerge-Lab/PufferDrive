@@ -7,17 +7,38 @@ on:
 jobs:
   test-performance:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: "3.11"
+
+      - name: Check disk space (before cleanup)
+        run: df -h
+
+      - name: Free up disk space
+        run: |
+          echo "Before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
+          echo "After cleanup:"
+          df -h
 
       - name: Install dependencies
         run: |
           sudo apt update && sudo apt install -y build-essential
+          python -m pip install -U pip
           python -m pip install -e .
           python setup.py build_ext --inplace --force
+
+      - name: Check disk space (after install)
+        run: df -h
 
       - name: Test simulator performance
         run: python tests/test_simulator_perf.py
