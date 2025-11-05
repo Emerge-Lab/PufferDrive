@@ -916,8 +916,8 @@ class Profile:
         profile["delta"] += delta
 
     def end(self):
-        # if torch.cuda.is_available():
-        #    torch.cuda.synchronize()
+        if torch.cuda.is_available():
+           torch.cuda.synchronize()
 
         end = time.time()
         for i in range(len(self.stack)):
