@@ -1678,15 +1678,9 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    // printf("num static cars: %d\n", env->static_car_count);
-    // printf("active agent count: %d\n", env->active_agent_count);
-    // printf("num objects: %d\n", env->num_objects);
-    env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
-    env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
-    env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
-    env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
+    int base_ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0) + (env->use_dc ? 1 : 0);
+    int ego_dim = base_ego_dim + conditioning_dims;
 
     if (env->use_rc) {
         env->collision_weights = (float*)calloc(env->active_agent_count, sizeof(float));
@@ -1699,6 +1693,13 @@ void allocate(Drive* env){
     if (env->use_dc) {
         env->discount_weights = (float*)calloc(env->active_agent_count, sizeof(float));
     }
+
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
+    env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
+    env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
+    env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
+
 }
 
 void free_allocated(Drive* env){
@@ -1905,10 +1906,14 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
 }
 
 void compute_observations(Drive* env) {
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int base_ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0) + (env->use_dc ? 1 : 0);
+    int ego_dim = base_ego_dim + conditioning_dims;
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
+
     for(int i = 0; i < env->active_agent_count; i++) {
         float* obs = &observations[i][0];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];

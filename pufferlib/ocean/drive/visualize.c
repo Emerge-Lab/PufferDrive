@@ -235,9 +235,9 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     Drive env = {
         .dynamics_model = conf.dynamics_model,
-        .reward_vehicle_collision = -0.5f,
-        .reward_offroad_collision = -0.2f,
-        .reward_ade = -0.0f,
+        .reward_vehicle_collision = conf.reward_vehicle_collision,
+        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_ade = conf.reward_ade,
         .goal_radius = goal_radius,
         .dt = conf.dt,
 	      .map_name = (char*)map_name,

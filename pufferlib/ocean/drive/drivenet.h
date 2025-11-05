@@ -49,7 +49,9 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model, bo
     int hidden_size = 256;
     int input_size = 64;
 
-    int ego_dim = (dynamics_model == JERK) ? 10 : 7;
+    int base_ego_dim = (dynamics_model == JERK) ? 10 : 7;
+    net->conditioning_dims = (use_rc ? 3 : 0) + (use_ec ? 1 : 0) + (use_dc ? 1 : 0);
+    net->ego_dim = base_ego_dim + net->conditioning_dims;
 
     // Determine action space size based on dynamics model
     int action_size, logit_sizes[2];
@@ -64,14 +66,8 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model, bo
     }
 
     net->num_agents = num_agents;
-    net->conditioning_dims = (use_rc ? 3 : 0) + (use_ec ? 1 : 0) + (use_dc ? 1 : 0);
-    net->ego_dim = ego_dim;
 
-    if (use_rc) ego_dim += 3; // reward conditioning
-    if (use_ec) ego_dim += 1; // entropy conditioning
-    if (use_dc) ego_dim += 1; // discount conditioning
-
-    net->obs_self = calloc(num_agents*ego_dim, sizeof(float));
+    net->obs_self = calloc(num_agents*net->ego_dim, sizeof(float));
     net->obs_partner = calloc(num_agents*63*7, sizeof(float)); // 63 objects, 7 features
     net->obs_road = calloc(num_agents*200*13, sizeof(float)); // 200 objects, 13 features
 
@@ -81,7 +77,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model, bo
     net->road_linear_output_two = calloc(num_agents*200*input_size, sizeof(float));
     net->partner_layernorm_output = calloc(num_agents*63*input_size, sizeof(float));
     net->road_layernorm_output = calloc(num_agents*200*input_size, sizeof(float));
-    net->ego_encoder = make_linear(weights, num_agents, ego_dim, input_size);
+    net->ego_encoder = make_linear(weights, num_agents, net->ego_dim, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->road_encoder = make_linear(weights, num_agents, 13, input_size);
