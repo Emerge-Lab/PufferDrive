@@ -25,15 +25,6 @@
 #define SPEED_BUMP 9
 #define DRIVEWAY 10
 
-// Initialization modes
-#define INIT_ALL_VALID 0
-#define INIT_ONLY_CONTROLLABLE_AGENTS 1
-
-// Control modes
-#define CONTROL_VEHICLES 0
-#define CONTROL_AGENTS 1
-#define CONTROL_TRACKS_TO_PREDICT 2
-
 #define INVALID_POSITION -10000.0f
 
 // Trajectory Length
@@ -1753,7 +1744,8 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
 }
 
 void compute_observations(Drive* env) {
-    int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
@@ -1991,7 +1983,7 @@ void compute_new_goal(Drive* env, int agent_idx) {
         lane = &env->entities[current_entity];
 
         int start_idx = first_lane ? initial_segment_idx : 1;
-        // Ensure start_idx is at least 1 _to avoid accessing traj_x[i-1] with i=0
+        // Ensure start_idx is at least 1 to avoid accessing traj_x[i-1] with i=0
         if (start_idx < 1) start_idx = 1;
         first_lane = 0;
 

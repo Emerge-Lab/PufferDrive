@@ -26,9 +26,8 @@ typedef struct
     int control_non_vehicles;
     int scenario_length;
     int init_steps;
-    int control_all_agents;
-    int num_policy_controlled_agents;
-    int deterministic_agent_selection;
+    int init_mode;
+    int control_mode;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -93,12 +92,10 @@ static int handler(
         env_config->scenario_length = atoi(value);
     } else if (MATCH("env", "init_steps")) {
         env_config->init_steps = atoi(value);
-    } else if (MATCH("env", "control_all_agents")) {
-        env_config->control_all_agents = (strcmp(value, "True") == 0) ? 1 : 0;
-    } else if (MATCH("env", "num_policy_controlled_agents")) {
-        env_config->num_policy_controlled_agents = atoi(value);
-    } else if (MATCH("env", "deterministic_agent_selection")) {
-        env_config->deterministic_agent_selection = (strcmp(value, "True") == 0) ? 1 : 0;
+    } else if (MATCH("env", "init_mode")) {
+        env_config->init_mode = atoi(value);
+    } else if (MATCH("env", "control_mode")) {
+        env_config->control_mode = atoi(value);
     }
 
     #undef MATCH
