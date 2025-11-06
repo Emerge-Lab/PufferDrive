@@ -22,7 +22,7 @@ typedef struct
     int offroad_behaviour;
     int spawn_immunity_timer;
     float dt;
-    int use_goal_generation;
+    int goal_behaviour;
     int control_non_vehicles;
     int scenario_length;
     int init_steps;
@@ -59,8 +59,12 @@ static int handler(
             printf("Warning: Unknown dynamics_model value '%s', defaulting to JERK\n", value);
             env_config->dynamics_model = 1;  // Default to JERK
         }
-    } else if (MATCH("env", "use_goal_generation")) {
-        env_config->use_goal_generation = (strcmp(value, "True") == 0) ? 1 : 0;
+    } else if(MATCH("env", "collision_behaviour")){
+        env_config->collision_behaviour = atoi(value);
+    } else if(MATCH("env", "offroad_behaviour")){
+        env_config->offroad_behaviour = atoi(value);
+    } else if (MATCH("env", "goal_behaviour")) {
+        env_config->goal_behaviour = atoi(value);
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {
