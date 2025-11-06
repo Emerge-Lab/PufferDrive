@@ -33,7 +33,7 @@ def send_precheck(vecenv, actions):
     actions = np.asarray(actions)
     if not vecenv.initialized:
         vecenv.initialized = True
-        if vecenv.population_play:
+        if getattr(vecenv ,"population_play", False):
             if not vecenv.ego_action_space.contains(actions):
                 raise pufferlib.APIUsageError("Ego Actions do not match action space")
         else:
@@ -841,6 +841,14 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
         from pufferlib.ocean.torch import Drive
         import pufferlib.models
 
+        dynamics_model = env_k.get("dynamics_model", "jerk")
+        # Observation space calculation
+        if dynamics_model == "classic":
+            ego_features = 7
+        elif dynamics_model == "jerk":
+            ego_features = 10
+        
+
         co_player_policy = env_k["co_player_policy"]
 
         input_size = co_player_policy.get("input_size", 256)
@@ -858,13 +866,15 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
         )
 
         # Base observations + conditioning observations
-        num_obs = 7 + conditioning_dims + 63 * 7 + 200 * 7
+        num_obs = ego_features + conditioning_dims + 63 * 7 + 200 * 7
+        
         temp_env = SimpleNamespace(
             single_action_space=gymnasium.spaces.MultiDiscrete([7, 13]),
             single_observation_space=gymnasium.spaces.Box(low=-1, high=1, shape=(num_obs,), dtype=np.float32),
             reward_conditioned=reward_conditioned,
             entropy_conditioned=entropy_conditioned,
             discount_conditioned=discount_conditioned,
+            dynamics_model = dynamics_model, ## keep these the same I think, multiple dynamics models could get weird
         )
 
         base_policy = Drive(temp_env, input_size=input_size, hidden_size=hidden_size)

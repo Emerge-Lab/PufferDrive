@@ -92,27 +92,7 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
 
-        self.ego_features = ego_features
-        partner_features = 7
-        road_features = 7
-        max_partner_objects = 63
-        max_road_objects = 200
-        self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
-
-        self.num_ego_agents = num_ego_agents
-        self.ini_file = ini_file
-        self.ini_file
-
-        print(f"DEBUG: in drive resample frequency is ", self.resample_frequency, flush=True)
-
-        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
-        self.population_play = population_play
-        self.num_agents_const = num_agents
-
-        # Action space setup
-        self.num_ego_agents = num_ego_agents
-
-
+        
         # Conditioning setup
         self.condition_type = condition_type
         self.reward_conditioned = condition_type in ("reward", "all")
@@ -135,9 +115,29 @@ class Drive(pufferlib.PufferEnv):
             + (1 if self.entropy_conditioned else 0)
             + (1 if self.discount_conditioned else 0)
         )
-        self.num_obs = 7 + conditioning_dims + 63 * 7 + 200 * 7
+
+        ego_features += conditioning_dims
+
+        self.ego_features = ego_features
+        partner_features = 7
+        road_features = 7
+        max_partner_objects = 63
+        max_road_objects = 200
+        self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
+
+        self.num_ego_agents = num_ego_agents
+        self.ini_file = ini_file
+        self.ini_file
+
+
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.population_play = population_play
+        self.num_agents_const = num_agents
+
+        # Action space setup
+        self.num_ego_agents = num_ego_agents
+
+
         self.num_agents_const = num_agents
         self.init_steps = init_steps
 

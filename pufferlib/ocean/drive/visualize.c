@@ -217,6 +217,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
 
     return 0;
 }
+
 int eval_gif(const char* map_name, 
              const char* policy_name, 
              int show_grid, 
@@ -258,15 +259,14 @@ int eval_gif(const char* map_name,
              float co_player_entropy_weight,
              float co_player_discount_weight) {
 
-
-
     // Parse configuration from INI file
-    env_init_config conf = {0};  // Initialize to zero
+    env_init_config conf = {0};
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
     if(ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         return -1;
     }
+    
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
@@ -276,7 +276,7 @@ int eval_gif(const char* map_name,
     }
 
     if (frame_skip <= 0) {
-        frame_skip = 1;  // Default: render every frame
+        frame_skip = 1;
     }
 
     // Check if map file exists
@@ -299,7 +299,7 @@ int eval_gif(const char* map_name,
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
-	    .map_name = (char*)map_name,
+        .map_name = (char*)map_name,
         .control_non_vehicles = conf.control_non_vehicles,
         .init_steps = conf.init_steps,
         .control_all_agents = conf.control_all_agents,
@@ -311,7 +311,6 @@ int eval_gif(const char* map_name,
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
-    // Set which vehicle to focus on for obs mode
     env.human_agent_idx = 0;
 
     const char* topdown_path = output_topdown ? output_topdown : "resources/drive/output_topdown.mp4";
@@ -326,21 +325,20 @@ int eval_gif(const char* map_name,
         create_directory_recursive(dir_path);
     }
     c_reset(&env);
+    
     // Make client for rendering
     Client* client = (Client*)calloc(1, sizeof(Client));
     env.client = client;
 
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
-
     SetTargetFPS(6000);
 
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 6.0f; // Can be used to increase the video quality
+    float scale = 6.0f;
 
-    // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
     int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
     InitWindow(img_width, img_height, "Puffer Drive");
@@ -353,22 +351,23 @@ int eval_gif(const char* map_name,
     
     // Calculate conditioning sizes
     int ego_conditioning_size = 0;
-    if (ego_reward_conditioned) ego_conditioning_size += 3;  // collision, offroad, goal weights
-    if (ego_entropy_conditioned) ego_conditioning_size += 1;  // entropy weight
-    if (ego_discount_conditioned) ego_conditioning_size += 1;  // discount weight
+    if (ego_reward_conditioned) ego_conditioning_size += 3;
+    if (ego_entropy_conditioned) ego_conditioning_size += 1;
+    if (ego_discount_conditioned) ego_conditioning_size += 1;
     
     int co_player_conditioning_size = 0;
     if (co_player_reward_conditioned) co_player_conditioning_size += 3;
     if (co_player_entropy_conditioned) co_player_conditioning_size += 1;
     if (co_player_discount_conditioned) co_player_conditioning_size += 1;
     
-    // Base observation size: 7 self features + 63 objects * 7 features + 200 road points * 7 features
-    int base_obs = 7 + 63*7 + 200*7;  // = 1848
-    int max_obs = base_obs;  // This is the size WITHOUT conditioning (what comes from env)
+    // Determine base observation size based on dynamics model
+    int base_ego_size = (conf.dynamics_model == JERK) ? 9 : 6;  // 6 base + 3 JERK or just 6 base
+    int remaining_obs_size = 63*7 + 200*7;  // Objects + road points
+    int max_obs = base_ego_size + 1 + remaining_obs_size;  // +1 for respawn flag at the end
     
-    // Size WITH conditioning for ego and co-players (for our buffers)
-    int ego_obs_with_conditioning = base_obs + ego_conditioning_size;
-    int co_player_obs_with_conditioning = base_obs + co_player_conditioning_size;
+    // Size WITH conditioning for ego and co-players
+    int ego_obs_with_conditioning = base_ego_size + ego_conditioning_size + remaining_obs_size + 1;
+    int co_player_obs_with_conditioning = base_ego_size + co_player_conditioning_size + remaining_obs_size + 1;
 
     if (population_play) {
         clock_gettime(CLOCK_REALTIME, &ts);
@@ -379,7 +378,10 @@ int eval_gif(const char* map_name,
         printf("Population play enabled: ego_agent_id=%d, num_co_players=%d, total_agents=%d\n", 
                ego_agent_id, num_co_players, env.active_agent_count);
         printf("Will run %d scenario attempts with same roles\n", k_scenarios);
+        printf("Dynamics model: %s\n", (conf.dynamics_model == JERK) ? "JERK" : "NON-JERK");
+        printf("Base ego size: %d, max_obs: %d\n", base_ego_size, max_obs);
     }
+
 
     // Load weights and initialize networks
     Weights* weights = NULL;
@@ -401,6 +403,7 @@ int eval_gif(const char* map_name,
             return -1;
         }
         ego_net = init_drivenet(weights, 1, 
+                                conf.dynamics_model,
                                 ego_reward_conditioned, 
                                 ego_entropy_conditioned, 
                                 ego_discount_conditioned);
@@ -417,7 +420,12 @@ int eval_gif(const char* map_name,
             CloseWindow();
             return -1;
         }
-        co_player_net = init_drivenet(co_player_policy_weights, num_co_players, co_player_reward_conditioned, co_player_entropy_conditioned, co_player_discount_conditioned);
+        co_player_net = init_drivenet(co_player_policy_weights,
+                                      num_co_players, 
+                                      conf.dynamics_model,
+                                      co_player_reward_conditioned,
+                                      co_player_entropy_conditioned, 
+                                      co_player_discount_conditioned);
         if (co_player_net == NULL) {
             printf("ERROR: Failed to initialize co-player network\n");
             CloseWindow();
@@ -435,13 +443,10 @@ int eval_gif(const char* map_name,
         }
         
         printf("Population play memory allocated successfully\n");
-        printf("DEBUG: max_obs=%d, ego_agent_id=%d, offset=%d\n", 
-               max_obs, ego_agent_id, ego_agent_id * max_obs);
-        fflush(stdout);
     } else {
         weights = load_weights(policy_name);
         printf("Active agents in map: %d\n", env.active_agent_count);
-        net = init_drivenet(weights, env.active_agent_count, use_rc, use_ec, use_dc);
+        net = init_drivenet(weights, env.active_agent_count, conf.dynamics_model, use_rc, use_ec, use_dc);
     }
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
@@ -461,7 +466,6 @@ int eval_gif(const char* map_name,
         strcpy(map, basename((char*)map_name));
         *strrchr(map, '.') = '\0';
 
-        // Create video directory if it doesn't exist
         char video_dir[256];
         sprintf(video_dir, "%s/video", policy_base);
         char mkdir_cmd[512];
@@ -511,17 +515,188 @@ int eval_gif(const char* map_name,
         printf("DEBUG: active_agent_count=%d, max_obs=%d\n", env.active_agent_count, max_obs);
         fflush(stdout);
         
-        // Loop through k_scenarios attempts
         for (int scenario_idx = 0; scenario_idx < k_scenarios; scenario_idx++) {
             printf("\n=== Scenario attempt %d/%d ===\n", scenario_idx + 1, k_scenarios);
             fflush(stdout);
             
-            // Reset environment for each scenario
             if (scenario_idx > 0) {
                 c_reset(&env);
             }
             
-            // Set agent roles (same ego_agent_id for all scenarios)
+            if (population_play) {
+                for (int i = 0; i < env.active_agent_count; i++) {
+                    if (i != ego_agent_id) {
+                        env.entities[env.active_agent_indices[i]].is_ego = false;
+                        env.entities[env.active_agent_indices[i]].is_co_player = true;
+                    } else {
+                        env.entities[env.active_agent_indices[i]].is_ego = true;
+                        env.entities[env.active_agent_indices[i]].is_co_player = false;
+                    }
+                }
+                env.human_agent_idx = ego_agent_id;
+            }
+            else{
+                for (int i = 0; i < env.active_agent_count; i++) {
+                    env.entities[env.active_agent_indices[i]].is_ego = true;
+                    env.entities[env.active_agent_indices[i]].is_co_player = false;
+                }
+            }
+            
+            for(int i = 0; i < frame_count; i++) {
+                if (i % frame_skip == 0) {
+                    renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid);
+                    WriteFrame(&topdown_recorder, img_width, img_height);
+                    rendered_frames++;
+                }
+                
+                int (*actions)[2] = (int(*)[2])env.actions;
+                
+                if (population_play) {
+                    // Copy and condition ego agent observation
+                    float* ego_src = &env.observations[ego_agent_id * max_obs];
+                    
+                    if (ego_conditioning_size > 0) {
+                        if (conf.dynamics_model == JERK) {
+                            // Copy first 6 base observations
+                            memcpy(ego_agent_obs, ego_src, 6 * sizeof(float));
+                            
+                            // Copy JERK dynamics (indices 6-8: steering_angle, a_long, a_lat)
+                            memcpy(&ego_agent_obs[6], &ego_src[6], 3 * sizeof(float));
+                            
+                            // Add conditioning values after JERK dynamics (starting at index 9)
+                            int cond_idx = 9;
+                            if (ego_reward_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_collision_weight;
+                                ego_agent_obs[cond_idx++] = ego_offroad_weight;
+                                ego_agent_obs[cond_idx++] = ego_goal_weight;
+                            }
+                            if (ego_entropy_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_entropy_weight;
+                            }
+                            if (ego_discount_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_discount_weight;
+                            }
+                            
+                            // Copy remaining observations (objects + road points) and respawn flag
+                            memcpy(&ego_agent_obs[cond_idx], &ego_src[9], (max_obs - 9) * sizeof(float));
+                        } else {
+                            // Non-JERK: Copy first 6 base observations
+                            memcpy(ego_agent_obs, ego_src, 6 * sizeof(float));
+                            
+                            // Add conditioning values after first 6 (starting at index 6)
+                            int cond_idx = 6;
+                            if (ego_reward_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_collision_weight;
+                                ego_agent_obs[cond_idx++] = ego_offroad_weight;
+                                ego_agent_obs[cond_idx++] = ego_goal_weight;
+                            }
+                            if (ego_entropy_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_entropy_weight;
+                            }
+                            if (ego_discount_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_discount_weight;
+                            }
+                            
+                            // Copy remaining observations and respawn flag
+                            memcpy(&ego_agent_obs[cond_idx], &ego_src[6], (max_obs - 6) * sizeof(float));
+                        }
+                    } else {
+                        // No conditioning, just copy
+                        memcpy(ego_agent_obs, ego_src, max_obs * sizeof(float));
+                    }
+
+                    // Copy and condition co-player observations
+                    int co_obs_offset = 0;
+                    for (int j = 0; j < env.active_agent_count; j++) {
+                        if (j == ego_agent_id) continue;
+                        
+                        float* co_src = &env.observations[j * max_obs];
+                        float* co_dest = &co_player_obs[co_obs_offset];
+                        
+                        if (co_player_conditioning_size > 0) {
+                            if (conf.dynamics_model == JERK) {
+                                // Copy first 6 base + 3 JERK dynamics
+                                memcpy(co_dest, co_src, 6 * sizeof(float));
+                                memcpy(&co_dest[6], &co_src[6], 3 * sizeof(float));
+                                
+                                // Add conditioning after JERK (index 9)
+                                int cond_idx = 9;
+                                if (co_player_reward_conditioned) {
+                                    co_dest[cond_idx++] = co_player_collision_weight;
+                                    co_dest[cond_idx++] = co_player_offroad_weight;
+                                    co_dest[cond_idx++] = co_player_goal_weight;
+                                }
+                                if (co_player_entropy_conditioned) {
+                                    co_dest[cond_idx++] = co_player_entropy_weight;
+                                }
+                                if (co_player_discount_conditioned) {
+                                    co_dest[cond_idx++] = co_player_discount_weight;
+                                }
+                                
+                                memcpy(&co_dest[cond_idx], &co_src[9], (max_obs - 9) * sizeof(float));
+                            } else {
+                                // Non-JERK: Copy first 6 base observations
+                                memcpy(co_dest, co_src, 6 * sizeof(float));
+                                
+                                int cond_idx = 6;
+                                if (co_player_reward_conditioned) {
+                                    co_dest[cond_idx++] = co_player_collision_weight;
+                                    co_dest[cond_idx++] = co_player_offroad_weight;
+                                    co_dest[cond_idx++] = co_player_goal_weight;
+                                }
+                                if (co_player_entropy_conditioned) {
+                                    co_dest[cond_idx++] = co_player_entropy_weight;
+                                }
+                                if (co_player_discount_conditioned) {
+                                    co_dest[cond_idx++] = co_player_discount_weight;
+                                }
+                                
+                                memcpy(&co_dest[cond_idx], &co_src[6], (max_obs - 6) * sizeof(float));
+                            }
+                            co_obs_offset += co_player_obs_with_conditioning;
+                        } else {
+                            // No conditioning, just copy
+                            memcpy(co_dest, co_src, max_obs * sizeof(float));
+                            co_obs_offset += max_obs;
+                        }
+                    }
+
+                    // Get actions from both networks
+                    forward(ego_net, ego_agent_obs, ego_actions);
+                    forward(co_player_net, co_player_obs, co_player_actions);
+
+                    // Assign ego action
+                    actions[ego_agent_id][0] = ego_actions[0];
+                    actions[ego_agent_id][1] = ego_actions[1];
+
+                    // Assign co-player actions
+                    int co_player_idx = 0;
+                    for (int j = 0; j < env.active_agent_count; j++) {
+                        if (j == ego_agent_id) continue;
+                        actions[j][0] = co_player_actions[co_player_idx * 2];
+                        actions[j][1] = co_player_actions[co_player_idx * 2 + 1];
+                        co_player_idx++;
+                    }
+                } else {
+                    forward(net, env.observations, (int*)env.actions);
+                }
+                c_step(&env);
+            }
+        }
+    }
+
+    if (render_agent) {
+        c_reset(&env);
+        printf("Recording agent view...\n");
+        
+        for (int scenario_idx = 0; scenario_idx < k_scenarios; scenario_idx++) {
+            printf("\n=== Agent view scenario attempt %d/%d ===\n", scenario_idx + 1, k_scenarios);
+            fflush(stdout);
+            
+            if (scenario_idx > 0) {
+                c_reset(&env);
+            }
+            
             if (population_play) {
                 for (int i = 0; i < env.active_agent_count; i++) {
                     if (i != ego_agent_id) {
@@ -536,277 +711,130 @@ int eval_gif(const char* map_name,
             }
             
             for(int i = 0; i < frame_count; i++) {
-            if (i % frame_skip == 0) {
-                if (i == 0) {
-                    printf("DEBUG: About to render frame 0\n");
-                    printf("DEBUG: Calling renderTopDownView...\n");
-                    fflush(stdout);
-                }
-                renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid);
-                if (i == 0) {
-                    printf("DEBUG: Render complete, about to write frame\n");
-                    fflush(stdout);
-                }
-                WriteFrame(&topdown_recorder, img_width, img_height);
-                rendered_frames++;
-                if (i == 0) {
-                    printf("DEBUG: Frame written successfully\n");
-                    fflush(stdout);
-                }
-            }
-            int (*actions)[2] = (int(*)[2])env.actions;
-            
-            if (population_play) {
-                if (i == 0) {
-                    printf("DEBUG: Starting population play logic\n");
-                    printf("DEBUG: ego_agent_id=%d, max_obs=%d, active_agent_count=%d\n", 
-                           ego_agent_id, max_obs, env.active_agent_count);
-                    printf("DEBUG: ego_conditioning_size=%d, co_player_conditioning_size=%d\n",
-                           ego_conditioning_size, co_player_conditioning_size);
-                    printf("DEBUG: Expected total obs buffer size: %d floats (%zu bytes)\n",
-                           env.active_agent_count * max_obs,
-                           env.active_agent_count * max_obs * sizeof(float));
-                    printf("DEBUG: env.observations pointer: %p\n", (void*)env.observations);
-                    printf("DEBUG: ego_agent_obs pointer: %p\n", (void*)ego_agent_obs);
-                    printf("DEBUG: co_player_obs pointer: %p\n", (void*)co_player_obs);
-                    if (env.observations == NULL) {
-                        printf("ERROR: env.observations is NULL!\n");
-                        return -1;
-                    }
-                    if (ego_agent_obs == NULL) {
-                        printf("ERROR: ego_agent_obs is NULL!\n");
-                        return -1;
-                    }
-                    
-                    // Check if ego_agent_id is within bounds
-                    if (ego_agent_id >= env.active_agent_count) {
-                        printf("ERROR: ego_agent_id (%d) >= active_agent_count (%d)!\n",
-                               ego_agent_id, env.active_agent_count);
-                        return -1;
-                    }
-                    
-                    printf("DEBUG: About to copy ego observation (offset=%d, size=%zu bytes)\n", 
-                           ego_agent_id * max_obs, max_obs * sizeof(float));
-                    fflush(stdout);
-                    
-                    printf("DEBUG: Computing source pointer...\n");
-                    fflush(stdout);
-                    int obs_offset = ego_agent_id * max_obs;
-                    printf("DEBUG: obs_offset = %d\n", obs_offset);
-                    fflush(stdout);
-                    
-                    float* src_ptr = &env.observations[obs_offset];
-                    printf("DEBUG: Source address: %p\n", (void*)src_ptr);
-                    fflush(stdout);
-                    
-                    printf("DEBUG: Attempting to read first observation value...\n");
-                    fflush(stdout);
-                    float test_val = env.observations[obs_offset];
-                    printf("DEBUG: First obs value: %f\n", test_val);
-                    fflush(stdout);
+                if (i % frame_skip == 0) {
+                    renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
+                    WriteFrame(&agent_recorder, img_width, img_height);
+                    rendered_frames++;
                 }
                 
-                // Copy and condition ego agent observation
-                float* ego_src = &env.observations[ego_agent_id * max_obs];
-                if (ego_conditioning_size > 0) {
-                    // Copy first 7 base observations
-                    memcpy(ego_agent_obs, ego_src, 7 * sizeof(float));
-                    
-                    // Add conditioning values after first 7
-                    int cond_idx = 7;
-                    if (ego_reward_conditioned) {
-                        ego_agent_obs[cond_idx++] = ego_collision_weight;
-                        ego_agent_obs[cond_idx++] = ego_offroad_weight;
-                        ego_agent_obs[cond_idx++] = ego_goal_weight;
-                    }
-                    if (ego_entropy_conditioned) {
-                        ego_agent_obs[cond_idx++] = ego_entropy_weight;
-                    }
-                    if (ego_discount_conditioned) {
-                        ego_agent_obs[cond_idx++] = ego_discount_weight;
-                    }
-                    
-                    // Copy rest of observations
-                    memcpy(&ego_agent_obs[cond_idx], &ego_src[7], (max_obs - 7) * sizeof(float));
-                } else {
-                    // No conditioning, just copy
-                    memcpy(ego_agent_obs, ego_src, max_obs * sizeof(float));
-                }
+                int (*actions)[2] = (int(*)[2])env.actions;
                 
-                if (i == 0) {
-                    printf("DEBUG: About to memcpy...\n");
-                    fflush(stdout);
-                }
-
-                // Copy and condition co-player observations
-                int co_obs_offset = 0;
-                for (int j = 0; j < env.active_agent_count; j++) {
-                    if (j == ego_agent_id) continue;
+                if (population_play) {
+                    // Copy and condition ego agent observation
+                    float* ego_src = &env.observations[ego_agent_id * max_obs];
                     
-                    float* co_src = &env.observations[j * max_obs];
-                    float* co_dest = &co_player_obs[co_obs_offset];
-                    
-                    if (co_player_conditioning_size > 0) {
-                        // Copy first 7 base observations
-                        memcpy(co_dest, co_src, 7 * sizeof(float));
-                        
-                        // Add conditioning values after first 7
-                        int cond_idx = 7;
-                        if (co_player_reward_conditioned) {
-                            co_dest[cond_idx++] = co_player_collision_weight;
-                            co_dest[cond_idx++] = co_player_offroad_weight;
-                            co_dest[cond_idx++] = co_player_goal_weight;
+                    if (ego_conditioning_size > 0) {
+                        if (conf.dynamics_model == JERK) {
+                            memcpy(ego_agent_obs, ego_src, 6 * sizeof(float));
+                            memcpy(&ego_agent_obs[6], &ego_src[6], 3 * sizeof(float));
+                            
+                            int cond_idx = 9;
+                            if (ego_reward_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_collision_weight;
+                                ego_agent_obs[cond_idx++] = ego_offroad_weight;
+                                ego_agent_obs[cond_idx++] = ego_goal_weight;
+                            }
+                            if (ego_entropy_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_entropy_weight;
+                            }
+                            if (ego_discount_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_discount_weight;
+                            }
+                            
+                            memcpy(&ego_agent_obs[cond_idx], &ego_src[9], (max_obs - 9) * sizeof(float));
+                        } else {
+                            memcpy(ego_agent_obs, ego_src, 6 * sizeof(float));
+                            
+                            int cond_idx = 6;
+                            if (ego_reward_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_collision_weight;
+                                ego_agent_obs[cond_idx++] = ego_offroad_weight;
+                                ego_agent_obs[cond_idx++] = ego_goal_weight;
+                            }
+                            if (ego_entropy_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_entropy_weight;
+                            }
+                            if (ego_discount_conditioned) {
+                                ego_agent_obs[cond_idx++] = ego_discount_weight;
+                            }
+                            
+                            memcpy(&ego_agent_obs[cond_idx], &ego_src[6], (max_obs - 6) * sizeof(float));
                         }
-                        if (co_player_entropy_conditioned) {
-                            co_dest[cond_idx++] = co_player_entropy_weight;
-                        }
-                        if (co_player_discount_conditioned) {
-                            co_dest[cond_idx++] = co_player_discount_weight;
-                        }
-                        
-                        // Copy rest of observations
-                        memcpy(&co_dest[cond_idx], &co_src[7], (max_obs - 7) * sizeof(float));
-                        co_obs_offset += co_player_obs_with_conditioning;
                     } else {
-                        // No conditioning, just copy
-                        memcpy(co_dest, co_src, max_obs * sizeof(float));
-                        co_obs_offset += max_obs;
+                        memcpy(ego_agent_obs, ego_src, max_obs * sizeof(float));
                     }
-                }
 
-                // Get actions from both networks
-                forward(ego_net, ego_agent_obs, ego_actions);
-                forward(co_player_net, co_player_obs, co_player_actions);
+                    // Copy and condition co-player observations
+                    int co_obs_offset = 0;
+                    for (int j = 0; j < env.active_agent_count; j++) {
+                        if (j == ego_agent_id) continue;
+                        
+                        float* co_src = &env.observations[j * max_obs];
+                        float* co_dest = &co_player_obs[co_obs_offset];
+                        
+                        if (co_player_conditioning_size > 0) {
+                            if (conf.dynamics_model == JERK) {
+                                memcpy(co_dest, co_src, 6 * sizeof(float));
+                                memcpy(&co_dest[6], &co_src[6], 3 * sizeof(float));
+                                
+                                int cond_idx = 9;
+                                if (co_player_reward_conditioned) {
+                                    co_dest[cond_idx++] = co_player_collision_weight;
+                                    co_dest[cond_idx++] = co_player_offroad_weight;
+                                    co_dest[cond_idx++] = co_player_goal_weight;
+                                }
+                                if (co_player_entropy_conditioned) {
+                                    co_dest[cond_idx++] = co_player_entropy_weight;
+                                }
+                                if (co_player_discount_conditioned) {
+                                    co_dest[cond_idx++] = co_player_discount_weight;
+                                }
+                                
+                                memcpy(&co_dest[cond_idx], &co_src[9], (max_obs - 9) * sizeof(float));
+                            } else {
+                                memcpy(co_dest, co_src, 6 * sizeof(float));
+                                
+                                int cond_idx = 6;
+                                if (co_player_reward_conditioned) {
+                                    co_dest[cond_idx++] = co_player_collision_weight;
+                                    co_dest[cond_idx++] = co_player_offroad_weight;
+                                    co_dest[cond_idx++] = co_player_goal_weight;
+                                }
+                                if (co_player_entropy_conditioned) {
+                                    co_dest[cond_idx++] = co_player_entropy_weight;
+                                }
+                                if (co_player_discount_conditioned) {
+                                    co_dest[cond_idx++] = co_player_discount_weight;
+                                }
+                                
+                                memcpy(&co_dest[cond_idx], &co_src[6], (max_obs - 6) * sizeof(float));
+                            }
+                            co_obs_offset += co_player_obs_with_conditioning;
+                        } else {
+                            memcpy(co_dest, co_src, max_obs * sizeof(float));
+                            co_obs_offset += max_obs;
+                        }
+                    }
 
-                // Assign ego action
-                actions[ego_agent_id][0] = ego_actions[0];
-                actions[ego_agent_id][1] = ego_actions[1];
+                    forward(ego_net, ego_agent_obs, ego_actions);
+                    forward(co_player_net, co_player_obs, co_player_actions);
 
-                // Assign co-player actions with correct indexing
-                int co_player_idx = 0;
-                for (int j = 0; j < env.active_agent_count; j++) {
-                    if (j == ego_agent_id) continue;
-                    actions[j][0] = co_player_actions[co_player_idx * 2];
-                    actions[j][1] = co_player_actions[co_player_idx * 2 + 1];
-                    co_player_idx++;
-                }
-            } else {
-                forward(net, env.observations, (int*)env.actions);
-            }
-            c_step(&env);
-        }
-        
-        } // End k_scenarios loop for topdown
-    }
+                    actions[ego_agent_id][0] = ego_actions[0];
+                    actions[ego_agent_id][1] = ego_actions[1];
 
-    if (render_agent) {
-        c_reset(&env);
-        printf("Recording agent view...\n");
-        
-        // Loop through k_scenarios attempts  
-        for (int scenario_idx = 0; scenario_idx < k_scenarios; scenario_idx++) {
-            printf("\n=== Agent view scenario attempt %d/%d ===\n", scenario_idx + 1, k_scenarios);
-            fflush(stdout);
-            
-            // Reset environment for each scenario
-            if (scenario_idx > 0) {
-                c_reset(&env);
-            }
-            
-            // Set agent roles (same ego_agent_id for all scenarios)
-            if (population_play) {
-                for (int i = 0; i < env.active_agent_count; i++) {
-                    if (i != ego_agent_id) {
-                        env.entities[env.active_agent_indices[i]].is_ego = false;
-                        env.entities[env.active_agent_indices[i]].is_co_player = true;
-                    } else {
-                        env.entities[env.active_agent_indices[i]].is_ego = true;
-                        env.entities[env.active_agent_indices[i]].is_co_player = false;
+                    int co_player_idx = 0;
+                    for (int j = 0; j < env.active_agent_count; j++) {
+                        if (j == ego_agent_id) continue;
+                        actions[j][0] = co_player_actions[co_player_idx * 2];
+                        actions[j][1] = co_player_actions[co_player_idx * 2 + 1];
+                        co_player_idx++;
                     }
-                }
-                env.human_agent_idx = ego_agent_id;
-            }
-            
-        for(int i = 0; i < frame_count; i++) {
-            if (i % frame_skip == 0) {
-                renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
-                WriteFrame(&agent_recorder, img_width, img_height);
-                rendered_frames++;
-            }
-            int (*actions)[2] = (int(*)[2])env.actions;
-            
-            if (population_play) {
-                // Copy and condition ego agent observation
-                float* ego_src = &env.observations[ego_agent_id * max_obs];
-                if (ego_conditioning_size > 0) {
-                    memcpy(ego_agent_obs, ego_src, 7 * sizeof(float));
-                    int cond_idx = 7;
-                    if (ego_reward_conditioned) {
-                        ego_agent_obs[cond_idx++] = ego_collision_weight;
-                        ego_agent_obs[cond_idx++] = ego_offroad_weight;
-                        ego_agent_obs[cond_idx++] = ego_goal_weight;
-                    }
-                    if (ego_entropy_conditioned) {
-                        ego_agent_obs[cond_idx++] = ego_entropy_weight;
-                    }
-                    if (ego_discount_conditioned) {
-                        ego_agent_obs[cond_idx++] = ego_discount_weight;
-                    }
-                    memcpy(&ego_agent_obs[cond_idx], &ego_src[7], (max_obs - 7) * sizeof(float));
                 } else {
-                    memcpy(ego_agent_obs, ego_src, max_obs * sizeof(float));
+                    forward(net, env.observations, (int*)env.actions);
                 }
-
-                // Copy and condition co-player observations
-                int co_obs_offset = 0;
-                for (int j = 0; j < env.active_agent_count; j++) {
-                    if (j == ego_agent_id) continue;
-                    
-                    float* co_src = &env.observations[j * max_obs];
-                    float* co_dest = &co_player_obs[co_obs_offset];
-                    
-                    if (co_player_conditioning_size > 0) {
-                        memcpy(co_dest, co_src, 7 * sizeof(float));
-                        int cond_idx = 7;
-                        if (co_player_reward_conditioned) {
-                            co_dest[cond_idx++] = co_player_collision_weight;
-                            co_dest[cond_idx++] = co_player_offroad_weight;
-                            co_dest[cond_idx++] = co_player_goal_weight;
-                        }
-                        if (co_player_entropy_conditioned) {
-                            co_dest[cond_idx++] = co_player_entropy_weight;
-                        }
-                        if (co_player_discount_conditioned) {
-                            co_dest[cond_idx++] = co_player_discount_weight;
-                        }
-                        memcpy(&co_dest[cond_idx], &co_src[7], (max_obs - 7) * sizeof(float));
-                        co_obs_offset += co_player_obs_with_conditioning;
-                    } else {
-                        memcpy(co_dest, co_src, max_obs * sizeof(float));
-                        co_obs_offset += max_obs;
-                    }
-                }
-
-                forward(ego_net, ego_agent_obs, ego_actions);
-                forward(co_player_net, co_player_obs, co_player_actions);
-
-                actions[ego_agent_id][0] = ego_actions[0];
-                actions[ego_agent_id][1] = ego_actions[1];
-
-                int co_player_idx = 0;
-                for (int j = 0; j < env.active_agent_count; j++) {
-                    if (j == ego_agent_id) continue;
-                    actions[j][0] = co_player_actions[co_player_idx * 2];
-                    actions[j][1] = co_player_actions[co_player_idx * 2 + 1];
-                    co_player_idx++;
-                }
-            } else {
-                forward(net, env.observations, (int*)env.actions);
+                c_step(&env);
             }
-            c_step(&env);
         }
-        
-        } // End k_scenarios loop for agent view
     }
 
     double endTime = GetTime();
@@ -861,8 +889,8 @@ int main(int argc, char* argv[]) {
     int control_non_vehicles = 0;
     int num_maps = 100;
     int scenario_length_cli = -1;
-    int population_play = 1;
-    int k_scenarios = 2;  // Default: run scenario once
+    int population_play = 0;
+    int k_scenarios = 1;  // Default: run scenario once
     int use_rc = 0;
     int use_ec = 0;
     int use_dc = 0;
@@ -874,9 +902,9 @@ int main(int argc, char* argv[]) {
     int ego_discount_conditioned = 0;
     
     // Conditioning flags for co-players
-    int co_player_reward_conditioned = 1;
-    int co_player_entropy_conditioned = 1;
-    int co_player_discount_conditioned = 1;
+    int co_player_reward_conditioned = 0;
+    int co_player_entropy_conditioned = 0;
+    int co_player_discount_conditioned = 0;
     
     // Ego agent conditioning weights
     float ego_collision_weight = -1.0f;
@@ -1023,6 +1051,17 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, population_play, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, use_rc, use_ec, use_dc, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, 
+         frame_skip, goal_radius, population_play, control_non_vehicles, 
+         init_steps, control_all_agents, policy_agents_per_env, 
+         deterministic_selection, view_mode, output_topdown, output_agent, 
+         num_maps, scenario_length_cli, k_scenarios, use_rc, use_ec, use_dc,
+         oracle_mode, ego_reward_conditioned, ego_entropy_conditioned, 
+         ego_discount_conditioned, co_player_reward_conditioned, 
+         co_player_entropy_conditioned, co_player_discount_conditioned,
+         ego_collision_weight, ego_offroad_weight, ego_goal_weight, 
+         ego_entropy_weight, ego_discount_weight, co_player_collision_weight,
+         co_player_offroad_weight, co_player_goal_weight, 
+         co_player_entropy_weight, co_player_discount_weight);
     return 0;
 }
