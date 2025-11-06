@@ -39,6 +39,15 @@
 // Trajectory Length
 #define TRAJECTORY_LENGTH 91
 
+// Initialization modes
+#define INIT_ALL_VALID 0
+#define INIT_ONLY_CONTROLLABLE_AGENTS 1
+
+// Control modes
+#define CONTROL_VEHICLES 0
+#define CONTROL_AGENTS 1
+#define CONTROL_TRACKS_TO_PREDICT 2
+
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
 
@@ -1266,49 +1275,6 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
     agent->collision_state = collided;
 
-    // spawn immunity for collisions with other agent cars as agent_idx respawns
-    int is_active_agent = env->entities[agent_idx].active_agent;
-    int respawned = env->entities[agent_idx].respawn_timestep != -1;
-
-    if(collided == VEHICLE_COLLISION){
-        if(env->collision_behaviour==STOP_AGENT && !agent->stopped){ //Stop
-            agent->stopped = 1;
-            agent->vx=agent->vy = 0.0f;
-        }
-        else if(env->collision_behaviour==REMOVE_AGENT && !agent->removed){
-            Entity* agent_collided = &env->entities[car_collided_with_index];
-            agent->removed = 1;
-            agent_collided->removed = 1;
-            agent->x = agent->y = -10000.0f;
-            agent_collided->x = agent_collided->y = -10000.0f;
-        }
-        if(is_active_agent ==1 && respawned){
-            agent->collision_state = 0;
-        }
-    }
-    if(collided == OFFROAD){
-        agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        if(env->offroad_behaviour==STOP_AGENT  && !agent->stopped){ //Stop
-            agent->stopped = 1;
-            agent->vx=agent->vy = 0.0f;
-        }
-        else if(env->offroad_behaviour==REMOVE_AGENT && !agent->removed){
-            agent->removed = 1;
-            agent->x = agent->y = -10000.0f;
-        }
-        return;
-    }
-    if(car_collided_with_index == -1) return;
-
-    // spawn immunity for collisions with other cars who just respawned
-    int respawned_collided_with_car = env->entities[car_collided_with_index].respawn_timestep != -1;
-
-    if (respawned_collided_with_car) {
-        agent->collision_state = 0;
-        agent->metrics_array[COLLISION_IDX] = 0.0f;
-    }
-
-
     return;
 }
 
@@ -1546,7 +1512,7 @@ void allocate(Drive* env){
     init(env);
     int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    // printf("num static cars: %d\n", env->static_car_count);
+    // printf("num static agents: %d\n", env->static_agent_count);
     // printf("active agent count: %d\n", env->active_agent_count);
     // printf("num objects: %d\n", env->num_objects);
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
@@ -1787,8 +1753,7 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
 }
 
 void compute_observations(Drive* env) {
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {

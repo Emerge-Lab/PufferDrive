@@ -37,6 +37,8 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        init_mode="create_all_valid",
+        control_mode="control_vehicles",
     ):
         # env
         self.dt = dt
@@ -71,6 +73,27 @@ class Drive(pufferlib.PufferEnv):
         self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.init_steps = init_steps
+        self.init_mode_str = init_mode
+        self.control_mode_str = control_mode
+
+        if self.control_mode_str == "control_vehicles":
+            self.control_mode = 0
+        elif self.control_mode_str == "control_agents":
+            self.control_mode = 1
+        elif self.control_mode_str == "control_tracks_to_predict":
+            self.control_mode = 2
+        else:
+            raise ValueError(
+                f"init_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.init_mode_str}"
+            )
+        if self.init_mode_str == "create_all_valid":
+            self.init_mode = 0
+        elif self.init_mode_str == "create_only_controlled":
+            self.init_mode = 1
+        else:
+            raise ValueError(
+                f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
+            )
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
 

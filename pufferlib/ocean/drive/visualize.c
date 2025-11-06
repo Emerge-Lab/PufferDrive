@@ -405,7 +405,6 @@ int main(int argc, char* argv[]) {
     const char* policy_name = "resources/drive/puffer_drive_weights.bin";
     int max_controlled_agents = -1;
     int num_maps = 1;
-    int num_maps = 100;
     int scenario_length_cli = -1;
     int init_mode = 0;
     int control_mode = 2;
