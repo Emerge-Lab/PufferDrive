@@ -71,7 +71,6 @@
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
 #define DRIVE_ENV 1
-#define DRIVE_ENV 1
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
@@ -386,6 +385,8 @@ struct Drive {
     int* ego_agent_ids;
     bool population_play;
     int control_non_vehicles;
+    int collision_behaviour; //0 = none, 1=stop, 2 = remove
+    int offroad_behaviour; //0 = none, 1=stop, 2 = remove
 
     Adaptive_Agent_Log* ada_log;
     Adaptive_Agent_Log** ada_logs;
@@ -1965,6 +1966,28 @@ void init(Drive* env){
     }
 }
 
+void free_adaptive_agent_log(Adaptive_Agent_Log* log) {
+    if (!log) return;
+
+    free(log->episode_return);
+    free(log->episode_length);
+    free(log->perf);
+    free(log->score);
+    free(log->offroad_rate);
+    free(log->collision_rate);
+    free(log->num_goals_reached);
+    free(log->completion_rate);
+    free(log->dnf_rate);
+    free(log->n);
+    free(log->lane_alignment_rate);
+    free(log->avg_displacement_error);
+    free(log->active_agent_count);
+    free(log->expert_static_car_count);
+    free(log->static_car_count);
+
+    free(log);
+}
+
 void c_close(Drive* env){
     if (env->population_play){
         free(env->co_player_logs);
@@ -2280,21 +2303,6 @@ void compute_observations(Drive* env) {
         obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
 
         if (env->dynamics_model == JERK) {
-            obs[obs_idx++] = ego_entity->steering_angle / M_PI;
-            obs[obs_idx++] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
-            obs[obs_idx++] = ego_entity->a_lat / JERK_LAT[2];
-        }
-
-        if (env->use_rc) {
-            obs[obs_idx++] = env->collision_weights[i];
-            obs[obs_idx++] = env->offroad_weights[i];
-            obs[obs_idx++] = env->goal_weights[i];
-        }
-        if (env->use_ec) {
-            obs[obs_idx++] = env->entropy_weights[i];
-        }
-        if (env->use_dc) {
-            obs[obs_idx++] = env->discount_weights[i];
             obs[7] = ego_entity->steering_angle / M_PI;
             // Asymmetric normalization for a_long to match action space
             obs[8] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];

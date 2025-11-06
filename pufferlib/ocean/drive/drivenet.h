@@ -1,6 +1,5 @@
 #include <time.h>
 #include "drive.h"
-#include "drive.h"
 #include "puffernet.h"
 #include <math.h>
 #include <raylib.h>
