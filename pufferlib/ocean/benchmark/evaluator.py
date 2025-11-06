@@ -7,10 +7,20 @@ import pandas as pd
 from pprint import pprint
 from typing import Dict, Optional
 import matplotlib.pyplot as plt
+import configparser
+import os
 
 import pufferlib
 from pufferlib.ocean.benchmark import metrics
 from pufferlib.ocean.benchmark import estimators
+
+
+_METRIC_FIELD_NAMES = [
+    "linear_speed",
+    "linear_acceleration",
+    "angular_speed",
+    "angular_acceleration",
+]
 
 
 class WOSACEvaluator:
@@ -23,6 +33,30 @@ class WOSACEvaluator:
         self.sim_steps = self.num_steps - self.init_steps
         self.show_dashboard = config.get("wosac", {}).get("dashboard", False)
         self.num_rollouts = config.get("wosac", {}).get("num_rollouts", 32)
+
+        wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
+        self.metrics_config = configparser.ConfigParser()
+        self.metrics_config.read(wosac_metrics_path)
+
+    def _compute_metametric(self, metrics: pd.Series) -> float:
+        metametric = 0.0
+        for field_name in _METRIC_FIELD_NAMES:
+            likelihood_field_name = "likelihood_" + field_name
+            weight = self.metrics_config.getfloat(field_name, "metametric_weight")
+            metric_score = metrics[likelihood_field_name]
+            metametric += weight * metric_score
+
+        weight_sum = sum(self.metrics_config.getfloat(fn, "metametric_weight") for fn in _METRIC_FIELD_NAMES)
+        return metametric / weight_sum
+
+    def _get_histogram_params(self, metric_name: str):
+        return (
+            self.metrics_config.getfloat(metric_name, "histogram.min_val"),
+            self.metrics_config.getfloat(metric_name, "histogram.max_val"),
+            self.metrics_config.getint(metric_name, "histogram.num_bins"),
+            self.metrics_config.getfloat(metric_name, "histogram.additive_smoothing_pseudocount"),
+            self.metrics_config.getboolean(metric_name, "independent_timesteps"),
+        )
 
     def collect_ground_truth_trajectories(self, puffer_env):
         """Collect ground truth data for evaluation.
@@ -142,25 +176,91 @@ class WOSACEvaluator:
 
         # Log-likelihood metrics
         # Kinematic features log-likelihoods
+        min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
+            "linear_speed"
+        )
         linear_speed_log_likelihood = estimators.log_likelihood_estimate_timeseries(
             log_values=ref_linear_speed,
             sim_values=sim_linear_speed,
-            treat_timesteps_independently=True,
-            min_val=0.0,
-            max_val=25.0,
-            num_bins=10,
-            sanity_check=True,
+            treat_timesteps_independently=independent_timesteps,
+            min_val=min_val,
+            max_val=max_val,
+            num_bins=num_bins,
+            additive_smoothing=additive_smoothing,
+            sanity_check=False,
         )
 
-        # Compute final normalized scores
-        # Each of these metrics is in [0, 1], higher is better
+        min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
+            "linear_acceleration"
+        )
+        linear_accel_log_likelihood = estimators.log_likelihood_estimate_timeseries(
+            log_values=ref_linear_accel,
+            sim_values=sim_linear_accel,
+            treat_timesteps_independently=independent_timesteps,
+            min_val=min_val,
+            max_val=max_val,
+            num_bins=num_bins,
+            additive_smoothing=additive_smoothing,
+            sanity_check=False,
+        )
 
-        # Input: [num_agents, num_steps]
+        min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
+            "angular_speed"
+        )
+        angular_speed_log_likelihood = estimators.log_likelihood_estimate_timeseries(
+            log_values=ref_angular_speed,
+            sim_values=sim_angular_speed,
+            treat_timesteps_independently=independent_timesteps,
+            min_val=min_val,
+            max_val=max_val,
+            num_bins=num_bins,
+            additive_smoothing=additive_smoothing,
+            sanity_check=False,
+        )
+
+        min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
+            "angular_acceleration"
+        )
+        angular_accel_log_likelihood = estimators.log_likelihood_estimate_timeseries(
+            log_values=ref_angular_accel,
+            sim_values=sim_angular_accel,
+            treat_timesteps_independently=independent_timesteps,
+            min_val=min_val,
+            max_val=max_val,
+            num_bins=num_bins,
+            additive_smoothing=additive_smoothing,
+            sanity_check=False,
+        )
+
         speed_likelihood = np.exp(
             metrics._reduce_average_with_validity(
                 linear_speed_log_likelihood,
                 speed_validity[:, 0, :],
-                axis=1,  # Average over time steps
+                axis=1,
+            )
+        )
+
+        accel_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                linear_accel_log_likelihood,
+                acceleration_validity[:, 0, :],
+                axis=1,
+            )
+        )
+
+        angular_speed_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                angular_speed_log_likelihood,
+                speed_validity[:, 0, :],
+                axis=1,
+            )
+        )
+
+        angular_accel_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                angular_accel_log_likelihood,
+                acceleration_validity[:, 0, :],
+                axis=1,
             )
         )
 
@@ -174,14 +274,27 @@ class WOSACEvaluator:
                 "scenario_id": scenario_ids.flatten(),
                 "ade": ade,
                 "min_ade": min_ade,
-                "likelihood_speed": speed_likelihood,
+                "likelihood_linear_speed": speed_likelihood,
+                "likelihood_linear_acceleration": accel_likelihood,
+                "likelihood_angular_speed": angular_speed_likelihood,
+                "likelihood_angular_acceleration": angular_accel_likelihood,
             }
         )
 
-        # Aggregate results per scenario_id
-        scene_level_results = df.groupby("scenario_id")[["ade", "min_ade", "likelihood_speed"]].mean()
+        scene_level_results = df.groupby("scenario_id")[
+            [
+                "ade",
+                "min_ade",
+                "likelihood_linear_speed",
+                "likelihood_linear_acceleration",
+                "likelihood_angular_speed",
+                "likelihood_angular_acceleration",
+            ]
+        ].mean()
 
-        print(f"\n Scene-level results:\n")
+        scene_level_results["realism_metametric"] = scene_level_results.apply(self._compute_metametric, axis=1)
+
+        print("\n Scene-level results:\n")
         print(scene_level_results)
 
         print(f"\n Full agent-level results:\n")
