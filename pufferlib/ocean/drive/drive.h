@@ -72,6 +72,9 @@
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
 #define DRIVE_ENV 1
 #define DRIVE_ENV 1
+#define STOP_AGENT 1
+#define REMOVE_AGENT 2
+
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
@@ -178,6 +181,8 @@ struct Entity {
     // population play flags
     bool is_ego;
     bool is_co_player;
+    int stopped; // 0/1 -> freeze if set
+    int removed; //0/1 -> remove from sim if set
 
     // Jerk dynamics
     float a_long;
@@ -1958,55 +1963,6 @@ void init(Drive* env){
     if (env->use_dc) {
         env->discount_weights = (float*)calloc(env->active_agent_count, sizeof(float));
     }
-
-    if (env->population_play) {
-    assign_ego_and_coplayer_roles(env);
-
-    if (env->co_player_logs) {
-            free(env->co_player_logs);
-            env->co_player_logs = NULL;
-        }
-
-        // Always allocate for all active agents, not just co-players
-        // because we index by x which goes from 0 to active_agent_count-1
-        if (env->active_agent_count > 0) {
-            env->co_player_logs = (Co_Player_Log*)calloc(env->active_agent_count, sizeof(Co_Player_Log));
-        } else {
-            env->co_player_logs = NULL;
-        }
-
-        memset(&env->co_player_log, 0, sizeof(Co_Player_Log));
-    }
-
-    if (env->adaptive_driving_agent) {
-            env->ada_logs = (Adaptive_Agent_Log**)calloc(env->active_agent_count, sizeof(Adaptive_Agent_Log*));
-            for (int i = 0; i < env->active_agent_count; i++) {
-                env->ada_logs[i] = create_adaptive_agent_log(env->k_scenarios);
-
-            }
-        }
-    }
-
-void free_adaptive_agent_log(Adaptive_Agent_Log* log) {
-    if (!log) return;
-
-    free(log->episode_return);
-    free(log->episode_length);
-    free(log->perf);
-    free(log->score);
-    free(log->offroad_rate);
-    free(log->collision_rate);
-    free(log->num_goals_reached);
-    free(log->completion_rate);
-    free(log->dnf_rate);
-    free(log->n);
-    free(log->lane_alignment_rate);
-    free(log->avg_displacement_error);
-    free(log->active_agent_count);
-    free(log->expert_static_car_count);
-    free(log->static_car_count);
-
-    free(log);
 }
 
 void c_close(Drive* env){
@@ -2062,22 +2018,9 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    
-    int conditioning_size = 0;
-    if (env->use_rc) conditioning_size += 3;
-    if (env->use_ec) conditioning_size += 1;
-    if (env->use_dc) conditioning_size += 1;
-    
-    int base_size = 7;  // 6 base + 1 respawn (now always included)
-    int dynamics_size = (env->dynamics_model == JERK) ? 3 : 0;
-    int ego_dim = base_size + dynamics_size + conditioning_size;
-    
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    
-    env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
-    env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
-    env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
-    env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
+    int base_ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0) + (env->use_dc ? 1 : 0);
+    int ego_dim = base_ego_dim + conditioning_dims;
 
     if (env->use_rc) {
         env->collision_weights = (float*)calloc(env->active_agent_count, sizeof(float));
@@ -2090,6 +2033,15 @@ void allocate(Drive* env){
     if (env->use_dc) {
         env->discount_weights = (float*)calloc(env->active_agent_count, sizeof(float));
     }
+
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    // printf("num static cars: %d\n", env->static_car_count);
+    // printf("active agent count: %d\n", env->active_agent_count);
+    // printf("num objects: %d\n", env->num_objects);
+    env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
+    env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
+    env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
+    env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
 }
 
 void free_allocated(Drive* env){
@@ -2296,25 +2248,13 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
 }
 
 void compute_observations(Drive* env) {
-    // Calculate conditioning size
-    int conditioning_size = 0;
-    if (env->use_rc) conditioning_size += 3;
-    if (env->use_ec) conditioning_size += 1;
-    if (env->use_dc) conditioning_size += 1;
-    
-    // Calculate ego dimension: base + dynamics + conditioning + respawn
-    int base_size = 6;
-    int dynamics_size = (env->dynamics_model == JERK) ? 3 : 0;
-    int respawn_size = 1;
-    int ego_dim = base_size + dynamics_size + conditioning_size + respawn_size;
-    
-    // Total observation size
+    int base_ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0) + (env->use_dc ? 1 : 0);
+    int ego_dim = base_ego_dim + conditioning_dims;
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    
-    
+
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
-    
     for(int i = 0; i < env->active_agent_count; i++) {
         float* obs = &observations[i][0];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];
@@ -2337,9 +2277,7 @@ void compute_observations(Drive* env) {
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
-        obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;  // Always at index 6
-
-        int obs_idx = 7;  // Start after respawn
+        obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
 
         if (env->dynamics_model == JERK) {
             obs[obs_idx++] = ego_entity->steering_angle / M_PI;
@@ -2357,9 +2295,26 @@ void compute_observations(Drive* env) {
         }
         if (env->use_dc) {
             obs[obs_idx++] = env->discount_weights[i];
+            obs[7] = ego_entity->steering_angle / M_PI;
+            // Asymmetric normalization for a_long to match action space
+            obs[8] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
+            obs[9] = ego_entity->a_lat / JERK_LAT[2];
+        }
+
+        int obs_idx = (env->dynamics_model == JERK) ? 10 : 7;
+        // Add conditioning weights to observations
+        if (env->use_rc) {
+            obs[obs_idx++] = env->collision_weights[i];
+            obs[obs_idx++] = env->offroad_weights[i];
+            obs[obs_idx++] = env->goal_weights[i];
+        }
+        if (env->use_ec) {
+            obs[obs_idx++] = env->entropy_weights[i];
+        }
+        if (env->use_dc) {
+            obs[obs_idx++] = env->discount_weights[i];
         }
         // Relative Pos of other cars
-        // Start after goal distances
         int cars_seen = 0;
         for(int j = 0; j < MAX_AGENTS; j++) {
             int index = -1;

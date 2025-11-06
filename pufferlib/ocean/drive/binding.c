@@ -461,6 +461,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
+    env->collision_behaviour = conf.collision_behaviour;
+    env->offroad_behaviour = conf.offroad_behaviour;
     if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) {
         conf.scenario_length = (int)unpack(kwargs, "scenario_length");
     }
@@ -470,6 +472,10 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     }
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
+    if (PyDict_GetItemString(kwargs, "dynamics_model")) {
+        char* dynamics_str = unpack_str(kwargs, "dynamics_model");
+        env->dynamics_model = (strcmp(dynamics_str, "jerk") == 0) ? JERK : CLASSIC;
+    }
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;

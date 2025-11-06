@@ -437,7 +437,14 @@ class PuffeRL:
             advantages = torch.zeros(shape, device=device)
 
             if hasattr(self.vecenv.driver_env, "discount_conditioned") and self.vecenv.driver_env.discount_conditioned:
-                disc_idx = 7  # base ego obs
+                if (
+                    hasattr(self.vecenv.driver_env, "dynamics_model")
+                    and self.vecenv.driver_env.dynamics_model == "jerk"
+                ):
+                    disc_idx = 7  # base ego obs
+                else:
+                    disc_idx = 10  # base ego obs
+
                 if self.vecenv.driver_env.reward_conditioned:
                     disc_idx += 3
                 if self.vecenv.driver_env.entropy_conditioned:
@@ -532,10 +539,19 @@ class PuffeRL:
             # Entropy-weighted loss if entropy conditioning is enabled
             if hasattr(self.vecenv.driver_env, "entropy_conditioned") and self.vecenv.driver_env.entropy_conditioned:
                 mb_obs_flat = mb_obs.reshape(-1, mb_obs.shape[-1])
-                if self.vecenv.driver_env.reward_conditioned:
-                    ent_weights = mb_obs_flat[:, 10]  # Position 10: after ego(7) + RC(3)
+
+                if (
+                    hasattr(self.vecenv.driver_env, "dynamics_model")
+                    and self.vecenv.driver_env.dynamics_model == "jerk"
+                ):
+                    ent_idx = 7  # base ego obs
                 else:
-                    ent_weights = mb_obs_flat[:, 7]  # Position 7: after ego(7)
+                    ent_idx = 10  # base ego obs
+
+                if self.vecenv.driver_env.reward_conditioned:
+                    ent_idx += 3
+
+                ent_weights = mb_obs_flat[:, ent_idx]  # after ego(7/10) + RC(3)
                 ent_weights = ent_weights.reshape(entropy.shape)
                 entropy_loss = -(entropy * ent_weights).mean()
                 loss = pg_loss + config["vf_coef"] * v_loss + entropy_loss
@@ -695,36 +711,6 @@ class PuffeRL:
                             and self.vecenv.driver_env.deterministic_agent_selection
                         ):
                             cmd.append("--deterministic-selection")
-
-                        # Add k_scenarios parameter
-                        render_config = config.get("render_config", {})
-                        if isinstance(render_config, dict) and "k_scenarios" in render_config:
-                            cmd.extend(["--k-scenarios", str(render_config["k_scenarios"])])
-
-                        # Add ego agent conditioning weights
-                        if isinstance(render_config, dict):
-                            if "ego_collision_weight" in render_config:
-                                cmd.extend(["--ego-collision", str(render_config["ego_collision_weight"])])
-                            if "ego_offroad_weight" in render_config:
-                                cmd.extend(["--ego-offroad", str(render_config["ego_offroad_weight"])])
-                            if "ego_goal_weight" in render_config:
-                                cmd.extend(["--ego-goal", str(render_config["ego_goal_weight"])])
-                            if "ego_entropy_weight" in render_config:
-                                cmd.extend(["--ego-entropy", str(render_config["ego_entropy_weight"])])
-                            if "ego_discount_weight" in render_config:
-                                cmd.extend(["--ego-discount", str(render_config["ego_discount_weight"])])
-
-                            # Add co-player conditioning weights
-                            if "co_player_collision_weight" in render_config:
-                                cmd.extend(["--co-player-collision", str(render_config["co_player_collision_weight"])])
-                            if "co_player_offroad_weight" in render_config:
-                                cmd.extend(["--co-player-offroad", str(render_config["co_player_offroad_weight"])])
-                            if "co_player_goal_weight" in render_config:
-                                cmd.extend(["--co-player-goal", str(render_config["co_player_goal_weight"])])
-                            if "co_player_entropy_weight" in render_config:
-                                cmd.extend(["--co-player-entropy", str(render_config["co_player_entropy_weight"])])
-                            if "co_player_discount_weight" in render_config:
-                                cmd.extend(["--co-player-discount", str(render_config["co_player_discount_weight"])])
 
                         # Specify output paths for videos
                         cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])

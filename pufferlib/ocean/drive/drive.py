@@ -82,17 +82,7 @@ class Drive(pufferlib.PufferEnv):
         self.use_goal_generation = use_goal_generation
         self.resample_frequency = resample_frequency
         self.ini_file = ini_file
-        self.dynamics_model = dynamics_model
 
-        # Observation space calculation
-        if dynamics_model == "classic":
-            ego_features = 7
-        elif dynamics_model == "jerk":
-            ego_features = 10
-        else:
-            raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
-
-        
         # Conditioning setup
         self.condition_type = condition_type
         self.reward_conditioned = condition_type in ("reward", "all")
@@ -109,26 +99,29 @@ class Drive(pufferlib.PufferEnv):
         self.entropy_weight_ub = entropy_weight_ub
         self.discount_weight_lb = discount_weight_lb
         self.discount_weight_ub = discount_weight_ub
-        
+
         conditioning_dims = (
             (3 if self.reward_conditioned else 0)
             + (1 if self.entropy_conditioned else 0)
             + (1 if self.discount_conditioned else 0)
         )
+        self.dynamics_model = dynamics_model
 
-        ego_features += conditioning_dims
+        # Observation space calculation
+        base_ego_dim = 10 if self.dynamics_model == "jerk" else 7
 
-        self.ego_features = ego_features
         partner_features = 7
         road_features = 7
         max_partner_objects = 63
         max_road_objects = 200
-        self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
-
+        self.num_obs = (
+            base_ego_dim + conditioning_dims + max_partner_objects * partner_features + max_road_objects * road_features
+        )
         self.num_ego_agents = num_ego_agents
         self.ini_file = ini_file
         self.ini_file
 
+        
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.population_play = population_play
@@ -302,6 +295,7 @@ class Drive(pufferlib.PufferEnv):
                 seed,
                 action_type=self._action_type_flag,
                 human_agent_idx=human_agent_idx,
+                dynamics_model=dynamics_model,
                 reward_vehicle_collision=reward_vehicle_collision,
                 reward_offroad_collision=reward_offroad_collision,
                 reward_goal=reward_goal,
@@ -524,6 +518,7 @@ class Drive(pufferlib.PufferEnv):
                         self.truncations[cur:nxt],
                         seed,
                         human_agent_idx=self.human_agent_idx,
+                        dynamics_model=self.dynamics_model,
                         reward_vehicle_collision=self.reward_vehicle_collision,
                         reward_offroad_collision=self.reward_offroad_collision,
                         reward_goal=self.reward_goal,
