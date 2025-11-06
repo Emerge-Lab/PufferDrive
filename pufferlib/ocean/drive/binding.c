@@ -91,6 +91,20 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
+
+        // Skip map if it doesn't contain any controllable agents
+        if(env->active_agent_count == 0) {
+              for(int j=0;j<env->num_entities;j++) {
+                  free_entity(&env->entities[j]);
+              }
+              free(env->entities);
+              free(env->active_agent_indices);
+              free(env->static_agent_indices);
+              free(env->expert_static_agent_indices);
+              free(env);
+              continue;
+          }
+
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);
         PyList_SetItem(map_ids, env_count, map_id_obj);
@@ -108,7 +122,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         free(env->expert_static_agent_indices);
         free(env);
     }
-    printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
+    //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
     if(total_agent_count >= num_agents){
         total_agent_count = num_agents;
     }
@@ -151,8 +165,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->goal_radius = conf.goal_radius;
     env->scenario_length = conf.scenario_length;
     env->goal_behaviour = conf.goal_behaviour;
-    env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
-    env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
+    env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
     env->dt = conf.dt;
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
