@@ -57,7 +57,7 @@ def save_lane_section_to_json(xodr_json, id, road_edges, road_lines, lanes, road
             "type": "road_edge",
             "road_id": road_id,
             "junction_id": junction_id,
-            "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": 0.0} for pt in road_edge],
+            "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": pt[2]} for pt in road_edge],
         }
         roads.append(edge_data)
         id += 1
@@ -68,7 +68,7 @@ def save_lane_section_to_json(xodr_json, id, road_edges, road_lines, lanes, road
             "type": "road_line",
             "road_id": road_id,
             "junction_id": junction_id,
-            "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": 0.0} for pt in road_line],
+            "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": pt[2]} for pt in road_line],
         }
         roads.append(line_data)
         id += 1
@@ -79,7 +79,7 @@ def save_lane_section_to_json(xodr_json, id, road_edges, road_lines, lanes, road
             "type": "lane",
             "road_id": road_id,
             "junction_id": junction_id,
-            "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": 0.0} for pt in lane],
+            "geometry": [{"x": float(pt[0]), "y": float(pt[1]), "z": pt[2]} for pt in lane],
         }
         roads.append(lane_data)
         id += 1
@@ -221,7 +221,8 @@ def generate_carla_road(
                         lanes.append(get_lane_data(previous_lane, "CENTERLINE"))
                     # Add outer edge as road edge
                     elif add_edge_data:
-                        road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                        road_edge_data = get_lane_data(previous_lane, "BOUNDARY")
+                        road_edges.append(road_edge_data)
                         lane_ids_for_edges.append(previous_lane.id)
                     add_lane_data = True
                     add_edge_data = False
@@ -277,10 +278,37 @@ def generate_carla_road(
 
             # If atleast one side has no immediate driveable lane add center as road edge
             if not left_immediate_driveable or not right_immediate_driveable:
-                road_edges.append(lane_section.lane_section_reference_line)
+                ref_line = lane_section.lane_section_reference_line
+                z_coords = lane_section.lane_section_z
+
+                # Interpolate z if sizes don't match
+                if len(ref_line) != len(z_coords):
+                    from scipy.interpolate import interp1d
+
+                    # Create interpolation function from z_coords indices to values
+                    old_indices = np.linspace(0, len(z_coords) - 1, len(z_coords))
+                    new_indices = np.linspace(0, len(z_coords) - 1, len(ref_line))
+                    z_interp = interp1d(old_indices, z_coords, kind="linear", fill_value="extrapolate")
+                    z_coords = z_interp(new_indices)
+
+                ref_line_3d = np.append(ref_line, z_coords[:, np.newaxis], axis=1)
+                road_edges.append(ref_line_3d)
                 lane_ids_for_edges.append(0)  # Center lane has ID 0 in OpenDRIVE
             else:
-                road_lines.append(lane_section.lane_section_reference_line)
+                ref_line = lane_section.lane_section_reference_line
+                z_coords = lane_section.lane_section_z
+
+                # Interpolate z if sizes don't match
+                if len(ref_line) != len(z_coords):
+                    from scipy.interpolate import interp1d
+
+                    old_indices = np.linspace(0, len(z_coords) - 1, len(z_coords))
+                    new_indices = np.linspace(0, len(z_coords) - 1, len(ref_line))
+                    z_interp = interp1d(old_indices, z_coords, kind="linear", fill_value="extrapolate")
+                    z_coords = z_interp(new_indices)
+
+                ref_line_3d = np.append(ref_line, z_coords[:, np.newaxis], axis=1)
+                road_lines.append(ref_line_3d)
 
             if len(road_lines) == 0 and len(lanes) == 0:
                 road_edges = []
@@ -521,7 +549,7 @@ if __name__ == "__main__":
     max_samples = int(1e5)  # Max points to sample per reference line
     print_number_of_sample_truncations = True  # Enable to see the number of data points lost
     # juncn_filter_thresholds = [0.3, 0.4, 1.0, 0.7, 0.35, 0.5, 0.375, 0.3]     # Final Filtering values(Complete deletion of road_edge style filtering), please don't change. Remember to backup towns before enabling for run
-    # juncn_filter_thresholds = [0.3, 0.4, 1.0, 0.7, 0.35, 0.7, 0.7, 0.3]       # Final Filtering values(Keeping out-of-polygonizable area style filtering), please don't change. Remember to backup towns before enabling for run
+    # juncn_filter_thresholds = [0.3, 0.4, 1.0, 1.0, 0.35, 0.7, 0.7, 0.3]       # Final Filtering values(Keeping out-of-polygonizable area style filtering), please don't change. Remember to backup towns before enabling for run
     juncn_filter_thresholds = [1.0]
     generate_carla_roads(
         town_names,
