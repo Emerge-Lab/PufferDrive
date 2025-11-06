@@ -119,8 +119,6 @@ class Drive(pufferlib.PufferEnv):
         )
         self.num_ego_agents = num_ego_agents
         self.ini_file = ini_file
-        self.ini_file
-
         
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)

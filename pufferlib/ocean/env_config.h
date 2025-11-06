@@ -29,6 +29,17 @@ typedef struct
     int control_all_agents;
     int num_policy_controlled_agents;
     int deterministic_agent_selection;
+    // Conditioning weight bounds
+    float reward_collision_weight_lb;
+    float reward_collision_weight_ub;
+    float reward_offroad_weight_lb;
+    float reward_offroad_weight_ub;
+    float reward_goal_weight_lb;
+    float reward_goal_weight_ub;
+    float entropy_weight_lb;
+    float entropy_weight_ub;
+    float discount_weight_lb;
+    float discount_weight_ub;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
