@@ -79,7 +79,6 @@ int test_values() {
     assert(config.num_maps == 1);
     assert(config.input_size == 64);
     assert(config.hidden_size == 256);
-    printf("test_values passed.\n");
     free_configurator(&config);
     return 0;
 }
@@ -91,7 +90,6 @@ int test_full_line_comment() {
     assert(config.key2 == 2.5);
     assert(config.key3 != 3);
     assert(config.key31 != 3.1);
-    printf("test_full_line_comment passed.\n");
     free_configurator(&config);
     return 0;
 }
@@ -101,7 +99,6 @@ int test_inline_comment() {
     if (ini_parse("test_drive.ini", handler, &config) < 0) return 1;
     assert(strcmp(config.key5, "five") == 0);
     assert(config.key6 == 6);
-    printf("test_inline_comment passed.\n");
     free_configurator(&config);
     return 0;
 }
@@ -113,7 +110,6 @@ int test_problematic_inline_comment() {
     assert(strcmp(config.key4, "four # and more") == 0);
     // assert(strcmp(config.key7, "seven ; seven") == 0); // was expected to pass, actually fails
     assert(strcmp(config.key7, "seven") == 0); // was expected to fail, actually pass
-    printf("test_problematic_inline_comment passed.\n");
     free_configurator(&config);
     return 0;
 }
