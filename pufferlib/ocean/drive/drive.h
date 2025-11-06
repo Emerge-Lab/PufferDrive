@@ -290,8 +290,7 @@ struct Drive {
     float reward_goal;
     float reward_goal_post_respawn;
     float goal_radius;
-    int deterministic_agent_selection;
-    int policy_agents_per_env;
+    int max_controlled_agents;
     int logs_capacity;
     int use_goal_generation;
     char* ini_file;
@@ -446,8 +445,6 @@ Entity* load_map_binary(const char* filename, Drive* env) {
     for (int i = 0; i < env->num_entities; i++) {
 	    // Read base entity data
         fread(&entities[i].scenario_id, sizeof(int), 1, file);
-        //printf("scenario_id: %d\n", entities[i].scenario_id);
-
         fread(&entities[i].type, sizeof(int), 1, file);
         fread(&entities[i].id, sizeof(int), 1, file);
         fread(&entities[i].array_size, sizeof(int), 1, file);
@@ -1373,13 +1370,6 @@ void set_active_agents(Drive* env){
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
 
-    if(env->active_agent_count == 0){
-        printf("Warning: No active agents found in the environment.\n");
-    }
-
-    // printf("Created %d active agents, %d static agents (%d expert)\n",
-    //        env->active_agent_count, env->static_agent_count, env->expert_static_agent_count);
-
     return;
 }
 
@@ -1600,7 +1590,6 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
 }
 
 void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* valid_out, int* id_out, int* scenario_id_out) {
-    //printf("Active agent count: %d\n", env->active_agent_count);
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
@@ -1610,9 +1599,7 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
         scenario_id_out[i] = agent->scenario_id;
 
         for(int t = env->init_steps; t < agent->array_size; t++){
-            printf("Agent %d, Time %d, array size %d, init steps %d\n", i, t, agent->array_size, env->init_steps);
             int out_idx = i * (agent->array_size - env->init_steps) + (t - env->init_steps);
-            //printf("Out idx: %d\n", out_idx);
 
             // Add world means back to get original world coordinates
             x_out[out_idx] = agent->traj_x[t] + env->world_mean_x;
@@ -2767,7 +2754,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
 
     EndMode3D();
 
-    if (env->control_mode == CONTROL_TRACKS_TO_PREDICT && mode == 1) {
+    if (mode == 1) {
 
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;

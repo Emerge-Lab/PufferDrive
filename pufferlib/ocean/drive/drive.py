@@ -26,7 +26,7 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
-        num_policy_controlled_agents=-1,
+        max_controlled_agents=-1,
         deterministic_agent_selection=False,
         use_goal_generation=False,
         buf=None,
@@ -96,7 +96,7 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
             )
-        self.num_policy_controlled_agents = int(num_policy_controlled_agents)
+        self.max_controlled_agents = int(max_controlled_agents)
         self.deterministic_agent_selection = bool(deterministic_agent_selection)
 
         # Iterate through all maps to count total agents that can be initialized for each map
@@ -106,7 +106,7 @@ class Drive(pufferlib.PufferEnv):
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             init_steps=init_steps,
-            num_policy_controlled_agents=self.num_policy_controlled_agents,
+            max_controlled_agents=self.max_controlled_agents,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
         )
 
@@ -135,7 +135,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
                 scenario_length=(int(scenario_length) if scenario_length is not None else None),
-                num_policy_controlled_agents=self.num_policy_controlled_agents,
+                max_controlled_agents=self.max_controlled_agents,
                 deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
@@ -175,7 +175,7 @@ class Drive(pufferlib.PufferEnv):
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
                     init_steps=self.init_steps,
-                    num_policy_controlled_agents=self.num_policy_controlled_agents,
+                    max_controlled_agents=self.max_controlled_agents,
                     deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                 )
                 env_ids = []
@@ -199,7 +199,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_ade=self.reward_ade,
                         goal_radius=self.goal_radius,
                         scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
-                        num_policy_controlled_agents=self.num_policy_controlled_agents,
+                        max_controlled_agents=self.max_controlled_agents,
                         deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
@@ -483,7 +483,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed/validation/json_selected")
+    data_dir = Path("data/processed/validation/json")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -502,14 +502,15 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=0.0001, atn_cache=1024, num_agents=5):
+def test_performance(timeout=0.0001, atn_cache=1024, num_agents=12):
     import time
 
     env = Drive(
         num_agents=num_agents,
-        num_maps=1,
-        control_mode="control_vehicles",
+        num_maps=10,
+        control_mode="control_agents",
         init_mode="create_all_valid",  # "create_only_controlled",create_all_valid
+        max_controlled_agents=-1,
         init_steps=0,
         scenario_length=91,
     )
