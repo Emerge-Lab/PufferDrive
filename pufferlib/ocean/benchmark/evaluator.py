@@ -292,6 +292,11 @@ class WOSACEvaluator:
 
         scene_level_results["realism_metametric"] = scene_level_results.apply(self._compute_metametric, axis=1)
 
+        scene_level_results["num_agents"] = df.groupby("scenario_id").size()
+        scene_level_results = scene_level_results[
+            ["num_agents"] + [col for col in scene_level_results.columns if col != "num_agents"]
+        ]
+
         print("\n Scene-level results:\n")
         print(scene_level_results)
 

@@ -99,11 +99,19 @@ def log_likelihood_estimate_timeseries(
         log_flat = log_values.reshape(n_agents, n_steps)
         sim_flat = sim_values.reshape(n_agents, n_rollouts * n_steps)
 
-        # Compute log-likelihoods
-        log_probs = histogram_estimate(log_flat, sim_flat, min_val, max_val, num_bins, additive_smoothing)
-
     else:
-        raise NotImplementedError("Currently not supported.")
+        # If values in time are instead to be compared per-step, reshape:
+        # - `sim_values` as (n_objects * n_steps, n_rollouts)
+        # - `log_values` as (n_objects * n_steps, 1)
+        log_flat = log_values.reshape(n_agents * n_steps, 1)
+        sim_flat = sim_values.transpose(0, 2, 1).reshape(n_agents * n_steps, n_rollouts)
+
+    # Compute log-likelihoods
+    log_probs = histogram_estimate(log_flat, sim_flat, min_val, max_val, num_bins, additive_smoothing)
+
+    # Depending on `independent_timesteps`, the likelihoods might be flattened, so
+    # reshape back to the initial `log_values` shape.
+    log_probs = log_probs.reshape(n_agents, n_steps)
 
     # Sanity check visualization
     if sanity_check:
