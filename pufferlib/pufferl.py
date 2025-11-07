@@ -1139,6 +1139,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args["env"]["init_mode"] = args["wosac"]["init_mode"] if wosac_enabled else args["env"]["init_mode"]
     args["env"]["control_mode"] = args["wosac"]["control_mode"] if wosac_enabled else args["env"]["control_mode"]
     args["env"]["init_steps"] = args["wosac"]["init_steps"] if wosac_enabled else args["env"]["init_steps"]
+    args["env"]["goal_behaviour"] = args["wosac"]["goal_behaviour"] if wosac_enabled else args["env"]["goal_behavior"]
 
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
@@ -1155,7 +1156,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         # Roll out trained policy in the simulator
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
 
-        evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
+        if args["wosac"]["sanity_check"]:
+            evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
 
         # Analyze and compute metrics
         results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories)

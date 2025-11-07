@@ -152,8 +152,6 @@ class WOSACEvaluator:
         ref_heading = ground_truth_trajectories["heading"]
         ref_valid = ground_truth_trajectories["valid"]
 
-        breakpoint()
-
         # Compute features
         # Kinematics-related features
         sim_linear_speed, sim_linear_accel, sim_angular_speed, sim_angular_accel = metrics.compute_kinematic_features(
@@ -297,9 +295,10 @@ class WOSACEvaluator:
         print("\n Scene-level results:\n")
         print(scene_level_results)
 
-        print(f"\n Full agent-level results:\n")
-        print(df)
+        print(f"\n Overall realism metametric: {scene_level_results['realism_metametric'].mean():.4f}")
 
+        # print(f"\n Full agent-level results:\n")
+        # print(df)
         return scene_level_results
 
     def _quick_sanity_check(self, gt_trajectories, simulated_trajectories):
