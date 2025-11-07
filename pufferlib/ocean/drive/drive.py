@@ -57,8 +57,6 @@ class Drive(pufferlib.PufferEnv):
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
 
-        print(f"Drive env initialized with goal_behavior={goal_behavior}")
-
         # Observation space calculation
         if dynamics_model == "classic":
             ego_features = 7
@@ -533,17 +531,16 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=0.000001, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
 
     env = Drive(
         num_agents=num_agents,
         num_maps=10,
-        control_mode="control_agents",
+        control_mode="control_vehicles",
         init_mode="create_all_valid",
         init_steps=0,
         scenario_length=91,
-        goal_behavior=2,
     )
 
     env.reset()
@@ -558,7 +555,6 @@ def test_performance(timeout=0.000001, atn_cache=1024, num_agents=1024):
         atn = actions[tick % atn_cache]
         env.step(atn)
         tick += 1
-        break
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
 
@@ -566,5 +562,5 @@ def test_performance(timeout=0.000001, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    test_performance()
-    # process_all_maps()
+    # test_performance()
+    process_all_maps()
