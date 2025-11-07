@@ -2,18 +2,34 @@
 
 This readme contains several important assumptions and definions about the `PufferDrive` environment.
 
-## Assumptions for initializating agents
+## Agent initialization and control
 
-### Waymo Open Motion Dataset (WOMD)
+### Overview
 
-By default, the environment only creates and controls **vehicles** that meet the following conditions:
+* `init_mode` → which agents are **created**
+* `control_mode` → which agents are **controlled** by the policy
 
-- Their `valid` flag is `True` at initialization (as determined by `init_steps`).
-- Their initial position is more than `MIN_DISTANCE_TO_GOAL` away from the goal.
-- They are **not** marked as experts in the scenario file.
-- The total number of agents has **not** yet reached `MAX_AGENTS`.
+### `init_mode`
 
-When `control_non_vehicles=True`, these same conditions apply, but the environment will also include **non-vehicle agents**, such as cyclists and pedestrians.
+Determines which agents are **created** in the environment.
+
+| Option                   | Description                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------- |
+| `create_all_valid`       | Create all entities valid at initialization (`traj_valid[init_steps] == 1`). |
+| `create_only_controlled` | Create only those agents that are controlled by the policy.                  |
+
+---
+
+### `control_mode`
+
+Determines which created agents are **controlled** by the policy.
+
+| Option                                    | Description                                                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `control_vehicles` (default)              | Control only valid **vehicles** (not experts, beyond `MIN_DISTANCE_TO_GOAL`, under `MAX_AGENTS`). |
+| `control_agents`                          | Control all valid **agent types** (vehicles, cyclists, pedestrians).                              |
+| `control_tracks_to_predict` *(WOMD only)* | Control agents listed in the `tracks_to_predict` metadata.                                        |
+
 
 ## Termination conditions (`done`)
 
