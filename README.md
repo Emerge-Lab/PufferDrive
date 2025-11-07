@@ -39,6 +39,9 @@ puffer train puffer_drive
 
 ## Dataset
 
+<details>
+<summary>Downloading and using data</summary>
+
 ### Data preparation
 
 To train with PufferDrive, you need to convert JSON files to map binaries. Run the following command with the path to your data folder:
@@ -59,8 +62,13 @@ You can download the WOMD data from Hugging Face in two versions:
 ### Additional Data Sources
 
 For more training data compatible with PufferDrive, see [ScenarioMax](https://github.com/valeoai/ScenarioMax). The GPUDrive data format is fully compatible with PufferDrive.
+</details>
+
 
 ## Visualizer
+
+<details>
+<summary>Dependencies and usage</summary>
 
 ## Headless server setup
 
@@ -101,6 +109,8 @@ The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color 
 > To force a rebuild, you can delete the cached compiled executable binary using `rm ./visualize`.
 
 ---
+
+</details>
 
 
 ## Benchmarks
