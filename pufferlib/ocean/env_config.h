@@ -18,11 +18,11 @@ typedef struct
     float reward_vehicle_collision_post_respawn;
     float reward_ade;
     float goal_radius;
+    int collision_behaviour;
+    int offroad_behaviour;
     int spawn_immunity_timer;
     float dt;
     int goal_behaviour;
-    int collision_behaviour;
-    int offroad_behaviour;
     int control_non_vehicles;
     int scenario_length;
     int init_steps;

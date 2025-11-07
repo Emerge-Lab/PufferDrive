@@ -55,9 +55,6 @@ void demo() {
         .init_steps = conf.init_steps,
         .collision_behaviour = conf.collision_behaviour,
         .offroad_behaviour = conf.offroad_behaviour,
-        .control_all_agents = conf.control_all_agents,
-        .policy_agents_per_env = conf.num_policy_controlled_agents,
-        .deterministic_agent_selection = conf.deterministic_agent_selection,
     };
     allocate(&env);
     c_reset(&env);
@@ -137,9 +134,6 @@ void performance_test() {
 	    .map_name = "resources/drive/binaries/map_000.bin",
         .control_non_vehicles = conf.control_non_vehicles,
         .init_steps = conf.init_steps,
-        .control_all_agents = conf.control_all_agents,
-        .policy_agents_per_env = conf.num_policy_controlled_agents,
-        .deterministic_agent_selection = conf.deterministic_agent_selection,
     };
     clock_t start_time, end_time;
     double cpu_time_used;

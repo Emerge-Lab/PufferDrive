@@ -1398,6 +1398,11 @@ void set_active_agents(Drive* env){
 }
 
 void remove_bad_trajectories(Drive* env){
+
+    if (env->control_mode != CONTROL_TRACKS_TO_PREDICT) {
+        return; // Leave all trajectories in WOSAC control mode
+    }
+
     set_start_position(env);
     int collided_agents[env->active_agent_count];
     int collided_with_indices[env->active_agent_count];
@@ -1462,9 +1467,7 @@ void init(Drive* env){
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
-    if (env->control_mode != CONTROL_TRACKS_TO_PREDICT) {
-        remove_bad_trajectories(env);
-    }
+    remove_bad_trajectories(env);
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
@@ -1725,14 +1728,11 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
-
-        // Store agent ID
         id_out[i] = agent->id;
         scenario_id_out[i] = agent->scenario_id;
 
         for(int t = env->init_steps; t < agent->array_size; t++){
             int out_idx = i * (agent->array_size - env->init_steps) + (t - env->init_steps);
-
             // Add world means back to get original world coordinates
             x_out[out_idx] = agent->traj_x[t] + env->world_mean_x;
             y_out[out_idx] = agent->traj_y[t] + env->world_mean_y;
@@ -2919,8 +2919,8 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
 
     EndMode3D();
 
-    if (mode == 1) {
-
+    // Draw track indices for the tracks to predict
+    if (mode == 1 && env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;

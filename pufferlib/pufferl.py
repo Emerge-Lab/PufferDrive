@@ -5,8 +5,6 @@
 import contextlib
 import warnings
 
-from matplotlib import colors
-
 warnings.filterwarnings("error", category=RuntimeWarning)
 
 import os
@@ -575,8 +573,6 @@ class PuffeRL:
                                 n_policy = -1
                             if n_policy > 0:
                                 cmd += ["--num-policy-controlled-agents", str(n_policy)]
-                            if getattr(env_cfg, "deterministic_agent_selection", False):
-                                cmd.append("--deterministic-selection")
                             if getattr(env_cfg, "num_maps", False):
                                 cmd.extend(["--num-maps", str(env_cfg.num_maps)])
                             if getattr(env_cfg, "scenario_length", None):

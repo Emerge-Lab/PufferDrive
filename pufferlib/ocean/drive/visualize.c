@@ -246,7 +246,6 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
 	    .map_name = (char*)map_name,
-        .control_non_vehicles = conf.control_non_vehicles,
         .init_steps = conf.init_steps,
         .max_controlled_agents = max_controlled_agents,
         .collision_behaviour = conf.collision_behaviour,
@@ -255,6 +254,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .init_mode = init_mode,
         .control_mode = control_mode,
     };
+
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
