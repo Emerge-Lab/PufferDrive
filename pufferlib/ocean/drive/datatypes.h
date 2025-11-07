@@ -53,6 +53,17 @@ struct DynamicAgent {
     // Respawn tracking
     int respawn_timestep;
     int respawn_count;
+
+    int stopped; // 0/1 -> freeze if set
+    int removed; //0/1 -> remove from sim if set
+
+    // Jerk dynamics
+    float a_long;
+    float a_lat;
+    float jerk_long;
+    float jerk_lat;
+    float steering_angle;
+    float wheelbase;
 };
 
 struct RoadMapElement {
