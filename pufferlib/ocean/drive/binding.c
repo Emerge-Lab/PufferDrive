@@ -178,6 +178,10 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_ade = conf.reward_ade;
+    env->reward_guided_autonomy = conf.reward_guided_autonomy;
+    env->guidance_speed_weight = conf.guidance_speed_weight;
+    env->guidance_heading_weight = conf.guidance_heading_weight;
+    env->waypoint_reach_threshold = conf.waypoint_reach_threshold;
     env->goal_radius = conf.goal_radius;
     env->scenario_length = conf.scenario_length;
     env->goal_behaviour = conf.goal_behaviour;
