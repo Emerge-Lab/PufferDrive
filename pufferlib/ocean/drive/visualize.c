@@ -248,9 +248,9 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 	    .map_name = (char*)map_name,
         .init_steps = conf.init_steps,
         .max_controlled_agents = max_controlled_agents,
-        .collision_behaviour = conf.collision_behaviour,
-        .offroad_behaviour = conf.offroad_behaviour,
-        .goal_behaviour = 0,
+        .collision_behavior = conf.collision_behavior,
+        .offroad_behavior = conf.offroad_behavior,
+        .goal_behavior = conf.goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,
     };

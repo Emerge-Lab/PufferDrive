@@ -162,9 +162,10 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_ade = conf.reward_ade;
     env->scenario_length = conf.scenario_length;
     env->goal_radius = conf.goal_radius;
-    env->goal_behaviour = conf.goal_behaviour;
-    env->collision_behaviour = conf.collision_behaviour;
-    env->offroad_behaviour = conf.offroad_behaviour;
+    env->goal_behavior = conf.goal_behavior;
+    printf("Goal behavior INSIDE BINDING: %d\n", env->goal_behavior);
+    env->collision_behavior = conf.collision_behavior;
+    env->offroad_behavior = conf.offroad_behavior;
     env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
     env->dt = conf.dt;
     env->init_mode = (int)unpack(kwargs, "init_mode");

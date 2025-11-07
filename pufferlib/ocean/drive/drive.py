@@ -20,10 +20,10 @@ class Drive(pufferlib.PufferEnv):
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
         reward_ade=0.0,
-        goal_behaviour=0,
+        goal_behavior=0,
         goal_radius=2.0,
-        collision_behaviour=0,
-        offroad_behaviour=0,
+        collision_behavior=0,
+        offroad_behavior=0,
         dt=0.1,
         scenario_length=None,
         resample_frequency=91,
@@ -48,14 +48,16 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
-        self.goal_behaviour = goal_behaviour
-        self.collision_behaviour = collision_behaviour
-        self.offroad_behaviour = offroad_behaviour
+        self.goal_behavior = goal_behavior
+        self.collision_behavior = collision_behavior
+        self.offroad_behavior = offroad_behavior
         self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+
+        print(f"Drive env initialized with goal_behavior={goal_behavior}")
 
         # Observation space calculation
         if dynamics_model == "classic":
@@ -134,6 +136,8 @@ class Drive(pufferlib.PufferEnv):
             max_controlled_agents=self.max_controlled_agents,
         )
 
+        breakpoint()
+
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -158,9 +162,9 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
-                goal_behaviour=goal_behaviour,
-                collision_behaviour=self.collision_behaviour,
-                offroad_behaviour=self.offroad_behaviour,
+                goal_behavior=goal_behavior,
+                collision_behavior=self.collision_behavior,
+                offroad_behavior=self.offroad_behavior,
                 dt=dt,
                 scenario_length=(int(scenario_length) if scenario_length is not None else None),
                 max_controlled_agents=self.max_controlled_agents,
@@ -224,9 +228,9 @@ class Drive(pufferlib.PufferEnv):
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_ade=self.reward_ade,
                         goal_radius=self.goal_radius,
-                        goal_behaviour=self.goal_behaviour,
-                        collision_behaviour=self.collision_behaviour,
-                        offroad_behaviour=self.offroad_behaviour,
+                        goal_behavior=self.goal_behavior,
+                        collision_behavior=self.collision_behavior,
+                        offroad_behavior=self.offroad_behavior,
                         dt=self.dt,
                         scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
                         max_controlled_agents=self.max_controlled_agents,
@@ -531,7 +535,7 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=0.000001, atn_cache=1024, num_agents=1024):
     import time
 
     env = Drive(
@@ -541,6 +545,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         init_mode="create_all_valid",
         init_steps=0,
         scenario_length=91,
+        goal_behavior=2,
     )
 
     env.reset()
@@ -555,6 +560,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         atn = actions[tick % atn_cache]
         env.step(atn)
         tick += 1
+        break
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
 
@@ -562,5 +568,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()

@@ -52,8 +52,8 @@ void demo() {
         .dt = conf.dt,
 	    .map_name = "resources/drive/binaries/map_000.bin",
         .init_steps = conf.init_steps,
-        .collision_behaviour = conf.collision_behaviour,
-        .offroad_behaviour = conf.offroad_behaviour,
+        .collision_behavior = conf.collision_behavior,
+        .offroad_behavior = conf.offroad_behavior,
     };
     allocate(&env);
     c_reset(&env);

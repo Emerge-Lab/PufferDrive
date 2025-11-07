@@ -322,11 +322,11 @@ struct Drive {
     float goal_radius;
     int max_controlled_agents;
     int logs_capacity;
-    int goal_behaviour;
+    int goal_behavior;
     char* ini_file;
     char* scenario_id;
-    int collision_behaviour;
-    int offroad_behaviour;
+    int collision_behavior;
+    int offroad_behavior;
     int sdc_track_index;
     int num_tracks_to_predict;
     int* tracks_to_predict_indices;
@@ -1463,7 +1463,8 @@ void init(Drive* env){
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
-    if (env->goal_behaviour==GOAL_GENERATE_NEW) init_topology_graph(env);
+    if (env->goal_behavior==GOAL_GENERATE_NEW) init_topology_graph(env);
+    printf("%d\n", env->goal_behavior);
     env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
@@ -2044,7 +2045,7 @@ void c_reset(Drive* env){
 	    env->entities[agent_idx].stopped = 0;
         env->entities[agent_idx].removed = 0;
 
-        if (env->goal_behaviour==GOAL_GENERATE_NEW) {
+        if (env->goal_behavior==GOAL_GENERATE_NEW) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
             env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
             env->entities[agent_idx].sampled_new_goal = 0;
@@ -2152,10 +2153,10 @@ void c_step(Drive* env){
 	    }
 
         if(env->entities[agent_idx].sampled_new_goal){
-            if (env->goal_behaviour==GOAL_GENERATE_NEW) {
+            if (env->goal_behavior==GOAL_GENERATE_NEW) {
                 compute_new_goal(env, agent_idx);
             }
-            else if (env->goal_behaviour==GOAL_STOP) {
+            else if (env->goal_behavior==GOAL_STOP) {
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
             }
@@ -2175,7 +2176,7 @@ void c_step(Drive* env){
         env->logs[i].avg_displacement_error = current_ade;
     }
 
-    if (env->goal_behaviour==GOAL_RESPAWN) {
+    if (env->goal_behavior==GOAL_RESPAWN) {
         for(int i = 0; i < env->active_agent_count; i++){
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
@@ -2185,7 +2186,7 @@ void c_step(Drive* env){
             }
         }
     }
-    else if (env->goal_behaviour==GOAL_STOP) {
+    else if (env->goal_behavior==GOAL_STOP) {
         for(int i = 0; i < env->active_agent_count; i++){
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];

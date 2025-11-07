@@ -26,11 +26,11 @@ Determines which created agents are **controlled** by the policy.
 
 ## Termination conditions (`done`)
 
-Episodes are never truncated before reaching `episode_len`. The `goal_behaviour` argument controls agent behavior after reaching a goal early:
+Episodes are never truncated before reaching `episode_len`. The `goal_behavior` argument controls agent behavior after reaching a goal early:
 
-* **`goal_behaviour=0` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
-* **`goal_behaviour=1`:** Agents receive new goals indefinitely after reaching each goal.
-* **`goal_behaviour=2`:** Agents stop after reaching their goal.
+* **`goal_behavior=0` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
+* **`goal_behavior=1`:** Agents receive new goals indefinitely after reaching each goal.
+* **`goal_behavior=2`:** Agents stop after reaching their goal.
 
 ## Logged performance metrics
 
