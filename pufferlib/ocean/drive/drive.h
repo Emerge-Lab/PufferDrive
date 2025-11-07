@@ -321,7 +321,7 @@ struct Drive {
     float goal_radius;
     int max_controlled_agents;
     int logs_capacity;
-    int goal_behaviour; //0 = respawn, 1 = generate_new_goals, 2 = stop
+    int goal_behaviour;
     char* ini_file;
     char* scenario_id;
     int sdc_track_index;

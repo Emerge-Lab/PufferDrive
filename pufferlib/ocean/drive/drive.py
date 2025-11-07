@@ -20,23 +20,21 @@ class Drive(pufferlib.PufferEnv):
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
         reward_ade=0.0,
+        goal_behaviour=0,
         goal_radius=2.0,
+        collision_behaviour=0,
+        offroad_behaviour=0,
         dt=0.1,
         scenario_length=None,
-        goal_behaviour=0,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
         action_type="discrete",
         dynamics_model="classic",
-        control_all_agents=False,
         max_controlled_agents=-1,
-        deterministic_agent_selection=False,
         buf=None,
         seed=1,
         init_steps=0,
-        init_mode="create_all_valid",
-        control_mode="control_vehicles",
         init_mode="create_all_valid",
         control_mode="control_vehicles",
     ):
@@ -50,10 +48,12 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
+        self.goal_behaviour = goal_behaviour
+        self.collision_behaviour = collision_behaviour
+        self.offroad_behaviour = offroad_behaviour
         self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
-        self.goal_behaviour = goal_behaviour
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
 
@@ -182,6 +182,8 @@ class Drive(pufferlib.PufferEnv):
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
                 goal_behaviour=goal_behaviour,
+                collision_behaviour=self.collision_behaviour,
+                offroad_behaviour=self.offroad_behaviour,
                 dt=dt,
                 scenario_length=(int(scenario_length) if scenario_length is not None else None),
                 max_controlled_agents=self.max_controlled_agents,
@@ -248,6 +250,8 @@ class Drive(pufferlib.PufferEnv):
                         reward_ade=self.reward_ade,
                         goal_radius=self.goal_radius,
                         goal_behaviour=self.goal_behaviour,
+                        collision_behaviour=self.collision_behaviour,
+                        offroad_behaviour=self.offroad_behaviour,
                         dt=self.dt,
                         scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
                         max_controlled_agents=self.max_controlled_agents,
