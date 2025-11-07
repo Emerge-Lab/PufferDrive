@@ -27,8 +27,7 @@ To test your setup, you can run
 ```
 puffer train puffer_drive
 ```
-
-Alternative options for working with pufferdrive are found at https://puffer.ai/docs.html
+See also the [puffer docs](https://puffer.ai/docs.html).
 
 
 ## Quick start
@@ -108,7 +107,7 @@ The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color 
 
 ### Realism
 
-We provide an implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) enabling you to easily evaluate how closely your trained agent matches the distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/main/pufferlib/ocean/benchmark).
+We provide an implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) within PufferDrive allowing you to easily evaluate how well your trained agent reproduces distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/main/pufferlib/ocean/benchmark).
 
 WOSAC evaluation with random policy
 ```bash
