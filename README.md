@@ -8,20 +8,9 @@ Clone the repo
 https://github.com/Emerge-Lab/PufferDrive.git
 ```
 
-Make a venv
-```
-uv venv
-```
-
-Activate the venv
+Make a venv (`uv venv`), activate the venv
 ```
 source .venv/bin/activate
-```
-
-Install `inih`
-
-```
-wget https://github.com/benhoyt/inih/archive/r62.tar.gz
 ```
 
 Inside the venv, install the dependencies
@@ -85,7 +74,7 @@ sudo apt update
 sudo apt install ffmpeg xvfb
 ```
 
-For HPC(There are no root privileges), so install into the conda environment
+For HPC (There are no root privileges), so install into the conda environment
 ```bash
 conda install -c conda-forge xorg-x11-server-xvfb-cos6-x86_64
 conda install -c conda-forge ffmpeg
@@ -114,6 +103,19 @@ The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color 
 
 ---
 
-### Output
 
-The visualizer will automatically generate two videos from the rendered frames.
+## Benchmarks
+
+### Realism
+
+We provide an implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) enabling you to easily evaluate how closely your trained agent matches the distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/main/pufferlib/ocean/benchmark).
+
+WOSAC evaluation with random policy
+```bash
+puffer eval puffer_drive --wosac.enabled True
+```
+
+WOSAC evaluation with your checkpoint (must be .pt file)
+```bash
+puffer eval puffer_drive --wosac.enabled True --load-model-path <your-trained-policy>.pt
+```
