@@ -107,9 +107,9 @@ int test_problematic_inline_comment() {
     drive_config config;
     if (ini_parse("test_drive.ini", handler, &config) < 0) return 1;
     // assert(strcmp(config.key4, "four") == 0); // should pass if comments where eluded
-    assert(strcmp(config.key4, "four # and more") == 0);
+    assert(strcmp(config.key4, "four # and more") == 0); // # comments are interpreted as content
     // assert(strcmp(config.key7, "seven ; seven") == 0); // was expected to pass, actually fails
-    assert(strcmp(config.key7, "seven") == 0); // was expected to fail, actually pass
+    assert(strcmp(config.key7, "seven") == 0); // ; comments are interpreted properly
     free_configurator(&config);
     return 0;
 }
