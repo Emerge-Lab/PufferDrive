@@ -309,6 +309,7 @@ struct Drive {
     int dynamics_model;
     GridMap* grid_map;
     int* neighbor_offsets;
+    int scenario_length;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_ade;
@@ -324,6 +325,8 @@ struct Drive {
     int goal_behaviour;
     char* ini_file;
     char* scenario_id;
+    int collision_behaviour;
+    int offroad_behaviour;
     int sdc_track_index;
     int num_tracks_to_predict;
     int* tracks_to_predict_indices;
