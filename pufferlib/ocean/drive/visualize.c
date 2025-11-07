@@ -491,14 +491,14 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--init-mode") == 0) {
             if (i + 1 < argc) {
                 init_mode = atoi(argv[i + 1]);
-                }
                 i++;
+            }
         } else if (strcmp(argv[i], "--control-mode") == 0) {
             if (i + 1 < argc) {
                 control_mode = atoi(argv[i + 1]);
                 i++;
-        }
-        else if (strcmp(argv[i], "--max-controlled-agents") == 0) {
+            }
+        } else if (strcmp(argv[i], "--max-controlled-agents") == 0) {
             if (i + 1 < argc) {
                 max_controlled_agents = atoi(argv[i + 1]);
                 i++;
