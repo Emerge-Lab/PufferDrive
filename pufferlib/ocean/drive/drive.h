@@ -1464,7 +1464,6 @@ void init(Drive* env){
     set_means(env);
     init_grid_map(env);
     if (env->goal_behavior==GOAL_GENERATE_NEW) init_topology_graph(env);
-    printf("%d\n", env->goal_behavior);
     env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
@@ -1510,9 +1509,6 @@ void allocate(Drive* env){
     init(env);
     int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    // printf("num static agents: %d\n", env->static_agent_count);
-    // printf("active agent count: %d\n", env->active_agent_count);
-    // printf("num objects: %d\n", env->num_objects);
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
     env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));

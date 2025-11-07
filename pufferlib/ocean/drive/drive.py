@@ -136,8 +136,6 @@ class Drive(pufferlib.PufferEnv):
             max_controlled_agents=self.max_controlled_agents,
         )
 
-        breakpoint()
-
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
