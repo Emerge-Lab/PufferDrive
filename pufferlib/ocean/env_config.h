@@ -23,7 +23,6 @@ typedef struct
     int spawn_immunity_timer;
     float dt;
     int goal_behaviour;
-    int control_non_vehicles;
     int scenario_length;
     int init_steps;
     int init_mode;
@@ -82,8 +81,6 @@ static int handler(
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "dt")) {
         env_config->dt = atof(value);
-    } else if (MATCH("env", "control_non_vehicles")) {
-        env_config->control_non_vehicles = (strcmp(value, "True") == 0) ? 1 : 0;
     } else if (MATCH("env", "scenario_length")) {
         env_config->scenario_length = atoi(value);
     } else if (MATCH("env", "init_steps")) {

@@ -94,27 +94,6 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
             )
-        self.init_mode_str = init_mode
-        self.control_mode_str = control_mode
-
-        if self.control_mode_str == "control_vehicles":
-            self.control_mode = 0
-        elif self.control_mode_str == "control_agents":
-            self.control_mode = 1
-        elif self.control_mode_str == "control_tracks_to_predict":
-            self.control_mode = 2
-        else:
-            raise ValueError(
-                f"init_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.init_mode_str}"
-            )
-        if self.init_mode_str == "create_all_valid":
-            self.init_mode = 0
-        elif self.init_mode_str == "create_only_controlled":
-            self.init_mode = 1
-        else:
-            raise ValueError(
-                f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
-            )
 
         if action_type == "discrete":
             if dynamics_model == "classic":

@@ -51,7 +51,6 @@ void demo() {
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
 	    .map_name = "resources/drive/binaries/map_000.bin",
-        .control_non_vehicles = conf.control_non_vehicles,
         .init_steps = conf.init_steps,
         .collision_behaviour = conf.collision_behaviour,
         .offroad_behaviour = conf.offroad_behaviour,
@@ -132,7 +131,6 @@ void performance_test() {
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
 	    .map_name = "resources/drive/binaries/map_000.bin",
-        .control_non_vehicles = conf.control_non_vehicles,
         .init_steps = conf.init_steps,
     };
     clock_t start_time, end_time;
