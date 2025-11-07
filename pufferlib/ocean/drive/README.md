@@ -4,11 +4,6 @@ This readme contains several important assumptions and definions about the `Puff
 
 ## Agent initialization and control
 
-### Overview
-
-* `init_mode` → which agents are **created**
-* `control_mode` → which agents are **controlled** by the policy
-
 ### `init_mode`
 
 Determines which agents are **created** in the environment.
@@ -17,8 +12,6 @@ Determines which agents are **created** in the environment.
 | ------------------------ | ---------------------------------------------------------------------------- |
 | `create_all_valid`       | Create all entities valid at initialization (`traj_valid[init_steps] == 1`). |
 | `create_only_controlled` | Create only those agents that are controlled by the policy.                  |
-
----
 
 ### `control_mode`
 

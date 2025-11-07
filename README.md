@@ -117,7 +117,7 @@ The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color 
 
 ### Realism
 
-We provide an implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) within PufferDrive allowing you to easily evaluate how well your trained agent reproduces distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/main/pufferlib/ocean/benchmark).
+We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent reproduces human driving behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/main/pufferlib/ocean/benchmark).
 
 WOSAC evaluation with random policy
 ```bash
