@@ -1338,7 +1338,7 @@ void set_active_agents(Drive* env){
     }
 
     // Iterate through entities to find agents to create and/or control
-    for(int i = 0; i < env->num_objects-1 && env->num_actors < MAX_AGENTS; i++){
+    for(int i = 0; i < env->num_objects && env->num_actors < MAX_AGENTS; i++){
 
         Entity* entity = &env->entities[i];
 
