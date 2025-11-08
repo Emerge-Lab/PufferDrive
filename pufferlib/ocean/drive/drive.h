@@ -1282,7 +1282,7 @@ bool should_control_agent(Drive* env, int agent_idx){
     Entity* entity = &env->entities[agent_idx];
 
     // Shrink agent size for collision checking
-    entity->width *= 0.7f;
+    entity->width *= 0.7f; // TODO: Move this somewhere else
     entity->length *= 0.7f;
 
     // Special mode: control only agents in prediction track list
