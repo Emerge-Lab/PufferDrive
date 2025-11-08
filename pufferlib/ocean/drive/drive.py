@@ -390,7 +390,6 @@ def save_map_binary(map_data, output_file, unique_map_id):
             if obj_type == "vehicle":
                 obj_type = 1
             elif obj_type == "pedestrian":
-                print("pedestrian")
                 obj_type = 2
             elif obj_type == "cyclist":
                 obj_type = 3
@@ -536,7 +535,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
     env = Drive(
         num_agents=num_agents,
-        num_maps=10,
+        num_maps=1,
         control_mode="control_vehicles",
         init_mode="create_all_valid",
         init_steps=0,
