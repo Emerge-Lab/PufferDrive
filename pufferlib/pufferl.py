@@ -546,9 +546,6 @@ class PuffeRL:
                             cmd.append("--lasers")
                         if config["show_human_logs"]:
                             cmd.append("--log-trajectories")
-
-                        if self.vecenv.driver_env.control_non_vehicles:
-                            cmd.append("--control-non-vehicles")
                         if self.vecenv.driver_env.goal_radius is not None:
                             cmd.extend(["--goal-radius", str(self.vecenv.driver_env.goal_radius)])
                         if self.vecenv.driver_env.init_steps > 0:
@@ -557,6 +554,10 @@ class PuffeRL:
                             map_path = config["render_map"]
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
+                        if self.vecenv.driver_env.init_mode is not None:
+                            cmd.extend(["--init-mode", str(self.vecenv.driver_env.init_mode)])
+                        if self.vecenv.driver_env.control_mode is not None:
+                            cmd.extend(["--control-mode", str(self.vecenv.driver_env.control_mode)])
 
                         # Specify output paths for videos
                         cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
@@ -565,17 +566,13 @@ class PuffeRL:
                         env_cfg = getattr(self, "vecenv", None)
                         env_cfg = getattr(env_cfg, "driver_env", None)
                         if env_cfg is not None:
-                            if getattr(env_cfg, "control_all_agents", False):
-                                cmd.append("--pure-self-play")
-                            n_policy = getattr(env_cfg, "num_policy_controlled_agents", -1)
+                            n_policy = getattr(env_cfg, "max_controlled_agents", -1)
                             try:
                                 n_policy = int(n_policy)
                             except (TypeError, ValueError):
                                 n_policy = -1
                             if n_policy > 0:
                                 cmd += ["--num-policy-controlled-agents", str(n_policy)]
-                            if getattr(env_cfg, "deterministic_agent_selection", False):
-                                cmd.append("--deterministic-selection")
                             if getattr(env_cfg, "num_maps", False):
                                 cmd.extend(["--num-maps", str(env_cfg.num_maps)])
                             if getattr(env_cfg, "scenario_length", None):
@@ -616,7 +613,7 @@ class PuffeRL:
                                     print(f"Video generation completed but {source_vid} not found")
 
                         else:
-                            print(f"C rendering failed with exit code {result.returncode}: {result.stderr}")
+                            print(f"C rendering failed with exit code {result.returncode}: {result.stdout}")
 
                     except subprocess.TimeoutExpired:
                         print("C rendering timed out")
@@ -917,7 +914,7 @@ class Profile:
 
     def end(self):
         if torch.cuda.is_available():
-           torch.cuda.synchronize()
+            torch.cuda.synchronize()
 
         end = time.time()
         for i in range(len(self.stack)):
@@ -1132,14 +1129,42 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
 def eval(env_name, args=None, vecenv=None, policy=None):
     args = args or load_config(env_name)
-    backend = args["vec"]["backend"]
-    if backend != "PufferEnv":
-        backend = "Serial"
+
+    wosac_enabled = args["wosac"]["enabled"]
+    backend = args["wosac"]["backend"] if wosac_enabled else args["vec"]["backend"]
+    assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
 
     args["vec"] = dict(backend=backend, num_envs=1)
-    vecenv = vecenv or load_env(env_name, args)
+    args["env"]["num_agents"] = args["wosac"]["num_total_wosac_agents"] if wosac_enabled else 1
+    args["env"]["init_mode"] = args["wosac"]["init_mode"] if wosac_enabled else args["env"]["init_mode"]
+    args["env"]["control_mode"] = args["wosac"]["control_mode"] if wosac_enabled else args["env"]["control_mode"]
+    args["env"]["init_steps"] = args["wosac"]["init_steps"] if wosac_enabled else args["env"]["init_steps"]
+    args["env"]["goal_behavior"] = args["wosac"]["goal_behavior"] if wosac_enabled else args["env"]["goal_behavior"]
 
+    print(args["env"]["goal_behavior"])
+    vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
+
+    if wosac_enabled:
+        print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
+        from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
+
+        evaluator = WOSACEvaluator(args)
+
+        # Collect ground truth trajectories from the dataset
+        gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+
+        # Roll out trained policy in the simulator
+        simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
+
+        if args["wosac"]["sanity_check"]:
+            evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
+
+        # Analyze and compute metrics
+        results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories)
+
+        return results
+
     ob, info = vecenv.reset()
     driver = vecenv.driver_env
     num_agents = vecenv.observation_space.shape[0]
@@ -1353,7 +1378,7 @@ def load_policy(args, vecenv, env_name=""):
     return policy
 
 
-def load_config(env_name):
+def load_config(env_name, config_dir=None):
     parser = argparse.ArgumentParser(
         description=f":blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]"
         " demo options. Shows valid args for your env and policy",
@@ -1381,8 +1406,13 @@ def load_config(env_name):
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
     args = parser.parse_known_args()[0]
 
+    if config_dir is None:
+        puffer_dir = os.path.dirname(os.path.realpath(__file__))
+    else:
+        print("Using custom config dir:", config_dir)
+        puffer_dir = config_dir
+
     # Load defaults and config
-    puffer_dir = os.path.dirname(os.path.realpath(__file__))
     puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
     puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
     if env_name == "default":
