@@ -78,6 +78,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int total_agent_count = 0;
     int env_count = 0;
     int max_envs = num_agents;
+    int maps_checked = 0;
     PyObject* agent_offsets = PyList_New(max_envs+1);
     PyObject* map_ids = PyList_New(max_envs);
     // getting env count
@@ -94,15 +95,35 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if(env->active_agent_count == 0) {
-              for(int j=0;j<env->num_entities;j++) {
-                  free_entity(&env->entities[j]);
-              }
-              free(env->entities);
-              free(env->active_agent_indices);
-              free(env->static_agent_indices);
-              free(env->expert_static_agent_indices);
-              free(env);
-              continue;
+            maps_checked++;
+
+            // Safeguard: if we've checked all available maps and found no active agents, raise an error
+            if(maps_checked >= num_maps) {
+                for(int j=0;j<env->num_entities;j++) {
+                    free_entity(&env->entities[j]);
+                }
+                free(env->entities);
+                free(env->active_agent_indices);
+                free(env->static_agent_indices);
+                free(env->expert_static_agent_indices);
+                free(env);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
+            }
+
+            for(int j=0;j<env->num_entities;j++) {
+                free_entity(&env->entities[j]);
+            }
+            free(env->entities);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env);
+            continue;
           }
 
         // Store map_id
