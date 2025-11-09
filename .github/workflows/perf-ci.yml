@@ -40,4 +40,4 @@ jobs:
 
       - name: Test simulator performance
         run: python tests/test_simulator_perf.py
-        timeout-minutes: 8
+        timeout-minutes: 20

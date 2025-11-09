@@ -24,20 +24,16 @@ typedef struct
     float reward_vehicle_collision_post_respawn;
     float reward_ade;
     float goal_radius;
-    int collision_behaviour;
-    int offroad_behaviour;
+    int collision_behavior;
+    int offroad_behavior;
     int spawn_immunity_timer;
     float dt;
-    int use_goal_generation;
-    int control_non_vehicles;
+    int goal_behavior;
     int scenario_length;
     int init_steps;
-    int control_all_agents;
-    int num_policy_controlled_agents;
-    int deterministic_agent_selection;
-    Init_Mode init_mode;
-    int num_agents_per_world; // Used if init_mode is dynamic_no_agents
-} EnvInitConfig;
+    int init_mode;
+    int control_mode;
+} env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
 static int handler(
@@ -67,8 +63,8 @@ static int handler(
             printf("Warning: Unknown dynamics_model value '%s', defaulting to JERK\n", value);
             env_config->dynamics_model = 1;  // Default to JERK
         }
-    } else if (MATCH("env", "use_goal_generation")) {
-        env_config->use_goal_generation = (strcmp(value, "True") == 0) ? 1 : 0;
+    } else if (MATCH("env", "goal_behavior")) {
+        env_config->goal_behavior = atoi(value);
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {
@@ -83,26 +79,22 @@ static int handler(
         env_config->reward_ade = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
-    } else if(MATCH("env", "collision_behaviour")){
-        env_config->collision_behaviour = atoi(value);
-    } else if(MATCH("env", "offroad_behaviour")){
-        env_config->offroad_behaviour = atoi(value);
+    } else if(MATCH("env", "collision_behavior")){
+        env_config->collision_behavior = atoi(value);
+    } else if(MATCH("env", "offroad_behavior")){
+        env_config->offroad_behavior = atoi(value);
     } else if (MATCH("env", "spawn_immunity_timer")) {
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "dt")) {
         env_config->dt = atof(value);
-    } else if (MATCH("env", "control_non_vehicles")) {
-        env_config->control_non_vehicles = (strcmp(value, "True") == 0) ? 1 : 0;
     } else if (MATCH("env", "scenario_length")) {
         env_config->scenario_length = atoi(value);
     } else if (MATCH("env", "init_steps")) {
         env_config->init_steps = atoi(value);
-    } else if (MATCH("env", "control_all_agents")) {
-        env_config->control_all_agents = (strcmp(value, "True") == 0) ? 1 : 0;
-    } else if (MATCH("env", "num_policy_controlled_agents")) {
-        env_config->num_policy_controlled_agents = atoi(value);
-    } else if (MATCH("env", "deterministic_agent_selection")) {
-        env_config->deterministic_agent_selection = (strcmp(value, "True") == 0) ? 1 : 0;
+    } else if (MATCH("env", "init_mode")) {
+        env_config->init_mode = atoi(value);
+    } else if (MATCH("env", "control_mode")) {
+        env_config->control_mode = atoi(value);
     }
     else if (MATCH("env", "init_mode")) {
         if (strcmp(value, "\"default\"") == 0 || strcmp(value, "default") == 0) {

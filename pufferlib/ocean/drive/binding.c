@@ -70,6 +70,9 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
+    int init_mode = unpack(kwargs, "init_mode");
+    int control_mode = unpack(kwargs, "control_mode");
+    int init_steps = unpack(kwargs, "init_steps");
 
     // Get configs
     char* ini_file = unpack_str(kwargs, "ini_file");
@@ -88,6 +91,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int total_agent_count = 0;
     int env_count = 0;
     int max_envs = num_agents;
+    int maps_checked = 0;
     PyObject* agent_offsets = PyList_New(max_envs+1);
     PyObject* map_ids = PyList_New(max_envs);
     // getting env count
@@ -104,48 +108,65 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
             total_agent_count += num_agents_per_world;
             env_count++;
         }
-        else {
-            Drive* env = calloc(1, sizeof(Drive));
-            sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-            env->entities = load_map_binary(map_file, env, conf);
-            PyObject* obj = NULL;
-            obj = kwargs ? PyDict_GetItemString(kwargs, "num_policy_controlled_agents") : NULL;
-            if (obj && PyLong_Check(obj)) {
-                env->policy_agents_per_env = (int)PyLong_AsLong(obj);
-            } else {
-                env->policy_agents_per_env = -1;
+        Drive* env = calloc(1, sizeof(Drive));
+        env->init_mode = init_mode;
+        env->control_mode = control_mode;
+        env->init_steps = init_steps;
+        sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
+        env->entities = load_map_binary(map_file, env);
+        set_active_agents(env);
+
+        // Skip map if it doesn't contain any controllable agents
+        if(env->active_agent_count == 0) {
+            maps_checked++;
+
+            // Safeguard: if we've checked all available maps and found no active agents, raise an error
+            if(maps_checked >= num_maps) {
+                for(int j=0;j<env->num_entities;j++) {
+                    free_entity(&env->entities[j]);
+                }
+                free(env->entities);
+                free(env->active_agent_indices);
+                free(env->static_agent_indices);
+                free(env->expert_static_agent_indices);
+                free(env);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
             }
-            obj = kwargs ? PyDict_GetItemString(kwargs, "control_all_agents") : NULL;
-            if (obj && PyLong_Check(obj)) {
-                env->control_all_agents = (int)PyLong_AsLong(obj);
-            } else {
-                env->control_all_agents = 0;
-            }
-            obj = kwargs ? PyDict_GetItemString(kwargs, "deterministic_agent_selection") : NULL;
-            if (obj && PyLong_Check(obj)) {
-                env->deterministic_agent_selection = (int)PyLong_AsLong(obj);
-            } else {
-                env->deterministic_agent_selection = 0;
-            }
-            set_active_agents(env);
-            // Store map_id
-            PyObject* map_id_obj = PyLong_FromLong(map_id);
-            PyList_SetItem(map_ids, env_count, map_id_obj);
-            // Store agent offset
-            PyObject* offset = PyLong_FromLong(total_agent_count);
-            PyList_SetItem(agent_offsets, env_count, offset);
-            total_agent_count += env->active_agent_count;
-            env_count++;
+
             for(int j=0;j<env->num_entities;j++) {
                 free_entity(&env->entities[j]);
             }
             free(env->entities);
             free(env->active_agent_indices);
-            free(env->static_car_indices);
-            free(env->expert_static_car_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
             free(env);
+            continue;
+          }
+
+        // Store map_id
+        PyObject* map_id_obj = PyLong_FromLong(map_id);
+        PyList_SetItem(map_ids, env_count, map_id_obj);
+        // Store agent offset
+        PyObject* offset = PyLong_FromLong(total_agent_count);
+        PyList_SetItem(agent_offsets, env_count, offset);
+        total_agent_count += env->active_agent_count;
+        env_count++;
+        for(int j=0;j<env->num_entities;j++) {
+            free_entity(&env->entities[j]);
         }
+        free(env->entities);
+        free(env->active_agent_indices);
+        free(env->static_agent_indices);
+        free(env->expert_static_agent_indices);
+        free(env);
     }
+    //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
     if(total_agent_count >= num_agents){
         total_agent_count = num_agents;
     }
@@ -155,29 +176,11 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     // resize lists
     PyObject* resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject* resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-    //
-    //Py_DECREF(agent_offsets);
-    //Py_DECREF(map_ids);
-    // create a tuple
     PyObject* tuple = PyTuple_New(3);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
     return tuple;
-
-    //Py_DECREF(num);
-    /*
-    for(int i = 0;i<num_envs; i++) {
-        for(int j=0;j<temp_envs[i].num_entities;j++) {
-            free_entity(&temp_envs[i].entities[j]);
-        }
-        free(temp_envs[i].entities);
-        free(temp_envs[i].active_agent_indices);
-        free(temp_envs[i].static_car_indices);
-    }
-    free(temp_envs);
-    */
-    // return agent_offsets;
 }
 
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
@@ -187,8 +190,6 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
-    env->collision_behaviour = conf.collision_behaviour;
-    env->offroad_behaviour = conf.offroad_behaviour;
     if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) {
         conf.scenario_length = (int)unpack(kwargs, "scenario_length");
     }
@@ -203,14 +204,15 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_ade = conf.reward_ade;
-    env->goal_radius = conf.goal_radius;
     env->scenario_length = conf.scenario_length;
-    env->use_goal_generation = conf.use_goal_generation;
-    env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
-    env->control_all_agents = unpack(kwargs, "control_all_agents");
-    env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
+    env->goal_radius = conf.goal_radius;
+    env->goal_behavior = conf.goal_behavior;
+    env->collision_behavior = conf.collision_behavior;
+    env->offroad_behavior = conf.offroad_behavior;
+    env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
     env->dt = conf.dt;
-    env->control_non_vehicles = (int)unpack(kwargs, "control_non_vehicles");
+    env->init_mode = (int)unpack(kwargs, "init_mode");
+    env->control_mode = (int)unpack(kwargs, "control_mode");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
@@ -232,13 +234,9 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "episode_return", log->episode_return);
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
-    //assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
     assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
     assign_to_dict(dict, "score", log->score);
-    // assign_to_dict(dict, "active_agent_count", log->active_agent_count);
-    // assign_to_dict(dict, "expert_static_car_count", log->expert_static_car_count);
-    // assign_to_dict(dict, "static_car_count", log->static_car_count);
     assign_to_dict(dict, "avg_offroad_per_agent", log->avg_offroad_per_agent);
     assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
     return 0;

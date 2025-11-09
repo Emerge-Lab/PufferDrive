@@ -51,11 +51,9 @@ void demo() {
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
 	    .map_name = "resources/drive/binaries/map_000.bin",
-        .control_non_vehicles = conf.control_non_vehicles,
         .init_steps = conf.init_steps,
-        .control_all_agents = conf.control_all_agents,
-        .policy_agents_per_env = conf.num_policy_controlled_agents,
-        .deterministic_agent_selection = conf.deterministic_agent_selection,
+        .collision_behavior = conf.collision_behavior,
+        .offroad_behavior = conf.offroad_behavior,
     };
     allocate(&env, conf);
     c_reset(&env);
@@ -133,11 +131,7 @@ void performance_test() {
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
 	    .map_name = "resources/drive/binaries/map_000.bin",
-        .control_non_vehicles = conf.control_non_vehicles,
         .init_steps = conf.init_steps,
-        .control_all_agents = conf.control_all_agents,
-        .policy_agents_per_env = conf.num_policy_controlled_agents,
-        .deterministic_agent_selection = conf.deterministic_agent_selection,
     };
     clock_t start_time, end_time;
     double cpu_time_used;
