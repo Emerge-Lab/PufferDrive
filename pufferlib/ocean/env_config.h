@@ -6,6 +6,12 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+typedef enum{
+    UNKNOWN_INIT_MODE = -1,
+    DEFAULT_INIT_MODE = 0,
+    DYNAMIC_AGENTS_PER_ENV_INIT_MODE = 1
+} Init_Mode;
+
 // Config struct for parsing INI files - contains all environment configuration
 typedef struct
 {
@@ -29,7 +35,9 @@ typedef struct
     int control_all_agents;
     int num_policy_controlled_agents;
     int deterministic_agent_selection;
-} env_init_config;
+    Init_Mode init_mode;
+    int num_agents_per_world; // Used if init_mode is dynamic_no_agents
+} EnvInitConfig;
 
 // INI file parser handler - parses all environment configuration from drive.ini
 static int handler(
@@ -38,7 +46,7 @@ static int handler(
     const char* name,
     const char* value
 ) {
-    env_init_config* env_config = (env_init_config*)config;
+    EnvInitConfig* env_config = (EnvInitConfig*)config;
     #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
 
     if (MATCH("env", "action_type")) {
@@ -95,6 +103,21 @@ static int handler(
         env_config->num_policy_controlled_agents = atoi(value);
     } else if (MATCH("env", "deterministic_agent_selection")) {
         env_config->deterministic_agent_selection = (strcmp(value, "True") == 0) ? 1 : 0;
+    }
+    else if (MATCH("env", "init_mode")) {
+        if (strcmp(value, "\"default\"") == 0 || strcmp(value, "default") == 0) {
+            env_config->init_mode = DEFAULT_INIT_MODE;  // DEFAULT
+        } else if (strcmp(value, "\"dynamic_no_agents\"") == 0 || strcmp(value, "dynamic_no_agents") == 0) {
+            env_config->init_mode = DYNAMIC_AGENTS_PER_ENV_INIT_MODE;  // DYNAMIC_NO_AGENTS
+        } else {
+            raise_error_with_message(ERROR_INVALID_CONFIG, "Unknown init_mode value: %s", value);
+            env_config->init_mode = UNKNOWN_INIT_MODE;  // Default to UNKNOWN
+        }
+    } else if (MATCH("env", "num_agents_per_world")) {
+        env_config->num_agents_per_world = atoi(value);
+        if(env_config->num_agents_per_world <= 0 && env_config->init_mode == DYNAMIC_AGENTS_PER_ENV_INIT_MODE) {
+            raise_error_with_message(ERROR_INVALID_CONFIG, "num_agents_per_world must be positive for dynamic_agents_per_env init_mode");
+        }
     }
 
     #undef MATCH

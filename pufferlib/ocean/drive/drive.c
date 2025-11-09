@@ -35,7 +35,7 @@ void test_drivenet() {
 
 void demo() {
     // Read configuration from INI file
-    env_init_config conf = {0};
+    EnvInitConfig conf = {0};
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
     if(ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
@@ -57,7 +57,7 @@ void demo() {
         .policy_agents_per_env = conf.num_policy_controlled_agents,
         .deterministic_agent_selection = conf.deterministic_agent_selection,
     };
-    allocate(&env);
+    allocate(&env, conf);
     c_reset(&env);
     c_render(&env);
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
@@ -116,7 +116,7 @@ void demo() {
 
 void performance_test() {
     // Read configuration from INI file
-    env_init_config conf = {0};
+    EnvInitConfig conf = {0};
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
     if(ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
@@ -142,7 +142,7 @@ void performance_test() {
     clock_t start_time, end_time;
     double cpu_time_used;
     start_time = clock();
-    allocate(&env);
+    allocate(&env, conf);
     c_reset(&env);
     end_time = clock();
     cpu_time_used = ((double) (end_time - start_time)) / CLOCKS_PER_SEC;

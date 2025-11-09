@@ -11,6 +11,7 @@
 #include "rlgl.h"
 #include <time.h>
 #include "error.h"
+#include "../env_config.h"
 
 // Entity Types
 #define NONE 0
@@ -281,6 +282,9 @@ struct Drive {
     int num_controllable_agents;
     int num_objects;
     int num_roads;
+    int num_lanes;
+    int num_road_edges;
+    int num_road_lines;
     int static_car_count;
     int* static_car_indices;
     int expert_static_car_count;
@@ -479,60 +483,163 @@ void freeTopologyGraph(struct Graph* graph) {
     free(graph);
 }
 
+bool is_valid_spawn_point(Drive* env, Entity agent, int lane_idx, int point_idx) {
+    // Check for collisions with existing agents
+    // Use collision_check function
+    if (!collision_check(env, agent, lane_idx, point_idx)) {
+        return false;
+    }
+    // offroad checks use check_line_intersection function
+    if (!check_line_intersection()) {
+        return false;
+    }
+    return true; // No collisions detected
+}
 
-Entity* load_map_binary(const char* filename, Drive* env) {
+void init_agents(Drive* env, int entities_start_index, int entities_end_index, int num_agents){
+    Entity* entities = env->entities;
+    for (int i=entities_start_index; i<entities_end_index; i++){
+        // Random Road lane, random point on lane, random orientation
+        Entity agent = entities[i];
+        while(1){
+            int random_lane_idx = rand() % env->num_roads;
+            if(entities[random_lane_idx].type == ROAD_LANE){
+                int lane_size = entities[random_lane_idx].array_size;
+                int random_point_idx = rand() % lane_size;
+
+                entities[i].x = entities[random_lane_idx].traj_x[random_point_idx];
+                entities[i].y = entities[random_lane_idx].traj_y[random_point_idx];
+                entities[i].z = entities[random_lane_idx].traj_z[random_point_idx];
+                entities[i].heading = rand() * 2.0f * PI; // Random orientation
+                // Set initial velocities to zero
+                entities[i].vx = 0.0f;
+                entities[i].vy = 0.0f;
+                entities[i].vz = 0.0f;
+
+                // Keep repeating above till we find a valid spawn point
+                // Valid: doesn't collide with existing agents, not offroad
+                if (is_valid_spawn_point(env, entities[i], random_lane_idx, random_point_idx)) {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+Entity* load_map_binary(const char* filename, Drive* env, EnvInitConfig conf) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
-    fread(&env->num_objects, sizeof(int), 1, file);
-    fread(&env->num_roads, sizeof(int), 1, file);
-    env->num_entities = env->num_objects + env->num_roads;
-    Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
-    for (int i = 0; i < env->num_entities; i++) {
-	    // Read base entity data
-        fread(&entities[i].type, sizeof(int), 1, file);
-        fread(&entities[i].array_size, sizeof(int), 1, file);
-        // Allocate arrays based on type
-        int size = entities[i].array_size;
-        entities[i].traj_x = (float*)malloc(size * sizeof(float));
-        entities[i].traj_y = (float*)malloc(size * sizeof(float));
-        entities[i].traj_z = (float*)malloc(size * sizeof(float));
-        if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
-            // Allocate arrays for object-specific data
-            entities[i].traj_vx = (float*)malloc(size * sizeof(float));
-            entities[i].traj_vy = (float*)malloc(size * sizeof(float));
-            entities[i].traj_vz = (float*)malloc(size * sizeof(float));
-            entities[i].traj_heading = (float*)malloc(size * sizeof(float));
-            entities[i].traj_valid = (int*)malloc(size * sizeof(int));
-        } else {
+    if (conf.init_mode == DYNAMIC_AGENTS_PER_ENV_INIT_MODE) {
+        env->num_objects = conf.num_agents_per_world;
+        fread(&env->num_roads, sizeof(int), 1, file);
+        env->num_lanes = 0;
+        env->num_road_edges = 0;
+        env->num_road_lines = 0;
+        env->num_entities = env->num_objects + env->num_roads;
+        Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
+        for (int i = 0; i < env->num_roads; i++) {
+            // Read base entity data
+            fread(&entities[i].type, sizeof(int), 1, file);
+            fread(&entities[i].array_size, sizeof(int), 1, file);
+            if (entities[i].type == ROAD_LANE) {
+                env->num_lanes += 1;
+            } else if (entities[i].type == ROAD_EDGE) {
+                env->num_road_edges += 1;
+            } else if (entities[i].type == ROAD_LINE) {
+                env->num_road_lines += 1;
+            }
+            // Allocate arrays based on type
+            int size = entities[i].array_size;
+            entities[i].traj_x = (float*)malloc(size * sizeof(float));
+            entities[i].traj_y = (float*)malloc(size * sizeof(float));
+            entities[i].traj_z = (float*)malloc(size * sizeof(float));
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
             entities[i].traj_vy = NULL;
             entities[i].traj_vz = NULL;
             entities[i].traj_heading = NULL;
             entities[i].traj_valid = NULL;
+            // Read array data
+            fread(entities[i].traj_x, sizeof(float), size, file);
+            fread(entities[i].traj_y, sizeof(float), size, file);
+            fread(entities[i].traj_z, sizeof(float), size, file);
+            // Read remaining scalar fields
+            fread(&entities[i].width, sizeof(float), 1, file);
+            fread(&entities[i].length, sizeof(float), 1, file);
+            fread(&entities[i].height, sizeof(float), 1, file);
+            fread(&entities[i].goal_position_x, sizeof(float), 1, file);
+            fread(&entities[i].goal_position_y, sizeof(float), 1, file);
+            fread(&entities[i].goal_position_z, sizeof(float), 1, file);
+            fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
         }
-        // Read array data
-        fread(entities[i].traj_x, sizeof(float), size, file);
-        fread(entities[i].traj_y, sizeof(float), size, file);
-        fread(entities[i].traj_z, sizeof(float), size, file);
-        if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
-            fread(entities[i].traj_vx, sizeof(float), size, file);
-            fread(entities[i].traj_vy, sizeof(float), size, file);
-            fread(entities[i].traj_vz, sizeof(float), size, file);
-            fread(entities[i].traj_heading, sizeof(float), size, file);
-            fread(entities[i].traj_valid, sizeof(int), size, file);
-        }
-        // Read remaining scalar fields
-        fread(&entities[i].width, sizeof(float), 1, file);
-        fread(&entities[i].length, sizeof(float), 1, file);
-        fread(&entities[i].height, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_x, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_y, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_z, sizeof(float), 1, file);
-        fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
+
+        init_agents(env, env->num_roads, env->num_entities, env->num_objects);
+
+        fclose(file);
+        return entities;
     }
-    fclose(file);
-    return entities;
+    else {
+        fread(&env->num_objects, sizeof(int), 1, file);
+        fread(&env->num_roads, sizeof(int), 1, file);
+        env->num_lanes = 0;
+        env->num_road_edges = 0;
+        env->num_road_lines = 0;
+        env->num_entities = env->num_objects + env->num_roads;
+        Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
+        for (int i = 0; i < env->num_entities; i++) {
+            // Read base entity data
+            fread(&entities[i].type, sizeof(int), 1, file);
+            fread(&entities[i].array_size, sizeof(int), 1, file);
+            if (entities[i].type == ROAD_LANE) {
+                env->num_lanes += 1;
+            } else if (entities[i].type == ROAD_EDGE) {
+                env->num_road_edges += 1;
+            } else if (entities[i].type == ROAD_LINE) {
+                env->num_road_lines += 1;
+            }
+            // Allocate arrays based on type
+            int size = entities[i].array_size;
+            entities[i].traj_x = (float*)malloc(size * sizeof(float));
+            entities[i].traj_y = (float*)malloc(size * sizeof(float));
+            entities[i].traj_z = (float*)malloc(size * sizeof(float));
+            if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
+                // Allocate arrays for object-specific data
+                entities[i].traj_vx = (float*)malloc(size * sizeof(float));
+                entities[i].traj_vy = (float*)malloc(size * sizeof(float));
+                entities[i].traj_vz = (float*)malloc(size * sizeof(float));
+                entities[i].traj_heading = (float*)malloc(size * sizeof(float));
+                entities[i].traj_valid = (int*)malloc(size * sizeof(int));
+            } else {
+                // Roads don't use these arrays
+                entities[i].traj_vx = NULL;
+                entities[i].traj_vy = NULL;
+                entities[i].traj_vz = NULL;
+                entities[i].traj_heading = NULL;
+                entities[i].traj_valid = NULL;
+            }
+            // Read array data
+            fread(entities[i].traj_x, sizeof(float), size, file);
+            fread(entities[i].traj_y, sizeof(float), size, file);
+            fread(entities[i].traj_z, sizeof(float), size, file);
+            if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
+                fread(entities[i].traj_vx, sizeof(float), size, file);
+                fread(entities[i].traj_vy, sizeof(float), size, file);
+                fread(entities[i].traj_vz, sizeof(float), size, file);
+                fread(entities[i].traj_heading, sizeof(float), size, file);
+                fread(entities[i].traj_valid, sizeof(int), size, file);
+            }
+            // Read remaining scalar fields
+            fread(&entities[i].width, sizeof(float), 1, file);
+            fread(&entities[i].length, sizeof(float), 1, file);
+            fread(&entities[i].height, sizeof(float), 1, file);
+            fread(&entities[i].goal_position_x, sizeof(float), 1, file);
+            fread(&entities[i].goal_position_y, sizeof(float), 1, file);
+            fread(&entities[i].goal_position_z, sizeof(float), 1, file);
+            fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
+        }
+        fclose(file);
+        return entities;
+    }
 }
 
 void set_start_position(Drive* env){
@@ -1628,10 +1735,10 @@ void init_goal_positions(Drive* env){
     }
 }
 
-void init(Drive* env){
+void init(Drive* env, EnvInitConfig conf){
     env->human_agent_idx = 0;
     env->timestep = 0;
-    env->entities = load_map_binary(env->map_name, env);
+    env->entities = load_map_binary(env->map_name, env, conf);
     set_means(env);
     init_grid_map(env);
     if (env->use_goal_generation) init_topology_graph(env);
@@ -1676,8 +1783,8 @@ void c_close(Drive* env){
     free(env->ini_file);
 }
 
-void allocate(Drive* env){
-    init(env);
+void allocate(Drive* env, EnvInitConfig conf){
+    init(env, conf);
     int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     // printf("num static cars: %d\n", env->static_car_count);

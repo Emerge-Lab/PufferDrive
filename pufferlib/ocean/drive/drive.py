@@ -22,8 +22,8 @@ class Drive(pufferlib.PufferEnv):
         reward_ade=0.0,
         goal_radius=2.0,
         dt=0.1,
-        scenario_length=None,
-        resample_frequency=91,
+        scenario_length=91,
+        resample_frequency=910,
         num_maps=100,
         num_agents=512,
         action_type="discrete",
@@ -104,13 +104,14 @@ class Drive(pufferlib.PufferEnv):
         self.control_all_agents = bool(control_all_agents)
         self.num_policy_controlled_agents = int(num_policy_controlled_agents)
         self.deterministic_agent_selection = bool(deterministic_agent_selection)
-
+        print("Calling shared...")
         agent_offsets, map_ids, num_envs = binding.shared(
             num_agents=num_agents,
             num_maps=num_maps,
             num_policy_controlled_agents=self.num_policy_controlled_agents,
             control_all_agents=1 if self.control_all_agents else 0,
             deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
+            ini_file="pufferlib/config/ocean/drive.ini",
         )
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
@@ -178,6 +179,7 @@ class Drive(pufferlib.PufferEnv):
                     num_policy_controlled_agents=self.num_policy_controlled_agents,
                     control_all_agents=1 if self.control_all_agents else 0,
                     deterministic_agent_selection=1 if self.deterministic_agent_selection else 0,
+                    ini_file="pufferlib/config/ocean/drive.ini",
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)

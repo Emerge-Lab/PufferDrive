@@ -70,6 +70,19 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
+
+    // Get configs
+    char* ini_file = unpack_str(kwargs, "ini_file");
+    EnvInitConfig conf = {0};
+    if(ini_parse(ini_file, handler, &conf) < 0) {
+        raise_error_with_message(ERROR_UNKNOWN, "Error while loading %s", ini_file);
+    }
+    Init_Mode init_mode = conf.init_mode;
+    int num_agents_per_world = 0;
+    if (init_mode == DYNAMIC_AGENTS_PER_ENV_INIT_MODE) {
+        num_agents_per_world = conf.num_agents_per_world;
+    }
+
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
@@ -81,45 +94,57 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     while(total_agent_count < num_agents && env_count < max_envs){
         char map_file[100];
         int map_id = rand() % num_maps;
-        Drive* env = calloc(1, sizeof(Drive));
-        sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-        env->entities = load_map_binary(map_file, env);
-        PyObject* obj = NULL;
-        obj = kwargs ? PyDict_GetItemString(kwargs, "num_policy_controlled_agents") : NULL;
-        if (obj && PyLong_Check(obj)) {
-            env->policy_agents_per_env = (int)PyLong_AsLong(obj);
-        } else {
-            env->policy_agents_per_env = -1;
+        if (init_mode == DYNAMIC_AGENTS_PER_ENV_INIT_MODE) {
+            // Store map_id
+            PyObject* map_id_obj = PyLong_FromLong(map_id);
+            PyList_SetItem(map_ids, env_count, map_id_obj);
+            // Store agent offset
+            PyObject* offset = PyLong_FromLong(total_agent_count);
+            PyList_SetItem(agent_offsets, env_count, offset);
+            total_agent_count += num_agents_per_world;
+            env_count++;
         }
-        obj = kwargs ? PyDict_GetItemString(kwargs, "control_all_agents") : NULL;
-        if (obj && PyLong_Check(obj)) {
-            env->control_all_agents = (int)PyLong_AsLong(obj);
-        } else {
-            env->control_all_agents = 0;
+        else {
+            Drive* env = calloc(1, sizeof(Drive));
+            sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
+            env->entities = load_map_binary(map_file, env, conf);
+            PyObject* obj = NULL;
+            obj = kwargs ? PyDict_GetItemString(kwargs, "num_policy_controlled_agents") : NULL;
+            if (obj && PyLong_Check(obj)) {
+                env->policy_agents_per_env = (int)PyLong_AsLong(obj);
+            } else {
+                env->policy_agents_per_env = -1;
+            }
+            obj = kwargs ? PyDict_GetItemString(kwargs, "control_all_agents") : NULL;
+            if (obj && PyLong_Check(obj)) {
+                env->control_all_agents = (int)PyLong_AsLong(obj);
+            } else {
+                env->control_all_agents = 0;
+            }
+            obj = kwargs ? PyDict_GetItemString(kwargs, "deterministic_agent_selection") : NULL;
+            if (obj && PyLong_Check(obj)) {
+                env->deterministic_agent_selection = (int)PyLong_AsLong(obj);
+            } else {
+                env->deterministic_agent_selection = 0;
+            }
+            set_active_agents(env);
+            // Store map_id
+            PyObject* map_id_obj = PyLong_FromLong(map_id);
+            PyList_SetItem(map_ids, env_count, map_id_obj);
+            // Store agent offset
+            PyObject* offset = PyLong_FromLong(total_agent_count);
+            PyList_SetItem(agent_offsets, env_count, offset);
+            total_agent_count += env->active_agent_count;
+            env_count++;
+            for(int j=0;j<env->num_entities;j++) {
+                free_entity(&env->entities[j]);
+            }
+            free(env->entities);
+            free(env->active_agent_indices);
+            free(env->static_car_indices);
+            free(env->expert_static_car_indices);
+            free(env);
         }
-        obj = kwargs ? PyDict_GetItemString(kwargs, "deterministic_agent_selection") : NULL;
-        if (obj && PyLong_Check(obj)) {
-            env->deterministic_agent_selection = (int)PyLong_AsLong(obj);
-        } else {
-            env->deterministic_agent_selection = 0;
-        }
-        set_active_agents(env);
-        // Store map_id
-        PyObject* map_id_obj = PyLong_FromLong(map_id);
-        PyList_SetItem(map_ids, env_count, map_id_obj);
-        // Store agent offset
-        PyObject* offset = PyLong_FromLong(total_agent_count);
-        PyList_SetItem(agent_offsets, env_count, offset);
-        total_agent_count += env->active_agent_count;
-        env_count++;
-        for(int j=0;j<env->num_entities;j++) {
-            free_entity(&env->entities[j]);
-        }
-        free(env->entities);
-        free(env->active_agent_indices);
-        free(env->static_car_indices);
-        free(env->expert_static_car_indices);
-        free(env);
     }
     if(total_agent_count >= num_agents){
         total_agent_count = num_agents;
@@ -158,7 +183,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
     env->ini_file = unpack_str(kwargs, "ini_file");
-    env_init_config conf = {0};
+    EnvInitConfig conf = {0};
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
@@ -195,7 +220,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->map_name = strdup(map_file);
     env->init_steps = init_steps;
     env->timestep = init_steps;
-    init(env);
+    init(env, conf);
     return 0;
 }
 
