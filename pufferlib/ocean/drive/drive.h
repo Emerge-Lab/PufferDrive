@@ -1420,14 +1420,13 @@ void set_active_agents(Drive* env){
     env->expert_static_agent_indices = (int*)malloc(env->expert_static_agent_count * sizeof(int));
     for(int i=0;i<env->active_agent_count;i++){
         env->active_agent_indices[i] = active_agent_indices[i];
-    };
+    }
     for(int i=0;i<env->static_agent_count;i++){
         env->static_agent_indices[i] = static_agent_indices[i];
     }
     for(int i=0;i<env->expert_static_agent_count;i++){
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
-
     return;
 }
 
