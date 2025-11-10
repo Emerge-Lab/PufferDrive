@@ -313,21 +313,26 @@ class WOSACEvaluator:
             agent_indices = [agent_idx]
 
         for agent_idx in agent_indices:
-            breakpoint
-
             valid_mask = gt_trajectories["valid"][agent_idx, 0, :] == 1
             invalid_mask = ~valid_mask
+
+            last_valid_idx = np.where(valid_mask)[0][-1] if valid_mask.any() else 0
+            goal_x = gt_trajectories["x"][agent_idx, 0, last_valid_idx]
+            goal_y = gt_trajectories["y"][agent_idx, 0, last_valid_idx]
+            goal_radius = 2.0  # Note: Hardcoded here; ideally pass from config
 
             fig, axs = plt.subplots(1, 3, figsize=(12, 4))
 
             axs[0].set_title(f"Simulated rollouts (x, y) for agent id: {simulated_trajectories['id'][agent_idx, 0][0]}")
 
             for i in range(self.num_rollouts):
+                # Sample random color for each rollout
+                color = plt.cm.tab20(i % 20)
                 axs[0].scatter(
                     simulated_trajectories["x"][agent_idx, i, :],
                     simulated_trajectories["y"][agent_idx, i, :],
-                    color="b",
                     alpha=0.1,
+                    color=color,
                 )
 
             axs[1].set_title(
@@ -339,6 +344,7 @@ class WOSACEvaluator:
                 simulated_trajectories["y"][agent_idx, :, valid_mask],
                 color="b",
                 alpha=0.1,
+                zorder=4,
             )
 
             axs[1].scatter(
@@ -346,31 +352,46 @@ class WOSACEvaluator:
                 gt_trajectories["y"][agent_idx, 0, valid_mask],
                 color="g",
                 label="Ground Truth",
+                alpha=0.5,
             )
 
             axs[1].scatter(
                 gt_trajectories["x"][agent_idx, 0, 0],
                 gt_trajectories["y"][agent_idx, 0, 0],
-                color="purple",
+                color="darkgreen",
                 marker="*",
                 s=200,
-                label="GT start",
+                label="Log start",
                 zorder=5,
                 alpha=0.5,
             )
             axs[1].scatter(
                 simulated_trajectories["x"][agent_idx, :, 0],
                 simulated_trajectories["y"][agent_idx, :, 0],
-                color="purple",
+                color="darkblue",
                 marker="*",
                 s=200,
                 label="Agent start",
                 zorder=5,
                 alpha=0.5,
             )
-            axs[1].set_xlabel("X Position")
-            axs[1].set_ylabel("Y Position")
+
+            circle = plt.Circle(
+                (goal_x, goal_y),
+                goal_radius,
+                color="g",
+                fill=False,
+                linewidth=2,
+                linestyle="--",
+                label=f"Goal radius ({goal_radius}m)",
+                zorder=0,
+            )
+            axs[1].add_patch(circle)
+
+            axs[1].set_xlabel("x")
+            axs[1].set_ylabel("y")
             axs[1].legend()
+            axs[1].set_aspect("equal", adjustable="datalim")
 
             axs[2].set_title(f"x timeseries; ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
             time_steps = list(range(self.sim_steps))
@@ -384,7 +405,6 @@ class WOSACEvaluator:
                 )
             axs[2].plot(time_steps, gt_trajectories["x"][agent_idx, 0, :], color="g", label="Ground Truth")
 
-            # Overlay red triangles where valid flag is 0
             if invalid_mask.any():
                 invalid_timesteps = np.where(invalid_mask)[0]
                 axs[2].scatter(

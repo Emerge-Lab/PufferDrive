@@ -186,8 +186,8 @@ struct Entity {
     float cumulative_displacement;
     int displacement_sample_count;
     float goal_radius;
-    int stopped; // 0/1 -> freeze if set
-    int removed; //0/1 -> remove from sim if set
+    int stopped;
+    int removed;
 
     // Jerk dynamics
     float a_long;
@@ -1474,11 +1474,6 @@ void init(Drive* env){
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
-
-    printf("Initialized with %d active agents and %d static agents.\n", env->active_agent_count, env->static_agent_count);
-    printf("Control mode: %d, Init mode: %d\n", env->control_mode, env->init_mode);
-    printf("Goal behavior: %d\n", env->goal_behavior);
-    printf("init_steps: %d, scenario_length: %d\n", env->init_steps, env->scenario_length);
 }
 
 void c_close(Drive* env){
