@@ -1548,10 +1548,10 @@ float normalize_value(float value, float min, float max){
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
     if (agent->removed) return;
+
     if (agent->stopped) {
         agent->vx = 0.0f;
         agent->vy = 0.0f;
-        return;
     }
 
     if (agent->collision_state != 0) {
@@ -2106,12 +2106,11 @@ void c_step(Drive* env){
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
         move_dynamics(env, i, agent_idx);
-        // move_expert(env, env->actions, agent_idx);
     }
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
-        //if(env->entities[agent_idx].respawn_timestep != -1) continue;
+
         compute_agent_metrics(env, agent_idx);
         int collision_state = env->entities[agent_idx].collision_state;
 
@@ -2137,31 +2136,33 @@ void c_step(Drive* env){
                 env->entities[agent_idx].x,
                 env->entities[agent_idx].y,
                 env->entities[agent_idx].goal_position_x,
-                env->entities[agent_idx].goal_position_y);
+                env->entities[agent_idx].goal_position_y
+            );
 
         // Reward agent if it is within X meters of goal
-        if(distance_to_goal < env->goal_radius){
-            if(env->entities[agent_idx].respawn_timestep != -1){
+        if (distance_to_goal < env->goal_radius){
+
+            if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1){
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
-            } else {
+            } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
                 env->entities[agent_idx].sampled_new_goal = 1;
                 env->logs[i].num_goals_reached += 1;
+            } else { // Zero out the velocity so that the agent stops at the goal
+                env->rewards[i] = env->reward_goal;
+                env->logs[i].episode_return = env->reward_goal;
+                env->logs[i].num_goals_reached = 1;
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
             }
             env->entities[agent_idx].reached_goal_this_episode = 1;
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
 	    }
 
-        if(env->entities[agent_idx].sampled_new_goal){
-            if (env->goal_behavior==GOAL_GENERATE_NEW) {
-                compute_new_goal(env, agent_idx);
-            }
-            else if (env->goal_behavior==GOAL_STOP) {
-                env->entities[agent_idx].stopped = 1;
-                env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
-            }
+        if(env->entities[agent_idx].sampled_new_goal && env->goal_behavior == GOAL_GENERATE_NEW){
+            compute_new_goal(env, agent_idx);
         }
 
 
