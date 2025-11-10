@@ -538,7 +538,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     env = Drive(
         num_agents=num_agents,
         num_maps=1,
-        control_mode="control_tracks_to_predict",
+        control_mode="control_vehicles",
         init_mode="create_all_valid",
         init_steps=0,
         scenario_length=91,
@@ -563,5 +563,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    test_performance()
-    # process_all_maps()
+    # test_performance()
+    process_all_maps()
