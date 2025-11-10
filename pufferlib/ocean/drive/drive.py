@@ -130,8 +130,9 @@ class Drive(pufferlib.PufferEnv):
             num_maps=num_maps,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
-            init_steps=init_steps,
+            init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
+            goal_behavior=self.goal_behavior,
         )
 
         self.num_agents = num_agents
@@ -158,7 +159,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
-                goal_behavior=goal_behavior,
+                goal_behavior=self.goal_behavior,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
@@ -203,6 +204,7 @@ class Drive(pufferlib.PufferEnv):
                     control_mode=self.control_mode,
                     init_steps=self.init_steps,
                     max_controlled_agents=self.max_controlled_agents,
+                    goal_behavior=self.goal_behavior,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
@@ -536,7 +538,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     env = Drive(
         num_agents=num_agents,
         num_maps=1,
-        control_mode="control_vehicles",
+        control_mode="control_tracks_to_predict",
         init_mode="create_all_valid",
         init_steps=0,
         scenario_length=91,
@@ -561,5 +563,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()

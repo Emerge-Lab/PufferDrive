@@ -1474,6 +1474,11 @@ void init(Drive* env){
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
+
+    printf("Initialized with %d active agents and %d static agents.\n", env->active_agent_count, env->static_agent_count);
+    printf("Control mode: %d, Init mode: %d\n", env->control_mode, env->init_mode);
+    printf("Goal behavior: %d\n", env->goal_behavior);
+    printf("init_steps: %d, scenario_length: %d\n", env->init_steps, env->scenario_length);
 }
 
 void c_close(Drive* env){
@@ -1715,12 +1720,13 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
+
         // For WOSAC, we need the original world coordinates, so we add the world means back
         x_out[i] = agent->x + env->world_mean_x;
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
-        id_out[i] = agent->id;
+        id_out[i] = env->tracks_to_predict_indices[i];
     }
 }
 
@@ -1728,7 +1734,7 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
-        id_out[i] = agent->id;
+        id_out[i] = env->tracks_to_predict_indices[i];
         scenario_id_out[i] = agent->scenario_id;
 
         for(int t = env->init_steps; t < agent->array_size; t++){
