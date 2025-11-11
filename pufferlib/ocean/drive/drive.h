@@ -1546,17 +1546,6 @@ void c_close(Drive* env){
     // free(env->map_name);
     free(env->ini_file);
 
-    if (env->use_rc) {
-        free(env->collision_weights);
-        free(env->offroad_weights);
-        free(env->goal_weights);
-    }
-    if (env->use_ec) {
-        free(env->entropy_weights);
-    }
-    if (env->use_dc) {
-        free(env->discount_weights);
-    }
 }
 
 void allocate(Drive* env){
