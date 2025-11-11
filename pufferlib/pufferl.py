@@ -1140,8 +1140,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args["env"]["control_mode"] = args["wosac"]["control_mode"] if wosac_enabled else args["env"]["control_mode"]
     args["env"]["init_steps"] = args["wosac"]["init_steps"] if wosac_enabled else args["env"]["init_steps"]
     args["env"]["goal_behavior"] = args["wosac"]["goal_behavior"] if wosac_enabled else args["env"]["goal_behavior"]
+    args["env"]["goal_radius"] = args["wosac"]["goal_radius"] if wosac_enabled else args["env"]["goal_radius"]
 
-    print(args["env"]["goal_behavior"])
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
 
