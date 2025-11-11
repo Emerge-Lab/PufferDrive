@@ -113,7 +113,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
             env->control_mode = control_mode;
             env->init_steps = init_steps;
             sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-            env->entities = load_map_binary(map_file, env);
+            env->entities = load_map_binary(map_file, env, conf);
             set_active_agents(env);
 
             // Skip map if it doesn't contain any controllable agents

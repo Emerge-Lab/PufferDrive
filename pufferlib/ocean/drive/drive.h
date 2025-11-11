@@ -392,6 +392,9 @@ struct Graph {
     struct AdjListNode** array;
 };
 
+// Forward declarations
+int* get_relative_neighbor_offsets(Drive* env, float neighbor_radius, int* offset_count);
+
 // Function to create a new adjacency list node
 struct AdjListNode* newAdjListNode(int dest) {
     struct AdjListNode* newNode = malloc(sizeof(struct AdjListNode));
@@ -444,18 +447,19 @@ void freeTopologyGraph(struct Graph* graph) {
     free(graph);
 }
 
-bool is_valid_spawn_point(Drive* env, Entity agent, int lane_idx, int point_idx) {
-    // Check for collisions with existing agents
-    // Use collision_check function
-    if (!collision_check(env, agent, lane_idx, point_idx)) {
-        return false;
-    }
-    // offroad checks use check_line_intersection function
-    if (!check_line_intersection()) {
-        return false;
-    }
-    return true; // No collisions detected
-}
+// TODO: Valid spawn point check
+// bool is_valid_spawn_point(Drive* env, Entity agent, int lane_idx, int point_idx) {
+//     // Check for collisions with existing agents
+//     // Use collision_check function
+//     if (!collision_check(env, agent, lane_idx, point_idx)) {
+//         return false;
+//     }
+//     // offroad checks use check_line_intersection function
+//     if (!check_line_intersection()) {
+//         return false;
+//     }
+//     return true; // No collisions detected
+// }
 
 Entity* load_map_binary(const char* filename, Drive* env, env_init_config conf) {
     FILE* file = fopen(filename, "rb");
@@ -633,7 +637,7 @@ bool get_valid_goal(Drive* env, float start_point_x, float start_point_y, float 
     }
 
     int rand_goal_idx = rand() % valid_goals_count;
-    int i = 0;
+    i = 0;
     while (1) {
         int offset_row = rel_neighbor_offsets[i++];
         int offset_col = rel_neighbor_offsets[i++];
@@ -721,6 +725,7 @@ void init_agents_random_start(Drive* env){
                 env,
                 start_x, start_y, start_z,
                 rand_grid_row, rand_grid_col,
+                rel_neighbor_offsets, rel_neighbor_offsets_cnt,
                 &goal_x, &goal_y, &goal_z
             );
             // If no surrounding cell with goal curriculum, repeat
@@ -754,6 +759,8 @@ void init_agents_random_start(Drive* env){
         }
         entities[i] = agent;
     }
+
+    free(rel_neighbor_offsets);
 }
 
 void set_start_position(Drive* env){
@@ -1059,7 +1066,8 @@ int* get_relative_neighbor_offsets(Drive* env, float neighbor_radius, int* offse
 
     int number_cols = 2 * rel_col_offset + 1;
     int number_rows = 2 * rel_row_offset + 1;
-    int rel_offsets[number_rows][number_cols] = {0};
+    int rel_offsets[number_rows][number_cols];
+    memset(rel_offsets, 0, number_rows * number_cols * sizeof(int));
 
     // Origin is center of center cell
     float center_corners[4][2] = {
@@ -1093,10 +1101,10 @@ int* get_relative_neighbor_offsets(Drive* env, float neighbor_radius, int* offse
             int within_radius = 0;
             for (int c = 0; c < 4; c++) {
                 // Sufficient to check Top-Left and Bottom-Right corners of cell
-                float max_dist = sqrtf((top_left_cell_corner[0] - center_corners[c][0]) ** 2 +
-                                 (top_left_cell_corner[1] - center_corners[c][1]) ** 2);
-                float min_dist = sqrtf((bottom_right_cell_corner[0] - center_corners[c][0]) ** 2 +
-                                 (bottom_right_cell_corner[1] - center_corners[c][1]) ** 2);
+                float max_dist = sqrtf(powf(top_left_cell_corner[0] - center_corners[c][0], 2) +
+                                 powf(top_left_cell_corner[1] - center_corners[c][1], 2));
+                float min_dist = sqrtf(powf(bottom_right_cell_corner[0] - center_corners[c][0], 2) +
+                                 powf(bottom_right_cell_corner[1] - center_corners[c][1], 2));
                 if (neighbor_radius >= min_dist && neighbor_radius <= max_dist) {
                     within_radius = 1;
                     break;
@@ -1846,8 +1854,8 @@ void c_close(Drive* env){
     free(env->ini_file);
 }
 
-void allocate(Drive* env, env_init_co conf){
-    init(env, conf);
+void allocate(Drive* env, env_init_config conf){
+    init(env);
     int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
