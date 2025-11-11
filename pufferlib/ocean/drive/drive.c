@@ -35,7 +35,7 @@ void test_drivenet() {
 
 void demo() {
     // Read configuration from INI file
-    EnvInitConfig conf = {0};
+    env_init_config conf = {0};
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
     if(ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
@@ -114,7 +114,7 @@ void demo() {
 
 void performance_test() {
     // Read configuration from INI file
-    EnvInitConfig conf = {0};
+    env_init_config conf = {0};
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
     if(ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);

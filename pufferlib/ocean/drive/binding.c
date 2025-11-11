@@ -70,19 +70,18 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
-    int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
 
     // Get configs
     char* ini_file = unpack_str(kwargs, "ini_file");
-    EnvInitConfig conf = {0};
+    env_init_config conf = {0};
     if(ini_parse(ini_file, handler, &conf) < 0) {
         raise_error_with_message(ERROR_UNKNOWN, "Error while loading %s", ini_file);
     }
     Init_Mode init_mode = conf.init_mode;
-    int num_agents_per_world = 0;
-    if (init_mode == DYNAMIC_AGENTS_PER_ENV_INIT_MODE) {
+    int num_agents_per_world = -1;
+    if (init_mode == DYNAMIC_AGENTS_PER_ENV) {
         num_agents_per_world = conf.num_agents_per_world;
     }
 
@@ -98,7 +97,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     while(total_agent_count < num_agents && env_count < max_envs){
         char map_file[100];
         int map_id = rand() % num_maps;
-        if (init_mode == DYNAMIC_AGENTS_PER_ENV_INIT_MODE) {
+        if (init_mode == DYNAMIC_AGENTS_PER_ENV) {
             // Store map_id
             PyObject* map_id_obj = PyLong_FromLong(map_id);
             PyList_SetItem(map_ids, env_count, map_id_obj);
@@ -108,20 +107,37 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
             total_agent_count += num_agents_per_world;
             env_count++;
         }
-        Drive* env = calloc(1, sizeof(Drive));
-        env->init_mode = init_mode;
-        env->control_mode = control_mode;
-        env->init_steps = init_steps;
-        sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-        env->entities = load_map_binary(map_file, env);
-        set_active_agents(env);
+        else {
+            Drive* env = calloc(1, sizeof(Drive));
+            env->init_mode = init_mode;
+            env->control_mode = control_mode;
+            env->init_steps = init_steps;
+            sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
+            env->entities = load_map_binary(map_file, env);
+            set_active_agents(env);
 
-        // Skip map if it doesn't contain any controllable agents
-        if(env->active_agent_count == 0) {
-            maps_checked++;
+            // Skip map if it doesn't contain any controllable agents
+            if(env->active_agent_count == 0) {
+                maps_checked++;
 
-            // Safeguard: if we've checked all available maps and found no active agents, raise an error
-            if(maps_checked >= num_maps) {
+                // Safeguard: if we've checked all available maps and found no active agents, raise an error
+                if(maps_checked >= num_maps) {
+                    for(int j=0;j<env->num_entities;j++) {
+                        free_entity(&env->entities[j]);
+                    }
+                    free(env->entities);
+                    free(env->active_agent_indices);
+                    free(env->static_agent_indices);
+                    free(env->expert_static_agent_indices);
+                    free(env);
+                    Py_DECREF(agent_offsets);
+                    Py_DECREF(map_ids);
+                    char error_msg[256];
+                    sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                    PyErr_SetString(PyExc_ValueError, error_msg);
+                    return NULL;
+                }
+
                 for(int j=0;j<env->num_entities;j++) {
                     free_entity(&env->entities[j]);
                 }
@@ -130,14 +146,17 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
                 free(env->static_agent_indices);
                 free(env->expert_static_agent_indices);
                 free(env);
-                Py_DECREF(agent_offsets);
-                Py_DECREF(map_ids);
-                char error_msg[256];
-                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
-                PyErr_SetString(PyExc_ValueError, error_msg);
-                return NULL;
+                continue;
             }
 
+            // Store map_id
+            PyObject* map_id_obj = PyLong_FromLong(map_id);
+            PyList_SetItem(map_ids, env_count, map_id_obj);
+            // Store agent offset
+            PyObject* offset = PyLong_FromLong(total_agent_count);
+            PyList_SetItem(agent_offsets, env_count, offset);
+            total_agent_count += env->active_agent_count;
+            env_count++;
             for(int j=0;j<env->num_entities;j++) {
                 free_entity(&env->entities[j]);
             }
@@ -146,25 +165,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
             free(env);
-            continue;
-          }
-
-        // Store map_id
-        PyObject* map_id_obj = PyLong_FromLong(map_id);
-        PyList_SetItem(map_ids, env_count, map_id_obj);
-        // Store agent offset
-        PyObject* offset = PyLong_FromLong(total_agent_count);
-        PyList_SetItem(agent_offsets, env_count, offset);
-        total_agent_count += env->active_agent_count;
-        env_count++;
-        for(int j=0;j<env->num_entities;j++) {
-            free_entity(&env->entities[j]);
         }
-        free(env->entities);
-        free(env->active_agent_indices);
-        free(env->static_agent_indices);
-        free(env->expert_static_agent_indices);
-        free(env);
     }
     //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
     if(total_agent_count >= num_agents){
@@ -186,7 +187,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
     env->ini_file = unpack_str(kwargs, "ini_file");
-    EnvInitConfig conf = {0};
+    env_init_config conf = {0};
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
@@ -222,7 +223,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->map_name = strdup(map_file);
     env->init_steps = init_steps;
     env->timestep = init_steps;
-    init(env, conf);
+    init(env);
     return 0;
 }
 
