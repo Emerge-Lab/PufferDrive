@@ -254,6 +254,17 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .use_rc = use_rc,
         .use_ec = use_ec,
         .use_dc = use_dc,
+        // Conditioning weight bounds (defaults from drive.py)
+        .collision_weight_lb = -0.0f,
+        .collision_weight_ub = -0.0f,
+        .offroad_weight_lb = -0.0f,
+        .offroad_weight_ub = -0.0f,
+        .goal_weight_lb = 1.0f,
+        .goal_weight_ub = 1.0f,
+        .entropy_weight_lb = 0.001f,
+        .entropy_weight_ub = 0.001f,
+        .discount_weight_lb = 0.98f,
+        .discount_weight_ub = 0.98f,
     };
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
