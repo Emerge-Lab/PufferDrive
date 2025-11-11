@@ -220,19 +220,21 @@ class Drive(nn.Module):
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
             nn.LayerNorm(input_size),
-            # nn.ReLU(),
+            nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
         # TODO: Switch to LinearMax after adding tf32
         self.road_encoder = nn.Sequential(
-            LinearMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),
+            # LinearMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),  # Cuda
+            FusedLinearMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),  # Triton
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             # pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
         self.partner_encoder = nn.Sequential(
-            LinearMax(PARTNER_FEATURES, input_size),
+            # LinearMax(PARTNER_FEATURES, input_size), # Cuda
+            FusedLinearMax(PARTNER_FEATURES, input_size),  # Triton
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             # pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),

@@ -32,7 +32,7 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         dynamics_model="classic",
         max_controlled_agents=-1,
-        road_points=200,
+        road_points=128,
         other_objects=63,
         buf=None,
         seed=1,
