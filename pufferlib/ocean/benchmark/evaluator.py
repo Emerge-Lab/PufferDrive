@@ -300,6 +300,7 @@ class WOSACEvaluator:
         print(scene_level_results)
 
         print(f"\n Overall realism metametric: {scene_level_results['realism_metametric'].mean():.4f}")
+        print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
         print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
 
         # print(f"\n Full agent-level results:\n")
