@@ -306,9 +306,10 @@ class WOSACEvaluator:
         # print(df)
         return scene_level_results
 
-    def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None):
+    def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None, max_agents_to_plot=10):
         if agent_idx is None:
-            agent_indices = range(simulated_trajectories["x"].shape[0])
+            agent_indices = range(np.clip(simulated_trajectories["x"].shape[0], 1, max_agents_to_plot))
+
         else:
             agent_indices = [agent_idx]
 
@@ -351,7 +352,7 @@ class WOSACEvaluator:
                 gt_trajectories["x"][agent_idx, 0, valid_mask],
                 gt_trajectories["y"][agent_idx, 0, valid_mask],
                 color="g",
-                label="Ground Truth",
+                label="Ground truth",
                 alpha=0.5,
             )
 
@@ -393,23 +394,23 @@ class WOSACEvaluator:
             axs[1].legend()
             axs[1].set_aspect("equal", adjustable="datalim")
 
-            axs[2].set_title(f"x timeseries; ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
+            axs[2].set_title(f"Heading timeseries for agent ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
             time_steps = list(range(self.sim_steps))
             for r in range(self.num_rollouts):
                 axs[2].plot(
                     time_steps,
-                    simulated_trajectories["x"][agent_idx, r, :],
+                    simulated_trajectories["heading"][agent_idx, r, :],
                     color="b",
                     alpha=0.1,
                     label="Simulated" if r == 0 else "",
                 )
-            axs[2].plot(time_steps, gt_trajectories["x"][agent_idx, 0, :], color="g", label="Ground Truth")
+            axs[2].plot(time_steps, gt_trajectories["heading"][agent_idx, 0, :], color="g", label="Ground truth")
 
             if invalid_mask.any():
                 invalid_timesteps = np.where(invalid_mask)[0]
                 axs[2].scatter(
                     invalid_timesteps,
-                    gt_trajectories["x"][agent_idx, 0, invalid_mask],
+                    gt_trajectories["heading"][agent_idx, 0, invalid_mask],
                     color="r",
                     marker="^",
                     s=100,
@@ -419,7 +420,7 @@ class WOSACEvaluator:
                     linewidths=1,
                 )
 
-            axs[2].set_xlabel("Time Step")
+            axs[2].set_xlabel("Time step")
             axs[2].legend()
 
             plt.tight_layout()
