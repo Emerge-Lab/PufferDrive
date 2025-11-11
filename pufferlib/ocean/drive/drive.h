@@ -1574,43 +1574,70 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
             steering = STEERING_VALUES[steering_index];
         }
 
-        // Current state
-        float x = agent->x;
-        float y = agent->y;
-        float heading = agent->heading;
-        float vx = agent->vx;
-        float vy = agent->vy;
+        // State
+        // Read state
+        float x       = agent->x;
+        float y       = agent->y;
+        float heading = agent->heading;      // psi
+        float vx      = agent->vx;
+        float vy      = agent->vy;
 
-        // Calculate current speed
-        float speed = sqrtf(vx*vx + vy*vy);
+        float dt      = env->dt;
+        float L       = agent->length;       // wheelbase
+        float delta   = steering;            // steering angle
 
-        // Update speed with acceleration
-        speed = speed + 0.5f*acceleration*env->dt;
-        speed = clipSpeed(speed);
+        // 1) Recover scalar speed from vx, vy
+        float v_mag = sqrtf(vx*vx + vy*vy);
 
-        // Compute yaw rate
-        float beta = tanh(.5*tanf(steering));
+        // 2) Determine sign of speed (forward or backward)
+        //    Project velocity onto heading direction
+        float cos_h = cosf(heading);
+        float sin_h = sinf(heading);
+        float v_proj = vx * cos_h + vy * sin_h;
 
-        // New heading
-        float yaw_rate = (speed*cosf(beta)*tanf(steering)) / agent->length;
+        // If projection is negative, we're moving backwards
+        float sign_v = (v_proj >= 0.0f) ? 1.0f : -1.0f;
 
-        // New velocity
-        float new_vx = speed*cosf(heading + beta);
-        float new_vy = speed*sinf(heading + beta);
+        // Signed speed
+        float v = sign_v * v_mag;
 
-        // Update position
-        x = x + (new_vx*env->dt);
-        y = y + (new_vy*env->dt);
-        heading = heading + yaw_rate*env->dt;
+        // 3) Update speed with longitudinal acceleration
+        v += acceleration * dt;
 
-        // Apply updates to the agent's state
-        agent->x = x;
-        agent->y = y;
-        agent->heading = heading;
+        // Clip speed (allowing backward motion)
+        v = clipSpeed(v);
+
+        // 4) Bicycle model: slip angle beta and yaw rate
+        // Simple approx with lr/(lf+lr) ≈ 0.5
+        float beta = atanf(0.5f * tanf(delta));
+
+        // Yaw rate (kinematic bicycle)
+        float yaw_rate = v * tanf(delta) / L;
+
+        // 5) Continuous-time derivatives (world frame)
+        float x_dot = v * cosf(heading + beta);
+        float y_dot = v * sinf(heading + beta);
+
+        // Integrate position and heading
+        x       += x_dot * dt;
+        y       += y_dot * dt;
+        heading += yaw_rate * dt;
+
+        // 6) Rebuild vx, vy from updated v and heading
+        float dir_cos = cosf(heading + beta);
+        float dir_sin = sinf(heading + beta);
+        vx = v * dir_cos;
+        vy = v * dir_sin;
+
+        // Write back to agent
+        agent->x         = x;
+        agent->y         = y;
+        agent->heading   = heading;
         agent->heading_x = cosf(heading);
         agent->heading_y = sinf(heading);
-        agent->vx = new_vx;
-        agent->vy = new_vy;
+        agent->vx        = vx;
+        agent->vy        = vy;
+
     } else {
         // JERK dynamics model
         // Extract action components
