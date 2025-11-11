@@ -1547,9 +1547,6 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     if (agent->stopped) {
         agent->vx = 0.0f;
         agent->vy = 0.0f;
-    }
-
-    if (agent->collision_state != 0) {
         return;
     }
 
