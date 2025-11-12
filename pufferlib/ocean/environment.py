@@ -181,6 +181,7 @@ def make_multiagent(buf=None, **kwargs):
 
 MAKE_FUNCTIONS = {
     "drive": "Drive",
+    "adaptive_drive": "AdaptiveDrivingAgent",
     "spaces": make_spaces,
     "multiagent": make_multiagent,
 }
@@ -192,6 +193,12 @@ def env_creator(name="squared", *args, **kwargs):
 
     # TODO: Robust sanity / ocean imports
     name = name.replace("puffer_", "")
+
+    # Special case: adaptive_drive is in the drive module
+    if name == "adaptive_drive":
+        module = importlib.import_module("pufferlib.ocean.drive")
+        return getattr(module, MAKE_FUNCTIONS[name])
+
     try:
         module = importlib.import_module(f"pufferlib.ocean.{name}.{name}")
         return getattr(module, MAKE_FUNCTIONS[name])

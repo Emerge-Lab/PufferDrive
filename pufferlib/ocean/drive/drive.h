@@ -120,6 +120,7 @@ typedef struct Client Client;
 typedef struct Log Log;
 typedef struct Graph Graph;
 typedef struct AdjListNode AdjListNode;
+typedef struct Adaptive_Agent_Log Adaptive_Agent_Log;
 
 struct Log {
     float episode_return;
@@ -216,7 +217,33 @@ void free_entity(Entity* entity){
     free(entity->traj_valid);
 }
 
+struct Adaptive_Agent_Log {
+    // Array of Log structs, one per scenario
+    Log* scenario_logs;
+
+    // Delta metrics: last scenario - first scenario (single values per agent)
+    float delta_completion_rate;
+    float delta_score;
+    float delta_perf;
+    float delta_collision_rate;
+    float delta_offroad_rate;
+    float delta_num_goals_reached;
+    float delta_dnf_rate;
+    float delta_lane_alignment_rate;
+    float delta_avg_displacement_error;
+    float delta_episode_return;
+
+    int num_scenarios;
+};
+
 // Utility functions
+float compute_delta_percent(float first, float last) {
+    if (fabs(first) < 0.0001f) {
+        return 0.0f;
+    }
+    return (last - first) / first * 100.0f;
+}
+
 float relative_distance(float a, float b){
     float distance = sqrtf(powf(a - b, 2));
     return distance;
@@ -360,9 +387,20 @@ struct Drive {
     float discount_weight_lb;
     float discount_weight_ub;
     float* discount_weights;
+    // Adaptive driving agent
+    Adaptive_Agent_Log* ada_log;
+    Adaptive_Agent_Log** ada_logs;
+    bool adaptive_driving_agent;
+    int k_scenarios;
+    int current_scenario;
 };
 
 void add_log(Drive* env) {
+    int scenario = -1;
+    if (env->adaptive_driving_agent && env->ada_logs != NULL) {
+        scenario = env->current_scenario % env->k_scenarios;
+    }
+
     for(int i = 0; i < env->active_agent_count; i++){
         Entity* e = &env->entities[env->active_agent_indices[i]];
 
@@ -396,6 +434,74 @@ void add_log(Drive* env) {
         env->log.expert_static_agent_count += env->expert_static_agent_count;
         env->log.static_agent_count += env->static_agent_count;
         env->log.n += 1;
+
+        // ADDITIONALLY, if adaptive, also track per-scenario for delta computation
+        if (env->adaptive_driving_agent && env->ada_logs != NULL) {
+            Log* scenario_log = &env->ada_logs[i]->scenario_logs[scenario];
+
+            if (e->reached_goal_this_episode)
+                scenario_log->completion_rate += 1.0f;
+
+            scenario_log->offroad_rate += offroad;
+            scenario_log->collision_rate += collided;
+            scenario_log->num_goals_reached += num_goals_reached;
+
+            if (e->reached_goal_this_episode && !e->collided_before_goal) {
+                scenario_log->score += 1.0f;
+            }
+
+            if (!offroad && !collided && !e->reached_goal_this_episode) {
+                scenario_log->dnf_rate += 1.0f;
+            }
+
+            scenario_log->lane_alignment_rate += lane_aligned;
+            scenario_log->avg_displacement_error += displacement_error;
+            scenario_log->episode_length += env->logs[i].episode_length;
+            scenario_log->episode_return += env->logs[i].episode_return;
+
+            scenario_log->active_agent_count += env->active_agent_count;
+            scenario_log->expert_static_agent_count += env->expert_static_agent_count;
+            scenario_log->static_agent_count += env->static_agent_count;
+            scenario_log->n += 1.0f;
+
+            // Compute delta metrics when completing last scenario
+            if (scenario == env->k_scenarios - 1) {
+                Log* first_log = &env->ada_logs[i]->scenario_logs[0];
+                Log* last_log = &env->ada_logs[i]->scenario_logs[env->k_scenarios - 1];
+
+                // Compute all delta metrics
+                env->ada_logs[i]->delta_completion_rate =
+                    compute_delta_percent(first_log->completion_rate, last_log->completion_rate);
+                env->ada_logs[i]->delta_score =
+                    compute_delta_percent(first_log->score, last_log->score);
+                env->ada_logs[i]->delta_perf =
+                    compute_delta_percent(first_log->score, last_log->score);
+                env->ada_logs[i]->delta_collision_rate =
+                    compute_delta_percent(first_log->collision_rate, last_log->collision_rate);
+                env->ada_logs[i]->delta_offroad_rate =
+                    compute_delta_percent(first_log->offroad_rate, last_log->offroad_rate);
+                env->ada_logs[i]->delta_num_goals_reached =
+                    compute_delta_percent(first_log->num_goals_reached, last_log->num_goals_reached);
+                env->ada_logs[i]->delta_dnf_rate =
+                    compute_delta_percent(first_log->dnf_rate, last_log->dnf_rate);
+                env->ada_logs[i]->delta_lane_alignment_rate =
+                    compute_delta_percent(first_log->lane_alignment_rate, last_log->lane_alignment_rate);
+
+                float first_ade = (first_log->n != 0.0f) ?
+                    first_log->avg_displacement_error / first_log->n : 0.0f;
+                float last_ade = (last_log->n != 0.0f) ?
+                    last_log->avg_displacement_error / last_log->n : 0.0f;
+                env->ada_logs[i]->delta_avg_displacement_error =
+                    compute_delta_percent(first_ade, last_ade);
+
+                float first_return = (first_log->n != 0.0f) ?
+                    first_log->episode_return / first_log->n : 0.0f;
+                float last_return = (last_log->n != 0.0f) ?
+                    last_log->episode_return / last_log->n : 0.0f;
+                env->ada_logs[i]->delta_episode_return =
+                    compute_delta_percent(first_return, last_return);
+            }
+        }
     }
 }
 
@@ -1487,6 +1593,24 @@ void init_goal_positions(Drive* env){
     }
 }
 
+Adaptive_Agent_Log* create_adaptive_agent_log(int num_scenarios) {
+    Adaptive_Agent_Log* log = (Adaptive_Agent_Log*)calloc(1, sizeof(Adaptive_Agent_Log));
+
+    log->num_scenarios = num_scenarios;
+
+    // Allocate array of Log structs (calloc initializes all fields to 0)
+    log->scenario_logs = (Log*)calloc(num_scenarios, sizeof(Log));
+
+    return log;
+}
+
+void free_adaptive_agent_log(Adaptive_Agent_Log* log) {
+    if (!log) return;
+
+    free(log->scenario_logs);
+    free(log);
+}
+
 void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
@@ -1525,6 +1649,13 @@ void c_close(Drive* env){
     free(env->entities);
     free(env->active_agent_indices);
     free(env->logs);
+    // Adaptive agent logs cleanup
+    if (env->adaptive_driving_agent && env->ada_logs != NULL) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            free_adaptive_agent_log(env->ada_logs[i]);
+        }
+        free(env->ada_logs);
+    }
     // GridMap cleanup
     int grid_cell_count = env->grid_map->grid_cols*env->grid_map->grid_rows;
     for(int grid_index = 0; grid_index < grid_cell_count; grid_index++){
@@ -2194,6 +2325,9 @@ void c_step(Drive* env){
     if(env->timestep == env->scenario_length){
         add_log(env);
 	    c_reset(env);
+        if (env->adaptive_driving_agent){
+            env->current_scenario += 1;
+        }
         return;
     }
 

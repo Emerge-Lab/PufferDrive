@@ -48,6 +48,9 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        k_scenarios=0,
+        adaptive_driving_agent=False,
+        ini_file=None,
     ):
         # env
         self.dt = dt
@@ -66,6 +69,11 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
+        self.ini_file = ini_file
+
+        # Adaptive driving agent setup
+        self.adaptive_driving_agent = int(adaptive_driving_agent)
+        self.k_scenarios = int(k_scenarios)
 
         # Conditioning setup
         self.condition_type = condition_type
@@ -198,7 +206,7 @@ class Drive(pufferlib.PufferEnv):
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
-                ini_file="pufferlib/config/ocean/drive.ini",
+                ini_file=self.ini_file,
                 init_steps=init_steps,
                 use_rc=self.reward_conditioned,
                 use_ec=self.entropy_conditioned,
@@ -215,6 +223,8 @@ class Drive(pufferlib.PufferEnv):
                 discount_weight_ub=self.discount_weight_ub,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
+                adaptive_driving=self.adaptive_driving_agent,
+                k_scenarios=self.k_scenarios,
             )
             env_ids.append(env_id)
 
@@ -291,10 +301,12 @@ class Drive(pufferlib.PufferEnv):
                         discount_weight_lb=self.discount_weight_lb,
                         discount_weight_ub=self.discount_weight_ub,
                         max_agents=nxt - cur,
-                        ini_file="pufferlib/config/ocean/drive.ini",
+                        ini_file=self.ini_file,
                         init_steps=self.init_steps,
                         init_mode=self.init_mode,
                         control_mode=self.control_mode,
+                        adaptive_driving=self.adaptive_driving_agent,
+                        k_scenarios=self.k_scenarios,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)

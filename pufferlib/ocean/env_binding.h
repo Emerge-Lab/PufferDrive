@@ -572,28 +572,83 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
     // horribly if Log has non-float data.
     Log aggregate = {0};
     int num_keys = sizeof(Log) / sizeof(float);
+
+    // Adaptive agent logging variables
+    int has_adaptive_agents = 0;
+    float ada_delta_completion_rate = 0.0f;
+    float ada_delta_score = 0.0f;
+    float ada_delta_perf = 0.0f;
+    float ada_delta_collision_rate = 0.0f;
+    float ada_delta_offroad_rate = 0.0f;
+    float ada_delta_num_goals_reached = 0.0f;
+    float ada_delta_dnf_rate = 0.0f;
+    float ada_delta_lane_alignment_rate = 0.0f;
+    float ada_delta_avg_displacement_error = 0.0f;
+    float ada_delta_episode_return = 0.0f;
+    int ada_agent_count = 0;
+
     for (int i = 0; i < vec->num_envs; i++) {
         Env* env = vec->envs[i];
+
         for (int j = 0; j < num_keys; j++) {
             ((float*)&aggregate)[j] += ((float*)&env->log)[j];
             ((float*)&env->log)[j] = 0.0f;
         }
+
+        if (env->adaptive_driving_agent && env->ada_logs != NULL) {
+            has_adaptive_agents = 1;
+
+            // Aggregate delta metrics across all agents in this environment
+            for (int a = 0; a < env->active_agent_count; a++) {
+                ada_delta_completion_rate += env->ada_logs[a]->delta_completion_rate;
+                ada_delta_score += env->ada_logs[a]->delta_score;
+                ada_delta_perf += env->ada_logs[a]->delta_perf;
+                ada_delta_collision_rate += env->ada_logs[a]->delta_collision_rate;
+                ada_delta_offroad_rate += env->ada_logs[a]->delta_offroad_rate;
+                ada_delta_num_goals_reached += env->ada_logs[a]->delta_num_goals_reached;
+                ada_delta_dnf_rate += env->ada_logs[a]->delta_dnf_rate;
+                ada_delta_lane_alignment_rate += env->ada_logs[a]->delta_lane_alignment_rate;
+                ada_delta_avg_displacement_error += env->ada_logs[a]->delta_avg_displacement_error;
+                ada_delta_episode_return += env->ada_logs[a]->delta_episode_return;
+
+                ada_agent_count++;
+            }
+        }
     }
 
     PyObject* dict = PyDict_New();
-    if (aggregate.n == 0.0f) {
+    if (aggregate.n == 0.0f && !has_adaptive_agents) {
         return dict;
     }
 
-    // Average
-    float n = aggregate.n;
-    for (int i = 0; i < num_keys; i++) {
-        ((float*)&aggregate)[i] /= n;
+    // Average regular logs
+    if (aggregate.n > 0.0f) {
+        float n = aggregate.n;
+        for (int i = 0; i < num_keys; i++) {
+            ((float*)&aggregate)[i] /= n;
+        }
+
+        // User populates dict
+        my_log(dict, &aggregate);
+        assign_to_dict(dict, "n", n);
     }
 
-    // User populates dict
-    my_log(dict, &aggregate);
-    assign_to_dict(dict, "n", n);
+    // Average and add adaptive agent delta metrics if they exist
+    if (has_adaptive_agents && ada_agent_count > 0) {
+        float n = (float)ada_agent_count;
+
+        assign_to_dict(dict, "ada_delta_completion_rate", ada_delta_completion_rate / n);
+        assign_to_dict(dict, "ada_delta_score", ada_delta_score / n);
+        assign_to_dict(dict, "ada_delta_perf", ada_delta_perf / n);
+        assign_to_dict(dict, "ada_delta_collision_rate", ada_delta_collision_rate / n);
+        assign_to_dict(dict, "ada_delta_offroad_rate", ada_delta_offroad_rate / n);
+        assign_to_dict(dict, "ada_delta_num_goals_reached", ada_delta_num_goals_reached / n);
+        assign_to_dict(dict, "ada_delta_dnf_rate", ada_delta_dnf_rate / n);
+        assign_to_dict(dict, "ada_delta_lane_alignment_rate", ada_delta_lane_alignment_rate / n);
+        assign_to_dict(dict, "ada_delta_avg_displacement_error", ada_delta_avg_displacement_error / n);
+        assign_to_dict(dict, "ada_delta_episode_return", ada_delta_episode_return / n);
+        assign_to_dict(dict, "ada_agent_count", n);
+    }
 
     return dict;
 }
