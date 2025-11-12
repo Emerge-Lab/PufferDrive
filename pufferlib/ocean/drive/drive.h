@@ -188,8 +188,8 @@ struct Entity {
     float cumulative_displacement;
     int displacement_sample_count;
     float goal_radius;
-    int stopped; // 0/1 -> freeze if set
-    int removed; //0/1 -> remove from sim if set
+    int stopped;
+    int removed;
 
     // Jerk dynamics
     float a_long;
@@ -1892,13 +1892,10 @@ float normalize_value(float value, float min, float max){
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
     if (agent->removed) return;
+
     if (agent->stopped) {
         agent->vx = 0.0f;
         agent->vy = 0.0f;
-        return;
-    }
-
-    if (agent->collision_state != 0) {
         return;
     }
 
@@ -2064,12 +2061,13 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
+
         // For WOSAC, we need the original world coordinates, so we add the world means back
         x_out[i] = agent->x + env->world_mean_x;
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
-        id_out[i] = agent->id;
+        id_out[i] = env->tracks_to_predict_indices[i];
     }
 }
 
@@ -2077,7 +2075,7 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
-        id_out[i] = agent->id;
+        id_out[i] = env->tracks_to_predict_indices[i];
         scenario_id_out[i] = agent->scenario_id;
 
         for(int t = env->init_steps; t < agent->array_size; t++){
@@ -2449,12 +2447,11 @@ void c_step(Drive* env){
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
         move_dynamics(env, i, agent_idx);
-        // move_expert(env, env->actions, agent_idx);
     }
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
-        //if(env->entities[agent_idx].respawn_timestep != -1) continue;
+
         compute_agent_metrics(env, agent_idx);
         int collision_state = env->entities[agent_idx].collision_state;
 
@@ -2480,31 +2477,33 @@ void c_step(Drive* env){
                 env->entities[agent_idx].x,
                 env->entities[agent_idx].y,
                 env->entities[agent_idx].goal_position_x,
-                env->entities[agent_idx].goal_position_y);
+                env->entities[agent_idx].goal_position_y
+            );
 
         // Reward agent if it is within X meters of goal
-        if(distance_to_goal < env->goal_radius){
-            if(env->entities[agent_idx].respawn_timestep != -1){
+        if (distance_to_goal < env->goal_radius){
+
+            if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1){
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
-            } else {
+            } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
                 env->entities[agent_idx].sampled_new_goal = 1;
                 env->logs[i].num_goals_reached += 1;
+            } else { // Zero out the velocity so that the agent stops at the goal
+                env->rewards[i] = env->reward_goal;
+                env->logs[i].episode_return = env->reward_goal;
+                env->logs[i].num_goals_reached = 1;
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
             }
             env->entities[agent_idx].reached_goal_this_episode = 1;
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
 	    }
 
-        if(env->entities[agent_idx].sampled_new_goal){
-            if (env->goal_behavior==GOAL_GENERATE_NEW) {
-                compute_new_goal(env, agent_idx);
-            }
-            else if (env->goal_behavior==GOAL_STOP) {
-                env->entities[agent_idx].stopped = 1;
-                env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
-            }
+        if(env->entities[agent_idx].sampled_new_goal && env->goal_behavior == GOAL_GENERATE_NEW){
+            compute_new_goal(env, agent_idx);
         }
 
 
