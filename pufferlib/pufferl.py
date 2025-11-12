@@ -218,15 +218,6 @@ class PuffeRL:
         self.stats = defaultdict(list)
         self.last_stats = defaultdict(list)
         self.losses = {}
-        self.exploration = {
-            "un_prio_adv_dist": [],
-            "prio_adv_dist": [],
-            "entropy_unweighted_dist": [],
-            "entropy_weighted_dist": [],
-            "adv_mean": 0.0,
-            "entropy_unweighted_mean": 0.0,
-            "entropy_weighted_mean": 0.0,
-        }
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -433,8 +424,7 @@ class PuffeRL:
                 config["vtrace_c_clip"],
             )
             adv = mb_advantages
-            adv_unprio = (adv - adv.mean()) / (adv.std() + 1e-8)
-            adv = mb_prio * adv_unprio
+            adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
             # Losses
             pg_loss1 = -adv * ratio
@@ -447,13 +437,7 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
-            adv_scaled = torch.clamp(adv_unprio.abs(), 0, 3)
-            weighted_entropy = torch.exp(adv_scaled / 3).view(-1) * entropy
-
-            if config["adv_weighted_entropy"]:
-                entropy_loss = weighted_entropy.mean()
-            else:
-                entropy_loss = entropy.mean()
+            entropy_loss = entropy.mean()
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
@@ -471,18 +455,14 @@ class PuffeRL:
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
 
-            # Exploration metrics
-            self.exploration["un_prio_adv_dist"].append(adv_unprio.detach().cpu().flatten())
-            self.exploration["prio_adv_dist"].append(adv.detach().cpu().flatten())
-            self.exploration["entropy_unweighted_dist"].append(entropy.detach().cpu().flatten())
-            self.exploration["entropy_weighted_dist"].append(weighted_entropy.detach().cpu().flatten())
-            self.exploration["adv_mean"] += adv_unprio.mean().item() / self.total_minibatches
-            self.exploration["entropy_unweighted_mean"] += entropy.mean().item() / self.total_minibatches
-            self.exploration["entropy_weighted_mean"] += weighted_entropy.mean().item() / self.total_minibatches
-
             # Learn on accumulated minibatches
             profile("learn", epoch)
+
             loss.backward()
+            # print(f'after loss backward [ego_encoder]: {self.policy.policy.ego_encoder[0].weight[0,:3]}')
+            # print(f'after loss backward [road_encoder]: {self.policy.policy.road_encoder[0].weight[0,:3]}')
+            # breakpoint()
+
             if (mb + 1) % self.accumulate_minibatches == 0:
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
                 self.optimizer.step()
@@ -508,15 +488,6 @@ class PuffeRL:
             self.losses = losses
             self.print_dashboard()
             self.stats = defaultdict(list)
-            self.exploration = {
-                "un_prio_adv_dist": [],
-                "prio_adv_dist": [],
-                "entropy_unweighted_dist": [],
-                "entropy_weighted_dist": [],
-                "adv_mean": 0.0,
-                "entropy_unweighted_mean": 0.0,
-                "entropy_weighted_mean": 0.0,
-            }
             self.last_log_time = time.time()
             self.last_log_step = self.global_step
             profile.clear()
@@ -688,24 +659,6 @@ class PuffeRL:
             # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
-
-        # Add exploration metrics
-        if self.exploration:
-            import torch
-
-            # Add mean values
-            for key in ["adv_mean", "entropy_unweighted_mean", "entropy_weighted_mean"]:
-                if key in self.exploration:
-                    logs[f"exploration/{key}"] = self.exploration[key]
-
-            # Add wandb histograms if available
-            if hasattr(self.logger, "wandb") and self.logger.wandb:
-                import wandb
-
-                for key in ["un_prio_adv_dist", "prio_adv_dist", "entropy_unweighted_dist", "entropy_weighted_dist"]:
-                    if key in self.exploration and self.exploration[key]:
-                        data = torch.cat(self.exploration[key]).numpy()
-                        logs[f"exploration/{key}"] = wandb.Histogram(data)
 
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:
