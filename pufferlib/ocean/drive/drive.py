@@ -50,7 +50,7 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         k_scenarios=0,
         adaptive_driving_agent=False,
-        ini_file=None,
+        ini_file="pufferlib/config/ocean/drive.ini",
     ):
         # env
         self.dt = dt

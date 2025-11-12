@@ -14,5 +14,5 @@ class AdaptiveDrivingAgent(Drive):
 
         kwargs["resample_frequency"] = self.k_scenarios * self.scenario_length
         self.episode_length = kwargs["resample_frequency"]
-        print(f"resample frequency is ", kwargs["resample_frequency"], flush=True)
+        # print(f"resample frequency is ", kwargs["resample_frequency"], flush=True)
         super().__init__(**kwargs)

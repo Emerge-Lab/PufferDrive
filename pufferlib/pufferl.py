@@ -1354,9 +1354,11 @@ def ensure_drive_binary():
     """Delete existing visualize binary and rebuild it. This ensures the
     binary is always up-to-date with the latest code changes.
     """
-    if os.path.exists("./visualize"):
-        print("Removing existing visualize binary...")
+    try:
         os.remove("./visualize")
+        print("Removed existing visualize binary...")
+    except FileNotFoundError:
+        pass
 
     print("Building visualize binary...")
     try:

@@ -1640,6 +1640,13 @@ void init(Drive* env){
     if (env->use_dc) {
         env->discount_weights = (float*)calloc(env->active_agent_count, sizeof(float));
     }
+
+    if (env->adaptive_driving_agent) {
+        env->ada_logs = (Adaptive_Agent_Log**)calloc(env->active_agent_count, sizeof(Adaptive_Agent_Log*));
+        for (int i = 0; i < env->active_agent_count; i++) {
+            env->ada_logs[i] = create_adaptive_agent_log(env->k_scenarios);
+        }
+    }
 }
 
 void c_close(Drive* env){
