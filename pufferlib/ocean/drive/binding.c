@@ -73,6 +73,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
+    int max_controlled_agents = unpack(kwargs, "max_controlled_agents");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
@@ -89,6 +90,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         env->init_mode = init_mode;
         env->control_mode = control_mode;
         env->init_steps = init_steps;
+        env->max_controlled_agents = max_controlled_agents;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
@@ -176,6 +178,10 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     }
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
+    if (PyDict_GetItemString(kwargs, "dynamics_model")) {
+        char* dynamics_str = unpack_str(kwargs, "dynamics_model");
+        env->dynamics_model = (strcmp(dynamics_str, "jerk") == 0) ? JERK : CLASSIC;
+    }
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
@@ -188,6 +194,22 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->offroad_behavior = conf.offroad_behavior;
     env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
     env->dt = conf.dt;
+
+    // Conditioning parameters
+    env->use_rc = (bool)unpack(kwargs, "use_rc");
+    env->use_ec = (bool)unpack(kwargs, "use_ec");
+    env->use_dc = (bool)unpack(kwargs, "use_dc");
+    env->collision_weight_lb = (float)unpack(kwargs, "collision_weight_lb");
+    env->collision_weight_ub = (float)unpack(kwargs, "collision_weight_ub");
+    env->offroad_weight_lb = (float)unpack(kwargs, "offroad_weight_lb");
+    env->offroad_weight_ub = (float)unpack(kwargs, "offroad_weight_ub");
+    env->goal_weight_lb = (float)unpack(kwargs, "goal_weight_lb");
+    env->goal_weight_ub = (float)unpack(kwargs, "goal_weight_ub");
+    env->entropy_weight_lb = (float)unpack(kwargs, "entropy_weight_lb");
+    env->entropy_weight_ub = (float)unpack(kwargs, "entropy_weight_ub");
+    env->discount_weight_lb = (float)unpack(kwargs, "discount_weight_lb");
+    env->discount_weight_ub = (float)unpack(kwargs, "discount_weight_ub");
+
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
     int map_id = unpack(kwargs, "map_id");

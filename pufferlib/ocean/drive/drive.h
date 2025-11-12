@@ -136,6 +136,12 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
+    // Conditioning metrics
+    float avg_collision_weight;
+    float avg_offroad_weight;
+    float avg_goal_weight;
+    float avg_entropy_weight;
+    float avg_discount_weight;
     float avg_offroad_per_agent;
     float avg_collisions_per_agent;
 };
@@ -332,6 +338,28 @@ struct Drive {
     int* tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+
+    // Reward conditioning
+    bool use_rc;
+    float collision_weight_lb;
+    float collision_weight_ub;
+    float offroad_weight_lb;
+    float offroad_weight_ub;
+    float goal_weight_lb;
+    float goal_weight_ub;
+    float* collision_weights;
+    float* offroad_weights;
+    float* goal_weights;
+    // Entropy conditioning
+    bool use_ec;
+    float entropy_weight_lb;
+    float entropy_weight_ub;
+    float* entropy_weights;
+    // Discount conditioning
+    bool use_dc;
+    float discount_weight_lb;
+    float discount_weight_ub;
+    float* discount_weights;
 };
 
 void add_log(Drive* env) {
@@ -1363,8 +1391,12 @@ void set_active_agents(Drive* env){
 
         // Determine if this agent should be policy-controlled
         bool is_controlled = false;
-
         is_controlled = should_control_agent(env, i);
+
+        if (is_controlled && env->active_agent_count >= env->max_controlled_agents && env->max_controlled_agents != -1) {
+            is_controlled = false;
+            entity->mark_as_expert = 1;
+        }
 
         if(is_controlled){
             active_agent_indices[env->active_agent_count] = i;
@@ -1388,15 +1420,13 @@ void set_active_agents(Drive* env){
     env->expert_static_agent_indices = (int*)malloc(env->expert_static_agent_count * sizeof(int));
     for(int i=0;i<env->active_agent_count;i++){
         env->active_agent_indices[i] = active_agent_indices[i];
-    };
+    }
     for(int i=0;i<env->static_agent_count;i++){
         env->static_agent_indices[i] = static_agent_indices[i];
-
     }
     for(int i=0;i<env->expert_static_agent_count;i++){
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
-
     return;
 }
 
@@ -1474,6 +1504,18 @@ void init(Drive* env){
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
+
+    if (env->use_rc) {
+        env->collision_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+        env->offroad_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+        env->goal_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+    }
+    if (env->use_ec) {
+        env->entropy_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+    }
+    if (env->use_dc) {
+        env->discount_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+    }
 }
 
 void c_close(Drive* env){
@@ -1503,16 +1545,33 @@ void c_close(Drive* env){
     freeTopologyGraph(env->topology_graph);
     // free(env->map_name);
     free(env->ini_file);
+
 }
 
 void allocate(Drive* env){
     init(env);
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int base_ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0) + (env->use_dc ? 1 : 0);
+    int ego_dim = base_ego_dim + conditioning_dims;
+
+    if (env->use_rc) {
+        env->collision_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+        env->offroad_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+        env->goal_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+    }
+    if (env->use_ec) {
+        env->entropy_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+    }
+    if (env->use_dc) {
+        env->discount_weights = (float*)calloc(env->active_agent_count, sizeof(float));
+    }
+
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
     env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
     env->terminals= (unsigned char*)calloc(env->active_agent_count, sizeof(unsigned char));
+
 }
 
 void free_allocated(Drive* env){
@@ -1520,6 +1579,19 @@ void free_allocated(Drive* env){
     free(env->actions);
     free(env->rewards);
     free(env->terminals);
+
+    if (env->use_rc) {
+        free(env->collision_weights);
+        free(env->offroad_weights);
+        free(env->goal_weights);
+    }
+    if (env->use_ec) {
+        free(env->entropy_weights);
+    }
+    if (env->use_dc) {
+        free(env->discount_weights);
+    }
+
     c_close(env);
 }
 
@@ -1744,10 +1816,14 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
 }
 
 void compute_observations(Drive* env) {
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int base_ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int conditioning_dims = (env->use_rc ? 3 : 0) + (env->use_ec ? 1 : 0) + (env->use_dc ? 1 : 0);
+    int ego_dim = base_ego_dim + conditioning_dims;
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
+
     for(int i = 0; i < env->active_agent_count; i++) {
         float* obs = &observations[i][0];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];
@@ -1771,19 +1847,30 @@ void compute_observations(Drive* env) {
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
+        obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
 
         if (env->dynamics_model == JERK) {
-            obs[6] = ego_entity->steering_angle / M_PI;
+            obs[7] = ego_entity->steering_angle / M_PI;
             // Asymmetric normalization for a_long to match action space
-            obs[7] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
-            obs[8] = ego_entity->a_lat / JERK_LAT[2];
-            obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-        } else {
-            obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[8] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
+            obs[9] = ego_entity->a_lat / JERK_LAT[2];
+        }
+
+        int obs_idx = (env->dynamics_model == JERK) ? 10 : 7;
+        // Add conditioning weights to observations
+        if (env->use_rc) {
+            obs[obs_idx++] = env->collision_weights[i];
+            obs[obs_idx++] = env->offroad_weights[i];
+            obs[obs_idx++] = env->goal_weights[i];
+        }
+        if (env->use_ec) {
+            obs[obs_idx++] = env->entropy_weights[i];
+        }
+        if (env->use_dc) {
+            obs[obs_idx++] = env->discount_weights[i];
         }
 
         // Relative Pos of other cars
-        int obs_idx = ego_dim;
         int cars_seen = 0;
         for(int j = 0; j < MAX_AGENTS; j++) {
             int index = -1;
@@ -1808,6 +1895,7 @@ void compute_observations(Drive* env) {
             float rel_y = -dx*sin_heading + dy*cos_heading;
             // Store observations with correct indexing
             obs[obs_idx] = rel_x * 0.02f;
+        // Add conditioning weights to observations
             obs[obs_idx + 1] = rel_y * 0.02f;
             obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH;
             obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN;
@@ -2024,6 +2112,28 @@ void compute_new_goal(Drive* env, int agent_idx) {
 void c_reset(Drive* env){
     env->timestep = env->init_steps;
     set_start_position(env);
+
+    // Initialize conditioning weights
+    if (env->use_rc) {
+        for(int i = 0; i < env->active_agent_count; i++) {
+            env->collision_weights[i] = ((float)rand() / RAND_MAX) * (env->collision_weight_ub - env->collision_weight_lb) + env->collision_weight_lb;
+            env->offroad_weights[i] = ((float)rand() / RAND_MAX) * (env->offroad_weight_ub - env->offroad_weight_lb) + env->offroad_weight_lb;
+            env->goal_weights[i] = ((float)rand() / RAND_MAX) * (env->goal_weight_ub - env->goal_weight_lb) + env->goal_weight_lb;
+        }
+    }
+
+    if (env->use_ec) {
+        for(int i = 0; i < env->active_agent_count; i++) {
+            env->entropy_weights[i] = ((float)rand() / RAND_MAX) * (env->entropy_weight_ub - env->entropy_weight_lb) + env->entropy_weight_lb;
+        }
+    }
+
+    if (env->use_dc) {
+        for(int i = 0; i < env->active_agent_count; i++) {
+            env->discount_weights[i] = ((float)rand() / RAND_MAX) * (env->discount_weight_ub - env->discount_weight_lb) + env->discount_weight_lb;
+        }
+    }
+
     for(int x = 0;x<env->active_agent_count; x++){
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];

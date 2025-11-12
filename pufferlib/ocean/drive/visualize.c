@@ -10,7 +10,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include "error.h"
-#include "drive.h"
 #include "drivenet.h"
 #include "libgen.h"
 #include "../env_config.h"
@@ -202,8 +201,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
     return 0;
 }
 
-
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int use_rc, int use_ec, int use_dc, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};  // Initialize to zero
@@ -243,9 +241,9 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
         .reward_ade = conf.reward_ade,
-        .goal_radius = conf.goal_radius,
+        .goal_radius = goal_radius,
         .dt = conf.dt,
-	    .map_name = (char*)map_name,
+        .map_name = (char*)map_name,
         .init_steps = conf.init_steps,
         .max_controlled_agents = max_controlled_agents,
         .collision_behavior = conf.collision_behavior,
@@ -253,6 +251,20 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .goal_behavior = conf.goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,
+        .use_rc = use_rc,
+        .use_ec = use_ec,
+        .use_dc = use_dc,
+        // Conditioning weight bounds (defaults from drive.py)
+        .collision_weight_lb = -0.0f,
+        .collision_weight_ub = -0.0f,
+        .offroad_weight_lb = -0.0f,
+        .offroad_weight_ub = -0.0f,
+        .goal_weight_lb = 1.0f,
+        .goal_weight_ub = 1.0f,
+        .entropy_weight_lb = 0.001f,
+        .entropy_weight_ub = 0.001f,
+        .discount_weight_lb = 0.98f,
+        .discount_weight_ub = 0.98f,
     };
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
@@ -285,7 +297,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, use_rc, use_ec, use_dc);
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     int log_trajectory = log_trajectories;
@@ -406,6 +418,9 @@ int main(int argc, char* argv[]) {
     int max_controlled_agents = -1;
     int num_maps = 1;
     int scenario_length_cli = -1;
+    int use_rc = 0;
+    int use_ec = 0;
+    int use_dc = 0;
     int init_mode = 0;
     int control_mode = 2;
 
@@ -513,9 +528,24 @@ int main(int argc, char* argv[]) {
                 scenario_length_cli = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--use-rc") == 0) {
+            if (i + 1 < argc) {
+                use_rc = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--use-ec") == 0) {
+            if (i + 1 < argc) {
+                use_ec = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--use-dc") == 0) {
+            if (i + 1 < argc) {
+                use_dc = atoi(argv[i + 1]);
+                i++;
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, use_rc, use_ec, use_dc, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode);
     return 0;
 }
