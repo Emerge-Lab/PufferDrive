@@ -49,7 +49,7 @@ static int handler(
     } else if (MATCH("test", "key3")) {
         env_config->key3 = atoi(value);
     } else if (MATCH("test", "key31")) {
-        env_config->key3 = atof(value);
+        env_config->key31 = atof(value);
     } else if (MATCH("test", "key4")) {
         env_config->key4 = strdup(value);
     } else if (MATCH("test", "key5")) {
