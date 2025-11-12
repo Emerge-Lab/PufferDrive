@@ -34,29 +34,29 @@ static int handler(
     drive_config* env_config = (drive_config*)config;
     if (MATCH("env", "num_agents")) {
         env_config->num_agents = atoi(value);
-    } if (MATCH("env", "action_type")) {
+    } else if (MATCH("env", "action_type")) {
         env_config->action_type = strdup(value);
-    } if (MATCH("env", "num_maps")) {
+    } else if (MATCH("env", "num_maps")) {
         env_config->num_maps = atoi(value);
-    } if (MATCH("policy", "input_size")) {
+    } else if (MATCH("policy", "input_size")) {
         env_config->input_size = atoi(value);
-    } if (MATCH("policy", "hidden_size")) {
+    } else if (MATCH("policy", "hidden_size")) {
         env_config->hidden_size = atoi(value);
-    } if (MATCH("test", "key1")) {
+    } else if (MATCH("test", "key1")) {
         env_config->key1 = atoi(value);
-    } if (MATCH("test", "key2")) {
+    } else if (MATCH("test", "key2")) {
         env_config->key2 = atof(value);
-    } if (MATCH("test", "key3")) {
+    } else if (MATCH("test", "key3")) {
         env_config->key3 = atoi(value);
-    } if (MATCH("test", "key31")) {
+    } else if (MATCH("test", "key31")) {
         env_config->key3 = atof(value);
-    } if (MATCH("test", "key4")) {
+    } else if (MATCH("test", "key4")) {
         env_config->key4 = strdup(value);
-    } if (MATCH("test", "key5")) {
+    } else if (MATCH("test", "key5")) {
         env_config->key5 = strdup(value);
-    } if (MATCH("test", "key6")) {
+    } else if (MATCH("test", "key6")) {
         env_config->key6 = atoi(value);
-    } if (MATCH("test", "key7")) {
+    } else if (MATCH("test", "key7")) {
         env_config->key7 = strdup(value);
     } else {
         return 0;
