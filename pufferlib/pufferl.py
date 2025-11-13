@@ -415,9 +415,9 @@ class PuffeRL:
 
             # Add log likelihood loss of human actions under current policy.
             # 1: Sample a batch of human actions and observations from dataset
-            # Shape: [n_samples, bptt_horizon, feature_dim]
+            # Shape: [n_sequences, bptt_horizon, feature_dim]
             discrete_human_actions, continuous_human_actions, human_observations = (
-                self.vecenv.driver_env.sample_expert_data(n_samples=config["human_samples"], return_both=True)
+                self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
             )
             discrete_human_actions = discrete_human_actions.to(device)
             continuous_human_actions = continuous_human_actions.to(device)
@@ -432,7 +432,6 @@ class PuffeRL:
             # Select appropriate action type for training
             use_continuous = self.vecenv.driver_env._action_type_flag == 1
             human_actions = continuous_human_actions if use_continuous else discrete_human_actions
-            human_observations = human_observations.to(device)
 
             # 2: Compute the log-likelihood of human actions under the current policy,
             # given the corresponding human observations. A higher likelihood indicates
