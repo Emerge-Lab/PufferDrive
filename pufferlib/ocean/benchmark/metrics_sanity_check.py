@@ -77,14 +77,14 @@ def main():
 
     config = load_config(args.env)
     config["wosac"]["enabled"] = True
-    config["wosac"]["num_rollouts"] = 48
+    config["wosac"]["num_rollouts"] = 32
     config["vec"]["backend"] = "PufferEnv"
     config["vec"]["num_envs"] = 1
     config["env"]["num_agents"] = config["wosac"]["num_total_wosac_agents"]
     config["env"]["init_mode"] = config["wosac"]["init_mode"]
     config["env"]["control_mode"] = config["wosac"]["control_mode"]
     config["env"]["init_steps"] = config["wosac"]["init_steps"]
-    config["env"]["goal_behaviour"] = config["wosac"]["goal_behaviour"]
+    config["env"]["goal_behavior"] = config["wosac"]["goal_behavior"]
 
     vecenv = load_env(args.env, config)
     policy = load_policy(config, vecenv, args.env)

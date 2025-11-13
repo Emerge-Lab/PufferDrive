@@ -31,7 +31,6 @@ class WOSACEvaluator:
         self.num_steps = 91  # Hardcoded for WOSAC (9.1s at 10Hz)
         self.init_steps = config.get("wosac", {}).get("init_steps", 0)
         self.sim_steps = self.num_steps - self.init_steps
-        self.show_dashboard = config.get("wosac", {}).get("dashboard", False)
         self.num_rollouts = config.get("wosac", {}).get("num_rollouts", 32)
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
@@ -301,59 +300,130 @@ class WOSACEvaluator:
         print(scene_level_results)
 
         print(f"\n Overall realism metametric: {scene_level_results['realism_metametric'].mean():.4f}")
+        print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
         print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
 
         # print(f"\n Full agent-level results:\n")
         # print(df)
         return scene_level_results
 
-    def _quick_sanity_check(self, gt_trajectories, simulated_trajectories):
-        fig, axs = plt.subplots(1, 2, figsize=(12, 4))
-        agent_idx = 0  # Visualize the first agent
-        axs[0].set_title(f"Agent ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
-        axs[0].scatter(
-            simulated_trajectories["x"][agent_idx, :, :],
-            simulated_trajectories["y"][agent_idx, :, :],
-            color="b",
-            alpha=0.1,
-            label="Simulated",
-        )
-        axs[0].scatter(
-            gt_trajectories["x"][agent_idx, :, :],
-            gt_trajectories["y"][agent_idx, :, :],
-            color="g",
-            label="Ground Truth",
-        )
-        axs[0].scatter(
-            gt_trajectories["x"][agent_idx, 0, 0],
-            gt_trajectories["y"][agent_idx, 0, 0],
-            color="purple",
-            marker="*",
-            s=200,
-            label="GT start",
-            zorder=5,
-            alpha=0.5,
-        )
-        axs[0].scatter(
-            simulated_trajectories["x"][agent_idx, :, 0],
-            simulated_trajectories["y"][agent_idx, :, 0],
-            color="purple",
-            marker="*",
-            s=200,
-            label="Agent start",
-            zorder=5,
-            alpha=0.5,
-        )
-        axs[0].set_xlabel("X Position")
-        axs[0].set_ylabel("Y Position")
-        axs[0].legend()
+    def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None, max_agents_to_plot=10):
+        if agent_idx is None:
+            agent_indices = range(np.clip(simulated_trajectories["x"].shape[0], 1, max_agents_to_plot))
 
-        axs[1].set_title(f"Heading timeseries; ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
-        time_steps = list(range(self.sim_steps))
-        for r in range(self.num_rollouts):
-            axs[1].plot(
-                time_steps, simulated_trajectories["heading"][agent_idx, r, :], color="b", alpha=0.1, label="Simulated"
+        else:
+            agent_indices = [agent_idx]
+
+        for agent_idx in agent_indices:
+            valid_mask = gt_trajectories["valid"][agent_idx, 0, :] == 1
+            invalid_mask = ~valid_mask
+
+            last_valid_idx = np.where(valid_mask)[0][-1] if valid_mask.any() else 0
+            goal_x = gt_trajectories["x"][agent_idx, 0, last_valid_idx]
+            goal_y = gt_trajectories["y"][agent_idx, 0, last_valid_idx]
+            goal_radius = 2.0  # Note: Hardcoded here; ideally pass from config
+
+            fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+
+            axs[0].set_title(f"Simulated rollouts (x, y) for agent id: {simulated_trajectories['id'][agent_idx, 0][0]}")
+
+            for i in range(self.num_rollouts):
+                # Sample random color for each rollout
+                color = plt.cm.tab20(i % 20)
+                axs[0].scatter(
+                    simulated_trajectories["x"][agent_idx, i, :],
+                    simulated_trajectories["y"][agent_idx, i, :],
+                    alpha=0.1,
+                    color=color,
+                )
+
+            axs[1].set_title(
+                f"Simulated rollouts (x, y) and GT; agent id: {simulated_trajectories['id'][agent_idx, 0][0]}"
             )
-        axs[1].plot(time_steps, gt_trajectories["heading"][agent_idx, :, :].T, color="g", label="Ground Truth")
-        axs[1].set_xlabel("Time Step")
-        plt.savefig("trajectory_comparison.png")
+
+            axs[1].scatter(
+                simulated_trajectories["x"][agent_idx, :, valid_mask],
+                simulated_trajectories["y"][agent_idx, :, valid_mask],
+                color="b",
+                alpha=0.1,
+                zorder=4,
+            )
+
+            axs[1].scatter(
+                gt_trajectories["x"][agent_idx, 0, valid_mask],
+                gt_trajectories["y"][agent_idx, 0, valid_mask],
+                color="g",
+                label="Ground truth",
+                alpha=0.5,
+            )
+
+            axs[1].scatter(
+                gt_trajectories["x"][agent_idx, 0, 0],
+                gt_trajectories["y"][agent_idx, 0, 0],
+                color="darkgreen",
+                marker="*",
+                s=200,
+                label="Log start",
+                zorder=5,
+                alpha=0.5,
+            )
+            axs[1].scatter(
+                simulated_trajectories["x"][agent_idx, :, 0],
+                simulated_trajectories["y"][agent_idx, :, 0],
+                color="darkblue",
+                marker="*",
+                s=200,
+                label="Agent start",
+                zorder=5,
+                alpha=0.5,
+            )
+
+            circle = plt.Circle(
+                (goal_x, goal_y),
+                goal_radius,
+                color="g",
+                fill=False,
+                linewidth=2,
+                linestyle="--",
+                label=f"Goal radius ({goal_radius}m)",
+                zorder=0,
+            )
+            axs[1].add_patch(circle)
+
+            axs[1].set_xlabel("x")
+            axs[1].set_ylabel("y")
+            axs[1].legend()
+            axs[1].set_aspect("equal", adjustable="datalim")
+
+            axs[2].set_title(f"Heading timeseries for agent ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
+            time_steps = list(range(self.sim_steps))
+            for r in range(self.num_rollouts):
+                axs[2].plot(
+                    time_steps,
+                    simulated_trajectories["heading"][agent_idx, r, :],
+                    color="b",
+                    alpha=0.1,
+                    label="Simulated" if r == 0 else "",
+                )
+            axs[2].plot(time_steps, gt_trajectories["heading"][agent_idx, 0, :], color="g", label="Ground truth")
+
+            if invalid_mask.any():
+                invalid_timesteps = np.where(invalid_mask)[0]
+                axs[2].scatter(
+                    invalid_timesteps,
+                    gt_trajectories["heading"][agent_idx, 0, invalid_mask],
+                    color="r",
+                    marker="^",
+                    s=100,
+                    label="Invalid",
+                    zorder=6,
+                    edgecolors="darkred",
+                    linewidths=1,
+                )
+
+            axs[2].set_xlabel("Time step")
+            axs[2].legend()
+
+            plt.tight_layout()
+
+            plt.savefig(f"trajectory_comparison_agent_{agent_idx}.png")

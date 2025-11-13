@@ -74,6 +74,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     int max_controlled_agents = unpack(kwargs, "max_controlled_agents");
+    int goal_behavior = unpack(kwargs, "goal_behavior");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
@@ -91,6 +92,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         env->control_mode = control_mode;
         env->init_steps = init_steps;
         env->max_controlled_agents = max_controlled_agents;
+        env->goal_behavior = goal_behavior;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
@@ -188,8 +190,6 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_ade = conf.reward_ade;
     env->scenario_length = conf.scenario_length;
-    env->goal_radius = conf.goal_radius;
-    env->goal_behavior = conf.goal_behavior;
     env->collision_behavior = conf.collision_behavior;
     env->offroad_behavior = conf.offroad_behavior;
     env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
@@ -212,6 +212,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
 
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
+    env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
+    env->goal_radius = (float)unpack(kwargs, "goal_radius");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
