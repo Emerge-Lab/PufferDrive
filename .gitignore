@@ -174,8 +174,16 @@ pufferlib/resources/drive/human_demonstrations/*
 
 # Compiled drive binary in root
 /drive
+/visualize
 # But allow drive directories
 !*/drive/
 *.exe
 *.out
 *.app
+artifacts/
+pufferlib/resources/drive/output_agent.gif pufferlib/resources/drive/output.gif pufferlib/resources/drive/output_topdown.gif
+
+# Local artifacts and outputs
+artifacts/
+# Local drive renders
+pufferlib/resources/drive/output*.gif

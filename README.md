@@ -8,20 +8,9 @@ Clone the repo
 https://github.com/Emerge-Lab/PufferDrive.git
 ```
 
-Make a venv
-```
-uv venv
-```
-
-Activate the venv
+Make a venv (`uv venv`), activate the venv
 ```
 source .venv/bin/activate
-```
-
-Install `inih`
-
-```
-wget https://github.com/benhoyt/inih/archive/r62.tar.gz
 ```
 
 Inside the venv, install the dependencies
@@ -38,8 +27,7 @@ To test your setup, you can run
 ```
 puffer train puffer_drive
 ```
-
-Alternative options for working with pufferdrive are found at https://puffer.ai/docs.html
+See also the [puffer docs](https://puffer.ai/docs.html).
 
 
 ## Quick start
@@ -50,6 +38,9 @@ puffer train puffer_drive
 ```
 
 ## Dataset
+
+<details>
+<summary>Downloading and using data</summary>
 
 ### Data preparation
 
@@ -71,12 +62,17 @@ You can download the WOMD data from Hugging Face in two versions:
 ### Additional Data Sources
 
 For more training data compatible with PufferDrive, see [ScenarioMax](https://github.com/valeoai/ScenarioMax). The GPUDrive data format is fully compatible with PufferDrive.
+</details>
+
 
 ## Visualizer
 
+<details>
+<summary>Dependencies and usage</summary>
+
 ## Headless server setup
 
-Run the Raylib visualizer on a headless server and export as GIF.
+Run the Raylib visualizer on a headless server and export as .mp4. This will rollout the pre-trained policy in the env.
 
 ### Install dependencies
 
@@ -85,7 +81,7 @@ sudo apt update
 sudo apt install ffmpeg xvfb
 ```
 
-For HPC(There are no root privileges), so install into the conda environment
+For HPC (There are no root privileges), so install into the conda environment
 ```bash
 conda install -c conda-forge xorg-x11-server-xvfb-cos6-x86_64
 conda install -c conda-forge ffmpeg
@@ -98,16 +94,37 @@ conda install -c conda-forge ffmpeg
 
 1. Build the application:
 ```bash
-bash scripts/build_ocean.sh drive local
+bash scripts/build_ocean.sh visualize local
 ```
 
 2. Run with virtual display:
 ```bash
-xvfb-run -s "-screen 0 1280x720x24" ./drive
+xvfb-run -s "-screen 0 1280x720x24" ./visualize
 ```
 
 The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color depth.
 
-### Output
+---
 
-The visualizer will automatically generate a GIF file from the rendered frames.
+> To force a rebuild, you can delete the cached compiled executable binary using `rm ./visualize`.
+
+---
+
+</details>
+
+
+## Benchmarks
+
+### Realism
+
+We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/main/pufferlib/ocean/benchmark).
+
+WOSAC evaluation with random policy
+```bash
+puffer eval puffer_drive --wosac.enabled True
+```
+
+WOSAC evaluation with your checkpoint (must be .pt file)
+```bash
+puffer eval puffer_drive --wosac.enabled True --load-model-path <your-trained-policy>.pt
+```

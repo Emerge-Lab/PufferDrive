@@ -584,7 +584,7 @@ class PuffeRL:
                         env = os.environ.copy()
                         env["ASAN_OPTIONS"] = "exitcode=0"
 
-                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive"]
+                        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
                         # Add render configurations
                         if config["show_grid"]:
@@ -595,13 +595,38 @@ class PuffeRL:
                             cmd.append("--lasers")
                         if config["show_human_logs"]:
                             cmd.append("--log-trajectories")
-
                         if self.vecenv.driver_env.goal_radius is not None:
                             cmd.extend(["--goal-radius", str(self.vecenv.driver_env.goal_radius)])
+                        if self.vecenv.driver_env.init_steps > 0:
+                            cmd.extend(["--init-steps", str(self.vecenv.driver_env.init_steps)])
                         if config["render_map"] is not None:
                             map_path = config["render_map"]
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
+                        if self.vecenv.driver_env.init_mode is not None:
+                            cmd.extend(["--init-mode", str(self.vecenv.driver_env.init_mode)])
+                        if self.vecenv.driver_env.control_mode is not None:
+                            cmd.extend(["--control-mode", str(self.vecenv.driver_env.control_mode)])
+
+                        # Specify output paths for videos
+                        cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
+                        cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+
+                        env_cfg = getattr(self, "vecenv", None)
+                        env_cfg = getattr(env_cfg, "driver_env", None)
+                        if env_cfg is not None:
+                            n_policy = getattr(env_cfg, "max_controlled_agents", -1)
+                            try:
+                                n_policy = int(n_policy)
+                            except (TypeError, ValueError):
+                                n_policy = -1
+                            if n_policy > 0:
+                                cmd += ["--num-policy-controlled-agents", str(n_policy)]
+                            if getattr(env_cfg, "num_maps", False):
+                                cmd.extend(["--num-maps", str(env_cfg.num_maps)])
+                            if getattr(env_cfg, "scenario_length", None):
+                                cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
+
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
                             cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env
@@ -637,7 +662,7 @@ class PuffeRL:
                                     print(f"Video generation completed but {source_vid} not found")
 
                         else:
-                            print(f"C rendering failed with exit code {result.returncode}: {result.stderr}")
+                            print(f"C rendering failed with exit code {result.returncode}: {result.stdout}")
 
                     except subprocess.TimeoutExpired:
                         print("C rendering timed out")
@@ -1163,18 +1188,50 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
 def eval(env_name, args=None, vecenv=None, policy=None):
     args = args or load_config(env_name)
-    backend = args["vec"]["backend"]
-    if backend != "PufferEnv":
-        backend = "Serial"
+
+    wosac_enabled = args["wosac"]["enabled"]
+    backend = args["wosac"]["backend"] if wosac_enabled else args["vec"]["backend"]
+    assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
 
     args["vec"] = dict(backend=backend, num_envs=1)
-    vecenv = vecenv or load_env(env_name, args)
+    args["env"]["num_agents"] = args["wosac"]["num_total_wosac_agents"] if wosac_enabled else 1
+    args["env"]["init_mode"] = args["wosac"]["init_mode"] if wosac_enabled else args["env"]["init_mode"]
+    args["env"]["control_mode"] = args["wosac"]["control_mode"] if wosac_enabled else args["env"]["control_mode"]
+    args["env"]["init_steps"] = args["wosac"]["init_steps"] if wosac_enabled else args["env"]["init_steps"]
+    args["env"]["goal_behavior"] = args["wosac"]["goal_behavior"] if wosac_enabled else args["env"]["goal_behavior"]
+    args["env"]["goal_radius"] = args["wosac"]["goal_radius"] if wosac_enabled else args["env"]["goal_radius"]
 
+    vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
+
+    if wosac_enabled:
+        print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
+        from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
+
+        evaluator = WOSACEvaluator(args)
+
+        # Collect ground truth trajectories from the dataset
+        gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+
+        # Roll out trained policy in the simulator
+        simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
+
+        if args["wosac"]["sanity_check"]:
+            evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
+
+        # Analyze and compute metrics
+        results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories)
+
+        return results
+
     ob, info = vecenv.reset()
     driver = vecenv.driver_env
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
+
+    # Rebuild visualize binary if saving frames (for C-based rendering)
+    if args["save_frames"] > 0:
+        ensure_drive_binary()
 
     state = {}
     if args["train"]["use_rnn"]:
@@ -1286,7 +1343,7 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
     weights = np.concatenate(weights)
     if path is None:
-        path = f"{args['env_name']}_weights.bin"
+        path = f"pufferlib/resources/drive/{args['env_name']}_weights.bin"
 
     weights.tofile(path)
 
@@ -1295,27 +1352,28 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
 
 def ensure_drive_binary():
-    """Ensure the drive binary exists, build it once if necessary. This
-    is required for rendering with raylib.
+    """Delete existing visualize binary and rebuild it. This ensures the
+    binary is always up-to-date with the latest code changes.
     """
-    if not os.path.exists("./drive"):
-        print("Drive binary not found, building...")
-        try:
-            result = subprocess.run(
-                ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=300
-            )
+    if os.path.exists("./visualize"):
+        print("Removing existing visualize binary...")
+        os.remove("./visualize")
 
-            if result.returncode == 0:
-                print("Successfully built drive binary")
-            else:
-                print(f"Build failed: {result.stderr}")
-                raise RuntimeError("Failed to build drive binary for rendering")
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Build timed out")
-        except Exception as e:
-            raise RuntimeError(f"Build error: {e}")
-    else:
-        print("Drive binary found, ready for rendering")
+    print("Building visualize binary...")
+    try:
+        result = subprocess.run(
+            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
+        )
+
+        if result.returncode == 0:
+            print("Successfully built visualize binary")
+        else:
+            print(f"Build failed: {result.stderr}")
+            raise RuntimeError("Failed to build visualize binary for rendering")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Build timed out")
+    except Exception as e:
+        raise RuntimeError(f"Build error: {e}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
@@ -1379,7 +1437,7 @@ def load_policy(args, vecenv, env_name=""):
     return policy
 
 
-def load_config(env_name):
+def load_config(env_name, config_dir=None):
     parser = argparse.ArgumentParser(
         description=f":blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]"
         " demo options. Shows valid args for your env and policy",
@@ -1407,8 +1465,13 @@ def load_config(env_name):
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
     args = parser.parse_known_args()[0]
 
+    if config_dir is None:
+        puffer_dir = os.path.dirname(os.path.realpath(__file__))
+    else:
+        print("Using custom config dir:", config_dir)
+        puffer_dir = config_dir
+
     # Load defaults and config
-    puffer_dir = os.path.dirname(os.path.realpath(__file__))
     puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
     puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
     if env_name == "default":
