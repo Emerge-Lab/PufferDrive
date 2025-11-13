@@ -755,6 +755,8 @@ class PuffeRL:
             "update": self.epoch,
             "model_name": model_name,
             "run_id": run_id,
+            "max_expert_sequences": self.vecenv.driver_env.max_expert_sequences,
+            "bptt_horizon": self.config["bptt_horizon"],
         }
         state_path = os.path.join(path, "trainer_state.pt")
         torch.save(state, state_path + ".tmp")

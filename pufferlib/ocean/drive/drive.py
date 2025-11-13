@@ -80,6 +80,7 @@ class Drive(pufferlib.PufferEnv):
         self.init_steps = init_steps
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
+        self.max_expert_sequences = max_expert_sequences
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
