@@ -1370,6 +1370,11 @@ void set_active_agents(Drive* env){
         bool is_controlled = false;
 
         is_controlled = should_control_agent(env, i);
+        // If max_controlled_agents is set, then mark the active agent as expert.
+        if (is_controlled && env->active_agent_count >= env->max_controlled_agents && env->max_controlled_agents != -1) {
+            is_controlled = false;
+            entity->mark_as_expert = 1;
+        }
 
         if(is_controlled){
             active_agent_indices[env->active_agent_count] = i;
