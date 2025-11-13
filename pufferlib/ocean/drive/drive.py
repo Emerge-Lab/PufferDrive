@@ -38,7 +38,7 @@ class Drive(pufferlib.PufferEnv):
         seed=1,
         bptt_horizon=32,
         human_data_dir="pufferlib/resources/drive/human_demonstrations",
-        max_expert_samples=128,
+        max_expert_sequences=128,
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
@@ -185,7 +185,7 @@ class Drive(pufferlib.PufferEnv):
         self.bptt_horizon = bptt_horizon
         self.human_data_dir = human_data_dir
         os.makedirs(self.human_data_dir, exist_ok=True)
-        self._save_expert_data(bptt_horizon, max_expert_samples)
+        self._save_expert_data(bptt_horizon, max_expert_sequences)
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -317,7 +317,6 @@ class Drive(pufferlib.PufferEnv):
     def _save_expert_data(self, bptt_horizon=32, max_expert_sequences=10000):
         """Collect and save expert trajectories with bptt_horizon length sequences."""
         trajectory_length = 91
-        sequences_per_trajectory = trajectory_length - bptt_horizon + 1
 
         # Collect full expert trajectories - both discrete and continuous
         expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
@@ -328,36 +327,32 @@ class Drive(pufferlib.PufferEnv):
             self.c_envs, expert_actions_discrete, expert_actions_continuous, expert_observations_full
         )
 
+        # Determine how many sequences we can actually store
+        num_sequences = min(self.num_agents, max_expert_sequences)
+
         # Preallocate sequences
-        discrete_sequences = np.zeros((max_expert_sequences, bptt_horizon, 2), dtype=np.float32)
-        continuous_sequences = np.zeros((max_expert_sequences, bptt_horizon, 2), dtype=np.float32)
-        obs_sequences = np.zeros((max_expert_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
+        discrete_sequences = np.zeros((num_sequences, bptt_horizon, 2), dtype=np.float32)
+        continuous_sequences = np.zeros((num_sequences, bptt_horizon, 2), dtype=np.float32)
+        obs_sequences = np.zeros((num_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
 
-        idx = 0
-        for agent_idx in range(self.num_agents):
-            for start_idx in range(sequences_per_trajectory):
-                if idx >= max_expert_sequences:
-                    break
-                end_idx = start_idx + bptt_horizon
-                discrete_sequences[idx] = expert_actions_discrete[start_idx:end_idx, agent_idx, :]
-                continuous_sequences[idx] = expert_actions_continuous[start_idx:end_idx, agent_idx, :]
-                obs_sequences[idx] = expert_observations_full[start_idx:end_idx, agent_idx, :]
-                idx += 1
-            if idx >= max_expert_sequences:
-                break
+        # Take one sequence per agent (starting from timestep 0)
+        for agent_idx in range(num_sequences):
+            discrete_sequences[agent_idx] = expert_actions_discrete[:bptt_horizon, agent_idx, :]
+            continuous_sequences[agent_idx] = expert_actions_continuous[:bptt_horizon, agent_idx, :]
+            obs_sequences[agent_idx] = expert_observations_full[:bptt_horizon, agent_idx, :]
 
-        self._cache_size = idx
+        self._cache_size = num_sequences
 
         torch.save(
-            torch.from_numpy(discrete_sequences[:idx]),
+            torch.from_numpy(discrete_sequences),
             os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt"),
         )
         torch.save(
-            torch.from_numpy(continuous_sequences[:idx]),
+            torch.from_numpy(continuous_sequences),
             os.path.join(self.human_data_dir, f"expert_actions_continuous_h{bptt_horizon}.pt"),
         )
         torch.save(
-            torch.from_numpy(obs_sequences[:idx]),
+            torch.from_numpy(obs_sequences),
             os.path.join(self.human_data_dir, f"expert_observations_h{bptt_horizon}.pt"),
         )
 
