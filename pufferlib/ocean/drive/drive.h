@@ -246,6 +246,15 @@ struct Drive {
     int offroad_behaviour; //0 = none, 1=stop, 2 = remove
     int scenario_length;
     int control_non_vehicles;
+    // Metadata fields
+    char scenario_id[128];
+    char dataset_name[64];
+    int length;
+    int ego_id;
+    int num_objects_of_interest;
+    int* objects_of_interest;
+    int num_tracks_to_predict;
+    int* tracks_to_predict;
 };
 
 typedef struct {
@@ -543,29 +552,28 @@ int load_map_binary(const char* filename, Drive* drive) {
             return -1;
         }
 
-        // Read routes
-        int num_route_ints;
-        if (fread(&num_route_ints, sizeof(int), 1, file) != 1) {
+        // Read route
+        if (fread(&agent->route_length, sizeof(int), 1, file) != 1) {
             fprintf(stderr, "Error: Failed to read agent %d num_route_ints\n", i);
             fclose(file);
             return -1;
         }
 
-        if (num_route_ints > 0) {
-            agent->routes = (int*)malloc(num_route_ints * sizeof(int));
-            if (!agent->routes) {
-                fprintf(stderr, "Error: Failed to allocate agent %d routes\n", i);
+        if (agent->route_length > 0) {
+            agent->route = (int*)malloc(agent->route_length * sizeof(int));
+            if (!agent->route) {
+                fprintf(stderr, "Error: Failed to allocate agent %d route\n", i);
                 fclose(file);
                 return -1;
             }
 
-            if (fread(agent->routes, sizeof(int), num_route_ints, file) != (size_t)num_route_ints) {
-                fprintf(stderr, "Error: Failed to read agent %d routes\n", i);
+            if (fread(agent->route, sizeof(int), agent->route_length, file) != (size_t)agent->route_length) {
+                fprintf(stderr, "Error: Failed to read agent %d route\n", i);
                 fclose(file);
                 return -1;
             }
         } else {
-            agent->routes = NULL;
+            agent->route = NULL;
         }
 
         // Read goal position
@@ -692,6 +700,86 @@ int load_map_binary(const char* filename, Drive* drive) {
             fclose(file);
             return -1;
         }
+    }
+
+    // ========================================================================
+    // Read Metadata
+    // ========================================================================
+
+    // Read scenario_id (128 bytes, null-padded)
+    if (fread(drive->scenario_id, sizeof(char), 128, file) != 128) {
+        fprintf(stderr, "Error: Failed to read scenario_id\n");
+        fclose(file);
+        return -1;
+    }
+
+    // Read dataset_name (64 bytes, null-padded)
+    if (fread(drive->dataset_name, sizeof(char), 64, file) != 64) {
+        fprintf(stderr, "Error: Failed to read dataset_name\n");
+        fclose(file);
+        return -1;
+    }
+
+    // Read length (timestep count)
+    if (fread(&drive->length, sizeof(int), 1, file) != 1) {
+        fprintf(stderr, "Error: Failed to read length\n");
+        fclose(file);
+        return -1;
+    }
+
+    // Read ego_id
+    if (fread(&drive->ego_id, sizeof(int), 1, file) != 1) {
+        fprintf(stderr, "Error: Failed to read ego_id\n");
+        fclose(file);
+        return -1;
+    }
+
+    // Read objects_of_interest
+    if (fread(&drive->num_objects_of_interest, sizeof(int), 1, file) != 1) {
+        fprintf(stderr, "Error: Failed to read num_objects_of_interest\n");
+        fclose(file);
+        return -1;
+    }
+
+    if (drive->num_objects_of_interest > 0) {
+        drive->objects_of_interest = (int*)malloc(drive->num_objects_of_interest * sizeof(int));
+        if (!drive->objects_of_interest) {
+            fprintf(stderr, "Error: Failed to allocate objects_of_interest\n");
+            fclose(file);
+            return -1;
+        }
+
+        if (fread(drive->objects_of_interest, sizeof(int), drive->num_objects_of_interest, file) != (size_t)drive->num_objects_of_interest) {
+            fprintf(stderr, "Error: Failed to read objects_of_interest\n");
+            fclose(file);
+            return -1;
+        }
+    } else {
+        drive->objects_of_interest = NULL;
+    }
+
+    // Read tracks_to_predict
+    if (fread(&drive->num_tracks_to_predict, sizeof(int), 1, file) != 1) {
+        fprintf(stderr, "Error: Failed to read num_tracks_to_predict\n");
+        fclose(file);
+        return -1;
+    }
+
+    if (drive->num_tracks_to_predict > 0) {
+        drive->tracks_to_predict = (int*)malloc(drive->num_tracks_to_predict * sizeof(int));
+        if (!drive->tracks_to_predict) {
+            fprintf(stderr, "Error: Failed to allocate tracks_to_predict\n");
+            fclose(file);
+            return -1;
+        }
+
+        if (fread(drive->tracks_to_predict, sizeof(int), drive->num_tracks_to_predict, file) != (size_t)drive->num_tracks_to_predict) {
+            fprintf(stderr, "Error: Failed to read tracks_to_predict\n");
+            fclose(file);
+            return -1;
+        }
+    } else {
+        drive->tracks_to_predict = NULL;
     }
 
     fclose(file);
@@ -1889,6 +1977,9 @@ void c_close(Drive* env){
     free(env->grid_map);
     free(env->static_car_indices);
     free(env->expert_static_car_indices);
+    // Free metadata arrays
+    free(env->objects_of_interest);
+    free(env->tracks_to_predict);
     freeTopologyGraph(env->topology_graph);
     // free(env->map_name);
     free(env->ini_file);
@@ -2131,16 +2222,6 @@ void compute_observations(Drive* env) {
         obs[3] = ego_entity->sim_width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->sim_length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
-
-        if (env->dynamics_model == JERK) {
-            obs[6] = ego_entity->steering_angle / M_PI;
-            // Asymmetric normalization for a_long to match action space
-            obs[7] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
-            obs[8] = ego_entity->a_lat / JERK_LAT[2];
-            obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-        } else {
-            obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-        }
 
         if (env->dynamics_model == JERK) {
             obs[6] = ego_entity->steering_angle / M_PI;

@@ -28,7 +28,8 @@ struct DynamicAgent {
     int sim_valid;
 
     // Route information
-    int* routes;
+    int route_length;
+    int* route;
 
     // Metrics and status tracking
     int collision_state;
@@ -107,7 +108,7 @@ void free_dynamic_agent(struct DynamicAgent* agent){
     free(agent->log_width);
     free(agent->log_height);
     free(agent->log_valid);
-    free(agent->routes);
+    free(agent->route);
 }
 
 void free_road_element(struct RoadMapElement* element){
