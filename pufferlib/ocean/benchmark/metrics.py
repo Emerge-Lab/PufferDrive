@@ -5,6 +5,8 @@ https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_
 import numpy as np
 from typing import Dict, Tuple
 
+from pufferlib.ocean.benchmark import interaction_features
+
 
 def compute_displacement_error(
     pred_x: np.ndarray,
@@ -211,4 +213,100 @@ def _reduce_average_with_validity(tensor: np.ndarray, validity: np.ndarray, axis
         )
     cond_sum = np.sum(np.where(validity, tensor, np.zeros_like(tensor)), axis=axis, keepdims=False)
     valid_sum = np.sum(validity.astype(np.float32), axis=axis, keepdims=False)
-    return cond_sum / valid_sum
+
+    # Safe division:
+    safe_valid_sum = np.where(valid_sum == 0, 1, valid_sum)
+
+    return np.where(valid_sum == 0, np.nan, cond_sum / safe_valid_sum)
+
+
+def compute_interaction_features(
+    trajectories: dict,
+    scenario_ids: np.ndarray,
+    agent_length: np.ndarray,
+    agent_width: np.ndarray,
+    corner_rounding_factor: float = 0.7,
+    seconds_per_step: float = 0.1,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Computes distance to nearest object for each agent, grouped by scenario.
+
+    Loops over unique scenario_ids and calls the vectorized distance computation
+    for agents within each scenario.
+
+    Args:
+        trajectories: Dictionary with keys:
+            - 'x', 'y', 'heading': shape (num_agents, num_rollouts, num_steps)
+            - 'valid': shape (num_agents, num_rollouts, num_steps) (optional, defaults to all True)
+        scenario_ids: Shape (num_agents, 1) - scenario ID for each agent
+        agent_length: Shape (num_agents,) - length of each agent
+        agent_width: Shape (num_agents,) - width of each agent
+        corner_rounding_factor: Rounding factor for box corners, between 0 (sharp) and 1 (capsule)
+        seconds_per_step: Duration of one step in seconds
+
+    Returns:
+        Tuple of:
+            - Distance to nearest object, shape (num_agents, num_rollouts, num_steps)
+            - Collision indicator per step, shape (num_agents, num_rollouts, num_steps)
+            - Time to collision, shape (num_agents, num_rollouts, num_steps)
+    """
+
+    num_agents = trajectories["x"].shape[0]
+    num_rollouts = trajectories["x"].shape[1]
+    num_steps = trajectories["x"].shape[2]
+
+    length_broadcast = np.broadcast_to(agent_length[:, None], (num_agents, num_rollouts))
+    width_broadcast = np.broadcast_to(agent_width[:, None], (num_agents, num_rollouts))
+
+    result_distances = np.full(
+        (num_agents, num_rollouts, num_steps), interaction_features.EXTREMELY_LARGE_DISTANCE, dtype=np.float32
+    )
+
+    result_collisions = np.full((num_agents, num_rollouts, num_steps), False, dtype=bool)
+
+    result_ttc = np.full(
+        (num_agents, num_rollouts, num_steps), interaction_features.MAXIMUM_TIME_TO_COLLISION, dtype=np.float32
+    )
+
+    valid = trajectories.get("valid", np.ones((num_agents, num_rollouts, num_steps), dtype=bool))
+
+    unique_scenarios = np.unique(scenario_ids)
+
+    for scenario_id in unique_scenarios:
+        scenario_mask = scenario_ids[:, 0] == scenario_id
+        agent_indices = np.where(scenario_mask)[0]
+        n_agents_in_scenario = len(agent_indices)
+
+        scenario_x = trajectories["x"][scenario_mask]
+        scenario_y = trajectories["y"][scenario_mask]
+        scenario_length = length_broadcast[scenario_mask]
+        scenario_width = width_broadcast[scenario_mask]
+        scenario_heading = trajectories["heading"][scenario_mask]
+        scenario_valid = valid[scenario_mask]
+
+        distances_to_objects = interaction_features.compute_distance_to_nearest_object(
+            center_x=scenario_x,
+            center_y=scenario_y,
+            length=scenario_length,
+            width=scenario_width,
+            heading=scenario_heading,
+            valid=scenario_valid,
+            corner_rounding_factor=corner_rounding_factor,
+        )
+
+        is_colliding_per_step = np.less(distances_to_objects, interaction_features.COLLISION_DISTANCE_THRESHOLD)
+
+        times_to_collision = interaction_features.compute_time_to_collision(
+            center_x=scenario_x,
+            center_y=scenario_y,
+            length=scenario_length,
+            width=scenario_width,
+            heading=scenario_heading,
+            valid=scenario_valid,
+            seconds_per_step=seconds_per_step,
+        )
+
+        result_distances[scenario_mask] = distances_to_objects
+        result_collisions[scenario_mask] = is_colliding_per_step
+        result_ttc[scenario_mask] = times_to_collision
+
+    return result_distances, result_collisions, result_ttc

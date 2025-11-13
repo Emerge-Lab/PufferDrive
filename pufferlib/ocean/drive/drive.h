@@ -1716,7 +1716,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     return;
 }
 
-void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* id_out) {
+void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* id_out, float* length_out, float* width_out) {
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
@@ -1727,6 +1727,8 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
         id_out[i] = env->tracks_to_predict_indices[i];
+        length_out[i] = agent->length;
+        width_out[i] = agent->width;
     }
 }
 
