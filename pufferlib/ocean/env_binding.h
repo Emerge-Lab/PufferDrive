@@ -925,7 +925,7 @@ static PyObject* vec_collect_expert_data(PyObject* self, PyObject* args) {
     }
 
     int trajectory_length = PyArray_DIM(expert_actions_discrete, 0);
-    int max_obs = 7 + 7*(MAX_CARS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
 
     // Process each environment
     int agent_offset = 0;
