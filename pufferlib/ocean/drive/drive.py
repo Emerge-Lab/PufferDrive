@@ -86,7 +86,7 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 3
         else:
             raise ValueError(
-                f"init_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.init_mode_str}"
+                f"control_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.control_mode_str}"
             )
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
