@@ -77,7 +77,7 @@ void CloseVideo(VideoRecorder *recorder) {
     waitpid(recorder->pid, NULL, 0);
 }
 
-void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid) {
+void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid, int img_width, int img_height) {
 
     BeginDrawing();
 
@@ -88,6 +88,9 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
     camera.fovy     = map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
+
+    client->width = img_width;
+    client->height = img_height;
 
     Color road = (Color){35, 35, 37, 255};
     ClearBackground(road);
@@ -200,7 +203,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
 }
 
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int control_non_vehicles, int init_steps, int control_all_agents, int policy_agents_per_env, int deterministic_selection, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};  // Initialize to zero
@@ -243,12 +246,15 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
 	    .map_name = (char*)map_name,
-        .control_non_vehicles = conf.control_non_vehicles,
-        .init_steps = conf.init_steps,
-        .control_all_agents = conf.control_all_agents,
-        .policy_agents_per_env = conf.num_policy_controlled_agents,
-        .deterministic_agent_selection = conf.deterministic_agent_selection
+        .init_steps = init_steps,
+        .max_controlled_agents = max_controlled_agents,
+        .collision_behavior = conf.collision_behavior,
+        .offroad_behavior = conf.offroad_behavior,
+        .goal_behavior = goal_behavior,
+        .init_mode = init_mode,
+        .control_mode = control_mode,
     };
+
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
@@ -338,7 +344,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         printf("Recording topdown view...\n");
         for(int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
-                renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid);
+                renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid, img_width, img_height);
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
             }
@@ -397,12 +403,12 @@ int main(int argc, char* argv[]) {
     int init_steps = 0;
     const char* map_name = NULL;
     const char* policy_name = "resources/drive/puffer_drive_weights.bin";
-    int control_all_agents = 0;
-    int deterministic_selection = 0;
-    int policy_agents_per_env = -1;
-    int control_non_vehicles = 0;
-    int num_maps = 100;
+    int max_controlled_agents = -1;
+    int num_maps = 1;
     int scenario_length_cli = -1;
+    int init_mode = 0;
+    int control_mode = 0;
+    int goal_behavior = 0;
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
@@ -483,17 +489,21 @@ int main(int argc, char* argv[]) {
                     init_steps = 0;
                 }
             }
-        } else if (strcmp(argv[i], "--control-non-vehicles") == 0) {
-            control_non_vehicles = 1;
-        } else if (strcmp(argv[i], "--pure-self-play") == 0) {
-            control_all_agents = 1;
-        } else if (strcmp(argv[i], "--num-policy-controlled-agents") == 0) {
+        } else if (strcmp(argv[i], "--init-mode") == 0) {
             if (i + 1 < argc) {
-                policy_agents_per_env = atoi(argv[i + 1]);
+                init_mode = atoi(argv[i + 1]);
                 i++;
             }
-        } else if (strcmp(argv[i], "--deterministic-selection") == 0) {
-            deterministic_selection = 1;
+        } else if (strcmp(argv[i], "--control-mode") == 0) {
+            if (i + 1 < argc) {
+                control_mode = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--max-controlled-agents") == 0) {
+            if (i + 1 < argc) {
+                max_controlled_agents = atoi(argv[i + 1]);
+                i++;
+            }
         } else if (strcmp(argv[i], "--num-maps") == 0) {
             if (i + 1 < argc) {
                 num_maps = atoi(argv[i + 1]);
@@ -504,9 +514,14 @@ int main(int argc, char* argv[]) {
                 scenario_length_cli = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--goal-behavior") == 0) {
+            if (i + 1 < argc) {
+                goal_behavior = atoi(argv[i + 1]);
+                i++;
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, control_non_vehicles, init_steps, control_all_agents, policy_agents_per_env, deterministic_selection, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode, goal_behavior);
     return 0;
 }

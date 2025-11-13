@@ -7,15 +7,10 @@ on:
     branches: [ main ]
 
 jobs:
-  cleanup-before:
-    uses: ./.github/workflows/_cleanup.yml
-    with:
-      when: "before"
-
   test-render:
-    needs: cleanup-before
     name: test-render - ubuntu-latest
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -24,6 +19,19 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
+
+      - name: Check disk space (before cleanup)
+        run: df -h
+
+      - name: Free up disk space
+        run: |
+          echo "Before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
+          echo "After cleanup:"
+          df -h
 
       - name: Install system dependencies for headless rendering
         run: |
@@ -42,6 +50,9 @@ jobs:
 
       - name: Compile C extensions
         run: python setup.py build_ext --inplace --force
+
+      - name: Check disk space (after install)
+        run: df -h
 
       - name: Run render test
         run: python tests/test_drive_render.py
