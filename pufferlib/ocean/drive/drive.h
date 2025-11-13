@@ -155,6 +155,8 @@ struct Entity {
     float* traj_vz;
     float* traj_heading;
     int* traj_valid;
+    float* expert_accel;
+    float* expert_steering;
     float width;
     float length;
     float height;
@@ -209,6 +211,8 @@ void free_entity(Entity* entity){
     free(entity->traj_vz);
     free(entity->traj_heading);
     free(entity->traj_valid);
+    free(entity->expert_accel);
+    free(entity->expert_steering);
 }
 
 // Utility functions
@@ -456,10 +460,12 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         env->tracks_to_predict_indices = NULL;
     }
 
+
     fread(&env->num_objects, sizeof(int), 1, file);
     fread(&env->num_roads, sizeof(int), 1, file);
     env->num_entities = env->num_objects + env->num_roads;
     Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
+
     for (int i = 0; i < env->num_entities; i++) {
 	    // Read base entity data
         fread(&entities[i].scenario_id, sizeof(int), 1, file);
@@ -478,6 +484,8 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_vz = (float*)malloc(size * sizeof(float));
             entities[i].traj_heading = (float*)malloc(size * sizeof(float));
             entities[i].traj_valid = (int*)malloc(size * sizeof(int));
+            entities[i].expert_accel = (float*)malloc(size * sizeof(float));
+            entities[i].expert_steering = (float*)malloc(size * sizeof(float));
         } else {
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
@@ -485,6 +493,8 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_vz = NULL;
             entities[i].traj_heading = NULL;
             entities[i].traj_valid = NULL;
+            entities[i].expert_accel = NULL;
+            entities[i].expert_steering = NULL;
         }
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
@@ -496,6 +506,8 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             fread(entities[i].traj_vz, sizeof(float), size, file);
             fread(entities[i].traj_heading, sizeof(float), size, file);
             fread(entities[i].traj_valid, sizeof(int), size, file);
+            fread(entities[i].expert_accel, sizeof(float), size, file);
+            fread(entities[i].expert_steering, sizeof(float), size, file);
         }
         // Read remaining scalar fields
         fread(&entities[i].width, sizeof(float), 1, file);
@@ -2198,6 +2210,72 @@ void c_step(Drive* env){
     }
 
     compute_observations(env);
+}
+
+void c_collect_expert_data(Drive* env, float* expert_actions_discrete_out, float* expert_actions_continuous_out, float* expert_obs_out) {
+    int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+
+    int original_timestep = env->timestep;
+
+    c_reset(env);
+
+    for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
+        // Set expert actions for this timestep
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            Entity* agent = &env->entities[agent_idx];
+
+            // Check bounds
+            if (t < agent->array_size && agent->expert_accel && agent->expert_steering) {
+                float continuous_accel = agent->expert_accel[t];
+                float continuous_steer = agent->expert_steering[t];
+
+                // Store continuous actions
+                int continuous_offset = t * env->active_agent_count * 2 + i * 2;
+                expert_actions_continuous_out[continuous_offset] = continuous_accel;
+                expert_actions_continuous_out[continuous_offset + 1] = continuous_steer;
+
+                // Discretize and store discrete actions
+                int best_accel_idx = 0;
+                float min_accel_diff = fabsf(continuous_accel - ACCELERATION_VALUES[0]);
+                for (int j = 1; j < 7; j++) {
+                    float diff = fabsf(continuous_accel - ACCELERATION_VALUES[j]);
+                    if (diff < min_accel_diff) {
+                        min_accel_diff = diff;
+                        best_accel_idx = j;
+                    }
+                }
+
+                // Discretize steering - find closest value in STEERING_VALUES
+                int best_steer_idx = 0;
+                float min_steer_diff = fabsf(continuous_steer - STEERING_VALUES[0]);
+                for (int j = 1; j < 13; j++) {
+                    float diff = fabsf(continuous_steer - STEERING_VALUES[j]);
+                    if (diff < min_steer_diff) {
+                        min_steer_diff = diff;
+                        best_steer_idx = j;
+                    }
+                }
+
+                int discrete_offset = t * env->active_agent_count * 2 + i * 2;
+                expert_actions_discrete_out[discrete_offset] = (float)best_accel_idx;
+                expert_actions_discrete_out[discrete_offset + 1] = (float)best_steer_idx;
+            }
+        }
+
+        int obs_offset = t * env->active_agent_count * max_obs;
+        memcpy(&expert_obs_out[obs_offset], env->observations,
+               env->active_agent_count * max_obs * sizeof(float));
+
+        // Step environment to get next observations
+        if (t < TRAJECTORY_LENGTH - 1) {
+            c_step(env);
+        }
+    }
+
+    // Restore original state
+    env->timestep = original_timestep;
+    c_reset(env);
 }
 
 const Color STONE_GRAY = (Color){80, 80, 80, 255};
