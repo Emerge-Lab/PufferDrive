@@ -82,6 +82,8 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 1
         elif self.control_mode_str == "control_tracks_to_predict":
             self.control_mode = 2
+        elif self.control_mode_str == "control_sdc_only":
+            self.control_mode = 3
         else:
             raise ValueError(
                 f"init_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.init_mode_str}"
