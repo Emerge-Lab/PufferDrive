@@ -218,6 +218,7 @@ class PuffeRL:
         self.stats = defaultdict(list)
         self.last_stats = defaultdict(list)
         self.losses = {}
+        self.realism = {}
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -349,6 +350,7 @@ class PuffeRL:
         a = config["prio_alpha"]
         clip_coef = config["clip_coef"]
         vf_clip = config["vf_clip_coef"]
+        human_clip = config["human_clip_coef"]
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
 
@@ -411,6 +413,43 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
+            # Add log likelihood loss of human actions under current policy.
+            # 1: Sample a batch of human actions and observations from dataset
+            # Shape: [n_sequences, bptt_horizon, feature_dim]
+            discrete_human_actions, continuous_human_actions, human_observations = (
+                self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
+            )
+            discrete_human_actions = discrete_human_actions.to(device)
+            continuous_human_actions = continuous_human_actions.to(device)
+            human_observations = human_observations.to(device)
+
+            # Use helper function to compute realism metrics
+            realism_metrics = self.vecenv.driver_env.compute_realism_metrics(
+                discrete_human_actions, continuous_human_actions
+            )
+            self.realism.update(realism_metrics)
+
+            # Select appropriate action type for training
+            use_continuous = self.vecenv.driver_env._action_type_flag == 1
+            human_actions = continuous_human_actions if use_continuous else discrete_human_actions
+
+            # 2: Compute the log-likelihood of human actions under the current policy,
+            # given the corresponding human observations. A higher likelihood indicates
+            # that the policy behaves more like a human under the same observations.
+            human_state = dict(
+                action=human_actions,
+                lstm_h=None,
+                lstm_c=None,
+            )
+
+            human_logits, _ = self.policy(human_observations, human_state)
+
+            _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
+                logits=human_logits, action=human_actions
+            )
+
+            self.realism["human_log_prob"] = human_log_prob.mean().item()
+
             adv = advantages[idx]
             adv = compute_puff_advantage(
                 mb_values,
@@ -437,9 +476,17 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
+            human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
+            human_loss = human_loss_clipped.mean()
+
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            loss = (
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - config["ent_coef"] * entropy_loss
+                - config["human_ll_coef"] * human_loss
+            )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -454,6 +501,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["human_loss"] += human_loss / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
@@ -654,6 +702,16 @@ class PuffeRL:
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
 
+        for k, v in self.realism.items():
+            if k.endswith("_histogram"):
+                if hasattr(self.logger, "wandb") and self.logger.wandb:
+                    import wandb
+
+                    metric_name = k.replace("_histogram", "")
+                    logs[f"realism/{metric_name}"] = wandb.Histogram(v)
+            else:
+                logs[f"realism/{k}"] = v
+
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:
                 self.logger.log(logs, agent_steps)
@@ -697,6 +755,8 @@ class PuffeRL:
             "update": self.epoch,
             "model_name": model_name,
             "run_id": run_id,
+            "max_expert_sequences": self.vecenv.driver_env.max_expert_sequences,
+            "bptt_horizon": self.config["bptt_horizon"],
         }
         state_path = os.path.join(path, "trainer_state.pt")
         torch.save(state, state_path + ".tmp")
