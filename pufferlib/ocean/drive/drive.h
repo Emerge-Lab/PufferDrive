@@ -520,11 +520,8 @@ float compute_heading_guidance_reward(Entity* agent, int timestep, float weight)
     // Get actual heading
     float actual_heading = agent->heading;
 
-    // Compute heading error (accounting for angle wrapping)
-    float heading_error = ref_heading - actual_heading;
-    // Normalize to [-π, π]
-    while (heading_error > PI) heading_error -= 2*PI;
-    while (heading_error < -PI) heading_error += 2*PI;
+    // Compute heading error (accounting for angle wrapping)[-π, π]
+    float heading_error = normalize_heading(ref_heading - actual_heading);
 
     float heading_error_sq = heading_error * heading_error;
 
