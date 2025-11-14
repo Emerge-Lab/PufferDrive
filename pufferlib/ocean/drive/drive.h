@@ -38,6 +38,7 @@
 #define CONTROL_VEHICLES 0
 #define CONTROL_AGENTS 1
 #define CONTROL_TRACKS_TO_PREDICT 2
+#define CONTROL_SDC_ONLY 3
 
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
@@ -1285,6 +1286,10 @@ bool should_control_agent(Drive* env, int agent_idx){
     entity->width *= 0.7f; // TODO: Move this somewhere else
     entity->length *= 0.7f;
 
+    if (env->control_mode == CONTROL_SDC_ONLY) {
+        return (agent_idx == env->sdc_track_index);
+    }
+
     // Special mode: control only agents in prediction track list
     if (env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
         for (int j = 0; j < env->num_tracks_to_predict; j++) {
@@ -1582,7 +1587,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         float speed = sqrtf(vx*vx + vy*vy);
 
         // Update speed with acceleration
-        speed = speed + 0.5f*acceleration*env->dt;
+        speed = speed + acceleration*env->dt;
         speed = clipSpeed(speed);
 
         // Compute yaw rate
