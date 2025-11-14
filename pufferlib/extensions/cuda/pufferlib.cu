@@ -6,6 +6,9 @@
 #include <cmath>
 
 namespace pufferlib {
+
+// Single unified kernel that works for D=7, D=13, or any other D
+template<int D_VAL = 0>
 __global__ void linear_max_fused_kernel(
     const float* __restrict__ x,
     const float* __restrict__ weight,
@@ -20,34 +23,46 @@ __global__ void linear_max_fused_kernel(
 
     extern __shared__ float sh_x[];
 
-    const int x_size = N * D;
+    constexpr int D_compile = D_VAL;
+    const int D_runtime = (D_compile > 0) ? D_compile : D;
+    const int x_size = N * D_runtime;
     const float* x_batch = x + b * x_size;
 
-    // Cooperatively load x_batch into shared memory
-    for (int i = threadIdx.x; i < x_size; i += blockDim.x) {
+    // Strided cooperative loading for better memory coalescing
+    for (int i = h; i < x_size; i += H) {
         sh_x[i] = x_batch[i];
     }
     __syncthreads();
 
-    float w[7];
-    for (int d = 0; d < 7; d++) {
-        w[d] = weight[h * D + d];
-    }
-
+    const float* weight_h = weight + h * D_runtime;
     float bias_val = bias[h];
-
     float max_val = -FLT_MAX;
 
     #pragma unroll 8
     for (int n = 0; n < N; n++) {
-        float dot = 
-            w[0] * sh_x[n * D + 0] +
-            w[1] * sh_x[n * D + 1] +
-            w[2] * sh_x[n * D + 2] +
-            w[3] * sh_x[n * D + 3] +
-            w[4] * sh_x[n * D + 4] +
-            w[5] * sh_x[n * D + 5] +
-            w[6] * sh_x[n * D + 6];
+        float dot = 0.0f;
+        const float* x_n = sh_x + n * D_runtime;
+
+        if constexpr (D_compile > 0) {
+            // Compile-time known D: fully unroll
+            #pragma unroll
+            for (int d = 0; d < D_compile; d++) {
+                dot += weight_h[d] * x_n[d];
+            }
+        } else {
+            // Runtime D: manual unroll by 4
+            int d = 0;
+            #pragma unroll 4
+            for (; d + 3 < D; d += 4) {
+                dot += weight_h[d] * x_n[d] +
+                       weight_h[d+1] * x_n[d+1] +
+                       weight_h[d+2] * x_n[d+2] +
+                       weight_h[d+3] * x_n[d+3];
+            }
+            for (; d < D; d++) {
+                dot += weight_h[d] * x_n[d];
+            }
+        }
 
         max_val = fmaxf(max_val, dot);
     }
@@ -57,6 +72,7 @@ __global__ void linear_max_fused_kernel(
     out[b * H + h] = max_val;
 }
 
+template<int D_VAL = 0>
 __global__ void linear_max_backward_kernel(
     const float* __restrict__ x,
     const float* __restrict__ weight,
@@ -73,20 +89,18 @@ __global__ void linear_max_backward_kernel(
 
     extern __shared__ float sh_x[];
 
-    const int x_size = N * D;
+    constexpr int D_compile = D_VAL;
+    const int D_runtime = (D_compile > 0) ? D_compile : D;
+    const int x_size = N * D_runtime;
     const float* x_batch = x + b * x_size;
 
-    // Cooperatively load x_batch into shared memory
-    for (int i = threadIdx.x; i < x_size; i += blockDim.x) {
+    // Strided cooperative loading
+    for (int i = h; i < x_size; i += H) {
         sh_x[i] = x_batch[i];
     }
     __syncthreads();
 
-    float w[7];
-    for (int d = 0; d < D; d++) {
-        w[d] = weight[h * D + d];
-    }
-
+    const float* weight_h = weight + h * D_runtime;
     float go = grad_out[b * H + h];
 
     int argmax_n = -1;
@@ -94,14 +108,27 @@ __global__ void linear_max_backward_kernel(
 
     #pragma unroll 8
     for (int n = 0; n < N; n++) {
-        float dot = 
-            w[0] * sh_x[n * D + 0] +
-            w[1] * sh_x[n * D + 1] +
-            w[2] * sh_x[n * D + 2] +
-            w[3] * sh_x[n * D + 3] +
-            w[4] * sh_x[n * D + 4] +
-            w[5] * sh_x[n * D + 5] +
-            w[6] * sh_x[n * D + 6];
+        float dot = 0.0f;
+        const float* x_n = sh_x + n * D_runtime;
+
+        if constexpr (D_compile > 0) {
+            #pragma unroll
+            for (int d = 0; d < D_compile; d++) {
+                dot += weight_h[d] * x_n[d];
+            }
+        } else {
+            int d = 0;
+            #pragma unroll 4
+            for (; d + 3 < D; d += 4) {
+                dot += weight_h[d] * x_n[d] +
+                       weight_h[d+1] * x_n[d+1] +
+                       weight_h[d+2] * x_n[d+2] +
+                       weight_h[d+3] * x_n[d+3];
+            }
+            for (; d < D; d++) {
+                dot += weight_h[d] * x_n[d];
+            }
+        }
 
         if (dot > max_dot) {
             max_dot = dot;
@@ -114,15 +141,31 @@ __global__ void linear_max_backward_kernel(
     // Non-atomic writes to per-batch temps
     grad_bias_temp[b * H + h] = go;
 
-    const int weight_temp_base = b * H * D + h * D;
-    const int x_base = argmax_n * D;
-    for (int d = 0; d < D; d++) {
-        grad_weight_temp[weight_temp_base + d] = go * sh_x[x_base + d];
+    const int weight_temp_base = b * H * D_runtime + h * D_runtime;
+    const int x_base = argmax_n * D_runtime;
+
+    if constexpr (D_compile > 0) {
+        #pragma unroll
+        for (int d = 0; d < D_compile; d++) {
+            grad_weight_temp[weight_temp_base + d] = go * sh_x[x_base + d];
+        }
+    } else {
+        for (int d = 0; d < D; d++) {
+            grad_weight_temp[weight_temp_base + d] = go * sh_x[x_base + d];
+        }
     }
 
-    const int grad_x_base = b * N * D + argmax_n * D;
-    for (int d = 0; d < D; d++) {
-        atomicAdd(grad_x + grad_x_base + d, go * w[d]);
+    const int grad_x_base = b * N * D_runtime + argmax_n * D_runtime;
+
+    if constexpr (D_compile > 0) {
+        #pragma unroll
+        for (int d = 0; d < D_compile; d++) {
+            atomicAdd(grad_x + grad_x_base + d, go * weight_h[d]);
+        }
+    } else {
+        for (int d = 0; d < D; d++) {
+            atomicAdd(grad_x + grad_x_base + d, go * weight_h[d]);
+        }
     }
 }
 
@@ -162,13 +205,18 @@ torch::Tensor linear_max_fused_cuda(
     int device_idx = x.get_device();  // or use c10::cuda::current_device()
     cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device_idx);
 
-    linear_max_fused_kernel<<<grid, block, shared_size, stream>>>(
-        x_ptr,
-        weight_ptr,
-        bias_ptr,
-        out_ptr,
-        B, N, H, D
-    );
+    // Simple dispatch for D=7 or D=13
+    if (D == 7) {
+        linear_max_fused_kernel<7><<<grid, block, shared_size, stream>>>(
+            x_ptr, weight_ptr, bias_ptr, out_ptr, B, N, H, D);
+    } else if (D == 13) {
+        linear_max_fused_kernel<13><<<grid, block, shared_size, stream>>>(
+            x_ptr, weight_ptr, bias_ptr, out_ptr, B, N, H, D);
+    } else {
+        // Fallback for any other D (shouldn't happen in practice)
+        linear_max_fused_kernel<0><<<grid, block, shared_size, stream>>>(
+            x_ptr, weight_ptr, bias_ptr, out_ptr, B, N, H, D);
+    }
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return out;
@@ -218,15 +266,21 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> linear_max_fused_backwar
     int device_idx = x.get_device();
     cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device_idx);
 
-    linear_max_backward_kernel<<<grid, block, shared_size, stream>>>(
-        x_ptr,
-        weight_ptr,
-        grad_out_ptr,
-        grad_x_ptr,
-        grad_weight_temp_ptr,
-        grad_bias_temp_ptr,
-        B, N, H, D
-    );
+    // Simple dispatch for D=7 or D=13
+    if (D == 7) {
+        linear_max_backward_kernel<7><<<grid, block, shared_size, stream>>>(
+            x_ptr, weight_ptr, grad_out_ptr, grad_x_ptr, grad_weight_temp_ptr,
+            grad_bias_temp_ptr, B, N, H, D);
+    } else if (D == 13) {
+        linear_max_backward_kernel<13><<<grid, block, shared_size, stream>>>(
+            x_ptr, weight_ptr, grad_out_ptr, grad_x_ptr, grad_weight_temp_ptr,
+            grad_bias_temp_ptr, B, N, H, D);
+    } else {
+        // Fallback for any other D (shouldn't happen in practice)
+        linear_max_backward_kernel<0><<<grid, block, shared_size, stream>>>(
+            x_ptr, weight_ptr, grad_out_ptr, grad_x_ptr, grad_weight_temp_ptr,
+            grad_bias_temp_ptr, B, N, H, D);
+    }
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 

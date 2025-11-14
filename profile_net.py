@@ -4,7 +4,6 @@
 import time
 import torch
 from torch import nn
-from fla.layers.linear_attn import LinearAttention
 
 import torch
 from torch.backends import cudnn
@@ -16,6 +15,7 @@ cudnn.benchmark = True
 cudnn.deterministic = False
 cudnn.benchmark_limit = 32
 
+
 class PointwiseNet(nn.Module):
     def __init__(self, input_size, hidden_size):
         super().__init__()
@@ -23,6 +23,7 @@ class PointwiseNet(nn.Module):
 
     def forward(self, x):
         return self.linear(x).max(dim=1)[0]
+
 
 class LinearMaxKernels(torch.autograd.Function):
     @staticmethod
@@ -37,6 +38,7 @@ class LinearMaxKernels(torch.autograd.Function):
         grad_x, grad_weight, grad_bias = torch.ops.pufferlib.linear_max_fused_backward(grad_out.contiguous(), x, weight)
         return grad_x, grad_weight, grad_bias
 
+
 class LinearMax(torch.nn.Module):
     def __init__(self, input_size, hidden_size):
         super().__init__()
@@ -45,6 +47,23 @@ class LinearMax(torch.nn.Module):
 
     def forward(self, x):
         return LinearMaxKernels.apply(x, self.weight, self.bias)
+
+
+class LinearMaxWithPreprocessing(torch.nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super().__init__()
+        # First linear layer to transform input
+        self.linear1 = torch.nn.Linear(input_size, hidden_size)
+
+        # Linear-max layer (using your custom kernel)
+        self.weight = torch.nn.Parameter(torch.empty(output_size, hidden_size).normal_(mean=0.0, std=hidden_size**-0.5))
+        self.bias = torch.nn.Parameter(torch.zeros(output_size))
+
+    def forward(self, x):
+        # x: (B, N, input_size)
+        x = self.linear1(x)  # (B, N, hidden_size)
+        return LinearMaxKernels.apply(x, self.weight, self.bias)  # (B, output_size)
+
 
 def check_cuda_correct(model, cuda_model, data):
     cuda_model.weight.data = model.linear.weight.data.clone()
@@ -59,6 +78,7 @@ def check_cuda_correct(model, cuda_model, data):
         cuda_out.mean().backward()
         assert torch.allclose(model.linear.weight.grad, cuda_model.weight.grad, rtol=1e-4, atol=1e-4)
         assert torch.allclose(model.linear.bias.grad, cuda_model.bias.grad, rtol=1e-4, atol=1e-4)
+
 
 def profile_forward(model, data, num_iters=100, warmup=10):
     B = data.shape[0]
@@ -76,6 +96,7 @@ def profile_forward(model, data, num_iters=100, warmup=10):
 
         sps = B * num_iters / (end - start)
     return sps
+
 
 def profile_backward(model, data, num_iters=100, warmup=10):
     B = data.shape[0]
@@ -97,6 +118,7 @@ def profile_backward(model, data, num_iters=100, warmup=10):
     sps = B * num_iters / (end - start)
     return sps
 
+
 class ConcatNet(nn.Module):
     def __init__(self, input_size, points, hidden_size):
         super().__init__()
@@ -106,49 +128,33 @@ class ConcatNet(nn.Module):
         x = x.view(x.shape[0], -1)
         return self.linear(x)
 
-class FlashLinearAttentionNet(nn.Module):
-    def __init__(self, embed_dim, hidden_size):
-        super().__init__()
-        self.attn = LinearAttention(
-            hidden_size=embed_dim,
-            num_heads=1,
-            expand_k=1.0,
-            expand_v=1.0,
-            feature_map='elementwise_product',
-            mode='chunk',           # Fastest fused kernel
-            causal=False,
-            norm_q=False,
-            norm_k=False,
-            do_feature_map_norm=False
-        ).cuda()
-        self.proj = nn.Linear(embed_dim, hidden_size).cuda()
 
-    def forward(self, x):
-        # x: (B, N, D)
-        attended = self.attn(x)          # -> (B, N, D)
-        pooled = attended.max(dim=1)[0]  # -> (B, D)
-        return self.proj(pooled)         # -> (B, H)
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     num_iters = 100
-    B = 4096
-    H = 64
-    D = 7
-    N = 200
+    B = 4096  # Batch size
+    H = 13  # Hidden size
+    D = 7  # Feature dimension
+    N = 200  # Number of points
 
-    device = torch.device('cuda')
+    device = torch.device("cuda")
     data = torch.randn(num_iters, B, N, D).to(device)
 
-    fla_net = FlashLinearAttentionNet(D, H)
     pointwise = PointwiseNet(D, H).to(device)
     concat = ConcatNet(D, N, H).to(device)
     linear_max = LinearMax(D, H).to(device)
+    linear_max_with_preprocessing = LinearMaxWithPreprocessing(D, H, H).to(device)
 
     # Test custom kernel
     check_cuda_correct(pointwise, linear_max, data)
 
-    print(f"FlashLinearAttention: Forward ({profile_forward(fla_net, data):.2f}), backward ({profile_backward(fla_net, data):.2f})")
-    print(f"Pointwise: Forward ({profile_forward(pointwise, data):.2f}), backward ({profile_backward(pointwise, data):.2f})")
-    print(f"Concat: Forward ({profile_forward(concat, data):.2f}), backward ({profile_backward(concat, data):.2f})")
-    print(f"Cuda Linear Max: Forward ({profile_forward(linear_max, data):.2f}), backward ({profile_backward(linear_max, data):.2f})")
+    print(
+        f"Pointwise: Forward ({profile_forward(pointwise, data):,.2f}), backward ({profile_backward(pointwise, data):,.2f})"
+    )
+    print(f"Concat: Forward ({profile_forward(concat, data):,.2f}), backward ({profile_backward(concat, data):,.2f})")
+    print(
+        f"Cuda Linear Max: Forward ({profile_forward(linear_max, data):,.2f}), backward ({profile_backward(linear_max, data):,.2f})"
+    )
+    print(
+        f"With Preprocessing: Forward ({profile_forward(linear_max_with_preprocessing, data):,.2f}), "
+        f"backward ({profile_backward(linear_max_with_preprocessing, data):,.2f})"
+    )
