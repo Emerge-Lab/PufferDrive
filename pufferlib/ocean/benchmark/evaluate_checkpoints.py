@@ -11,12 +11,13 @@ Includes baselines for ground truth and random policy.
 import argparse
 import os
 import glob
+import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
 
-from pufferlib.pufferl import load_env, load_policy
+from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 import pufferlib.pytorch
 
@@ -137,8 +138,8 @@ def evaluate_collision_rate(config, vecenv, policy, policy_name="policy", num_ep
 
     # Track collision statistics
     total_steps = 0
-    vehicle_collisions = 0
-    offroad_collisions = 0
+    total_collision_count = 0
+    total_collisions_per_agent = 0.0
     episodes_completed = 0
 
     ob, info = vecenv.reset()
@@ -163,6 +164,14 @@ def evaluate_collision_rate(config, vecenv, policy, policy_name="policy", num_ep
                 # Check for episode completion
                 if terminals.any() or truncations.any():
                     episodes_completed += 1
+                    # Extract metrics from final info (contains log data)
+                    if info:
+                        for info_dict in info:
+                            if isinstance(info_dict, dict):
+                                if "collision_rate" in info_dict:
+                                    total_collision_count += int(info_dict["collision_rate"])
+                                if "avg_collisions_per_agent" in info_dict:
+                                    total_collisions_per_agent += float(info_dict["avg_collisions_per_agent"])
                 continue
 
             action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
@@ -175,29 +184,28 @@ def evaluate_collision_rate(config, vecenv, policy, policy_name="policy", num_ep
         ob, rewards, terminals, truncations, info = vecenv.step(action)
         total_steps += 1
 
-        # Parse collision info from environment logs
-        for info_dict in info:
-            if isinstance(info_dict, dict):
-                vehicle_collisions += info_dict.get("vehicle_collision_count", 0)
-                offroad_collisions += info_dict.get("offroad_collision_count", 0)
-
         # Check for episode completion
         if terminals.any() or truncations.any():
             episodes_completed += 1
+            # Extract metrics from final info (contains log data)
+            if info:
+                for info_dict in info:
+                    if isinstance(info_dict, dict):
+                        if "collision_rate" in info_dict:
+                            total_collision_count += int(info_dict["collision_rate"])
+                        if "avg_collisions_per_agent" in info_dict:
+                            total_collisions_per_agent += float(info_dict["avg_collisions_per_agent"])
 
     # Calculate rates
-    vehicle_collision_rate = vehicle_collisions / total_steps if total_steps > 0 else 0
-    offroad_collision_rate = offroad_collisions / total_steps if total_steps > 0 else 0
-    total_collision_rate = (vehicle_collisions + offroad_collisions) / total_steps if total_steps > 0 else 0
+    collision_rate = total_collision_count / num_episodes if num_episodes > 0 else 0
+    avg_collisions_per_agent = total_collisions_per_agent / num_episodes if num_episodes > 0 else 0
 
     return {
         "policy": policy_name,
+        "num_episodes": num_episodes,
         "total_steps": total_steps,
-        "vehicle_collisions": vehicle_collisions,
-        "offroad_collisions": offroad_collisions,
-        "vehicle_collision_rate": vehicle_collision_rate,
-        "offroad_collision_rate": offroad_collision_rate,
-        "total_collision_rate": total_collision_rate,
+        "collision_rate": collision_rate,
+        "avg_collisions_per_agent": avg_collisions_per_agent,
     }
 
 
@@ -212,122 +220,6 @@ def evaluate_collision_rate_random(config, vecenv, num_episodes=100):
 
     random_policy = RandomPolicy()
     return evaluate_collision_rate(config, vecenv, random_policy, policy_name="random", num_episodes=num_episodes)
-
-
-def load_config_programmatic(env_name):
-    """Load config without command-line argument parsing."""
-    import configparser
-    import ast
-    import glob
-    from collections import defaultdict
-
-    puffer_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-    puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
-    puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
-
-    # Find the config file for this environment
-    for path in glob.glob(puffer_config_dir, recursive=True):
-        p = configparser.ConfigParser()
-        p.read([puffer_default_config, path])
-        if env_name in p["base"]["env_name"].split():
-            break
-    else:
-        raise ValueError(f"No config for env_name {env_name}")
-
-    # Parse config into nested dict
-    def puffer_type(value):
-        try:
-            return ast.literal_eval(value)
-        except:
-            return value
-
-    # Unpack to nested dict, handling both top-level and nested keys
-    parsed = {}
-    for section in p.sections():
-        for key in p[section]:
-            parsed[key] = puffer_type(p[section][key])
-
-    args = defaultdict(dict)
-    for key, value in parsed.items():
-        next = args
-        for subkey in key.split("."):
-            prev = next
-            next = next.setdefault(subkey, {})
-        prev[subkey] = value
-
-    args["train"]["use_rnn"] = args.get("rnn_name") is not None
-
-    # Ensure base-level keys exist
-    if "package" not in args:
-        args["package"] = "ocean"
-    if "env_name" not in args:
-        args["env_name"] = env_name
-
-    # Ensure vec section exists with defaults
-    if "vec" not in args:
-        args["vec"] = {}
-    vec_defaults = {
-        "backend": "serial",
-        "num_envs": 1,
-        "num_workers": 1,
-        "batch_size": 1,
-        "zero_copy": False,
-        "seed": 1,
-    }
-    for key, default_value in vec_defaults.items():
-        if key not in args["vec"]:
-            args["vec"][key] = default_value
-
-    # Ensure env section exists with defaults
-    if "env" not in args:
-        args["env"] = {}
-    env_defaults = {
-        "num_agents": 1,
-        "action_type": "discrete",
-        "dynamics_model": "classic",
-        "reward_vehicle_collision": -0.1,
-        "reward_offroad_collision": -0.1,
-        "reward_ade": 0.0,
-        "dt": 0.1,
-        "reward_goal": 1.0,
-        "reward_goal_post_respawn": 0.5,
-        "goal_radius": 2.0,
-        "goal_behavior": 0,
-        "collision_behavior": 0,
-        "offroad_behavior": 0,
-        "scenario_length": 91,
-        "resample_frequency": 91,
-        "num_maps": 100,
-        "init_steps": 0,
-        "control_mode": "control_vehicles",
-        "init_mode": "create_all_valid",
-    }
-    for key, default_value in env_defaults.items():
-        if key not in args["env"]:
-            args["env"][key] = default_value
-
-    # Ensure wosac section exists with defaults
-    if "wosac" not in args:
-        args["wosac"] = {}
-
-    wosac_defaults = {
-        "backend": "PufferEnv",
-        "enabled": False,
-        "num_rollouts": 32,
-        "init_steps": 10,
-        "num_total_wosac_agents": 256,
-        "control_mode": "control_tracks_to_predict",
-        "init_mode": "create_only_controlled",
-        "goal_behavior": 0,
-        "goal_radius": 2.0,
-        "sanity_check": False,
-    }
-
-    for key, default_value in wosac_defaults.items():
-        if key not in args["wosac"]:
-            args["wosac"][key] = default_value
-
-    return dict(args)
 
 
 def main():
@@ -364,8 +256,14 @@ def main():
 
     print(f"Found {len(checkpoint_files)} checkpoint files")
 
-    # Load base config without CLI parsing
-    config = load_config_programmatic(env_name)
+    # Temporarily modify sys.argv to prevent load_config from parsing our arguments
+    original_argv = sys.argv.copy()
+    sys.argv = [sys.argv[0]]  # Keep only script name
+
+    try:
+        config = load_config(env_name)
+    finally:
+        sys.argv = original_argv
 
     # Results storage
     wosac_results = []

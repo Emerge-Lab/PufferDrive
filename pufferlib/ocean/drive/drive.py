@@ -80,7 +80,7 @@ class Drive(pufferlib.PufferEnv):
         self.init_steps = init_steps
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
-        self.max_expert_sequences = max_expert_sequences
+        self.max_expert_sequences = int(max_expert_sequences)
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
@@ -188,7 +188,7 @@ class Drive(pufferlib.PufferEnv):
         self.bptt_horizon = bptt_horizon
         self.human_data_dir = human_data_dir
         os.makedirs(self.human_data_dir, exist_ok=True)
-        self._save_expert_data(bptt_horizon, max_expert_sequences)
+        self._save_expert_data(bptt_horizon, self.max_expert_sequences)
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
