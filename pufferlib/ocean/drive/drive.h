@@ -241,6 +241,12 @@ float clip(float value, float min, float max) {
     return value;
 }
 
+float normalize_heading(float heading){
+    if(heading > M_PI) heading -= 2*M_PI;
+    if(heading < -M_PI) heading += 2*M_PI;
+    return heading;
+}
+
 float compute_displacement_error(Entity* agent, int timestep) {
     // Check if timestep is within valid range
     if (timestep < 0 || timestep >= agent->array_size) {
@@ -1696,16 +1702,6 @@ float clipSpeed(float speed) {
     if (speed > maxSpeed) return maxSpeed;
     if (speed < -maxSpeed) return -maxSpeed;
     return speed;
-}
-
-float normalize_heading(float heading){
-    if(heading > M_PI) heading -= 2*M_PI;
-    if(heading < -M_PI) heading += 2*M_PI;
-    return heading;
-}
-
-float normalize_value(float value, float min, float max){
-    return (value - min) / (max - min);
 }
 
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
