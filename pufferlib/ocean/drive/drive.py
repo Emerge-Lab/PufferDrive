@@ -83,9 +83,11 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 1
         elif self.control_mode_str == "control_tracks_to_predict":
             self.control_mode = 2
+        elif self.control_mode_str == "control_sdc_only":
+            self.control_mode = 3
         else:
             raise ValueError(
-                f"init_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.init_mode_str}"
+                f"control_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.control_mode_str}"
             )
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
@@ -131,8 +133,9 @@ class Drive(pufferlib.PufferEnv):
             num_maps=num_maps,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
-            init_steps=init_steps,
+            init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
+            goal_behavior=self.goal_behavior,
         )
 
         self.num_agents = num_agents
@@ -159,7 +162,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
-                goal_behavior=goal_behavior,
+                goal_behavior=self.goal_behavior,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
@@ -204,6 +207,7 @@ class Drive(pufferlib.PufferEnv):
                     control_mode=self.control_mode,
                     init_steps=self.init_steps,
                     max_controlled_agents=self.max_controlled_agents,
+                    goal_behavior=self.goal_behavior,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
