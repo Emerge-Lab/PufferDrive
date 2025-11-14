@@ -331,7 +331,7 @@ struct Drive {
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_ade;
-    float reward_guided_autonomy;     // Master switch/weight for guided autonomy reward
+    int use_guided_autonomy;          // Boolean: whether to calculate and add guided autonomy reward
     float guidance_speed_weight;      // Weight for speed deviation penalty
     float guidance_heading_weight;    // Weight for heading deviation penalty
     float waypoint_reach_threshold;   // Distance threshold for hitting waypoints (e.g., 2.0m)
@@ -2335,9 +2335,8 @@ void c_step(Drive* env){
         env->logs[i].avg_displacement_error = current_ade;
 
         // Apply guided autonomy reward
-        if (env->reward_guided_autonomy != 0.0f) {
+        if (env->use_guided_autonomy) {
             float ga_reward = compute_guided_autonomy_reward(env, agent_idx, i);
-            ga_reward *= env->reward_guided_autonomy;  // Scale by master weight
             env->rewards[i] += ga_reward;
             env->logs[i].episode_return += ga_reward;
         }

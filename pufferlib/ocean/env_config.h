@@ -17,7 +17,7 @@ typedef struct
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     float reward_ade;
-    float reward_guided_autonomy;     // Master switch/weight for guided autonomy reward
+    int use_guided_autonomy;          // Boolean: whether to calculate and add guided autonomy reward
     float guidance_speed_weight;      // Weight for speed deviation penalty
     float guidance_heading_weight;    // Weight for heading deviation penalty
     float waypoint_reach_threshold;   // Distance threshold for hitting waypoints
@@ -75,8 +75,8 @@ static int handler(
         env_config->reward_vehicle_collision_post_respawn = atof(value);
     } else if (MATCH("env", "reward_ade")) {
         env_config->reward_ade = atof(value);
-    } else if (MATCH("env", "reward_guided_autonomy")) {
-        env_config->reward_guided_autonomy = atof(value);
+    } else if (MATCH("env", "use_guided_autonomy")) {
+        env_config->use_guided_autonomy = atoi(value);
     } else if (MATCH("env", "guidance_speed_weight")) {
         env_config->guidance_speed_weight = atof(value);
     } else if (MATCH("env", "guidance_heading_weight")) {
