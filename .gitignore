@@ -169,6 +169,9 @@ pufferlib/resources/drive/binaries/
 # But keep map_000.bin for the training test
 !pufferlib/resources/drive/binaries/map_000.bin
 
+# Ignore human demonstration data
+pufferlib/resources/drive/human_demonstrations/*
+
 # Compiled drive binary in root
 /drive
 /visualize

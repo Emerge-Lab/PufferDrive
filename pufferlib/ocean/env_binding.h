@@ -613,6 +613,214 @@ static PyObject* vec_close(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
+static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
+    if (PyTuple_Size(args) != 5) {
+        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 5 arguments");
+        return NULL;
+    }
+
+    Env* env = unpack_env(args);
+    if (!env) {
+        return NULL;
+    }
+
+    Drive* drive = (Drive*)env; // Cast to Drive*
+
+    // Get the numpy arrays from arguments
+    PyObject* x_arr = PyTuple_GetItem(args, 1);
+    PyObject* y_arr = PyTuple_GetItem(args, 2);
+    PyObject* z_arr = PyTuple_GetItem(args, 3);
+    PyObject* heading_arr = PyTuple_GetItem(args, 4);
+    PyObject* id_arr = PyTuple_GetItem(args, 5);
+
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
+        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(id_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+        return NULL;
+    }
+
+    float* x_data = (float*)PyArray_DATA((PyArrayObject*)x_arr);
+    float* y_data = (float*)PyArray_DATA((PyArrayObject*)y_arr);
+    float* z_data = (float*)PyArray_DATA((PyArrayObject*)z_arr);
+    float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
+    int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
+
+    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data);
+
+    Py_RETURN_NONE;
+}
+static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
+    if (PyTuple_Size(args) != 6) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 6 arguments");
+        return NULL;
+    }
+
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    // Get the numpy arrays from arguments
+    PyObject* x_arr = PyTuple_GetItem(args, 1);
+    PyObject* y_arr = PyTuple_GetItem(args, 2);
+    PyObject* z_arr = PyTuple_GetItem(args, 3);
+    PyObject* heading_arr = PyTuple_GetItem(args, 4);
+    PyObject* id_arr = PyTuple_GetItem(args, 5);
+
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
+        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(id_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+        return NULL;
+    }
+
+    PyArrayObject* x_array = (PyArrayObject*)x_arr;
+    PyArrayObject* y_array = (PyArrayObject*)y_arr;
+    PyArrayObject* z_array = (PyArrayObject*)z_arr;
+    PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
+    PyArrayObject* id_array = (PyArrayObject*)id_arr;
+
+    // Get base pointers to the arrays
+    float* x_base = (float*)PyArray_DATA(x_array);
+    float* y_base = (float*)PyArray_DATA(y_array);
+    float* z_base = (float*)PyArray_DATA(z_array);
+    float* heading_base = (float*)PyArray_DATA(heading_array);
+    int* id_base = (int*)PyArray_DATA(id_array);
+
+    // Iterate through environments and write to correct offsets
+    int offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive* drive = (Drive*)vec->envs[i];
+
+        // Write to the arrays at the current offset
+        c_get_global_agent_state(drive,
+                                &x_base[offset],
+                                &y_base[offset],
+                                &z_base[offset],
+                                &heading_base[offset],
+                                &id_base[offset]);
+
+        // Move offset forward by the number of agents in this environment
+        offset += drive->active_agent_count;
+    }
+
+    Py_RETURN_NONE;
+}
+
+static PyObject* get_ground_truth_trajectories(PyObject* self, PyObject* args) {
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 7 arguments");
+        return NULL;
+    }
+
+    Env* env = unpack_env(args);
+    if (!env) {
+        return NULL;
+    }
+
+    Drive* drive = (Drive*)env;
+
+    // Get the numpy arrays from arguments
+    PyObject* x_arr = PyTuple_GetItem(args, 1);
+    PyObject* y_arr = PyTuple_GetItem(args, 2);
+    PyObject* z_arr = PyTuple_GetItem(args, 3);
+    PyObject* heading_arr = PyTuple_GetItem(args, 4);
+    PyObject* valid_arr = PyTuple_GetItem(args, 5);
+    PyObject* id_arr = PyTuple_GetItem(args, 6);
+    PyObject* scenario_id_arr = PyTuple_GetItem(args, 7);
+
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
+        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+        return NULL;
+    }
+
+    float* x_data = (float*)PyArray_DATA((PyArrayObject*)x_arr);
+    float* y_data = (float*)PyArray_DATA((PyArrayObject*)y_arr);
+    float* z_data = (float*)PyArray_DATA((PyArrayObject*)z_arr);
+    float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
+    int* valid_data = (int*)PyArray_DATA((PyArrayObject*)valid_arr);
+    int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
+    int* scenario_id_data = (int*)PyArray_DATA((PyArrayObject*)scenario_id_arr);
+
+    c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data, scenario_id_data);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObject* args) {
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 8 arguments");
+        return NULL;
+    }
+
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    // Get the numpy arrays from arguments
+    PyObject* x_arr = PyTuple_GetItem(args, 1);
+    PyObject* y_arr = PyTuple_GetItem(args, 2);
+    PyObject* z_arr = PyTuple_GetItem(args, 3);
+    PyObject* heading_arr = PyTuple_GetItem(args, 4);
+    PyObject* valid_arr = PyTuple_GetItem(args, 5);
+    PyObject* id_arr = PyTuple_GetItem(args, 6);
+    PyObject* scenario_id_arr = PyTuple_GetItem(args, 7);
+
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
+        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+        return NULL;
+    }
+
+    PyArrayObject* x_array = (PyArrayObject*)x_arr;
+    PyArrayObject* y_array = (PyArrayObject*)y_arr;
+    PyArrayObject* z_array = (PyArrayObject*)z_arr;
+    PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
+    PyArrayObject* valid_array = (PyArrayObject*)valid_arr;
+    PyArrayObject* id_array = (PyArrayObject*)id_arr;
+    PyArrayObject* scenario_id_array = (PyArrayObject*)scenario_id_arr;
+
+    // Get base pointers to the arrays
+    float* x_base = (float*)PyArray_DATA(x_array);
+    float* y_base = (float*)PyArray_DATA(y_array);
+    float* z_base = (float*)PyArray_DATA(z_array);
+    float* heading_base = (float*)PyArray_DATA(heading_array);
+    int* valid_base = (int*)PyArray_DATA(valid_array);
+    int* id_base = (int*)PyArray_DATA(id_array);
+    int* scenario_id_base = (int*)PyArray_DATA(scenario_id_array);
+
+    // Get number of timesteps from array shape
+    npy_intp* x_shape = PyArray_DIMS(x_array);
+    int num_timesteps = x_shape[1];  // Second dimension for 2D arrays
+
+    // Iterate through environments and write to correct offsets
+    int agent_offset = 0;  // Offset for 1D arrays (id, scenario_id)
+    int traj_offset = 0;   // Offset for 2D arrays (x, y, z, heading, valid)
+
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive* drive = (Drive*)vec->envs[i];
+
+        c_get_global_ground_truth_trajectories(drive,
+                                              &x_base[traj_offset],
+                                              &y_base[traj_offset],
+                                              &z_base[traj_offset],
+                                              &heading_base[traj_offset],
+                                              &valid_base[traj_offset],
+                                              &id_base[agent_offset],
+                                              &scenario_id_base[agent_offset]);
+
+        // Move offsets forward
+        agent_offset += drive->active_agent_count;
+        traj_offset += drive->active_agent_count * num_timesteps;
+    }
+
+    Py_RETURN_NONE;
+}
 static double unpack(PyObject* kwargs, char* key) {
     PyObject* val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
@@ -667,6 +875,111 @@ static char* unpack_str(PyObject* kwargs, char* key) {
     return ret;
 }
 
+static PyObject* vec_collect_expert_data(PyObject* self, PyObject* args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(PyExc_TypeError, "collect_expert_data requires 4 arguments");
+        return NULL;
+    }
+
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    // Argument 1: discrete actions
+    PyObject* discrete_actions_arg = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(discrete_actions_arg, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "expert_actions_discrete must be a NumPy array");
+        return NULL;
+    }
+    PyArrayObject* expert_actions_discrete = (PyArrayObject*)discrete_actions_arg;
+
+    // Argument 2: continuous actions
+    PyObject* continuous_actions_arg = PyTuple_GetItem(args, 2);
+    if (!PyObject_TypeCheck(continuous_actions_arg, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "expert_actions_continuous must be a NumPy array");
+        return NULL;
+    }
+    PyArrayObject* expert_actions_continuous = (PyArrayObject*)continuous_actions_arg;
+
+    // Argument 3: observations
+    PyObject* obs_arg = PyTuple_GetItem(args, 3);
+    if (!PyObject_TypeCheck(obs_arg, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "expert_observations must be a NumPy array");
+        return NULL;
+    }
+    PyArrayObject* expert_observations = (PyArrayObject*)obs_arg;
+
+    // Check array shapes
+    if (PyArray_NDIM(expert_actions_discrete) != 3) {
+        PyErr_SetString(PyExc_ValueError, "expert_actions_discrete must be 3D (trajectory_length, num_agents, 2)");
+        return NULL;
+    }
+    if (PyArray_NDIM(expert_actions_continuous) != 3) {
+        PyErr_SetString(PyExc_ValueError, "expert_actions_continuous must be 3D (trajectory_length, num_agents, 2)");
+        return NULL;
+    }
+    if (PyArray_NDIM(expert_observations) != 3) {
+        PyErr_SetString(PyExc_ValueError, "expert_observations must be 3D (trajectory_length, num_agents, obs_dim)");
+        return NULL;
+    }
+
+    int trajectory_length = PyArray_DIM(expert_actions_discrete, 0);
+    int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+
+    // Process each environment
+    int agent_offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Env* env = vec->envs[i];
+        int num_agents = env->active_agent_count;
+
+        // Allocate temporary buffers for this environment
+        float* env_actions_discrete = (float*)malloc(trajectory_length * num_agents * 2 * sizeof(float));
+        float* env_actions_continuous = (float*)malloc(trajectory_length * num_agents * 2 * sizeof(float));
+        float* env_obs = (float*)malloc(trajectory_length * num_agents * max_obs * sizeof(float));
+
+        if (!env_actions_discrete || !env_actions_continuous || !env_obs) {
+            PyErr_SetString(PyExc_MemoryError, "Failed to allocate temporary buffers");
+            free(env_actions_discrete);
+            free(env_actions_continuous);
+            free(env_obs);
+            return NULL;
+        }
+
+        // Call C function with both action types
+        c_collect_expert_data(env, env_actions_discrete, env_actions_continuous, env_obs);
+
+        // Copy results back to Python arrays
+        for (int t = 0; t < trajectory_length; t++) {
+            for (int a = 0; a < num_agents; a++) {
+                // Copy discrete actions
+                float* discrete_action_src = &env_actions_discrete[t * num_agents * 2 + a * 2];
+                float* discrete_action_dst = (float*)PyArray_GETPTR3(expert_actions_discrete, t, agent_offset + a, 0);
+                discrete_action_dst[0] = discrete_action_src[0];
+                discrete_action_dst[1] = discrete_action_src[1];
+
+                // Copy continuous actions
+                float* continuous_action_src = &env_actions_continuous[t * num_agents * 2 + a * 2];
+                float* continuous_action_dst = (float*)PyArray_GETPTR3(expert_actions_continuous, t, agent_offset + a, 0);
+                continuous_action_dst[0] = continuous_action_src[0];
+                continuous_action_dst[1] = continuous_action_src[1];
+
+                // Copy observations
+                float* obs_src = &env_obs[t * num_agents * max_obs + a * max_obs];
+                float* obs_dst = (float*)PyArray_GETPTR3(expert_observations, t, agent_offset + a, 0);
+                memcpy(obs_dst, obs_src, max_obs * sizeof(float));
+            }
+        }
+
+        free(env_actions_discrete);
+        free(env_actions_continuous);
+        free(env_obs);
+        agent_offset += num_agents;
+    }
+
+    Py_RETURN_NONE;
+}
+
 // Method table
 static PyMethodDef methods[] = {
     {"env_init", (PyCFunction)env_init, METH_VARARGS | METH_KEYWORDS, "Init environment with observation, action, reward, terminal, truncation arrays"},
@@ -684,6 +997,11 @@ static PyMethodDef methods[] = {
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
+    {"vec_collect_expert_data", vec_collect_expert_data, METH_VARARGS, "Collect expert actions and observations"},
+    {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
+    {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
+    {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},
+    {"vec_get_global_ground_truth_trajectories", vec_get_global_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories from vectorized env"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}
 };

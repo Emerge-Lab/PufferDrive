@@ -218,6 +218,7 @@ class PuffeRL:
         self.stats = defaultdict(list)
         self.last_stats = defaultdict(list)
         self.losses = {}
+        self.realism = {}
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -349,6 +350,7 @@ class PuffeRL:
         a = config["prio_alpha"]
         clip_coef = config["clip_coef"]
         vf_clip = config["vf_clip_coef"]
+        human_clip = config["human_clip_coef"]
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
 
@@ -411,6 +413,43 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
+            # Add log likelihood loss of human actions under current policy.
+            # 1: Sample a batch of human actions and observations from dataset
+            # Shape: [n_sequences, bptt_horizon, feature_dim]
+            discrete_human_actions, continuous_human_actions, human_observations = (
+                self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
+            )
+            discrete_human_actions = discrete_human_actions.to(device)
+            continuous_human_actions = continuous_human_actions.to(device)
+            human_observations = human_observations.to(device)
+
+            # Use helper function to compute realism metrics
+            realism_metrics = self.vecenv.driver_env.compute_realism_metrics(
+                discrete_human_actions, continuous_human_actions
+            )
+            self.realism.update(realism_metrics)
+
+            # Select appropriate action type for training
+            use_continuous = self.vecenv.driver_env._action_type_flag == 1
+            human_actions = continuous_human_actions if use_continuous else discrete_human_actions
+
+            # 2: Compute the log-likelihood of human actions under the current policy,
+            # given the corresponding human observations. A higher likelihood indicates
+            # that the policy behaves more like a human under the same observations.
+            human_state = dict(
+                action=human_actions,
+                lstm_h=None,
+                lstm_c=None,
+            )
+
+            human_logits, _ = self.policy(human_observations, human_state)
+
+            _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
+                logits=human_logits, action=human_actions
+            )
+
+            self.realism["human_log_prob"] = human_log_prob.mean().item()
+
             adv = advantages[idx]
             adv = compute_puff_advantage(
                 mb_values,
@@ -437,9 +476,17 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
+            human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
+            human_loss = human_loss_clipped.mean()
+
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            loss = (
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - config["ent_coef"] * entropy_loss
+                - config["human_ll_coef"] * human_loss
+            )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -454,6 +501,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["human_loss"] += human_loss / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
@@ -546,9 +594,6 @@ class PuffeRL:
                             cmd.append("--lasers")
                         if config["show_human_logs"]:
                             cmd.append("--log-trajectories")
-
-                        if self.vecenv.driver_env.control_non_vehicles:
-                            cmd.append("--control-non-vehicles")
                         if self.vecenv.driver_env.goal_radius is not None:
                             cmd.extend(["--goal-radius", str(self.vecenv.driver_env.goal_radius)])
                         if self.vecenv.driver_env.init_steps > 0:
@@ -557,6 +602,10 @@ class PuffeRL:
                             map_path = config["render_map"]
                             if os.path.exists(map_path):
                                 cmd.extend(["--map-name", map_path])
+                        if self.vecenv.driver_env.init_mode is not None:
+                            cmd.extend(["--init-mode", str(self.vecenv.driver_env.init_mode)])
+                        if self.vecenv.driver_env.control_mode is not None:
+                            cmd.extend(["--control-mode", str(self.vecenv.driver_env.control_mode)])
 
                         # Specify output paths for videos
                         cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
@@ -565,17 +614,13 @@ class PuffeRL:
                         env_cfg = getattr(self, "vecenv", None)
                         env_cfg = getattr(env_cfg, "driver_env", None)
                         if env_cfg is not None:
-                            if getattr(env_cfg, "control_all_agents", False):
-                                cmd.append("--pure-self-play")
-                            n_policy = getattr(env_cfg, "num_policy_controlled_agents", -1)
+                            n_policy = getattr(env_cfg, "max_controlled_agents", -1)
                             try:
                                 n_policy = int(n_policy)
                             except (TypeError, ValueError):
                                 n_policy = -1
                             if n_policy > 0:
                                 cmd += ["--num-policy-controlled-agents", str(n_policy)]
-                            if getattr(env_cfg, "deterministic_agent_selection", False):
-                                cmd.append("--deterministic-selection")
                             if getattr(env_cfg, "num_maps", False):
                                 cmd.extend(["--num-maps", str(env_cfg.num_maps)])
                             if getattr(env_cfg, "scenario_length", None):
@@ -616,7 +661,7 @@ class PuffeRL:
                                     print(f"Video generation completed but {source_vid} not found")
 
                         else:
-                            print(f"C rendering failed with exit code {result.returncode}: {result.stderr}")
+                            print(f"C rendering failed with exit code {result.returncode}: {result.stdout}")
 
                     except subprocess.TimeoutExpired:
                         print("C rendering timed out")
@@ -656,6 +701,16 @@ class PuffeRL:
             # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
+
+        for k, v in self.realism.items():
+            if k.endswith("_histogram"):
+                if hasattr(self.logger, "wandb") and self.logger.wandb:
+                    import wandb
+
+                    metric_name = k.replace("_histogram", "")
+                    logs[f"realism/{metric_name}"] = wandb.Histogram(v)
+            else:
+                logs[f"realism/{k}"] = v
 
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:
@@ -700,6 +755,8 @@ class PuffeRL:
             "update": self.epoch,
             "model_name": model_name,
             "run_id": run_id,
+            "max_expert_sequences": self.vecenv.driver_env.max_expert_sequences,
+            "bptt_horizon": self.config["bptt_horizon"],
         }
         state_path = os.path.join(path, "trainer_state.pt")
         torch.save(state, state_path + ".tmp")
@@ -1132,14 +1189,42 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
 def eval(env_name, args=None, vecenv=None, policy=None):
     args = args or load_config(env_name)
-    backend = args["vec"]["backend"]
-    if backend != "PufferEnv":
-        backend = "Serial"
+
+    wosac_enabled = args["wosac"]["enabled"]
+    backend = args["wosac"]["backend"] if wosac_enabled else args["vec"]["backend"]
+    assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
 
     args["vec"] = dict(backend=backend, num_envs=1)
-    vecenv = vecenv or load_env(env_name, args)
+    args["env"]["num_agents"] = args["wosac"]["num_total_wosac_agents"] if wosac_enabled else 1
+    args["env"]["init_mode"] = args["wosac"]["init_mode"] if wosac_enabled else args["env"]["init_mode"]
+    args["env"]["control_mode"] = args["wosac"]["control_mode"] if wosac_enabled else args["env"]["control_mode"]
+    args["env"]["init_steps"] = args["wosac"]["init_steps"] if wosac_enabled else args["env"]["init_steps"]
+    args["env"]["goal_behavior"] = args["wosac"]["goal_behavior"] if wosac_enabled else args["env"]["goal_behavior"]
+    args["env"]["goal_radius"] = args["wosac"]["goal_radius"] if wosac_enabled else args["env"]["goal_radius"]
 
+    vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
+
+    if wosac_enabled:
+        print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
+        from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
+
+        evaluator = WOSACEvaluator(args)
+
+        # Collect ground truth trajectories from the dataset
+        gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+
+        # Roll out trained policy in the simulator
+        simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
+
+        if args["wosac"]["sanity_check"]:
+            evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
+
+        # Analyze and compute metrics
+        results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories)
+
+        return results
+
     ob, info = vecenv.reset()
     driver = vecenv.driver_env
     num_agents = vecenv.observation_space.shape[0]
@@ -1353,7 +1438,7 @@ def load_policy(args, vecenv, env_name=""):
     return policy
 
 
-def load_config(env_name):
+def load_config(env_name, config_dir=None):
     parser = argparse.ArgumentParser(
         description=f":blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]"
         " demo options. Shows valid args for your env and policy",
@@ -1381,8 +1466,13 @@ def load_config(env_name):
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
     args = parser.parse_known_args()[0]
 
+    if config_dir is None:
+        puffer_dir = os.path.dirname(os.path.realpath(__file__))
+    else:
+        print("Using custom config dir:", config_dir)
+        puffer_dir = config_dir
+
     # Load defaults and config
-    puffer_dir = os.path.dirname(os.path.realpath(__file__))
     puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
     puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
     if env_name == "default":
