@@ -1935,7 +1935,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         // Update position
         x = x + (new_vx*env->dt);
         y = y + (new_vy*env->dt);
-        heading = heading + yaw_rate*env->dt;
+        heading = normalize_heading(heading + yaw_rate*env->dt);
 
         // Apply updates to the agent's state
         agent->x = x;
