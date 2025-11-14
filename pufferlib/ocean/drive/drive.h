@@ -504,7 +504,7 @@ float compute_speed_guidance_reward(Entity* agent, int timestep, float weight) {
     float speed_error_sq = speed_error * speed_error;
 
     // Exponential penalty: 1.0 - exp(-error²)
-    float penalty = 1.0f - expf(-speed_error_sq + 1e-8f);
+    float penalty = 1.0f - expf(-speed_error_sq);
 
     return -weight * penalty;
 }
@@ -529,7 +529,7 @@ float compute_heading_guidance_reward(Entity* agent, int timestep, float weight)
     float heading_error_sq = heading_error * heading_error;
 
     // Exponential penalty: 1.0 - exp(-error²)
-    float penalty = 1.0f - expf(-heading_error_sq + 1e-8f);
+    float penalty = 1.0f - expf(-heading_error_sq);
 
     return -weight * penalty;
 }
