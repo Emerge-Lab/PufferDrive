@@ -16,7 +16,7 @@ from pufferlib.models import Convolutional as Conv  # noqa: F401
 Recurrent = pufferlib.models.LSTMWrapper
 
 MAX_PARTNER_OBJECTS = 63
-MAX_ROAD_OBJECTS = 128
+MAX_ROAD_OBJECTS = 200
 
 ROAD_FEATURES = 7
 ROAD_FEATURES_AFTER_ONEHOT = 13
@@ -47,168 +47,6 @@ class LinearMax(torch.nn.Module):
         return LinearMaxKernels.apply(x, self.weight, self.bias)
 
 
-@triton.jit
-def fused_linear_max_kernel(
-    x_ptr,
-    w_ptr,
-    b_ptr,
-    out_ptr,
-    B: tl.constexpr,
-    N: tl.constexpr,
-    D: tl.constexpr,
-    H: tl.constexpr,
-    stride_xb,
-    stride_xn,
-    stride_xd,
-    stride_wh,
-    stride_wd,
-    stride_b,
-    stride_outb,
-    stride_outh,
-    BLOCK_H: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    BLOCK_D: tl.constexpr,
-):
-    pid_b = tl.program_id(0)
-    pid_h = tl.program_id(1)
-
-    offs_h = pid_h * BLOCK_H + tl.arange(0, BLOCK_H)
-    mask_h = offs_h < H
-
-    # Load bias (H block)
-    bias = tl.load(b_ptr + offs_h * stride_b, mask=mask_h, other=0.0)
-
-    # Initialize max accumulator
-    max_val = tl.full([BLOCK_H], -float("inf"), dtype=tl.float32)
-
-    for start_n in range(0, N, BLOCK_N):
-        offs_n = start_n + tl.arange(0, BLOCK_N)
-        mask_n = offs_n < N
-
-        # Accumulator for dots (BLOCK_H, BLOCK_N)
-        acc = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
-
-        for start_d in range(0, D, BLOCK_D):
-            offs_d = start_d + tl.arange(0, BLOCK_D)
-            mask_d = offs_d < D
-
-            # Load x slice: (BLOCK_N, BLOCK_D)
-            x_offs = pid_b * stride_xb + offs_n[:, None] * stride_xn + offs_d[None, :] * stride_xd
-            x = tl.load(
-                x_ptr + x_offs,
-                mask=mask_n[:, None] & mask_d[None, :],
-                other=0.0,
-            )
-
-            # Load w slice: (BLOCK_H, BLOCK_D)
-            w_offs = offs_h[:, None] * stride_wh + offs_d[None, :] * stride_wd
-            w = tl.load(
-                w_ptr + w_offs,
-                mask=mask_h[:, None] & mask_d[None, :],
-                other=0.0,
-            )
-
-            # Accumulate dot products: tl.dot(w, x.T) -> (BLOCK_H, BLOCK_N)
-            acc += tl.dot(w, tl.trans(x))
-
-        # Mask invalid n with -inf
-        acc = tl.where(mask_n[None, :], acc, -float("inf"))
-
-        # Compute max over this n-block
-        block_max = tl.max(acc, axis=1)
-
-        # Accumulate global max
-        max_val = tl.maximum(max_val, block_max)
-
-    # Add bias after max (since max_n(dot_n + bias) = max_n(dot_n) + bias)
-    max_val += bias
-
-    # Store output
-    out_offs = pid_b * stride_outb + offs_h * stride_outh
-    tl.store(out_ptr + out_offs, max_val, mask=mask_h)
-
-
-def fused_linear_max(
-    x: torch.Tensor,
-    weight: torch.Tensor,
-    bias: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """
-    Fused linear projection + max reduction over the sequence dimension.
-
-    Computes max_n (x[b, n] @ weight.T + bias) for each b and output dim,
-    without materializing the (B, N, H) intermediate.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Input embeddings of shape ``(B, N, D)`` (float32/16/bf16).
-    weight : torch.Tensor
-        Weight matrix of shape ``(H, D)``.
-    bias : torch.Tensor | None
-        Optional bias of shape ``(H,)``.
-
-    Returns
-    -------
-    torch.Tensor
-        ``(B, H)`` tensor containing the max-pooled projections.
-    """
-    assert x.dim() == 3, "Input must be (B, N, D)"
-    assert x.shape[2] == weight.shape[1], "D must match"
-    assert x.is_contiguous() and weight.is_contiguous()
-
-    B, N, D = x.shape
-    H = weight.shape[0]
-
-    out = torch.empty((B, H), dtype=x.dtype, device=x.device)
-
-    if bias is None:
-        bias = torch.zeros((H,), dtype=x.dtype, device=x.device)
-    assert bias.is_contiguous()
-
-    # Heuristics (autotune in prod)
-    BLOCK_H = 64
-    BLOCK_N = 32
-    BLOCK_D = 64
-
-    grid = (B, triton.cdiv(H, BLOCK_H))
-    fused_linear_max_kernel[grid](
-        x,
-        weight,
-        bias,
-        out,
-        B,
-        N,
-        D,
-        H,
-        x.stride(0),
-        x.stride(1),
-        x.stride(2),
-        weight.stride(0),
-        weight.stride(1),
-        bias.stride(0),
-        out.stride(0),
-        out.stride(1),
-        BLOCK_H=BLOCK_H,
-        BLOCK_N=BLOCK_N,
-        BLOCK_D=BLOCK_D,
-    )
-    return out
-
-
-class FusedLinearMax(torch.nn.Module):
-    def __init__(self, in_features: int, out_features: int, bias: bool = True):
-        super().__init__()
-        self.weight = torch.nn.Parameter(
-            torch.empty(out_features, in_features).normal_(mean=0.0, std=in_features**-0.5)
-        )
-        self.bias = torch.nn.Parameter(torch.zeros(out_features)) if bias else None
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, N, D)
-        return fused_linear_max(x, self.weight, self.bias)
-
-
 class Drive(nn.Module):
     def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
         super().__init__()
@@ -224,17 +62,14 @@ class Drive(nn.Module):
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
-        # TODO: Switch to LinearMax after adding tf32
         self.road_encoder = nn.Sequential(
-            # LinearMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),  # Cuda
-            FusedLinearMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),  # Triton
+            LinearMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),  # Cuda kernel
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             # pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
         self.partner_encoder = nn.Sequential(
-            # LinearMax(PARTNER_FEATURES, input_size), # Cuda
-            FusedLinearMax(PARTNER_FEATURES, input_size),  # Triton
+            LinearMax(PARTNER_FEATURES, input_size),  # Cuda kernel
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             # pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
