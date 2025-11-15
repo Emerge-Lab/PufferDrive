@@ -2,25 +2,35 @@
 
 This readme contains several important assumptions and definions about the `PufferDrive` environment.
 
-## Assumptions for initializating agents
+## Agent initialization and control
 
-### Waymo Open Motion Dataset (WOMD)
+### `init_mode`
 
-By default, the environment only creates and controls **vehicles** that meet the following conditions:
+Determines which agents are **created** in the environment.
 
-- Their `valid` flag is `True` at initialization (as determined by `init_steps`).
-- Their initial position is more than `MIN_DISTANCE_TO_GOAL` away from the goal.
-- They are **not** marked as experts in the scenario file.
-- The total number of agents has **not** yet reached `MAX_AGENTS`.
+| Option                   | Description                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------- |
+| `create_all_valid`       | Create all entities valid at initialization (`traj_valid[init_steps] == 1`). |
+| `create_only_controlled` | Create only those agents that are controlled by the policy.                  |
 
-When `control_non_vehicles=True`, these same conditions apply, but the environment will also include **non-vehicle agents**, such as cyclists and pedestrians.
+### `control_mode`
+
+Determines which created agents are **controlled** by the policy.
+
+| Option                                    | Description                                                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `control_vehicles` (default)              | Control only valid **vehicles** (not experts, beyond `MIN_DISTANCE_TO_GOAL`, under `MAX_AGENTS`). |
+| `control_agents`                          | Control all valid **agent types** (vehicles, cyclists, pedestrians).                              |
+| `control_tracks_to_predict` *(WOMD only)* | Control agents listed in the `tracks_to_predict` metadata.                                        |
+
 
 ## Termination conditions (`done`)
 
-Episodes are never truncated before reaching `episode_len`. The `use_goal_generation` argument controls agent behavior after reaching a goal early:
+Episodes are never truncated before reaching `episode_len`. The `goal_behavior` argument controls agent behavior after reaching a goal early:
 
-* **`use_goal_generation=False` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
-* **`use_goal_generation=True`:** Agents receive new goals indefinitely after reaching each goal.
+* **`goal_behavior=0` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
+* **`goal_behavior=1`:** Agents receive new goals indefinitely after reaching each goal.
+* **`goal_behavior=2`:** Agents stop after reaching their goal.
 
 ## Logged performance metrics
 
