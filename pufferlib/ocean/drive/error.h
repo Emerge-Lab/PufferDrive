@@ -15,6 +15,7 @@ typedef enum {
     ERROR_MEMORY_ALLOCATION,
     ERROR_FILE_NOT_FOUND,
     ERROR_INITIALIZATION_FAILED,
+    ERROR_INVALID_CONFIG,
     ERROR_UNKNOWN
 } ErrorType;
 
@@ -27,6 +28,7 @@ const char* error_type_to_string(ErrorType type) {
         case ERROR_MEMORY_ALLOCATION: return "Memory Allocation Failed";
         case ERROR_FILE_NOT_FOUND: return "File Not Found";
         case ERROR_INITIALIZATION_FAILED: return "Initialization Failed";
+        case ERROR_INVALID_CONFIG: return "Invalid Configuration";
         default: return "Unknown Error";
     }
 }

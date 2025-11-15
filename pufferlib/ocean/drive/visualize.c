@@ -257,7 +257,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
-    allocate(&env);
+    allocate(&env, conf);
 
     // Set which vehicle to focus on for obs mode
     env.human_agent_idx = 0;
