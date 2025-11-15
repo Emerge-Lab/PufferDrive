@@ -37,6 +37,7 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        enable_eval=True,
     ):
         # env
         self.dt = dt
@@ -56,6 +57,7 @@ class Drive(pufferlib.PufferEnv):
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.enable_eval = enable_eval
 
         # Observation space calculation
         if dynamics_model == "classic":

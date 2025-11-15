@@ -121,6 +121,7 @@ class WOSACEvaluator:
         self,
         ground_truth_trajectories: Dict,
         simulated_trajectories: Dict,
+        aggregate_results: bool = False,
     ) -> Dict:
         """Compute realism metrics comparing simulated and ground truth trajectories.
 
@@ -289,23 +290,28 @@ class WOSACEvaluator:
             ]
         ].mean()
 
-        scene_level_results["realism_metametric"] = scene_level_results.apply(self._compute_metametric, axis=1)
-
+        scene_level_results["realism_meta_score"] = scene_level_results.apply(self._compute_metametric, axis=1)
         scene_level_results["num_agents"] = df.groupby("scenario_id").size()
         scene_level_results = scene_level_results[
             ["num_agents"] + [col for col in scene_level_results.columns if col != "num_agents"]
         ]
 
-        print("\n Scene-level results:\n")
-        print(scene_level_results)
+        if aggregate_results:
+            aggregate_metrics = scene_level_results.mean().to_dict()
+            aggregate_metrics["total_num_agents"] = scene_level_results["num_agents"].sum()
+            # Convert numpy types to Python native types
+            return {k: v.item() if hasattr(v, "item") else v for k, v in aggregate_metrics.items()}
+        else:
+            print("\n Scene-level results:\n")
+            print(scene_level_results)
 
-        print(f"\n Overall realism metametric: {scene_level_results['realism_metametric'].mean():.4f}")
-        print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
-        print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
+            print(f"\n Overall realism meta score: {scene_level_results['realism_meta_score'].mean():.4f}")
+            print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
+            print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
 
-        # print(f"\n Full agent-level results:\n")
-        # print(df)
-        return scene_level_results
+            # print(f"\n Full agent-level results:\n")
+            # print(df)
+            return scene_level_results
 
     def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None, max_agents_to_plot=10):
         if agent_idx is None:
