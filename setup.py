@@ -253,6 +253,7 @@ if not NO_OCEAN:
     for c_ext in c_extensions:
         if "drive" in c_ext.name:
             c_ext.sources.append("inih-r62/ini.c")
+            c_ext.include_dirs.append("pufferlib/extensions")
             c_ext.extra_compile_args.extend(
                 [
                     '-DINI_START_COMMENT_PREFIXES="#"',
