@@ -491,6 +491,77 @@ class PuffeRL:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
+            if self.vecenv.driver_env.enable_eval:
+                try:
+                    run_id = self.logger.run_id
+                    model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
+                    model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+                    if model_files:
+                        latest_cpt = max(model_files, key=os.path.getctime)
+
+                    # Prepare evaluation command
+                    wosac_config = self.config.get("wosac", {})
+                    cmd = [
+                        sys.executable,
+                        "-m",
+                        "pufferlib.pufferl",
+                        "eval",
+                        self.config["env"],
+                        "--load-model-path",
+                        latest_cpt,
+                        "--wosac.enabled",
+                        "True",
+                        "--wosac.num-total-wosac-agents",
+                        str(wosac_config.get("num_total_wosac_agents", 256)),
+                        "--wosac.init-mode",
+                        str(wosac_config.get("init_mode", "create_all_valid")),
+                        "--wosac.control-mode",
+                        str(wosac_config.get("control_mode", "control_tracks_to_predict")),
+                        "--wosac.init-steps",
+                        str(wosac_config.get("init_steps", 10)),
+                        "--wosac.goal-behavior",
+                        str(wosac_config.get("goal_behavior", 2)),
+                        "--wosac.goal-radius",
+                        str(wosac_config.get("goal_radius", 2.0)),
+                        "--wosac.aggregate-results",
+                        str(wosac_config.get("aggregate_results", True)),
+                    ]
+
+                    # Run WOSAC evaluation in subprocess
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
+
+                    if result.returncode == 0:
+                        import json
+
+                        # Extract JSON from stdout between markers
+                        stdout = result.stdout
+                        if "WOSAC_METRICS_START" in stdout and "WOSAC_METRICS_END" in stdout:
+                            start = stdout.find("WOSAC_METRICS_START") + len("WOSAC_METRICS_START")
+                            end = stdout.find("WOSAC_METRICS_END")
+                            json_str = stdout[start:end].strip()
+                            wosac_metrics = json.loads(json_str)
+
+                        if hasattr(self.logger, "wandb") and self.logger.wandb:
+                            self.logger.wandb.log(
+                                {
+                                    "realism/realism_meta_score": wosac_metrics["realism_meta_score"],
+                                    "realism/ade": wosac_metrics["ade"],
+                                    "realism/min_ade": wosac_metrics["min_ade"],
+                                    "realism/total_num_agents": wosac_metrics["total_num_agents"],
+                                    # Optionally log all metrics:
+                                    # **{f"realism/{k}": v for k, v in wosac_metrics.items()}
+                                },
+                                step=self.global_step,
+                            )
+
+                    else:
+                        print(f"WOSAC evaluation failed with exit code {result.returncode}: {result.stderr}")
+
+                except subprocess.TimeoutExpired:
+                    print("WOSAC evaluation timed out")
+                except Exception as e:
+                    print(f"Failed to run WOSAC evaluation: {e}")
+
         if self.render and self.epoch % self.render_interval == 0:
             run_id = self.logger.run_id
             model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
@@ -1092,7 +1163,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     elif args["wandb"]:
         logger = WandbLogger(args)
 
-    train_config = dict(**args["train"], env=env_name)
+    train_config = dict(**args["train"], env=env_name, wosac=args.get("wosac", {}))
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     all_logs = []
@@ -1141,6 +1212,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args["env"]["init_steps"] = args["wosac"]["init_steps"] if wosac_enabled else args["env"]["init_steps"]
     args["env"]["goal_behavior"] = args["wosac"]["goal_behavior"] if wosac_enabled else args["env"]["goal_behavior"]
     args["env"]["goal_radius"] = args["wosac"]["goal_radius"] if wosac_enabled else args["env"]["goal_radius"]
+    aggregate_results = args["wosac"].get("aggregate_results", True)
 
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
@@ -1161,7 +1233,14 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
 
         # Analyze and compute metrics
-        results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories)
+        results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories, aggregate_results)
+
+        if aggregate_results:
+            import json
+
+            print("WOSAC_METRICS_START")
+            print(json.dumps(results))
+            print("WOSAC_METRICS_END")
 
         return results
 
