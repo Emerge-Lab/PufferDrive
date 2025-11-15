@@ -52,9 +52,8 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
     // Determine action space size based on dynamics model
     int action_size, logit_sizes[2];
     if (dynamics_model == CLASSIC) {
-        action_size = 20;  // 7 + 13
-        logit_sizes[0] = 7;
-        logit_sizes[1] = 13;
+        action_size = 7 * 13; // Joint action space
+        logit_sizes[0] = 7 * 13;
     } else {  // JERK
         action_size = 7;   // 4 + 3
         logit_sizes[0] = 4;
@@ -93,7 +92,6 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
     net->lstm = make_lstm(weights, num_agents, hidden_size, 256);
     memset(net->lstm->state_h, 0, num_agents*256*sizeof(float));
     memset(net->lstm->state_c, 0, num_agents*256*sizeof(float));
-    int logit_sizes[1] = {7 * 13};
     net->multidiscrete = make_multidiscrete(num_agents, logit_sizes, 1);
     return net;
 }
