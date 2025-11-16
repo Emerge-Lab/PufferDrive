@@ -457,7 +457,12 @@ class PuffeRL:
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
+
             loss.backward()
+            # print(f'after loss backward [ego_encoder]: {self.policy.policy.ego_encoder[0].weight[0,:3]}')
+            # print(f'after loss backward [road_encoder]: {self.policy.policy.road_encoder[0].weight[0,:3]}')
+            # breakpoint()
+
             if (mb + 1) % self.accumulate_minibatches == 0:
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
                 self.optimizer.step()
@@ -640,6 +645,7 @@ class PuffeRL:
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
+
         logs = {
             "SPS": dist_sum(self.sps, device),
             "agent_steps": agent_steps,
@@ -896,8 +902,8 @@ class Profile:
         if epoch % self.frequency != 0:
             return
 
-        # if torch.cuda.is_available():
-        #    torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         tick = time.time()
         if len(self.stack) != 0 and not nest:
@@ -913,8 +919,8 @@ class Profile:
         profile["delta"] += delta
 
     def end(self):
-        # if torch.cuda.is_available():
-        #    torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         end = time.time()
         for i in range(len(self.stack)):
