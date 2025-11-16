@@ -920,7 +920,7 @@ class Profile:
 
     def end(self):
         if torch.cuda.is_available():
-           torch.cuda.synchronize()
+            torch.cuda.synchronize()
 
         end = time.time()
         for i in range(len(self.stack)):
