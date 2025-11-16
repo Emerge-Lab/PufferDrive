@@ -100,7 +100,10 @@ class Drive(pufferlib.PufferEnv):
 
         if action_type == "discrete":
             if dynamics_model == "classic":
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+                # Joint action space (assume dependence)
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 13])
+                # Multi discrete (assume independence)
+                # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
             elif dynamics_model == "jerk":
                 self.single_action_space = gymnasium.spaces.MultiDiscrete([4, 3])
             else:
