@@ -25,6 +25,23 @@ class PointwiseNet(nn.Module):
         return self.linear(x).max(dim=1)[0]
 
 
+class OriginalLinearMax(torch.nn.Module):
+    """Original implementation of Linear + Max without custom CUDA kernel."""
+
+    def __init__(self, input_size, hidden_size):
+        super().__init__()
+        self.linear1 = nn.Linear(input_size, hidden_size)
+        self.ln = nn.LayerNorm(hidden_size)
+        self.linear2 = nn.Linear(hidden_size, hidden_size)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.ln(x)
+        x = self.linear2(x)
+        x, _ = x.max(dim=1)
+        return x
+
+
 class LinearMaxKernels(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, bias):
@@ -49,20 +66,18 @@ class LinearMax(torch.nn.Module):
         return LinearMaxKernels.apply(x, self.weight, self.bias)
 
 
-class LinearMaxWithPreprocessing(torch.nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
+class LinearMaxTwoLayer(torch.nn.Module):
+    def __init__(self, input_dim, hidden_size, output_size):
         super().__init__()
-        # First linear layer to transform input
-        self.linear1 = torch.nn.Linear(input_size, hidden_size)
-
-        # Linear-max layer (using your custom kernel)
-        self.weight = torch.nn.Parameter(torch.empty(output_size, hidden_size).normal_(mean=0.0, std=hidden_size**-0.5))
-        self.bias = torch.nn.Parameter(torch.zeros(output_size))
+        self.linear_max = LinearMax(input_dim, hidden_size)
+        self.ln = nn.LayerNorm(hidden_size)
+        self.linear2 = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
-        # x: (B, N, input_size)
-        x = self.linear1(x)  # (B, N, hidden_size)
-        return LinearMaxKernels.apply(x, self.weight, self.bias)  # (B, output_size)
+        x = self.linear_max(x)
+        x = self.ln(x)
+        x = self.linear2(x)
+        return x
 
 
 def check_cuda_correct(model, cuda_model, data):
@@ -119,30 +134,21 @@ def profile_backward(model, data, num_iters=100, warmup=10):
     return sps
 
 
-class ConcatNet(nn.Module):
-    def __init__(self, input_size, points, hidden_size):
-        super().__init__()
-        self.linear = nn.Linear(input_size * points, hidden_size)
-
-    def forward(self, x):
-        x = x.view(x.shape[0], -1)
-        return self.linear(x)
-
-
 if __name__ == "__main__":
     num_iters = 100
     B = 4096  # Batch size
-    H = 13  # Hidden size
-    D = 7  # Feature dimension
-    N = 200  # Number of points
+    H = 64  # Hidden size
+    N = 128  # Number of road points
+    D = 13  # Feature dimension
 
     device = torch.device("cuda")
     data = torch.randn(num_iters, B, N, D).to(device)
 
     pointwise = PointwiseNet(D, H).to(device)
-    concat = ConcatNet(D, N, H).to(device)
+    # concat = ConcatNet(D, N, H).to(device)
     linear_max = LinearMax(D, H).to(device)
-    linear_max_with_preprocessing = LinearMaxWithPreprocessing(D, H, H).to(device)
+    linear_max_two_layer = LinearMaxTwoLayer(D, H, H).to(device)
+    original_linear_max = OriginalLinearMax(D, H).to(device)
 
     # Test custom kernel
     check_cuda_correct(pointwise, linear_max, data)
@@ -150,11 +156,13 @@ if __name__ == "__main__":
     print(
         f"Pointwise: Forward ({profile_forward(pointwise, data):,.2f}), backward ({profile_backward(pointwise, data):,.2f})"
     )
-    print(f"Concat: Forward ({profile_forward(concat, data):,.2f}), backward ({profile_backward(concat, data):,.2f})")
+    print(
+        f"Original Linear Max: Forward ({profile_forward(original_linear_max, data):,.2f}), backward ({profile_backward(original_linear_max, data):,.2f})"
+    )
     print(
         f"Cuda Linear Max: Forward ({profile_forward(linear_max, data):,.2f}), backward ({profile_backward(linear_max, data):,.2f})"
     )
     print(
-        f"With Preprocessing: Forward ({profile_forward(linear_max_with_preprocessing, data):,.2f}), "
-        f"backward ({profile_backward(linear_max_with_preprocessing, data):,.2f})"
+        f"Cuda Linear Max + Linear: Forward ({profile_forward(linear_max_two_layer, data):,.2f}), "
+        f"backward ({profile_backward(linear_max_two_layer, data):,.2f})"
     )
