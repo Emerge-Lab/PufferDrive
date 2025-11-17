@@ -95,38 +95,42 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         load_map_binary(map_file, env);
         set_active_agents(env);
 
-        // // Skip map if it doesn't contain any controllable agents
-        // if(env->active_agent_count == 0) {
-        //     maps_checked++;
+        // Skip map if it doesn't contain any controllable agents
+        if(env->active_agent_count == 0) {
+            maps_checked++;
 
-        //     // Safeguard: if we've checked all available maps and found no active agents, raise an error
-        //     if(maps_checked >= num_maps) {
-        //         for(int j=0;j<env->num_entities;j++) {
-        //             free_entity(&env->entities[j]);
-        //         }
-        //         free(env->entities);
-        //         free(env->active_agent_indices);
-        //         free(env->static_agent_indices);
-        //         free(env->expert_static_agent_indices);
-        //         free(env);
-        //         Py_DECREF(agent_offsets);
-        //         Py_DECREF(map_ids);
-        //         char error_msg[256];
-        //         sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
-        //         PyErr_SetString(PyExc_ValueError, error_msg);
-        //         return NULL;
-        //     }
+            // Safeguard: if we've checked all available maps and found no active agents, raise an error
+            if(maps_checked >= num_maps) {
+                for(int j=0;j<env->num_dynamic_agents;j++) free_dynamic_agent(&env->dynamic_agents[j]);
+                for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+                for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+                free(env->dynamic_agents);
+                free(env->road_elements);
+                free(env->traffic_elements);
+                free(env->active_agent_indices);
+                free(env->static_agent_indices);
+                free(env->expert_static_agent_indices);
+                free(env);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
+            }
 
-        //     for(int j=0;j<env->num_entities;j++) {
-        //         free_entity(&env->entities[j]);
-        //     }
-        //     free(env->entities);
-        //     free(env->active_agent_indices);
-        //     free(env->static_agent_indices);
-        //     free(env->expert_static_agent_indices);
-        //     free(env);
-        //     continue;
-        // }
+            for(int j=0;j<env->num_dynamic_agents;j++) free_dynamic_agent(&env->dynamic_agents[j]);
+            for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+            for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+            free(env->dynamic_agents);
+            free(env->road_elements);
+            free(env->traffic_elements);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env);
+            continue;
+        }
 
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);
@@ -143,8 +147,8 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         free(env->road_elements);
         free(env->traffic_elements);
         free(env->active_agent_indices);
-        free(env->static_car_indices);
-        free(env->expert_static_car_indices);
+        free(env->static_agent_indices);
+        free(env->expert_static_agent_indices);
         free(env);
     }
     //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
