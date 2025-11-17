@@ -1,8 +1,7 @@
-#include "drive.h"
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
-#include "../env_binding.h"
+#include "binding.h"
 
 static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
     PyObject* obs = PyDict_GetItemString(kwargs, "observations");
@@ -68,98 +67,15 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 }
 
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
-    int num_agents = unpack(kwargs, "num_agents");
-    int num_maps = unpack(kwargs, "num_maps");
-    int init_mode = unpack(kwargs, "init_mode");
-    int control_mode = unpack(kwargs, "control_mode");
-    int init_steps = unpack(kwargs, "init_steps");
-    int max_controlled_agents = unpack(kwargs, "max_controlled_agents");
-    clock_gettime(CLOCK_REALTIME, &ts);
-    srand(ts.tv_nsec);
-    int total_agent_count = 0;
-    int env_count = 0;
-    int max_envs = num_agents;
-    int maps_checked = 0;
-    PyObject* agent_offsets = PyList_New(max_envs+1);
-    PyObject* map_ids = PyList_New(max_envs);
-    // getting env count
-    while(total_agent_count < num_agents && env_count < max_envs){
-        char map_file[100];
-        int map_id = rand() % num_maps;
-        Drive* env = calloc(1, sizeof(Drive));
-        env->init_mode = init_mode;
-        env->control_mode = control_mode;
-        env->init_steps = init_steps;
-        env->max_controlled_agents = max_controlled_agents;
-        sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-        env->entities = load_map_binary(map_file, env);
-        set_active_agents(env);
 
-        // Skip map if it doesn't contain any controllable agents
-        if(env->active_agent_count == 0) {
-            maps_checked++;
-
-            // Safeguard: if we've checked all available maps and found no active agents, raise an error
-            if(maps_checked >= num_maps) {
-                for(int j=0;j<env->num_entities;j++) {
-                    free_entity(&env->entities[j]);
-                }
-                free(env->entities);
-                free(env->active_agent_indices);
-                free(env->static_agent_indices);
-                free(env->expert_static_agent_indices);
-                free(env);
-                Py_DECREF(agent_offsets);
-                Py_DECREF(map_ids);
-                char error_msg[256];
-                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
-                PyErr_SetString(PyExc_ValueError, error_msg);
-                return NULL;
-            }
-
-            for(int j=0;j<env->num_entities;j++) {
-                free_entity(&env->entities[j]);
-            }
-            free(env->entities);
-            free(env->active_agent_indices);
-            free(env->static_agent_indices);
-            free(env->expert_static_agent_indices);
-            free(env);
-            continue;
-          }
-
-        // Store map_id
-        PyObject* map_id_obj = PyLong_FromLong(map_id);
-        PyList_SetItem(map_ids, env_count, map_id_obj);
-        // Store agent offset
-        PyObject* offset = PyLong_FromLong(total_agent_count);
-        PyList_SetItem(agent_offsets, env_count, offset);
-        total_agent_count += env->active_agent_count;
-        env_count++;
-        for(int j=0;j<env->num_entities;j++) {
-            free_entity(&env->entities[j]);
-        }
-        free(env->entities);
-        free(env->active_agent_indices);
-        free(env->static_agent_indices);
-        free(env->expert_static_agent_indices);
-        free(env);
+    int population_play = unpack(kwargs, "population_play");
+    if (population_play){
+        return my_shared_population_play(self, args,  kwargs);
     }
-    //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
-    if(total_agent_count >= num_agents){
-        total_agent_count = num_agents;
+    else{
+        return my_shared_self_play( self, args,  kwargs);
     }
-    PyObject* final_total_agent_count = PyLong_FromLong(total_agent_count);
-    PyList_SetItem(agent_offsets, env_count, final_total_agent_count);
-    PyObject* final_env_count = PyLong_FromLong(env_count);
-    // resize lists
-    PyObject* resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
-    PyObject* resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-    PyObject* tuple = PyTuple_New(3);
-    PyTuple_SetItem(tuple, 0, resized_agent_offsets);
-    PyTuple_SetItem(tuple, 1, resized_map_ids);
-    PyTuple_SetItem(tuple, 2, final_env_count);
-    return tuple;
+
 }
 
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
@@ -218,6 +134,57 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     } else {
         env->k_scenarios = 0;
     }
+
+    env->population_play = unpack(kwargs, "population_play");
+
+    if (env->population_play) {
+        env->num_co_players = unpack(kwargs, "num_co_players");
+        double* co_player_ids_d = unpack_float_array(kwargs, "co_player_ids", &env->num_co_players);
+
+        if (co_player_ids_d != NULL && env->num_co_players > 0) {
+            env->co_player_ids = (int*)malloc(env->num_co_players * sizeof(int));
+            if (env->co_player_ids == NULL) {
+                fprintf(stderr, "Error: Failed to allocate memory for co_player_ids\n");
+                free(co_player_ids_d);
+                env->num_co_players = 0;
+            } else {
+                for (int i = 0; i < env->num_co_players; i++) {
+                    env->co_player_ids[i] = (int)co_player_ids_d[i];
+                }
+                free(co_player_ids_d);
+            }
+        } else {
+            if (co_player_ids_d != NULL) {
+                free(co_player_ids_d);
+            }
+            env->co_player_ids = NULL;
+            env->num_co_players = 0;
+        }
+
+        // Handle ego agents - always as an array
+        env->num_ego_agents = unpack(kwargs, "num_ego_agents");
+        if (env->num_ego_agents > 0) {
+            double* ego_agent_ids_d = unpack_float_array(kwargs, "ego_agent_ids", &env->num_ego_agents);
+            if (ego_agent_ids_d != NULL) {
+                env->ego_agent_ids = (int*)malloc(env->num_ego_agents * sizeof(int));
+                for (int i = 0; i < env->num_ego_agents; i++) {
+                    env->ego_agent_ids[i] = (int)ego_agent_ids_d[i];
+                }
+                free(ego_agent_ids_d);
+            } else {
+                env->ego_agent_ids = NULL;
+                env->num_ego_agents = 0;
+            }
+        } else {
+            env->ego_agent_ids = NULL;
+            env->num_ego_agents = 0;
+        }
+    } else {
+        // Non-population play mode - set defaults
+        env->num_ego_agents = 0;
+        env->ego_agent_ids = NULL;
+    }
+
 
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
