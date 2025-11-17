@@ -120,7 +120,7 @@ class Drive(nn.Module):
 
         # Pass through shared embedding
         embedding = F.relu(self.shared_embedding(concat_features))
-        # embedding = self.shared_embedding(concat_features)
+
         return embedding
 
     def decode_actions(self, flat_hidden):
