@@ -346,7 +346,6 @@ class WOSACEvaluator:
             min_val=0.0,
             max_val=1.0,
             num_bins=2,
-            additive_smoothing=0.0,
             use_bernoulli=True,
         )
         collision_likelihood = np.exp(collision_log_likelihood)

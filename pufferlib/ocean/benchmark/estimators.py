@@ -123,7 +123,7 @@ def log_likelihood_estimate_timeseries(
 def bernoulli_estimate(
     log_samples: np.ndarray,
     sim_samples: np.ndarray,
-    additive_smoothing: float = 0.1,
+    additive_smoothing: float = 0.001,
 ) -> np.ndarray:
     """Computes log probabilities of samples based on Bernoulli distributions.
 
