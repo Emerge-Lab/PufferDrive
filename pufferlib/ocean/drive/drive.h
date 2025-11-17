@@ -1573,7 +1573,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
             int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
             int action_val = action_array[action_idx];
-            int acceleration_index = action_val / num_steer;
+            int acceleration_index = action_val / num_accel;
             int steering_index = action_val % num_steer;
             acceleration = ACCELERATION_VALUES[acceleration_index];
             steering = STEERING_VALUES[steering_index];
