@@ -130,6 +130,8 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
+    float expert_static_agent_count;
+    float static_agent_count;
     float avg_offroad_per_agent;
     float avg_collisions_per_agent;
 };
@@ -236,6 +238,7 @@ struct Drive {
     int dynamics_model;
     GridMap* grid_map;
     int* neighbor_offsets;
+    int scenario_length;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_ade;
@@ -1455,6 +1458,8 @@ void set_active_agents(Drive* env){
     env->active_agent_indices = (int*)malloc(env->active_agent_count * sizeof(int));
     env->static_agent_indices = (int*)malloc(env->static_agent_count * sizeof(int));
     env->expert_static_agent_indices = (int*)malloc(env->expert_static_agent_count * sizeof(int));
+    env->static_agent_indices = (int*)malloc(env->static_agent_count * sizeof(int));
+    env->expert_static_agent_indices = (int*)malloc(env->expert_static_agent_count * sizeof(int));
     for(int i=0;i<env->active_agent_count;i++){
         env->active_agent_indices[i] = active_agent_indices[i];
     };
@@ -1614,6 +1619,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     DynamicAgent* agent = &env->dynamic_agents[agent_idx];
     if (agent->removed) return;
 
+
     if (agent->stopped) {
         agent->sim_vx = 0.0f;
         agent->sim_vy = 0.0f;
@@ -1635,6 +1641,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         } else { // discrete
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
             int* action_array = (int*)env->actions;
+            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
             int action_val = action_array[action_idx];
             int acceleration_index = action_val / num_steer;
@@ -2223,16 +2230,21 @@ void c_step(Drive* env){
             );
 
         // Reward agent if it is within X meters of goal
-        if(distance_to_goal < env->goal_radius){
-
-            if(env->dynamic_agents[agent_idx].respawn_timestep != -1){
+        if (distance_to_goal < env->goal_radius) {
+            if(env->goal_behavior == GOAL_RESPAWN  && env->dynamic_agents[agent_idx].respawn_timestep != -1){
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
-            } else {
+            } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
                 env->dynamic_agents[agent_idx].sampled_new_goal = 1;
                 env->logs[i].num_goals_reached += 1;
+            } else { // Zero out the velocity so that the agent stops at the goal
+                env->rewards[i] = env->reward_goal;
+                env->logs[i].episode_return = env->reward_goal;
+                env->logs[i].num_goals_reached = 1;
+                env->dynamic_agents[agent_idx].stopped = 1;
+                env->dynamic_agents[agent_idx].sim_vx=env->dynamic_agents[agent_idx].sim_vy = 0.0f;
             }
             env->dynamic_agents[agent_idx].reached_goal_this_episode = 1;
             env->dynamic_agents[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
