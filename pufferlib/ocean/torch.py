@@ -1,5 +1,3 @@
-import triton
-import triton.language as tl
 from torch.backends import cudnn
 from torch import nn
 import torch
