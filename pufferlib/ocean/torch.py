@@ -14,7 +14,7 @@ from pufferlib.models import Convolutional as Conv  # noqa: F401
 Recurrent = pufferlib.models.LSTMWrapper
 
 MAX_PARTNER_OBJECTS = 63
-MAX_ROAD_OBJECTS = 128
+MAX_ROAD_OBJECTS = 200
 
 ROAD_FEATURES = 7
 ROAD_FEATURES_AFTER_ONEHOT = 13
@@ -45,8 +45,22 @@ class LinearMax(torch.nn.Module):
         return LinearMaxKernels.apply(x, self.weight, self.bias)
 
 
+class LinearMaxTwoLayer(torch.nn.Module):
+    def __init__(self, input_dim, hidden_size, output_size):
+        super().__init__()
+        self.linear_max = LinearMax(input_dim, hidden_size)
+        self.ln = nn.LayerNorm(hidden_size)
+        self.linear2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = self.linear_max(x)
+        x = self.ln(x)
+        x = self.linear2(x)
+        return x
+
+
 class Drive(nn.Module):
-    def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
+    def __init__(self, env, input_size=128, hidden_size=256, **kwargs):
         super().__init__()
         self.hidden_size = hidden_size
 

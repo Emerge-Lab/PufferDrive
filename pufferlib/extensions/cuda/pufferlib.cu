@@ -195,7 +195,7 @@ torch::Tensor linear_max_fused_cuda(
 
     dim3 block(H);  // Threads per block = H (64)
     dim3 grid(B);   // Blocks = B (4096)
-    size_t shared_size = N * D * sizeof(float);  // 200 * 7 * 4 = 5600 bytes
+    size_t shared_size = N * D * sizeof(float);
 
     const float* x_ptr = x.data_ptr<float>();
     const float* weight_ptr = weight.data_ptr<float>();
