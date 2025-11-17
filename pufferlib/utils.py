@@ -6,6 +6,13 @@ import subprocess
 import json
 
 
+def run_human_replay_eval(args):
+    """
+    Run human replay evaluation in a subprocess and log metrics to wandb.
+    """
+    pass
+
+
 def run_wosac_eval(config, logger, epoch, global_step):
     """
     Run WOSAC evaluation in a subprocess and log metrics to wandb.
@@ -31,7 +38,7 @@ def run_wosac_eval(config, logger, epoch, global_step):
         latest_cpt = max(model_files, key=os.path.getctime)
 
         # Prepare evaluation command
-        wosac_config = config.get("wosac", {})
+        eval_config = config.get("eval", {})
         cmd = [
             sys.executable,
             "-m",
@@ -40,22 +47,24 @@ def run_wosac_eval(config, logger, epoch, global_step):
             config["env"],
             "--load-model-path",
             latest_cpt,
-            "--wosac.enabled",
+            "--eval.wosac-realism-eval",
             "True",
-            "--wosac.num-total-wosac-agents",
-            str(wosac_config.get("num_total_wosac_agents", 256)),
-            "--wosac.init-mode",
-            str(wosac_config.get("init_mode", "create_all_valid")),
-            "--wosac.control-mode",
-            str(wosac_config.get("control_mode", "control_tracks_to_predict")),
-            "--wosac.init-steps",
-            str(wosac_config.get("init_steps", 10)),
-            "--wosac.goal-behavior",
-            str(wosac_config.get("goal_behavior", 2)),
-            "--wosac.goal-radius",
-            str(wosac_config.get("goal_radius", 2.0)),
-            "--wosac.aggregate-results",
-            str(wosac_config.get("aggregate_results", True)),
+            "--eval.wosac-num-agents",
+            str(eval_config.get("wosac_num_agents", 256)),
+            "--eval.wosac-init-mode",
+            str(eval_config.get("wosac_init_mode", "create_all_valid")),
+            "--eval.wosac-control-mode",
+            str(eval_config.get("wosac_control_mode", "control_tracks_to_predict")),
+            "--eval.wosac-init-steps",
+            str(eval_config.get("wosac_init_steps", 10)),
+            "--eval.wosac-goal-behavior",
+            str(eval_config.get("wosac_goal_behavior", 2)),
+            "--eval.wosac-goal-radius",
+            str(eval_config.get("wosac_goal_radius", 2.0)),
+            "--eval.wosac-sanity-check",
+            str(eval_config.get("wosac_sanity_check", False)),
+            "--eval.wosac-aggregate-results",
+            str(eval_config.get("wosac_aggregate_results", True)),
         ]
 
         # Run WOSAC evaluation in subprocess
@@ -74,12 +83,10 @@ def run_wosac_eval(config, logger, epoch, global_step):
                 if hasattr(logger, "wandb") and logger.wandb:
                     logger.wandb.log(
                         {
-                            "realism/realism_meta_score": wosac_metrics["realism_meta_score"],
-                            "realism/ade": wosac_metrics["ade"],
-                            "realism/min_ade": wosac_metrics["min_ade"],
-                            "realism/total_num_agents": wosac_metrics["total_num_agents"],
-                            # Optionally log all metrics:
-                            # **{f"realism/{k}": v for k, v in wosac_metrics.items()}
+                            "eval/wosac_realism_meta_score": wosac_metrics["realism_meta_score"],
+                            "eval/wosac_ade": wosac_metrics["ade"],
+                            "eval/wosac_min_ade": wosac_metrics["min_ade"],
+                            "eval/wosac_total_num_agents": wosac_metrics["total_num_agents"],
                         },
                         step=global_step,
                     )

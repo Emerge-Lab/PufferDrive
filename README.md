@@ -121,10 +121,10 @@ We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge 
 
 WOSAC evaluation with random policy
 ```bash
-puffer eval puffer_drive --wosac.enabled True
+puffer eval puffer_drive --eval.wosac-realism-eval True
 ```
 
 WOSAC evaluation with your checkpoint (must be .pt file)
 ```bash
-puffer eval puffer_drive --wosac.enabled True --load-model-path <your-trained-policy>.pt
+puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-trained-policy>.pt
 ```

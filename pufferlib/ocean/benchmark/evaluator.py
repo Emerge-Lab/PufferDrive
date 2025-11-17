@@ -29,9 +29,9 @@ class WOSACEvaluator:
     def __init__(self, config: Dict):
         self.config = config
         self.num_steps = 91  # Hardcoded for WOSAC (9.1s at 10Hz)
-        self.init_steps = config.get("wosac", {}).get("init_steps", 0)
+        self.init_steps = config.get("eval", {}).get("wosac_init_steps", 0)
         self.sim_steps = self.num_steps - self.init_steps
-        self.num_rollouts = config.get("wosac", {}).get("num_rollouts", 32)
+        self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
@@ -433,3 +433,48 @@ class WOSACEvaluator:
             plt.tight_layout()
 
             plt.savefig(f"trajectory_comparison_agent_{agent_idx}.png")
+
+
+class HumanReplayEvaluator:
+    """Evaluates policies against human replays in PufferDrive."""
+
+    def __init__(self, config: Dict):
+        self.config = config
+        self.num_rollouts = config.get("num_rollouts", 1)
+        self.sim_steps = config.get("sim_steps", 91)
+
+    def rollout(self, args, puffer_env, policy):
+        """Roll out policy in env with human replays. Store statistics.
+        Returns:
+            collision_rates: dict
+        """
+
+        driver = puffer_env.driver_env
+        num_agents = puffer_env.observation_space.shape[0]
+        device = args["train"]["device"]
+        collisions = []
+
+        for rollout_idx in range(self.num_rollouts):
+            print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
+            obs, info = puffer_env.reset()
+            state = {}
+            if args["train"]["use_rnn"]:
+                state = dict(
+                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+                )
+
+            for time_idx in range(self.sim_steps):
+                # Step policy
+                with torch.no_grad():
+                    ob_tensor = torch.as_tensor(obs).to(device)
+                    logits, value = policy.forward_eval(ob_tensor, state)
+                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                    action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+
+                if isinstance(logits, torch.distributions.Normal):
+                    action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
+
+                obs, _, _, _, _ = puffer_env.step(action_np)
+
+        return collisions

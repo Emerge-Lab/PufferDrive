@@ -520,8 +520,14 @@ class PuffeRL:
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
 
-        if self.vecenv.driver_env.enable_wosac_eval and self.epoch % self.config["eval_interval"] == 0:
+        if self.vecenv.driver_env.wosac_realism_eval and self.epoch % self.config["eval"]["eval_interval"] == 0:
+            print("WOSAC EVAL")
             pufferlib.utils.run_wosac_eval(self.config, self.logger, self.epoch, self.global_step)
+
+        if self.vecenv.driver_env.human_replay_eval and self.epoch % self.config["eval"]["eval_interval"] == 0:
+            print("HUMAN REPLAY EVAL")
+            pass
+            # pufferlib.utils.run_log_replay_eval(self.config, self.logger, self.epoch, self.global_step)
 
     def mean_and_log(self):
         config = self.config
@@ -988,7 +994,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     elif args["wandb"]:
         logger = WandbLogger(args)
 
-    train_config = dict(**args["train"], env=env_name, wosac=args.get("wosac", {}))
+    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     all_logs = []
@@ -1026,25 +1032,31 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 def eval(env_name, args=None, vecenv=None, policy=None):
     args = args or load_config(env_name)
 
-    wosac_enabled = args["wosac"]["enabled"]
-    backend = args["wosac"]["backend"] if wosac_enabled else args["vec"]["backend"]
-    assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
-
-    args["vec"] = dict(backend=backend, num_envs=1)
-    args["env"]["num_agents"] = args["wosac"]["num_total_wosac_agents"] if wosac_enabled else 1
-    args["env"]["init_mode"] = args["wosac"]["init_mode"] if wosac_enabled else args["env"]["init_mode"]
-    args["env"]["control_mode"] = args["wosac"]["control_mode"] if wosac_enabled else args["env"]["control_mode"]
-    args["env"]["init_steps"] = args["wosac"]["init_steps"] if wosac_enabled else args["env"]["init_steps"]
-    args["env"]["goal_behavior"] = args["wosac"]["goal_behavior"] if wosac_enabled else args["env"]["goal_behavior"]
-    args["env"]["goal_radius"] = args["wosac"]["goal_radius"] if wosac_enabled else args["env"]["goal_radius"]
-    aggregate_results = args["wosac"].get("aggregate_results", True)
-
-    vecenv = vecenv or load_env(env_name, args)
-    policy = policy or load_policy(args, vecenv, env_name)
+    wosac_enabled = args["eval"]["wosac_realism_eval"]
+    human_replay_enabled = args["eval"]["human_replay_eval"]
 
     if wosac_enabled:
         print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
+
+        backend = args["eval"]["backend"] if wosac_enabled else args["vec"]["backend"]
+        assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
+
+        args["vec"] = dict(backend=backend, num_envs=1)
+        args["env"]["num_agents"] = args["eval"]["wosac_num_agents"] if wosac_enabled else 1
+        args["env"]["init_mode"] = args["eval"]["wosac_init_mode"] if wosac_enabled else args["env"]["init_mode"]
+        args["env"]["control_mode"] = (
+            args["eval"]["wosac_control_mode"] if wosac_enabled else args["env"]["control_mode"]
+        )
+        args["env"]["init_steps"] = args["eval"]["wosac_init_steps"] if wosac_enabled else args["env"]["init_steps"]
+        args["env"]["goal_behavior"] = (
+            args["eval"]["wosac_goal_behavior"] if wosac_enabled else args["env"]["goal_behavior"]
+        )
+        args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"] if wosac_enabled else args["env"]["goal_radius"]
+        aggregate_results = args["eval"]["wosac_aggregate_results"] if wosac_enabled else True
+
+        vecenv = vecenv or load_env(env_name, args)
+        policy = policy or load_policy(args, vecenv, env_name)
 
         evaluator = WOSACEvaluator(args)
 
@@ -1054,7 +1066,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         # Roll out trained policy in the simulator
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
 
-        if args["wosac"]["sanity_check"]:
+        if args["eval"]["wosac_sanity_check"]:
             evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
 
         # Analyze and compute metrics
@@ -1069,56 +1081,73 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         return results
 
-    ob, info = vecenv.reset()
-    driver = vecenv.driver_env
-    num_agents = vecenv.observation_space.shape[0]
-    device = args["train"]["device"]
+    elif human_replay_enabled:
+        print("Running human replay evaluation.\n")
 
-    # Rebuild visualize binary if saving frames (for C-based rendering)
-    if args["save_frames"] > 0:
-        ensure_drive_binary()
+        human_replay_eval = False
+        human_replay_control_mode = "control_sdc_only"
+        human_replay_num_agents = 10  # This equals the number of scenarios, since we control 1 agent for each
 
-    state = {}
-    if args["train"]["use_rnn"]:
-        state = dict(
-            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-        )
+        # Update args for human replay evaluation
+        args["vec"]["num_envs"] = 1
+        args["env"]["num_agents"] = 1
+        pass
+        return results
+    else:
+        vecenv = vecenv or load_env(env_name, args)
+        policy = policy or load_policy(args, vecenv, env_name)
 
-    frames = []
-    while True:
-        render = driver.render()
-        if len(frames) < args["save_frames"]:
-            frames.append(render)
+        # Make a video of the policy
+        ob, info = vecenv.reset()
+        driver = vecenv.driver_env
+        num_agents = vecenv.observation_space.shape[0]
+        device = args["train"]["device"]
 
-        # Screenshot Ocean envs with F12, gifs with control + F12
-        if driver.render_mode == "ansi":
-            print("\033[0;0H" + render + "\n")
-            time.sleep(1 / args["fps"])
-        elif driver.render_mode == "rgb_array":
-            pass
-            # import cv2
-            # render = cv2.cvtColor(render, cv2.COLOR_RGB2BGR)
-            # cv2.imshow('frame', render)
-            # cv2.waitKey(1)
-            # time.sleep(1/args['fps'])
+        # Rebuild visualize binary if saving frames (for C-based rendering)
+        if args["save_frames"] > 0:
+            ensure_drive_binary()
 
-        with torch.no_grad():
-            ob = torch.as_tensor(ob).to(device)
-            logits, value = policy.forward_eval(ob, state)
-            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-            action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+        state = {}
+        if args["train"]["use_rnn"]:
+            state = dict(
+                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+            )
 
-        if isinstance(logits, torch.distributions.Normal):
-            action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+        frames = []
+        while True:
+            render = driver.render()
+            if len(frames) < args["save_frames"]:
+                frames.append(render)
 
-        ob = vecenv.step(action)[0]
+            # Screenshot Ocean envs with F12, gifs with control + F12
+            if driver.render_mode == "ansi":
+                print("\033[0;0H" + render + "\n")
+                time.sleep(1 / args["fps"])
+            elif driver.render_mode == "rgb_array":
+                pass
+                # import cv2
+                # render = cv2.cvtColor(render, cv2.COLOR_RGB2BGR)
+                # cv2.imshow('frame', render)
+                # cv2.waitKey(1)
+                # time.sleep(1/args['fps'])
 
-        if len(frames) > 0 and len(frames) == args["save_frames"]:
-            import imageio
+            with torch.no_grad():
+                ob = torch.as_tensor(ob).to(device)
+                logits, value = policy.forward_eval(ob, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
-            imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
-            frames.append("Done")
+            if isinstance(logits, torch.distributions.Normal):
+                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+            ob = vecenv.step(action)[0]
+
+            if len(frames) > 0 and len(frames) == args["save_frames"]:
+                import imageio
+
+                imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
+                frames.append("Done")
 
 
 def sweep(args=None, env_name=None):
