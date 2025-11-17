@@ -15,8 +15,7 @@ typedef enum{
 } Init_Mode;
 
 // Config struct for parsing INI files - contains all environment configuration
-typedef struct
-{
+typedef struct {
     int action_type;
     int dynamics_model;
     float reward_vehicle_collision;
@@ -35,6 +34,7 @@ typedef struct
     int init_steps;
     Init_Mode init_mode;
     int num_agents_per_world;
+    float goal_distance;
     float vehicle_width;
     float vehicle_length;
     float vehicle_height;
@@ -123,6 +123,8 @@ static int handler(
         env_config->vehicle_length = atof(value);
     } else if(MATCH("env", "vehicle_height")) {
         env_config->vehicle_height = atof(value);
+    } else if (MATCH("env", "goal_curriculum")) {
+        env_config->goal_distance = atof(value);
     }
 
     #undef MATCH

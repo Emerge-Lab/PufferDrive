@@ -70,7 +70,6 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
-    int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");

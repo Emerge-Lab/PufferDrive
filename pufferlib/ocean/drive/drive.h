@@ -64,8 +64,8 @@
 
 // Grid Map Related
 #define GRID_CELL_SIZE 5.0f
-#define MAX_ENTITIES_PER_CELL 30    // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define GRID_MAP_CACHE_VISION_RANGE 21      // Vision range to cache neighbor offsets
+#define COLLISION_VISION_RANGE 5        // Vision range for collision checking
 
 // Max road segment observation entities
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 200
@@ -178,6 +178,7 @@ struct Entity {
     float heading_y;
     int current_lane_idx;
     int valid;
+    int initialized;    // Only for random init mode
     int respawn_timestep;
     int respawn_count;
     int collided_before_goal;
@@ -329,7 +330,8 @@ struct Drive {
     float dt;
     float reward_goal;
     float reward_goal_post_respawn;
-    float goal_radius;
+    float goal_radius;  // Distance threshold to consider goal reached
+    float goal_distance;    // Distance from agent to goal
     int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
@@ -394,6 +396,8 @@ struct Graph {
 
 // Forward declarations
 int* get_relative_neighbor_offsets(Drive* env, float neighbor_radius, int* offset_count);
+GridMapEntity* checkNeighbors(Drive* env, float x, float y, const int (*local_offsets)[2], int* out_size, int offset_size);
+bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2]);
 
 // Function to create a new adjacency list node
 struct AdjListNode* newAdjListNode(int dest) {
@@ -447,19 +451,78 @@ void freeTopologyGraph(struct Graph* graph) {
     free(graph);
 }
 
-// TODO: Valid spawn point check
-// bool is_valid_spawn_point(Drive* env, Entity agent, int lane_idx, int point_idx) {
-//     // Check for collisions with existing agents
-//     // Use collision_check function
-//     if (!collision_check(env, agent, lane_idx, point_idx)) {
-//         return false;
-//     }
-//     // offroad checks use check_line_intersection function
-//     if (!check_line_intersection()) {
-//         return false;
-//     }
-//     return true; // No collisions detected
-// }
+// Checks for collisions at a specified spawn point
+bool is_valid_spawn_point(Drive* env, int agent_idx, float start_x, float start_y, float start_z, float heading, float vehicle_width, float vehicle_length, float vehicle_height) {
+    // Create Mock Entity for collision checking
+    Entity mock_agent = {
+        .x = start_x,
+        .y = start_y,
+        .z = start_z,
+        .width = vehicle_width,
+        .length = vehicle_length,
+        .height = vehicle_height,
+        .heading = heading,
+        .heading_x = cosf(heading),
+        .heading_y = sinf(heading)
+    };
+
+    float half_length = mock_agent.length/2.0f;
+    float half_width = mock_agent.width/2.0f;
+    float cos_heading = cosf(mock_agent.heading);
+    float sin_heading = sinf(mock_agent.heading);
+    float agent_corners[4][2];
+    for (int i = 0; i < 4; i++) {
+        agent_corners[i][0] = mock_agent.x + (offsets[i][0]*half_length*cos_heading - offsets[i][1]*half_width*sin_heading);
+        agent_corners[i][1] = mock_agent.y + (offsets[i][0]*half_length*sin_heading + offsets[i][1]*half_width*cos_heading);
+    }
+    int collided = 0;
+
+    // Vehicle collision check
+    for (int i = 0; i < env->num_entities; i++) {
+        Entity* entity = &env->entities[i];
+        if (entity->type != VEHICLE && entity-> type != PEDESTRIAN && entity->type != CYCLIST) continue; // Only check dynamic entities
+        if (entity->id == agent_idx) continue; // Skip self
+
+        if (entity->type == VEHICLE) {
+            if (entity->initialized == 0) continue; // Skip uninitialized entities
+            if(check_aabb_collision(&mock_agent, entity)) {
+                printf("Collision detected with existing vehicle (Entity ID: %d)\n", entity->id);
+                collided = VEHICLE_COLLISION;
+                return false; // Collision detected with existing vehicle at spawn point
+            }
+        }
+    }
+
+    // Offroad check
+    // int list_size = 0;
+    // GridMapEntity* entity_list = checkNeighbors(env, mock_agent.x, mock_agent.y, collision_offsets, &list_size, COLLISION_VISION_RANGE*COLLISION_VISION_RANGE);
+    // for (int i = 0; i < list_size ; i++) {
+    //     if(entity_list[i].entity_idx == -1) continue;
+    //     Entity* entity;
+    //     entity = &env->entities[entity_list[i].entity_idx];
+
+    //     // Check for offroad collision with road edges
+    //     if(entity->type == ROAD_EDGE) {
+    //         int geometry_idx = entity_list[i].geometry_idx;
+    //         float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
+    //         float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
+    //         for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
+    //             int next = (k + 1) % 4;
+    //             if (check_line_intersection(agent_corners[k], agent_corners[next], start, end)) {
+    //                 collided = OFFROAD;
+    //                 printf("Invalid Spawn: collision with road edge (Entity ID: %d)\n", entity->id);
+    //                 break;
+    //             }
+    //         }
+    //     }
+
+    //     if (collided == OFFROAD) break;
+    // }
+
+    // Cleanup
+    // free(entity_list);
+    return true; // No collisions detected
+}
 
 Entity* load_map_binary(const char* filename, Drive* env, env_init_config conf) {
     FILE* file = fopen(filename, "rb");
@@ -532,10 +595,13 @@ Entity* load_map_binary(const char* filename, Drive* env, env_init_config conf) 
             fread(&read_bin_entities[i].goal_position_y, sizeof(float), 1, file);
             fread(&read_bin_entities[i].goal_position_z, sizeof(float), 1, file);
             fread(&read_bin_entities[i].mark_as_expert, sizeof(int), 1, file);
+
+            read_bin_entities[i].initialized = 1;
         }
 
         env->num_objects = conf.num_agents_per_world;
         env->num_entities = env->num_objects + env->num_roads;
+        printf("Initializing environment with %d dynamic agents, %d num entities\n", env->num_objects, env->num_entities);
         Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
 
         // Only initialize road entities
@@ -548,9 +614,21 @@ Entity* load_map_binary(const char* filename, Drive* env, env_init_config conf) 
                 env_entity_idx++;
             }
         }
+        printf("Loaded %d road entities into environment\n", env_entity_idx);
 
         while (env_entity_idx < env->num_entities) {
             entities[env_entity_idx].type = VEHICLE;   // Placeholder type for non-road entities
+            entities[env_entity_idx].id = env_entity_idx;
+            entities[env_entity_idx].initialized = 0;
+            entities[env_entity_idx].array_size = 0;
+            entities[env_entity_idx].traj_x = NULL;
+            entities[env_entity_idx].traj_y = NULL;
+            entities[env_entity_idx].traj_z = NULL;
+            entities[env_entity_idx].traj_vx = NULL;
+            entities[env_entity_idx].traj_vy = NULL;
+            entities[env_entity_idx].traj_vz = NULL;
+            entities[env_entity_idx].traj_heading = NULL;
+            entities[env_entity_idx].traj_valid = NULL;
             env_entity_idx++;
         }
 
@@ -604,13 +682,18 @@ Entity* load_map_binary(const char* filename, Drive* env, env_init_config conf) 
             fread(&entities[i].goal_position_y, sizeof(float), 1, file);
             fread(&entities[i].goal_position_z, sizeof(float), 1, file);
             fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
+
+            entities[i].initialized = 1;
         }
         fclose(file);
         return entities;
     }
 }
 
-bool get_valid_goal(Drive* env, float start_point_x, float start_point_y, float start_point_z, int start_grid_row, int start_grid_col, int* rel_neighbor_offsets, int rel_neighbor_offsets_cnt, float* goal_x, float* goal_y, float* goal_z) {
+bool get_valid_goal(Drive* env, float start_point_x, float start_point_y, float start_point_z,
+                    int start_grid_row, int start_grid_col,
+                    int* rel_neighbor_offsets, int rel_neighbor_offsets_cnt,
+                    float* goal_x, float* goal_y, float* goal_z) {
     float goal_radius = env->goal_radius;
 
     int grid_cell_offset_x = (int)(goal_radius / env->grid_map->cell_size_x) + 1;
@@ -631,10 +714,7 @@ bool get_valid_goal(Drive* env, float start_point_x, float start_point_y, float 
 
         valid_goals_count += env->grid_map->cell_roadlanes_count[neighbor_grid_row * env->grid_map->grid_cols + neighbor_grid_col];
     }
-    if (valid_goals_count == 0) {
-        printf("No valid goals found around start point (%.2f, %.2f, %.2f)\n", start_point_x, start_point_y, start_point_z);
-        return false;
-    }
+    if (valid_goals_count == 0) return false;
 
     int rand_goal_idx = rand() % valid_goals_count;
     i = 0;
@@ -660,7 +740,7 @@ bool get_valid_goal(Drive* env, float start_point_x, float start_point_y, float 
                 int entity_idx = env->grid_map->cells[current_grid_cell_idx][j].entity_idx;
                 Entity entity = env->entities[entity_idx];
                 if (entity.type != ROAD_LANE) {
-                    raise_error_with_message(ERROR_UNKNOWN, "Non-road lane entity found in road lane count!");
+                    continue;
                 }
                 if (cnt == lane_idx) {
                     int goal_point_geometry_idx = env->grid_map->cells[current_grid_cell_idx][j].geometry_idx;
@@ -678,17 +758,22 @@ bool get_valid_goal(Drive* env, float start_point_x, float start_point_y, float 
     return false;
 }
 
-void init_agents_random_start(Drive* env){
+void init_agents_random_start(Drive* env, env_init_config conf) {
     Entity* entities = env->entities;
     float goal_radius = env->goal_radius;
-    int rel_neighbor_offsets_cnt = 0;
-    int* rel_neighbor_offsets = get_relative_neighbor_offsets(env, goal_radius, &rel_neighbor_offsets_cnt);
+    // int rel_neighbor_offsets_cnt = 0;
+    // int* rel_neighbor_offsets = get_relative_neighbor_offsets(env, goal_radius, &rel_neighbor_offsets_cnt);
 
-    for (int i=0; i<env->num_entities; i++){
-        if (entities[i].type != VEHICLE) {
+    for (int agent_idx=0; agent_idx<env->num_entities; agent_idx++){
+        if (entities[agent_idx].type != VEHICLE) {
             continue;
         }
-        Entity agent = entities[i];
+
+        Entity agent = entities[agent_idx];
+        if (agent.id == 239 || agent.id == 238) {
+            printf("Initializing Agent %d with random start position\n", agent.id);
+        }
+        // printf("Random Initializing Agent %d\n", agent.id);
         while(1){
             // Random Road lane of a random grid cell
             int rand_grid_col = rand() % env->grid_map->grid_cols;
@@ -700,9 +785,11 @@ void init_agents_random_start(Drive* env){
             }
             int cell_lane_count = env->grid_map->cell_roadlanes_count[grid_map_idx];
             int lane_idx = rand() % cell_lane_count;
+            // float heading = ((float)rand() / RAND_MAX) * 2.0f * PI;     // Random heading
+            float heading = 0.0f;
 
             // Get start lane point info
-            float start_x, start_y, start_z;
+            float start_x = INVALID_POSITION, start_y = INVALID_POSITION, start_z = INVALID_POSITION, start_heading = INVALID_POSITION;
             int cnt = 0;
             for (int i = 0; i < env->grid_map->cell_entities_count[grid_map_idx]; i++) {
                 int entity_idx = env->grid_map->cells[grid_map_idx][i].entity_idx;
@@ -710,57 +797,109 @@ void init_agents_random_start(Drive* env){
                 if (entity.type != ROAD_LANE) {
                     continue;
                 }
+                // Current spawn point
                 if (cnt == lane_idx) {
                     int start_point_geometry_idx = env->grid_map->cells[grid_map_idx][i].geometry_idx;
-                    start_x = entity.traj_x[start_point_geometry_idx];
-                    start_y = entity.traj_y[start_point_geometry_idx];
-                    start_z = entity.traj_z[start_point_geometry_idx];
-                    break;
+                    if (start_point_geometry_idx + 1 < entity.array_size) {
+                        float dx = entity.traj_x[start_point_geometry_idx + 1] - entity.traj_x[start_point_geometry_idx];
+                        float dy = entity.traj_y[start_point_geometry_idx + 1] - entity.traj_y[start_point_geometry_idx];
+                        heading = atan2f(dy, dx);
+                    }
+                    else if (start_point_geometry_idx - 1 >= 0) {
+                        float dx = entity.traj_x[start_point_geometry_idx] - entity.traj_x[start_point_geometry_idx - 1];
+                        float dy = entity.traj_y[start_point_geometry_idx] - entity.traj_y[start_point_geometry_idx - 1];
+                        heading = atan2f(dy, dx);
+                    }
+                    else {
+                        heading = 0.0f; // Design choice: default to 0 if no previous lane
+                    }
+                    printf("Selected Point (%f, %f) at Grid Cell (%d, %d) with heading %f\n", entity.traj_x[start_point_geometry_idx], entity.traj_y[start_point_geometry_idx], rand_grid_row, rand_grid_col, heading);
+                    bool valid_spawn = is_valid_spawn_point(
+                        env,
+                        agent.id,
+                        entity.traj_x[start_point_geometry_idx],
+                        entity.traj_y[start_point_geometry_idx],
+                        entity.traj_z[start_point_geometry_idx],
+                        heading,
+                        conf.vehicle_width, conf.vehicle_length, conf.vehicle_height
+                    );
+                    if (valid_spawn) {
+                        start_x = entity.traj_x[start_point_geometry_idx];
+                        start_y = entity.traj_y[start_point_geometry_idx];
+                        start_z = entity.traj_z[start_point_geometry_idx];
+                        start_heading = heading;
+                        break;
+                    }
+
+                    break;  // Break anyways as current spawn pt is invalid
                 }
                 cnt++;
             }
-
-            float goal_x, goal_y, goal_z;
-            bool is_valid_goal = get_valid_goal(
-                env,
-                start_x, start_y, start_z,
-                rand_grid_row, rand_grid_col,
-                rel_neighbor_offsets, rel_neighbor_offsets_cnt,
-                &goal_x, &goal_y, &goal_z
-            );
-            // If no surrounding cell with goal curriculum, repeat
-            if (!is_valid_goal) {
+            // Invalid start point, repeat
+            if (start_x == INVALID_POSITION || start_y == INVALID_POSITION || start_z == INVALID_POSITION) {
                 continue;
             }
+
+            // Get goal point info
+            float goal_x = -0.5, goal_y = -0.5, goal_z = -0.5;
+            // bool is_valid_goal = get_valid_goal(
+            //     env,
+            //     start_x, start_y, start_z,
+            //     rand_grid_row, rand_grid_col,
+            //     rel_neighbor_offsets, rel_neighbor_offsets_cnt,
+            //     &goal_x, &goal_y, &goal_z
+            // );
+            // If no surrounding cell with goal curriculum, repeat
+            // if (!is_valid_goal) {
+            //     printf("No valid goals found around start point (%.2f, %.2f, %.2f)\n", start_x, start_y, start_z);
+            //     continue;
+            // }
             // Else break with given start and goal
+            agent.initialized = 1;
             agent.array_size = 1;
-            agent.traj_x = (float*)malloc(sizeof(float));
-            agent.traj_y = (float*)malloc(sizeof(float));
-            agent.traj_z = (float*)malloc(sizeof(float));
+            agent.traj_x = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_y = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_z = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_vx = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_vy = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_vz = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_heading = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_valid = (int*)calloc(agent.array_size, sizeof(int));
             agent.traj_x[0] = start_x;
             agent.traj_y[0] = start_y;
             agent.traj_z[0] = start_z;
+            agent.x = start_x;
+            agent.y = start_y;
+            agent.z = start_z;
+            agent.traj_heading[0] = start_heading;
+            agent.heading = start_heading;
+            agent.heading_x = cosf(agent.heading);
+            agent.heading_y = sinf(agent.heading);
+            agent.traj_valid[0] = 1;
+            agent.height = conf.vehicle_height;
+            agent.width = conf.vehicle_width;
+            agent.length = conf.vehicle_length;
             agent.goal_position_x = goal_x;
             agent.goal_position_y = goal_y;
             agent.goal_position_z = goal_z;
 
             agent.mark_as_expert = 0;
-
-            // No Human logs for random init
-            agent.traj_x = NULL;
-            agent.traj_y = NULL;
-            agent.traj_z = NULL;
-            agent.traj_vx = NULL;
-            agent.traj_vy = NULL;
-            agent.traj_vz = NULL;
-            agent.traj_heading = NULL;
-            agent.traj_valid = NULL;
+            agent.goal_radius = goal_radius;
             break;
         }
-        entities[i] = agent;
+        entities[agent_idx] = agent;
+        printf("Initialized Agent %d at random start position (%.2f, %.2f, %.2f) with goal (%.2f, %.2f, %.2f)\n",
+            agent.id,
+            agent.traj_x[0], agent.traj_y[0], agent.traj_z[0],
+            agent.goal_position_x, agent.goal_position_y, agent.goal_position_z
+        );
+        printf("Agent dimensions (W x L x H): %.2f x %.2f x %.2f\n",
+            agent.width, agent.length, agent.height
+        );
     }
+    printf("Completed random start position initialization for all agents.\n");
 
-    free(rel_neighbor_offsets);
+    // free(rel_neighbor_offsets);
 }
 
 void set_start_position(Drive* env){
@@ -926,7 +1065,6 @@ void init_topology_graph(Drive* env){
 }
 
 void init_grid_map(Drive* env){
-    // Allocate memory for the grid map structure
     env->grid_map = (GridMap*)malloc(sizeof(GridMap));
 
     // Find top left and bottom right points of the map
@@ -980,6 +1118,10 @@ void init_grid_map(Drive* env){
                 float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
                 float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
                 int grid_index = getGridIndex(env, x_center, y_center);
+                if (grid_index == -1) {
+                    printf("Warning: Not Supposed to happen, Point (%f, %f) out of grid bounds\n", x_center, y_center);
+                    continue;  // Out of bounds
+                }
                 env->grid_map->cell_entities_count[grid_index]++;
             }
         }
@@ -989,6 +1131,8 @@ void init_grid_map(Drive* env){
 
     // Initialize grid cells
     for(int grid_index = 0; grid_index < grid_cell_count; grid_index++){
+        if (env->grid_map->cell_entities_count[grid_index] > 100)
+            printf("Warning: High entity count in Grid Cell %d = %d\n", grid_index, env->grid_map->cell_entities_count[grid_index]);
         env->grid_map->cells[grid_index] = (GridMapEntity*)calloc(env->grid_map->cell_entities_count[grid_index], sizeof(GridMapEntity));
     }
     for(int i = 0;i<grid_cell_count;i++){
@@ -1132,7 +1276,7 @@ int* get_relative_neighbor_offsets(Drive* env, float neighbor_radius, int* offse
             }
         }
     }
-    *(offset_count) = offset_cnt;
+    *(offset_count) = offset_cnt * 2;
     return final_offsets;
 }
 
@@ -1193,19 +1337,17 @@ void cache_neighbor_offsets(Drive* env){
     }
 }
 
-int get_neighbor_cache_entities(Drive* env, int cell_idx, GridMapEntity* entities, int max_entities) {
+GridMapEntity* get_neighbor_cache_entities(Drive* env, int cell_idx, int* neighbor_entities_cnt) {
     GridMap* grid_map = env->grid_map;
     if (cell_idx < 0 || cell_idx >= (grid_map->grid_cols * grid_map->grid_rows)) {
         return 0; // Invalid cell index
     }
 
     int count = grid_map->neighbor_cache_count[cell_idx];
-    // Limit to available space
-    if (count > max_entities) {
-        count = max_entities;
-    }
+    GridMapEntity* entities = (GridMapEntity*)calloc(count, sizeof(GridMapEntity));
     memcpy(entities, grid_map->neighbor_cache_entities[cell_idx], count * sizeof(GridMapEntity));
-    return count;
+    *neighbor_entities_cnt = count;
+    return entities;
 }
 
 void set_means(Drive* env) {
@@ -1236,6 +1378,7 @@ void set_means(Drive* env) {
     env->world_mean_y = mean_y;
     for (int i = 0; i < env->num_entities; i++) {
         if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST || env->entities[i].type >= 4) {
+            if (env->entities[i].initialized == 0) continue;
             for (int j = 0; j < env->entities[i].array_size; j++) {
                 if(env->entities[i].traj_x[j] == INVALID_POSITION) continue;
                 env->entities[i].traj_x[j] -= mean_x;
@@ -1306,14 +1449,32 @@ bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2])
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
-int checkNeighbors(Drive* env, float x, float y, GridMapEntity* entity_list, int max_size, const int (*local_offsets)[2], int offset_size) {
+GridMapEntity* checkNeighbors(Drive* env, float x, float y, const int (*local_offsets)[2], int* out_size, int offset_size) {
     // Get the grid index for the given position (x, y)
     int index = getGridIndex(env, x, y);
-    if (index == -1) return 0;  // Return 0 size if position invalid
+    if (index == -1) {
+        *out_size = 0;
+        return NULL;  // Return NULL if position invalid
+    }
+
     // Calculate 2D grid coordinates
     int cellsX = env->grid_map->grid_cols;
     int gridX = index % cellsX;
     int gridY = index / cellsX;
+    // Calculate size of neighbor entities list
+    for (int i = 0; i < offset_size; i++) {
+        int nx = gridX + local_offsets[i][0];
+        int ny = gridY + local_offsets[i][1];
+        // Ensure the neighbor is within grid bounds
+        if(nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows) continue;
+        int neighborIndex = ny * env->grid_map->grid_cols + nx;
+        *out_size = (*out_size) + env->grid_map->cell_entities_count[neighborIndex];
+    }
+    if ((*out_size) == 0) {
+        return NULL;  // No neighboring entities found
+    }
+
+    GridMapEntity* entity_list = (GridMapEntity*)calloc((*out_size), sizeof(GridMapEntity));
     int entity_list_count = 0;
     // Fill the provided array
     for (int i = 0; i < offset_size; i++) {
@@ -1324,7 +1485,7 @@ int checkNeighbors(Drive* env, float x, float y, GridMapEntity* entity_list, int
         int neighborIndex = ny * env->grid_map->grid_cols + nx;
         int count = env->grid_map->cell_entities_count[neighborIndex];
         // Add entities from this cell to the list
-        for (int j = 0; j < count && entity_list_count < max_size; j++) {
+        for (int j = 0; j < count; j++) {
             int entityId = env->grid_map->cells[neighborIndex][j].entity_idx;
             int geometry_idx = env->grid_map->cells[neighborIndex][j].geometry_idx;
             entity_list[entity_list_count].entity_idx = entityId;
@@ -1332,7 +1493,7 @@ int checkNeighbors(Drive* env, float x, float y, GridMapEntity* entity_list, int
             entity_list_count += 1;
         }
     }
-    return entity_list_count;
+    return entity_list;
 }
 
 int check_aabb_collision(Entity* car1, Entity* car2) {
@@ -1363,6 +1524,20 @@ int check_aabb_collision(Entity* car1, Entity* car2) {
         {car2->x + (-half_len2 * cos2 - half_width2 * sin2), car2->y + (-half_len2 * sin2 + half_width2 * cos2)},
         {car2->x + (-half_len2 * cos2 + half_width2 * sin2), car2->y + (-half_len2 * sin2 - half_width2 * cos2)}
     };
+
+    // Log car 1 details
+    // printf("Car 1 - Position: (%f, %f), Heading: (%f, %f), Size: (%f, %f)\n",
+    //        car1->x, car1->y, cos1, sin1, car1->length, car1->width);
+    // for (int i = 0; i < 4; i++) {
+    //     printf("  Corner %d: (%f, %f)\n", i, car1_corners[i][0], car1_corners[i][1]);
+    // }
+
+    // // Log car 2 details
+    // printf("Car 2 - Position: (%f, %f), Heading: (%f, %f), Size: (%f, %f)\n",
+    //        car2->x, car2->y, cos2, sin2, car2->length, car2->width);
+    // for (int i = 0; i < 4; i++) {
+    //     printf("  Corner %d: (%f, %f)\n", i, car2_corners[i][0], car2_corners[i][1]);
+    // }
 
     // Get the axes to check (normalized vectors perpendicular to each edge)
     float axes[4][2] = {
@@ -1542,8 +1717,8 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         corners[i][1] = agent->y + (offsets[i][0]*half_length*sin_heading + offsets[i][1]*half_width*cos_heading);
     }
 
-    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*25];  // Array big enough for all neighboring cells
-    int list_size = checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL*25, collision_offsets, 25);
+    int list_size = 0;
+    GridMapEntity* entity_list = checkNeighbors(env, agent->x, agent->y, collision_offsets, &list_size, COLLISION_VISION_RANGE*COLLISION_VISION_RANGE);
     for (int i = 0; i < list_size ; i++) {
         if(entity_list[i].entity_idx == -1) continue;
         if(entity_list[i].entity_idx == agent_idx) continue;
@@ -1609,6 +1784,8 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 
     agent->collision_state = collided;
 
+    // Cleanup
+    free(entity_list);
     return;
 }
 
@@ -1797,7 +1974,27 @@ void init_goal_positions(Drive* env){
     }
 }
 
+void seed_prng_once(void) {
+    static int seeded = 0;
+    if (seeded) return;
+
+    const char* env_seed = getenv("PUFFER_SEED");
+    if (env_seed && *env_seed) {
+        unsigned s = (unsigned)strtoul(env_seed, NULL, 10);
+        srand(s);
+        seeded = 1;
+        return;
+    }
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    unsigned seed = (unsigned)(ts.tv_nsec ^ (ts.tv_sec * 1000003u) ^ getpid() ^ (uintptr_t)&seeded);
+    srand(seed);
+    seeded = 1;
+}
+
 void init(Drive* env){
+    seed_prng_once();  // seed rand() for this process
     env->human_agent_idx = 0;
     env->timestep = 0;
     env_init_config conf = {0};
@@ -1805,12 +2002,12 @@ void init(Drive* env){
         printf("Error while loading %s", env->ini_file);
     }
     env->entities = load_map_binary(env->map_name, env, conf);
+    set_means(env);
     init_grid_map(env);
     if (conf.init_mode == DYNAMIC_AGENTS_PER_ENV) {
-        env->goal_radius = conf.goal_radius;
-        init_agents_random_start(env);
+        env->goal_distance = conf.goal_distance;
+        init_agents_random_start(env, conf);
     }
-    set_means(env);
     if (env->goal_behavior==GOAL_GENERATE_NEW) init_topology_graph(env);
     env->grid_map->vision_range = GRID_MAP_CACHE_VISION_RANGE;
     init_neighbor_offsets(env);
@@ -1854,7 +2051,7 @@ void c_close(Drive* env){
     free(env->ini_file);
 }
 
-void allocate(Drive* env, env_init_config conf){
+void allocate(Drive* env){
     init(env);
     int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
     int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
@@ -2178,10 +2375,10 @@ void compute_observations(Drive* env) {
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
         // map observations
-        GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*25];
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
 
-        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
+        int list_size = 0;
+        GridMapEntity* entity_list = get_neighbor_cache_entities(env, grid_idx, &list_size);
 
         for(int k = 0; k < list_size; k++) {
             int entity_idx = entity_list[k].entity_idx;
@@ -2238,6 +2435,9 @@ void compute_observations(Drive* env) {
         int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 7;
         // Set the entire block to 0 at once
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
+
+        // Free heap memory
+        free(entity_list);
     }
 }
 

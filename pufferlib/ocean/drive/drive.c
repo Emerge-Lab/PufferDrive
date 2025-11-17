@@ -55,7 +55,7 @@ void demo() {
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
     };
-    allocate(&env, conf);
+    allocate(&env);
     c_reset(&env);
     c_render(&env);
     Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
@@ -136,7 +136,7 @@ void performance_test() {
     clock_t start_time, end_time;
     double cpu_time_used;
     start_time = clock();
-    allocate(&env, conf);
+    allocate(&env);
     c_reset(&env);
     end_time = clock();
     cpu_time_used = ((double) (end_time - start_time)) / CLOCKS_PER_SEC;

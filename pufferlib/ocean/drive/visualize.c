@@ -206,7 +206,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
 int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
 
     // Parse configuration from INI file
-    env_init_config conf = {0};  // Initialize to zero
+    env_init_config conf = {0};
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
     if(ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
@@ -257,7 +257,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
-    allocate(&env, conf);
+    allocate(&env);
 
     // Set which vehicle to focus on for obs mode
     env.human_agent_idx = 0;
