@@ -199,6 +199,12 @@ struct Entity {
     float jerk_lat;
     float steering_angle;
     float wheelbase;
+
+    // Guided autonomy tracking
+    int* waypoints_hit;              // Boolean array: 1 if waypoint reached, 0 otherwise
+    int waypoints_hit_count;         // Total waypoints reached so far
+    int total_valid_waypoints;       // Total valid waypoints in trajectory
+    float route_progress;            // Percentage of route completed (0.0 to 1.0)
 };
 
 void free_entity(Entity* entity){
@@ -211,6 +217,7 @@ void free_entity(Entity* entity){
     free(entity->traj_vz);
     free(entity->traj_heading);
     free(entity->traj_valid);
+    free(entity->waypoints_hit);
     free(entity->expert_accel);
     free(entity->expert_steering);
 }
@@ -232,6 +239,12 @@ float clip(float value, float min, float max) {
     if (value < min) return min;
     if (value > max) return max;
     return value;
+}
+
+float normalize_heading(float heading){
+    if(heading > M_PI) heading -= 2*M_PI;
+    if(heading < -M_PI) heading += 2*M_PI;
+    return heading;
 }
 
 float compute_displacement_error(Entity* agent, int timestep) {
@@ -318,6 +331,10 @@ struct Drive {
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_ade;
+    int use_guided_autonomy;          // Boolean: whether to calculate and add guided autonomy reward
+    float guidance_speed_weight;      // Weight for speed deviation penalty
+    float guidance_heading_weight;    // Weight for heading deviation penalty
+    float waypoint_reach_threshold;   // Distance threshold for hitting waypoints (e.g., 2.0m)
     char* map_name;
     float world_mean_x;
     float world_mean_y;
@@ -376,6 +393,124 @@ void add_log(Drive* env) {
     }
 }
 
+// Guided autonomy helper functions
+int is_waypoint_within_reach(Entity* agent, int traj_idx, float threshold) {
+    if (traj_idx >= agent->array_size || !agent->traj_valid[traj_idx]) {
+        return 0;
+    }
+
+    float ref_x = agent->traj_x[traj_idx];
+    float ref_y = agent->traj_y[traj_idx];
+
+    if (ref_x == INVALID_POSITION || ref_y == INVALID_POSITION) {
+        return 0;
+    }
+
+    float dx = agent->x - ref_x;
+    float dy = agent->y - ref_y;
+    float distance = sqrtf(dx*dx + dy*dy);
+
+    return distance < threshold;
+}
+
+float compute_route_guidance_reward(Drive* env, Entity* agent, int timestep) {
+    float reward = 0.0f;
+    int new_hits = 0;
+
+    // Check all waypoints from current timestep to end of trajectory
+    for (int i = timestep; i < agent->array_size; i++) {
+        // Skip if already hit or invalid
+        if (agent->waypoints_hit[i] || !agent->traj_valid[i]) {
+            continue;
+        }
+
+        // Check if within reach
+        if (is_waypoint_within_reach(agent, i, env->waypoint_reach_threshold)) {
+            agent->waypoints_hit[i] = 1;
+            agent->waypoints_hit_count++;
+            new_hits++;
+        }
+    }
+
+    // Compute route progress
+    if (agent->total_valid_waypoints > 0) {
+        agent->route_progress = (float)agent->waypoints_hit_count / agent->total_valid_waypoints;
+    }
+
+    // Scale reward by number of valid waypoints to normalize
+    if (agent->total_valid_waypoints > 0 && new_hits > 0) {
+        reward = (float)new_hits / agent->total_valid_waypoints;
+        reward = fminf(reward, 0.1f); // Cap at 0.1 per step
+    }
+
+    return reward;
+}
+
+float compute_speed_guidance_reward(Entity* agent, int timestep, float weight) {
+    if (timestep >= agent->array_size || !agent->traj_valid[timestep]) {
+        return 0.0f;
+    }
+
+    // Get reference speed at current timestep
+    float ref_vx = agent->traj_vx[timestep];
+    float ref_vy = agent->traj_vy[timestep];
+    float ref_speed = sqrtf(ref_vx*ref_vx + ref_vy*ref_vy);
+
+    // Get actual speed
+    float actual_speed = sqrtf(agent->vx*agent->vx + agent->vy*agent->vy);
+
+    // Compute squared error
+    float speed_error = ref_speed - actual_speed;
+    float speed_error_sq = speed_error * speed_error;
+
+    // Exponential penalty: 1.0 - exp(-error²)
+    float penalty = 1.0f - expf(-speed_error_sq);
+
+    return -weight * penalty;
+}
+
+float compute_heading_guidance_reward(Entity* agent, int timestep, float weight) {
+    if (timestep >= agent->array_size || !agent->traj_valid[timestep]) {
+        return 0.0f;
+    }
+
+    // Get reference heading at current timestep
+    float ref_heading = agent->traj_heading[timestep];
+
+    // Get actual heading
+    float actual_heading = agent->heading;
+
+    // Compute heading error (accounting for angle wrapping)[-π, π]
+    float heading_error = normalize_heading(ref_heading - actual_heading);
+
+    float heading_error_sq = heading_error * heading_error;
+
+    // Exponential penalty: 1.0 - exp(-error²)
+    float penalty = 1.0f - expf(-heading_error_sq);
+
+    return -weight * penalty;
+}
+
+float compute_guided_autonomy_reward(Drive* env, int agent_idx, int active_idx) {
+    Entity* agent = &env->entities[agent_idx];
+    int timestep = env->timestep;
+
+    float total_reward = 0.0f;
+
+    // 1. Route guidance (waypoint hitting)
+    float route_reward = compute_route_guidance_reward(env, agent, timestep);
+    total_reward += route_reward;
+
+    // 2. Speed guidance
+    float speed_reward = compute_speed_guidance_reward(agent, timestep, env->guidance_speed_weight);
+    total_reward += speed_reward;
+
+    // 3. Heading guidance
+    float heading_reward = compute_heading_guidance_reward(agent, timestep, env->guidance_heading_weight);
+    total_reward += heading_reward;
+
+    return total_reward;
+}
 
 struct AdjListNode {
     int dest;
@@ -486,6 +621,11 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_valid = (int*)malloc(size * sizeof(int));
             entities[i].expert_accel = (float*)malloc(size * sizeof(float));
             entities[i].expert_steering = (float*)malloc(size * sizeof(float));
+            // Allocate waypoints_hit array for guided autonomy
+            entities[i].waypoints_hit = (int*)calloc(size, sizeof(int));
+            entities[i].waypoints_hit_count = 0;
+            entities[i].total_valid_waypoints = 0;
+            entities[i].route_progress = 0.0f;
         } else {
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
@@ -495,6 +635,10 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             entities[i].traj_valid = NULL;
             entities[i].expert_accel = NULL;
             entities[i].expert_steering = NULL;
+            entities[i].waypoints_hit = NULL;
+            entities[i].waypoints_hit_count = 0;
+            entities[i].total_valid_waypoints = 0;
+            entities[i].route_progress = 0.0f;
         }
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
@@ -508,6 +652,12 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             fread(entities[i].traj_valid, sizeof(int), size, file);
             fread(entities[i].expert_accel, sizeof(float), size, file);
             fread(entities[i].expert_steering, sizeof(float), size, file);
+            // Count total valid waypoints for guided autonomy
+            for (int j = 0; j < size; j++) {
+                if (entities[i].traj_valid[j]) {
+                    entities[i].total_valid_waypoints++;
+                }
+            }
         }
         // Read remaining scalar fields
         fread(&entities[i].width, sizeof(float), 1, file);
@@ -582,6 +732,13 @@ void set_start_position(Drive* env){
         e->jerk_lat = 0.0f;
         e->steering_angle = 0.0f;
         e->wheelbase = 0.6f * e->length;
+
+        // Reset guided autonomy tracking
+        if (e->waypoints_hit != NULL) {
+            memset(e->waypoints_hit, 0, e->array_size * sizeof(int));
+        }
+        e->waypoints_hit_count = 0;
+        e->route_progress = 0.0f;
     }
     //EndDrawing();
 }
@@ -1547,16 +1704,6 @@ float clipSpeed(float speed) {
     return speed;
 }
 
-float normalize_heading(float heading){
-    if(heading > M_PI) heading -= 2*M_PI;
-    if(heading < -M_PI) heading += 2*M_PI;
-    return heading;
-}
-
-float normalize_value(float value, float min, float max){
-    return (value - min) / (max - min);
-}
-
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
     if (agent->removed) return;
@@ -1618,7 +1765,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         // Update position
         x = x + (new_vx*env->dt);
         y = y + (new_vy*env->dt);
-        heading = heading + yaw_rate*env->dt;
+        heading = normalize_heading(heading + yaw_rate*env->dt);
 
         // Apply updates to the agent's state
         agent->x = x;
@@ -2189,6 +2336,13 @@ void c_step(Drive* env){
             env->logs[i].episode_return += ade_reward;
         }
         env->logs[i].avg_displacement_error = current_ade;
+
+        // Apply guided autonomy reward
+        if (env->use_guided_autonomy) {
+            float ga_reward = compute_guided_autonomy_reward(env, agent_idx, i);
+            env->rewards[i] += ga_reward;
+            env->logs[i].episode_return += ga_reward;
+        }
     }
 
     if (env->goal_behavior==GOAL_RESPAWN) {
