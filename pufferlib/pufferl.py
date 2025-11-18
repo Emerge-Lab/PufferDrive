@@ -548,6 +548,11 @@ class PuffeRL:
                             cmd.append("--log-trajectories")
                         if self.vecenv.driver_env.goal_radius is not None:
                             cmd.extend(["--goal-radius", str(self.vecenv.driver_env.goal_radius)])
+                        if self.vecenv.driver_env.goal_behavior is not None:
+                            cmd.extend(["--goal-behavior", str(self.vecenv.driver_env.goal_behavior)])
+                        gfd = getattr(self.vecenv.driver_env, "goal_forward_distance", None)
+                        if gfd is not None:
+                            cmd.extend(["--goal-forward-distance", str(gfd)])
                         if self.vecenv.driver_env.init_steps > 0:
                             cmd.extend(["--init-steps", str(self.vecenv.driver_env.init_steps)])
                         if config["render_map"] is not None:

@@ -90,6 +90,9 @@
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
+#define GOAL_FORWARD_SAMPLE 3
+
+#define FORWARD_GOAL_DISTANCE 40.0f
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
@@ -321,6 +324,7 @@ struct Drive {
     float reward_goal;
     float reward_goal_post_respawn;
     float goal_radius;
+    float goal_forward_distance;
     int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
@@ -1468,7 +1472,9 @@ void init(Drive* env){
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
-    if (env->goal_behavior==GOAL_GENERATE_NEW) init_topology_graph(env);
+    if (env->goal_behavior==GOAL_GENERATE_NEW || env->goal_behavior==GOAL_FORWARD_SAMPLE) {
+        init_topology_graph(env);
+    }
     env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
@@ -1950,8 +1956,10 @@ void compute_new_goal(Drive* env, int agent_idx) {
 
     if (current_lane == -1) return; // No current lane
 
-    // Target distance: 40m ahead along the lane topology from agent's current position
-    float target_distance = 40.0f;
+    // Target distance: meters ahead along the lane topology from agent's current position
+    float target_distance = env->goal_forward_distance > 0.0f
+        ? env->goal_forward_distance
+        : FORWARD_GOAL_DISTANCE;
     int current_entity = current_lane;
     Entity* lane = &env->entities[current_entity];
 
@@ -2047,7 +2055,7 @@ void c_reset(Drive* env){
 	    env->entities[agent_idx].stopped = 0;
         env->entities[agent_idx].removed = 0;
 
-        if (env->goal_behavior==GOAL_GENERATE_NEW) {
+        if (env->goal_behavior==GOAL_GENERATE_NEW || env->goal_behavior==GOAL_FORWARD_SAMPLE) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
             env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
             env->entities[agent_idx].sampled_new_goal = 0;
@@ -2145,7 +2153,10 @@ void c_step(Drive* env){
             if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1){
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
-            } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
+            } else if (
+                env->goal_behavior == GOAL_GENERATE_NEW ||
+                env->goal_behavior == GOAL_FORWARD_SAMPLE
+            ) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
                 env->entities[agent_idx].sampled_new_goal = 1;
@@ -2161,7 +2172,10 @@ void c_step(Drive* env){
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
 	    }
 
-        if(env->entities[agent_idx].sampled_new_goal && env->goal_behavior == GOAL_GENERATE_NEW){
+        if (
+            env->entities[agent_idx].sampled_new_goal &&
+            (env->goal_behavior == GOAL_GENERATE_NEW || env->goal_behavior == GOAL_FORWARD_SAMPLE)
+        ){
             compute_new_goal(env, agent_idx);
         }
 

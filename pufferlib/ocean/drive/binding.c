@@ -192,6 +192,14 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
+    PyObject* py_goal_forward_distance = PyDict_GetItemString(kwargs, "goal_forward_distance");
+    if (py_goal_forward_distance) {
+        env->goal_forward_distance = (float)unpack(kwargs, "goal_forward_distance");
+    } else if (conf.goal_forward_distance > 0.0f) {
+        env->goal_forward_distance = conf.goal_forward_distance;
+    } else {
+        env->goal_forward_distance = FORWARD_GOAL_DISTANCE;
+    }
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");

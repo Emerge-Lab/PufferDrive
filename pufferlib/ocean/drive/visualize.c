@@ -203,7 +203,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
 }
 
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior, float goal_forward_distance) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};  // Initialize to zero
@@ -243,14 +243,15 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
         .reward_ade = conf.reward_ade,
-        .goal_radius = conf.goal_radius,
+        .goal_radius = goal_radius > 0.0f ? goal_radius : conf.goal_radius,
+        .goal_forward_distance = goal_forward_distance > 0.0f ? goal_forward_distance : conf.goal_forward_distance,
         .dt = conf.dt,
-	    .map_name = (char*)map_name,
+        .map_name = (char*)map_name,
         .init_steps = init_steps,
         .max_controlled_agents = max_controlled_agents,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
-        .goal_behavior = goal_behavior,
+        .goal_behavior = goal_behavior >= 0 ? goal_behavior : conf.goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,
     };
@@ -400,6 +401,7 @@ int main(int argc, char* argv[]) {
     int log_trajectories = 1;
     int frame_skip = 1;
     float goal_radius = 2.0f;
+    float goal_forward_distance = -1.0f;
     int init_steps = 0;
     const char* map_name = NULL;
     const char* policy_name = "resources/drive/puffer_drive_weights.bin";
@@ -408,7 +410,7 @@ int main(int argc, char* argv[]) {
     int scenario_length_cli = -1;
     int init_mode = 0;
     int control_mode = 0;
-    int goal_behavior = 0;
+    int goal_behavior = -1;
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
@@ -438,6 +440,14 @@ int main(int argc, char* argv[]) {
                 i++;
                 if (goal_radius <= 0) {
                     goal_radius = 2.0f; // Ensure valid value
+                }
+            }
+        } else if (strcmp(argv[i], "--goal-forward-distance") == 0) {
+            if (i + 1 < argc) {
+                goal_forward_distance = atof(argv[i + 1]);
+                i++;
+                if (goal_forward_distance <= 0) {
+                    goal_forward_distance = -1.0f;
                 }
             }
         } else if (strcmp(argv[i], "--map-name") == 0) {
@@ -522,6 +532,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode, goal_behavior);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode, goal_behavior, goal_forward_distance);
     return 0;
 }

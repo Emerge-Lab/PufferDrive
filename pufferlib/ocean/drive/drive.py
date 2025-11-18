@@ -22,6 +22,7 @@ class Drive(pufferlib.PufferEnv):
         reward_ade=0.0,
         goal_behavior=0,
         goal_radius=2.0,
+        goal_forward_distance=40.0,
         collision_behavior=0,
         offroad_behavior=0,
         dt=0.1,
@@ -49,6 +50,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
         self.goal_behavior = goal_behavior
+        self.goal_forward_distance = goal_forward_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.reward_ade = reward_ade
@@ -165,6 +167,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
                 goal_behavior=self.goal_behavior,
+                goal_forward_distance=self.goal_forward_distance,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
@@ -210,6 +213,7 @@ class Drive(pufferlib.PufferEnv):
                     init_steps=self.init_steps,
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
+                    goal_forward_distance=self.goal_forward_distance,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
@@ -232,6 +236,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_ade=self.reward_ade,
                         goal_radius=self.goal_radius,
                         goal_behavior=self.goal_behavior,
+                        goal_forward_distance=self.goal_forward_distance,
                         collision_behavior=self.collision_behavior,
                         offroad_behavior=self.offroad_behavior,
                         dt=self.dt,
