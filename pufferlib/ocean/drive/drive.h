@@ -458,16 +458,16 @@ int load_map_binary(const char* filename, Drive* drive) {
 
         if (is_road_lane(road->type)) {
             fread(&road->num_entries, sizeof(int), 1, file);
-            road->entry_lanes = (int*)malloc(road->num_entries * sizeof(int));
             if (road->num_entries > 0) {
+                road->entry_lanes = (int*)malloc(road->num_entries * sizeof(int));
                 fread(road->entry_lanes, sizeof(int), road->num_entries, file);
             } else {
                 road->entry_lanes = NULL;
             }
 
             fread(&road->num_exits, sizeof(int), 1, file);
-            road->exit_lanes = (int*)malloc(road->num_exits * sizeof(int));
             if (road->num_exits > 0) {
+                road->exit_lanes = (int*)malloc(road->num_exits * sizeof(int));
                 fread(road->exit_lanes, sizeof(int), road->num_exits, file);
             } else {
                 road->exit_lanes = NULL;
@@ -1423,7 +1423,7 @@ void set_active_agents(Drive* env){
         } else if (env->control_mode == CONTROL_VEHICLES) {
             should_create = (agent->type == VEHICLE);
         } else {  // Control all agents
-            should_create = (agent->type == VEHICLE || agent->type == PEDESTRIAN || agent->type == CYCLIST);
+            should_create = (is_controllable_agent(agent->type));
         }
 
         if (!should_create) continue;
@@ -1453,8 +1453,6 @@ void set_active_agents(Drive* env){
 
     // Set up initial active agents
     env->active_agent_indices = (int*)malloc(env->active_agent_count * sizeof(int));
-    env->static_agent_indices = (int*)malloc(env->static_agent_count * sizeof(int));
-    env->expert_static_agent_indices = (int*)malloc(env->expert_static_agent_count * sizeof(int));
     env->static_agent_indices = (int*)malloc(env->static_agent_count * sizeof(int));
     env->expert_static_agent_indices = (int*)malloc(env->expert_static_agent_count * sizeof(int));
     for(int i=0;i<env->active_agent_count;i++){
@@ -1569,7 +1567,6 @@ void c_close(Drive* env){
     free(env->grid_map);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
-    // Free metadata arrays
     free(env->objects_of_interest);
     free(env->tracks_to_predict);
     freeTopologyGraph(env->topology_graph);
@@ -1615,7 +1612,6 @@ float normalize_value(float value, float min, float max){
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     DynamicAgent* agent = &env->dynamic_agents[agent_idx];
     if (agent->removed) return;
-
 
     if (agent->stopped) {
         agent->sim_vx = 0.0f;
@@ -2227,8 +2223,8 @@ void c_step(Drive* env){
             );
 
         // Reward agent if it is within X meters of goal
-        if (distance_to_goal < env->goal_radius) {
-            if(env->goal_behavior == GOAL_RESPAWN  && env->dynamic_agents[agent_idx].respawn_timestep != -1){
+        if (distance_to_goal < env->goal_radius){
+             if (env->goal_behavior == GOAL_RESPAWN && env->dynamic_agents[agent_idx].respawn_timestep != -1){
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
             } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
@@ -2247,14 +2243,8 @@ void c_step(Drive* env){
             env->dynamic_agents[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
 	    }
 
-        if(env->dynamic_agents[agent_idx].sampled_new_goal){
-            if (env->goal_behavior==GOAL_GENERATE_NEW) {
+        if(env->dynamic_agents[agent_idx].sampled_new_goal && env->goal_behavior == GOAL_GENERATE_NEW){
                 compute_new_goal(env, agent_idx);
-            }
-            else if (env->goal_behavior==GOAL_STOP) {
-                env->dynamic_agents[agent_idx].stopped = 1;
-                env->dynamic_agents[agent_idx].sim_vx=env->dynamic_agents[agent_idx].sim_vy = 0.0f;
-            }
         }
 
 

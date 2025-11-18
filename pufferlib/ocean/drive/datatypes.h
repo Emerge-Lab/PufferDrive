@@ -53,6 +53,10 @@ int is_road_edge(int type){
     return (type >= 20 && type <= 29);
 }
 
+int is_controllable_agent(int type){
+    return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST);
+}
+
 int normalize_road_type(int type){
     if(is_road_lane(type)){
         return 0;
