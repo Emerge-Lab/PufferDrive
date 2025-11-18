@@ -29,9 +29,9 @@ class WOSACEvaluator:
     def __init__(self, config: Dict):
         self.config = config
         self.num_steps = 91  # Hardcoded for WOSAC (9.1s at 10Hz)
-        self.init_steps = config.get("wosac", {}).get("init_steps", 0)
+        self.init_steps = config.get("eval", {}).get("wosac_init_steps", 0)
         self.sim_steps = self.num_steps - self.init_steps
-        self.num_rollouts = config.get("wosac", {}).get("num_rollouts", 32)
+        self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
@@ -121,6 +121,7 @@ class WOSACEvaluator:
         self,
         ground_truth_trajectories: Dict,
         simulated_trajectories: Dict,
+        aggregate_results: bool = False,
     ) -> Dict:
         """Compute realism metrics comparing simulated and ground truth trajectories.
 
@@ -289,23 +290,28 @@ class WOSACEvaluator:
             ]
         ].mean()
 
-        scene_level_results["realism_metametric"] = scene_level_results.apply(self._compute_metametric, axis=1)
-
+        scene_level_results["realism_meta_score"] = scene_level_results.apply(self._compute_metametric, axis=1)
         scene_level_results["num_agents"] = df.groupby("scenario_id").size()
         scene_level_results = scene_level_results[
             ["num_agents"] + [col for col in scene_level_results.columns if col != "num_agents"]
         ]
 
-        print("\n Scene-level results:\n")
-        print(scene_level_results)
+        if aggregate_results:
+            aggregate_metrics = scene_level_results.mean().to_dict()
+            aggregate_metrics["total_num_agents"] = scene_level_results["num_agents"].sum()
+            # Convert numpy types to Python native types
+            return {k: v.item() if hasattr(v, "item") else v for k, v in aggregate_metrics.items()}
+        else:
+            print("\n Scene-level results:\n")
+            print(scene_level_results)
 
-        print(f"\n Overall realism metametric: {scene_level_results['realism_metametric'].mean():.4f}")
-        print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
-        print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
+            print(f"\n Overall realism meta score: {scene_level_results['realism_meta_score'].mean():.4f}")
+            print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
+            print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
 
-        # print(f"\n Full agent-level results:\n")
-        # print(df)
-        return scene_level_results
+            # print(f"\n Full agent-level results:\n")
+            # print(df)
+            return scene_level_results
 
     def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None, max_agents_to_plot=10):
         if agent_idx is None:
@@ -427,3 +433,60 @@ class WOSACEvaluator:
             plt.tight_layout()
 
             plt.savefig(f"trajectory_comparison_agent_{agent_idx}.png")
+
+
+class HumanReplayEvaluator:
+    """Evaluates policies against human replays in PufferDrive."""
+
+    def __init__(self, config: Dict):
+        self.config = config
+        self.sim_steps = 91 - self.config["env"]["init_steps"]
+
+    def rollout(self, args, puffer_env, policy):
+        """Roll out policy in env with human replays. Store statistics.
+
+        In human replay mode, only the SDC (self-driving car) is controlled by the policy
+        while all other agents replay their human trajectories. This tests how compatible
+        the policy is with (static) human partners.
+
+        Args:
+            args: Config dict with train settings (device, use_rnn, etc.)
+            puffer_env: PufferLib environment wrapper
+            policy: Trained policy to evaluate
+
+        Returns:
+            dict: Aggregated metrics including:
+                - avg_collisions_per_agent: Average collisions per agent
+                - avg_offroad_per_agent: Average offroad events per agent
+        """
+        import numpy as np
+        import torch
+        import pufferlib
+
+        num_agents = puffer_env.observation_space.shape[0]
+        device = args["train"]["device"]
+
+        obs, info = puffer_env.reset()
+        state = {}
+        if args["train"]["use_rnn"]:
+            state = dict(
+                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+            )
+
+        for time_idx in range(self.sim_steps):
+            # Step policy
+            with torch.no_grad():
+                ob_tensor = torch.as_tensor(obs).to(device)
+                logits, value = policy.forward_eval(ob_tensor, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+
+            if isinstance(logits, torch.distributions.Normal):
+                action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
+
+            obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
+
+            if len(info_list) > 0:  # Happens at the end of episode
+                results = info_list[0]
+                return results

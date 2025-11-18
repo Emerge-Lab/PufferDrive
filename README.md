@@ -115,16 +115,23 @@ The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color 
 
 ## Benchmarks
 
-### Realism
+### Distributional realism
 
 We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/main/pufferlib/ocean/benchmark).
 
-WOSAC evaluation with random policy
+WOSAC evaluation with random policy:
 ```bash
-puffer eval puffer_drive --wosac.enabled True
+puffer eval puffer_drive --eval.wosac-realism-eval True
 ```
 
-WOSAC evaluation with your checkpoint (must be .pt file)
+WOSAC evaluation with your checkpoint (must be .pt file):
 ```bash
-puffer eval puffer_drive --wosac.enabled True --load-model-path <your-trained-policy>.pt
+puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-trained-policy>.pt
+```
+
+### Human-compatibility
+
+You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how closely aligned your agent's behavior is to how people drive. You can run it like this:
+```bash
+puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-trained-policy>.pt
 ```

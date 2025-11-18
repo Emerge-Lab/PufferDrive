@@ -1580,10 +1580,13 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
             acceleration *= ACCELERATION_VALUES[6];
             steering *= STEERING_VALUES[12];
         } else { // discrete
-            int (*action_array)[2] = (int(*)[2])env->actions;
-            int acceleration_index = action_array[action_idx][0];
-            int steering_index = action_array[action_idx][1];
-
+            // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
+            int* action_array = (int*)env->actions;
+            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
+            int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+            int action_val = action_array[action_idx];
+            int acceleration_index = action_val / num_steer;
+            int steering_index = action_val % num_steer;
             acceleration = ACCELERATION_VALUES[acceleration_index];
             steering = STEERING_VALUES[steering_index];
         }
@@ -1599,7 +1602,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         float speed = sqrtf(vx*vx + vy*vy);
 
         // Update speed with acceleration
-        speed = speed + 0.5f*acceleration*env->dt;
+        speed = speed + acceleration*env->dt;
         speed = clipSpeed(speed);
 
         // Compute yaw rate
@@ -2430,7 +2433,8 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int max_obs = 10 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
@@ -2454,7 +2458,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
-    int obs_idx = 10;  // Start after ego obs
+    int obs_idx = ego_dim;  // Start after ego obs
     for(int j = 0; j < MAX_AGENTS - 1; j++) {
         if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 7;  // Move to next agent observation
