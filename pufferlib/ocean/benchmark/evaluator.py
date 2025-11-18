@@ -445,14 +445,34 @@ class HumanReplayEvaluator:
 
     def rollout(self, args, puffer_env, policy):
         """Roll out policy in env with human replays. Store statistics.
+
+        In human replay mode, only the SDC (self-driving car) is controlled by the policy
+        while all other agents replay their human trajectories. This tests how compatible
+        the policy is with (static) human partners.
+
+        Args:
+            args: Config dict with train settings (device, use_rnn, etc.)
+            puffer_env: PufferLib environment wrapper
+            policy: Trained policy to evaluate
+
         Returns:
-            collision_rates: dict
+            dict: Aggregated metrics including:
+                - avg_collisions_per_agent: Average collisions per agent
+                - avg_offroad_per_agent: Average offroad events per agent
         """
+        import numpy as np
+        import torch
+        import pufferlib
 
         driver = puffer_env.driver_env
         num_agents = puffer_env.observation_space.shape[0]
         device = args["train"]["device"]
-        collisions = []
+
+        # Track statistics across all episodes
+        # create one for each rollout
+        all_stats = {}
+        all_stats["avg_collisions_per_agent"] = {f"rollout_{idx}": 0.0 for idx in range(self.num_rollouts)}
+        all_stats["avg_offroad_per_agent"] = {f"rollout_{idx}": 0.0 for idx in range(self.num_rollouts)}
 
         for rollout_idx in range(self.num_rollouts):
             print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
@@ -475,6 +495,21 @@ class HumanReplayEvaluator:
                 if isinstance(logits, torch.distributions.Normal):
                     action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-                obs, _, _, _, _ = puffer_env.step(action_np)
+                obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
 
-        return collisions
+                if len(info_list) > 0:  # Happens at the end of episode
+                    all_stats["avg_collisions_per_agent"][f"rollout_{rollout_idx}"] = float(
+                        info_list[0]["avg_collisions_per_agent"]
+                    )
+                    all_stats["avg_offroad_per_agent"][f"rollout_{rollout_idx}"] = float(
+                        info_list[0]["avg_offroad_per_agent"]
+                    )
+                    break
+
+        # Aggregate results
+        results = {
+            "avg_collisions_per_agent": float(np.mean(list(all_stats["avg_collisions_per_agent"].values()))),
+            "avg_offroad_per_agent": float(np.mean(list(all_stats["avg_offroad_per_agent"].values()))),
+        }
+
+        return results

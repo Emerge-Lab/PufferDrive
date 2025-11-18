@@ -521,13 +521,10 @@ class PuffeRL:
                         print(f"Failed to export model weights: {e}")
 
         if self.vecenv.driver_env.wosac_realism_eval and self.epoch % self.config["eval"]["eval_interval"] == 0:
-            print("WOSAC EVAL")
-            pufferlib.utils.run_wosac_eval(self.config, self.logger, self.epoch, self.global_step)
+            pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.epoch, self.global_step)
 
         if self.vecenv.driver_env.human_replay_eval and self.epoch % self.config["eval"]["eval_interval"] == 0:
-            print("HUMAN REPLAY EVAL")
-            pass
-            # pufferlib.utils.run_log_replay_eval(self.config, self.logger, self.epoch, self.global_step)
+            pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.epoch, self.global_step)
 
     def mean_and_log(self):
         config = self.config
@@ -1083,15 +1080,36 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     elif human_replay_enabled:
         print("Running human replay evaluation.\n")
+        from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
-        human_replay_eval = False
-        human_replay_control_mode = "control_sdc_only"
-        human_replay_num_agents = 10  # This equals the number of scenarios, since we control 1 agent for each
+        # Configure environment for human replay mode
+        backend = args["eval"].get("backend", "PufferEnv")
+        args["vec"] = dict(backend=backend, num_envs=1)
+        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
+        args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
+        args["env"]["scenario_length"] = 91  # Standard scenario length
 
-        # Update args for human replay evaluation
-        args["vec"]["num_envs"] = 1
-        args["env"]["num_agents"] = 1
-        pass
+        # Initialize environment and policy
+        vecenv = vecenv or load_env(env_name, args)
+        policy = policy or load_policy(args, vecenv, env_name)
+
+        # Create evaluator with config
+        eval_config = {
+            "num_rollouts": args["eval"]["human_replay_num_agents"],
+            "sim_steps": 91,
+        }
+        evaluator = HumanReplayEvaluator(eval_config)
+
+        # Run rollouts with human replays
+        results = evaluator.rollout(args, vecenv, policy)
+
+        # Print results with markers for subprocess parsing
+        import json
+
+        print("HUMAN_REPLAY_METRICS_START")
+        print(json.dumps(results))
+        print("HUMAN_REPLAY_METRICS_END")
+
         return results
     else:
         vecenv = vecenv or load_env(env_name, args)

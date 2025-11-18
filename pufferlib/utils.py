@@ -6,14 +6,75 @@ import subprocess
 import json
 
 
-def run_human_replay_eval(args):
+def run_human_replay_eval_in_subprocess(config, logger, epoch, global_step):
     """
     Run human replay evaluation in a subprocess and log metrics to wandb.
+
     """
-    pass
+    try:
+        run_id = logger.run_id
+        model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
+        model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+
+        if not model_files:
+            print("No model files found for human replay evaluation")
+            return
+
+        latest_cpt = max(model_files, key=os.path.getctime)
+
+        # Prepare evaluation command
+        eval_config = config.get("eval", {})
+        cmd = [
+            sys.executable,
+            "-m",
+            "pufferlib.pufferl",
+            "eval",
+            config["env"],
+            "--load-model-path",
+            latest_cpt,
+            "--eval.human-replay-eval",
+            "True",
+            "--eval.human-replay-num-agents",
+            str(eval_config.get("human_replay_num_agents", 10)),
+            "--eval.human-replay-control-mode",
+            str(eval_config.get("human_replay_control_mode", "control_sdc_only")),
+        ]
+
+        # Run human replay evaluation in subprocess
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
+
+        if result.returncode == 0:
+            # Extract JSON from stdout between markers
+            stdout = result.stdout
+            if "HUMAN_REPLAY_METRICS_START" in stdout and "HUMAN_REPLAY_METRICS_END" in stdout:
+                start = stdout.find("HUMAN_REPLAY_METRICS_START") + len("HUMAN_REPLAY_METRICS_START")
+                end = stdout.find("HUMAN_REPLAY_METRICS_END")
+                json_str = stdout[start:end].strip()
+                human_replay_metrics = json.loads(json_str)
+
+                # Log to wandb if available
+                if hasattr(logger, "wandb") and logger.wandb:
+                    logger.wandb.log(
+                        {
+                            "eval/human_replay_collision_count_avg": human_replay_metrics.get(
+                                "avg_collisions_per_agent", 0.0
+                            ),
+                            "eval/human_replay_offroad_count_avg": human_replay_metrics.get(
+                                "avg_offroad_per_agent", 0.0
+                            ),
+                        },
+                        step=global_step,
+                    )
+        else:
+            print(f"Human replay evaluation failed with exit code {result.returncode}: {result.stderr}")
+
+    except subprocess.TimeoutExpired:
+        print("Human replay evaluation timed out")
+    except Exception as e:
+        print(f"Failed to run human replay evaluation: {e}")
 
 
-def run_wosac_eval(config, logger, epoch, global_step):
+def run_wosac_eval_in_subprocess(config, logger, epoch, global_step):
     """
     Run WOSAC evaluation in a subprocess and log metrics to wandb.
 

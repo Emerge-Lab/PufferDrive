@@ -37,8 +37,8 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
-        wosac_realism_eval=True,  # TODO(dc): Pass via ini
-        human_replay_eval=False,
+        wosac_realism_eval=True,  # TODO(dc): Pass correctly via ini
+        human_replay_eval=True,  # TODO(dc): Pass correctly via ini
     ):
         # env
         self.dt = dt
