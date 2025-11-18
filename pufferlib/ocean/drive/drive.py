@@ -37,8 +37,6 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
-        wosac_realism_eval=True,  # TODO(dc): Pass correctly via ini
-        human_replay_eval=True,  # TODO(dc): Pass correctly via ini
     ):
         # env
         self.dt = dt
@@ -58,8 +56,6 @@ class Drive(pufferlib.PufferEnv):
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
-        self.wosac_realism_eval = wosac_realism_eval
-        self.human_replay_eval = human_replay_eval
 
         # Observation space calculation
         if dynamics_model == "classic":
