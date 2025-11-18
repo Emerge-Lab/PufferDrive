@@ -130,8 +130,6 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
-    float expert_static_agent_count;
-    float static_agent_count;
     float avg_offroad_per_agent;
     float avg_collisions_per_agent;
 };
@@ -255,12 +253,11 @@ struct Drive {
     char* ini_file;
     int collision_behavior;
     int offroad_behavior;
-    int scenario_length;
     int control_non_vehicles;
     // Metadata fields
     char scenario_id[128];
     char dataset_name[64];
-    int length;
+    int log_length;
     int sdc_index;
     int num_objects_of_interest;
     int* objects_of_interest;
@@ -516,7 +513,7 @@ int load_map_binary(const char* filename, Drive* drive) {
 
     fread(drive->scenario_id, sizeof(char), 128, file);
     fread(drive->dataset_name, sizeof(char), 64, file);
-    fread(&drive->length, sizeof(int), 1, file);
+    fread(&drive->log_length, sizeof(int), 1, file);
     fread(&drive->sdc_index, sizeof(int), 1, file);
     fread(&drive->num_objects_of_interest, sizeof(int), 1, file);
 

@@ -1,3 +1,84 @@
+#define UNKNOWN 0
+
+// -- AGENT TYPE
+#define VEHICLE 1
+#define PEDESTRIAN 2
+#define CYCLIST 3
+#define OTHER 4
+
+// -- ROAD TYPE
+#define LANE_FREEWAY 1
+#define LANE_SURFACE_STREET 2
+#define LANE_BIKE_LANE 3
+
+#define ROAD_LINE_UNKNOWN 10
+#define ROAD_LINE_BROKEN_SINGLE_WHITE 11
+#define ROAD_LINE_SOLID_SINGLE_WHITE 12
+#define ROAD_LINE_SOLID_DOUBLE_WHITE 13
+#define ROAD_LINE_BROKEN_SINGLE_YELLOW 14
+#define ROAD_LINE_BROKEN_DOUBLE_YELLOW 15
+#define ROAD_LINE_SOLID_SINGLE_YELLOW 16
+#define ROAD_LINE_SOLID_DOUBLE_YELLOW 17
+#define ROAD_LINE_PASSING_DOUBLE_YELLOW 18
+
+#define ROAD_EDGE_UNKNOWN 20
+#define ROAD_EDGE_BOUNDARY 21
+#define ROAD_EDGE_MEDIAN 22
+#define ROAD_EDGE_SIDEWALK 23
+
+#define CROSSWALK 31
+#define SPEED_BUMP 32
+#define DRIVEWAY 34
+
+// -- TRAFFIC CONTROL TYPE
+#define TRAFFIC_LIGHT 1
+#define STOP_SIGN 2
+#define YIELD_SIGN 3
+#define SPEED_LIMIT_SIGN 4
+
+
+int is_road_lane(int type){
+    return (type >= 0 && type <= 9);
+}
+
+int is_drivable_road_lane(int type){
+    return (type == LANE_FREEWAY || type == LANE_SURFACE_STREET);
+}
+
+int is_road_line(int type){
+    return (type >= 10 && type <= 19);
+}
+
+int is_road_edge(int type){
+    return (type >= 20 && type <= 29);
+}
+
+int normalize_road_type(int type){
+    if(is_road_lane(type)){
+        return 0;
+    } else if(is_road_line(type)){
+        return 1;
+    } else if(is_road_edge(type)){
+        return 2;
+    } else {
+        return -1;
+    }
+}
+
+int unnormalize_road_type(int norm_type){
+    if(norm_type == 0){
+        return LANE_SURFACE_STREET;
+    } else if(norm_type == 1){
+        return ROAD_LINE_BROKEN_SINGLE_WHITE;
+    } else if(norm_type == 2){
+        return ROAD_EDGE_BOUNDARY;
+    } else {
+        return -1; // Invalid
+    }
+}
+
+
+
 struct DynamicAgent {
     int id;
     int type;
@@ -123,80 +204,3 @@ void free_traffic_element(struct TrafficControlElement* element){
 }
 
 
-#define UNKNOWN 0
-// -- AGENT TYPE
-#define VEHICLE 1
-#define PEDESTRIAN 2
-#define CYCLIST 3
-#define OTHER 4
-
-// -- ROAD TYPE
-#define LANE_FREEWAY 1
-#define LANE_SURFACE_STREET 2
-#define LANE_BIKE_LANE 3
-
-#define ROAD_LINE_UNKNOWN 10
-#define ROAD_LINE_BROKEN_SINGLE_WHITE 11
-#define ROAD_LINE_SOLID_SINGLE_WHITE 12
-#define ROAD_LINE_SOLID_DOUBLE_WHITE 13
-#define ROAD_LINE_BROKEN_SINGLE_YELLOW 14
-#define ROAD_LINE_BROKEN_DOUBLE_YELLOW 15
-#define ROAD_LINE_SOLID_SINGLE_YELLOW 16
-#define ROAD_LINE_SOLID_DOUBLE_YELLOW 17
-#define ROAD_LINE_PASSING_DOUBLE_YELLOW 18
-
-#define ROAD_EDGE_UNKNOWN 20
-#define ROAD_EDGE_BOUNDARY 21
-#define ROAD_EDGE_MEDIAN 22
-#define ROAD_EDGE_SIDEWALK 23
-
-#define CROSSWALK 31
-#define SPEED_BUMP 32
-#define DRIVEWAY 34
-
-// -- TRAFFIC CONTROL TYPE
-// TRAFFIC_LIGHT: 1,
-// STOP_SIGN: 2,
-// YIELD_SIGN: 3,
-// SPEED_LIMIT_SIGN: 4,
-
-
-int is_road_lane(int type){
-    return (type >= 0 && type <= 9);
-}
-
-int is_drivable_road_lane(int type){
-    return (type == LANE_FREEWAY || type == LANE_SURFACE_STREET);
-}
-
-int is_road_line(int type){
-    return (type >= 10 && type <= 19);
-}
-
-int is_road_edge(int type){
-    return (type >= 20 && type <= 29);
-}
-
-int normalize_road_type(int type){
-    if(is_road_lane(type)){
-        return 0;
-    } else if(is_road_line(type)){
-        return 1;
-    } else if(is_road_edge(type)){
-        return 2;
-    } else {
-        return -1;
-    }
-}
-
-int unnormalize_road_type(int norm_type){
-    if(norm_type == 0){
-        return LANE_SURFACE_STREET;
-    } else if(norm_type == 1){
-        return ROAD_LINE_BROKEN_SINGLE_WHITE;
-    } else if(norm_type == 2){
-        return ROAD_EDGE_BOUNDARY;
-    } else {
-        return -1; // Invalid
-    }
-}
