@@ -440,8 +440,7 @@ class HumanReplayEvaluator:
 
     def __init__(self, config: Dict):
         self.config = config
-        self.num_rollouts = config.get("num_rollouts", 1)
-        self.sim_steps = config.get("sim_steps", 91)
+        self.sim_steps = 91 - self.config["env"]["init_steps"]
 
     def rollout(self, args, puffer_env, policy):
         """Roll out policy in env with human replays. Store statistics.
@@ -464,52 +463,30 @@ class HumanReplayEvaluator:
         import torch
         import pufferlib
 
-        driver = puffer_env.driver_env
         num_agents = puffer_env.observation_space.shape[0]
         device = args["train"]["device"]
 
-        # Track statistics across all episodes
-        # create one for each rollout
-        all_stats = {}
-        all_stats["avg_collisions_per_agent"] = {f"rollout_{idx}": 0.0 for idx in range(self.num_rollouts)}
-        all_stats["avg_offroad_per_agent"] = {f"rollout_{idx}": 0.0 for idx in range(self.num_rollouts)}
+        obs, info = puffer_env.reset()
+        state = {}
+        if args["train"]["use_rnn"]:
+            state = dict(
+                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+            )
 
-        for rollout_idx in range(self.num_rollouts):
-            print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
-            obs, info = puffer_env.reset()
-            state = {}
-            if args["train"]["use_rnn"]:
-                state = dict(
-                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-                )
+        for time_idx in range(self.sim_steps):
+            # Step policy
+            with torch.no_grad():
+                ob_tensor = torch.as_tensor(obs).to(device)
+                logits, value = policy.forward_eval(ob_tensor, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
-            for time_idx in range(self.sim_steps):
-                # Step policy
-                with torch.no_grad():
-                    ob_tensor = torch.as_tensor(obs).to(device)
-                    logits, value = policy.forward_eval(ob_tensor, state)
-                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                    action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+            if isinstance(logits, torch.distributions.Normal):
+                action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-                if isinstance(logits, torch.distributions.Normal):
-                    action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
+            obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
 
-                obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
-
-                if len(info_list) > 0:  # Happens at the end of episode
-                    all_stats["avg_collisions_per_agent"][f"rollout_{rollout_idx}"] = float(
-                        info_list[0]["avg_collisions_per_agent"]
-                    )
-                    all_stats["avg_offroad_per_agent"][f"rollout_{rollout_idx}"] = float(
-                        info_list[0]["avg_offroad_per_agent"]
-                    )
-                    break
-
-        # Aggregate results
-        results = {
-            "avg_collisions_per_agent": float(np.mean(list(all_stats["avg_collisions_per_agent"].values()))),
-            "avg_offroad_per_agent": float(np.mean(list(all_stats["avg_offroad_per_agent"].values()))),
-        }
-
-        return results
+            if len(info_list) > 0:  # Happens at the end of episode
+                results = info_list[0]
+                return results

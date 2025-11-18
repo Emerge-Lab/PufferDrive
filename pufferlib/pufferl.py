@@ -513,18 +513,16 @@ class PuffeRL:
                             path=bin_path,
                             silent=True,
                         )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
+                        pufferlib.utils.render_videos(self.config, self.vecenv, self.logger, self.global_step, bin_path)
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
 
         if self.config["eval"]["wosac_realism_eval"] and self.epoch % self.config["eval"]["eval_interval"] == 0:
-            pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.epoch, self.global_step)
+            pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
         if self.config["eval"]["human_replay_eval"] and self.epoch % self.config["eval"]["eval_interval"] == 0:
-            pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.epoch, self.global_step)
+            pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
     def mean_and_log(self):
         config = self.config
@@ -1027,30 +1025,26 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
 
 def eval(env_name, args=None, vecenv=None, policy=None):
+    """Evaluate a policy."""
+
     args = args or load_config(env_name)
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
 
     if wosac_enabled:
-        print(f"Running WOSAC evaluation with {args['env']['num_agents']} agents. \n")
+        print(f"Running WOSAC realism evaluation. \n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
-        backend = args["eval"]["backend"] if wosac_enabled else args["vec"]["backend"]
+        backend = args["eval"]["backend"]
         assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
-
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["num_agents"] = args["eval"]["wosac_num_agents"] if wosac_enabled else 1
-        args["env"]["init_mode"] = args["eval"]["wosac_init_mode"] if wosac_enabled else args["env"]["init_mode"]
-        args["env"]["control_mode"] = (
-            args["eval"]["wosac_control_mode"] if wosac_enabled else args["env"]["control_mode"]
-        )
-        args["env"]["init_steps"] = args["eval"]["wosac_init_steps"] if wosac_enabled else args["env"]["init_steps"]
-        args["env"]["goal_behavior"] = (
-            args["eval"]["wosac_goal_behavior"] if wosac_enabled else args["env"]["goal_behavior"]
-        )
-        args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"] if wosac_enabled else args["env"]["goal_radius"]
-        aggregate_results = args["eval"]["wosac_aggregate_results"] if wosac_enabled else True
+        args["env"]["num_agents"] = args["eval"]["wosac_num_agents"]
+        args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
+        args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
+        args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
+        args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
+        args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
 
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
@@ -1067,9 +1061,11 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
 
         # Analyze and compute metrics
-        results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories, aggregate_results)
+        results = evaluator.compute_metrics(
+            gt_trajectories, simulated_trajectories, args["eval"]["wosac_aggregate_results"]
+        )
 
-        if aggregate_results:
+        if args["eval"]["wosac_aggregate_results"]:
             import json
 
             print("WOSAC_METRICS_START")
@@ -1082,28 +1078,20 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print("Running human replay evaluation.\n")
         from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
-        # Configure environment for human replay mode
         backend = args["eval"].get("backend", "PufferEnv")
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
         args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
         args["env"]["scenario_length"] = 91  # Standard scenario length
 
-        # Initialize environment and policy
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
 
-        # Create evaluator with config
-        eval_config = {
-            "num_rollouts": args["eval"]["human_replay_num_agents"],
-            "sim_steps": 91,
-        }
-        evaluator = HumanReplayEvaluator(eval_config)
+        evaluator = HumanReplayEvaluator(args)
 
         # Run rollouts with human replays
         results = evaluator.rollout(args, vecenv, policy)
 
-        # Print results with markers for subprocess parsing
         import json
 
         print("HUMAN_REPLAY_METRICS_START")
@@ -1111,11 +1099,15 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print("HUMAN_REPLAY_METRICS_END")
 
         return results
-    else:
+    else:  # Standard evaluation: Render
+        backend = args["vec"]["backend"]
+        if backend != "PufferEnv":
+            backend = "Serial"
+
+        args["vec"] = dict(backend=backend, num_envs=1)
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
 
-        # Make a video of the policy
         ob, info = vecenv.reset()
         driver = vecenv.driver_env
         num_agents = vecenv.observation_space.shape[0]

@@ -131,7 +131,7 @@ puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-
 
 ### Human-compatibility
 
-You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how close your agent's behavior is to how people drive. You can run it like this:
+You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how closely aligned your agent's behavior is to how people drive. You can run it like this:
 ```bash
-puffer eval puffer_drive --eval.wosac-human-replay-eval True --load-model-path <your-trained-policy>.pt
+puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-trained-policy>.pt
 ```

@@ -6,7 +6,7 @@ import subprocess
 import json
 
 
-def run_human_replay_eval_in_subprocess(config, logger, epoch, global_step):
+def run_human_replay_eval_in_subprocess(config, logger, global_step):
     """
     Run human replay evaluation in a subprocess and log metrics to wandb.
 
@@ -23,7 +23,7 @@ def run_human_replay_eval_in_subprocess(config, logger, epoch, global_step):
         latest_cpt = max(model_files, key=os.path.getctime)
 
         # Prepare evaluation command
-        eval_config = config.get("eval", {})
+        eval_config = config["eval"]
         cmd = [
             sys.executable,
             "-m",
@@ -35,9 +35,9 @@ def run_human_replay_eval_in_subprocess(config, logger, epoch, global_step):
             "--eval.human-replay-eval",
             "True",
             "--eval.human-replay-num-agents",
-            str(eval_config.get("human_replay_num_agents", 10)),
+            str(eval_config["human_replay_num_agents"]),
             "--eval.human-replay-control-mode",
-            str(eval_config.get("human_replay_control_mode", "control_sdc_only")),
+            str(eval_config["human_replay_control_mode"]),
         ]
 
         # Run human replay evaluation in subprocess
@@ -56,12 +56,9 @@ def run_human_replay_eval_in_subprocess(config, logger, epoch, global_step):
                 if hasattr(logger, "wandb") and logger.wandb:
                     logger.wandb.log(
                         {
-                            "eval/human_replay_collision_count_avg": human_replay_metrics.get(
-                                "avg_collisions_per_agent", 0.0
-                            ),
-                            "eval/human_replay_offroad_count_avg": human_replay_metrics.get(
-                                "avg_offroad_per_agent", 0.0
-                            ),
+                            "eval/human_replay_collision_rate": human_replay_metrics["collision_rate"],
+                            "eval/human_replay_offroad_rate": human_replay_metrics["offroad_rate"],
+                            "eval/human_replay_completion_rate": human_replay_metrics["completion_rate"],
                         },
                         step=global_step,
                     )
@@ -74,7 +71,7 @@ def run_human_replay_eval_in_subprocess(config, logger, epoch, global_step):
         print(f"Failed to run human replay evaluation: {e}")
 
 
-def run_wosac_eval_in_subprocess(config, logger, epoch, global_step):
+def run_wosac_eval_in_subprocess(config, logger, global_step):
     """
     Run WOSAC evaluation in a subprocess and log metrics to wandb.
 
@@ -160,7 +157,7 @@ def run_wosac_eval_in_subprocess(config, logger, epoch, global_step):
         print(f"Failed to run WOSAC evaluation: {e}")
 
 
-def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
+def render_videos(config, vecenv, logger, global_step, bin_path):
     """
     Generate and log training videos using C-based rendering.
 
