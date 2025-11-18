@@ -115,7 +115,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
             env->init_steps = init_steps;
             env->goal_behavior = goal_behavior;
             sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-            env->entities = load_map_binary(map_file, env, conf);
+            env->entities = load_map_binary(map_file, env);
             set_active_agents(env);
 
             // Skip map if it doesn't contain any controllable agents
@@ -221,7 +221,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
     char map_file[100];
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-    env->num_agents = max_agents;
+    env->max_active_agents = max_agents;
     env->map_name = strdup(map_file);
     env->init_steps = init_steps;
     env->timestep = init_steps;

@@ -253,6 +253,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .goal_behavior = goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,
+        .ini_file = (char*)ini_file,
     };
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :

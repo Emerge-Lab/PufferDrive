@@ -133,6 +133,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            ini_file="pufferlib/config/ocean/drive.ini",
         )
 
         self.num_agents = num_agents
@@ -205,6 +206,7 @@ class Drive(pufferlib.PufferEnv):
                     init_steps=self.init_steps,
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
+                    ini_file="pufferlib/config/ocean/drive.ini",
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)

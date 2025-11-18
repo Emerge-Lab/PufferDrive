@@ -293,7 +293,7 @@ struct Drive {
     unsigned char* terminals;
     Log log;
     Log* logs;
-    int num_agents;
+    int max_active_agents;
     int active_agent_count;
     int* active_agent_indices;
     int action_type;
@@ -344,6 +344,7 @@ struct Drive {
     int* tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    env_init_config conf;
 };
 
 void add_log(Drive* env) {
@@ -486,7 +487,6 @@ bool is_valid_spawn_point(Drive* env, int agent_idx, float start_x, float start_
         if (entity->type == VEHICLE) {
             if (entity->initialized == 0) continue; // Skip uninitialized entities
             if(check_aabb_collision(&mock_agent, entity)) {
-                printf("Collision detected with existing vehicle (Entity ID: %d)\n", entity->id);
                 collided = VEHICLE_COLLISION;
                 return false; // Collision detected with existing vehicle at spawn point
             }
@@ -524,7 +524,7 @@ bool is_valid_spawn_point(Drive* env, int agent_idx, float start_x, float start_
     return true; // No collisions detected
 }
 
-Entity* load_map_binary(const char* filename, Drive* env, env_init_config conf) {
+Entity* load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
     if (!file) return NULL;
 
@@ -547,7 +547,7 @@ Entity* load_map_binary(const char* filename, Drive* env, env_init_config conf) 
     fread(&env->num_objects, sizeof(int), 1, file);     // Can be 0 for dynamic_no_agents init_mode
     fread(&env->num_roads, sizeof(int), 1, file);
     int num_bin_entities = env->num_objects + env->num_roads;
-    if (conf.init_mode == DYNAMIC_AGENTS_PER_ENV) {
+    if (env->conf.init_mode == DYNAMIC_AGENTS_PER_ENV) {
         Entity read_bin_entities[num_bin_entities];
         // Read all binaries into temporary array
         for (int i = 0; i < num_bin_entities; i++) {
@@ -599,9 +599,9 @@ Entity* load_map_binary(const char* filename, Drive* env, env_init_config conf) 
             read_bin_entities[i].initialized = 1;
         }
 
-        env->num_objects = conf.num_agents_per_world;
+        env->num_objects = env->conf.num_agents_per_world;
         env->num_entities = env->num_objects + env->num_roads;
-        printf("Initializing environment with %d dynamic agents, %d num entities\n", env->num_objects, env->num_entities);
+        printf("Initializing environment with %d agents, %d roads, %d total entities\n", env->num_objects, env->num_roads, env->num_entities);
         Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
 
         // Only initialize road entities
@@ -758,9 +758,8 @@ bool get_valid_goal(Drive* env, float start_point_x, float start_point_y, float 
     return false;
 }
 
-void init_agents_random_start(Drive* env, env_init_config conf) {
+void init_agents_random_start(Drive* env) {
     Entity* entities = env->entities;
-    float goal_radius = env->goal_radius;
     // int rel_neighbor_offsets_cnt = 0;
     // int* rel_neighbor_offsets = get_relative_neighbor_offsets(env, goal_radius, &rel_neighbor_offsets_cnt);
 
@@ -770,10 +769,6 @@ void init_agents_random_start(Drive* env, env_init_config conf) {
         }
 
         Entity agent = entities[agent_idx];
-        if (agent.id == 239 || agent.id == 238) {
-            printf("Initializing Agent %d with random start position\n", agent.id);
-        }
-        // printf("Random Initializing Agent %d\n", agent.id);
         while(1){
             // Random Road lane of a random grid cell
             int rand_grid_col = rand() % env->grid_map->grid_cols;
@@ -813,7 +808,7 @@ void init_agents_random_start(Drive* env, env_init_config conf) {
                     else {
                         heading = 0.0f; // Design choice: default to 0 if no previous lane
                     }
-                    printf("Selected Point (%f, %f) at Grid Cell (%d, %d) with heading %f\n", entity.traj_x[start_point_geometry_idx], entity.traj_y[start_point_geometry_idx], rand_grid_row, rand_grid_col, heading);
+                    // printf("Selected Point (%f, %f) at Grid Cell (%d, %d) with heading %f\n", entity.traj_x[start_point_geometry_idx], entity.traj_y[start_point_geometry_idx], rand_grid_row, rand_grid_col, heading);
                     bool valid_spawn = is_valid_spawn_point(
                         env,
                         agent.id,
@@ -821,7 +816,7 @@ void init_agents_random_start(Drive* env, env_init_config conf) {
                         entity.traj_y[start_point_geometry_idx],
                         entity.traj_z[start_point_geometry_idx],
                         heading,
-                        conf.vehicle_width, conf.vehicle_length, conf.vehicle_height
+                        env->conf.vehicle_width, env->conf.vehicle_length, env->conf.vehicle_height
                     );
                     if (valid_spawn) {
                         start_x = entity.traj_x[start_point_geometry_idx];
@@ -841,7 +836,7 @@ void init_agents_random_start(Drive* env, env_init_config conf) {
             }
 
             // Get goal point info
-            float goal_x = -0.5, goal_y = -0.5, goal_z = -0.5;
+            float goal_x = start_x + 3.0, goal_y = start_y + 4.0, goal_z = start_z + 1.0;
             // bool is_valid_goal = get_valid_goal(
             //     env,
             //     start_x, start_y, start_z,
@@ -856,6 +851,7 @@ void init_agents_random_start(Drive* env, env_init_config conf) {
             // }
             // Else break with given start and goal
             agent.initialized = 1;
+            agent.type = VEHICLE;
             agent.array_size = 1;
             agent.traj_x = (float*)calloc(agent.array_size, sizeof(float));
             agent.traj_y = (float*)calloc(agent.array_size, sizeof(float));
@@ -876,15 +872,15 @@ void init_agents_random_start(Drive* env, env_init_config conf) {
             agent.heading_x = cosf(agent.heading);
             agent.heading_y = sinf(agent.heading);
             agent.traj_valid[0] = 1;
-            agent.height = conf.vehicle_height;
-            agent.width = conf.vehicle_width;
-            agent.length = conf.vehicle_length;
+            agent.height = env->conf.vehicle_height;
+            agent.width = env->conf.vehicle_width;
+            agent.length = env->conf.vehicle_length;
             agent.goal_position_x = goal_x;
             agent.goal_position_y = goal_y;
             agent.goal_position_z = goal_z;
 
             agent.mark_as_expert = 0;
-            agent.goal_radius = goal_radius;
+            agent.goal_radius = env->goal_radius;
             break;
         }
         entities[agent_idx] = agent;
@@ -905,6 +901,12 @@ void init_agents_random_start(Drive* env, env_init_config conf) {
 void set_start_position(Drive* env){
     //InitWindow(800, 600, "GPU Drive");
     //BeginDrawing();
+
+    // Must start at step 0 if using DYNAMIC_AGENTS_PER_ENV init_mode
+    if (env->conf.init_mode == DYNAMIC_AGENTS_PER_ENV && env->init_steps != 0) {
+        raise_error_with_message(ERROR_INVALID_CONFIG, "init_steps must be 0 when using DYNAMIC_AGENTS_PER_ENV init_mode, %d given\n", env->init_steps);
+    }
+
     for(int i = 0; i < env->num_entities; i++){
         int is_active = 0;
         for(int j = 0; j < env->active_agent_count; j++){
@@ -1337,13 +1339,18 @@ void cache_neighbor_offsets(Drive* env){
     }
 }
 
-GridMapEntity* get_neighbor_cache_entities(Drive* env, int cell_idx, int* neighbor_entities_cnt) {
+GridMapEntity* get_neighbor_cache_entities(Drive* env, int cell_idx, int* neighbor_entities_cnt, int max_entities) {
     GridMap* grid_map = env->grid_map;
     if (cell_idx < 0 || cell_idx >= (grid_map->grid_cols * grid_map->grid_rows)) {
         return 0; // Invalid cell index
     }
 
     int count = grid_map->neighbor_cache_count[cell_idx];
+    // Limit to available size
+    if (count > max_entities){
+        count = max_entities;
+    }
+
     GridMapEntity* entities = (GridMapEntity*)calloc(count, sizeof(GridMapEntity));
     memcpy(entities, grid_map->neighbor_cache_entities[cell_idx], count * sizeof(GridMapEntity));
     *neighbor_entities_cnt = count;
@@ -1525,19 +1532,6 @@ int check_aabb_collision(Entity* car1, Entity* car2) {
         {car2->x + (-half_len2 * cos2 + half_width2 * sin2), car2->y + (-half_len2 * sin2 - half_width2 * cos2)}
     };
 
-    // Log car 1 details
-    // printf("Car 1 - Position: (%f, %f), Heading: (%f, %f), Size: (%f, %f)\n",
-    //        car1->x, car1->y, cos1, sin1, car1->length, car1->width);
-    // for (int i = 0; i < 4; i++) {
-    //     printf("  Corner %d: (%f, %f)\n", i, car1_corners[i][0], car1_corners[i][1]);
-    // }
-
-    // // Log car 2 details
-    // printf("Car 2 - Position: (%f, %f), Heading: (%f, %f), Size: (%f, %f)\n",
-    //        car2->x, car2->y, cos2, sin2, car2->length, car2->width);
-    // for (int i = 0; i < 4; i++) {
-    //     printf("  Corner %d: (%f, %f)\n", i, car2_corners[i][0], car2_corners[i][1]);
-    // }
 
     // Get the axes to check (normalized vectors perpendicular to each edge)
     float axes[4][2] = {
@@ -1792,7 +1786,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 bool should_control_agent(Drive* env, int agent_idx){
 
     // Check if we have room for more agents or are already at capacity
-    if (env->active_agent_count >= env->num_agents) {
+    if (env->active_agent_count >= env->max_active_agents) {
         return false;
     }
 
@@ -1850,13 +1844,16 @@ void set_active_agents(Drive* env){
     int static_agent_indices[MAX_AGENTS];
     int expert_static_agent_indices[MAX_AGENTS];
 
-    if(env->num_agents == 0){
-        env->num_agents = MAX_AGENTS;
+    if(env->max_active_agents == 0){
+        env->max_active_agents = MAX_AGENTS;
     }
 
     // Iterate through entities to find agents to create and/or control
-    for(int i = 0; i < env->num_objects && env->num_actors < MAX_AGENTS; i++){
-
+    for(int i = 0; i < env->num_entities && env->num_actors < env->max_active_agents; i++){
+        // Skip non-agent entities
+        if (env->entities[i].type != VEHICLE && env->entities[i].type != PEDESTRIAN && env->entities[i].type != CYCLIST) {
+            continue;
+        }
         Entity* entity = &env->entities[i];
 
         // Skip if not valid at initialization
@@ -1891,7 +1888,7 @@ void set_active_agents(Drive* env){
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->entities[i].active_agent = 0;
-            if(env->entities[i].mark_as_expert == 1 || env->active_agent_count == env->num_agents) {
+            if(env->entities[i].mark_as_expert == 1 || env->active_agent_count == env->max_active_agents) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
                 env->entities[i].mark_as_expert = 1;
@@ -1994,19 +1991,20 @@ void seed_prng_once(void) {
 }
 
 void init(Drive* env){
-    seed_prng_once();  // seed rand() for this process
+    seed_prng_once();  // unique seed for each run(for reproducibility comment this line)
     env->human_agent_idx = 0;
     env->timestep = 0;
     env_init_config conf = {0};
     if(ini_parse(env->ini_file, handler, &conf) < 0) {
-        printf("Error while loading %s", env->ini_file);
+        printf("Error while loading config file %s", env->ini_file);
     }
-    env->entities = load_map_binary(env->map_name, env, conf);
+    env->conf = conf;
+    env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
-    if (conf.init_mode == DYNAMIC_AGENTS_PER_ENV) {
-        env->goal_distance = conf.goal_distance;
-        init_agents_random_start(env, conf);
+    if (env->conf.init_mode == DYNAMIC_AGENTS_PER_ENV) {
+        env->goal_distance = env->conf.goal_distance;
+        init_agents_random_start(env);
     }
     if (env->goal_behavior==GOAL_GENERATE_NEW) init_topology_graph(env);
     env->grid_map->vision_range = GRID_MAP_CACHE_VISION_RANGE;
@@ -2015,7 +2013,9 @@ void init(Drive* env){
     env->logs_capacity = 0;
     set_active_agents(env);     // TODO
     env->logs_capacity = env->active_agent_count;
-    remove_bad_trajectories(env);       // TODO
+    if (conf.init_mode != DYNAMIC_AGENTS_PER_ENV) {
+        remove_bad_trajectories(env);       // TODO
+    }
     set_start_position(env);        // TODO(Can skip for dynamic agents)
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
@@ -2378,7 +2378,7 @@ void compute_observations(Drive* env) {
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
 
         int list_size = 0;
-        GridMapEntity* entity_list = get_neighbor_cache_entities(env, grid_idx, &list_size);
+        GridMapEntity* entity_list = get_neighbor_cache_entities(env, grid_idx, &list_size, MAX_ROAD_SEGMENT_OBSERVATIONS);
 
         for(int k = 0; k < list_size; k++) {
             int entity_idx = entity_list[k].entity_idx;
