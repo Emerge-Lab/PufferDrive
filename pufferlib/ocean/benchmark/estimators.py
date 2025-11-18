@@ -13,7 +13,7 @@ def histogram_estimate(
     min_val: float,
     max_val: float,
     num_bins: int,
-    additive_smoothing: float = 0.1,
+    additive_smoothing: float,
 ) -> np.ndarray:
     """Computes log-likelihoods of samples based on histograms.
 
@@ -68,7 +68,7 @@ def log_likelihood_estimate_timeseries(
     min_val: float,
     max_val: float,
     num_bins: int,
-    additive_smoothing: float = 0.1,
+    additive_smoothing: float,
     treat_timesteps_independently: bool = True,
     sanity_check: bool = False,
     plot_agent_idx: int = 0,
@@ -123,7 +123,7 @@ def log_likelihood_estimate_timeseries(
 def bernoulli_estimate(
     log_samples: np.ndarray,
     sim_samples: np.ndarray,
-    additive_smoothing: float = 0.001,
+    additive_smoothing: float,
 ) -> np.ndarray:
     """Computes log probabilities of samples based on Bernoulli distributions.
 
@@ -156,7 +156,7 @@ def log_likelihood_estimate_scenario_level(
     min_val: float,
     max_val: float,
     num_bins: int,
-    additive_smoothing: float = 0.1,
+    additive_smoothing: float | None = None,
     use_bernoulli: bool = False,
 ) -> np.ndarray:
     """Computes log-likelihood estimates for scenario-level features (no time dimension).
@@ -185,7 +185,7 @@ def log_likelihood_estimate_scenario_level(
         log_likelihood_2d = bernoulli_estimate(
             log_values_2d.astype(bool),
             sim_values_2d.astype(bool),
-            additive_smoothing=additive_smoothing,
+            additive_smoothing=0.001,
         )
     else:
         log_likelihood_2d = histogram_estimate(
