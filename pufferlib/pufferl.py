@@ -558,25 +558,16 @@ class PuffeRL:
                             cmd.extend(["--init-mode", str(self.vecenv.driver_env.init_mode)])
                         if self.vecenv.driver_env.control_mode is not None:
                             cmd.extend(["--control-mode", str(self.vecenv.driver_env.control_mode)])
+                        if self.vecenv.driver_env.max_controlled_agents != -1:
+                            cmd.extend(["--max-controlled-agents", str(self.vecenv.driver_env.max_controlled_agents)])
+                        if self.vecenv.driver_env.num_maps is not None:
+                            cmd.extend(["--num-maps", str(self.vecenv.driver_env.num_maps)])
+                        if self.vecenv.driver_env.scenario_length is not None:
+                            cmd.extend(["--scenario-length", str(self.vecenv.driver_env.scenario_length)])
 
                         # Specify output paths for videos
                         cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
                         cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
-
-                        env_cfg = getattr(self, "vecenv", None)
-                        env_cfg = getattr(env_cfg, "driver_env", None)
-                        if env_cfg is not None:
-                            n_policy = getattr(env_cfg, "max_controlled_agents", -1)
-                            try:
-                                n_policy = int(n_policy)
-                            except (TypeError, ValueError):
-                                n_policy = -1
-                            if n_policy > 0:
-                                cmd += ["--num-policy-controlled-agents", str(n_policy)]
-                            if getattr(env_cfg, "num_maps", False):
-                                cmd.extend(["--num-maps", str(env_cfg.num_maps)])
-                            if getattr(env_cfg, "scenario_length", None):
-                                cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
 
                         # Call C code that runs eval_gif() in subprocess
                         result = subprocess.run(
