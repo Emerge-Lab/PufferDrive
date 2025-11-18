@@ -48,7 +48,7 @@ def run_validation_experiment(config, vecenv, policy):
             "likelihood_distance_to_nearest_object": scene_results["likelihood_distance_to_nearest_object"].mean(),
             "likelihood_time_to_collision": scene_results["likelihood_time_to_collision"].mean(),
             "likelihood_collision_indication": scene_results["likelihood_collision_indication"].mean(),
-            "realism_metametric": scene_results["realism_metametric"].mean(),
+            "realism_meta_score": scene_results["realism_meta_score"].mean(),
         }
 
     return results
@@ -68,7 +68,7 @@ def format_results_table(results):
             f"| {label:11s} | {r['ade']:6.4f} | {r['min_ade']:6.4f} | {r['likelihood_linear_speed']:12.4f} | "
             f"{r['likelihood_linear_acceleration']:12.4f} | {r['likelihood_angular_speed']:13.4f} | "
             f"{r['likelihood_angular_acceleration']:13.4f} | {r['likelihood_distance_to_nearest_object']:8.4f} | "
-            f"{r['likelihood_time_to_collision']:6.4f} | {r['likelihood_collision_indication']:9.4f} | {r['realism_metametric']:18.4f} |"
+            f"{r['likelihood_time_to_collision']:6.4f} | {r['likelihood_collision_indication']:9.4f} | {r['realism_meta_score']:18.4f} |"
         )
 
     return "\n".join(lines)
@@ -81,15 +81,16 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.env)
-    config["wosac"]["enabled"] = True
-    config["wosac"]["num_rollouts"] = 32
     config["vec"]["backend"] = "PufferEnv"
     config["vec"]["num_envs"] = 1
-    config["env"]["num_agents"] = config["wosac"]["num_total_wosac_agents"]
-    config["env"]["init_mode"] = config["wosac"]["init_mode"]
-    config["env"]["control_mode"] = config["wosac"]["control_mode"]
-    config["env"]["init_steps"] = config["wosac"]["init_steps"]
-    config["env"]["goal_behavior"] = config["wosac"]["goal_behavior"]
+    config["eval"]["enabled"] = True
+    config["eval"]["wosac_num_rollouts"] = 32
+
+    config["env"]["num_agents"] = config["eval"]["wosac_num_agents"]
+    config["env"]["init_mode"] = config["eval"]["wosac_init_mode"]
+    config["env"]["control_mode"] = config["eval"]["wosac_control_mode"]
+    config["env"]["init_steps"] = config["eval"]["wosac_init_steps"]
+    config["env"]["goal_behavior"] = config["eval"]["wosac_goal_behavior"]
 
     vecenv = load_env(args.env, config)
     policy = load_policy(config, vecenv, args.env)
