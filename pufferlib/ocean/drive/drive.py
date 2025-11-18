@@ -324,6 +324,8 @@ class Drive(pufferlib.PufferEnv):
         """Collect and save expert trajectories with bptt_horizon length sequences."""
         trajectory_length = 91
 
+        # TODO: Map these to the new joint action space
+
         # Collect full expert trajectories - both discrete and continuous
         expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
         expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
