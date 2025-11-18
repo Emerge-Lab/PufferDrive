@@ -518,10 +518,14 @@ class PuffeRL:
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
 
-        if self.config["eval"]["wosac_realism_eval"] and self.epoch % self.config["eval"]["eval_interval"] == 0:
+        if self.config["eval"]["wosac_realism_eval"] and (
+            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+        ):
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
-        if self.config["eval"]["human_replay_eval"] and self.epoch % self.config["eval"]["eval_interval"] == 0:
+        if self.config["eval"]["human_replay_eval"] and (
+            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+        ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
     def mean_and_log(self):
