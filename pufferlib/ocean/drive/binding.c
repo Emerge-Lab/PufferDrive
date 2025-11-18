@@ -93,6 +93,51 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         env->goal_behavior = goal_behavior;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         load_map_binary(map_file, env);
+
+        // Skip map if it contains traffic lights
+        bool has_traffic_light = false;
+        for(int j=0; j<env->num_traffic_elements; j++) {
+            if(env->traffic_elements[j].type == TRAFFIC_LIGHT) {
+                has_traffic_light = true;
+                break;
+            }
+        }
+        if(has_traffic_light) {
+            maps_checked++;
+
+            // Safeguard: if we've checked all available maps and all have traffic lights, raise an error
+            if(maps_checked >= num_maps) {
+                for(int j=0;j<env->num_dynamic_agents;j++) free_dynamic_agent(&env->dynamic_agents[j]);
+                for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+                for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+                free(env->dynamic_agents);
+                free(env->road_elements);
+                free(env->traffic_elements);
+                free(env->active_agent_indices);
+                free(env->static_agent_indices);
+                free(env->expert_static_agent_indices);
+                free(env);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                sprintf(error_msg, "All %d available maps contain traffic lights which are not supported", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
+            }
+
+            for(int j=0;j<env->num_dynamic_agents;j++) free_dynamic_agent(&env->dynamic_agents[j]);
+            for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+            for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+            free(env->dynamic_agents);
+            free(env->road_elements);
+            free(env->traffic_elements);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env);
+            continue;
+        }
+
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
