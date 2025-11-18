@@ -415,41 +415,45 @@ class PuffeRL:
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
             # Add log likelihood loss of human actions under current policy.
-            # 1: Sample a batch of human actions and observations from dataset
-            # Shape: [n_sequences, bptt_horizon, feature_dim]
-            discrete_human_actions, continuous_human_actions, human_observations = (
-                self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
-            )
-            discrete_human_actions = discrete_human_actions.to(device)
-            continuous_human_actions = continuous_human_actions.to(device)
-            human_observations = human_observations.to(device)
+            # Skip if human_ll_coef is 0
+            if config["human_ll_coef"] > 0:
+                # 1: Sample a batch of human actions and observations from dataset
+                # Shape: [n_sequences, bptt_horizon, feature_dim]
+                discrete_human_actions, continuous_human_actions, human_observations = (
+                    self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
+                )
+                discrete_human_actions = discrete_human_actions.to(device)
+                continuous_human_actions = continuous_human_actions.to(device)
+                human_observations = human_observations.to(device)
 
-            # Use helper function to compute realism metrics
-            realism_metrics = self.vecenv.driver_env.compute_realism_metrics(
-                discrete_human_actions, continuous_human_actions
-            )
-            self.realism.update(realism_metrics)
+                # Use helper function to compute realism metrics
+                realism_metrics = self.vecenv.driver_env.compute_realism_metrics(
+                    discrete_human_actions, continuous_human_actions
+                )
+                self.realism.update(realism_metrics)
 
-            # Select appropriate action type for training
-            use_continuous = self.vecenv.driver_env._action_type_flag == 1
-            human_actions = continuous_human_actions if use_continuous else discrete_human_actions
+                # Select appropriate action type for training
+                use_continuous = self.vecenv.driver_env._action_type_flag == 1
+                human_actions = continuous_human_actions if use_continuous else discrete_human_actions
 
-            # 2: Compute the log-likelihood of human actions under the current policy,
-            # given the corresponding human observations. A higher likelihood indicates
-            # that the policy behaves more like a human under the same observations.
-            human_state = dict(
-                action=human_actions,
-                lstm_h=None,
-                lstm_c=None,
-            )
+                # 2: Compute the log-likelihood of human actions under the current policy,
+                # given the corresponding human observations. A higher likelihood indicates
+                # that the policy behaves more like a human under the same observations.
+                human_state = dict(
+                    action=human_actions,
+                    lstm_h=None,
+                    lstm_c=None,
+                )
 
-            human_logits, _ = self.policy(human_observations, human_state)
+                human_logits, _ = self.policy(human_observations, human_state)
 
-            _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
-                logits=human_logits, action=human_actions
-            )
+                _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
+                    logits=human_logits, action=human_actions
+                )
 
-            self.realism["human_log_prob"] = human_log_prob.mean().item()
+                self.realism["human_log_prob"] = human_log_prob.mean().item()
+            else:
+                human_log_prob = torch.tensor(0.0, device=device)
 
             adv = advantages[idx]
             adv = compute_puff_advantage(
