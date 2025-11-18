@@ -37,6 +37,12 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        control_non_vehicles=False,
+        num_agents_per_world=32,
+        vehicle_width=2.0,
+        vehicle_length=4.5,
+        vehicle_height=1.8,
+        goal_curriculum=30.0,
     ):
         # env
         self.dt = dt
@@ -90,6 +96,8 @@ class Drive(pufferlib.PufferEnv):
             self.init_mode = 0
         elif self.init_mode_str == "create_only_controlled":
             self.init_mode = 1
+        elif self.init_mode_str == "dynamic_no_agents":
+            self.init_mode = 0  # All created agents are valid
         else:
             raise ValueError(
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
