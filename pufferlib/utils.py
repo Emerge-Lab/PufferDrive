@@ -32,6 +32,8 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
             config["env"],
             "--load-model-path",
             latest_cpt,
+            "--eval.wosac-realism-eval",
+            "False",
             "--eval.human-replay-eval",
             "True",
             "--eval.human-replay-num-agents",
