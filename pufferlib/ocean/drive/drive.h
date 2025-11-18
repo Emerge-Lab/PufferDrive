@@ -1548,6 +1548,9 @@ void c_close(Drive* env){
     for(int i = 0; i < env->num_dynamic_agents; i++) free_dynamic_agent(&env->dynamic_agents[i]);
     for(int i = 0; i < env->num_road_elements; i++) free_road_element(&env->road_elements[i]);
     for(int i = 0; i < env->num_traffic_elements; i++) free_traffic_element(&env->traffic_elements[i]);
+    free(env->dynamic_agents);
+    free(env->road_elements);
+    free(env->traffic_elements);
     free(env->active_agent_indices);
     free(env->logs);
     // GridMap cleanup
