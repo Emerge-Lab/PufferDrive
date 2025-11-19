@@ -114,7 +114,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             "--eval.wosac-init-mode",
             str(eval_config.get("wosac_init_mode", "create_all_valid")),
             "--eval.wosac-control-mode",
-            str(eval_config.get("wosac_control_mode", "control_tracks_to_predict")),
+            str(eval_config.get("wosac_control_mode", "control_wosac")),
             "--eval.wosac-init-steps",
             str(eval_config.get("wosac_init_steps", 10)),
             "--eval.wosac-goal-behavior",

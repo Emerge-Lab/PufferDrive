@@ -80,13 +80,13 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 0
         elif self.control_mode_str == "control_agents":
             self.control_mode = 1
-        elif self.control_mode_str == "control_tracks_to_predict":
+        elif self.control_mode_str == "control_wosac":
             self.control_mode = 2
         elif self.control_mode_str == "control_sdc_only":
             self.control_mode = 3
         else:
             raise ValueError(
-                f"control_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.control_mode_str}"
+                f"control_mode must be one of 'control_vehicles', 'control_wosac', or 'control_agents'. Got: {self.control_mode_str}"
             )
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
@@ -271,7 +271,14 @@ class Drive(pufferlib.PufferEnv):
         }
 
         binding.vec_get_global_agent_state(
-            self.c_envs, states["x"], states["y"], states["z"], states["heading"], states["id"], states["length"], states["width"]
+            self.c_envs,
+            states["x"],
+            states["y"],
+            states["z"],
+            states["heading"],
+            states["id"],
+            states["length"],
+            states["width"],
         )
 
         return states
