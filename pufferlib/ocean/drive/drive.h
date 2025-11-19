@@ -40,6 +40,11 @@
 #define CONTROL_TRACKS_TO_PREDICT 2
 #define CONTROL_SDC_ONLY 3
 
+// Goal sampling modes
+#define GOAL_FIXED_FROM_DATASET 0
+#define GOAL_RANDOM_WITHIN_RADIUS 1
+#define GOAL_RANDOMIZED_CURRICULUM 2
+
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
 
@@ -139,6 +144,7 @@ struct Log {
     float static_agent_count;
     float avg_offroad_per_agent;
     float avg_collisions_per_agent;
+    float avg_initial_distance_to_goal;
 };
 
 typedef struct Entity Entity;
@@ -333,6 +339,8 @@ struct Drive {
     int* tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    int goal_sampling_mode;
+    float max_distance_to_goal;
 };
 
 void add_log(Drive* env) {
@@ -350,6 +358,8 @@ void add_log(Drive* env) {
         env->log.avg_offroad_per_agent += avg_offroad_per_agent;
         float avg_collisions_per_agent = env->logs[i].avg_collisions_per_agent;
         env->log.avg_collisions_per_agent += avg_collisions_per_agent;
+        float avg_initial_distance_to_goal = env->logs[i].avg_initial_distance_to_goal;
+        env->log.avg_initial_distance_to_goal += avg_initial_distance_to_goal;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
         if(e->reached_goal_this_episode && !e->collided_before_goal){
@@ -512,6 +522,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
 }
 
 void set_start_position(Drive* env){
+
     //InitWindow(800, 600, "GPU Drive");
     //BeginDrawing();
     for(int i = 0; i < env->num_entities; i++){
@@ -529,6 +540,7 @@ void set_start_position(Drive* env){
         if (step >= e->array_size) step = e->array_size - 1;
         if (step < 0) step = 0;
 
+        e->current_lane_idx = -1;
         e->x = e->traj_x[step];
         e->y = e->traj_y[step];
         e->z = e->traj_z[step];
@@ -1312,18 +1324,19 @@ bool should_control_agent(Drive* env, int agent_idx){
         return false;
     }
 
+    return true;
     // Check distance to goal in agent's local frame
-    float cos_heading = cosf(entity->traj_heading[0]);
-    float sin_heading = sinf(entity->traj_heading[0]);
-    float goal_dx = entity->goal_position_x - entity->traj_x[0];
-    float goal_dy = entity->goal_position_y - entity->traj_y[0];
+    // float cos_heading = cosf(entity->traj_heading[0]);
+    // float sin_heading = sinf(entity->traj_heading[0]);
+    // float goal_dx = entity->goal_position_x - entity->traj_x[0];
+    // float goal_dy = entity->goal_position_y - entity->traj_y[0];
 
     // Transform to agent's local frame
-    float local_goal_x = goal_dx * cos_heading + goal_dy * sin_heading;
-    float local_goal_y = -goal_dx * sin_heading + goal_dy * cos_heading;
-    float distance_to_goal = relative_distance_2d(0, 0, local_goal_x, local_goal_y);
+    // float local_goal_x = goal_dx * cos_heading + goal_dy * sin_heading;
+    // float local_goal_y = -goal_dx * sin_heading + goal_dy * cos_heading;
+    // float distance_to_goal = relative_distance_2d(0, 0, local_goal_x, local_goal_y);
 
-    return distance_to_goal >= MIN_DISTANCE_TO_GOAL;
+    // return distance_to_goal >= MIN_DISTANCE_TO_GOAL;
 }
 
 void set_active_agents(Drive* env){
@@ -1455,10 +1468,69 @@ void remove_bad_trajectories(Drive* env){
 }
 
 void init_goal_positions(Drive* env){
-    for(int x = 0;x<env->active_agent_count; x++){
+
+    //printf("Initializing goal positions with mode %d\n", env->goal_sampling_mode);
+
+    // First compute metrics to get current_lane_idx
+    for(int x = 0; x < env->active_agent_count; x++){
         int agent_idx = env->active_agent_indices[x];
-        env->entities[agent_idx].init_goal_x = env->entities[agent_idx].goal_position_x;
-        env->entities[agent_idx].init_goal_y = env->entities[agent_idx].goal_position_y;
+        compute_agent_metrics(env, agent_idx);
+    }
+
+    // Variables to compute average distance to goal
+    float total_distance_to_goal = 0.0f;
+    int valid_agents = 0;
+
+    if (env->goal_sampling_mode == GOAL_FIXED_FROM_DATASET) {
+        for(int x = 0; x < env->active_agent_count; x++){
+            int agent_idx = env->active_agent_indices[x];
+            env->entities[agent_idx].init_goal_x = env->entities[agent_idx].goal_position_x;
+            env->entities[agent_idx].init_goal_y = env->entities[agent_idx].goal_position_y;
+
+            // Compute distance to goal
+            float distance_to_goal = relative_distance_2d(
+                env->entities[agent_idx].x,
+                env->entities[agent_idx].y,
+                env->entities[agent_idx].goal_position_x,
+                env->entities[agent_idx].goal_position_y
+            );
+
+            if (env->entities[agent_idx].x != INVALID_POSITION) {
+                total_distance_to_goal += distance_to_goal;
+                valid_agents++;
+            }
+        }
+    }
+    else if (env->goal_sampling_mode == GOAL_RANDOM_WITHIN_RADIUS ||
+             env->goal_sampling_mode == GOAL_RANDOMIZED_CURRICULUM) {
+        for(int x = 0; x < env->active_agent_count; x++){
+            int agent_idx = env->active_agent_indices[x];
+            // Sample a goal for that agent within a radius
+            compute_new_goal(env, agent_idx);
+
+            // After computing new goal, calculate distance
+            float distance_to_goal = relative_distance_2d(
+                env->entities[agent_idx].x,
+                env->entities[agent_idx].y,
+                env->entities[agent_idx].goal_position_x,
+                env->entities[agent_idx].goal_position_y
+            );
+
+            if (env->entities[agent_idx].x != INVALID_POSITION) {
+                total_distance_to_goal += distance_to_goal;
+                valid_agents++;
+            }
+        }
+    }
+
+    // Compute and store average distance
+    if (valid_agents > 0) {
+        // Is averaged somewhere else
+        env->log.avg_initial_distance_to_goal = env->max_distance_to_goal * valid_agents;
+        //printf("Average initial distance to goal: %.2f meters (computed from %d agents)\n", total_distance_to_goal / valid_agents, valid_agents);
+    } else {
+        env->log.avg_initial_distance_to_goal = 0.0f;
+        //printf("Warning: No valid agents for computing average distance to goal\n");
     }
 }
 
@@ -1468,7 +1540,7 @@ void init(Drive* env){
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
-    if (env->goal_behavior==GOAL_GENERATE_NEW) init_topology_graph(env);
+    if (env->goal_behavior==GOAL_GENERATE_NEW) init_topology_graph(env); // Todo(dc): not sure why this is here
     env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
@@ -1950,8 +2022,8 @@ void compute_new_goal(Drive* env, int agent_idx) {
 
     if (current_lane == -1) return; // No current lane
 
-    // Target distance: 40m ahead along the lane topology from agent's current position
-    float target_distance = 40.0f;
+    // Target distance to goal
+    float target_distance = env->max_distance_to_goal;
     int current_entity = current_lane;
     Entity* lane = &env->entities[current_entity];
 
@@ -2046,6 +2118,8 @@ void c_reset(Drive* env){
         env->entities[agent_idx].displacement_sample_count = 0;
 	    env->entities[agent_idx].stopped = 0;
         env->entities[agent_idx].removed = 0;
+
+        init_goal_positions(env);
 
         if (env->goal_behavior==GOAL_GENERATE_NEW) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;

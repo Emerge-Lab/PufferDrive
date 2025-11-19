@@ -37,6 +37,8 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        goal_sampling_mode="fixed_from_dataset",
+        max_distance_to_goal=100.0,
     ):
         # env
         self.dt = dt
@@ -56,6 +58,7 @@ class Drive(pufferlib.PufferEnv):
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.max_distance_to_goal = max_distance_to_goal
 
         # Observation space calculation
         if dynamics_model == "classic":
@@ -76,6 +79,7 @@ class Drive(pufferlib.PufferEnv):
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
 
+        # TODO: Convert all these to enums
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
         elif self.control_mode_str == "control_agents":
@@ -95,6 +99,21 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
+            )
+
+        if goal_sampling_mode == "fixed_from_dataset":
+            self.goal_sampling_mode = 0
+        elif goal_sampling_mode == "random_within_radius":
+            self.goal_sampling_mode = 1
+        elif goal_sampling_mode == "randomized_curriculum":
+            self.goal_sampling_mode = 2
+            self.goal_curriculum = np.linspace(5.0, max_distance_to_goal, num=5)
+            self.curriculum_step = 0
+            self.max_distance_to_goal = self.goal_curriculum[self.curriculum_step]
+
+        else:
+            raise ValueError(
+                f"goal_sampling_mode must be one of 'fixed_from_dataset', 'random_within_radius', or 'randomized_curriculum'. Got: {goal_sampling_mode}"
             )
 
         if action_type == "discrete":
@@ -138,6 +157,8 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            goal_sampling_mode=self.goal_sampling_mode,
+            max_distance_to_goal=self.max_distance_to_goal,
         )
 
         self.num_agents = num_agents
@@ -176,6 +197,8 @@ class Drive(pufferlib.PufferEnv):
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
+                goal_sampling_mode=self.goal_sampling_mode,
+                max_distance_to_goal=self.max_distance_to_goal,
             )
             env_ids.append(env_id)
 
@@ -198,6 +221,18 @@ class Drive(pufferlib.PufferEnv):
                 info.append(log)
                 # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+            # TODO: Separate goal curriculum logic from resampling logic
+            if self.goal_sampling_mode == 2:  # randomized_curriculum
+                # Clamp curriculum_step to valid range
+                idx = np.clip(self.curriculum_step, 0, len(self.goal_curriculum) - 1)
+
+                # Update max distance based on the curriculum
+                self.max_distance_to_goal = self.goal_curriculum[idx]
+                # print(f"Resampling with max_distance_to_goal: {self.max_distance_to_goal}")
+
+                # Advance curriculum step
+                self.curriculum_step += 1
+
             self.tick = 0
             will_resample = 1
             if will_resample:
@@ -210,6 +245,8 @@ class Drive(pufferlib.PufferEnv):
                     init_steps=self.init_steps,
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
+                    goal_sampling_mode=self.goal_sampling_mode,
+                    max_distance_to_goal=self.max_distance_to_goal,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
@@ -243,6 +280,8 @@ class Drive(pufferlib.PufferEnv):
                         init_steps=self.init_steps,
                         init_mode=self.init_mode,
                         control_mode=self.control_mode,
+                        goal_sampling_mode=self.goal_sampling_mode,
+                        max_distance_to_goal=self.max_distance_to_goal,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -518,7 +557,7 @@ def process_all_maps():
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Path to the training data
-    data_dir = Path("data/processed/training")
+    data_dir = Path("data/processed/carla")
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
@@ -537,8 +576,10 @@ def process_all_maps():
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=10, atn_cache=1024, num_agents=32):
     import time
+
+    # 0 = fixed_from_dataset, 1 = random_within_radius, 2 = randomized_curriculum
 
     env = Drive(
         num_agents=num_agents,
@@ -547,6 +588,8 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         init_mode="create_all_valid",
         init_steps=0,
         scenario_length=91,
+        goal_sampling_mode="randomized_curriculum",  # "fixed_from_dataset",
+        max_distance_to_goal=1.0,
     )
 
     env.reset()
@@ -568,5 +611,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()

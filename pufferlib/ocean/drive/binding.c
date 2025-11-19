@@ -72,6 +72,8 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_maps = unpack(kwargs, "num_maps");
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
+    int goal_sampling_mode = unpack(kwargs, "goal_sampling_mode");
+    float max_distance_to_goal = unpack(kwargs, "max_distance_to_goal");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -91,6 +93,8 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         env->control_mode = control_mode;
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
+        env->goal_sampling_mode = goal_sampling_mode;
+        env->max_distance_to_goal = max_distance_to_goal;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
@@ -192,6 +196,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
+    env->goal_sampling_mode = (int)unpack(kwargs, "goal_sampling_mode");
+    env->max_distance_to_goal = (float)unpack(kwargs, "max_distance_to_goal");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
@@ -218,5 +224,6 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "score", log->score);
     assign_to_dict(dict, "avg_offroad_per_agent", log->avg_offroad_per_agent);
     assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
+    assign_to_dict(dict, "avg_initial_distance_to_goal", log->avg_initial_distance_to_goal);
     return 0;
 }
