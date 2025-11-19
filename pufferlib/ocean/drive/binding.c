@@ -104,8 +104,6 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_ade = conf.reward_ade;
     env->scenario_length = conf.scenario_length;
-    env->goal_radius = conf.goal_radius;
-    env->goal_behavior = conf.goal_behavior;
     env->collision_behavior = conf.collision_behavior;
     env->offroad_behavior = conf.offroad_behavior;
     env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
@@ -188,6 +186,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
 
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
+    env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
+    env->goal_radius = (float)unpack(kwargs, "goal_radius");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");

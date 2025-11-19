@@ -38,6 +38,7 @@
 #define CONTROL_VEHICLES 0
 #define CONTROL_AGENTS 1
 #define CONTROL_TRACKS_TO_PREDICT 2
+#define CONTROL_SDC_ONLY 3
 
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
@@ -194,8 +195,8 @@ struct Entity {
     float cumulative_displacement;
     int displacement_sample_count;
     float goal_radius;
-    int stopped; // 0/1 -> freeze if set
-    int removed; //0/1 -> remove from sim if set
+    int stopped;
+    int removed;
 
     // Jerk dynamics
     float a_long;
@@ -1570,6 +1571,10 @@ bool should_control_agent(Drive* env, int agent_idx){
     entity->width *= 0.7f; // TODO: Move this somewhere else
     entity->length *= 0.7f;
 
+    if (env->control_mode == CONTROL_SDC_ONLY) {
+        return (agent_idx == env->sdc_track_index);
+    }
+
     // Special mode: control only agents in prediction track list
     if (env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
         for (int j = 0; j < env->num_tracks_to_predict; j++) {
@@ -1994,13 +1999,10 @@ float normalize_value(float value, float min, float max){
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
     if (agent->removed) return;
+
     if (agent->stopped) {
         agent->vx = 0.0f;
         agent->vy = 0.0f;
-        return;
-    }
-
-    if (agent->collision_state != 0) {
         return;
     }
 
@@ -2017,10 +2019,13 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
             acceleration *= ACCELERATION_VALUES[6];
             steering *= STEERING_VALUES[12];
         } else { // discrete
-            int (*action_array)[2] = (int(*)[2])env->actions;
-            int acceleration_index = action_array[action_idx][0];
-            int steering_index = action_array[action_idx][1];
-
+            // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
+            int* action_array = (int*)env->actions;
+            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
+            int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+            int action_val = action_array[action_idx];
+            int acceleration_index = action_val / num_steer;
+            int steering_index = action_val % num_steer;
             acceleration = ACCELERATION_VALUES[acceleration_index];
             steering = STEERING_VALUES[steering_index];
         }
@@ -2036,7 +2041,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         float speed = sqrtf(vx*vx + vy*vy);
 
         // Update speed with acceleration
-        speed = speed + 0.5f*acceleration*env->dt;
+        speed = speed + acceleration*env->dt;
         speed = clipSpeed(speed);
 
         // Compute yaw rate
@@ -2166,12 +2171,13 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
+
         // For WOSAC, we need the original world coordinates, so we add the world means back
         x_out[i] = agent->x + env->world_mean_x;
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
-        id_out[i] = agent->id;
+        id_out[i] = env->tracks_to_predict_indices[i];
     }
 }
 
@@ -2179,7 +2185,7 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
-        id_out[i] = agent->id;
+        id_out[i] = env->tracks_to_predict_indices[i];
         scenario_id_out[i] = agent->scenario_id;
 
         for(int t = env->init_steps; t < agent->array_size; t++){
@@ -2611,6 +2617,7 @@ void c_step(Drive* env){
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
+
         compute_agent_metrics(env, agent_idx);
 
         int collision_state = env->entities[agent_idx].collision_state;
@@ -2659,18 +2666,16 @@ void c_step(Drive* env){
         );
 
         if(distance_to_goal < env->goal_radius){
-            if(env->entities[agent_idx].respawn_timestep != -1){
+            if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1){
                 env->rewards[i] += env->reward_goal_post_respawn;
-
                 if(is_ego){
                     env->logs[i].episode_return += env->reward_goal_post_respawn;
                 } else if(is_co_player){
                     env->co_player_logs[i].co_player_episode_return += env->reward_goal_post_respawn;
                 }
-            } else {
+            } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
                 env->rewards[i] += env->reward_goal;
                 env->entities[agent_idx].sampled_new_goal = 1;
-
                 if(is_ego){
                     env->logs[i].episode_return += env->reward_goal;
                     env->logs[i].num_goals_reached += 1;
@@ -2678,19 +2683,25 @@ void c_step(Drive* env){
                     env->co_player_logs[i].co_player_episode_return += env->reward_goal;
                     env->co_player_logs[i].co_player_num_goals_reached += 1;
                 }
+            } else { // Zero out the velocity so that the agent stops at the goal
+                env->rewards[i] = env->reward_goal;
+                if(is_ego){
+                    env->logs[i].episode_return = env->reward_goal;
+                    env->logs[i].num_goals_reached = 1;
+                } else if(is_co_player){
+                    env->co_player_logs[i].co_player_episode_return = env->reward_goal;
+                    env->co_player_logs[i].co_player_num_goals_reached = 1;
+                }
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
             }
 
             env->entities[agent_idx].reached_goal_this_episode = 1;
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
+
         }
-        if(env->entities[agent_idx].sampled_new_goal){
-            if (env->goal_behavior==GOAL_GENERATE_NEW) {
-                compute_new_goal(env, agent_idx);
-            }
-            else if (env->goal_behavior==GOAL_STOP) {
-                env->entities[agent_idx].stopped = 1;
-                env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
-            }
+        if(env->entities[agent_idx].sampled_new_goal && env->goal_behavior == GOAL_GENERATE_NEW){
+            compute_new_goal(env, agent_idx);
         }
 
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
@@ -2892,7 +2903,8 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int max_obs = 10 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
@@ -2916,7 +2928,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
-    int obs_idx = 10;  // Start after ego obs
+    int obs_idx = ego_dim;  // Start after ego obs
     for(int j = 0; j < MAX_AGENTS - 1; j++) {
         if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 7;  // Move to next agent observation

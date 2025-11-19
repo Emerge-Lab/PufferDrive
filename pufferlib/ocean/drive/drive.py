@@ -143,9 +143,11 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 1
         elif self.control_mode_str == "control_tracks_to_predict":
             self.control_mode = 2
+        elif self.control_mode_str == "control_sdc_only":
+            self.control_mode = 3
         else:
             raise ValueError(
-                f"init_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.init_mode_str}"
+                f"control_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.control_mode_str}"
             )
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
@@ -158,7 +160,10 @@ class Drive(pufferlib.PufferEnv):
 
         if action_type == "discrete":
             if dynamics_model == "classic":
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+                # Joint action space (assume dependence)
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 13])
+                # Multi discrete (assume independence)
+                # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
             elif dynamics_model == "jerk":
                 self.single_action_space = gymnasium.spaces.MultiDiscrete([4, 3])
             else:
@@ -228,7 +233,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
-                goal_behavior=goal_behavior,
+                goal_behavior=self.goal_behavior,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
@@ -282,6 +287,7 @@ class Drive(pufferlib.PufferEnv):
             control_mode=self.control_mode,
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
+            goal_behavior=self.goal_behavior,
             population_play=self.population_play,
             num_ego_agents=self.num_ego_agents,
         )
