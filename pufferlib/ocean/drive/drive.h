@@ -11,6 +11,7 @@
 #include "rlgl.h"
 #include <time.h>
 #include "error.h"
+#include "../env_config.h"
 
 // Entity Types
 #define NONE 0
@@ -62,9 +63,11 @@
 #define LANE_ALIGNED_IDX 3
 #define AVG_DISPLACEMENT_ERROR_IDX 4
 
-// Grid cell size
+// Grid Map Related
 #define GRID_CELL_SIZE 5.0f
 #define MAX_ENTITIES_PER_CELL 30    // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
+#define GRID_MAP_CACHE_VISION_RANGE 21      // Vision range to cache neighbor offsets
+#define COLLISION_VISION_RANGE 5        // Vision range for collision checking
 
 // Max road segment observation entities
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 200
@@ -177,6 +180,7 @@ struct Entity {
     float heading_y;
     int current_lane_idx;
     int valid;
+    int initialized;
     int respawn_timestep;
     int respawn_count;
     int collided_before_goal;
@@ -275,6 +279,7 @@ struct GridMap {
     int cell_size_y;
     int* cell_entities_count;  // number of entities in each cell of the GridMap
     GridMapEntity** cells;  // list of gridEntities in each cell of the GridMap
+    int* cell_roadlanes_count; // number of road lanes in each cell
 
     // Extras/Optimizations
     int vision_range;
@@ -290,7 +295,7 @@ struct Drive {
     unsigned char* terminals;
     Log log;
     Log* logs;
-    int num_agents;
+    int max_active_agents;
     int active_agent_count;
     int* active_agent_indices;
     int action_type;
@@ -305,6 +310,13 @@ struct Drive {
     int* static_agent_indices;
     int expert_static_agent_count;
     int* expert_static_agent_indices;
+    int num_lanes;
+    int num_road_edges;
+    int num_road_lines;
+    int static_car_count;
+    int* static_car_indices;
+    int expert_static_car_count;
+    int* expert_static_car_indices;
     int timestep;
     int init_steps;
     int dynamics_model;
@@ -320,7 +332,7 @@ struct Drive {
     float dt;
     float reward_goal;
     float reward_goal_post_respawn;
-    float goal_radius;
+    float goal_radius;  // Distance threshold to consider goal reached
     int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
@@ -333,6 +345,7 @@ struct Drive {
     int* tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    env_init_config conf;
 };
 
 void add_log(Drive* env) {
@@ -435,6 +448,78 @@ void freeTopologyGraph(struct Graph* graph) {
     free(graph);
 }
 
+// Checks for collisions at a specified spawn point
+bool is_valid_spawn_point(Drive* env, int agent_idx, float start_x, float start_y, float start_z, float heading, float vehicle_width, float vehicle_length, float vehicle_height) {
+    // Create Mock Entity for collision checking
+    Entity mock_agent = {
+        .x = start_x,
+        .y = start_y,
+        .z = start_z,
+        .width = vehicle_width,
+        .length = vehicle_length,
+        .height = vehicle_height,
+        .heading = heading,
+        .heading_x = cosf(heading),
+        .heading_y = sinf(heading)
+    };
+
+    float half_length = mock_agent.length/2.0f;
+    float half_width = mock_agent.width/2.0f;
+    float cos_heading = cosf(mock_agent.heading);
+    float sin_heading = sinf(mock_agent.heading);
+    float agent_corners[4][2];
+    for (int i = 0; i < 4; i++) {
+        agent_corners[i][0] = mock_agent.x + (offsets[i][0]*half_length*cos_heading - offsets[i][1]*half_width*sin_heading);
+        agent_corners[i][1] = mock_agent.y + (offsets[i][0]*half_length*sin_heading + offsets[i][1]*half_width*cos_heading);
+    }
+    int collided = 0;
+
+    // Vehicle collision check
+    for (int i = 0; i < env->num_entities; i++) {
+        Entity* entity = &env->entities[i];
+        if (entity->type != VEHICLE && entity-> type != PEDESTRIAN && entity->type != CYCLIST) continue; // Only check dynamic entities
+        if (entity->id == agent_idx) continue; // Skip self
+
+        if (entity->type == VEHICLE) {
+            if (entity->initialized == 0) continue; // Skip uninitialized entities
+            if(check_aabb_collision(&mock_agent, entity)) {
+                collided = VEHICLE_COLLISION;
+                return false; // Collision detected with existing vehicle at spawn point
+            }
+        }
+    }
+
+    // Offroad check
+    // int list_size = 0;
+    // GridMapEntity* entity_list = checkNeighbors(env, mock_agent.x, mock_agent.y, collision_offsets, &list_size, COLLISION_VISION_RANGE*COLLISION_VISION_RANGE);
+    // for (int i = 0; i < list_size ; i++) {
+    //     if(entity_list[i].entity_idx == -1) continue;
+    //     Entity* entity;
+    //     entity = &env->entities[entity_list[i].entity_idx];
+
+    //     // Check for offroad collision with road edges
+    //     if(entity->type == ROAD_EDGE) {
+    //         int geometry_idx = entity_list[i].geometry_idx;
+    //         float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
+    //         float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
+    //         for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
+    //             int next = (k + 1) % 4;
+    //             if (check_line_intersection(agent_corners[k], agent_corners[next], start, end)) {
+    //                 collided = OFFROAD;
+    //                 printf("Invalid Spawn: collision with road edge (Entity ID: %d)\n", entity->id);
+    //                 break;
+    //             }
+    //         }
+    //     }
+
+    //     if (collided == OFFROAD) break;
+    // }
+
+    // Cleanup
+    // free(entity_list);
+    return true; // No collisions detected
+}
+
 
 Entity* load_map_binary(const char* filename, Drive* env) {
     FILE* file = fopen(filename, "rb");
@@ -456,59 +541,284 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         env->tracks_to_predict_indices = NULL;
     }
 
-    fread(&env->num_objects, sizeof(int), 1, file);
+    fread(&env->num_objects, sizeof(int), 1, file);     // Can be 0 for random_agents_init init_mode
     fread(&env->num_roads, sizeof(int), 1, file);
-    env->num_entities = env->num_objects + env->num_roads;
-    Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
-    for (int i = 0; i < env->num_entities; i++) {
-	    // Read base entity data
-        fread(&entities[i].scenario_id, sizeof(int), 1, file);
-        fread(&entities[i].type, sizeof(int), 1, file);
-        fread(&entities[i].id, sizeof(int), 1, file);
-        fread(&entities[i].array_size, sizeof(int), 1, file);
-        // Allocate arrays based on type
-        int size = entities[i].array_size;
-        entities[i].traj_x = (float*)malloc(size * sizeof(float));
-        entities[i].traj_y = (float*)malloc(size * sizeof(float));
-        entities[i].traj_z = (float*)malloc(size * sizeof(float));
-        if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
-            // Allocate arrays for object-specific data
-            entities[i].traj_vx = (float*)malloc(size * sizeof(float));
-            entities[i].traj_vy = (float*)malloc(size * sizeof(float));
-            entities[i].traj_vz = (float*)malloc(size * sizeof(float));
-            entities[i].traj_heading = (float*)malloc(size * sizeof(float));
-            entities[i].traj_valid = (int*)malloc(size * sizeof(int));
-        } else {
-            // Roads don't use these arrays
-            entities[i].traj_vx = NULL;
-            entities[i].traj_vy = NULL;
-            entities[i].traj_vz = NULL;
-            entities[i].traj_heading = NULL;
-            entities[i].traj_valid = NULL;
+    int num_bin_entities = env->num_objects + env->num_roads;
+    if (env->conf.init_mode == RANDOM_AGENTS_INIT) {
+        Entity read_bin_entities[num_bin_entities];
+        // Read all binaries into temporary array
+        for (int i = 0; i < num_bin_entities; i++) {
+            // Read base entity data
+            fread(&read_bin_entities[i].scenario_id, sizeof(int), 1, file);
+            fread(&read_bin_entities[i].type, sizeof(int), 1, file);
+            fread(&read_bin_entities[i].id, sizeof(int), 1, file);
+            fread(&read_bin_entities[i].array_size, sizeof(int), 1, file);
+            // Allocate arrays based on type
+            int size = read_bin_entities[i].array_size;
+            read_bin_entities[i].traj_x = (float*)malloc(size * sizeof(float));
+            read_bin_entities[i].traj_y = (float*)malloc(size * sizeof(float));
+            read_bin_entities[i].traj_z = (float*)malloc(size * sizeof(float));
+            if (read_bin_entities[i].type == VEHICLE || read_bin_entities[i].type == PEDESTRIAN || read_bin_entities[i].type == CYCLIST) {  // Object type
+                // Allocate arrays for object-specific data
+                read_bin_entities[i].traj_vx = (float*)malloc(size * sizeof(float));
+                read_bin_entities[i].traj_vy = (float*)malloc(size * sizeof(float));
+                read_bin_entities[i].traj_vz = (float*)malloc(size * sizeof(float));
+                read_bin_entities[i].traj_heading = (float*)malloc(size * sizeof(float));
+                read_bin_entities[i].traj_valid = (int*)malloc(size * sizeof(int));
+            } else {
+                // Roads don't use these arrays
+                read_bin_entities[i].traj_vx = NULL;
+                read_bin_entities[i].traj_vy = NULL;
+                read_bin_entities[i].traj_vz = NULL;
+                read_bin_entities[i].traj_heading = NULL;
+                read_bin_entities[i].traj_valid = NULL;
+            }
+            // Read array data
+            fread(read_bin_entities[i].traj_x, sizeof(float), size, file);
+            fread(read_bin_entities[i].traj_y, sizeof(float), size, file);
+            fread(read_bin_entities[i].traj_z, sizeof(float), size, file);
+            if (read_bin_entities[i].type == VEHICLE || read_bin_entities[i].type == PEDESTRIAN || read_bin_entities[i].type == CYCLIST) {  // Object type
+                fread(read_bin_entities[i].traj_vx, sizeof(float), size, file);
+                fread(read_bin_entities[i].traj_vy, sizeof(float), size, file);
+                fread(read_bin_entities[i].traj_vz, sizeof(float), size, file);
+                fread(read_bin_entities[i].traj_heading, sizeof(float), size, file);
+                fread(read_bin_entities[i].traj_valid, sizeof(int), size, file);
+            }
+            // Read remaining scalar fields
+            fread(&read_bin_entities[i].width, sizeof(float), 1, file);
+            fread(&read_bin_entities[i].length, sizeof(float), 1, file);
+            fread(&read_bin_entities[i].height, sizeof(float), 1, file);
+            fread(&read_bin_entities[i].goal_position_x, sizeof(float), 1, file);
+            fread(&read_bin_entities[i].goal_position_y, sizeof(float), 1, file);
+            fread(&read_bin_entities[i].goal_position_z, sizeof(float), 1, file);
+            fread(&read_bin_entities[i].mark_as_expert, sizeof(int), 1, file);
+
+            read_bin_entities[i].initialized = 1;
         }
-        // Read array data
-        fread(entities[i].traj_x, sizeof(float), size, file);
-        fread(entities[i].traj_y, sizeof(float), size, file);
-        fread(entities[i].traj_z, sizeof(float), size, file);
-        if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
-            fread(entities[i].traj_vx, sizeof(float), size, file);
-            fread(entities[i].traj_vy, sizeof(float), size, file);
-            fread(entities[i].traj_vz, sizeof(float), size, file);
-            fread(entities[i].traj_heading, sizeof(float), size, file);
-            fread(entities[i].traj_valid, sizeof(int), size, file);
+
+        env->num_objects = env->conf.num_agents_per_world;
+        env->num_entities = env->num_objects + env->num_roads;
+        Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
+
+        // Only initialize road entities
+        int env_entity_idx = 0;
+        for (int i = 0; i < num_bin_entities; i++) {
+            if (read_bin_entities[i].type == VEHICLE || read_bin_entities[i].type == PEDESTRIAN || read_bin_entities[i].type == CYCLIST) {
+                continue;
+            } else {
+                entities[env_entity_idx] = read_bin_entities[i];
+                env_entity_idx++;
+            }
         }
-        // Read remaining scalar fields
-        fread(&entities[i].width, sizeof(float), 1, file);
-        fread(&entities[i].length, sizeof(float), 1, file);
-        fread(&entities[i].height, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_x, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_y, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_z, sizeof(float), 1, file);
-        fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
+
+        while (env_entity_idx < env->num_entities) {
+            entities[env_entity_idx].type = VEHICLE;   // Placeholder type for non-road entities
+            entities[env_entity_idx].id = env_entity_idx;
+            entities[env_entity_idx].initialized = 0;
+            entities[env_entity_idx].array_size = 0;
+            entities[env_entity_idx].traj_x = NULL;
+            entities[env_entity_idx].traj_y = NULL;
+            entities[env_entity_idx].traj_z = NULL;
+            entities[env_entity_idx].traj_vx = NULL;
+            entities[env_entity_idx].traj_vy = NULL;
+            entities[env_entity_idx].traj_vz = NULL;
+            entities[env_entity_idx].traj_heading = NULL;
+            entities[env_entity_idx].traj_valid = NULL;
+            env_entity_idx++;
+        }
+
+        fclose(file);
+        return entities;
+    } else {
+        env->num_entities = num_bin_entities;
+        Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
+        for (int i = 0; i < env->num_entities; i++) {
+            // Read base entity data
+            fread(&entities[i].scenario_id, sizeof(int), 1, file);
+            fread(&entities[i].type, sizeof(int), 1, file);
+            fread(&entities[i].id, sizeof(int), 1, file);
+            fread(&entities[i].array_size, sizeof(int), 1, file);
+            // Allocate arrays based on type
+            int size = entities[i].array_size;
+            entities[i].traj_x = (float*)malloc(size * sizeof(float));
+            entities[i].traj_y = (float*)malloc(size * sizeof(float));
+            entities[i].traj_z = (float*)malloc(size * sizeof(float));
+            if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
+                // Allocate arrays for object-specific data
+                entities[i].traj_vx = (float*)malloc(size * sizeof(float));
+                entities[i].traj_vy = (float*)malloc(size * sizeof(float));
+                entities[i].traj_vz = (float*)malloc(size * sizeof(float));
+                entities[i].traj_heading = (float*)malloc(size * sizeof(float));
+                entities[i].traj_valid = (int*)malloc(size * sizeof(int));
+            } else {
+                // Roads don't use these arrays
+                entities[i].traj_vx = NULL;
+                entities[i].traj_vy = NULL;
+                entities[i].traj_vz = NULL;
+                entities[i].traj_heading = NULL;
+                entities[i].traj_valid = NULL;
+            }
+            // Read array data
+            fread(entities[i].traj_x, sizeof(float), size, file);
+            fread(entities[i].traj_y, sizeof(float), size, file);
+            fread(entities[i].traj_z, sizeof(float), size, file);
+            if (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST) {  // Object type
+                fread(entities[i].traj_vx, sizeof(float), size, file);
+                fread(entities[i].traj_vy, sizeof(float), size, file);
+                fread(entities[i].traj_vz, sizeof(float), size, file);
+                fread(entities[i].traj_heading, sizeof(float), size, file);
+                fread(entities[i].traj_valid, sizeof(int), size, file);
+            }
+            // Read remaining scalar fields
+            fread(&entities[i].width, sizeof(float), 1, file);
+            fread(&entities[i].length, sizeof(float), 1, file);
+            fread(&entities[i].height, sizeof(float), 1, file);
+            fread(&entities[i].goal_position_x, sizeof(float), 1, file);
+            fread(&entities[i].goal_position_y, sizeof(float), 1, file);
+            fread(&entities[i].goal_position_z, sizeof(float), 1, file);
+            fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
+
+            entities[i].initialized = 1;
+        }
+        fclose(file);
+        return entities;
+    }
+}
+
+void init_agents_random_start(Drive* env) {
+    Entity* entities = env->entities;
+    float goal_radius = env->goal_radius;
+    // int rel_neighbor_offsets_cnt = 0;
+    // int* rel_neighbor_offsets = get_relative_neighbor_offsets(env, goal_radius, &rel_neighbor_offsets_cnt);
+
+    for (int agent_idx=0; agent_idx<env->num_entities; agent_idx++){
+        if (entities[agent_idx].type != VEHICLE) {
+            continue;
+        }
+
+        Entity agent = entities[agent_idx];
+        if (agent.id == 239 || agent.id == 238) {
+        }
+
+        // Random Initializing Agent
+        while(1){
+            // Random Road lane of a random grid cell
+            int rand_grid_col = rand() % env->grid_map->grid_cols;
+            int rand_grid_row = rand() % env->grid_map->grid_rows;
+            int grid_map_idx = rand_grid_row * env->grid_map->grid_cols + rand_grid_col;
+            // If cell has no lanes, repeat
+            if (env->grid_map->cell_roadlanes_count[grid_map_idx] == 0){
+                continue;
+            }
+            int cell_lane_count = env->grid_map->cell_roadlanes_count[grid_map_idx];
+            int lane_idx = rand() % cell_lane_count;
+            // float heading = ((float)rand() / RAND_MAX) * 2.0f * PI;     // Random heading
+            float heading = 0.0f;
+
+            // Get start lane point info
+            float start_x = INVALID_POSITION, start_y = INVALID_POSITION, start_z = INVALID_POSITION, start_heading = INVALID_POSITION;
+            int cnt = 0;
+            for (int i = 0; i < env->grid_map->cell_entities_count[grid_map_idx]; i++) {
+                int entity_idx = env->grid_map->cells[grid_map_idx][i].entity_idx;
+                Entity entity = env->entities[entity_idx];
+                if (entity.type != ROAD_LANE) {
+                    continue;
+                }
+                // Current spawn point
+                if (cnt == lane_idx) {
+                    int start_point_geometry_idx = env->grid_map->cells[grid_map_idx][i].geometry_idx;
+                    if (start_point_geometry_idx + 1 < entity.array_size) {
+                        float dx = entity.traj_x[start_point_geometry_idx + 1] - entity.traj_x[start_point_geometry_idx];
+                        float dy = entity.traj_y[start_point_geometry_idx + 1] - entity.traj_y[start_point_geometry_idx];
+                        heading = atan2f(dy, dx);
+                    }
+                    else if (start_point_geometry_idx - 1 >= 0) {
+                        float dx = entity.traj_x[start_point_geometry_idx] - entity.traj_x[start_point_geometry_idx - 1];
+                        float dy = entity.traj_y[start_point_geometry_idx] - entity.traj_y[start_point_geometry_idx - 1];
+                        heading = atan2f(dy, dx);
+                    }
+                    else {
+                        heading = 0.0f; // Design choice: default to 0 if no previous lane
+                    }
+
+                    bool valid_spawn = is_valid_spawn_point(
+                        env,
+                        agent.id,
+                        entity.traj_x[start_point_geometry_idx],
+                        entity.traj_y[start_point_geometry_idx],
+                        entity.traj_z[start_point_geometry_idx],
+                        heading,
+                        env->conf.vehicle_width, env->conf.vehicle_length, env->conf.vehicle_height
+                    );
+                    if (valid_spawn) {
+                        start_x = entity.traj_x[start_point_geometry_idx];
+                        start_y = entity.traj_y[start_point_geometry_idx];
+                        start_z = entity.traj_z[start_point_geometry_idx];
+                        start_heading = heading;
+                        break;
+                    }
+
+                    break;  // Break anyways as current spawn pt is invalid
+                }
+                cnt++;
+            }
+            // Invalid start point, repeat
+            if (start_x == INVALID_POSITION || start_y == INVALID_POSITION || start_z == INVALID_POSITION) {
+                continue;
+            }
+
+            // Get goal point info
+            float goal_x = -0.5, goal_y = -0.5, goal_z = -0.5;
+            // bool is_valid_goal = get_valid_goal(
+            //     env,
+            //     start_x, start_y, start_z,
+            //     rand_grid_row, rand_grid_col,
+            //     rel_neighbor_offsets, rel_neighbor_offsets_cnt,
+            //     &goal_x, &goal_y, &goal_z
+            // );
+            // If no surrounding cell with goal curriculum, repeat
+            // if (!is_valid_goal) {
+            //     printf("No valid goals found around start point (%.2f, %.2f, %.2f)\n", start_x, start_y, start_z);
+            //     continue;
+            // }
+            // Else break with given start and goal
+            agent.initialized = 1;
+            agent.array_size = 1;
+            agent.traj_x = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_y = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_z = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_vx = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_vy = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_vz = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_heading = (float*)calloc(agent.array_size, sizeof(float));
+            agent.traj_valid = (int*)calloc(agent.array_size, sizeof(int));
+            agent.traj_x[0] = start_x;
+            agent.traj_y[0] = start_y;
+            agent.traj_z[0] = start_z;
+            agent.x = start_x;
+            agent.y = start_y;
+            agent.z = start_z;
+            agent.traj_heading[0] = start_heading;
+            agent.heading = start_heading;
+            agent.heading_x = cosf(agent.heading);
+            agent.heading_y = sinf(agent.heading);
+            agent.traj_valid[0] = 1;
+            agent.height = env->conf.vehicle_height;
+            agent.width = env->conf.vehicle_width;
+            agent.length = env->conf.vehicle_length;
+            agent.goal_position_x = goal_x;
+            agent.goal_position_y = goal_y;
+            agent.goal_position_z = goal_z;
+
+            agent.mark_as_expert = 0;
+            agent.goal_radius = goal_radius;
+            break;
+        }
+        entities[agent_idx] = agent;
+
     }
 
-    fclose(file);
-    return entities;
+    // free(rel_neighbor_offsets);
 }
 
 void set_start_position(Drive* env){
@@ -670,7 +980,6 @@ void init_topology_graph(Drive* env){
 }
 
 void init_grid_map(Drive* env){
-    // Allocate memory for the grid map structure
     env->grid_map = (GridMap*)malloc(sizeof(GridMap));
 
     // Find top left and bottom right points of the map
@@ -715,6 +1024,7 @@ void init_grid_map(Drive* env){
     int grid_cell_count = env->grid_map->grid_cols*env->grid_map->grid_rows;
     env->grid_map->cells = (GridMapEntity**)calloc(grid_cell_count, sizeof(GridMapEntity*));
     env->grid_map->cell_entities_count = (int*)calloc(grid_cell_count, sizeof(int));
+    env->grid_map->cell_roadlanes_count = (int*)calloc(grid_cell_count, sizeof(int));
 
     // Calculate number of entities in each grid cell
     for(int i = 0; i < env->num_entities; i++){
@@ -723,6 +1033,10 @@ void init_grid_map(Drive* env){
                 float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
                 float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
                 int grid_index = getGridIndex(env, x_center, y_center);
+                if (grid_index == -1) {
+                    printf("Warning: Not Supposed to happen, Point (%f, %f) out of grid bounds\n", x_center, y_center);
+                    continue;  // Out of bounds
+                }
                 env->grid_map->cell_entities_count[grid_index]++;
             }
         }
@@ -732,6 +1046,8 @@ void init_grid_map(Drive* env){
 
     // Initialize grid cells
     for(int grid_index = 0; grid_index < grid_cell_count; grid_index++){
+        if (env->grid_map->cell_entities_count[grid_index] > 100)
+            printf("Warning: High entity count in Grid Cell %d = %d\n", grid_index, env->grid_map->cell_entities_count[grid_index]);
         env->grid_map->cells[grid_index] = (GridMapEntity*)calloc(env->grid_map->cell_entities_count[grid_index], sizeof(GridMapEntity));
     }
     for(int i = 0;i<grid_cell_count;i++){
@@ -749,6 +1065,10 @@ void init_grid_map(Drive* env){
                 float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
                 int grid_index = getGridIndex(env, x_center, y_center);
                 add_entity_to_grid(env, grid_index, i, j, cell_entities_insert_index);
+                if (env->entities[i].type == ROAD_LANE) {
+                    // Also add to road lane count
+                    env->grid_map->cell_roadlanes_count[grid_index]++;
+                }
             }
         }
     }
@@ -897,6 +1217,7 @@ void set_means(Drive* env) {
     env->world_mean_y = mean_y;
     for (int i = 0; i < env->num_entities; i++) {
         if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST || env->entities[i].type >= 4) {
+            if (env->entities[i].initialized == 0) continue;
             for (int j = 0; j < env->entities[i].array_size; j++) {
                 if(env->entities[i].traj_x[j] == INVALID_POSITION) continue;
                 env->entities[i].traj_x[j] -= mean_x;
@@ -1276,7 +1597,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
 bool should_control_agent(Drive* env, int agent_idx){
 
     // Check if we have room for more agents or are already at capacity
-    if (env->active_agent_count >= env->num_agents) {
+    if (env->active_agent_count >= env->max_active_agents) {
         return false;
     }
 
@@ -1338,13 +1659,16 @@ void set_active_agents(Drive* env){
     int static_agent_indices[MAX_AGENTS];
     int expert_static_agent_indices[MAX_AGENTS];
 
-    if(env->num_agents == 0){
-        env->num_agents = MAX_AGENTS;
+    if(env->max_active_agents == 0){
+        env->max_active_agents = MAX_AGENTS;
     }
 
     // Iterate through entities to find agents to create and/or control
-    for(int i = 0; i < env->num_objects && env->num_actors < MAX_AGENTS; i++){
-
+    for(int i = 0; i < env->num_entities && env->num_actors < env->max_active_agents; i++){
+        // Skip non-agent entities
+        if (env->entities[i].type != VEHICLE && env->entities[i].type != PEDESTRIAN && env->entities[i].type != CYCLIST) {
+            continue;
+        }
         Entity* entity = &env->entities[i];
 
         // Skip if not valid at initialization
@@ -1379,7 +1703,7 @@ void set_active_agents(Drive* env){
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->entities[i].active_agent = 0;
-            if(env->entities[i].mark_as_expert == 1 || env->active_agent_count == env->num_agents) {
+            if(env->entities[i].mark_as_expert == 1 || env->active_agent_count == env->max_active_agents) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
                 env->entities[i].mark_as_expert = 1;
@@ -1462,21 +1786,49 @@ void init_goal_positions(Drive* env){
     }
 }
 
+void seed_prng_once(void) {
+    static int seeded = 0;
+    if (seeded) return;
+
+    const char* env_seed = getenv("PUFFER_SEED");
+    if (env_seed && *env_seed) {
+        unsigned s = (unsigned)strtoul(env_seed, NULL, 10);
+        srand(s);
+        seeded = 1;
+        return;
+    }
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    unsigned seed = (unsigned)(ts.tv_nsec ^ (ts.tv_sec * 1000003u) ^ getpid() ^ (uintptr_t)&seeded);
+    srand(seed);
+    seeded = 1;
+}
+
 void init(Drive* env){
+    seed_prng_once();  // seed rand() for this process
     env->human_agent_idx = 0;
     env->timestep = 0;
+    env_init_config conf = {0};
+    if(ini_parse(env->ini_file, handler, &conf) < 0) {
+        printf("Error while loading %s", env->ini_file);
+    }
+    env->conf = conf;
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
+    if (conf.init_mode == RANDOM_AGENTS_INIT) {
+        init_agents_random_start(env);
+    }
     if (env->goal_behavior==GOAL_GENERATE_NEW) init_topology_graph(env);
-    env->grid_map->vision_range = 21;
+    env->grid_map->vision_range = GRID_MAP_CACHE_VISION_RANGE;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     env->logs_capacity = 0;
-    set_active_agents(env);
+    set_active_agents(env);     // TODO
     env->logs_capacity = env->active_agent_count;
-    remove_bad_trajectories(env);
-    set_start_position(env);
+    remove_bad_trajectories(env);       // TODO
+    set_start_position(env);        // TODO(Can skip for dynamic agents)
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
 }
