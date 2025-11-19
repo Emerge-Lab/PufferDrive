@@ -46,3 +46,53 @@ jobs:
       - name: Test training
         run: python tests/test_drive_train.py
         timeout-minutes: 20
+
+  test-scenarios:
+    name: test-scenario-${{ matrix.scenario.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - { name: "normal", test: "test_scenario_1_normal_training" }
+          - { name: "conditioned", test: "test_scenario_2_conditioned_self_play" }
+          - { name: "adaptive", test: "test_scenario_3_adaptive_self_play" }
+          - { name: "population", test: "test_scenario_4_population_play_normal" }
+          - { name: "population_adaptive", test: "test_scenario_5_population_play_adaptive" }
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Check disk space (before cleanup)
+        run: df -h
+
+      - name: Free up disk space
+        run: |
+          echo "Before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
+          echo "After cleanup:"
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt install -y build-essential
+          python -m pip install -U pip
+          pip install -e .
+          python setup.py build_ext --inplace --force
+
+      - name: Check disk space (after install)
+        run: df -h
+
+      - name: Test scenario - ${{ matrix.scenario.name }}
+        run: pytest tests/test_drive_scenarios.py::${{ matrix.scenario.test }} -v -s
+        timeout-minutes: 15
