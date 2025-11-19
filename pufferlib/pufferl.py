@@ -1070,8 +1070,9 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         # Analyze and compute metrics
         agent_state = vecenv.driver_env.get_global_agent_state()
+        road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
         results = evaluator.compute_metrics(
-            gt_trajectories, simulated_trajectories, agent_state, args["eval"]["wosac_aggregate_results"]
+            gt_trajectories, simulated_trajectories, agent_state, road_edge_polylines, args["eval"]["wosac_aggregate_results"]
         )
 
         if args["eval"]["wosac_aggregate_results"]:

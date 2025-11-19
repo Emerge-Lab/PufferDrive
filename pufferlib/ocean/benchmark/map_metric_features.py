@@ -103,6 +103,37 @@ def _pad_polylines(
     return polylines, valid
 
 
+def _check_polyline_cycles(
+    polylines: np.ndarray,
+    polylines_valid: np.ndarray,
+    tolerance: float = 1e-3,
+) -> np.ndarray:
+    """Check if polylines are cyclic (first point == last point).
+
+    Args:
+        polylines: Shape (num_polylines, max_length, 2)
+        polylines_valid: Shape (num_polylines, max_length)
+        tolerance: Distance threshold for considering points equal
+
+    Returns:
+        Boolean array of shape (num_polylines,)
+    """
+    num_polylines = polylines.shape[0]
+    is_cyclic = np.zeros(num_polylines, dtype=bool)
+
+    for i in range(num_polylines):
+        valid_mask = polylines_valid[i]
+        if valid_mask.sum() < 2:
+            continue
+        last_valid_idx = np.where(valid_mask)[0][-1]
+        first_pt = polylines[i, 0]
+        last_pt = polylines[i, last_valid_idx]
+        dist = np.linalg.norm(first_pt - last_pt)
+        is_cyclic[i] = dist < tolerance
+
+    return is_cyclic
+
+
 def _compute_signed_distance_to_polylines(
     xys: np.ndarray,
     polylines: np.ndarray,
@@ -124,6 +155,7 @@ def _compute_signed_distance_to_polylines(
     num_segments = max_length - 1
 
     is_segment_valid = polylines_valid[:, :-1] & polylines_valid[:, 1:]
+    is_polyline_cyclic = _check_polyline_cycles(polylines, polylines_valid)
 
     xy_starts = polylines[:, :-1, :]
     xy_ends = polylines[:, 1:, :]
@@ -161,16 +193,41 @@ def _compute_signed_distance_to_polylines(
         start_to_end_padded[:, 1:, np.newaxis, :]
     ) > 0.0
 
-    n_prior = np.concatenate([n[:, :1, :], n[:, :-1, :]], axis=1)
-    n_next = np.concatenate([n[:, 1:, :], n[:, -1:, :]], axis=1)
+    # For cyclic polylines, wrap around; for non-cyclic, pad with edge values
+    # n shape: (num_polylines, num_segments, num_points)
+    n_prior = np.concatenate([
+        np.where(
+            is_polyline_cyclic[:, np.newaxis, np.newaxis],
+            n[:, -1:, :],
+            n[:, :1, :],
+        ),
+        n[:, :-1, :],
+    ], axis=1)
+    n_next = np.concatenate([
+        n[:, 1:, :],
+        np.where(
+            is_polyline_cyclic[:, np.newaxis, np.newaxis],
+            n[:, :1, :],
+            n[:, -1:, :],
+        ),
+    ], axis=1)
 
+    # is_segment_valid shape: (num_polylines, num_segments)
     is_prior_valid = np.concatenate([
-        is_segment_valid[:, :1],
-        is_segment_valid[:, :-1]
+        np.where(
+            is_polyline_cyclic[:, np.newaxis],
+            is_segment_valid[:, -1:],
+            is_segment_valid[:, :1],
+        ),
+        is_segment_valid[:, :-1],
     ], axis=1)
     is_next_valid = np.concatenate([
         is_segment_valid[:, 1:],
-        is_segment_valid[:, -1:]
+        np.where(
+            is_polyline_cyclic[:, np.newaxis],
+            is_segment_valid[:, :1],
+            is_segment_valid[:, -1:],
+        ),
     ], axis=1)
 
     sign_if_before = np.where(

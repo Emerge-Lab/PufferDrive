@@ -32,11 +32,12 @@ def run_validation_experiment(config, vecenv, policy):
     gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
     simulated_trajectories = evaluator.collect_simulated_trajectories(config, vecenv, policy)
     agent_state = vecenv.driver_env.get_global_agent_state()
+    road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
 
     results = {}
     for num_gt in [0, 1, 2, 8, 16, 32]:
         modified_sim = replace_rollouts_with_gt(simulated_trajectories, gt_trajectories, num_gt)
-        scene_results = evaluator.compute_metrics(gt_trajectories, modified_sim, agent_state)
+        scene_results = evaluator.compute_metrics(gt_trajectories, modified_sim, agent_state, road_edge_polylines)
 
         results[num_gt] = {
             "ade": scene_results["ade"].mean(),
@@ -48,6 +49,8 @@ def run_validation_experiment(config, vecenv, policy):
             "likelihood_distance_to_nearest_object": scene_results["likelihood_distance_to_nearest_object"].mean(),
             "likelihood_time_to_collision": scene_results["likelihood_time_to_collision"].mean(),
             "likelihood_collision_indication": scene_results["likelihood_collision_indication"].mean(),
+            "likelihood_distance_to_road_edge": scene_results["likelihood_distance_to_road_edge"].mean(),
+            "likelihood_offroad_indication": scene_results["likelihood_offroad_indication"].mean(),
             "realism_meta_score": scene_results["realism_meta_score"].mean(),
         }
 
@@ -57,8 +60,8 @@ def run_validation_experiment(config, vecenv, policy):
 def format_results_table(results):
     lines = [
         "## WOSAC Log-Likelihood Validation Results\n",
-        "| GT Rollouts | ADE    | minADE | Linear Speed | Linear Accel | Angular Speed | Angular Accel | Distance | TTC    | Collision | Realism Metametric |",
-        "|-------------|--------|--------|--------------|--------------|---------------|---------------|----------|--------|-----------|--------------------|\n",
+        "| GT Rollouts | ADE    | minADE | Linear Speed | Linear Accel | Angular Speed | Angular Accel | Dist Obj | TTC    | Collision | Dist Road | Offroad | Metametric |",
+        "|-------------|--------|--------|--------------|--------------|---------------|---------------|----------|--------|-----------|-----------|---------|------------|\n",
     ]
 
     for num_gt in sorted(results.keys()):
@@ -68,7 +71,8 @@ def format_results_table(results):
             f"| {label:11s} | {r['ade']:6.4f} | {r['min_ade']:6.4f} | {r['likelihood_linear_speed']:12.4f} | "
             f"{r['likelihood_linear_acceleration']:12.4f} | {r['likelihood_angular_speed']:13.4f} | "
             f"{r['likelihood_angular_acceleration']:13.4f} | {r['likelihood_distance_to_nearest_object']:8.4f} | "
-            f"{r['likelihood_time_to_collision']:6.4f} | {r['likelihood_collision_indication']:9.4f} | {r['realism_meta_score']:18.4f} |"
+            f"{r['likelihood_time_to_collision']:6.4f} | {r['likelihood_collision_indication']:9.4f} | "
+            f"{r['likelihood_distance_to_road_edge']:9.4f} | {r['likelihood_offroad_indication']:7.4f} | {r['realism_meta_score']:10.4f} |"
         )
 
     return "\n".join(lines)

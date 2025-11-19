@@ -11,7 +11,7 @@ from pufferlib.ocean.benchmark import map_metric_features
 
 def plot_test_cases():
     """Visualize all test cases."""
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    fig, axes = plt.subplots(3, 3, figsize=(15, 15))
 
     # Test 1: Sign correctness
     ax = axes[0, 0]
@@ -110,32 +110,79 @@ def plot_test_cases():
     ax.set_title('Test 5: Agent boxes')
     ax.grid(True, alpha=0.3)
 
-    # Distance field visualization
-    ax = axes[1, 2]
-    x = np.linspace(-1, 4, 50)
-    y = np.linspace(-3, 3, 50)
-    X, Y = np.meshgrid(x, y)
-    mesh_xys = np.stack([X.flatten(), Y.flatten()], axis=-1).astype(np.float32)
+    # Hide unused subplot
+    axes[1, 2].axis('off')
 
-    polyline_x = np.array([0.0, 0.0, 2.0, 2.0], dtype=np.float32)
-    polyline_y = np.array([10.0, -10.0, -10.0, 10.0], dtype=np.float32)
-    polyline_lengths = np.array([2, 2], dtype=np.int32)
+    # Test 6: Donut road (outer CCW, inner CW)
+    ax = axes[2, 0]
+    # Outer square
+    outer_x = [0, 4, 4, 0, 0]
+    outer_y = [0, 0, 4, 4, 0]
+    ax.plot(outer_x, outer_y, 'b-', linewidth=2)
+    # Inner square
+    inner_x = [1, 1, 3, 3, 1]
+    inner_y = [1, 3, 3, 1, 1]
+    ax.plot(inner_x, inner_y, 'b-', linewidth=2)
+    # Fill road area
+    from matplotlib.patches import Polygon
+    outer_poly = np.array([[0, 0], [4, 0], [4, 4], [0, 4]])
+    inner_poly = np.array([[1, 1], [1, 3], [3, 3], [3, 1]])
+    ax.fill(outer_x, outer_y, alpha=0.2, color='green')
+    ax.fill(inner_x, inner_y, alpha=1.0, color='white')
 
-    polylines, valid = map_metric_features._pad_polylines(
-        polyline_x, polyline_y, polyline_lengths
-    )
-    distances = map_metric_features._compute_signed_distance_to_polylines(
-        mesh_xys, polylines, valid
-    )
-    Z = distances.reshape(X.shape)
+    # Direction arrows - outer CCW, inner CW
+    ax.arrow(1.5, 0, 1, 0, head_width=0.15, head_length=0.1, fc='b', ec='b')  # outer bottom: right
+    ax.arrow(2.5, 1, -1, 0, head_width=0.15, head_length=0.1, fc='b', ec='b')  # inner bottom: left (CW)
 
-    contour = ax.contourf(X, Y, Z, levels=20, cmap='RdYlGn_r')
-    ax.contour(X, Y, Z, levels=[0], colors='black', linewidths=2)
-    plt.colorbar(contour, ax=ax, label='Signed distance')
-    ax.plot([0, 0], [3, -3], 'b-', linewidth=2)
-    ax.plot([2, 2], [-3, 3], 'b-', linewidth=2)
-    ax.set_title('Distance field (0 = boundary)')
+    # Test points
+    ax.plot(0.5, 2, 'go', markersize=10, label='P1 (on road)')
+    ax.plot(2, 2, 'ro', markersize=10, label='P2 (inside inner)')
+    ax.plot(5, 2, 'ro', markersize=8)
+    ax.plot(2, 0.5, 'go', markersize=8)
+
+    ax.text(0.5, 2.3, 'P1', ha='center', fontsize=8)
+    ax.text(2, 2.3, 'P2', ha='center', fontsize=8)
+    ax.text(5.2, 2, 'P3', ha='left', fontsize=8)
+    ax.text(2, 0.2, 'P4', ha='center', fontsize=8)
+
+    ax.set_xlim(-0.5, 5.5)
+    ax.set_ylim(-0.5, 4.5)
     ax.set_aspect('equal')
+    ax.set_title('Test 6: Donut road')
+    ax.legend(loc='upper right', fontsize=7)
+    ax.grid(True, alpha=0.3)
+
+    # Test 7: Triangle with acute corner (cyclic test)
+    ax = axes[2, 1]
+    # Triangle counterclockwise
+    shape_x = [0, 10, 10, 0]
+    shape_y = [0, 0, 10, 0]
+    ax.plot(shape_x, shape_y, 'b-', linewidth=2)
+    ax.fill(shape_x, shape_y, alpha=0.2, color='green')
+
+    # Mark the acute corner at (0, 0)
+    ax.plot(0, 0, 'ko', markersize=10, markerfacecolor='yellow', label='Acute corner')
+
+    # Test point P at (-2, 1) - outside but Seg 0 thinks inside
+    ax.plot(-2.0, 1.0, 'ro', markersize=10, label='P (-2, 1)')
+
+    # Direction arrows
+    ax.arrow(3, 0, 3, 0, head_width=0.4, head_length=0.3, fc='b', ec='b')  # Seg 0: right
+    ax.arrow(6, 6, -1.5, -1.5, head_width=0.4, head_length=0.3, fc='b', ec='b')  # Seg 2: down-left (on hypotenuse)
+
+    # Labels
+    ax.text(5, -1, 'Seg 0', ha='center', fontsize=7)
+    ax.text(1.5, 5, 'Seg 2', ha='center', fontsize=7)
+
+    ax.set_xlim(-4, 12)
+    ax.set_ylim(-2, 12)
+    ax.set_aspect('equal')
+    ax.set_title('Test 7: Triangle (cyclic corner)')
+    ax.legend(loc='upper right', fontsize=7)
+    ax.grid(True, alpha=0.3)
+
+    # Hide unused subplot
+    axes[2, 2].axis('off')
 
     plt.tight_layout()
     plt.savefig('test_map_metrics.png', dpi=150)
@@ -257,6 +304,164 @@ def test_signed_distance_with_padding():
     print("✓ test_signed_distance_with_padding passed")
 
 
+def test_cyclic_polyline():
+    """Test with a cyclic polyline (closed square boundary).
+
+    Square road boundary: corners at (0,0), (2,0), (2,2), (0,2), back to (0,0)
+    Winding order: counterclockwise (inside = on-road)
+
+    Points:
+    - P1 at (1, 1): center of square, should be negative (on-road)
+    - P2 at (3, 1): outside right edge, should be positive (off-road)
+    - P3 at (1, 3): outside top edge, should be positive (off-road)
+    - P4 at (-1, 1): outside left edge, should be positive (off-road)
+    - P5 at (2, 2): exactly at corner, should be ~0
+    """
+    query_points = np.array([
+        [1.0, 1.0],   # P1: center
+        [3.0, 1.0],   # P2: outside right
+        [1.0, 3.0],   # P3: outside top
+        [-1.0, 1.0],  # P4: outside left
+        [2.0, 2.0],   # P5: at corner
+    ], dtype=np.float32)
+
+    # Counterclockwise square: (0,0) -> (2,0) -> (2,2) -> (0,2) -> (0,0)
+    polyline_x = np.array([0.0, 2.0, 2.0, 0.0, 0.0], dtype=np.float32)
+    polyline_y = np.array([0.0, 0.0, 2.0, 2.0, 0.0], dtype=np.float32)
+    polyline_lengths = np.array([5], dtype=np.int32)
+
+    polylines, valid = map_metric_features._pad_polylines(
+        polyline_x, polyline_y, polyline_lengths
+    )
+
+    distances = map_metric_features._compute_signed_distance_to_polylines(
+        query_points, polylines, valid
+    )
+
+    print(f"P1 (center): {distances[0]:.3f} (expected ~ -1.0)")
+    print(f"P2 (outside right): {distances[1]:.3f} (expected ~ +1.0)")
+    print(f"P3 (outside top): {distances[2]:.3f} (expected ~ +1.0)")
+    print(f"P4 (outside left): {distances[3]:.3f} (expected ~ +1.0)")
+    print(f"P5 (at corner): {distances[4]:.3f} (expected ~ 0.0)")
+
+    # P1: inside square, distance to nearest edge is 1.0
+    assert distances[0] < 0, f"P1 should be on-road (negative), got {distances[0]}"
+    np.testing.assert_allclose(distances[0], -1.0, atol=0.1)
+
+    # P2, P3, P4: outside square by 1.0
+    assert distances[1] > 0, f"P2 should be off-road (positive), got {distances[1]}"
+    assert distances[2] > 0, f"P3 should be off-road (positive), got {distances[2]}"
+    assert distances[3] > 0, f"P4 should be off-road (positive), got {distances[3]}"
+    np.testing.assert_allclose(distances[1], 1.0, atol=0.1)
+    np.testing.assert_allclose(distances[2], 1.0, atol=0.1)
+    np.testing.assert_allclose(distances[3], 1.0, atol=0.1)
+
+    # P5: at corner
+    np.testing.assert_allclose(distances[4], 0.0, atol=0.1)
+
+    print("✓ test_cyclic_polyline passed")
+
+# NOTE: I made this test to understand why it is needed to handle cyclic polylines specially.
+def test_cyclic_seam():
+    """Test acute corner tie-breaking using a clean Triangle.
+    
+    Shape: Triangle (0,0) -> (10,0) -> (10,10) -> (0,0)
+    Winding: Counter-Clockwise (Left is Inside).
+    Corner at (0,0) is Acute (45 degrees).
+    """
+    # Query Point P (-2, 1)
+    # - Physically: To the left of the diagonal hypotenuse -> OUTSIDE.
+    # - To Segment 0 (Bottom): Above y=0 -> INSIDE (The Blind Spot).
+    query_points = np.array([[-2.0, 1.0]], dtype=np.float32)
+
+    # The Triangle
+    polyline_x = np.array([0.0, 10.0, 10.0, 0.0], dtype=np.float32)
+    polyline_y = np.array([0.0, 0.0, 10.0, 0.0], dtype=np.float32)
+    polyline_lengths = np.array([4], dtype=np.int32)
+
+    polylines, valid = map_metric_features._pad_polylines(
+        polyline_x, polyline_y, polyline_lengths
+    )
+
+    distances = map_metric_features._compute_signed_distance_to_polylines(
+        query_points, polylines, valid
+    )
+
+    # Distance to vertex (0,0) is sqrt(2^2 + 1^2) = sqrt(5)
+    expected = np.sqrt(5)
+    print(f"P at (-2, 1): {distances[0]:.3f} (expected ~ +{expected:.3f})")
+
+    assert distances[0] > 0, f"P should be OFF-ROAD (Positive), but got {distances[0]}"
+    np.testing.assert_allclose(distances[0], expected, atol=0.01)
+
+    print("✓ test_cyclic_seam passed (Clean Triangle)")
+
+
+def test_donut_road():
+    """Test with a donut-shaped road (outer CCW, inner CW).
+
+    Outer square: (0,0) -> (4,0) -> (4,4) -> (0,4) -> (0,0) [counterclockwise]
+    Inner square: (1,1) -> (1,3) -> (3,3) -> (3,1) -> (1,1) [clockwise]
+
+    Road is the region between the two squares (width=1 on each side).
+
+    Points:
+    - P1 at (0.5, 2): on road (between outer and inner), should be negative
+    - P2 at (2, 2): inside inner square (off-road), should be positive
+    - P3 at (5, 2): outside outer square (off-road), should be positive
+    - P4 at (2, 0.5): on road (between outer and inner), should be negative
+    """
+    query_points = np.array([
+        [0.5, 2.0],  # P1: on road (left side)
+        [2.0, 2.0],  # P2: inside inner square
+        [5.0, 2.0],  # P3: outside outer square
+        [2.0, 0.5],  # P4: on road (bottom side)
+    ], dtype=np.float32)
+
+    # Outer square: counterclockwise
+    outer_x = np.array([0.0, 4.0, 4.0, 0.0, 0.0], dtype=np.float32)
+    outer_y = np.array([0.0, 0.0, 4.0, 4.0, 0.0], dtype=np.float32)
+
+    # Inner square: clockwise (opposite winding)
+    inner_x = np.array([1.0, 1.0, 3.0, 3.0, 1.0], dtype=np.float32)
+    inner_y = np.array([1.0, 3.0, 3.0, 1.0, 1.0], dtype=np.float32)
+
+    polyline_x = np.concatenate([outer_x, inner_x])
+    polyline_y = np.concatenate([outer_y, inner_y])
+    polyline_lengths = np.array([5, 5], dtype=np.int32)
+
+    polylines, valid = map_metric_features._pad_polylines(
+        polyline_x, polyline_y, polyline_lengths
+    )
+
+    distances = map_metric_features._compute_signed_distance_to_polylines(
+        query_points, polylines, valid
+    )
+
+    print(f"P1 (on road, left): {distances[0]:.3f} (expected ~ -0.5)")
+    print(f"P2 (inside inner): {distances[1]:.3f} (expected ~ +1.0)")
+    print(f"P3 (outside outer): {distances[2]:.3f} (expected ~ +1.0)")
+    print(f"P4 (on road, bottom): {distances[3]:.3f} (expected ~ -0.5)")
+
+    # P1: on road, 0.5m from outer edge
+    assert distances[0] < 0, f"P1 should be on-road (negative), got {distances[0]}"
+    np.testing.assert_allclose(distances[0], -0.5, atol=0.1)
+
+    # P2: inside inner square, 1m from inner edge
+    assert distances[1] > 0, f"P2 should be off-road (positive), got {distances[1]}"
+    np.testing.assert_allclose(distances[1], 1.0, atol=0.1)
+
+    # P3: outside outer square, 1m from outer edge
+    assert distances[2] > 0, f"P3 should be off-road (positive), got {distances[2]}"
+    np.testing.assert_allclose(distances[2], 1.0, atol=0.1)
+
+    # P4: on road, 0.5m from outer edge
+    assert distances[3] < 0, f"P4 should be on-road (negative), got {distances[3]}"
+    np.testing.assert_allclose(distances[3], -0.5, atol=0.1)
+
+    print("✓ test_donut_road passed")
+
+
 def test_compute_distance_to_road_edge():
     """Test full pipeline with agent boxes."""
     num_agents = 5
@@ -331,17 +536,21 @@ if __name__ == "__main__":
     print("=" * 60)
 
     try:
+        print("Generating visualization first...")
+        plot_test_cases()
+        print()
+
         test_signed_distance_correct_sign()
         test_signed_distance_correct_magnitude()
         test_signed_distance_two_parallel_lines()
         test_signed_distance_with_padding()
+        test_cyclic_polyline()
+        test_cyclic_seam()
+        test_donut_road()
         test_compute_distance_to_road_edge()
 
         print("\n" + "=" * 60)
         print("✓ All tests passed!")
-
-        print("\nGenerating visualization...")
-        plot_test_cases()
 
     except Exception as e:
         print("\n" + "=" * 60)

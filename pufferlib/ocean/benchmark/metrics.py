@@ -5,7 +5,7 @@ https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_
 import numpy as np
 from typing import Dict, Tuple
 
-from pufferlib.ocean.benchmark import interaction_features
+from pufferlib.ocean.benchmark import interaction_features, map_metric_features
 
 
 def compute_displacement_error(
@@ -310,3 +310,101 @@ def compute_interaction_features(
         result_ttc[scenario_mask] = times_to_collision
 
     return result_distances, result_collisions, result_ttc
+
+
+def compute_map_features(
+    trajectories: dict,
+    scenario_ids: np.ndarray,
+    agent_length: np.ndarray,
+    agent_width: np.ndarray,
+    road_edge_polylines: dict,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Computes distance to road edge and offroad indication for each agent.
+
+    Args:
+        trajectories: Dictionary with keys:
+            - 'x', 'y', 'heading': shape (num_agents, num_rollouts, num_steps)
+            - 'valid': shape (num_agents, num_rollouts, num_steps) (optional)
+        scenario_ids: Shape (num_agents, 1) - scenario ID for each agent
+        agent_length: Shape (num_agents,) - length of each agent
+        agent_width: Shape (num_agents,) - width of each agent
+        road_edge_polylines: Dictionary with keys:
+            - 'x': flattened x coordinates
+            - 'y': flattened y coordinates
+            - 'lengths': length of each polyline
+            - 'scenario_id': scenario ID for each polyline
+
+    Returns:
+        Tuple of:
+            - Distance to road edge, shape (num_agents, num_rollouts, num_steps)
+            - Offroad indication per step, shape (num_agents, num_rollouts, num_steps)
+    """
+    num_agents = trajectories["x"].shape[0]
+    num_rollouts = trajectories["x"].shape[1]
+    num_steps = trajectories["x"].shape[2]
+
+    result_distances = np.zeros((num_agents, num_rollouts, num_steps), dtype=np.float32)
+    result_offroad = np.zeros((num_agents, num_rollouts, num_steps), dtype=bool)
+
+    valid = trajectories.get("valid", np.ones((num_agents, num_rollouts, num_steps), dtype=bool))
+
+    unique_scenarios = np.unique(scenario_ids)
+
+    # Precompute polyline boundaries
+    polyline_boundaries = np.cumsum(np.concatenate([[0], road_edge_polylines["lengths"]]))
+
+    for scenario_id in unique_scenarios:
+        # Get agents in this scenario
+        agent_mask = scenario_ids[:, 0] == scenario_id
+        agent_indices = np.where(agent_mask)[0]
+
+        if len(agent_indices) == 0:
+            continue
+
+        # Get road edges for this scenario
+        polyline_mask = road_edge_polylines["scenario_id"] == scenario_id
+        polyline_indices = np.where(polyline_mask)[0]
+
+        # Extract polyline data for this scenario
+        scenario_lengths = road_edge_polylines["lengths"][polyline_mask]
+
+        # Gather points for selected polylines
+        scenario_x_list = []
+        scenario_y_list = []
+        for idx in polyline_indices:
+            start = polyline_boundaries[idx]
+            end = polyline_boundaries[idx + 1]
+            scenario_x_list.append(road_edge_polylines["x"][start:end])
+            scenario_y_list.append(road_edge_polylines["y"][start:end])
+
+        scenario_polyline_x = np.concatenate(scenario_x_list)
+        scenario_polyline_y = np.concatenate(scenario_y_list)
+
+        # Get agent data for this scenario
+        scenario_x = trajectories["x"][agent_mask]
+        scenario_y = trajectories["y"][agent_mask]
+        scenario_heading = trajectories["heading"][agent_mask]
+        scenario_valid = valid[agent_mask]
+        scenario_length = agent_length[agent_mask]
+        scenario_width = agent_width[agent_mask]
+
+        n_scenario_agents = scenario_x.shape[0]
+
+        # Process each rollout
+        for rollout_idx in range(num_rollouts):
+            distances = map_metric_features.compute_distance_to_road_edge(
+                center_x=scenario_x[:, rollout_idx, :],
+                center_y=scenario_y[:, rollout_idx, :],
+                length=scenario_length,
+                width=scenario_width,
+                heading=scenario_heading[:, rollout_idx, :],
+                valid=scenario_valid[:, rollout_idx, :],
+                polyline_x=scenario_polyline_x,
+                polyline_y=scenario_polyline_y,
+                polyline_lengths=scenario_lengths,
+            )
+
+            result_distances[agent_mask, rollout_idx, :] = distances
+            result_offroad[agent_mask, rollout_idx, :] = distances > map_metric_features.OFFROAD_DISTANCE_THRESHOLD
+
+    return result_distances, result_offroad
