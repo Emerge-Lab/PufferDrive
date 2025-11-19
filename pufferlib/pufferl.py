@@ -1238,7 +1238,7 @@ def sweep(args=None, env_name=None):
     points_per_run = args["sweep"]["downsample"]
     target_key = f"environment/{args['sweep']['metric']}"
     for i in range(args["max_runs"]):
-        seed = time.time_ns() & 0xFFFFFFFF
+        seed = 42
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
