@@ -115,11 +115,16 @@ def main():
     agent_width = agent_state["width"]
 
     # Compute per-timestep indicators
+    num_agents = sim_traj["x"].shape[0]
+    eval_mask = np.ones(num_agents, dtype=bool)
+
     _, collisions, _ = compute_interaction_features(
-        sim_traj, scenario_ids, agent_length, agent_width
+        sim_traj["x"], sim_traj["y"], sim_traj["heading"],
+        scenario_ids, agent_length, agent_width, eval_mask
     )
     _, offroad = compute_map_features(
-        sim_traj, scenario_ids, agent_length, agent_width, road_edge_polylines
+        sim_traj["x"], sim_traj["y"], sim_traj["heading"],
+        scenario_ids, agent_length, agent_width, road_edge_polylines
     )
 
     # Plot each scenario

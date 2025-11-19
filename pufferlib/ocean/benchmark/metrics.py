@@ -221,67 +221,73 @@ def _reduce_average_with_validity(tensor: np.ndarray, validity: np.ndarray, axis
 
 
 def compute_interaction_features(
-    trajectories: dict,
+    x: np.ndarray,
+    y: np.ndarray,
+    heading: np.ndarray,
     scenario_ids: np.ndarray,
     agent_length: np.ndarray,
     agent_width: np.ndarray,
+    eval_mask: np.ndarray,
+    valid: np.ndarray = None,
     corner_rounding_factor: float = 0.7,
     seconds_per_step: float = 0.1,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Computes distance to nearest object for each agent, grouped by scenario.
 
-    Loops over unique scenario_ids and calls the vectorized distance computation
-    for agents within each scenario.
-
     Args:
-        trajectories: Dictionary with keys:
-            - 'x', 'y', 'heading': shape (num_agents, num_rollouts, num_steps)
-            - 'valid': shape (num_agents, num_rollouts, num_steps) (optional, defaults to all True)
-        scenario_ids: Shape (num_agents, 1) - scenario ID for each agent
-        agent_length: Shape (num_agents,) - length of each agent
-        agent_width: Shape (num_agents,) - width of each agent
-        corner_rounding_factor: Rounding factor for box corners, between 0 (sharp) and 1 (capsule)
-        seconds_per_step: Duration of one step in seconds
+        x: Shape (num_agents, num_rollouts, num_steps)
+        y: Shape (num_agents, num_rollouts, num_steps)
+        heading: Shape (num_agents, num_rollouts, num_steps)
+        scenario_ids: Shape (num_agents, 1)
+        agent_length: Shape (num_agents,)
+        agent_width: Shape (num_agents,)
+        eval_mask: Shape (num_agents,) - boolean mask for evaluated agents
+        valid: Shape (num_agents, num_rollouts, num_steps), optional
 
     Returns:
         Tuple of:
-            - Distance to nearest object, shape (num_agents, num_rollouts, num_steps)
-            - Collision indicator per step, shape (num_agents, num_rollouts, num_steps)
-            - Time to collision, shape (num_agents, num_rollouts, num_steps)
+            - Distance to nearest object, shape (num_eval_agents, num_rollouts, num_steps)
+            - Collision indicator per step, shape (num_eval_agents, num_rollouts, num_steps)
+            - Time to collision, shape (num_eval_agents, num_rollouts, num_steps)
     """
+    num_agents = x.shape[0]
+    num_eval_agents = np.sum(eval_mask)
+    num_rollouts = x.shape[1]
+    num_steps = x.shape[2]
 
-    num_agents = trajectories["x"].shape[0]
-    num_rollouts = trajectories["x"].shape[1]
-    num_steps = trajectories["x"].shape[2]
+    if valid is None:
+        valid = np.ones((num_agents, num_rollouts, num_steps), dtype=bool)
 
     length_broadcast = np.broadcast_to(agent_length[:, None], (num_agents, num_rollouts))
     width_broadcast = np.broadcast_to(agent_width[:, None], (num_agents, num_rollouts))
 
     result_distances = np.full(
-        (num_agents, num_rollouts, num_steps), interaction_features.EXTREMELY_LARGE_DISTANCE, dtype=np.float32
+        (num_eval_agents, num_rollouts, num_steps), interaction_features.EXTREMELY_LARGE_DISTANCE, dtype=np.float32
     )
 
-    result_collisions = np.full((num_agents, num_rollouts, num_steps), False, dtype=bool)
+    result_collisions = np.full((num_eval_agents, num_rollouts, num_steps), False, dtype=bool)
 
     result_ttc = np.full(
-        (num_agents, num_rollouts, num_steps), interaction_features.MAXIMUM_TIME_TO_COLLISION, dtype=np.float32
+        (num_eval_agents, num_rollouts, num_steps), interaction_features.MAXIMUM_TIME_TO_COLLISION, dtype=np.float32
     )
 
-    valid = trajectories.get("valid", np.ones((num_agents, num_rollouts, num_steps), dtype=bool))
-
     unique_scenarios = np.unique(scenario_ids)
+
+    eval_indices = np.where(eval_mask)[0]
+    eval_to_result = {idx: i for i, idx in enumerate(eval_indices)}
 
     for scenario_id in unique_scenarios:
         scenario_mask = scenario_ids[:, 0] == scenario_id
         agent_indices = np.where(scenario_mask)[0]
-        n_agents_in_scenario = len(agent_indices)
 
-        scenario_x = trajectories["x"][scenario_mask]
-        scenario_y = trajectories["y"][scenario_mask]
+        scenario_x = x[scenario_mask]
+        scenario_y = y[scenario_mask]
         scenario_length = length_broadcast[scenario_mask]
         scenario_width = width_broadcast[scenario_mask]
-        scenario_heading = trajectories["heading"][scenario_mask]
+        scenario_heading = heading[scenario_mask]
         scenario_valid = valid[scenario_mask]
+
+        scenario_eval_mask = eval_mask[scenario_mask]
 
         distances_to_objects = interaction_features.compute_distance_to_nearest_object(
             center_x=scenario_x,
@@ -291,6 +297,7 @@ def compute_interaction_features(
             heading=scenario_heading,
             valid=scenario_valid,
             corner_rounding_factor=corner_rounding_factor,
+            evaluated_object_mask=scenario_eval_mask,
         )
 
         is_colliding_per_step = np.less(distances_to_objects, interaction_features.COLLISION_DISTANCE_THRESHOLD)
@@ -303,72 +310,73 @@ def compute_interaction_features(
             heading=scenario_heading,
             valid=scenario_valid,
             seconds_per_step=seconds_per_step,
+            evaluated_object_mask=scenario_eval_mask,
         )
 
-        result_distances[scenario_mask] = distances_to_objects
-        result_collisions[scenario_mask] = is_colliding_per_step
-        result_ttc[scenario_mask] = times_to_collision
+        # Map results to correct positions in output arrays
+        eval_agents_in_scenario = agent_indices[scenario_eval_mask]
+        result_indices = [eval_to_result[idx] for idx in eval_agents_in_scenario]
+
+        result_distances[result_indices] = distances_to_objects
+        result_collisions[result_indices] = is_colliding_per_step
+        result_ttc[result_indices] = times_to_collision
 
     return result_distances, result_collisions, result_ttc
 
 
 def compute_map_features(
-    trajectories: dict,
+    x: np.ndarray,
+    y: np.ndarray,
+    heading: np.ndarray,
     scenario_ids: np.ndarray,
     agent_length: np.ndarray,
     agent_width: np.ndarray,
     road_edge_polylines: dict,
+    valid: np.ndarray = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Computes distance to road edge and offroad indication for each agent.
 
     Args:
-        trajectories: Dictionary with keys:
-            - 'x', 'y', 'heading': shape (num_agents, num_rollouts, num_steps)
-            - 'valid': shape (num_agents, num_rollouts, num_steps) (optional)
-        scenario_ids: Shape (num_agents, 1) - scenario ID for each agent
-        agent_length: Shape (num_agents,) - length of each agent
-        agent_width: Shape (num_agents,) - width of each agent
-        road_edge_polylines: Dictionary with keys:
-            - 'x': flattened x coordinates
-            - 'y': flattened y coordinates
-            - 'lengths': length of each polyline
-            - 'scenario_id': scenario ID for each polyline
+        x: Shape (num_agents, num_rollouts, num_steps)
+        y: Shape (num_agents, num_rollouts, num_steps)
+        heading: Shape (num_agents, num_rollouts, num_steps)
+        scenario_ids: Shape (num_agents, 1)
+        agent_length: Shape (num_agents,)
+        agent_width: Shape (num_agents,)
+        road_edge_polylines: Dictionary with polyline data
+        valid: Shape (num_agents, num_rollouts, num_steps), optional
 
     Returns:
         Tuple of:
             - Distance to road edge, shape (num_agents, num_rollouts, num_steps)
             - Offroad indication per step, shape (num_agents, num_rollouts, num_steps)
     """
-    num_agents = trajectories["x"].shape[0]
-    num_rollouts = trajectories["x"].shape[1]
-    num_steps = trajectories["x"].shape[2]
+    num_agents = x.shape[0]
+    num_rollouts = x.shape[1]
+    num_steps = x.shape[2]
+
+    if valid is None:
+        valid = np.ones((num_agents, num_rollouts, num_steps), dtype=bool)
 
     result_distances = np.zeros((num_agents, num_rollouts, num_steps), dtype=np.float32)
     result_offroad = np.zeros((num_agents, num_rollouts, num_steps), dtype=bool)
 
-    valid = trajectories.get("valid", np.ones((num_agents, num_rollouts, num_steps), dtype=bool))
-
     unique_scenarios = np.unique(scenario_ids)
 
-    # Precompute polyline boundaries
     polyline_boundaries = np.cumsum(np.concatenate([[0], road_edge_polylines["lengths"]]))
 
     for scenario_id in unique_scenarios:
-        # Get agents in this scenario
         agent_mask = scenario_ids[:, 0] == scenario_id
         agent_indices = np.where(agent_mask)[0]
 
         if len(agent_indices) == 0:
             continue
 
-        # Get road edges for this scenario
         polyline_mask = road_edge_polylines["scenario_id"] == scenario_id
         polyline_indices = np.where(polyline_mask)[0]
 
-        # Extract polyline data for this scenario
         scenario_lengths = road_edge_polylines["lengths"][polyline_mask]
 
-        # Gather points for selected polylines
         scenario_x_list = []
         scenario_y_list = []
         for idx in polyline_indices:
@@ -380,17 +388,13 @@ def compute_map_features(
         scenario_polyline_x = np.concatenate(scenario_x_list)
         scenario_polyline_y = np.concatenate(scenario_y_list)
 
-        # Get agent data for this scenario
-        scenario_x = trajectories["x"][agent_mask]
-        scenario_y = trajectories["y"][agent_mask]
-        scenario_heading = trajectories["heading"][agent_mask]
+        scenario_x = x[agent_mask]
+        scenario_y = y[agent_mask]
+        scenario_heading = heading[agent_mask]
         scenario_valid = valid[agent_mask]
         scenario_length = agent_length[agent_mask]
         scenario_width = agent_width[agent_mask]
 
-        n_scenario_agents = scenario_x.shape[0]
-
-        # Process each rollout
         for rollout_idx in range(num_rollouts):
             distances = map_metric_features.compute_distance_to_road_edge(
                 center_x=scenario_x[:, rollout_idx, :],

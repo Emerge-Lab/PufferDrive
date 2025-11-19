@@ -32,6 +32,7 @@ def test_box_distance_calculations():
     print(f"  length:   {length.shape} = (num_agents=4, num_rollouts=1)")
     print(f"  This test uses: 4 agents, 1 rollout, 1 timestep")
 
+    eval_mask = np.ones(4, dtype=bool)
     signed_distances = interaction_features.compute_signed_distances(
         center_x=center_x,
         center_y=center_y,
@@ -39,6 +40,7 @@ def test_box_distance_calculations():
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=eval_mask,
         corner_rounding_factor=0.0,
     )
 
@@ -91,6 +93,7 @@ def test_invalid_objects():
     print("This test uses: 2 agents (Box 0 and Box 1), 1 rollout, 1 timestep")
     print("Box 1 is marked as invalid")
 
+    eval_mask = np.ones(2, dtype=bool)
     distances = interaction_features.compute_distance_to_nearest_object(
         center_x=center_x,
         center_y=center_y,
@@ -98,6 +101,7 @@ def test_invalid_objects():
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=eval_mask,
     )
     print(f"  Agent 0 distance (box 1 invalid): {distances[0, 0, 0]}")
     print(f"  Expected: {interaction_features.EXTREMELY_LARGE_DISTANCE}")
@@ -135,6 +139,7 @@ def test_multiple_rollouts():
     print("Rollout 0: Box 1 at (4.5, 2.5) - closer to Box 0")
     print("Rollout 1: Box 1 at (5.0, 3.0) - further from Box 0")
 
+    eval_mask = np.ones(2, dtype=bool)
     distances = interaction_features.compute_distance_to_nearest_object(
         center_x=center_x,
         center_y=center_y,
@@ -142,6 +147,7 @@ def test_multiple_rollouts():
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=eval_mask,
         corner_rounding_factor=0.0,
     )
     print(f"  Agent 0, rollout 0: {distances[0, 0, 0]:.2f}m")
@@ -179,6 +185,7 @@ def test_multiple_timesteps():
     print("Box 0 stays at (2.0, 1.0) across all timesteps")
     print("Box 1 moves away: t=0 at (4.5, 2.5), t=1 at (5.0, 2.5), t=2 at (6.0, 2.5)")
 
+    eval_mask = np.ones(2, dtype=bool)
     distances = interaction_features.compute_distance_to_nearest_object(
         center_x=center_x,
         center_y=center_y,
@@ -186,6 +193,7 @@ def test_multiple_timesteps():
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=eval_mask,
         corner_rounding_factor=0.0,
     )
 
@@ -218,6 +226,7 @@ def test_rollout_isolation():
     print("Rollout 1: Box 0 at (100.0, 1.0), Box 1 at (2.0, 100.0) - far apart")
     print("Each agent should only see the other agent in its own rollout")
 
+    eval_mask = np.ones(2, dtype=bool)
     distances = interaction_features.compute_distance_to_nearest_object(
         center_x=center_x,
         center_y=center_y,
@@ -225,6 +234,7 @@ def test_rollout_isolation():
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=eval_mask,
         corner_rounding_factor=0.0,
     )
     print(f"  Agent 0, rollout 0: {distances[0, 0, 0]:.2f}m (should see Agent 1 rollout 0)")

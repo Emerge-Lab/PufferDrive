@@ -22,6 +22,7 @@ def compute_signed_distances(
     width: np.ndarray,
     heading: np.ndarray,
     valid: np.ndarray,
+    evaluated_object_mask: np.ndarray = None,
     corner_rounding_factor: float = CORNER_ROUNDING_FACTOR,
 ) -> np.ndarray:
     """Computes pairwise signed distances for all agents.
@@ -47,6 +48,10 @@ def compute_signed_distances(
     num_rollouts = center_x.shape[1]
     num_steps = center_x.shape[2]
 
+    eval_indices = np.where(evaluated_object_mask)[0]
+    other_indices = np.where(~evaluated_object_mask)[0]
+    num_eval = len(eval_indices)
+
     length = np.broadcast_to(length[..., None], (num_agents, num_rollouts, num_steps))
     width = np.broadcast_to(width[..., None], (num_agents, num_rollouts, num_steps))
 
@@ -68,13 +73,18 @@ def compute_signed_distances(
     box_corners = geometry_utils.get_2d_box_corners(boxes_flat)
     box_corners = box_corners.reshape(num_agents, num_rollouts, num_steps, 4, 2)
 
-    corners_1 = box_corners[:, np.newaxis, :, :, :, :]
-    corners_2 = box_corners[np.newaxis, :, :, :, :, :]
+    # Reorder: eval first, then others
+    eval_corners = box_corners[eval_indices]
+    other_corners = box_corners[other_indices]
+    all_corners = np.concatenate([eval_corners, other_corners], axis=0)
 
-    corners_broadcast_1 = np.broadcast_to(corners_1, (num_agents, num_agents, num_rollouts, num_steps, 4, 2))
-    corners_broadcast_2 = np.broadcast_to(corners_2, (num_agents, num_agents, num_rollouts, num_steps, 4, 2))
+    corners_1 = eval_corners[:, np.newaxis, :, :, :, :]
+    corners_2 = all_corners[np.newaxis, :, :, :, :, :]
 
-    batch_size = num_agents * num_agents * num_rollouts * num_steps
+    corners_broadcast_1 = np.broadcast_to(corners_1, (num_eval, num_agents, num_rollouts, num_steps, 4, 2))
+    corners_broadcast_2 = np.broadcast_to(corners_2, (num_eval, num_agents, num_rollouts, num_steps, 4, 2))
+
+    batch_size = num_eval * num_agents * num_rollouts * num_steps
     corners_flat_1 = corners_broadcast_1.reshape(batch_size, 4, 2)
     corners_flat_2 = corners_broadcast_2.reshape(batch_size, 4, 2)
 
@@ -85,17 +95,25 @@ def compute_signed_distances(
         query_points=np.zeros((batch_size, 2), dtype=np.float32), polygon_points=minkowski_sum
     )
 
-    signed_distances = signed_distances_flat.reshape(num_agents, num_agents, num_rollouts, num_steps)
+    signed_distances = signed_distances_flat.reshape(num_eval, num_agents, num_rollouts, num_steps)
 
-    signed_distances -= shrinking_distance[:, np.newaxis, :, :]
-    signed_distances -= shrinking_distance[np.newaxis, :, :, :]
+    # Reorder shrinking distances
+    eval_shrinking = shrinking_distance[eval_indices]
+    other_shrinking = shrinking_distance[other_indices]
+    all_shrinking = np.concatenate([eval_shrinking, other_shrinking], axis=0)
 
-    self_mask = np.eye(num_agents, dtype=np.float32)[:, :, np.newaxis, np.newaxis]
+    signed_distances -= eval_shrinking[:, np.newaxis, :, :]
+    signed_distances -= all_shrinking[np.newaxis, :, :, :]
+
+    self_mask = np.eye(num_eval, num_agents, dtype=np.float32)[:, :, np.newaxis, np.newaxis]
     signed_distances = signed_distances + self_mask * EXTREMELY_LARGE_DISTANCE
 
-    valid_1 = valid[:, np.newaxis, :, :]
-    valid_2 = valid[np.newaxis, :, :, :]
-    valid_mask = np.logical_and(valid_1, valid_2)
+    # Validity mask (reordered)
+    eval_valid = valid[eval_indices]
+    other_valid = valid[other_indices]
+    all_valid = np.concatenate([eval_valid, other_valid], axis=0)
+
+    valid_mask = np.logical_and(eval_valid[:, np.newaxis, :, :], all_valid[np.newaxis, :, :, :])
     signed_distances = np.where(valid_mask, signed_distances, EXTREMELY_LARGE_DISTANCE)
 
     return signed_distances
@@ -108,6 +126,7 @@ def compute_distance_to_nearest_object(
     width: np.ndarray,
     heading: np.ndarray,
     valid: np.ndarray,
+    evaluated_object_mask: np.ndarray,
     corner_rounding_factor: float = CORNER_ROUNDING_FACTOR,
 ) -> tuple[np.ndarray, np.ndarray]:
     signed_distances = compute_signed_distances(
@@ -117,6 +136,7 @@ def compute_distance_to_nearest_object(
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=evaluated_object_mask,
         corner_rounding_factor=corner_rounding_factor,
     )
 
@@ -131,6 +151,7 @@ def compute_time_to_collision(
     width: np.ndarray,
     heading: np.ndarray,
     valid: np.ndarray,
+    evaluated_object_mask: np.ndarray,
     seconds_per_step: float,
 ) -> np.ndarray:
     """Computes time-to-collision of the evaluated objects.
@@ -145,16 +166,21 @@ def compute_time_to_collision(
         width: Shape (num_agents, num_rollouts) - constant per timestep
         heading: Shape (num_agents, num_rollouts, num_steps)
         valid: Shape (num_agents, num_rollouts, num_steps)
+        evaluated_object_mask: Shape (num_agents,) - boolean mask for evaluated agents
         seconds_per_step: Duration of one step in seconds
 
     Returns:
-        Time-to-collision, shape (num_agents, num_rollouts, num_steps)
+        Time-to-collision, shape (num_eval_agents, num_rollouts, num_steps)
     """
     from pufferlib.ocean.benchmark import metrics
 
     num_agents = center_x.shape[0]
     num_rollouts = center_x.shape[1]
     num_steps = center_x.shape[2]
+
+    eval_indices = np.where(evaluated_object_mask)[0]
+    other_indices = np.where(~evaluated_object_mask)[0]
+    num_eval = len(eval_indices)
 
     speed = metrics.compute_kinematic_features(
         x=center_x, y=center_y, heading=heading, seconds_per_step=seconds_per_step
@@ -170,10 +196,18 @@ def compute_time_to_collision(
     # (num_agents, num_rollouts, num_steps) -> (num_steps, num_agents, num_rollouts)
     valid_transposed = np.transpose(valid, (2, 0, 1))
 
-    # Split box features: xy (2), sizes (2), yaw (1), speed (1)
-    # Each has shape (num_steps, num_agents, num_rollouts, feature_dim)
-    ego_xy, ego_sizes, ego_yaw, ego_speed = np.split(boxes, [2, 4, 5], axis=-1)
-    other_xy, other_sizes, other_yaw, _ = np.split(boxes, [2, 4, 5], axis=-1)
+    # Reorder: eval first, others second
+    eval_boxes = boxes[:, eval_indices]
+    other_boxes = boxes[:, other_indices]
+    all_boxes = np.concatenate([eval_boxes, other_boxes], axis=1)
+
+    eval_valid = valid_transposed[:, eval_indices]
+    other_valid = valid_transposed[:, other_indices]
+    all_valid = np.concatenate([eval_valid, other_valid], axis=1)
+
+    # Split for eval (ego) and all (other)
+    ego_xy, ego_sizes, ego_yaw, ego_speed = np.split(eval_boxes, [2, 4, 5], axis=-1)
+    other_xy, other_sizes, other_yaw, _ = np.split(all_boxes, [2, 4, 5], axis=-1)
 
     # Compute pairwise yaw differences
     # (num_steps, 1, num_agents, num_rollouts, 1) - (num_steps, num_agents, 1, num_rollouts, 1)
@@ -217,8 +251,8 @@ def compute_time_to_collision(
         yaw_diff[..., 0].transpose(1, 2, 0, 3),
     )
 
-    # (num_steps, 1, num_agents, num_agents, num_rollouts)
-    valid_mask = np.logical_and(valid_transposed[:, np.newaxis], following_mask.transpose(2, 0, 1, 3))
+    # (num_steps, num_eval, num_agents, num_rollouts)
+    valid_mask = np.logical_and(all_valid[:, np.newaxis], following_mask.transpose(2, 0, 1, 3))
     # Mask out invalid or non-following objects with large distance
     # (num_steps, num_agents, num_agents, num_rollouts)
     masked_long_distance = long_distance + (1.0 - valid_mask.astype(np.float32)) * EXTREMELY_LARGE_DISTANCE

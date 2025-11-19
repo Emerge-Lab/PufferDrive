@@ -23,6 +23,7 @@ def test_time_to_collision_output_shape():
     heading = np.zeros((num_agents, num_rollouts, num_steps), dtype=np.float32)
     valid = np.ones((num_agents, num_rollouts, num_steps), dtype=bool)
 
+    eval_mask = np.ones(num_agents, dtype=bool)
     ttc = interaction_features.compute_time_to_collision(
         center_x=center_x,
         center_y=center_y,
@@ -30,6 +31,7 @@ def test_time_to_collision_output_shape():
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=eval_mask,
         seconds_per_step=0.1,
     )
 
@@ -126,6 +128,7 @@ def test_time_to_collision_values(center_xys, headings, boxes_sizes, speeds, exp
     heading = np.broadcast_to(headings[:, np.newaxis, np.newaxis], (num_agents, num_rollouts, 3))
     valid = np.ones((num_agents, num_rollouts, 3), dtype=bool)
 
+    eval_mask = np.ones(num_agents, dtype=bool)
     ttc = interaction_features.compute_time_to_collision(
         center_x=center_x,
         center_y=center_y,
@@ -133,6 +136,7 @@ def test_time_to_collision_values(center_xys, headings, boxes_sizes, speeds, exp
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=eval_mask,
         seconds_per_step=seconds_per_step,
     )
 
@@ -172,6 +176,7 @@ def test_time_to_collision_invalid_objects():
     valid = np.ones((num_agents, num_rollouts, num_steps), dtype=bool)
     valid[1, 0, 1] = False
 
+    eval_mask = np.ones(num_agents, dtype=bool)
     ttc = interaction_features.compute_time_to_collision(
         center_x=center_x,
         center_y=center_y,
@@ -179,6 +184,7 @@ def test_time_to_collision_invalid_objects():
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=eval_mask,
         seconds_per_step=seconds_per_step,
     )
 
@@ -216,6 +222,7 @@ def test_time_to_collision_no_object_ahead():
     heading = np.broadcast_to(headings[:, np.newaxis, np.newaxis], (num_agents, num_rollouts, num_steps))
     valid = np.ones((num_agents, num_rollouts, num_steps), dtype=bool)
 
+    eval_mask = np.ones(num_agents, dtype=bool)
     ttc = interaction_features.compute_time_to_collision(
         center_x=center_x,
         center_y=center_y,
@@ -223,6 +230,7 @@ def test_time_to_collision_no_object_ahead():
         width=width,
         heading=heading,
         valid=valid,
+        evaluated_object_mask=eval_mask,
         seconds_per_step=seconds_per_step,
     )
 

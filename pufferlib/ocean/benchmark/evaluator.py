@@ -148,6 +148,8 @@ class WOSACEvaluator:
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
+        eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
+
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
         sim_y = simulated_trajectories["y"]
@@ -156,65 +158,63 @@ class WOSACEvaluator:
         ref_y = ground_truth_trajectories["y"]
         ref_heading = ground_truth_trajectories["heading"]
         ref_valid = ground_truth_trajectories["valid"]
+        agent_length = agent_state["length"]
+        agent_width = agent_state["width"]
+        scenario_ids = ground_truth_trajectories["scenario_id"]
+
+        # We evaluate the metrics only for the Tracks to Predict.
+        eval_sim_x = sim_x[eval_mask]
+        eval_sim_y = sim_y[eval_mask]
+        eval_sim_heading = sim_heading[eval_mask]
+        eval_ref_x = ref_x[eval_mask]
+        eval_ref_y = ref_y[eval_mask]
+        eval_ref_heading = ref_heading[eval_mask]
+        eval_ref_valid = ref_valid[eval_mask]
+        eval_agent_length = agent_length[eval_mask]
+        eval_agent_width = agent_width[eval_mask]
+        eval_scenario_ids = scenario_ids[eval_mask]
 
         # Compute features
         # Kinematics-related features
         sim_linear_speed, sim_linear_accel, sim_angular_speed, sim_angular_accel = metrics.compute_kinematic_features(
-            sim_x, sim_y, sim_heading
+            eval_sim_x, eval_sim_y, eval_sim_heading
         )
 
         ref_linear_speed, ref_linear_accel, ref_angular_speed, ref_angular_accel = metrics.compute_kinematic_features(
-            ref_x, ref_y, ref_heading
+            eval_ref_x, eval_ref_y, eval_ref_heading
         )
 
         # Get the log speed (linear and angular) validity. Since this is computed by
         # a delta between steps i-1 and i+1, we verify that both of these are
         # valid (logical and).
-        speed_validity, acceleration_validity = metrics.compute_kinematic_validity(ref_valid)
+        speed_validity, acceleration_validity = metrics.compute_kinematic_validity(ref_valid[eval_mask])
 
         # Interaction-related features
-        agent_length = agent_state["length"]
-        agent_width = agent_state["width"]
-
         sim_signed_distances, sim_collision_per_step, sim_time_to_collision = metrics.compute_interaction_features(
-            simulated_trajectories,
-            ground_truth_trajectories["scenario_id"],
-            agent_length,
-            agent_width,
-            corner_rounding_factor=0.7,
-            seconds_per_step=0.1,
+            sim_x, sim_y, sim_heading, scenario_ids, agent_length, agent_width, eval_mask,
         )
 
         ref_signed_distances, ref_collision_per_step, ref_time_to_collision = metrics.compute_interaction_features(
-            ground_truth_trajectories,
-            ground_truth_trajectories["scenario_id"],
-            agent_length,
-            agent_width,
-            corner_rounding_factor=0.7,
-            seconds_per_step=0.1,
+            ref_x, ref_y, ref_heading, scenario_ids, agent_length, agent_width, eval_mask, valid=ref_valid,
         )
 
         # Map-based features
         sim_distance_to_road_edge, sim_offroad_per_step = metrics.compute_map_features(
-            simulated_trajectories,
-            ground_truth_trajectories["scenario_id"],
-            agent_length,
-            agent_width,
-            road_edge_polylines,
+            eval_sim_x, eval_sim_y, eval_sim_heading,
+            eval_scenario_ids, eval_agent_length, eval_agent_width, road_edge_polylines,
         )
 
         ref_distance_to_road_edge, ref_offroad_per_step = metrics.compute_map_features(
-            ground_truth_trajectories,
-            ground_truth_trajectories["scenario_id"],
-            agent_length,
-            agent_width,
-            road_edge_polylines,
+            eval_ref_x, eval_ref_y, eval_ref_heading,
+            eval_scenario_ids, eval_agent_length, eval_agent_width, road_edge_polylines, valid=eval_ref_valid,
         )
 
         # Compute realism metrics
         # Average Displacement Error (ADE) and minADE
         # Note: This metric is not included in the scoring meta-metric, as per WOSAC rules.
-        ade, min_ade = metrics.compute_displacement_error(sim_x, sim_y, ref_x, ref_y, ref_valid)
+        ade, min_ade = metrics.compute_displacement_error(
+            eval_sim_x, eval_sim_y, eval_ref_x, eval_ref_y, eval_ref_valid
+        )
 
         # Log-likelihood metrics
         # Kinematic features log-likelihoods
@@ -352,7 +352,7 @@ class WOSACEvaluator:
         distance_to_nearest_object_likelihood = np.exp(
             metrics._reduce_average_with_validity(
                 distance_to_nearest_object_log_likelihood,
-                ref_valid[:, 0, :],
+                eval_ref_valid[:, 0, :],
                 axis=1,
             )
         )
@@ -360,7 +360,7 @@ class WOSACEvaluator:
         time_to_collision_likelihood = np.exp(
             metrics._reduce_average_with_validity(
                 time_to_collision_log_likelihood,
-                ref_valid[:, 0, :],
+                eval_ref_valid[:, 0, :],
                 axis=1,
             )
         )
@@ -368,7 +368,7 @@ class WOSACEvaluator:
         distance_to_road_edge_likelihood = np.exp(
             metrics._reduce_average_with_validity(
                 distance_to_road_edge_log_likelihood,
-                ref_valid[:, 0, :],
+                eval_ref_valid[:, 0, :],
                 axis=1,
             )
         )
@@ -377,8 +377,8 @@ class WOSACEvaluator:
         # in the logged scenario, we need to filter possible collisions in simulation.
         # `sim_collision_indication` shape: (n_samples, n_objects).
 
-        sim_collision_indication = np.any(np.where(ref_valid, sim_collision_per_step, False), axis=2)
-        ref_collision_indication = np.any(np.where(ref_valid, ref_collision_per_step, False), axis=2)
+        sim_collision_indication = np.any(np.where(eval_ref_valid, sim_collision_per_step, False), axis=2)
+        ref_collision_indication = np.any(np.where(eval_ref_valid, ref_collision_per_step, False), axis=2)
 
         # NOTE: I propose to log these numbers as well for interpretability
         sim_num_collisions = np.sum(sim_collision_indication, axis=1)
@@ -395,8 +395,8 @@ class WOSACEvaluator:
         collision_likelihood = np.exp(collision_log_likelihood)
 
         # Offroad likelihood (same pattern as collision)
-        sim_offroad_indication = np.any(np.where(ref_valid, sim_offroad_per_step, False), axis=2)
-        ref_offroad_indication = np.any(np.where(ref_valid, ref_offroad_per_step, False), axis=2)
+        sim_offroad_indication = np.any(np.where(eval_ref_valid, sim_offroad_per_step, False), axis=2)
+        ref_offroad_indication = np.any(np.where(eval_ref_valid, ref_offroad_per_step, False), axis=2)
 
         sim_num_offroad = np.sum(sim_offroad_indication, axis=1)
         ref_num_offroad = np.sum(ref_offroad_indication, axis=1)
@@ -411,14 +411,13 @@ class WOSACEvaluator:
         )
         offroad_likelihood = np.exp(offroad_log_likelihood)
 
-        # Get agent IDs and scenario IDs
-        agent_ids = ground_truth_trajectories["id"]
-        scenario_ids = ground_truth_trajectories["scenario_id"]
+        # Get agent IDs
+        eval_agent_ids = ground_truth_trajectories["id"][eval_mask]
 
         df = pd.DataFrame(
             {
-                "agent_id": agent_ids.flatten(),
-                "scenario_id": scenario_ids.flatten(),
+                "agent_id": eval_agent_ids.flatten(),
+                "scenario_id": eval_scenario_ids.flatten(),
                 "num_collisions_sim": sim_num_collisions.flatten(),
                 "num_collisions_ref": ref_num_collisions.flatten(),
                 "num_offroad_sim": sim_num_offroad.flatten(),
