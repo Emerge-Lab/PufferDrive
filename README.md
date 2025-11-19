@@ -8,20 +8,9 @@ Clone the repo
 https://github.com/Emerge-Lab/PufferDrive.git
 ```
 
-Make a venv
-```
-uv venv
-```
-
-Activate the venv
+Make a venv (`uv venv`), activate the venv
 ```
 source .venv/bin/activate
-```
-
-Install `inih`
-
-```
-wget https://github.com/benhoyt/inih/archive/r62.tar.gz
 ```
 
 Inside the venv, install the dependencies
@@ -38,8 +27,7 @@ To test your setup, you can run
 ```
 puffer train puffer_drive
 ```
-
-Alternative options for working with pufferdrive are found at https://puffer.ai/docs.html
+See also the [puffer docs](https://puffer.ai/docs.html).
 
 
 ## Quick start
@@ -50,6 +38,9 @@ puffer train puffer_drive
 ```
 
 ## Dataset
+
+<details>
+<summary>Downloading and using data</summary>
 
 ### Data preparation
 
@@ -71,8 +62,13 @@ You can download the WOMD data from Hugging Face in two versions:
 ### Additional Data Sources
 
 For more training data compatible with PufferDrive, see [ScenarioMax](https://github.com/valeoai/ScenarioMax). The GPUDrive data format is fully compatible with PufferDrive.
+</details>
+
 
 ## Visualizer
+
+<details>
+<summary>Dependencies and usage</summary>
 
 ## Headless server setup
 
@@ -85,7 +81,7 @@ sudo apt update
 sudo apt install ffmpeg xvfb
 ```
 
-For HPC(There are no root privileges), so install into the conda environment
+For HPC (There are no root privileges), so install into the conda environment
 ```bash
 conda install -c conda-forge xorg-x11-server-xvfb-cos6-x86_64
 conda install -c conda-forge ffmpeg
@@ -114,6 +110,28 @@ The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color 
 
 ---
 
-### Output
+</details>
 
-The visualizer will automatically generate two videos from the rendered frames.
+
+## Benchmarks
+
+### Distributional realism
+
+We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/main/pufferlib/ocean/benchmark).
+
+WOSAC evaluation with random policy:
+```bash
+puffer eval puffer_drive --eval.wosac-realism-eval True
+```
+
+WOSAC evaluation with your checkpoint (must be .pt file):
+```bash
+puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-trained-policy>.pt
+```
+
+### Human-compatibility
+
+You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how closely aligned your agent's behavior is to how people drive. You can run it like this:
+```bash
+puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-trained-policy>.pt
+```
