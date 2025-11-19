@@ -969,9 +969,9 @@ void move_expert(Drive* env, float* actions, int agent_idx){
         agent->sim_vx = 0.0f;
         agent->sim_vy = 0.0f;
         agent->sim_valid = 0;
-        agent->sim_length = 0.0f;
-        agent->sim_width = 0.0f;
-        agent->sim_height = 0.0f;
+        // agent->sim_length = 0.0f;
+        // agent->sim_width = 0.0f;
+        // agent->sim_height = 0.0f;
         return;
     }
     // Invalid log entry
@@ -983,9 +983,9 @@ void move_expert(Drive* env, float* actions, int agent_idx){
         agent->sim_vx = 0.0f;
         agent->sim_vy = 0.0f;
         agent->sim_valid = 0;
-        agent->sim_length = 0.0f;
-        agent->sim_width = 0.0f;
-        agent->sim_height = 0.0f;
+        // agent->sim_length = 0.0f;
+        // agent->sim_width = 0.0f;
+        // agent->sim_height = 0.0f;
         return;
     }
 
@@ -996,9 +996,9 @@ void move_expert(Drive* env, float* actions, int agent_idx){
     agent->sim_heading = agent->log_heading[t];
     agent->sim_vx = agent->log_velocity_x[t];
     agent->sim_vy = agent->log_velocity_y[t];
-    agent->sim_length = agent->log_length[t];
-    agent->sim_width = agent->log_width[t];
-    agent->sim_height = agent->log_height[t];
+    // agent->sim_length = agent->log_length[t];
+    // agent->sim_width = agent->log_width[t];
+    // agent->sim_height = agent->log_height[t];
     agent->sim_valid = agent->log_valid[t];
 }
 
