@@ -123,16 +123,6 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->entropy_weight_ub = (float)unpack(kwargs, "entropy_weight_ub");
     env->discount_weight_lb = (float)unpack(kwargs, "discount_weight_lb");
     env->discount_weight_ub = (float)unpack(kwargs, "discount_weight_ub");
-
-    env->adaptive_driving_agent = unpack(kwargs, "adaptive_driving");
-
-    if (env->adaptive_driving_agent) {
-        env->k_scenarios = unpack(kwargs, "k_scenarios");
-        env->current_scenario = 0;
-    } else {
-        env->k_scenarios = 0;
-    }
-
     env->population_play = unpack(kwargs, "population_play");
 
     if (env->population_play) {

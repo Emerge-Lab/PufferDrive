@@ -57,7 +57,7 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
-        k_scenarios=0,
+        k_scenarios=1,
         adaptive_driving_agent=False,
         ini_file="pufferlib/config/ocean/drive.ini",
     ):
@@ -83,6 +83,9 @@ class Drive(pufferlib.PufferEnv):
         # Adaptive driving agent setup
         self.adaptive_driving_agent = int(adaptive_driving_agent)
         self.k_scenarios = int(k_scenarios)
+        self.current_scenario = 0
+        self.scenario_metrics = []  # List to store metrics for each scenario
+        self.current_scenario_infos = []  # Accumulate infos for current scenario
 
         # Conditioning setup
         self.condition_type = condition_type
@@ -263,8 +266,6 @@ class Drive(pufferlib.PufferEnv):
                 discount_weight_ub=self.discount_weight_ub,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
-                adaptive_driving=self.adaptive_driving_agent,
-                k_scenarios=self.k_scenarios,
             )
             env_ids.append(env_id)
 
@@ -321,19 +322,28 @@ class Drive(pufferlib.PufferEnv):
             # Build per-environment ID lists
             local_ego_ids = []
             for i in range(num_envs):
-                if len(ego_ids[i]) > 0:
+                if len(ego_ids[i]) > 0 and len(co_player_ids[i]) > 0:
                     min_id_in_world = min(ego_ids[i] + co_player_ids[i])
-                    local_ego_ids.append([eid - min_id_in_world for eid in ego_ids[i]])
-                else:
+                elif len(ego_ids[i]) > 0:
+                    min_id_in_world = min(ego_ids[i])
+                elif len(co_player_ids[i]) > 0:
                     min_id_in_world = min(co_player_ids[i])
-                    local_ego_ids.append([])
+                else:
+                    min_id_in_world = 0
+
+                local_ego_ids.append([eid - min_id_in_world for eid in ego_ids[i]])
 
             local_co_player_ids = []
             for i in range(num_envs):
-                if len(ego_ids[i]) > 0:
+                if len(ego_ids[i]) > 0 and len(co_player_ids[i]) > 0:
                     min_id_in_world = min(ego_ids[i] + co_player_ids[i])
-                else:
+                elif len(ego_ids[i]) > 0:
+                    min_id_in_world = min(ego_ids[i])
+                elif len(co_player_ids[i]) > 0:
                     min_id_in_world = min(co_player_ids[i])
+                else:
+                    min_id_in_world = 0
+
                 local_co_player_ids.append([cid - min_id_in_world for cid in co_player_ids[i]])
 
             self.local_co_player_ids = local_co_player_ids
@@ -383,64 +393,134 @@ class Drive(pufferlib.PufferEnv):
 
     def _add_co_player_conditioning(self, observations):
         """Add pre-sampled conditioning variables to co-player observations"""
-        with torch.no_grad():
-            if not (
-                self.co_player_reward_conditioned
-                or self.co_player_entropy_conditioned
-                or self.co_player_discount_conditioned
-            ):
-                return observations
+        if self.cached_conditioning_array.shape[1] == 0:  # No conditioning
+            return observations
 
-            # Get the number of co-players per environment
-            num_co_players_per_env = np.array([len(ids) for ids in self.local_co_player_ids])
+        # Early return if no co-players
+        if self.total_co_players == 0:
+            return observations
 
-            # Early return if no co-players at all
-            if num_co_players_per_env.sum() == 0:
-                return observations
+        # Validate observations shape (optional, can remove in production for speed)
+        if observations.shape[0] != self.total_co_players:
+            raise ValueError(f"Expected {self.total_co_players} observations, got {observations.shape[0]}")
 
-            # Create indices for which environment each co-player belongs to
-            env_indices = np.repeat(np.arange(self.num_envs), num_co_players_per_env)
-
-            # self.env_conditioning is already a 2D array, just index directly
-            conditioning_array = self.env_conditioning[env_indices]
-
-            obs_with_conditioning = np.concatenate(
-                [
-                    observations[:, :7],  # First 7 base observations
-                    conditioning_array,  # Conditioning variables
-                    observations[:, 7:],  # Rest of observations
-                ],
-                axis=1,
-            )
-
-            return obs_with_conditioning
+        return np.concatenate([observations[:, :7], self.cached_conditioning_array, observations[:, 7:]], axis=1)
 
     def _set_co_player_conditioning(self):
-        """Sample and store conditioning values for each environment"""
-        with torch.no_grad():
-            env_cond_list = []
+        """Sample and store conditioning values for each environment and update all caches"""
+        # Update co-player counts and indices
+        self.num_co_players_per_env = np.array([len(ids) for ids in self.local_co_player_ids], dtype=np.int32)
+        self.total_co_players = self.num_co_players_per_env.sum()
 
-            for i in range(self.num_envs):
-                env_cond = []
+        # Pre-compute env_indices
+        if self.total_co_players > 0:
+            self.co_player_env_indices = np.repeat(
+                np.arange(self.num_envs, dtype=np.int32), self.num_co_players_per_env
+            )
+        else:
+            self.co_player_env_indices = np.array([], dtype=np.int32)
 
-                if self.co_player_reward_conditioned:
-                    collision_weight = np.random.uniform(self.collision_weight_lb, self.collision_weight_ub)
-                    offroad_weight = np.random.uniform(self.offroad_weight_lb, self.offroad_weight_ub)
-                    goal_weight = np.random.uniform(self.goal_weight_lb, self.goal_weight_ub)
-                    env_cond.extend([collision_weight, offroad_weight, goal_weight])
+        # Sample conditioning values
+        conditioning_dims = []
 
-                if self.co_player_entropy_conditioned:
-                    entropy_weight = np.random.uniform(self.entropy_weight_lb, self.entropy_weight_ub)
-                    env_cond.append(entropy_weight)
+        if self.co_player_reward_conditioned:
+            conditioning_dims.extend(
+                [
+                    (self.collision_weight_lb, self.collision_weight_ub),
+                    (self.offroad_weight_lb, self.offroad_weight_ub),
+                    (self.goal_weight_lb, self.goal_weight_ub),
+                ]
+            )
 
-                if self.co_player_discount_conditioned:
-                    discount_weight = np.random.uniform(self.discount_weight_lb, self.discount_weight_ub)
-                    env_cond.append(discount_weight)
+        if self.co_player_entropy_conditioned:
+            conditioning_dims.append((self.entropy_weight_lb, self.entropy_weight_ub))
 
-                env_cond_list.append(env_cond)
+        if self.co_player_discount_conditioned:
+            conditioning_dims.append((self.discount_weight_lb, self.discount_weight_ub))
 
-            # Store as 2D array directly
-            self.env_conditioning = np.array(env_cond_list, dtype=np.float32)
+        if not conditioning_dims:
+            self.env_conditioning = np.empty((self.num_envs, 0), dtype=np.float32)
+            self.cached_conditioning_array = np.empty((self.total_co_players, 0), dtype=np.float32)
+        else:
+            # Vectorized sampling
+            lbs = np.array([lb for lb, ub in conditioning_dims], dtype=np.float32)
+            ubs = np.array([ub for lb, ub in conditioning_dims], dtype=np.float32)
+
+            random_values = np.random.uniform(size=(self.num_envs, len(conditioning_dims))).astype(np.float32)
+            self.env_conditioning = lbs + random_values * (ubs - lbs)
+
+            # Cache the conditioning array for co-players
+            if self.total_co_players > 0:
+                self.cached_conditioning_array = self.env_conditioning[self.co_player_env_indices]
+            else:
+                self.cached_conditioning_array = np.empty((0, len(conditioning_dims)), dtype=np.float32)
+
+    def _aggregate_scenario_metrics(self, scenario_infos):
+        """Aggregate metrics from all infos collected during a scenario."""
+        if not scenario_infos:
+            return {}
+
+        # Sum up all metrics
+        aggregated = {}
+        count = len(scenario_infos)
+
+        for log in scenario_infos:
+            for key, value in log.items():
+                if isinstance(value, (int, float)):
+                    aggregated[key] = aggregated.get(key, 0.0) + value
+
+        # Average by number of logs (note: 'n' is already a count, don't average it)
+        if "n" in aggregated:
+            n = aggregated["n"]
+            for key in aggregated:
+                if key != "n":
+                    aggregated[key] = aggregated[key] / n if n > 0 else 0.0
+        else:
+            # If no 'n', just average by count of infos
+            for key in aggregated:
+                aggregated[key] = aggregated[key] / count if count > 0 else 0.0
+
+        return aggregated
+
+    def _compute_delta_metrics(self):
+        """Compute delta metrics between first and last scenario."""
+        if len(self.scenario_metrics) < 2:
+            return {}
+
+        first_metrics = self.scenario_metrics[0]
+        last_metrics = self.scenario_metrics[-1]
+
+        def compute_delta_percent(first_val, last_val):
+            if abs(first_val) < 0.0001:
+                return 0.0
+            return (last_val - first_val) / first_val * 100.0
+
+        delta_metrics = {}
+
+        # Compute deltas for key metrics
+        metrics_to_track = [
+            "score",
+            "collision_rate",
+            "offroad_rate",
+            "completion_rate",
+            "dnf_rate",
+            "num_goals_reached",
+            "lane_alignment_rate",
+            "avg_displacement_error",
+            "episode_return",
+            "perf",
+        ]
+
+        for metric in metrics_to_track:
+            if metric in first_metrics and metric in last_metrics:
+                delta_key = f"ada_delta_{metric}"
+                delta_metrics[delta_key] = compute_delta_percent(first_metrics[metric], last_metrics[metric])
+
+        # Add a count of how many agents this represents
+        if "n" in last_metrics:
+            delta_metrics["ada_agent_count"] = last_metrics["n"]
+
+        return delta_metrics
 
     def step(self, actions):
         self.terminals[:] = 0
@@ -455,15 +535,47 @@ class Drive(pufferlib.PufferEnv):
 
         self.tick += 1
         info = []
+
         if self.tick % self.report_interval == 0:
             log = binding.vec_log(self.c_envs)
             if log:
+                if self.adaptive_driving_agent:
+                    self.current_scenario_infos.append(log)
+
                 info.append(log)
-                # print(log)
+
+        if self.tick % self.scenario_length == 0:
+            if self.adaptive_driving_agent and self.current_scenario_infos:
+                scenario_log = self._aggregate_scenario_metrics(self.current_scenario_infos)
+                scenario_log["scenario_id"] = self.current_scenario
+                self.scenario_metrics.append(scenario_log)
+
+                if self.current_scenario == self.k_scenarios - 1:
+                    delta_metrics = self._compute_delta_metrics()
+                    if delta_metrics and info:
+                        info[-1].update(delta_metrics)
+                    elif delta_metrics:
+                        info.append(delta_metrics)
+
+                    self.scenario_metrics = []
+
+                self.current_scenario_infos = []
+
+            self.current_scenario = (self.current_scenario + 1) % self.k_scenarios
+
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
             will_resample = 1
             if will_resample:
+                # Log deltas before resampling if we're at the end of a cycle
+                if self.adaptive_driving_agent and self.scenario_metrics:
+                    delta_metrics = self._compute_delta_metrics()
+                    if delta_metrics:
+                        info.append(delta_metrics)
+                    self.scenario_metrics = []
+                    self.current_scenario_infos = []
+                    self.current_scenario = 0
+
                 binding.vec_close(self.c_envs)
                 self._set_env_variables()
                 env_ids = []
@@ -517,16 +629,16 @@ class Drive(pufferlib.PufferEnv):
                         init_steps=self.init_steps,
                         init_mode=self.init_mode,
                         control_mode=self.control_mode,
-                        adaptive_driving=self.adaptive_driving_agent,
-                        k_scenarios=self.k_scenarios,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
 
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
+
         if self.population_play:
-            info.append(self.ego_ids)  ## this is used to slice ego and co players correctly later on
+            info.append(self.ego_ids)
+
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):
