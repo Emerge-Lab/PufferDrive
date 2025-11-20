@@ -68,7 +68,7 @@
 
 // Max road segment observation entities
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
-#define MAX_AGENTS 64
+#define MAX_AGENTS 32
 
 // Observation Space Constants
 #define MAX_SPEED 100.0f

@@ -13,7 +13,7 @@ from pufferlib.models import Convolutional as Conv  # noqa: F401
 
 Recurrent = pufferlib.models.LSTMWrapper
 
-MAX_PARTNER_OBJECTS = 63
+MAX_PARTNER_OBJECTS = 31
 MAX_ROAD_OBJECTS = 128
 
 ROAD_FEATURES = 7
