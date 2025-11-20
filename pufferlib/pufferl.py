@@ -1063,8 +1063,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         print(f"\nCollected trajectories on {len(np.unique(gt_trajectories['scenario_id']))} scenarios.")
 
-    
-
         if args["eval"]["wosac_sanity_check"]:
             evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
 
@@ -1072,7 +1070,11 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         agent_state = vecenv.driver_env.get_global_agent_state()
         road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
         results = evaluator.compute_metrics(
-            gt_trajectories, simulated_trajectories, agent_state, road_edge_polylines, args["eval"]["wosac_aggregate_results"]
+            gt_trajectories,
+            simulated_trajectories,
+            agent_state,
+            road_edge_polylines,
+            args["eval"]["wosac_aggregate_results"],
         )
 
         if args["eval"]["wosac_aggregate_results"]:

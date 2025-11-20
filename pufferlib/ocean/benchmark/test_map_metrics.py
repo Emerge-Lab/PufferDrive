@@ -21,141 +21,142 @@ def plot_test_cases():
 
     # Test 1: Sign correctness
     ax = axes[0, 0]
-    ax.plot([0, 0], [0, 2], 'b-', linewidth=2, label='Road edge')
-    ax.arrow(0, 0.5, 0, 0.8, head_width=0.1, head_length=0.1, fc='b', ec='b')
-    ax.plot(-1, 1, 'go', markersize=10, label='P (left, neg)')
-    ax.plot(2, 1, 'ro', markersize=10, label='Q (right, pos)')
+    ax.plot([0, 0], [0, 2], "b-", linewidth=2, label="Road edge")
+    ax.arrow(0, 0.5, 0, 0.8, head_width=0.1, head_length=0.1, fc="b", ec="b")
+    ax.plot(-1, 1, "go", markersize=10, label="P (left, neg)")
+    ax.plot(2, 1, "ro", markersize=10, label="Q (right, pos)")
     ax.set_xlim(-2, 3)
     ax.set_ylim(-0.5, 2.5)
-    ax.set_aspect('equal')
-    ax.set_title('Test 1: Sign convention')
-    ax.legend(loc='upper right', fontsize=8)
+    ax.set_aspect("equal")
+    ax.set_title("Test 1: Sign convention")
+    ax.legend(loc="upper right", fontsize=8)
     ax.grid(True, alpha=0.3)
 
     # Test 2: Magnitude
     ax = axes[0, 1]
-    ax.plot([0, 2], [0, 0], 'b-', linewidth=2)
-    ax.arrow(0.5, 0, 0.8, 0, head_width=0.1, head_length=0.1, fc='b', ec='b')
-    ax.plot(0, 1, 'go', markersize=10, label='P (d=1)')
-    ax.plot(3, -1, 'ro', markersize=10, label=f'Q (d={math.sqrt(2):.2f})')
-    ax.plot([0, 0], [0, 1], 'g--', alpha=0.5)
-    ax.plot([2, 3], [0, -1], 'r--', alpha=0.5)
+    ax.plot([0, 2], [0, 0], "b-", linewidth=2)
+    ax.arrow(0.5, 0, 0.8, 0, head_width=0.1, head_length=0.1, fc="b", ec="b")
+    ax.plot(0, 1, "go", markersize=10, label="P (d=1)")
+    ax.plot(3, -1, "ro", markersize=10, label=f"Q (d={math.sqrt(2):.2f})")
+    ax.plot([0, 0], [0, 1], "g--", alpha=0.5)
+    ax.plot([2, 3], [0, -1], "r--", alpha=0.5)
     ax.set_xlim(-1, 4)
     ax.set_ylim(-2, 2)
-    ax.set_aspect('equal')
-    ax.set_title('Test 2: Distance magnitude')
-    ax.legend(loc='upper right', fontsize=8)
+    ax.set_aspect("equal")
+    ax.set_title("Test 2: Distance magnitude")
+    ax.legend(loc="upper right", fontsize=8)
     ax.grid(True, alpha=0.3)
 
     # Test 3: Two parallel lines
     ax = axes[0, 2]
-    ax.plot([0, 0], [3, -3], 'b-', linewidth=2, label='Left edge')
-    ax.plot([2, 2], [-3, 3], 'b-', linewidth=2, label='Right edge')
-    ax.arrow(0, 0, 0, -1.5, head_width=0.1, head_length=0.1, fc='b', ec='b')
-    ax.arrow(2, 0, 0, 1.5, head_width=0.1, head_length=0.1, fc='b', ec='b')
-    ax.axvspan(0, 2, alpha=0.2, color='green', label='On-road')
+    ax.plot([0, 0], [3, -3], "b-", linewidth=2, label="Left edge")
+    ax.plot([2, 2], [-3, 3], "b-", linewidth=2, label="Right edge")
+    ax.arrow(0, 0, 0, -1.5, head_width=0.1, head_length=0.1, fc="b", ec="b")
+    ax.arrow(2, 0, 0, 1.5, head_width=0.1, head_length=0.1, fc="b", ec="b")
+    ax.axvspan(0, 2, alpha=0.2, color="green", label="On-road")
     ax.set_xlim(-1.5, 4.5)
     ax.set_ylim(-3.5, 3.5)
-    ax.set_aspect('equal')
-    ax.set_title('Test 3: Road corridor')
-    ax.legend(loc='upper right', fontsize=8)
+    ax.set_aspect("equal")
+    ax.set_title("Test 3: Road corridor")
+    ax.legend(loc="upper right", fontsize=8)
     ax.grid(True, alpha=0.3)
 
     # Test 4: Padded polylines
     ax = axes[1, 0]
-    ax.plot([0, 0, 0, 0], [4, 1.5, -1.5, -4], 'b-', linewidth=2, marker='o', markersize=4, label='4-pt line')
-    ax.plot([2, 2], [-4, 4], 'r-', linewidth=2, marker='o', markersize=4, label='2-pt line (padded)')
-    ax.axvspan(0, 2, alpha=0.2, color='green')
-    ax.arrow(0, 0, 0, -1.5, head_width=0.1, head_length=0.1, fc='b', ec='b')
-    ax.arrow(2, 0, 0, 1.5, head_width=0.1, head_length=0.1, fc='r', ec='r')
-    ax.text(1, 0, 'on-road', ha='center', va='center', fontsize=8)
+    ax.plot([0, 0, 0, 0], [4, 1.5, -1.5, -4], "b-", linewidth=2, marker="o", markersize=4, label="4-pt line")
+    ax.plot([2, 2], [-4, 4], "r-", linewidth=2, marker="o", markersize=4, label="2-pt line (padded)")
+    ax.axvspan(0, 2, alpha=0.2, color="green")
+    ax.arrow(0, 0, 0, -1.5, head_width=0.1, head_length=0.1, fc="b", ec="b")
+    ax.arrow(2, 0, 0, 1.5, head_width=0.1, head_length=0.1, fc="r", ec="r")
+    ax.text(1, 0, "on-road", ha="center", va="center", fontsize=8)
     ax.set_xlim(-1, 4)
     ax.set_ylim(-5, 5)
-    ax.set_aspect('equal')
-    ax.set_title('Test 4: Polylines padded to same length')
-    ax.legend(loc='upper right', fontsize=8)
+    ax.set_aspect("equal")
+    ax.set_title("Test 4: Polylines padded to same length")
+    ax.legend(loc="upper right", fontsize=8)
     ax.grid(True, alpha=0.3)
 
     # Test 5: Agent boxes
     ax = axes[1, 1]
-    ax.plot([0, 0], [5, -5], 'b-', linewidth=2)
-    ax.plot([2, 2], [-5, 5], 'b-', linewidth=2)
-    ax.axvspan(0, 2, alpha=0.2, color='green')
+    ax.plot([0, 0], [5, -5], "b-", linewidth=2)
+    ax.plot([2, 2], [-5, 5], "b-", linewidth=2)
+    ax.axvspan(0, 2, alpha=0.2, color="green")
 
     # A0: Fully on-road - center (1, 0), 1m x 0.5m
-    rect0 = Rectangle((0.5, -0.25), 1, 0.5, fill=False, edgecolor='green', linewidth=2)
+    rect0 = Rectangle((0.5, -0.25), 1, 0.5, fill=False, edgecolor="green", linewidth=2)
     ax.add_patch(rect0)
-    ax.text(1, 0, 'A0', ha='center', va='center', fontsize=8)
+    ax.text(1, 0, "A0", ha="center", va="center", fontsize=8)
 
     # A1: At boundary - center (1, 0), 2m x 2m (offset in y for visibility)
-    rect1 = Rectangle((0, 1.5), 2, 2, fill=False, edgecolor='orange', linewidth=2)
+    rect1 = Rectangle((0, 1.5), 2, 2, fill=False, edgecolor="orange", linewidth=2)
     ax.add_patch(rect1)
-    ax.text(1, 2.5, 'A1', ha='center', va='center', fontsize=8)
+    ax.text(1, 2.5, "A1", ha="center", va="center", fontsize=8)
 
     # A2: One side off - center (1.75, 0), 1m x 0.5m (offset in y)
-    rect2 = Rectangle((1.25, -1.5), 1, 0.5, fill=False, edgecolor='red', linewidth=2)
+    rect2 = Rectangle((1.25, -1.5), 1, 0.5, fill=False, edgecolor="red", linewidth=2)
     ax.add_patch(rect2)
-    ax.text(1.75, -1.25, 'A2', ha='center', va='center', fontsize=8)
+    ax.text(1.75, -1.25, "A2", ha="center", va="center", fontsize=8)
 
     # A3: Fully off-road - center (5, 0), 1m x 0.5m
-    rect3 = Rectangle((4.5, -0.25), 1, 0.5, fill=False, edgecolor='darkred', linewidth=2)
+    rect3 = Rectangle((4.5, -0.25), 1, 0.5, fill=False, edgecolor="darkred", linewidth=2)
     ax.add_patch(rect3)
-    ax.text(5, 0, 'A3', ha='center', va='center', fontsize=8)
+    ax.text(5, 0, "A3", ha="center", va="center", fontsize=8)
 
     # A4: Rotated - center (1.5, 0), sqrt(2) x sqrt(2), heading=pi/4
     # Corners at (2.5, 0), (1.5, 1), (0.5, 0), (1.5, -1)
     diamond_x = [2.5, 1.5, 0.5, 1.5, 2.5]
     diamond_y = [-3.5, -2.5, -3.5, -4.5, -3.5]
-    ax.plot(diamond_x, diamond_y, 'purple', linewidth=2)
-    ax.plot(2.5, -3.5, 'ro', markersize=6)  # off-road corner
-    ax.text(1.5, -3.5, 'A4', ha='center', va='center', fontsize=8)
+    ax.plot(diamond_x, diamond_y, "purple", linewidth=2)
+    ax.plot(2.5, -3.5, "ro", markersize=6)  # off-road corner
+    ax.text(1.5, -3.5, "A4", ha="center", va="center", fontsize=8)
 
     ax.set_xlim(-1, 6)
     ax.set_ylim(-6, 4)
-    ax.set_aspect('equal')
-    ax.set_title('Test 5: Agent boxes')
+    ax.set_aspect("equal")
+    ax.set_title("Test 5: Agent boxes")
     ax.grid(True, alpha=0.3)
 
     # Hide unused subplot
-    axes[1, 2].axis('off')
+    axes[1, 2].axis("off")
 
     # Test 6: Donut road (outer CCW, inner CW)
     ax = axes[2, 0]
     # Outer square
     outer_x = [0, 4, 4, 0, 0]
     outer_y = [0, 0, 4, 4, 0]
-    ax.plot(outer_x, outer_y, 'b-', linewidth=2)
+    ax.plot(outer_x, outer_y, "b-", linewidth=2)
     # Inner square
     inner_x = [1, 1, 3, 3, 1]
     inner_y = [1, 3, 3, 1, 1]
-    ax.plot(inner_x, inner_y, 'b-', linewidth=2)
+    ax.plot(inner_x, inner_y, "b-", linewidth=2)
     # Fill road area
     from matplotlib.patches import Polygon
+
     outer_poly = np.array([[0, 0], [4, 0], [4, 4], [0, 4]])
     inner_poly = np.array([[1, 1], [1, 3], [3, 3], [3, 1]])
-    ax.fill(outer_x, outer_y, alpha=0.2, color='green')
-    ax.fill(inner_x, inner_y, alpha=1.0, color='white')
+    ax.fill(outer_x, outer_y, alpha=0.2, color="green")
+    ax.fill(inner_x, inner_y, alpha=1.0, color="white")
 
     # Direction arrows - outer CCW, inner CW
-    ax.arrow(1.5, 0, 1, 0, head_width=0.15, head_length=0.1, fc='b', ec='b')  # outer bottom: right
-    ax.arrow(2.5, 1, -1, 0, head_width=0.15, head_length=0.1, fc='b', ec='b')  # inner bottom: left (CW)
+    ax.arrow(1.5, 0, 1, 0, head_width=0.15, head_length=0.1, fc="b", ec="b")  # outer bottom: right
+    ax.arrow(2.5, 1, -1, 0, head_width=0.15, head_length=0.1, fc="b", ec="b")  # inner bottom: left (CW)
 
     # Test points
-    ax.plot(0.5, 2, 'go', markersize=10, label='P1 (on road)')
-    ax.plot(2, 2, 'ro', markersize=10, label='P2 (inside inner)')
-    ax.plot(5, 2, 'ro', markersize=8)
-    ax.plot(2, 0.5, 'go', markersize=8)
+    ax.plot(0.5, 2, "go", markersize=10, label="P1 (on road)")
+    ax.plot(2, 2, "ro", markersize=10, label="P2 (inside inner)")
+    ax.plot(5, 2, "ro", markersize=8)
+    ax.plot(2, 0.5, "go", markersize=8)
 
-    ax.text(0.5, 2.3, 'P1', ha='center', fontsize=8)
-    ax.text(2, 2.3, 'P2', ha='center', fontsize=8)
-    ax.text(5.2, 2, 'P3', ha='left', fontsize=8)
-    ax.text(2, 0.2, 'P4', ha='center', fontsize=8)
+    ax.text(0.5, 2.3, "P1", ha="center", fontsize=8)
+    ax.text(2, 2.3, "P2", ha="center", fontsize=8)
+    ax.text(5.2, 2, "P3", ha="left", fontsize=8)
+    ax.text(2, 0.2, "P4", ha="center", fontsize=8)
 
     ax.set_xlim(-0.5, 5.5)
     ax.set_ylim(-0.5, 4.5)
-    ax.set_aspect('equal')
-    ax.set_title('Test 6: Donut road')
-    ax.legend(loc='upper right', fontsize=7)
+    ax.set_aspect("equal")
+    ax.set_title("Test 6: Donut road")
+    ax.legend(loc="upper right", fontsize=7)
     ax.grid(True, alpha=0.3)
 
     # Test 7: Triangle with acute corner (cyclic test)
@@ -163,35 +164,35 @@ def plot_test_cases():
     # Triangle counterclockwise
     shape_x = [0, 10, 10, 0]
     shape_y = [0, 0, 10, 0]
-    ax.plot(shape_x, shape_y, 'b-', linewidth=2)
-    ax.fill(shape_x, shape_y, alpha=0.2, color='green')
+    ax.plot(shape_x, shape_y, "b-", linewidth=2)
+    ax.fill(shape_x, shape_y, alpha=0.2, color="green")
 
     # Mark the acute corner at (0, 0)
-    ax.plot(0, 0, 'ko', markersize=10, markerfacecolor='yellow', label='Acute corner')
+    ax.plot(0, 0, "ko", markersize=10, markerfacecolor="yellow", label="Acute corner")
 
     # Test point P at (-2, 1) - outside but Seg 0 thinks inside
-    ax.plot(-2.0, 1.0, 'ro', markersize=10, label='P (-2, 1)')
+    ax.plot(-2.0, 1.0, "ro", markersize=10, label="P (-2, 1)")
 
     # Direction arrows
-    ax.arrow(3, 0, 3, 0, head_width=0.4, head_length=0.3, fc='b', ec='b')  # Seg 0: right
-    ax.arrow(6, 6, -1.5, -1.5, head_width=0.4, head_length=0.3, fc='b', ec='b')  # Seg 2: down-left (on hypotenuse)
+    ax.arrow(3, 0, 3, 0, head_width=0.4, head_length=0.3, fc="b", ec="b")  # Seg 0: right
+    ax.arrow(6, 6, -1.5, -1.5, head_width=0.4, head_length=0.3, fc="b", ec="b")  # Seg 2: down-left (on hypotenuse)
 
     # Labels
-    ax.text(5, -1, 'Seg 0', ha='center', fontsize=7)
-    ax.text(1.5, 5, 'Seg 2', ha='center', fontsize=7)
+    ax.text(5, -1, "Seg 0", ha="center", fontsize=7)
+    ax.text(1.5, 5, "Seg 2", ha="center", fontsize=7)
 
     ax.set_xlim(-4, 12)
     ax.set_ylim(-2, 12)
-    ax.set_aspect('equal')
-    ax.set_title('Test 7: Triangle (cyclic corner)')
-    ax.legend(loc='upper right', fontsize=7)
+    ax.set_aspect("equal")
+    ax.set_title("Test 7: Triangle (cyclic corner)")
+    ax.legend(loc="upper right", fontsize=7)
     ax.grid(True, alpha=0.3)
 
     # Hide unused subplot
-    axes[2, 2].axis('off')
+    axes[2, 2].axis("off")
 
     plt.tight_layout()
-    plt.savefig('test_map_metrics.png', dpi=150)
+    plt.savefig("test_map_metrics.png", dpi=150)
     print(f"Plot saved to test_map_metrics.png")
     plt.close()
 
@@ -213,13 +214,9 @@ def test_signed_distance_correct_sign():
     polyline_y = _tensor([0.0, 2.0])
     polyline_lengths = _tensor([2], dtype=torch.int64)
 
-    polylines, valid = map_metric_features._pad_polylines(
-        polyline_x, polyline_y, polyline_lengths
-    )
+    polylines, valid = map_metric_features._pad_polylines(polyline_x, polyline_y, polyline_lengths)
 
-    distances = map_metric_features._compute_signed_distance_to_polylines(
-        query_points, polylines, valid
-    ).cpu().numpy()
+    distances = map_metric_features._compute_signed_distance_to_polylines(query_points, polylines, valid).cpu().numpy()
 
     expected = np.array([-1.0, 2.0])
     np.testing.assert_allclose(distances, expected, rtol=1e-5, atol=1e-5)
@@ -244,13 +241,9 @@ def test_signed_distance_correct_magnitude():
     polyline_y = _tensor([0.0, 0.0])
     polyline_lengths = _tensor([2], dtype=torch.int64)
 
-    polylines, valid = map_metric_features._pad_polylines(
-        polyline_x, polyline_y, polyline_lengths
-    )
+    polylines, valid = map_metric_features._pad_polylines(polyline_x, polyline_y, polyline_lengths)
 
-    distances = map_metric_features._compute_signed_distance_to_polylines(
-        query_points, polylines, valid
-    ).cpu().numpy()
+    distances = map_metric_features._compute_signed_distance_to_polylines(query_points, polylines, valid).cpu().numpy()
 
     expected_abs = np.array([1.0, math.sqrt(2)])
     np.testing.assert_allclose(np.abs(distances), expected_abs, rtol=1e-5, atol=1e-5)
@@ -275,13 +268,9 @@ def test_signed_distance_two_parallel_lines():
     polyline_y = _tensor([10.0, -10.0, -10.0, 10.0])
     polyline_lengths = _tensor([2, 2], dtype=torch.int64)
 
-    polylines, valid = map_metric_features._pad_polylines(
-        polyline_x, polyline_y, polyline_lengths
-    )
+    polylines, valid = map_metric_features._pad_polylines(polyline_x, polyline_y, polyline_lengths)
 
-    distances = map_metric_features._compute_signed_distance_to_polylines(
-        mesh_xys, polylines, valid
-    ).cpu().numpy()
+    distances = map_metric_features._compute_signed_distance_to_polylines(mesh_xys, polylines, valid).cpu().numpy()
 
     expected = np.abs(mesh_xys_np[:, 0] - 1.0) - 1.0
     np.testing.assert_allclose(distances, expected, rtol=1e-5, atol=1e-5)
@@ -299,13 +288,9 @@ def test_signed_distance_with_padding():
     polyline_y = _tensor([10.0, 3.0, -3.0, -10.0, -10.0, 10.0])
     polyline_lengths = _tensor([4, 2], dtype=torch.int64)
 
-    polylines, valid = map_metric_features._pad_polylines(
-        polyline_x, polyline_y, polyline_lengths
-    )
+    polylines, valid = map_metric_features._pad_polylines(polyline_x, polyline_y, polyline_lengths)
 
-    distances = map_metric_features._compute_signed_distance_to_polylines(
-        mesh_xys, polylines, valid
-    ).cpu().numpy()
+    distances = map_metric_features._compute_signed_distance_to_polylines(mesh_xys, polylines, valid).cpu().numpy()
 
     expected = np.abs(mesh_xys_np[:, 0] - 1.0) - 1.0
     np.testing.assert_allclose(distances, expected, rtol=1e-5, atol=1e-5)
@@ -325,26 +310,24 @@ def test_cyclic_polyline():
     - P4 at (-1, 1): outside left edge, should be positive (off-road)
     - P5 at (2, 2): exactly at corner, should be ~0
     """
-    query_points = _tensor([
-        [1.0, 1.0],   # P1: center
-        [3.0, 1.0],   # P2: outside right
-        [1.0, 3.0],   # P3: outside top
-        [-1.0, 1.0],  # P4: outside left
-        [2.0, 2.0],   # P5: at corner
-    ])
+    query_points = _tensor(
+        [
+            [1.0, 1.0],  # P1: center
+            [3.0, 1.0],  # P2: outside right
+            [1.0, 3.0],  # P3: outside top
+            [-1.0, 1.0],  # P4: outside left
+            [2.0, 2.0],  # P5: at corner
+        ]
+    )
 
     # Counterclockwise square: (0,0) -> (2,0) -> (2,2) -> (0,2) -> (0,0)
     polyline_x = _tensor([0.0, 2.0, 2.0, 0.0, 0.0])
     polyline_y = _tensor([0.0, 0.0, 2.0, 2.0, 0.0])
     polyline_lengths = _tensor([5], dtype=torch.int64)
 
-    polylines, valid = map_metric_features._pad_polylines(
-        polyline_x, polyline_y, polyline_lengths
-    )
+    polylines, valid = map_metric_features._pad_polylines(polyline_x, polyline_y, polyline_lengths)
 
-    distances = map_metric_features._compute_signed_distance_to_polylines(
-        query_points, polylines, valid
-    ).cpu().numpy()
+    distances = map_metric_features._compute_signed_distance_to_polylines(query_points, polylines, valid).cpu().numpy()
 
     print(f"P1 (center): {distances[0]:.3f} (expected ~ -1.0)")
     print(f"P2 (outside right): {distances[1]:.3f} (expected ~ +1.0)")
@@ -369,10 +352,11 @@ def test_cyclic_polyline():
 
     print("✓ test_cyclic_polyline passed")
 
+
 # NOTE: I made this test to understand why it is needed to handle cyclic polylines specially.
 def test_cyclic_seam():
     """Test acute corner tie-breaking using a clean Triangle.
-    
+
     Shape: Triangle (0,0) -> (10,0) -> (10,10) -> (0,0)
     Winding: Counter-Clockwise (Left is Inside).
     Corner at (0,0) is Acute (45 degrees).
@@ -387,13 +371,9 @@ def test_cyclic_seam():
     polyline_y = _tensor([0.0, 0.0, 10.0, 0.0])
     polyline_lengths = _tensor([4], dtype=torch.int64)
 
-    polylines, valid = map_metric_features._pad_polylines(
-        polyline_x, polyline_y, polyline_lengths
-    )
+    polylines, valid = map_metric_features._pad_polylines(polyline_x, polyline_y, polyline_lengths)
 
-    distances = map_metric_features._compute_signed_distance_to_polylines(
-        query_points, polylines, valid
-    ).cpu().numpy()
+    distances = map_metric_features._compute_signed_distance_to_polylines(query_points, polylines, valid).cpu().numpy()
 
     # Distance to vertex (0,0) is sqrt(2^2 + 1^2) = sqrt(5)
     expected = np.sqrt(5)
@@ -419,12 +399,14 @@ def test_donut_road():
     - P3 at (5, 2): outside outer square (off-road), should be positive
     - P4 at (2, 0.5): on road (between outer and inner), should be negative
     """
-    query_points = _tensor([
-        [0.5, 2.0],  # P1: on road (left side)
-        [2.0, 2.0],  # P2: inside inner square
-        [5.0, 2.0],  # P3: outside outer square
-        [2.0, 0.5],  # P4: on road (bottom side)
-    ])
+    query_points = _tensor(
+        [
+            [0.5, 2.0],  # P1: on road (left side)
+            [2.0, 2.0],  # P2: inside inner square
+            [5.0, 2.0],  # P3: outside outer square
+            [2.0, 0.5],  # P4: on road (bottom side)
+        ]
+    )
 
     # Outer square: counterclockwise
     outer_x = _tensor([0.0, 4.0, 4.0, 0.0, 0.0])
@@ -438,13 +420,9 @@ def test_donut_road():
     polyline_y = torch.cat([outer_y, inner_y])
     polyline_lengths = _tensor([5, 5], dtype=torch.int64)
 
-    polylines, valid = map_metric_features._pad_polylines(
-        polyline_x, polyline_y, polyline_lengths
-    )
+    polylines, valid = map_metric_features._pad_polylines(polyline_x, polyline_y, polyline_lengths)
 
-    distances = map_metric_features._compute_signed_distance_to_polylines(
-        query_points, polylines, valid
-    ).cpu().numpy()
+    distances = map_metric_features._compute_signed_distance_to_polylines(query_points, polylines, valid).cpu().numpy()
 
     print(f"P1 (on road, left): {distances[0]:.3f} (expected ~ -0.5)")
     print(f"P2 (inside inner): {distances[1]:.3f} (expected ~ +1.0)")
@@ -566,4 +544,5 @@ if __name__ == "__main__":
         print("\n" + "=" * 60)
         print(f"✗ Test failed:")
         import traceback
+
         traceback.print_exc()

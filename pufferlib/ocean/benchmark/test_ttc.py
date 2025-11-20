@@ -97,7 +97,12 @@ def test_time_to_collision_output_shape():
             [[4, 2]] * 3,
             [6, 3, 1],
             [
-                (8 - math.cos(MAX_HEADING_DIFF_FOR_SMALL_OVERLAP - 0.01) * 2 - math.sin(MAX_HEADING_DIFF_FOR_SMALL_OVERLAP - 0.01)) / 5,
+                (
+                    8
+                    - math.cos(MAX_HEADING_DIFF_FOR_SMALL_OVERLAP - 0.01) * 2
+                    - math.sin(MAX_HEADING_DIFF_FOR_SMALL_OVERLAP - 0.01)
+                )
+                / 5,
                 MAX_TTC_SEC,
                 MAX_TTC_SEC,
             ],
