@@ -7,7 +7,7 @@
 #include <string.h>
 #include <assert.h>
 
-#define MAX_ROAD_OBJECTS 200
+#define MAX_ROAD_OBJECTS 128
 #define MAX_PARTNER_OBJECTS 63
 #define ROAD_FEATURES 7
 #define ROAD_FEATURES_AFTER_ONEHOT 13
@@ -128,7 +128,7 @@ void free_drivenet(DriveNet* net) {
 
 void forward(DriveNet* net, float* observations, int* actions) {
     int ego_dim = net->ego_dim;
-    int input_size = 64;
+    int input_size = 128;
 
     // Clear previous observations
     memset(net->obs_self, 0, net->num_agents * ego_dim * sizeof(float));
