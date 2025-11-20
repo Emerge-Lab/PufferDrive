@@ -26,7 +26,7 @@ class Drive(nn.Module):
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
-        max_road_objects = 13
+        max_road_objects = 10
         self.road_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(max_road_objects, input_size)),
             nn.LayerNorm(input_size),
@@ -75,7 +75,7 @@ class Drive(nn.Module):
         road_objects = road_obs.view(-1, 200, 7)
         road_continuous = road_objects[:, :, :6]  # First 6 features
         road_categorical = road_objects[:, :, 6]
-        road_onehot = F.one_hot(road_categorical.long(), num_classes=7)  # Shape: [batch, 200, 7]
+        road_onehot = F.one_hot(road_categorical.long(), num_classes=4)  # Shape: [batch, 200, 7]
         road_objects = torch.cat([road_continuous, road_onehot], dim=2)
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
