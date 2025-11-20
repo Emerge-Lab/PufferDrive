@@ -35,6 +35,7 @@ class WOSACEvaluator:
         self.init_steps = config.get("eval", {}).get("wosac_init_steps", 0)
         self.sim_steps = self.num_steps - self.init_steps
         self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
+        self.device = config.get("train", {}).get("device", "cuda")
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
@@ -148,9 +149,6 @@ class WOSACEvaluator:
 
         eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
 
-        # NOTE: I put this here might want to put in config file
-        device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
         sim_y = simulated_trajectories["y"]
@@ -192,7 +190,7 @@ class WOSACEvaluator:
 
         # Interaction-related features
         sim_signed_distances, sim_collision_per_step, sim_time_to_collision = metrics.compute_interaction_features(
-            sim_x, sim_y, sim_heading, scenario_ids, agent_length, agent_width, eval_mask, device=device
+            sim_x, sim_y, sim_heading, scenario_ids, agent_length, agent_width, eval_mask, device=self.device
         )
 
         ref_signed_distances, ref_collision_per_step, ref_time_to_collision = metrics.compute_interaction_features(
@@ -203,7 +201,7 @@ class WOSACEvaluator:
             agent_length,
             agent_width,
             eval_mask,
-            device=device,
+            device=self.device,
             valid=ref_valid,
         )
 
@@ -216,7 +214,7 @@ class WOSACEvaluator:
             eval_agent_length,
             eval_agent_width,
             road_edge_polylines,
-            device=device,
+            device=self.device,
         )
 
         ref_distance_to_road_edge, ref_offroad_per_step = metrics.compute_map_features(
@@ -227,7 +225,7 @@ class WOSACEvaluator:
             eval_agent_length,
             eval_agent_width,
             road_edge_polylines,
-            device=device,
+            device=self.device,
             valid=eval_ref_valid,
         )
 
@@ -402,7 +400,6 @@ class WOSACEvaluator:
         sim_collision_indication = np.any(np.where(eval_ref_valid, sim_collision_per_step, False), axis=2)
         ref_collision_indication = np.any(np.where(eval_ref_valid, ref_collision_per_step, False), axis=2)
 
-        # NOTE: I propose to log these numbers as well for interpretability
         sim_num_collisions = np.sum(sim_collision_indication, axis=1)
         ref_num_collisions = np.sum(ref_collision_indication, axis=1)
 
