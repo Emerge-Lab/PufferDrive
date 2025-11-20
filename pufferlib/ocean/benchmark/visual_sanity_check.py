@@ -8,6 +8,7 @@ marking collision and offroad events.
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 
 from matplotlib.patches import Polygon
 
@@ -28,14 +29,13 @@ def plot_road_edges(ax, road_edge_polylines, scenario_id):
     for i in range(len(lengths)):
         length = lengths[i]
         if scenario_ids[i] == scenario_id:
-            poly_x = x[pt_idx:pt_idx + length]
-            poly_y = y[pt_idx:pt_idx + length]
-            ax.plot(poly_x, poly_y, 'k-', linewidth=1, alpha=0.7)
+            poly_x = x[pt_idx : pt_idx + length]
+            poly_y = y[pt_idx : pt_idx + length]
+            ax.plot(poly_x, poly_y, "k-", linewidth=1, alpha=0.7)
         pt_idx += length
 
 
-def plot_agent_trajectories(ax, traj, agent_mask, rollout_idx, collisions, offroad,
-                            agent_length, agent_width):
+def plot_agent_trajectories(ax, traj, agent_mask, rollout_idx, collisions, offroad, agent_length, agent_width):
     """Plot trajectories as bounding boxes with collision/offroad coloring."""
     x = traj["x"][agent_mask, rollout_idx, :]
     y = traj["y"][agent_mask, rollout_idx, :]
@@ -60,24 +60,26 @@ def plot_agent_trajectories(ax, traj, agent_mask, rollout_idx, collisions, offro
             offroad_agents.append(i)
 
         for t in range(num_steps):
-            box = np.array([[x[i, t], y[i, t], length[i], width[i], heading[i, t]]])
-            corners = get_2d_box_corners(box)[0]
+            box = torch.as_tensor(
+                [[x[i, t], y[i, t], length[i], width[i], heading[i, t]]],
+                dtype=torch.float32,
+            )
+            corners = get_2d_box_corners(box)[0].cpu().numpy()
 
             if coll[i, t]:
-                facecolor = 'red'
+                facecolor = "red"
                 alpha = 0.6
-                edgecolor = 'red'
+                edgecolor = "red"
             elif off[i, t]:
-                facecolor = 'orange'
+                facecolor = "orange"
                 alpha = 0.4
-                edgecolor = 'orange'
+                edgecolor = "orange"
             else:
                 facecolor = plt.cm.viridis(t / num_steps)
                 alpha = 0.3
                 edgecolor = facecolor
 
-            polygon = Polygon(corners, facecolor=facecolor, edgecolor=edgecolor,
-                            linewidth=0.3, alpha=alpha)
+            polygon = Polygon(corners, facecolor=facecolor, edgecolor=edgecolor, linewidth=0.3, alpha=alpha)
             ax.add_patch(polygon)
 
     return collision_agents, offroad_agents
@@ -118,13 +120,27 @@ def main():
     num_agents = sim_traj["x"].shape[0]
     eval_mask = np.ones(num_agents, dtype=bool)
 
+    device = torch.device("cpu")
+
     _, collisions, _ = compute_interaction_features(
-        sim_traj["x"], sim_traj["y"], sim_traj["heading"],
-        scenario_ids, agent_length, agent_width, eval_mask
+        sim_traj["x"],
+        sim_traj["y"],
+        sim_traj["heading"],
+        scenario_ids,
+        agent_length,
+        agent_width,
+        eval_mask,
+        device=device,
     )
     _, offroad = compute_map_features(
-        sim_traj["x"], sim_traj["y"], sim_traj["heading"],
-        scenario_ids, agent_length, agent_width, road_edge_polylines
+        sim_traj["x"],
+        sim_traj["y"],
+        sim_traj["heading"],
+        scenario_ids,
+        agent_length,
+        agent_width,
+        road_edge_polylines,
+        device=device,
     )
 
     # Plot each scenario
@@ -137,43 +153,55 @@ def main():
 
         plot_road_edges(ax, road_edge_polylines, target_scenario)
         collision_agents, offroad_agents = plot_agent_trajectories(
-            ax, sim_traj, agent_mask, rollout_idx=0,
-            collisions=collisions, offroad=offroad,
-            agent_length=agent_length, agent_width=agent_width
+            ax,
+            sim_traj,
+            agent_mask,
+            rollout_idx=0,
+            collisions=collisions,
+            offroad=offroad,
+            agent_length=agent_length,
+            agent_width=agent_width,
         )
 
-        ax.set_aspect('equal')
-        ax.set_xlabel('X (m)')
-        ax.set_ylabel('Y (m)')
-        ax.set_title(f'Scenario {target_scenario} - Collision/Offroad Detection')
+        ax.set_aspect("equal")
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_title(f"Scenario {target_scenario} - Collision/Offroad Detection")
 
         # Legend
         from matplotlib.patches import Patch
+
         legend_elements = [
-            Patch(facecolor='red', alpha=0.6, label='Collision'),
-            Patch(facecolor='orange', alpha=0.4, label='Offroad'),
+            Patch(facecolor="red", alpha=0.6, label="Collision"),
+            Patch(facecolor="orange", alpha=0.4, label="Offroad"),
         ]
-        ax.legend(handles=legend_elements, loc='upper right')
+        ax.legend(handles=legend_elements, loc="upper right")
 
         # Colorbar for time
-        sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(0, 1))
+        sm = plt.cm.ScalarMappable(cmap="viridis", norm=plt.Normalize(0, 1))
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label('Time (normalized)')
+        cbar.set_label("Time (normalized)")
 
         # Summary text
         num_agents_in_scenario = agent_mask.sum()
         summary = f"Agents: {num_agents_in_scenario}\n"
         summary += f"Collisions: {len(collision_agents)} agents ({collision_agents})\n"
         summary += f"Offroad: {len(offroad_agents)} agents ({offroad_agents})"
-        ax.text(0.02, 0.98, summary, transform=ax.transAxes,
-                verticalalignment='top', fontsize=9,
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        ax.text(
+            0.02,
+            0.98,
+            summary,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            fontsize=9,
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+        )
 
         plt.tight_layout()
 
         # Save with scenario index in filename
-        output_base = args.output.rsplit('.', 1)
+        output_base = args.output.rsplit(".", 1)
         if len(output_base) == 2:
             output_path = f"{output_base[0]}_{scenario_idx}.{output_base[1]}"
         else:

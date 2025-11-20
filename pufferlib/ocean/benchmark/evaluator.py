@@ -1,11 +1,9 @@
 """WOSAC evaluation class for PufferDrive."""
 
 import torch
-import time
 import numpy as np
 import pandas as pd
-from pprint import pprint
-from typing import Dict, Optional
+from typing import Dict
 import matplotlib.pyplot as plt
 import configparser
 import os
@@ -150,6 +148,9 @@ class WOSACEvaluator:
 
         eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
 
+        # NOTE: I put this here might want to put in config file
+        device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
         sim_y = simulated_trajectories["y"]
@@ -191,22 +192,43 @@ class WOSACEvaluator:
 
         # Interaction-related features
         sim_signed_distances, sim_collision_per_step, sim_time_to_collision = metrics.compute_interaction_features(
-            sim_x, sim_y, sim_heading, scenario_ids, agent_length, agent_width, eval_mask,
+            sim_x, sim_y, sim_heading, scenario_ids, agent_length, agent_width, eval_mask, device=device
         )
 
         ref_signed_distances, ref_collision_per_step, ref_time_to_collision = metrics.compute_interaction_features(
-            ref_x, ref_y, ref_heading, scenario_ids, agent_length, agent_width, eval_mask, valid=ref_valid,
+            ref_x,
+            ref_y,
+            ref_heading,
+            scenario_ids,
+            agent_length,
+            agent_width,
+            eval_mask,
+            device=device,
+            valid=ref_valid,
         )
 
         # Map-based features
         sim_distance_to_road_edge, sim_offroad_per_step = metrics.compute_map_features(
-            eval_sim_x, eval_sim_y, eval_sim_heading,
-            eval_scenario_ids, eval_agent_length, eval_agent_width, road_edge_polylines,
+            eval_sim_x,
+            eval_sim_y,
+            eval_sim_heading,
+            eval_scenario_ids,
+            eval_agent_length,
+            eval_agent_width,
+            road_edge_polylines,
+            device=device,
         )
 
         ref_distance_to_road_edge, ref_offroad_per_step = metrics.compute_map_features(
-            eval_ref_x, eval_ref_y, eval_ref_heading,
-            eval_scenario_ids, eval_agent_length, eval_agent_width, road_edge_polylines, valid=eval_ref_valid,
+            eval_ref_x,
+            eval_ref_y,
+            eval_ref_heading,
+            eval_scenario_ids,
+            eval_agent_length,
+            eval_agent_width,
+            road_edge_polylines,
+            device=device,
+            valid=eval_ref_valid,
         )
 
         # Compute realism metrics

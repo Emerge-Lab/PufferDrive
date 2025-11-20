@@ -5,8 +5,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import Affine2D
+import torch
 
 from pufferlib.ocean.benchmark import map_metric_features
+
+
+def _tensor(data, dtype=torch.float32):
+    """Convenience helper to create torch tensors for the map feature API."""
+    return torch.as_tensor(data, dtype=dtype)
 
 
 def plot_test_cases():
@@ -201,11 +207,11 @@ def test_signed_distance_correct_sign():
     P at (-1, 1) should be negative (left of upward line)
     Q at (2, 1) should be positive (right of upward line)
     """
-    query_points = np.array([[-1.0, 1.0], [2.0, 1.0]], dtype=np.float32)
+    query_points = _tensor([[-1.0, 1.0], [2.0, 1.0]])
 
-    polyline_x = np.array([0.0, 0.0], dtype=np.float32)
-    polyline_y = np.array([0.0, 2.0], dtype=np.float32)
-    polyline_lengths = np.array([2], dtype=np.int32)
+    polyline_x = _tensor([0.0, 0.0])
+    polyline_y = _tensor([0.0, 2.0])
+    polyline_lengths = _tensor([2], dtype=torch.int64)
 
     polylines, valid = map_metric_features._pad_polylines(
         polyline_x, polyline_y, polyline_lengths
@@ -213,7 +219,7 @@ def test_signed_distance_correct_sign():
 
     distances = map_metric_features._compute_signed_distance_to_polylines(
         query_points, polylines, valid
-    )
+    ).cpu().numpy()
 
     expected = np.array([-1.0, 2.0])
     np.testing.assert_allclose(distances, expected, rtol=1e-5, atol=1e-5)
@@ -232,11 +238,11 @@ def test_signed_distance_correct_magnitude():
     P at (0, 1) projects onto segment -> distance = 1.0
     Q at (3, -1) projects beyond R2 -> distance = sqrt(2) to corner
     """
-    query_points = np.array([[0.0, 1.0], [3.0, -1.0]], dtype=np.float32)
+    query_points = _tensor([[0.0, 1.0], [3.0, -1.0]])
 
-    polyline_x = np.array([0.0, 2.0], dtype=np.float32)
-    polyline_y = np.array([0.0, 0.0], dtype=np.float32)
-    polyline_lengths = np.array([2], dtype=np.int32)
+    polyline_x = _tensor([0.0, 2.0])
+    polyline_y = _tensor([0.0, 0.0])
+    polyline_lengths = _tensor([2], dtype=torch.int64)
 
     polylines, valid = map_metric_features._pad_polylines(
         polyline_x, polyline_y, polyline_lengths
@@ -244,7 +250,7 @@ def test_signed_distance_correct_magnitude():
 
     distances = map_metric_features._compute_signed_distance_to_polylines(
         query_points, polylines, valid
-    )
+    ).cpu().numpy()
 
     expected_abs = np.array([1.0, math.sqrt(2)])
     np.testing.assert_allclose(np.abs(distances), expected_abs, rtol=1e-5, atol=1e-5)
@@ -260,13 +266,14 @@ def test_signed_distance_two_parallel_lines():
     Expected: |x - 1| - 1 (distance to center minus half-width)
     """
     x = np.linspace(-1.0, 4.0, 10, dtype=np.float32)
-    mesh_xys = np.stack(np.meshgrid(x, x), axis=-1).reshape(-1, 2)
+    mesh_xys_np = np.stack(np.meshgrid(x, x), axis=-1).reshape(-1, 2)
+    mesh_xys = _tensor(mesh_xys_np)
 
     # Line 1: x=0, pointing down (y: 10 to -10)
     # Line 2: x=2, pointing up (y: -10 to 10)
-    polyline_x = np.array([0.0, 0.0, 2.0, 2.0], dtype=np.float32)
-    polyline_y = np.array([10.0, -10.0, -10.0, 10.0], dtype=np.float32)
-    polyline_lengths = np.array([2, 2], dtype=np.int32)
+    polyline_x = _tensor([0.0, 0.0, 2.0, 2.0])
+    polyline_y = _tensor([10.0, -10.0, -10.0, 10.0])
+    polyline_lengths = _tensor([2, 2], dtype=torch.int64)
 
     polylines, valid = map_metric_features._pad_polylines(
         polyline_x, polyline_y, polyline_lengths
@@ -274,9 +281,9 @@ def test_signed_distance_two_parallel_lines():
 
     distances = map_metric_features._compute_signed_distance_to_polylines(
         mesh_xys, polylines, valid
-    )
+    ).cpu().numpy()
 
-    expected = np.abs(mesh_xys[:, 0] - 1.0) - 1.0
+    expected = np.abs(mesh_xys_np[:, 0] - 1.0) - 1.0
     np.testing.assert_allclose(distances, expected, rtol=1e-5, atol=1e-5)
     print("✓ test_signed_distance_two_parallel_lines passed")
 
@@ -284,12 +291,13 @@ def test_signed_distance_two_parallel_lines():
 def test_signed_distance_with_padding():
     """Test with polylines of different lengths (padded)."""
     x = np.linspace(-1.0, 4.0, 10, dtype=np.float32)
-    mesh_xys = np.stack(np.meshgrid(x, x), axis=-1).reshape(-1, 2)
+    mesh_xys_np = np.stack(np.meshgrid(x, x), axis=-1).reshape(-1, 2)
+    mesh_xys = _tensor(mesh_xys_np)
 
     # Line 1: 4 points, Line 2: 2 points (will be padded)
-    polyline_x = np.array([0.0, 0.0, 0.0, 0.0, 2.0, 2.0], dtype=np.float32)
-    polyline_y = np.array([10.0, 3.0, -3.0, -10.0, -10.0, 10.0], dtype=np.float32)
-    polyline_lengths = np.array([4, 2], dtype=np.int32)
+    polyline_x = _tensor([0.0, 0.0, 0.0, 0.0, 2.0, 2.0])
+    polyline_y = _tensor([10.0, 3.0, -3.0, -10.0, -10.0, 10.0])
+    polyline_lengths = _tensor([4, 2], dtype=torch.int64)
 
     polylines, valid = map_metric_features._pad_polylines(
         polyline_x, polyline_y, polyline_lengths
@@ -297,9 +305,9 @@ def test_signed_distance_with_padding():
 
     distances = map_metric_features._compute_signed_distance_to_polylines(
         mesh_xys, polylines, valid
-    )
+    ).cpu().numpy()
 
-    expected = np.abs(mesh_xys[:, 0] - 1.0) - 1.0
+    expected = np.abs(mesh_xys_np[:, 0] - 1.0) - 1.0
     np.testing.assert_allclose(distances, expected, rtol=1e-5, atol=1e-5)
     print("✓ test_signed_distance_with_padding passed")
 
@@ -317,18 +325,18 @@ def test_cyclic_polyline():
     - P4 at (-1, 1): outside left edge, should be positive (off-road)
     - P5 at (2, 2): exactly at corner, should be ~0
     """
-    query_points = np.array([
+    query_points = _tensor([
         [1.0, 1.0],   # P1: center
         [3.0, 1.0],   # P2: outside right
         [1.0, 3.0],   # P3: outside top
         [-1.0, 1.0],  # P4: outside left
         [2.0, 2.0],   # P5: at corner
-    ], dtype=np.float32)
+    ])
 
     # Counterclockwise square: (0,0) -> (2,0) -> (2,2) -> (0,2) -> (0,0)
-    polyline_x = np.array([0.0, 2.0, 2.0, 0.0, 0.0], dtype=np.float32)
-    polyline_y = np.array([0.0, 0.0, 2.0, 2.0, 0.0], dtype=np.float32)
-    polyline_lengths = np.array([5], dtype=np.int32)
+    polyline_x = _tensor([0.0, 2.0, 2.0, 0.0, 0.0])
+    polyline_y = _tensor([0.0, 0.0, 2.0, 2.0, 0.0])
+    polyline_lengths = _tensor([5], dtype=torch.int64)
 
     polylines, valid = map_metric_features._pad_polylines(
         polyline_x, polyline_y, polyline_lengths
@@ -336,7 +344,7 @@ def test_cyclic_polyline():
 
     distances = map_metric_features._compute_signed_distance_to_polylines(
         query_points, polylines, valid
-    )
+    ).cpu().numpy()
 
     print(f"P1 (center): {distances[0]:.3f} (expected ~ -1.0)")
     print(f"P2 (outside right): {distances[1]:.3f} (expected ~ +1.0)")
@@ -372,12 +380,12 @@ def test_cyclic_seam():
     # Query Point P (-2, 1)
     # - Physically: To the left of the diagonal hypotenuse -> OUTSIDE.
     # - To Segment 0 (Bottom): Above y=0 -> INSIDE (The Blind Spot).
-    query_points = np.array([[-2.0, 1.0]], dtype=np.float32)
+    query_points = _tensor([[-2.0, 1.0]])
 
     # The Triangle
-    polyline_x = np.array([0.0, 10.0, 10.0, 0.0], dtype=np.float32)
-    polyline_y = np.array([0.0, 0.0, 10.0, 0.0], dtype=np.float32)
-    polyline_lengths = np.array([4], dtype=np.int32)
+    polyline_x = _tensor([0.0, 10.0, 10.0, 0.0])
+    polyline_y = _tensor([0.0, 0.0, 10.0, 0.0])
+    polyline_lengths = _tensor([4], dtype=torch.int64)
 
     polylines, valid = map_metric_features._pad_polylines(
         polyline_x, polyline_y, polyline_lengths
@@ -385,7 +393,7 @@ def test_cyclic_seam():
 
     distances = map_metric_features._compute_signed_distance_to_polylines(
         query_points, polylines, valid
-    )
+    ).cpu().numpy()
 
     # Distance to vertex (0,0) is sqrt(2^2 + 1^2) = sqrt(5)
     expected = np.sqrt(5)
@@ -411,24 +419,24 @@ def test_donut_road():
     - P3 at (5, 2): outside outer square (off-road), should be positive
     - P4 at (2, 0.5): on road (between outer and inner), should be negative
     """
-    query_points = np.array([
+    query_points = _tensor([
         [0.5, 2.0],  # P1: on road (left side)
         [2.0, 2.0],  # P2: inside inner square
         [5.0, 2.0],  # P3: outside outer square
         [2.0, 0.5],  # P4: on road (bottom side)
-    ], dtype=np.float32)
+    ])
 
     # Outer square: counterclockwise
-    outer_x = np.array([0.0, 4.0, 4.0, 0.0, 0.0], dtype=np.float32)
-    outer_y = np.array([0.0, 0.0, 4.0, 4.0, 0.0], dtype=np.float32)
+    outer_x = _tensor([0.0, 4.0, 4.0, 0.0, 0.0])
+    outer_y = _tensor([0.0, 0.0, 4.0, 4.0, 0.0])
 
     # Inner square: clockwise (opposite winding)
-    inner_x = np.array([1.0, 1.0, 3.0, 3.0, 1.0], dtype=np.float32)
-    inner_y = np.array([1.0, 3.0, 3.0, 1.0, 1.0], dtype=np.float32)
+    inner_x = _tensor([1.0, 1.0, 3.0, 3.0, 1.0])
+    inner_y = _tensor([1.0, 3.0, 3.0, 1.0, 1.0])
 
-    polyline_x = np.concatenate([outer_x, inner_x])
-    polyline_y = np.concatenate([outer_y, inner_y])
-    polyline_lengths = np.array([5, 5], dtype=np.int32)
+    polyline_x = torch.cat([outer_x, inner_x])
+    polyline_y = torch.cat([outer_y, inner_y])
+    polyline_lengths = _tensor([5, 5], dtype=torch.int64)
 
     polylines, valid = map_metric_features._pad_polylines(
         polyline_x, polyline_y, polyline_lengths
@@ -436,7 +444,7 @@ def test_donut_road():
 
     distances = map_metric_features._compute_signed_distance_to_polylines(
         query_points, polylines, valid
-    )
+    ).cpu().numpy()
 
     print(f"P1 (on road, left): {distances[0]:.3f} (expected ~ -0.5)")
     print(f"P2 (inside inner): {distances[1]:.3f} (expected ~ +1.0)")
@@ -480,17 +488,17 @@ def test_compute_distance_to_road_edge():
     #     Corners at (2.5, 0), (1.5, 1), (0.5, 0), (1.5, -1)
     #     Corner at (2.5, 0) is 0.5m outside, expected ~ +0.5
 
-    center_x = np.array([[1.0], [1.0], [1.75], [5.0], [1.5]], dtype=np.float32)
-    center_y = np.array([[0.0], [0.0], [0.0], [0.0], [0.0]], dtype=np.float32)
-    length = np.array([1.0, 2.0, 1.0, 1.0, np.sqrt(2)], dtype=np.float32)
-    width = np.array([0.5, 2.0, 0.5, 0.5, np.sqrt(2)], dtype=np.float32)
-    heading = np.array([[0.0], [0.0], [0.0], [0.0], [np.pi/4]], dtype=np.float32)
-    valid = np.ones((num_agents, num_steps), dtype=bool)
+    center_x = _tensor([[1.0], [1.0], [1.75], [5.0], [1.5]])
+    center_y = _tensor([[0.0], [0.0], [0.0], [0.0], [0.0]])
+    length = _tensor([1.0, 2.0, 1.0, 1.0, np.sqrt(2)])
+    width = _tensor([0.5, 2.0, 0.5, 0.5, np.sqrt(2)])
+    heading = _tensor([[0.0], [0.0], [0.0], [0.0], [np.pi / 4]])
+    valid = torch.ones((num_agents, num_steps), dtype=torch.bool)
 
     # Two parallel lines at x=0 and x=2
-    polyline_x = np.array([0.0, 0.0, 2.0, 2.0], dtype=np.float32)
-    polyline_y = np.array([10.0, -10.0, -10.0, 10.0], dtype=np.float32)
-    polyline_lengths = np.array([2, 2], dtype=np.int32)
+    polyline_x = _tensor([0.0, 0.0, 2.0, 2.0])
+    polyline_y = _tensor([10.0, -10.0, -10.0, 10.0])
+    polyline_lengths = _tensor([2, 2], dtype=torch.int64)
 
     distances = map_metric_features.compute_distance_to_road_edge(
         center_x=center_x,
@@ -504,29 +512,31 @@ def test_compute_distance_to_road_edge():
         polyline_lengths=polyline_lengths,
     )
 
+    distances_np = distances.cpu().numpy()
+
     assert distances.shape == (num_agents, num_steps)
 
-    print(f"A0 (fully on-road): {distances[0, 0]:.3f} (expected ~ -0.5)")
-    print(f"A1 (at boundary): {distances[1, 0]:.3f} (expected ~ 0)")
-    print(f"A2 (one side off): {distances[2, 0]:.3f} (expected ~ 0.25)")
-    print(f"A3 (fully off-road): {distances[3, 0]:.3f} (expected ~ 3.5)")
-    print(f"A4 (rotated, one corner off): {distances[4, 0]:.3f} (expected ~ 0.5)")
+    print(f"A0 (fully on-road): {distances_np[0, 0]:.3f} (expected ~ -0.5)")
+    print(f"A1 (at boundary): {distances_np[1, 0]:.3f} (expected ~ 0)")
+    print(f"A2 (one side off): {distances_np[2, 0]:.3f} (expected ~ 0.25)")
+    print(f"A3 (fully off-road): {distances_np[3, 0]:.3f} (expected ~ 3.5)")
+    print(f"A4 (rotated, one corner off): {distances_np[4, 0]:.3f} (expected ~ 0.5)")
 
     # A0: fully on-road, corners at x=0.5 and x=1.5, both 0.5m inside road
-    assert distances[0, 0] < 0, f"A0 should be on-road (negative), got {distances[0, 0]}"
-    np.testing.assert_allclose(distances[0, 0], -0.5, atol=0.1)
+    assert distances_np[0, 0] < 0, f"A0 should be on-road (negative), got {distances_np[0, 0]}"
+    np.testing.assert_allclose(distances_np[0, 0], -0.5, atol=0.1)
 
     # A1: at boundary, distance ~ 0
-    np.testing.assert_allclose(distances[1, 0], 0.0, atol=0.1)
+    np.testing.assert_allclose(distances_np[1, 0], 0.0, atol=0.1)
 
     # A2: one side off by 0.25m
-    np.testing.assert_allclose(distances[2, 0], 0.25, atol=0.1)
+    np.testing.assert_allclose(distances_np[2, 0], 0.25, atol=0.1)
 
     # A3: fully off-road
-    np.testing.assert_allclose(distances[3, 0], 3.5, atol=0.1)
+    np.testing.assert_allclose(distances_np[3, 0], 3.5, atol=0.1)
 
     # A4: rotated, corner at (2.5, 0) is 0.5m outside
-    np.testing.assert_allclose(distances[4, 0], 0.5, atol=0.1)
+    np.testing.assert_allclose(distances_np[4, 0], 0.5, atol=0.1)
 
     print("✓ test_compute_distance_to_road_edge passed")
 

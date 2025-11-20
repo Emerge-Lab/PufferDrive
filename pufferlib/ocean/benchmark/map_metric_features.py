@@ -4,7 +4,8 @@ Adapted from Waymo Open Dataset:
 https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/map_metric_features.py
 """
 
-import numpy as np
+import torch
+
 from pufferlib.ocean.benchmark.geometry_utils import (
     get_2d_box_corners,
     cross_product_2d,
@@ -16,16 +17,16 @@ OFFROAD_DISTANCE_THRESHOLD = 0.0
 
 
 def compute_distance_to_road_edge(
-    center_x: np.ndarray,
-    center_y: np.ndarray,
-    length: np.ndarray,
-    width: np.ndarray,
-    heading: np.ndarray,
-    valid: np.ndarray,
-    polyline_x: np.ndarray,
-    polyline_y: np.ndarray,
-    polyline_lengths: np.ndarray,
-) -> np.ndarray:
+    center_x: torch.Tensor,
+    center_y: torch.Tensor,
+    length: torch.Tensor,
+    width: torch.Tensor,
+    heading: torch.Tensor,
+    valid: torch.Tensor,
+    polyline_x: torch.Tensor,
+    polyline_y: torch.Tensor,
+    polyline_lengths: torch.Tensor,
+) -> torch.Tensor:
     """Computes signed distance to road edge for each agent at each timestep.
 
     Args:
@@ -46,11 +47,11 @@ def compute_distance_to_road_edge(
     num_agents, num_steps = center_x.shape
 
     if length.ndim == 1:
-        length = np.broadcast_to(length[:, np.newaxis], (num_agents, num_steps))
+        length = length.unsqueeze(-1).expand(-1, num_steps)
     if width.ndim == 1:
-        width = np.broadcast_to(width[:, np.newaxis], (num_agents, num_steps))
+        width = width.unsqueeze(-1).expand(-1, num_steps)
 
-    boxes = np.stack([center_x, center_y, length, width, heading], axis=-1)
+    boxes = torch.stack([center_x, center_y, length, width, heading], dim=-1)
     boxes_flat = boxes.reshape(-1, 5)
 
     corners = get_2d_box_corners(boxes_flat)
@@ -58,56 +59,56 @@ def compute_distance_to_road_edge(
 
     flat_corners = corners.reshape(-1, 2)
 
-    polylines_padded, polylines_valid = _pad_polylines(
-        polyline_x, polyline_y, polyline_lengths
-    )
+    polylines_padded, polylines_valid = _pad_polylines(polyline_x, polyline_y, polyline_lengths)
 
-    corner_distances = _compute_signed_distance_to_polylines(
-        flat_corners, polylines_padded, polylines_valid
-    )
+    corner_distances = _compute_signed_distance_to_polylines(flat_corners, polylines_padded, polylines_valid)
 
     corner_distances = corner_distances.reshape(num_agents, num_steps, 4)
-    signed_distances = np.max(corner_distances, axis=-1)
+    signed_distances = torch.max(corner_distances, dim=-1).values
 
-    signed_distances = np.where(valid, signed_distances, -EXTREMELY_LARGE_DISTANCE)
+    offroad_fill = signed_distances.new_full((), -EXTREMELY_LARGE_DISTANCE)
+    signed_distances = torch.where(valid, signed_distances, offroad_fill)
 
     return signed_distances
 
 
 def _pad_polylines(
-    polyline_x: np.ndarray,
-    polyline_y: np.ndarray,
-    polyline_lengths: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+    polyline_x: torch.Tensor,
+    polyline_y: torch.Tensor,
+    polyline_lengths: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Convert flattened polylines to padded tensor format.
 
     Returns:
         polylines: Shape (num_polylines, max_length, 2)
         valid: Shape (num_polylines, max_length)
     """
-    num_polylines = len(polyline_lengths)
-    max_length = polyline_lengths.max()
+    device = polyline_x.device
+    num_polylines = polyline_lengths.shape[0]
+    max_length = int(polyline_lengths.max().item())
 
-    polylines = np.zeros((num_polylines, max_length, 2), dtype=np.float32)
-    valid = np.zeros((num_polylines, max_length), dtype=bool)
+    polylines = torch.zeros((num_polylines, max_length, 2), dtype=torch.float32, device=device)
+    valid = torch.zeros((num_polylines, max_length), dtype=torch.bool, device=device)
 
-    boundaries = np.cumsum(np.concatenate([[0], polyline_lengths]))
+    lengths_long = polyline_lengths.to(torch.long)
+    boundaries = torch.cumsum(torch.cat([lengths_long.new_zeros(1), lengths_long]), dim=0)
 
     for i in range(num_polylines):
-        start, end = boundaries[i], boundaries[i + 1]
-        length = polyline_lengths[i]
-        polylines[i, :length, 0] = polyline_x[start:end]
-        polylines[i, :length, 1] = polyline_y[start:end]
-        valid[i, :length] = True
+        start = int(boundaries[i].item())
+        end = int(boundaries[i + 1].item())
+        length_i = int(lengths_long[i].item())
+        polylines[i, :length_i, 0] = polyline_x[start:end]
+        polylines[i, :length_i, 1] = polyline_y[start:end]
+        valid[i, :length_i] = True
 
     return polylines, valid
 
 
 def _check_polyline_cycles(
-    polylines: np.ndarray,
-    polylines_valid: np.ndarray,
+    polylines: torch.Tensor,
+    polylines_valid: torch.Tensor,
     tolerance: float = 1e-3,
-) -> np.ndarray:
+) -> torch.Tensor:
     """Check if polylines are cyclic (first point == last point).
 
     Args:
@@ -118,27 +119,27 @@ def _check_polyline_cycles(
     Returns:
         Boolean array of shape (num_polylines,)
     """
-    num_polylines = polylines.shape[0]
-    is_cyclic = np.zeros(num_polylines, dtype=bool)
+    device = polylines.device
+    max_length = polylines.shape[1]
+    valid_counts = polylines_valid.sum(dim=-1)
+    has_enough_points = valid_counts >= 2
 
-    for i in range(num_polylines):
-        valid_mask = polylines_valid[i]
-        if valid_mask.sum() < 2:
-            continue
-        last_valid_idx = np.where(valid_mask)[0][-1]
-        first_pt = polylines[i, 0]
-        last_pt = polylines[i, last_valid_idx]
-        dist = np.linalg.norm(first_pt - last_pt)
-        is_cyclic[i] = dist < tolerance
+    indices = torch.arange(max_length, device=device)
+    last_idx = torch.argmax(polylines_valid.int() * indices, dim=-1)
 
-    return is_cyclic
+    first_pts = polylines[:, 0]
+    gather_idx = last_idx.view(-1, 1, 1).expand(-1, 1, 2)
+    last_pts = torch.gather(polylines, 1, gather_idx).squeeze(1)
+    dist = torch.linalg.norm(first_pts - last_pts, dim=-1)
+
+    return (dist < tolerance) & has_enough_points
 
 
 def _compute_signed_distance_to_polylines(
-    xys: np.ndarray,
-    polylines: np.ndarray,
-    polylines_valid: np.ndarray,
-) -> np.ndarray:
+    xys: torch.Tensor,
+    polylines: torch.Tensor,
+    polylines_valid: torch.Tensor,
+) -> torch.Tensor:
     """Computes signed distance from points to polylines (2D).
 
     Args:
@@ -161,112 +162,112 @@ def _compute_signed_distance_to_polylines(
     xy_ends = polylines[:, 1:, :]
     start_to_end = xy_ends - xy_starts
 
-    start_to_point = xys[np.newaxis, np.newaxis, :, :] - xy_starts[:, :, np.newaxis, :]
+    start_to_point = xys.unsqueeze(0).unsqueeze(0) - xy_starts[:, :, None, :]
 
     dot_se_se = dot_product_2d(start_to_end, start_to_end)
-    dot_sp_se = dot_product_2d(
-        start_to_point,
-        start_to_end[:, :, np.newaxis, :]
+    dot_sp_se = dot_product_2d(start_to_point, start_to_end[:, :, None, :])
+
+    denom = dot_se_se[:, :, None]
+    rel_t = torch.where(
+        denom != 0,
+        dot_sp_se / denom,
+        torch.zeros_like(dot_sp_se),
     )
-    rel_t = np.divide(dot_sp_se, dot_se_se[:, :, np.newaxis],
-                      out=np.zeros_like(dot_sp_se),
-                      where=dot_se_se[:, :, np.newaxis] != 0)
 
-    n = np.sign(cross_product_2d(
-        start_to_point,
-        start_to_end[:, :, np.newaxis, :]
-    ))
+    n = torch.sign(cross_product_2d(start_to_point, start_to_end[:, :, None, :]))
 
-    segment_to_point = start_to_point - (
-        start_to_end[:, :, np.newaxis, :] * np.clip(rel_t, 0.0, 1.0)[:, :, :, np.newaxis]
+    segment_to_point = start_to_point - (start_to_end[:, :, None, :] * torch.clamp(rel_t, 0.0, 1.0)[:, :, :, None])
+    distance_to_segment_2d = torch.linalg.norm(segment_to_point, dim=-1)
+
+    start_to_end_padded = torch.cat(
+        [
+            start_to_end[:, -1:, :],
+            start_to_end,
+            start_to_end[:, :1, :],
+        ],
+        dim=1,
     )
-    distance_to_segment_2d = np.linalg.norm(segment_to_point, axis=-1)
 
-    start_to_end_padded = np.concatenate([
-        start_to_end[:, -1:, :],
-        start_to_end,
-        start_to_end[:, :1, :],
-    ], axis=1)
+    is_locally_convex = (
+        cross_product_2d(start_to_end_padded[:, :-1, None, :], start_to_end_padded[:, 1:, None, :]) > 0.0
+    )
 
-    is_locally_convex = cross_product_2d(
-        start_to_end_padded[:, :-1, np.newaxis, :],
-        start_to_end_padded[:, 1:, np.newaxis, :]
-    ) > 0.0
+    n_prior = torch.cat(
+        [
+            torch.where(
+                is_polyline_cyclic[:, None, None],
+                n[:, -1:, :],
+                n[:, :1, :],
+            ),
+            n[:, :-1, :],
+        ],
+        dim=1,
+    )
+    n_next = torch.cat(
+        [
+            n[:, 1:, :],
+            torch.where(
+                is_polyline_cyclic[:, None, None],
+                n[:, :1, :],
+                n[:, -1:, :],
+            ),
+        ],
+        dim=1,
+    )
 
-    # For cyclic polylines, wrap around; for non-cyclic, pad with edge values
-    # n shape: (num_polylines, num_segments, num_points)
-    n_prior = np.concatenate([
-        np.where(
-            is_polyline_cyclic[:, np.newaxis, np.newaxis],
-            n[:, -1:, :],
-            n[:, :1, :],
-        ),
-        n[:, :-1, :],
-    ], axis=1)
-    n_next = np.concatenate([
-        n[:, 1:, :],
-        np.where(
-            is_polyline_cyclic[:, np.newaxis, np.newaxis],
-            n[:, :1, :],
-            n[:, -1:, :],
-        ),
-    ], axis=1)
+    is_prior_valid = torch.cat(
+        [
+            torch.where(
+                is_polyline_cyclic[:, None],
+                is_segment_valid[:, -1:],
+                is_segment_valid[:, :1],
+            ),
+            is_segment_valid[:, :-1],
+        ],
+        dim=1,
+    )
+    is_next_valid = torch.cat(
+        [
+            is_segment_valid[:, 1:],
+            torch.where(
+                is_polyline_cyclic[:, None],
+                is_segment_valid[:, :1],
+                is_segment_valid[:, -1:],
+            ),
+        ],
+        dim=1,
+    )
 
-    # is_segment_valid shape: (num_polylines, num_segments)
-    is_prior_valid = np.concatenate([
-        np.where(
-            is_polyline_cyclic[:, np.newaxis],
-            is_segment_valid[:, -1:],
-            is_segment_valid[:, :1],
-        ),
-        is_segment_valid[:, :-1],
-    ], axis=1)
-    is_next_valid = np.concatenate([
-        is_segment_valid[:, 1:],
-        np.where(
-            is_polyline_cyclic[:, np.newaxis],
-            is_segment_valid[:, :1],
-            is_segment_valid[:, -1:],
-        ),
-    ], axis=1)
-
-    sign_if_before = np.where(
+    sign_if_before = torch.where(
         is_locally_convex[:, :-1, :],
-        np.maximum(n, n_prior),
-        np.minimum(n, n_prior),
+        torch.maximum(n, n_prior),
+        torch.minimum(n, n_prior),
     )
-    sign_if_after = np.where(
+    sign_if_after = torch.where(
         is_locally_convex[:, 1:, :],
-        np.maximum(n, n_next),
-        np.minimum(n, n_next),
+        torch.maximum(n, n_next),
+        torch.minimum(n, n_next),
     )
 
-    sign_to_segment = np.where(
-        (rel_t < 0.0) & is_prior_valid[:, :, np.newaxis],
+    sign_to_segment = torch.where(
+        (rel_t < 0.0) & is_prior_valid[:, :, None],
         sign_if_before,
-        np.where(
-            (rel_t > 1.0) & is_next_valid[:, :, np.newaxis],
-            sign_if_after,
-            n
-        )
+        torch.where((rel_t > 1.0) & is_next_valid[:, :, None], sign_if_after, n),
     )
 
-    distance_to_segment_2d = distance_to_segment_2d.reshape(
-        num_polylines * num_segments, num_points
-    ).T
-    sign_to_segment = sign_to_segment.reshape(
-        num_polylines * num_segments, num_points
-    ).T
+    distance_to_segment_2d = distance_to_segment_2d.reshape(num_polylines * num_segments, num_points).T
+    sign_to_segment = sign_to_segment.reshape(num_polylines * num_segments, num_points).T
 
     is_segment_valid_flat = is_segment_valid.reshape(num_polylines * num_segments)
-    distance_to_segment_2d = np.where(
-        is_segment_valid_flat[np.newaxis, :],
-        distance_to_segment_2d,
+    valid_mask = is_segment_valid_flat.unsqueeze(0).expand(num_points, -1)
+    distance_to_segment_2d = distance_to_segment_2d.masked_fill(
+        ~valid_mask,
         EXTREMELY_LARGE_DISTANCE,
     )
 
-    closest_idx = np.argmin(distance_to_segment_2d, axis=1)
-    distance_2d = distance_to_segment_2d[np.arange(num_points), closest_idx]
-    distance_sign = sign_to_segment[np.arange(num_points), closest_idx]
+    closest_idx = torch.argmin(distance_to_segment_2d, dim=1)
+    point_indices = torch.arange(num_points, device=xys.device)
+    distance_2d = distance_to_segment_2d[point_indices, closest_idx]
+    distance_sign = sign_to_segment[point_indices, closest_idx]
 
     return distance_sign * distance_2d

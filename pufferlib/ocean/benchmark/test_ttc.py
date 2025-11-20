@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import pytest
+import torch
 
 from pufferlib.ocean.benchmark import interaction_features
 
@@ -9,6 +10,12 @@ SMALL_OVERLAP_THRESHOLD = interaction_features.SMALL_OVERLAP_THRESHOLD
 MAX_HEADING_DIFF_FOR_SMALL_OVERLAP = interaction_features.MAX_HEADING_DIFF_FOR_SMALL_OVERLAP
 MAX_TTC_SEC = interaction_features.MAXIMUM_TIME_TO_COLLISION
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _tensor(value, *, dtype=torch.float32):
+    return torch.tensor(value, dtype=dtype, device=DEVICE)
+
 
 def test_time_to_collision_output_shape():
     """Test that TTC returns correct shape."""
@@ -16,14 +23,14 @@ def test_time_to_collision_output_shape():
     num_rollouts = 2
     num_steps = 10
 
-    center_x = np.random.randn(num_agents, num_rollouts, num_steps).astype(np.float32)
-    center_y = np.random.randn(num_agents, num_rollouts, num_steps).astype(np.float32)
-    length = np.ones((num_agents, num_rollouts), dtype=np.float32) * 4.0
-    width = np.ones((num_agents, num_rollouts), dtype=np.float32) * 2.0
-    heading = np.zeros((num_agents, num_rollouts, num_steps), dtype=np.float32)
-    valid = np.ones((num_agents, num_rollouts, num_steps), dtype=bool)
+    center_x = _tensor(np.random.randn(num_agents, num_rollouts, num_steps).astype(np.float32))
+    center_y = _tensor(np.random.randn(num_agents, num_rollouts, num_steps).astype(np.float32))
+    length = _tensor(np.ones((num_agents, num_rollouts), dtype=np.float32) * 4.0)
+    width = _tensor(np.ones((num_agents, num_rollouts), dtype=np.float32) * 2.0)
+    heading = _tensor(np.zeros((num_agents, num_rollouts, num_steps), dtype=np.float32))
+    valid = _tensor(np.ones((num_agents, num_rollouts, num_steps), dtype=bool), dtype=torch.bool)
 
-    eval_mask = np.ones(num_agents, dtype=bool)
+    eval_mask = _tensor(np.ones(num_agents, dtype=bool), dtype=torch.bool)
     ttc = interaction_features.compute_time_to_collision(
         center_x=center_x,
         center_y=center_y,
@@ -34,6 +41,7 @@ def test_time_to_collision_output_shape():
         evaluated_object_mask=eval_mask,
         seconds_per_step=0.1,
     )
+    ttc = ttc.cpu().numpy()
 
     assert ttc.shape == (num_agents, num_rollouts, num_steps)
 
@@ -120,15 +128,15 @@ def test_time_to_collision_values(center_xys, headings, boxes_sizes, speeds, exp
     center_y = np.stack([center_y_0, center_y_1, center_y_2], axis=-1)
 
     # Reshape to (num_agents, num_rollouts, num_steps)
-    center_x = center_x[:, np.newaxis, :]
-    center_y = center_y[:, np.newaxis, :]
+    center_x = _tensor(center_x[:, np.newaxis, :])
+    center_y = _tensor(center_y[:, np.newaxis, :])
 
-    length = np.broadcast_to(boxes_sizes[:, 0:1], (num_agents, num_rollouts))
-    width = np.broadcast_to(boxes_sizes[:, 1:2], (num_agents, num_rollouts))
-    heading = np.broadcast_to(headings[:, np.newaxis, np.newaxis], (num_agents, num_rollouts, 3))
-    valid = np.ones((num_agents, num_rollouts, 3), dtype=bool)
+    length = _tensor(np.broadcast_to(boxes_sizes[:, 0:1], (num_agents, num_rollouts)))
+    width = _tensor(np.broadcast_to(boxes_sizes[:, 1:2], (num_agents, num_rollouts)))
+    heading = _tensor(np.broadcast_to(headings[:, np.newaxis, np.newaxis], (num_agents, num_rollouts, 3)))
+    valid = _tensor(np.ones((num_agents, num_rollouts, 3), dtype=bool), dtype=torch.bool)
 
-    eval_mask = np.ones(num_agents, dtype=bool)
+    eval_mask = _tensor(np.ones(num_agents, dtype=bool), dtype=torch.bool)
     ttc = interaction_features.compute_time_to_collision(
         center_x=center_x,
         center_y=center_y,
@@ -139,6 +147,7 @@ def test_time_to_collision_values(center_xys, headings, boxes_sizes, speeds, exp
         evaluated_object_mask=eval_mask,
         seconds_per_step=seconds_per_step,
     )
+    ttc = ttc.cpu().numpy()
 
     # Check TTC at timestep 1 (middle) where speeds are valid
     np.testing.assert_allclose(ttc[:, 0, 1], expected_ttc_sec, rtol=1e-5, atol=1e-5)
@@ -173,10 +182,17 @@ def test_time_to_collision_invalid_objects():
     heading = np.zeros((num_agents, num_rollouts, num_steps), dtype=np.float32)
 
     # Test with agent 1 invalid - agent 0 should see agent 2 as nearest
+    center_x = _tensor(center_x)
+    center_y = _tensor(center_y)
+    length = _tensor(length)
+    width = _tensor(width)
+    heading = _tensor(heading)
+
     valid = np.ones((num_agents, num_rollouts, num_steps), dtype=bool)
     valid[1, 0, 1] = False
+    valid = _tensor(valid, dtype=torch.bool)
 
-    eval_mask = np.ones(num_agents, dtype=bool)
+    eval_mask = _tensor(np.ones(num_agents, dtype=bool), dtype=torch.bool)
     ttc = interaction_features.compute_time_to_collision(
         center_x=center_x,
         center_y=center_y,
@@ -187,6 +203,7 @@ def test_time_to_collision_invalid_objects():
         evaluated_object_mask=eval_mask,
         seconds_per_step=seconds_per_step,
     )
+    ttc = ttc.cpu().numpy()
 
     # Agent 0 should now see agent 2 at distance 10 with relative speed 6-1=5
     # TTC = (10 - 2 - 2) / 5 = 6/5 = 1.2
@@ -217,12 +234,15 @@ def test_time_to_collision_no_object_ahead():
     center_y_0 = center_y_1 + speeds * np.sin(headings) * seconds_per_step
     center_y = np.stack([center_y_0, center_y_1, center_y_2], axis=-1)[:, np.newaxis, :]
 
-    length = np.ones((num_agents, num_rollouts), dtype=np.float32) * 4.0
-    width = np.ones((num_agents, num_rollouts), dtype=np.float32) * 2.0
-    heading = np.broadcast_to(headings[:, np.newaxis, np.newaxis], (num_agents, num_rollouts, num_steps))
-    valid = np.ones((num_agents, num_rollouts, num_steps), dtype=bool)
+    length = _tensor(np.ones((num_agents, num_rollouts), dtype=np.float32) * 4.0)
+    width = _tensor(np.ones((num_agents, num_rollouts), dtype=np.float32) * 2.0)
+    heading = _tensor(np.broadcast_to(headings[:, np.newaxis, np.newaxis], (num_agents, num_rollouts, num_steps)))
+    valid = _tensor(np.ones((num_agents, num_rollouts, num_steps), dtype=bool), dtype=torch.bool)
 
-    eval_mask = np.ones(num_agents, dtype=bool)
+    center_x = _tensor(center_x)
+    center_y = _tensor(center_y)
+
+    eval_mask = _tensor(np.ones(num_agents, dtype=bool), dtype=torch.bool)
     ttc = interaction_features.compute_time_to_collision(
         center_x=center_x,
         center_y=center_y,
@@ -233,6 +253,7 @@ def test_time_to_collision_no_object_ahead():
         evaluated_object_mask=eval_mask,
         seconds_per_step=seconds_per_step,
     )
+    ttc = ttc.cpu().numpy()
 
     # Both agents should have max TTC since they're moving away
     np.testing.assert_allclose(ttc[:, 0, 1], MAX_TTC_SEC, rtol=1e-5, atol=1e-5)

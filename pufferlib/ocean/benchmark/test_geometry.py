@@ -1,6 +1,13 @@
 import numpy as np
+import torch
 
 from pufferlib.ocean.benchmark import interaction_features
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _tensor(value, *, dtype=torch.float32):
+    return torch.tensor(value, dtype=dtype, device=DEVICE)
 
 
 def test_box_distance_calculations():
@@ -18,21 +25,28 @@ def test_box_distance_calculations():
     - Box 0 to Box 3: 0.0 (touching)
     """
 
-    center_x = np.array([[[2.0]], [[4.5]], [[1.5]], [[3.5]]])
-    center_y = np.array([[[1.0]], [[2.5]], [[2.0]], [[0.0]]])
-    length = np.array([[2.0], [2.0], [2.0], [np.sqrt(2)]])
-    width = np.array([[1.0], [1.0], [1.0], [np.sqrt(2)]])
-    heading = np.array([[[0.0]], [[0.0]], [[np.pi / 2]], [[np.pi / 4]]])
-    valid = np.ones((4, 1, 1), dtype=bool)
+    center_x_np = np.array([[[2.0]], [[4.5]], [[1.5]], [[3.5]]])
+    center_y_np = np.array([[[1.0]], [[2.5]], [[2.0]], [[0.0]]])
+    length_np = np.array([[2.0], [2.0], [2.0], [np.sqrt(2)]])
+    width_np = np.array([[1.0], [1.0], [1.0], [np.sqrt(2)]])
+    heading_np = np.array([[[0.0]], [[0.0]], [[np.pi / 2]], [[np.pi / 4]]])
+    valid_np = np.ones((4, 1, 1), dtype=bool)
 
     print("Test: Handpicked box configurations")
     print("=" * 60)
     print(f"\nArray shapes:")
-    print(f"  center_x: {center_x.shape} = (num_agents=4, num_rollouts=1, num_timesteps=1)")
-    print(f"  length:   {length.shape} = (num_agents=4, num_rollouts=1)")
+    print(f"  center_x: {center_x_np.shape} = (num_agents=4, num_rollouts=1, num_timesteps=1)")
+    print(f"  length:   {length_np.shape} = (num_agents=4, num_rollouts=1)")
     print(f"  This test uses: 4 agents, 1 rollout, 1 timestep")
 
-    eval_mask = np.ones(4, dtype=bool)
+    center_x = _tensor(center_x_np)
+    center_y = _tensor(center_y_np)
+    length = _tensor(length_np)
+    width = _tensor(width_np)
+    heading = _tensor(heading_np)
+    valid = _tensor(valid_np, dtype=torch.bool)
+    eval_mask = _tensor(np.ones(4, dtype=bool), dtype=torch.bool)
+
     signed_distances = interaction_features.compute_signed_distances(
         center_x=center_x,
         center_y=center_y,
@@ -43,6 +57,7 @@ def test_box_distance_calculations():
         evaluated_object_mask=eval_mask,
         corner_rounding_factor=0.0,
     )
+    signed_distances = signed_distances.cpu().numpy()
 
     expected_distances = np.array([interaction_features.EXTREMELY_LARGE_DISTANCE, 1.0 / np.sqrt(2), -0.5, 0.0])
 
@@ -81,19 +96,26 @@ def test_box_distance_calculations():
 def test_invalid_objects():
     """Test invalid objects using handpicked box 1, but marked invalid."""
 
-    center_x = np.array([[[2.0]], [[4.5]]])
-    center_y = np.array([[[1.0]], [[2.5]]])
-    length = np.array([[2.0], [2.0]])
-    width = np.array([[1.0], [1.0]])
-    heading = np.array([[[0.0]], [[0.0]]])
-    valid = np.array([[True], [False]], dtype=bool)[:, :, np.newaxis]
+    center_x_np = np.array([[[2.0]], [[4.5]]])
+    center_y_np = np.array([[[1.0]], [[2.5]]])
+    length_np = np.array([[2.0], [2.0]])
+    width_np = np.array([[1.0], [1.0]])
+    heading_np = np.array([[[0.0]], [[0.0]]])
+    valid_np = np.array([[True], [False]], dtype=bool)[:, :, np.newaxis]
 
     print("\nTest: Invalid objects")
-    print(f"Array shapes: {center_x.shape} = (num_agents=2, num_rollouts=1, num_timesteps=1)")
+    print(f"Array shapes: {center_x_np.shape} = (num_agents=2, num_rollouts=1, num_timesteps=1)")
     print("This test uses: 2 agents (Box 0 and Box 1), 1 rollout, 1 timestep")
     print("Box 1 is marked as invalid")
 
-    eval_mask = np.ones(2, dtype=bool)
+    center_x = _tensor(center_x_np)
+    center_y = _tensor(center_y_np)
+    length = _tensor(length_np)
+    width = _tensor(width_np)
+    heading = _tensor(heading_np)
+    valid = _tensor(valid_np, dtype=torch.bool)
+    eval_mask = _tensor(np.ones(2, dtype=bool), dtype=torch.bool)
+
     distances = interaction_features.compute_distance_to_nearest_object(
         center_x=center_x,
         center_y=center_y,
@@ -103,6 +125,7 @@ def test_invalid_objects():
         valid=valid,
         evaluated_object_mask=eval_mask,
     )
+    distances = distances.cpu().numpy()
     print(f"  Agent 0 distance (box 1 invalid): {distances[0, 0, 0]}")
     print(f"  Expected: {interaction_features.EXTREMELY_LARGE_DISTANCE}")
 
@@ -116,30 +139,37 @@ def test_invalid_objects():
 def test_multiple_rollouts():
     """Test with handpicked boxes across multiple rollouts."""
 
-    center_x = np.array(
+    center_x_np = np.array(
         [
             [[2.0], [2.0]],
             [[4.5], [5.0]],
         ]
     )
-    center_y = np.array(
+    center_y_np = np.array(
         [
             [[1.0], [1.0]],
             [[2.5], [3.0]],
         ]
     )
-    length = np.ones((2, 2)) * 2.0
-    width = np.ones((2, 2)) * 1.0
-    heading = np.zeros_like(center_x)
-    valid = np.ones((2, 2, 1), dtype=bool)
+    length_np = np.ones((2, 2)) * 2.0
+    width_np = np.ones((2, 2)) * 1.0
+    heading_np = np.zeros_like(center_x_np)
+    valid_np = np.ones((2, 2, 1), dtype=bool)
 
     print("\nTest: Multiple rollouts")
-    print(f"Array shapes: {center_x.shape} = (num_agents=2, num_rollouts=2, num_timesteps=1)")
+    print(f"Array shapes: {center_x_np.shape} = (num_agents=2, num_rollouts=2, num_timesteps=1)")
     print("This test uses: 2 agents (Box 0 and Box 1), 2 rollouts, 1 timestep")
     print("Rollout 0: Box 1 at (4.5, 2.5) - closer to Box 0")
     print("Rollout 1: Box 1 at (5.0, 3.0) - further from Box 0")
 
-    eval_mask = np.ones(2, dtype=bool)
+    center_x = _tensor(center_x_np)
+    center_y = _tensor(center_y_np)
+    length = _tensor(length_np)
+    width = _tensor(width_np)
+    heading = _tensor(heading_np)
+    valid = _tensor(valid_np, dtype=torch.bool)
+    eval_mask = _tensor(np.ones(2, dtype=bool), dtype=torch.bool)
+
     distances = interaction_features.compute_distance_to_nearest_object(
         center_x=center_x,
         center_y=center_y,
@@ -150,6 +180,7 @@ def test_multiple_rollouts():
         evaluated_object_mask=eval_mask,
         corner_rounding_factor=0.0,
     )
+    distances = distances.cpu().numpy()
     print(f"  Agent 0, rollout 0: {distances[0, 0, 0]:.2f}m")
     print(f"  Agent 0, rollout 1: {distances[0, 1, 0]:.2f}m")
     print("  Distances should vary across rollouts")
@@ -162,30 +193,37 @@ def test_multiple_rollouts():
 def test_multiple_timesteps():
     """Test with handpicked boxes across multiple timesteps."""
 
-    center_x = np.array(
+    center_x_np = np.array(
         [
             [[2.0, 2.0, 2.0]],
             [[4.5, 5.0, 6.0]],
         ]
     )
-    center_y = np.array(
+    center_y_np = np.array(
         [
             [[1.0, 1.0, 1.0]],
             [[2.5, 2.5, 2.5]],
         ]
     )
-    length = np.ones((2, 1)) * 2.0
-    width = np.ones((2, 1)) * 1.0
-    heading = np.zeros_like(center_x)
-    valid = np.ones((2, 1, 3), dtype=bool)
+    length_np = np.ones((2, 1)) * 2.0
+    width_np = np.ones((2, 1)) * 1.0
+    heading_np = np.zeros_like(center_x_np)
+    valid_np = np.ones((2, 1, 3), dtype=bool)
 
     print("\nTest: Multiple timesteps")
-    print(f"Array shapes: {center_x.shape} = (num_agents=2, num_rollouts=1, num_timesteps=3)")
+    print(f"Array shapes: {center_x_np.shape} = (num_agents=2, num_rollouts=1, num_timesteps=3)")
     print("This test uses: 2 agents (Box 0 and Box 1), 1 rollout, 3 timesteps")
     print("Box 0 stays at (2.0, 1.0) across all timesteps")
     print("Box 1 moves away: t=0 at (4.5, 2.5), t=1 at (5.0, 2.5), t=2 at (6.0, 2.5)")
 
-    eval_mask = np.ones(2, dtype=bool)
+    center_x = _tensor(center_x_np)
+    center_y = _tensor(center_y_np)
+    length = _tensor(length_np)
+    width = _tensor(width_np)
+    heading = _tensor(heading_np)
+    valid = _tensor(valid_np, dtype=torch.bool)
+    eval_mask = _tensor(np.ones(2, dtype=bool), dtype=torch.bool)
+
     distances = interaction_features.compute_distance_to_nearest_object(
         center_x=center_x,
         center_y=center_y,
@@ -196,6 +234,7 @@ def test_multiple_timesteps():
         evaluated_object_mask=eval_mask,
         corner_rounding_factor=0.0,
     )
+    distances = distances.cpu().numpy()
 
     print(f"  Agent 0, timestep 0: {distances[0, 0, 0]:.2f}m")
     print(f"  Agent 0, timestep 1: {distances[0, 0, 1]:.2f}m")
@@ -212,21 +251,28 @@ def test_multiple_timesteps():
 def test_rollout_isolation():
     """Test that agents from different rollouts never interact."""
 
-    center_x = np.array([[[2.0], [100.0]], [[4.5], [2.0]]])
-    center_y = np.array([[[1.0], [1.0]], [[2.5], [100.0]]])
-    length = np.ones((2, 2)) * 2.0
-    width = np.ones((2, 2)) * 1.0
-    heading = np.zeros_like(center_x)
-    valid = np.ones((2, 2, 1), dtype=bool)
+    center_x_np = np.array([[[2.0], [100.0]], [[4.5], [2.0]]])
+    center_y_np = np.array([[[1.0], [1.0]], [[2.5], [100.0]]])
+    length_np = np.ones((2, 2)) * 2.0
+    width_np = np.ones((2, 2)) * 1.0
+    heading_np = np.zeros_like(center_x_np)
+    valid_np = np.ones((2, 2, 1), dtype=bool)
 
     print("\nTest: Rollout isolation")
-    print(f"Array shapes: {center_x.shape} = (num_agents=2, num_rollouts=2, num_timesteps=1)")
+    print(f"Array shapes: {center_x_np.shape} = (num_agents=2, num_rollouts=2, num_timesteps=1)")
     print("This test uses: 2 agents (Box 0 and Box 1), 2 rollouts, 1 timestep")
     print("Rollout 0: Box 0 at (2.0, 1.0), Box 1 at (4.5, 2.5) - close together")
     print("Rollout 1: Box 0 at (100.0, 1.0), Box 1 at (2.0, 100.0) - far apart")
     print("Each agent should only see the other agent in its own rollout")
 
-    eval_mask = np.ones(2, dtype=bool)
+    center_x = _tensor(center_x_np)
+    center_y = _tensor(center_y_np)
+    length = _tensor(length_np)
+    width = _tensor(width_np)
+    heading = _tensor(heading_np)
+    valid = _tensor(valid_np, dtype=torch.bool)
+    eval_mask = _tensor(np.ones(2, dtype=bool), dtype=torch.bool)
+
     distances = interaction_features.compute_distance_to_nearest_object(
         center_x=center_x,
         center_y=center_y,
@@ -237,6 +283,7 @@ def test_rollout_isolation():
         evaluated_object_mask=eval_mask,
         corner_rounding_factor=0.0,
     )
+    distances = distances.cpu().numpy()
     print(f"  Agent 0, rollout 0: {distances[0, 0, 0]:.2f}m (should see Agent 1 rollout 0)")
     print(f"  Agent 0, rollout 1: {distances[0, 1, 0]:.2f}m (should see Agent 1 rollout 1)")
 

@@ -3,7 +3,8 @@ Adapted from: https://github.com/waymo-research/waymo-open-dataset/blob/master/s
 """
 
 import math
-import numpy as np
+import torch
+
 from pufferlib.ocean.benchmark import geometry_utils
 
 EXTREMELY_LARGE_DISTANCE = 1e10
@@ -16,15 +17,15 @@ MAXIMUM_TIME_TO_COLLISION = 5.0
 
 
 def compute_signed_distances(
-    center_x: np.ndarray,
-    center_y: np.ndarray,
-    length: np.ndarray,
-    width: np.ndarray,
-    heading: np.ndarray,
-    valid: np.ndarray,
-    evaluated_object_mask: np.ndarray = None,
+    center_x: torch.Tensor,
+    center_y: torch.Tensor,
+    length: torch.Tensor,
+    width: torch.Tensor,
+    heading: torch.Tensor,
+    valid: torch.Tensor,
+    evaluated_object_mask: torch.Tensor,
     corner_rounding_factor: float = CORNER_ROUNDING_FACTOR,
-) -> np.ndarray:
+) -> torch.Tensor:
     """Computes pairwise signed distances for all agents.
 
     Objects are represented by 2D rectangles with rounded corners.
@@ -44,45 +45,49 @@ def compute_signed_distances(
         - min_distances: Distance to nearest object, shape (num_agents, num_rollouts, num_steps)
         - all_distances: All pairwise distances, shape (num_agents, num_agents, num_rollouts, num_steps)
     """
+
     num_agents = center_x.shape[0]
     num_rollouts = center_x.shape[1]
     num_steps = center_x.shape[2]
 
-    eval_indices = np.where(evaluated_object_mask)[0]
-    other_indices = np.where(~evaluated_object_mask)[0]
-    num_eval = len(eval_indices)
+    eval_indices = torch.nonzero(evaluated_object_mask, as_tuple=False).squeeze(-1)
+    other_indices = torch.nonzero(~evaluated_object_mask, as_tuple=False).squeeze(-1)
+    num_eval = eval_indices.numel()
 
-    length = np.broadcast_to(length[..., None], (num_agents, num_rollouts, num_steps))
-    width = np.broadcast_to(width[..., None], (num_agents, num_rollouts, num_steps))
+    if length.dim() == 2:
+        length = length.unsqueeze(-1)
+    if width.dim() == 2:
+        width = width.unsqueeze(-1)
+    length = length.expand(num_agents, num_rollouts, num_steps)
+    width = width.expand(num_agents, num_rollouts, num_steps)
 
-    boxes = np.stack([center_x, center_y, length, width, heading], axis=-1)
+    boxes = torch.stack([center_x, center_y, length, width, heading], dim=-1)
 
-    shrinking_distance = np.minimum(boxes[:, :, :, 2], boxes[:, :, :, 3]) * corner_rounding_factor / 2.0
+    shrinking_distance = torch.minimum(boxes[..., 2], boxes[..., 3]) * corner_rounding_factor / 2.0
 
-    boxes = np.concatenate(
+    boxes = torch.cat(
         [
-            boxes[:, :, :, :2],
-            boxes[:, :, :, 2:3] - 2.0 * shrinking_distance[..., np.newaxis],
-            boxes[:, :, :, 3:4] - 2.0 * shrinking_distance[..., np.newaxis],
-            boxes[:, :, :, 4:],
+            boxes[..., :2],
+            boxes[..., 2:3] - 2.0 * shrinking_distance.unsqueeze(-1),
+            boxes[..., 3:4] - 2.0 * shrinking_distance.unsqueeze(-1),
+            boxes[..., 4:],
         ],
-        axis=3,
+        dim=-1,
     )
 
     boxes_flat = boxes.reshape(num_agents * num_rollouts * num_steps, 5)
     box_corners = geometry_utils.get_2d_box_corners(boxes_flat)
     box_corners = box_corners.reshape(num_agents, num_rollouts, num_steps, 4, 2)
 
-    # Reorder: eval first, then others
     eval_corners = box_corners[eval_indices]
     other_corners = box_corners[other_indices]
-    all_corners = np.concatenate([eval_corners, other_corners], axis=0)
+    all_corners = torch.cat([eval_corners, other_corners], dim=0)
 
-    corners_1 = eval_corners[:, np.newaxis, :, :, :, :]
-    corners_2 = all_corners[np.newaxis, :, :, :, :, :]
+    corners_1 = eval_corners.unsqueeze(1)
+    corners_2 = all_corners.unsqueeze(0)
 
-    corners_broadcast_1 = np.broadcast_to(corners_1, (num_eval, num_agents, num_rollouts, num_steps, 4, 2))
-    corners_broadcast_2 = np.broadcast_to(corners_2, (num_eval, num_agents, num_rollouts, num_steps, 4, 2))
+    corners_broadcast_1 = corners_1.expand(num_eval, num_agents, num_rollouts, num_steps, 4, 2)
+    corners_broadcast_2 = corners_2.expand(num_eval, num_agents, num_rollouts, num_steps, 4, 2)
 
     batch_size = num_eval * num_agents * num_rollouts * num_steps
     corners_flat_1 = corners_broadcast_1.reshape(batch_size, 4, 2)
@@ -91,44 +96,47 @@ def compute_signed_distances(
     neg_corners_2 = -1.0 * corners_flat_2
     minkowski_sum = geometry_utils.minkowski_sum_of_box_and_box_points(corners_flat_1, neg_corners_2)
 
+    query_points = torch.zeros((batch_size, 2), dtype=torch.float32, device=center_x.device)
     signed_distances_flat = geometry_utils.signed_distance_from_point_to_convex_polygon(
-        query_points=np.zeros((batch_size, 2), dtype=np.float32), polygon_points=minkowski_sum
+        query_points=query_points, polygon_points=minkowski_sum
     )
 
     signed_distances = signed_distances_flat.reshape(num_eval, num_agents, num_rollouts, num_steps)
 
-    # Reorder shrinking distances
     eval_shrinking = shrinking_distance[eval_indices]
     other_shrinking = shrinking_distance[other_indices]
-    all_shrinking = np.concatenate([eval_shrinking, other_shrinking], axis=0)
+    all_shrinking = torch.cat([eval_shrinking, other_shrinking], dim=0)
 
-    signed_distances -= eval_shrinking[:, np.newaxis, :, :]
-    signed_distances -= all_shrinking[np.newaxis, :, :, :]
+    signed_distances = signed_distances - eval_shrinking[:, None, :, :]
+    signed_distances = signed_distances - all_shrinking[None, :, :, :]
 
-    self_mask = np.eye(num_eval, num_agents, dtype=np.float32)[:, :, np.newaxis, np.newaxis]
+    self_mask = torch.eye(num_eval, num_agents, dtype=torch.float32, device=center_x.device).unsqueeze(-1).unsqueeze(-1)
     signed_distances = signed_distances + self_mask * EXTREMELY_LARGE_DISTANCE
 
-    # Validity mask (reordered)
     eval_valid = valid[eval_indices]
     other_valid = valid[other_indices]
-    all_valid = np.concatenate([eval_valid, other_valid], axis=0)
+    all_valid = torch.cat([eval_valid, other_valid], dim=0)
 
-    valid_mask = np.logical_and(eval_valid[:, np.newaxis, :, :], all_valid[np.newaxis, :, :, :])
-    signed_distances = np.where(valid_mask, signed_distances, EXTREMELY_LARGE_DISTANCE)
+    valid_mask = torch.logical_and(eval_valid[:, None, :, :], all_valid[None, :, :, :])
+    signed_distances = torch.where(
+        valid_mask,
+        signed_distances,
+        torch.full_like(signed_distances, EXTREMELY_LARGE_DISTANCE),
+    )
 
     return signed_distances
 
 
 def compute_distance_to_nearest_object(
-    center_x: np.ndarray,
-    center_y: np.ndarray,
-    length: np.ndarray,
-    width: np.ndarray,
-    heading: np.ndarray,
-    valid: np.ndarray,
-    evaluated_object_mask: np.ndarray,
+    center_x: torch.Tensor,
+    center_y: torch.Tensor,
+    length: torch.Tensor,
+    width: torch.Tensor,
+    heading: torch.Tensor,
+    valid: torch.Tensor,
+    evaluated_object_mask: torch.Tensor,
     corner_rounding_factor: float = CORNER_ROUNDING_FACTOR,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> torch.Tensor:
     signed_distances = compute_signed_distances(
         center_x=center_x,
         center_y=center_y,
@@ -140,20 +148,20 @@ def compute_distance_to_nearest_object(
         corner_rounding_factor=corner_rounding_factor,
     )
 
-    min_distances = np.min(signed_distances, axis=1)
+    min_distances = torch.min(signed_distances, dim=1).values
     return min_distances
 
 
 def compute_time_to_collision(
-    center_x: np.ndarray,
-    center_y: np.ndarray,
-    length: np.ndarray,
-    width: np.ndarray,
-    heading: np.ndarray,
-    valid: np.ndarray,
-    evaluated_object_mask: np.ndarray,
+    center_x: torch.Tensor,
+    center_y: torch.Tensor,
+    length: torch.Tensor,
+    width: torch.Tensor,
+    heading: torch.Tensor,
+    valid: torch.Tensor,
+    evaluated_object_mask: torch.Tensor,
     seconds_per_step: float,
-) -> np.ndarray:
+) -> torch.Tensor:
     """Computes time-to-collision of the evaluated objects.
 
     The time-to-collision measures, in seconds, the time until an object collides
@@ -174,128 +182,109 @@ def compute_time_to_collision(
     """
     from pufferlib.ocean.benchmark import metrics
 
+    valid = valid.to(dtype=torch.bool, device=center_x.device)
+    evaluated_object_mask = evaluated_object_mask.to(dtype=torch.bool, device=center_x.device)
+
     num_agents = center_x.shape[0]
     num_rollouts = center_x.shape[1]
     num_steps = center_x.shape[2]
 
-    eval_indices = np.where(evaluated_object_mask)[0]
-    other_indices = np.where(~evaluated_object_mask)[0]
-    num_eval = len(eval_indices)
+    eval_indices = torch.nonzero(evaluated_object_mask, as_tuple=False).squeeze(-1)
+    other_indices = torch.nonzero(~evaluated_object_mask, as_tuple=False).squeeze(-1)
+    num_eval = eval_indices.numel()
 
+    # NOTE: I know this is ugly, I will fix it another day
     speed = metrics.compute_kinematic_features(
-        x=center_x, y=center_y, heading=heading, seconds_per_step=seconds_per_step
+        x=center_x.cpu().numpy(),
+        y=center_y.cpu().numpy(),
+        heading=heading.cpu().numpy(),
+        seconds_per_step=seconds_per_step,
     )[0]
+    if not isinstance(speed, torch.Tensor):
+        speed = torch.as_tensor(speed, device=center_x.device, dtype=center_x.dtype)
 
-    length_broadcast = np.broadcast_to(length[..., None], (num_agents, num_rollouts, num_steps))
-    width_broadcast = np.broadcast_to(width[..., None], (num_agents, num_rollouts, num_steps))
+    if length.dim() == 2:
+        length = length.unsqueeze(-1)
+    if width.dim() == 2:
+        width = width.unsqueeze(-1)
+    length_broadcast = length.expand(num_agents, num_rollouts, num_steps)
+    width_broadcast = width.expand(num_agents, num_rollouts, num_steps)
 
-    boxes = np.stack([center_x, center_y, length_broadcast, width_broadcast, heading, speed], axis=-1)
-    # (num_agents, num_rollouts, num_steps, 6) -> (num_steps, num_agents, num_rollouts, 6)
-    boxes = np.transpose(boxes, (2, 0, 1, 3))
+    boxes = torch.stack([center_x, center_y, length_broadcast, width_broadcast, heading, speed], dim=-1)
+    boxes = boxes.permute(2, 0, 1, 3)
 
-    # (num_agents, num_rollouts, num_steps) -> (num_steps, num_agents, num_rollouts)
-    valid_transposed = np.transpose(valid, (2, 0, 1))
+    valid_transposed = valid.permute(2, 0, 1)
 
-    # Reorder: eval first, others second
     eval_boxes = boxes[:, eval_indices]
     other_boxes = boxes[:, other_indices]
-    all_boxes = np.concatenate([eval_boxes, other_boxes], axis=1)
+    all_boxes = torch.cat([eval_boxes, other_boxes], dim=1)
 
     eval_valid = valid_transposed[:, eval_indices]
     other_valid = valid_transposed[:, other_indices]
-    all_valid = np.concatenate([eval_valid, other_valid], axis=1)
+    all_valid = torch.cat([eval_valid, other_valid], dim=1)
 
-    # Split for eval (ego) and all (other)
-    ego_xy, ego_sizes, ego_yaw, ego_speed = np.split(eval_boxes, [2, 4, 5], axis=-1)
-    other_xy, other_sizes, other_yaw, _ = np.split(all_boxes, [2, 4, 5], axis=-1)
+    ego_xy, ego_sizes, ego_yaw, ego_speed = torch.split(eval_boxes, [2, 2, 1, 1], dim=-1)
+    other_xy, other_sizes, other_yaw, _ = torch.split(all_boxes, [2, 2, 1, 1], dim=-1)
 
-    # Compute pairwise yaw differences
-    # (num_steps, 1, num_agents, num_rollouts, 1) - (num_steps, num_agents, 1, num_rollouts, 1)
-    # -> (num_steps, num_agents, num_agents, num_rollouts, 1)
-    yaw_diff = np.abs(other_yaw[:, np.newaxis] - ego_yaw[:, :, np.newaxis])
+    yaw_diff = torch.abs(other_yaw.unsqueeze(1) - ego_yaw.unsqueeze(2))
 
-    yaw_diff_cos = np.cos(yaw_diff)
-    yaw_diff_sin = np.sin(yaw_diff)
+    yaw_diff_cos = torch.cos(yaw_diff)
+    yaw_diff_sin = torch.sin(yaw_diff)
 
-    # Longitudinal and lateral offsets from other box center to closest corner
-    # (num_steps, 1, num_agents, num_rollouts, 2) -> (num_steps, num_agents, num_agents, num_rollouts)
     other_long_offset = geometry_utils.dot_product_2d(
-        other_sizes[:, np.newaxis] / 2.0,
-        np.abs(np.concatenate([yaw_diff_cos, yaw_diff_sin], axis=-1)),
+        other_sizes.unsqueeze(1) / 2.0,
+        torch.abs(torch.cat([yaw_diff_cos, yaw_diff_sin], dim=-1)),
     )
     other_lat_offset = geometry_utils.dot_product_2d(
-        other_sizes[:, np.newaxis] / 2.0,
-        np.abs(np.concatenate([yaw_diff_sin, yaw_diff_cos], axis=-1)),
+        other_sizes.unsqueeze(1) / 2.0,
+        torch.abs(torch.cat([yaw_diff_sin, yaw_diff_cos], dim=-1)),
     )
 
-    # Transform other boxes to ego-relative coordinates
-    # (num_steps, num_agents, num_agents, num_rollouts, 2)
-    other_relative_xy = geometry_utils.rotate_2d_points(
-        (other_xy[:, np.newaxis] - ego_xy[:, :, np.newaxis]),
-        -ego_yaw[:, :, np.newaxis, :, 0],
-    )
+    relative_xy = other_xy.unsqueeze(1) - ego_xy.unsqueeze(2)
+    rotation = -ego_yaw[..., 0].unsqueeze(2).expand(-1, -1, relative_xy.shape[2], -1)
+    other_relative_xy = geometry_utils.rotate_2d_points(relative_xy, rotation)
 
-    # Longitudinal distance from ego front to other box back
-    # (num_steps, num_agents, num_agents, num_rollouts)
-    long_distance = other_relative_xy[..., 0] - ego_sizes[:, :, np.newaxis, :, 0] / 2.0 - other_long_offset
+    long_distance = other_relative_xy[..., 0] - ego_sizes[..., 0].unsqueeze(2) / 2.0 - other_long_offset
 
-    # Lateral overlap (negative means overlap exists)
-    # (num_steps, num_agents, num_agents, num_rollouts)
-    lat_overlap = np.abs(other_relative_xy[..., 1]) - ego_sizes[:, :, np.newaxis, :, 1] / 2.0 - other_lat_offset
+    lat_overlap = torch.abs(other_relative_xy[..., 1]) - ego_sizes[..., 1].unsqueeze(2) / 2.0 - other_lat_offset
 
-    # Check following criteria
-    # (num_steps, num_agents, num_agents, num_rollouts) -> (num_agents, num_agents, num_rollouts, num_steps)
     following_mask = _get_object_following_mask(
-        long_distance.transpose(1, 2, 0, 3),
-        lat_overlap.transpose(1, 2, 0, 3),
-        yaw_diff[..., 0].transpose(1, 2, 0, 3),
+        long_distance.permute(1, 2, 0, 3),
+        lat_overlap.permute(1, 2, 0, 3),
+        yaw_diff[..., 0].permute(1, 2, 0, 3),
     )
 
-    # (num_steps, num_eval, num_agents, num_rollouts)
-    valid_mask = np.logical_and(all_valid[:, np.newaxis], following_mask.transpose(2, 0, 1, 3))
-    # Mask out invalid or non-following objects with large distance
-    # (num_steps, num_agents, num_agents, num_rollouts)
-    masked_long_distance = long_distance + (1.0 - valid_mask.astype(np.float32)) * EXTREMELY_LARGE_DISTANCE
+    valid_mask = torch.logical_and(all_valid.unsqueeze(1), following_mask.permute(2, 0, 1, 3))
+    masked_long_distance = long_distance + (1.0 - valid_mask.to(torch.float32)) * EXTREMELY_LARGE_DISTANCE
 
-    # Find nearest object ahead for each ego agent
-    # (num_steps, num_agents, num_rollouts)
-    box_ahead_index = np.argmin(masked_long_distance, axis=-2)
-    distance_to_box_ahead = np.take_along_axis(masked_long_distance, box_ahead_index[:, :, np.newaxis, :], axis=-2)[
-        ..., 0, :
-    ]
+    box_ahead_index = torch.argmin(masked_long_distance, dim=-2)
+    gather_index = box_ahead_index.unsqueeze(-2)
+    distance_to_box_ahead = torch.gather(masked_long_distance, -2, gather_index).squeeze(-2)
 
-    # Get speed of the object ahead
-    # speed: (num_agents, num_rollouts, num_steps) -> (num_steps, 1, num_agents, num_rollouts)
-    # broadcasts to (num_steps, num_agents, num_agents, num_rollouts)
-    box_ahead_speed = np.take_along_axis(
-        np.broadcast_to(
-            np.transpose(speed, (2, 0, 1))[:, np.newaxis, :, :],
-            masked_long_distance.shape,
-        ),
-        box_ahead_index[:, :, np.newaxis, :],
-        axis=-2,
-    )[..., 0, :]
+    speed_transposed = speed.permute(2, 0, 1)
+    speed_eval = speed_transposed[:, eval_indices]
+    speed_other = speed_transposed[:, other_indices]
+    ordered_speed = torch.cat([speed_eval, speed_other], dim=1)
+    speed_broadcast = ordered_speed.unsqueeze(1).expand(-1, num_eval, -1, -1)
+    box_ahead_speed = torch.gather(speed_broadcast, -2, gather_index).squeeze(-2)
 
-    # Compute TTC = distance / relative_speed
-    # (num_steps, num_agents, num_rollouts)
     rel_speed = ego_speed[..., 0] - box_ahead_speed
 
-    # Trick to avoid division by zero
-    rel_speed_safe = np.where(rel_speed > 0.0, rel_speed, 1.0)
-    time_to_collision = np.where(
+    rel_speed_safe = torch.where(rel_speed > 0.0, rel_speed, torch.ones_like(rel_speed))
+    max_ttc = torch.full_like(rel_speed, MAXIMUM_TIME_TO_COLLISION)
+    time_to_collision = torch.where(
         rel_speed > 0.0,
-        np.minimum(distance_to_box_ahead / rel_speed_safe, MAXIMUM_TIME_TO_COLLISION),
-        MAXIMUM_TIME_TO_COLLISION,
+        torch.minimum(distance_to_box_ahead / rel_speed_safe, max_ttc),
+        max_ttc,
     )
-    # (num_steps, num_agents, num_rollouts) -> (num_agents, num_rollouts, num_steps)
-    return np.transpose(time_to_collision, (1, 2, 0))
+    return time_to_collision.permute(1, 2, 0)
 
 
 def _get_object_following_mask(
-    longitudinal_distance: np.ndarray,
-    lateral_overlap: np.ndarray,
-    yaw_diff: np.ndarray,
-) -> np.ndarray:
+    longitudinal_distance,
+    lateral_overlap,
+    yaw_diff,
+):
     """Checks whether objects satisfy criteria for following another object.
 
     Args:
@@ -311,11 +300,11 @@ def _get_object_following_mask(
         Shape (num_agents, num_agents, num_rollouts, num_steps)
     """
     valid_mask = longitudinal_distance > 0.0
-    valid_mask = np.logical_and(valid_mask, yaw_diff <= MAX_HEADING_DIFF)
-    valid_mask = np.logical_and(valid_mask, lateral_overlap < 0.0)
-    return np.logical_and(
+    valid_mask = torch.logical_and(valid_mask, yaw_diff <= MAX_HEADING_DIFF)
+    valid_mask = torch.logical_and(valid_mask, lateral_overlap < 0.0)
+    return torch.logical_and(
         valid_mask,
-        np.logical_or(
+        torch.logical_or(
             lateral_overlap < -SMALL_OVERLAP_THRESHOLD,
             yaw_diff <= MAX_HEADING_DIFF_FOR_SMALL_OVERLAP,
         ),
