@@ -152,20 +152,96 @@ class PuffeRL:
                 f"minibatch_size {self.minibatch_size} must be divisible by bptt_horizon {horizon}"
             )
 
-        # Torch compile
-        self.uncompiled_policy = policy
-        self.policy = policy
-        if config["compile"]:
-            self.policy = torch.compile(policy, mode=config["compile_mode"])
-            self.policy.forward_eval = torch.compile(policy, mode=config["compile_mode"])
-            pufferlib.pytorch.sample_logits = torch.compile(
-                pufferlib.pytorch.sample_logits, mode=config["compile_mode"]
-            )
+        # Adversarial mode: dual policy setup
+        self.adversarial_mode = config.get("adversarial", {}).get("adversarial_mode", False)
+
+        if self.adversarial_mode:
+            print("\n" + "="*60)
+            print("ADVERSARIAL MODE ENABLED")
+            print("="*60)
+
+            # Reference policy (frozen)
+            ref_model_path = config["adversarial"]["reference_model_path"]
+            if ref_model_path == "none" or ref_model_path is None:
+                raise pufferlib.APIUsageError("adversarial_mode=True requires reference_model_path to be set")
+
+            print(f"Loading reference policy from: {ref_model_path}")
+            ref_state_dict = torch.load(ref_model_path, map_location=device)
+            # Clean up state dict keys (remove module., policy., lstm., cell. prefixes)
+            cleaned_state_dict = {}
+            for k, v in ref_state_dict.items():
+                # Remove common prefixes
+                k = k.replace("module.", "")
+                k = k.replace("policy.", "")
+                # Skip RNN/LSTM keys if reference policy doesn't use RNN
+                if k.startswith("lstm.") or k.startswith("cell."):
+                    continue
+                cleaned_state_dict[k] = v
+            ref_state_dict = cleaned_state_dict
+            print(f"Cleaned state dict: {len(ref_state_dict)} keys")
+
+            # Create reference policy with same architecture
+            import importlib
+            package = config["package"]
+            module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+            env_module = importlib.import_module(module_name)
+            policy_cls = getattr(env_module.torch, config["policy_name"])
+
+            self.ref_policy = policy_cls(vecenv.driver_env, **config["policy"]).to(device)
+            self.ref_policy.load_state_dict(ref_state_dict)
+            self.ref_policy.eval()
+            for param in self.ref_policy.parameters():
+                param.requires_grad = False
+            print(f"Reference policy loaded and frozen (requires_grad=False)")
+
+            # Adversarial policy (trainable) - the provided policy
+            self.adv_policy = policy
+            self.uncompiled_adv_policy = policy
+            print(f"Adversarial policy created (trainable)")
+
+            # Compute agent0 indices (one per environment)
+            if hasattr(vecenv.driver_env, 'agent_offsets'):
+                self.agent_offsets = vecenv.driver_env.agent_offsets
+                self.num_envs = vecenv.driver_env.num_envs
+                self.agent0_indices = torch.tensor(
+                    [self.agent_offsets[i] for i in range(self.num_envs)],
+                    device=device, dtype=torch.int64
+                )
+                print(f"Number of environments: {self.num_envs}")
+                print(f"Agent 0 indices: {self.agent0_indices.tolist()}")
+            else:
+                raise pufferlib.APIUsageError("Adversarial mode requires vecenv.driver_env.agent_offsets")
+
+            # For compatibility, keep self.policy pointing to adv_policy
+            self.policy = self.adv_policy
+            self.uncompiled_policy = self.uncompiled_adv_policy
+
+            # Torch compile (if enabled)
+            if config["compile"]:
+                print("Warning: torch.compile with adversarial mode not fully tested. Disabling recommended.")
+                self.adv_policy = torch.compile(policy, mode=config["compile_mode"])
+                self.policy = self.adv_policy
+
+            # Optimizer only trains adversarial policy
+            trainable_params = self.adv_policy.parameters()
+
+        else:
+            # Normal single-policy mode
+            self.uncompiled_policy = policy
+            self.policy = policy
+            if config["compile"]:
+                self.policy = torch.compile(policy, mode=config["compile_mode"])
+                self.policy.forward_eval = torch.compile(policy, mode=config["compile_mode"])
+                pufferlib.pytorch.sample_logits = torch.compile(
+                    pufferlib.pytorch.sample_logits, mode=config["compile_mode"]
+                )
+
+            trainable_params = self.policy.parameters()
 
         # Optimizer
         if config["optimizer"] == "adam":
             optimizer = torch.optim.Adam(
-                self.policy.parameters(),
+                trainable_params,
                 lr=config["learning_rate"],
                 betas=(config["adam_beta1"], config["adam_beta2"]),
                 eps=config["adam_eps"],
@@ -178,7 +254,7 @@ class PuffeRL:
 
             heavyball.utils.compile_mode = config["compile_mode"] if config["compile"] else None
             optimizer = ForeachMuon(
-                self.policy.parameters(),
+                trainable_params,
                 lr=config["learning_rate"],
                 betas=(config["adam_beta1"], config["adam_beta2"]),
                 eps=config["adam_eps"],
@@ -187,6 +263,10 @@ class PuffeRL:
             raise ValueError(f"Unknown optimizer: {config['optimizer']}")
 
         self.optimizer = optimizer
+
+        if self.adversarial_mode:
+            print(f"Optimizer created for adversarial policy only")
+            print("="*60 + "\n")
 
         # Logging
         self.logger = logger
