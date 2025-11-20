@@ -256,6 +256,7 @@ struct Drive {
     int control_non_vehicles;
     // Metadata fields
     char scenario_id[128];
+    int map_index;
     char dataset_name[64];
     int log_length;
     int sdc_index;
@@ -512,6 +513,7 @@ int load_map_binary(const char* filename, Drive* drive) {
     }
 
     fread(drive->scenario_id, sizeof(char), 128, file);
+    fread(&drive->map_index, sizeof(int), 1, file);
     fread(drive->dataset_name, sizeof(char), 64, file);
     fread(&drive->log_length, sizeof(int), 1, file);
     fread(&drive->sdc_index, sizeof(int), 1, file);
@@ -1802,7 +1804,7 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
         int agent_idx = env->active_agent_indices[i];
         DynamicAgent* agent = &env->dynamic_agents[agent_idx];
         id_out[i] = env->tracks_to_predict[i];
-        scenario_id_out[i] = 0; //agent->scenario_id;
+        scenario_id_out[i] = env->map_index;
 
         for(int t = env->init_steps; t < agent->trajectory_length; t++){
             int out_idx = i * (agent->trajectory_length - env->init_steps) + (t - env->init_steps);
