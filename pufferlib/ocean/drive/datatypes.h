@@ -28,7 +28,7 @@
 
 #define CROSSWALK 31
 #define SPEED_BUMP 32
-#define DRIVEWAY 34
+#define DRIVEWAY 33
 
 // -- TRAFFIC CONTROL TYPE
 #define TRAFFIC_LIGHT 1
@@ -51,6 +51,10 @@ int is_road_line(int type){
 
 int is_road_edge(int type){
     return (type >= 20 && type <= 29);
+}
+
+int is_road(int type){
+    return is_road_lane(type) || is_road_line(type) || is_road_edge(type);
 }
 
 int is_controllable_agent(int type){

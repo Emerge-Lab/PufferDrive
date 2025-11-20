@@ -712,6 +712,7 @@ void init_grid_map(Drive* env){
     int first_valid_point = 0;
     for(int i = 0; i < env->num_road_elements; i++){
         // Check all points in the geometry for road elements (ROAD_LANE, ROAD_LINE, ROAD_EDGE)
+        if (!is_road(env->road_elements[i].type)) continue;
         RoadMapElement* element = &env->road_elements[i];
         for(int j = 0; j < element->segment_length; j++){
             if(element->x[j] == INVALID_POSITION) continue;
