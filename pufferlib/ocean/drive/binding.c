@@ -92,7 +92,52 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-        env->entities = load_map_binary(map_file, env);
+        load_map_binary(map_file, env);
+
+        // Skip map if it contains traffic lights
+        bool has_traffic_light = false;
+        for(int j=0; j<env->num_traffic_elements; j++) {
+            if(env->traffic_elements[j].type == TRAFFIC_LIGHT) {
+                has_traffic_light = true;
+                break;
+            }
+        }
+        if(has_traffic_light) {
+            maps_checked++;
+
+            // Safeguard: if we've checked all available maps and all have traffic lights, raise an error
+            if(maps_checked >= num_maps) {
+                for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+                for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+                for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+                free(env->agents);
+                free(env->road_elements);
+                free(env->traffic_elements);
+                free(env->active_agent_indices);
+                free(env->static_agent_indices);
+                free(env->expert_static_agent_indices);
+                free(env);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                sprintf(error_msg, "All %d available maps contain traffic lights which are not supported", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
+            }
+
+            for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+            for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+            for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+            free(env->agents);
+            free(env->road_elements);
+            free(env->traffic_elements);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env);
+            continue;
+        }
+
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
@@ -101,10 +146,12 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 
             // Safeguard: if we've checked all available maps and found no active agents, raise an error
             if(maps_checked >= num_maps) {
-                for(int j=0;j<env->num_entities;j++) {
-                    free_entity(&env->entities[j]);
-                }
-                free(env->entities);
+                for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+                for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+                for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+                free(env->agents);
+                free(env->road_elements);
+                free(env->traffic_elements);
                 free(env->active_agent_indices);
                 free(env->static_agent_indices);
                 free(env->expert_static_agent_indices);
@@ -117,16 +164,18 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
                 return NULL;
             }
 
-            for(int j=0;j<env->num_entities;j++) {
-                free_entity(&env->entities[j]);
-            }
-            free(env->entities);
+            for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+            for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+            for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+            free(env->agents);
+            free(env->road_elements);
+            free(env->traffic_elements);
             free(env->active_agent_indices);
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
             free(env);
             continue;
-          }
+        }
 
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);
@@ -136,10 +185,12 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         PyList_SetItem(agent_offsets, env_count, offset);
         total_agent_count += env->active_agent_count;
         env_count++;
-        for(int j=0;j<env->num_entities;j++) {
-            free_entity(&env->entities[j]);
-        }
-        free(env->entities);
+        for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+        for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+        for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+        free(env->agents);
+        free(env->road_elements);
+        free(env->traffic_elements);
         free(env->active_agent_indices);
         free(env->static_agent_indices);
         free(env->expert_static_agent_indices);
@@ -197,7 +248,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
     char map_file[100];
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-    env->num_agents = max_agents;
+    env->num_max_agents = max_agents;
     env->map_name = strdup(map_file);
     env->init_steps = init_steps;
     env->timestep = init_steps;

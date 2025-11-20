@@ -104,10 +104,10 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
         Vector3 prev_point = {0};
         bool has_prev = false;
 
-        for(int j = 0; j < env->entities[idx].array_size; j++){
-            float x = env->entities[idx].traj_x[j];
-            float y = env->entities[idx].traj_y[j];
-            float valid = env->entities[idx].traj_valid[j];
+        for(int j = 0; j < env->agents[idx].trajectory_length; j++){
+            float x = env->agents[idx].log_trajectory_x[j];
+            float y = env->agents[idx].log_trajectory_y[j];
+            float valid = env->agents[idx].log_valid[j];
 
             if(!valid) {
                 has_prev = false;
@@ -142,20 +142,20 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
 void renderAgentView(Drive* env, Client* client, int map_height, int obs_only, int lasers, int show_grid) {
     // Agent perspective camera following the selected agent
     int agent_idx = env->active_agent_indices[env->human_agent_idx];
-    Entity* agent = &env->entities[agent_idx];
+    Agent* agent = &env->agents[agent_idx];
 
     BeginDrawing();
 
     Camera3D camera = {0};
     // Position camera behind and above the agent
     camera.position = (Vector3){
-        agent->x - (25.0f * cosf(agent->heading)),
-        agent->y - (25.0f * sinf(agent->heading)),
+        agent->sim_x - (25.0f * cosf(agent->sim_heading)),
+        agent->sim_y - (25.0f * sinf(agent->sim_heading)),
         15.0f
     };
     camera.target = (Vector3){
-        agent->x + 40.0f * cosf(agent->heading),
-        agent->y + 40.0f * sinf(agent->heading),
+        agent->sim_x + 40.0f * cosf(agent->sim_heading),
+        agent->sim_y + 40.0f * sinf(agent->sim_heading),
         1.0f
     };
     camera.up = (Vector3){ 0.0f, 0.0f, 1.0f };
