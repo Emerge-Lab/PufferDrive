@@ -104,10 +104,10 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
         Vector3 prev_point = {0};
         bool has_prev = false;
 
-        for(int j = 0; j < env->dynamic_agents[idx].trajectory_length; j++){
-            float x = env->dynamic_agents[idx].log_trajectory_x[j];
-            float y = env->dynamic_agents[idx].log_trajectory_y[j];
-            float valid = env->dynamic_agents[idx].log_valid[j];
+        for(int j = 0; j < env->agents[idx].trajectory_length; j++){
+            float x = env->agents[idx].log_trajectory_x[j];
+            float y = env->agents[idx].log_trajectory_y[j];
+            float valid = env->agents[idx].log_valid[j];
 
             if(!valid) {
                 has_prev = false;
@@ -142,7 +142,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
 void renderAgentView(Drive* env, Client* client, int map_height, int obs_only, int lasers, int show_grid) {
     // Agent perspective camera following the selected agent
     int agent_idx = env->active_agent_indices[env->human_agent_idx];
-    DynamicAgent* agent = &env->dynamic_agents[agent_idx];
+    Agent* agent = &env->agents[agent_idx];
 
     BeginDrawing();
 

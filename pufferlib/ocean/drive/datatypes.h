@@ -87,7 +87,7 @@ int unnormalize_road_type(int norm_type){
 
 
 
-struct DynamicAgent {
+struct Agent {
     int id;
     int type;
 
@@ -185,7 +185,7 @@ struct TrafficControlElement {
     int controlled_lane;
 };
 
-void free_dynamic_agent(struct DynamicAgent* agent){
+void free_agent(struct Agent* agent){
     free(agent->log_trajectory_x);
     free(agent->log_trajectory_y);
     free(agent->log_trajectory_z);
