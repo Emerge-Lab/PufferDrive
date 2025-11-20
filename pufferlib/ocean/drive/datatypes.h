@@ -206,5 +206,3 @@ void free_road_element(struct RoadMapElement* element){
 void free_traffic_element(struct TrafficControlElement* element){
     free(element->states);
 }
-
-
