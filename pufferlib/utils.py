@@ -159,7 +159,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {e}")
 
 
-def render_videos(config, vecenv, logger, global_step, bin_path):
+def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
     """
     Generate and log training videos using C-based rendering.
 
