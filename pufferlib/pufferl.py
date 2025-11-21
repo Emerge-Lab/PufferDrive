@@ -129,13 +129,6 @@ class PuffeRL:
         if self.render:
             ensure_drive_binary()
 
-        # LSTM
-        if config["use_rnn"]:
-            n = vecenv.agents_per_batch
-            h = policy.hidden_size
-            self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
-            self.lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
-
         # Minibatching & gradient accumulation
         minibatch_size = config["minibatch_size"]
         max_minibatch_size = config["max_minibatch_size"]
@@ -160,9 +153,9 @@ class PuffeRL:
         self.adversarial_mode = config.get("adversarial", {}).get("adversarial_mode", False)
 
         if self.adversarial_mode:
-            print("\n" + "="*60)
+            print("\n" + "=" * 60)
             print("ADVERSARIAL MODE ENABLED")
-            print("="*60)
+            print("=" * 60)
 
             # Reference policy (frozen)
             ref_model_path = config["adversarial"]["reference_model_path"]
@@ -176,22 +169,33 @@ class PuffeRL:
             for k, v in ref_state_dict.items():
                 # Remove common prefixes
                 k = k.replace("module.", "")
-                k = k.replace("policy.", "")
-                # Skip RNN/LSTM keys if reference policy doesn't use RNN
-                if k.startswith("lstm.") or k.startswith("cell."):
-                    continue
+
+                # If not using RNN, strip policy wrapper prefixes and skip RNN weights
+                if not config["use_rnn"]:
+                    k = k.replace("policy.", "")
+                    if k.startswith("lstm.") or k.startswith("cell."):
+                        continue
+
                 cleaned_state_dict[k] = v
             ref_state_dict = cleaned_state_dict
             print(f"Cleaned state dict: {len(ref_state_dict)} keys")
 
             # Create reference policy with same architecture
             import importlib
+
             package = config["package"]
             module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
             env_module = importlib.import_module(module_name)
             policy_cls = getattr(env_module.torch, config["policy_name"])
 
             self.ref_policy = policy_cls(vecenv.driver_env, **config["policy"]).to(device)
+
+            # Wrap with RNN if configured
+            if config["use_rnn"]:
+                rnn_name = config["rnn_name"]
+                rnn_cls = getattr(env_module.torch, rnn_name)
+                self.ref_policy = rnn_cls(vecenv.driver_env, self.ref_policy, **config["rnn"]).to(device)
+
             self.ref_policy.load_state_dict(ref_state_dict)
             self.ref_policy.eval()
             for param in self.ref_policy.parameters():
@@ -204,12 +208,11 @@ class PuffeRL:
             print(f"Adversarial policy created (trainable)")
 
             # Compute agent0 indices (one per environment)
-            if hasattr(vecenv.driver_env, 'agent_offsets'):
+            if hasattr(vecenv.driver_env, "agent_offsets"):
                 self.agent_offsets = vecenv.driver_env.agent_offsets
                 self.num_envs = vecenv.driver_env.num_envs
                 self.agent0_indices = torch.tensor(
-                    [self.agent_offsets[i] for i in range(self.num_envs)],
-                    device=device, dtype=torch.int64
+                    [self.agent_offsets[i] for i in range(self.num_envs)], device=device, dtype=torch.int64
                 )
                 print(f"Number of environments: {self.num_envs}")
                 print(f"Agent 0 indices: {self.agent0_indices.tolist()}")
@@ -270,7 +273,24 @@ class PuffeRL:
 
         if self.adversarial_mode:
             print(f"Optimizer created for adversarial policy only")
-            print("="*60 + "\n")
+            print("=" * 60 + "\n")
+
+        # LSTM Initialization (moved after adversarial setup to handle dual policies)
+        if config["use_rnn"]:
+            n = vecenv.agents_per_batch
+            # Main/Adversarial policy LSTM states
+            h = self.policy.hidden_size
+            self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+            self.lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+
+            # Reference policy LSTM states (for adversarial mode)
+            if self.adversarial_mode:
+                h_ref = self.ref_policy.hidden_size
+                self.ref_lstm_h = {i * n: torch.zeros(n, h_ref, device=device) for i in range(total_agents // n)}
+                self.ref_lstm_c = {i * n: torch.zeros(n, h_ref, device=device) for i in range(total_agents // n)}
+                # We also alias adv_lstm to the main lstm for clarity in code
+                self.adv_lstm_h = self.lstm_h
+                self.adv_lstm_c = self.lstm_c
 
         # Logging
         self.logger = logger
@@ -330,8 +350,13 @@ class PuffeRL:
 
         if config["use_rnn"]:
             for k in self.lstm_h:
-                self.lstm_h[k] = torch.zeros(self.lstm_h[k].shape, device=device)
-                self.lstm_c[k] = torch.zeros(self.lstm_c[k].shape, device=device)
+                self.lstm_h[k].zero_()
+                self.lstm_c[k].zero_()
+
+            if self.adversarial_mode:
+                for k in self.ref_lstm_h:
+                    self.ref_lstm_h[k].zero_()
+                    self.ref_lstm_c[k].zero_()
 
         self.full_rows = 0
         while self.full_rows < self.segments:
@@ -359,7 +384,7 @@ class PuffeRL:
                     mask=mask,
                 )
 
-                if config["use_rnn"]:
+                if config["use_rnn"] and not self.adversarial_mode:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
@@ -367,12 +392,11 @@ class PuffeRL:
                 if self.adversarial_mode:
                     # Refresh agent0_indices in case of environment resampling
                     # (agent_offsets can change when envs resample maps)
-                    if hasattr(self.vecenv.driver_env, 'agent_offsets'):
+                    if hasattr(self.vecenv.driver_env, "agent_offsets"):
                         self.agent_offsets = self.vecenv.driver_env.agent_offsets
                         self.num_envs = self.vecenv.driver_env.num_envs
                         self.agent0_indices = torch.tensor(
-                            [self.agent_offsets[i] for i in range(self.num_envs)],
-                            device=device, dtype=torch.int64
+                            [self.agent_offsets[i] for i in range(self.num_envs)], device=device, dtype=torch.int64
                         )
 
                     # Determine which agents in current batch are agent0
@@ -387,15 +411,32 @@ class PuffeRL:
                     logprob = torch.zeros(batch_size, device=device)
                     value = torch.zeros(batch_size, device=device)
 
+                    # Prepare LSTM states if needed
+                    if config["use_rnn"]:
+                        h_ref_batch = self.ref_lstm_h[env_id.start]
+                        c_ref_batch = self.ref_lstm_c[env_id.start]
+                        h_adv_batch = self.adv_lstm_h[env_id.start]
+                        c_adv_batch = self.adv_lstm_c[env_id.start]
+
                     # Forward agent0 observations through reference policy
                     # Note: we need to set 'logits' variable for action clipping check later (line 452)
                     logits = None
                     if agent0_mask.any():
                         o_ref = o_device[agent0_mask]
                         state_ref = {k: v for k, v in state.items()}  # Copy state dict
-                        # Use forward() method (Drive policy doesn't have forward_eval)
-                        logits_ref, value_ref = self.ref_policy(o_ref, state_ref)
+
+                        if config["use_rnn"]:
+                            state_ref["lstm_h"] = h_ref_batch[agent0_mask]
+                            state_ref["lstm_c"] = c_ref_batch[agent0_mask]
+
+                        # Use forward_eval() method
+                        logits_ref, value_ref = self.ref_policy.forward_eval(o_ref, state_ref)
                         action_ref, logprob_ref, _ = pufferlib.pytorch.sample_logits(logits_ref)
+
+                        if config["use_rnn"]:
+                            # Update reference LSTM states
+                            h_ref_batch[agent0_mask] = state_ref["lstm_h"]
+                            c_ref_batch[agent0_mask] = state_ref["lstm_c"]
 
                         # Place ref policy outputs in correct positions
                         # Note: action keeps its shape from sample_logits, just ensure correct dtype
@@ -409,9 +450,19 @@ class PuffeRL:
                     if (~agent0_mask).any():
                         o_adv = o_device[~agent0_mask]
                         state_adv = {k: v for k, v in state.items()}  # Copy state dict
-                        # Use forward() method (Drive policy doesn't have forward_eval)
-                        logits_adv, value_adv = self.adv_policy(o_adv, state_adv)
+
+                        if config["use_rnn"]:
+                            state_adv["lstm_h"] = h_adv_batch[~agent0_mask]
+                            state_adv["lstm_c"] = c_adv_batch[~agent0_mask]
+
+                        # Use forward_eval() method
+                        logits_adv, value_adv = self.adv_policy.forward_eval(o_adv, state_adv)
                         action_adv, logprob_adv, _ = pufferlib.pytorch.sample_logits(logits_adv)
+
+                        if config["use_rnn"]:
+                            # Update adversarial LSTM states
+                            h_adv_batch[~agent0_mask] = state_adv["lstm_h"]
+                            c_adv_batch[~agent0_mask] = state_adv["lstm_c"]
 
                         # Place adv policy outputs in correct positions
                         # Note: action keeps its shape from sample_logits, just ensure correct dtype
@@ -453,7 +504,7 @@ class PuffeRL:
 
             profile("eval_copy", epoch)
             with torch.no_grad():
-                if config["use_rnn"]:
+                if config["use_rnn"] and not self.adversarial_mode:
                     self.lstm_h[env_id.start] = state["lstm_h"]
                     self.lstm_c[env_id.start] = state["lstm_c"]
 
@@ -801,8 +852,8 @@ class PuffeRL:
         # Save checkpoint (dual policy if adversarial mode, single policy otherwise)
         if self.adversarial_mode:
             checkpoint = {
-                'ref_policy': self.ref_policy.state_dict(),
-                'adv_policy': self.uncompiled_adv_policy.state_dict(),
+                "ref_policy": self.ref_policy.state_dict(),
+                "adv_policy": self.uncompiled_adv_policy.state_dict(),
             }
             torch.save(checkpoint, model_path)
         else:
@@ -1535,9 +1586,9 @@ def load_policy(args, vecenv, env_name=""):
         checkpoint = torch.load(load_path, map_location=device)
 
         # Check if this is a dual-policy checkpoint (adversarial mode)
-        if isinstance(checkpoint, dict) and 'adv_policy' in checkpoint:
+        if isinstance(checkpoint, dict) and "adv_policy" in checkpoint:
             # Loading from adversarial checkpoint - use adv_policy
-            state_dict = checkpoint['adv_policy']
+            state_dict = checkpoint["adv_policy"]
         else:
             # Single-policy checkpoint
             state_dict = checkpoint
