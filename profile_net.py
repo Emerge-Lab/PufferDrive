@@ -4,6 +4,7 @@
 import time
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 import torch
 from torch.backends import cudnn
@@ -66,18 +67,34 @@ class LinearMax(torch.nn.Module):
         return LinearMaxKernels.apply(x, self.weight, self.bias)
 
 
-class LinearMaxTwoLayer(torch.nn.Module):
-    def __init__(self, input_dim, hidden_size, output_size):
+class LinearReluMaxKernel(torch.autograd.Function):
+    """Custom kernel: Linear -> ReLU -> Max"""
+
+    @staticmethod
+    def forward(ctx, x, weight, bias):
+        out = torch.ops.pufferlib.linear_relu_max(x, weight, bias)
+        ctx.save_for_backward(x, weight, bias)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        x, weight, bias = ctx.saved_tensors
+        grad_x, grad_weight, grad_bias = torch.ops.pufferlib.linear_relu_max_backward(
+            grad_out.contiguous(), x, weight, bias
+        )
+        return grad_x, grad_weight, grad_bias
+
+
+class FusedLinearReluMax(nn.Module):
+    """Fused CUDA kernel: Linear -> ReLU -> Max"""
+
+    def __init__(self, input_size, hidden_size):
         super().__init__()
-        self.linear_max = LinearMax(input_dim, hidden_size)
-        self.ln = nn.LayerNorm(hidden_size)
-        self.linear2 = nn.Linear(hidden_size, output_size)
+        self.weight = nn.Parameter(torch.empty(hidden_size, input_size).normal_(mean=0.0, std=input_size**-0.5))
+        self.bias = nn.Parameter(torch.zeros(hidden_size))
 
     def forward(self, x):
-        x = self.linear_max(x)
-        x = self.ln(x)
-        x = self.linear2(x)
-        return x
+        return LinearReluMaxKernel.apply(x, self.weight, self.bias)
 
 
 def check_cuda_correct(model, cuda_model, data):
@@ -145,13 +162,10 @@ if __name__ == "__main__":
     data = torch.randn(num_iters, B, N, D).to(device)
 
     pointwise = PointwiseNet(D, H).to(device)
-    # concat = ConcatNet(D, N, H).to(device)
     linear_max = LinearMax(D, H).to(device)
-    linear_max_two_layer = LinearMaxTwoLayer(D, H, H).to(device)
     original_linear_max = OriginalLinearMax(D, H).to(device)
 
-    # Test custom kernel
-    check_cuda_correct(pointwise, linear_max, data)
+    linear_relu_max = FusedLinearReluMax(D, H).to(device)
 
     print(
         f"Pointwise: Forward ({profile_forward(pointwise, data):,.2f}), backward ({profile_backward(pointwise, data):,.2f})"
@@ -162,7 +176,8 @@ if __name__ == "__main__":
     print(
         f"Cuda Linear Max: Forward ({profile_forward(linear_max, data):,.2f}), backward ({profile_backward(linear_max, data):,.2f})"
     )
+    print()
+
     print(
-        f"Cuda Linear Max + Linear: Forward ({profile_forward(linear_max_two_layer, data):,.2f}), "
-        f"backward ({profile_backward(linear_max_two_layer, data):,.2f})"
+        f"Cuda Linear ReLU Max: Forward ({profile_forward(linear_relu_max, data):,.2f}), backward ({profile_backward(linear_relu_max, data):,.2f})"
     )

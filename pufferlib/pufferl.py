@@ -460,9 +460,6 @@ class PuffeRL:
             profile("learn", epoch)
 
             loss.backward()
-            # print(f'after loss backward [ego_encoder]: {self.policy.policy.ego_encoder[0].weight[0,:3]}')
-            # print(f'after loss backward [road_encoder]: {self.policy.policy.road_encoder[0].weight[0,:3]}')
-            # breakpoint()
 
             if (mb + 1) % self.accumulate_minibatches == 0:
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
