@@ -5,7 +5,12 @@
 ENV=$1
 MODE=${2:-local}
 PLATFORM="$(uname -s)"
-SRC_DIR="pufferlib/ocean/$ENV"
+
+if [ "$ENV" = "visualize" ]; then
+    SRC_DIR="pufferlib/ocean/drive"
+else
+    SRC_DIR="pufferlib/ocean/$ENV"
+fi
 WEB_OUTPUT_DIR="build_web/$ENV"
 RAYLIB_NAME='raylib-5.5_macos'
 BOX2D_NAME='box2d-macos-arm64'
@@ -81,7 +86,9 @@ FLAGS=(
     -I./$BOX2D_NAME/include
     -I./$BOX2D_NAME/src
     -I./pufferlib/extensions
+    -I./inih-r62
     "$SRC_DIR/$ENV.c" -o "$ENV"
+    ./inih-r62/ini.c
     $LINK_ARCHIVES
     -lm
     -lpthread

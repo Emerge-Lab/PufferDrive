@@ -1,14 +1,11 @@
-name: render-ci
+name: perf-ci
 
 on:
   pull_request:
     branches: [ main ]
-  push:
-    branches: [ main ]
 
 jobs:
-  test-render:
-    name: test-render - ubuntu-latest
+  test-performance:
     runs-on: ubuntu-latest
 
     steps:
@@ -32,28 +29,15 @@ jobs:
           sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
           echo "After cleanup:"
           df -h
-
-      - name: Install system dependencies for headless rendering
+      - name: Install dependencies
         run: |
-          sudo apt update
-          sudo apt install -y ffmpeg xvfb build-essential
-
-      - name: Upgrade pip
-        run: python -m pip install -U pip
-
-      - name: Install pufferlib
-        run: |
-          pip install -e .[cpu] --no-cache-dir
-        env:
-          TMPDIR: ${{ runner.temp }}/build
-          PIP_NO_CACHE_DIR: 1
-
-      - name: Compile C extensions
-        run: python setup.py build_ext --inplace --force
-
+          sudo apt update && sudo apt install -y build-essential
+          python -m pip install -U pip
+          python -m pip install -e .
+          python setup.py build_ext --inplace --force
       - name: Check disk space (after install)
         run: df -h
 
-      - name: Run render test
-        run: python tests/test_drive_render.py
-        timeout-minutes: 15
+      - name: Test simulator performance
+        run: python tests/test_simulator_perf.py
+        timeout-minutes: 20

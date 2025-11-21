@@ -1,4 +1,4 @@
-name: render-ci
+name: Unit tests
 
 on:
   pull_request:
@@ -7,10 +7,9 @@ on:
     branches: [ main ]
 
 jobs:
-  test-render:
-    name: test-render - ubuntu-latest
+  test:
+    name: test
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -19,9 +18,6 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
-
-      - name: Check disk space (before cleanup)
-        run: df -h
 
       - name: Free up disk space
         run: |
@@ -33,10 +29,9 @@ jobs:
           echo "After cleanup:"
           df -h
 
-      - name: Install system dependencies for headless rendering
+      - name: Install dependencies
         run: |
-          sudo apt update
-          sudo apt install -y ffmpeg xvfb build-essential
+          sudo apt-get update && sudo apt-get install -y build-essential cmake
 
       - name: Upgrade pip
         run: python -m pip install -U pip
@@ -51,9 +46,10 @@ jobs:
       - name: Compile C extensions
         run: python setup.py build_ext --inplace --force
 
-      - name: Check disk space (after install)
-        run: df -h
+      - name: Run C ini parsing tests
+        run: |
+          chmod +x tests/ini_parser/build_n_test.sh
+          ./tests/ini_parser/build_n_test.sh
 
-      - name: Run render test
-        run: python tests/test_drive_render.py
-        timeout-minutes: 15
+      - name: Run python ini parsing tests
+        run: python tests/test_drive_config.py
