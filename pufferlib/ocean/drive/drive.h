@@ -601,7 +601,6 @@ Entity* load_map_binary(const char* filename, Drive* env) {
 
         env->num_objects = env->conf.num_agents_per_world;
         env->num_entities = env->num_objects + env->num_roads;
-        printf("Initializing environment with %d agents, %d roads, %d total entities\n", env->num_objects, env->num_roads, env->num_entities);
         Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
 
         // Only initialize road entities
@@ -614,7 +613,6 @@ Entity* load_map_binary(const char* filename, Drive* env) {
                 env_entity_idx++;
             }
         }
-        printf("Loaded %d road entities into environment\n", env_entity_idx);
 
         while (env_entity_idx < env->num_entities) {
             entities[env_entity_idx].type = VEHICLE;   // Placeholder type for non-road entities
@@ -895,7 +893,6 @@ void init_agents_random_start(Drive* env) {
         //     agent.width, agent.length, agent.height
         // );
     }
-    printf("Completed random start position initialization for all agents.\n");
 
     free(rel_neighbor_offsets);
 }
