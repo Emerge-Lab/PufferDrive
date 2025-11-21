@@ -114,7 +114,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             "--eval.wosac-init-mode",
             str(eval_config.get("wosac_init_mode", "create_all_valid")),
             "--eval.wosac-control-mode",
-            str(eval_config.get("wosac_control_mode", "control_tracks_to_predict")),
+            str(eval_config.get("wosac_control_mode", "control_wosac")),
             "--eval.wosac-init-steps",
             str(eval_config.get("wosac_init_steps", 10)),
             "--eval.wosac-goal-behavior",
@@ -151,12 +151,20 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
                         step=global_step,
                     )
         else:
-            print(f"WOSAC evaluation failed with exit code {result.returncode}: {result.stderr}")
+            print(f"WOSAC evaluation failed with exit code {result.returncode}")
+            print(f"Error: {result.stderr}")
+
+            # Check for memory issues
+            stderr_lower = result.stderr.lower()
+            if "out of memory" in stderr_lower or "cuda out of memory" in stderr_lower:
+                print("GPU out of memory. Skipping this WOSAC evaluation.")
 
     except subprocess.TimeoutExpired:
-        print("WOSAC evaluation timed out")
+        print("WOSAC evaluation timed out after 600 seconds")
+    except MemoryError as e:
+        print(f"WOSAC evaluation ran out of memory. Skipping this evaluation: {e}")
     except Exception as e:
-        print(f"Failed to run WOSAC evaluation: {e}")
+        print(f"Failed to run WOSAC evaluation: {type(e).__name__}: {e}")
 
 
 def render_videos(config, vecenv, logger, epoch, global_step, bin_path):

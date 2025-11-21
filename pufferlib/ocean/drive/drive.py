@@ -80,13 +80,13 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 0
         elif self.control_mode_str == "control_agents":
             self.control_mode = 1
-        elif self.control_mode_str == "control_tracks_to_predict":
+        elif self.control_mode_str == "control_wosac":
             self.control_mode = 2
         elif self.control_mode_str == "control_sdc_only":
             self.control_mode = 3
         else:
             raise ValueError(
-                f"control_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.control_mode_str}"
+                f"control_mode must be one of 'control_vehicles', 'control_wosac', or 'control_agents'. Got: {self.control_mode_str}"
             )
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
@@ -255,7 +255,7 @@ class Drive(pufferlib.PufferEnv):
         """Get current global state of all active agents.
 
         Returns:
-            dict with keys 'x', 'y', 'z', 'heading', 'id' containing numpy arrays
+            dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
             of shape (num_active_agents,)
         """
         num_agents = self.num_agents
@@ -266,10 +266,19 @@ class Drive(pufferlib.PufferEnv):
             "z": np.zeros(num_agents, dtype=np.float32),
             "heading": np.zeros(num_agents, dtype=np.float32),
             "id": np.zeros(num_agents, dtype=np.int32),
+            "length": np.zeros(num_agents, dtype=np.float32),
+            "width": np.zeros(num_agents, dtype=np.float32),
         }
 
         binding.vec_get_global_agent_state(
-            self.c_envs, states["x"], states["y"], states["z"], states["heading"], states["id"]
+            self.c_envs,
+            states["x"],
+            states["y"],
+            states["z"],
+            states["heading"],
+            states["id"],
+            states["length"],
+            states["width"],
         )
 
         return states
@@ -307,6 +316,32 @@ class Drive(pufferlib.PufferEnv):
             trajectories[key] = trajectories[key][:, None]
 
         return trajectories
+
+    def get_road_edge_polylines(self):
+        """Get road edge polylines for all scenarios.
+
+        Returns:
+            dict with keys 'x', 'y', 'lengths', 'scenario_id' containing numpy arrays.
+            x, y are flattened point coordinates; lengths indicates points per polyline.
+        """
+        num_polylines, total_points = binding.vec_get_road_edge_counts(self.c_envs)
+
+        polylines = {
+            "x": np.zeros(total_points, dtype=np.float32),
+            "y": np.zeros(total_points, dtype=np.float32),
+            "lengths": np.zeros(num_polylines, dtype=np.int32),
+            "scenario_id": np.zeros(num_polylines, dtype=np.int32),
+        }
+
+        binding.vec_get_road_edge_polylines(
+            self.c_envs,
+            polylines["x"],
+            polylines["y"],
+            polylines["lengths"],
+            polylines["scenario_id"],
+        )
+
+        return polylines
 
     def render(self):
         binding.vec_render(self.c_envs, 0)
