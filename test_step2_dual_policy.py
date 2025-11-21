@@ -46,7 +46,8 @@ if __name__ == '__main__':
         adversarial=config["adversarial"],
         package=config["package"],
         policy_name=config["policy_name"],
-        policy=config["policy"]
+        policy=config["policy"],
+        eval=config["eval"]
     )
     try:
         pufferl = PuffeRL(train_config, vecenv, adv_policy)

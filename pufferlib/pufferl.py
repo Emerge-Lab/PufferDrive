@@ -116,6 +116,10 @@ class PuffeRL:
         self.truncations = torch.zeros(segments, horizon, device=device)
         self.ratio = torch.ones(segments, horizon, device=device)
         self.importance = torch.ones(segments, horizon, device=device)
+
+        # Track agent IDs for adversarial masking during training
+        self.agent_id_buffer = torch.zeros(segments, horizon, device=device, dtype=torch.int64)
+
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
@@ -359,9 +363,93 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                logits, value = self.policy.forward_eval(o_device, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                # Split forward pass for adversarial mode
+                if self.adversarial_mode:
+                    # Refresh agent0_indices in case of environment resampling
+                    # (agent_offsets can change when envs resample maps)
+                    if hasattr(self.vecenv.driver_env, 'agent_offsets'):
+                        self.agent_offsets = self.vecenv.driver_env.agent_offsets
+                        self.num_envs = self.vecenv.driver_env.num_envs
+                        self.agent0_indices = torch.tensor(
+                            [self.agent_offsets[i] for i in range(self.num_envs)],
+                            device=device, dtype=torch.int64
+                        )
+
+                    # Determine which agents in current batch are agent0
+                    batch_indices = torch.arange(env_id.start, env_id.stop, device=device)
+                    agent0_mask = torch.isin(batch_indices, self.agent0_indices)
+
+                    # Initialize output tensors with correct shapes
+                    batch_size = len(o_device)
+                    # Action shape matches action space (includes action dimensions)
+                    action_shape = (batch_size,) + tuple(self.vecenv.single_action_space.shape)
+                    action = torch.zeros(action_shape, dtype=torch.long, device=device)
+                    logprob = torch.zeros(batch_size, device=device)
+                    value = torch.zeros(batch_size, device=device)
+
+                    # Forward agent0 observations through reference policy
+                    # Note: we need to set 'logits' variable for action clipping check later (line 452)
+                    logits = None
+                    if agent0_mask.any():
+                        o_ref = o_device[agent0_mask]
+                        state_ref = {k: v for k, v in state.items()}  # Copy state dict
+                        # Use forward() method (Drive policy doesn't have forward_eval)
+                        logits_ref, value_ref = self.ref_policy(o_ref, state_ref)
+                        action_ref, logprob_ref, _ = pufferlib.pytorch.sample_logits(logits_ref)
+
+                        # Place ref policy outputs in correct positions
+                        # Note: action keeps its shape from sample_logits, just ensure correct dtype
+                        action[agent0_mask] = action_ref.to(action.dtype)
+                        logprob[agent0_mask] = logprob_ref
+                        value[agent0_mask] = value_ref.flatten()
+
+                        logits = logits_ref  # Save for type check later
+
+                    # Forward adversarial observations through adversarial policy
+                    if (~agent0_mask).any():
+                        o_adv = o_device[~agent0_mask]
+                        state_adv = {k: v for k, v in state.items()}  # Copy state dict
+                        # Use forward() method (Drive policy doesn't have forward_eval)
+                        logits_adv, value_adv = self.adv_policy(o_adv, state_adv)
+                        action_adv, logprob_adv, _ = pufferlib.pytorch.sample_logits(logits_adv)
+
+                        # Place adv policy outputs in correct positions
+                        # Note: action keeps its shape from sample_logits, just ensure correct dtype
+                        action[~agent0_mask] = action_adv.to(action.dtype)
+                        logprob[~agent0_mask] = logprob_adv
+                        value[~agent0_mask] = value_adv.flatten()
+
+                        if logits is None:  # If no agent0 in batch, use adv logits for type check
+                            logits = logits_adv
+
+                else:
+                    # Original single-policy forward pass
+                    logits, value = self.policy.forward_eval(o_device, state)
+                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+
                 r = torch.clamp(r, -1, 1)
+
+                # Adversarial reward modification: assign -agent0_reward to other agents in same env
+                if self.adversarial_mode:
+                    # Loop through each environment
+                    for env_idx in range(self.num_envs):
+                        agent0_global_idx = self.agent0_indices[env_idx]
+
+                        # Check if this environment's agent0 is in the current batch
+                        if env_id.start <= agent0_global_idx < env_id.stop:
+                            # Find agent0's position in the current batch
+                            agent0_batch_pos = agent0_global_idx - env_id.start
+                            agent0_reward = r[agent0_batch_pos].item()
+
+                            # Find all agents from this environment in the current batch
+                            env_start = self.agent_offsets[env_idx]
+                            env_end = self.agent_offsets[env_idx + 1]
+
+                            # Assign -agent0_reward to all adversarial agents in this env
+                            for global_idx in range(env_start, env_end):
+                                if env_id.start <= global_idx < env_id.stop and global_idx != agent0_global_idx:
+                                    batch_pos = global_idx - env_id.start
+                                    r[batch_pos] = -agent0_reward
 
             profile("eval_copy", epoch)
             with torch.no_grad():
@@ -383,6 +471,10 @@ class PuffeRL:
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = d.float()
                 self.values[batch_rows, l] = value.flatten()
+
+                # Store agent IDs for adversarial masking during training
+                agent_ids = torch.arange(env_id.start, env_id.stop, device=device)
+                self.agent_id_buffer[batch_rows, l] = agent_ids
 
                 # Note: We are not yet handling masks in this version
                 self.ep_lengths[env_id] += 1
@@ -468,9 +560,15 @@ class PuffeRL:
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
 
+            # Sample agent IDs for adversarial masking
+            mb_agent_ids = self.agent_id_buffer[idx]
+
             profile("train_forward", epoch)
             if not config["use_rnn"]:
                 mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
+                mb_agent_ids_flat = mb_agent_ids.reshape(-1)
+            else:
+                mb_agent_ids_flat = mb_agent_ids
 
             state = dict(
                 action=mb_actions,
@@ -478,7 +576,13 @@ class PuffeRL:
                 lstm_c=None,
             )
 
-            logits, newvalue = self.policy(mb_obs, state)
+            # In adversarial mode, only train adv_policy (ref_policy is frozen)
+            if self.adversarial_mode:
+                policy_to_train = self.adv_policy
+            else:
+                policy_to_train = self.policy
+
+            logits, newvalue = policy_to_train(mb_obs, state)
             actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
 
             profile("train_misc", epoch)
@@ -507,18 +611,43 @@ class PuffeRL:
             adv = mb_advantages
             adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
-            # Losses
+            # Create loss weight mask for adversarial mode
+            # Agent0 samples get zero weight, adversarial agents get full weight
+            if self.adversarial_mode:
+                is_agent0 = torch.isin(mb_agent_ids_flat, self.agent0_indices)
+                loss_weight = (~is_agent0).float()
+                # Reshape to match minibatch shape
+                loss_weight = loss_weight.view(mb_logprobs.shape)
+            else:
+                loss_weight = torch.ones_like(mb_logprobs)
+
+            # Losses (weighted by mask in adversarial mode)
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+            pg_loss_unweighted = torch.max(pg_loss1, pg_loss2)
+            # Apply weight and compute mean over non-zero weights
+            if self.adversarial_mode and loss_weight.sum() > 0:
+                pg_loss = (pg_loss_unweighted * loss_weight).sum() / loss_weight.sum()
+            else:
+                pg_loss = pg_loss_unweighted.mean()
 
             newvalue = newvalue.view(mb_returns.shape)
             v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
-            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+            v_loss_unweighted = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
+            # Apply weight and compute mean over non-zero weights
+            if self.adversarial_mode and loss_weight.sum() > 0:
+                v_loss = (v_loss_unweighted * loss_weight).sum() / loss_weight.sum()
+            else:
+                v_loss = v_loss_unweighted.mean()
 
-            entropy_loss = entropy.mean()
+            # Entropy loss (also weighted)
+            entropy_per_sample = entropy.view(mb_logprobs.shape)
+            if self.adversarial_mode and loss_weight.sum() > 0:
+                entropy_loss = (entropy_per_sample * loss_weight).sum() / loss_weight.sum()
+            else:
+                entropy_loss = entropy_per_sample.mean()
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
@@ -669,7 +798,15 @@ class PuffeRL:
         if os.path.exists(model_path):
             return model_path
 
-        torch.save(self.uncompiled_policy.state_dict(), model_path)
+        # Save checkpoint (dual policy if adversarial mode, single policy otherwise)
+        if self.adversarial_mode:
+            checkpoint = {
+                'ref_policy': self.ref_policy.state_dict(),
+                'adv_policy': self.uncompiled_adv_policy.state_dict(),
+            }
+            torch.save(checkpoint, model_path)
+        else:
+            torch.save(self.uncompiled_policy.state_dict(), model_path)
 
         state = {
             "optimizer_state_dict": self.optimizer.state_dict(),
@@ -1395,7 +1532,16 @@ def load_policy(args, vecenv, env_name=""):
         load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
 
     if load_path is not None:
-        state_dict = torch.load(load_path, map_location=device)
+        checkpoint = torch.load(load_path, map_location=device)
+
+        # Check if this is a dual-policy checkpoint (adversarial mode)
+        if isinstance(checkpoint, dict) and 'adv_policy' in checkpoint:
+            # Loading from adversarial checkpoint - use adv_policy
+            state_dict = checkpoint['adv_policy']
+        else:
+            # Single-policy checkpoint
+            state_dict = checkpoint
+
         state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
         policy.load_state_dict(state_dict)
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
