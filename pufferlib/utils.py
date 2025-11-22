@@ -159,7 +159,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {e}")
 
 
-def render_videos(config, vecenv, logger, global_step, bin_path):
+def render_videos(config, vecenv, logger, global_step, bin_path, epoch=None, max_distance_to_goal=None):
     """
     Generate and log training videos using C-based rendering.
 
@@ -220,6 +220,12 @@ def render_videos(config, vecenv, logger, global_step, bin_path):
             cmd.extend(["--init-mode", str(vecenv.driver_env.init_mode)])
         if vecenv.driver_env.control_mode is not None:
             cmd.extend(["--control-mode", str(vecenv.driver_env.control_mode)])
+        if getattr(vecenv.driver_env, "goal_sampling_mode", None) is not None:
+            cmd.extend(["--goal-sampling-mode", str(vecenv.driver_env.goal_sampling_mode)])
+        if max_distance_to_goal is None:
+            max_distance_to_goal = getattr(vecenv.driver_env, "max_distance_to_goal", None)
+        if max_distance_to_goal is not None:
+            cmd.extend(["--max-distance-to-goal", str(max_distance_to_goal)])
 
         # Specify output paths for videos
         cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
@@ -241,7 +247,7 @@ def render_videos(config, vecenv, logger, global_step, bin_path):
                 cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
 
         # Call C code that runs eval_gif() in subprocess
-        result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env)
+        result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env)
 
         vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
             "resources/drive/output_agent.mp4"

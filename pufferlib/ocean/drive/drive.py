@@ -5,6 +5,7 @@ import struct
 import os
 import pufferlib
 from pufferlib.ocean.drive import binding
+from pufferlib.ocean.drive.curriculum import GoalCurriculum
 
 
 class Drive(pufferlib.PufferEnv):
@@ -39,6 +40,11 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         goal_sampling_mode="fixed_from_dataset",
         max_distance_to_goal=100.0,
+        goal_curriculum_start_distance=5.0,
+        goal_curriculum_end_distance=None,
+        goal_curriculum_steps=5,
+        goal_curriculum_schedule="linear",
+        goal_curriculum_total_timesteps=None,
     ):
         # env
         self.dt = dt
@@ -59,6 +65,12 @@ class Drive(pufferlib.PufferEnv):
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
         self.max_distance_to_goal = max_distance_to_goal
+        self.goal_curriculum_start_distance = goal_curriculum_start_distance
+        self.goal_curriculum_end_distance = goal_curriculum_end_distance
+        self.goal_curriculum_steps = goal_curriculum_steps
+        self.goal_curriculum_schedule = goal_curriculum_schedule
+        self.goal_curriculum_total_timesteps = goal_curriculum_total_timesteps
+        self.goal_curriculum = None
 
         # Observation space calculation
         if dynamics_model == "classic":
@@ -107,9 +119,17 @@ class Drive(pufferlib.PufferEnv):
             self.goal_sampling_mode = 1
         elif goal_sampling_mode == "randomized_curriculum":
             self.goal_sampling_mode = 2
-            self.goal_curriculum = np.linspace(5.0, max_distance_to_goal, num=5)
-            self.curriculum_step = 0
-            self.max_distance_to_goal = self.goal_curriculum[self.curriculum_step]
+            end_distance = goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            self.goal_curriculum = GoalCurriculum(
+                start_distance=goal_curriculum_start_distance,
+                end_distance=end_distance,
+                steps=goal_curriculum_steps,
+                schedule=goal_curriculum_schedule,
+                total_timesteps=goal_curriculum_total_timesteps,
+            )
+            self.max_distance_to_goal = self.goal_curriculum.current_distance
+            self.goal_curriculum_step_interval = self.goal_curriculum.step_interval
+            self.goal_curriculum_total_timesteps = self.goal_curriculum.total_timesteps
 
         else:
             raise ValueError(
@@ -214,81 +234,100 @@ class Drive(pufferlib.PufferEnv):
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
+
         info = []
         if self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs)
+            log = binding.vec_log(self.c_envs) or {}
+            if self.goal_sampling_mode == 2 and self.goal_curriculum is not None:
+                log.update(
+                    {
+                        "max_distance_to_goal": float(self.max_distance_to_goal),
+                        "goal_curriculum_step": int(self.goal_curriculum.current_idx),
+                        "goal_curriculum_agent_steps": self.goal_curriculum.agent_steps,
+                    }
+                )
             if log:
                 info.append(log)
-                # print(log)
+
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
-            # TODO: Separate goal curriculum logic from resampling logic
-            if self.goal_sampling_mode == 2:  # randomized_curriculum
-                # Clamp curriculum_step to valid range
-                idx = np.clip(self.curriculum_step, 0, len(self.goal_curriculum) - 1)
+            if self.goal_sampling_mode == 2 and self.goal_curriculum is not None:
+                if self.goal_curriculum.step_interval is None:
+                    self.goal_curriculum.advance_one_stage()
+                self.max_distance_to_goal = self.goal_curriculum.current_distance
 
-                # Update max distance based on the curriculum
-                self.max_distance_to_goal = self.goal_curriculum[idx]
-                # print(f"Resampling with max_distance_to_goal: {self.max_distance_to_goal}")
-
-                # Advance curriculum step
-                self.curriculum_step += 1
-
-            self.tick = 0
-            will_resample = 1
-            if will_resample:
-                binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(
-                    num_agents=self.num_agents,
-                    num_maps=self.num_maps,
+            binding.vec_close(self.c_envs)
+            agent_offsets, map_ids, num_envs = binding.shared(
+                num_agents=self.num_agents,
+                num_maps=self.num_maps,
+                init_mode=self.init_mode,
+                control_mode=self.control_mode,
+                init_steps=self.init_steps,
+                max_controlled_agents=self.max_controlled_agents,
+                goal_behavior=self.goal_behavior,
+                goal_sampling_mode=self.goal_sampling_mode,
+                max_distance_to_goal=self.max_distance_to_goal,
+            )
+            env_ids = []
+            seed = np.random.randint(0, 2**32 - 1)
+            for i in range(num_envs):
+                cur = agent_offsets[i]
+                nxt = agent_offsets[i + 1]
+                env_id = binding.env_init(
+                    self.observations[cur:nxt],
+                    self.actions[cur:nxt],
+                    self.rewards[cur:nxt],
+                    self.terminals[cur:nxt],
+                    self.truncations[cur:nxt],
+                    seed,
+                    action_type=self._action_type_flag,
+                    human_agent_idx=self.human_agent_idx,
+                    reward_vehicle_collision=self.reward_vehicle_collision,
+                    reward_offroad_collision=self.reward_offroad_collision,
+                    reward_goal=self.reward_goal,
+                    reward_goal_post_respawn=self.reward_goal_post_respawn,
+                    reward_ade=self.reward_ade,
+                    goal_radius=self.goal_radius,
+                    goal_behavior=self.goal_behavior,
+                    collision_behavior=self.collision_behavior,
+                    offroad_behavior=self.offroad_behavior,
+                    dt=self.dt,
+                    scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
+                    max_controlled_agents=self.max_controlled_agents,
+                    map_id=map_ids[i],
+                    max_agents=nxt - cur,
+                    ini_file="pufferlib/config/ocean/drive.ini",
+                    init_steps=self.init_steps,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
-                    init_steps=self.init_steps,
-                    max_controlled_agents=self.max_controlled_agents,
-                    goal_behavior=self.goal_behavior,
                     goal_sampling_mode=self.goal_sampling_mode,
                     max_distance_to_goal=self.max_distance_to_goal,
                 )
-                env_ids = []
-                seed = np.random.randint(0, 2**32 - 1)
-                for i in range(num_envs):
-                    cur = agent_offsets[i]
-                    nxt = agent_offsets[i + 1]
-                    env_id = binding.env_init(
-                        self.observations[cur:nxt],
-                        self.actions[cur:nxt],
-                        self.rewards[cur:nxt],
-                        self.terminals[cur:nxt],
-                        self.truncations[cur:nxt],
-                        seed,
-                        action_type=self._action_type_flag,
-                        human_agent_idx=self.human_agent_idx,
-                        reward_vehicle_collision=self.reward_vehicle_collision,
-                        reward_offroad_collision=self.reward_offroad_collision,
-                        reward_goal=self.reward_goal,
-                        reward_goal_post_respawn=self.reward_goal_post_respawn,
-                        reward_ade=self.reward_ade,
-                        goal_radius=self.goal_radius,
-                        goal_behavior=self.goal_behavior,
-                        collision_behavior=self.collision_behavior,
-                        offroad_behavior=self.offroad_behavior,
-                        dt=self.dt,
-                        scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
-                        max_controlled_agents=self.max_controlled_agents,
-                        map_id=map_ids[i],
-                        max_agents=nxt - cur,
-                        ini_file="pufferlib/config/ocean/drive.ini",
-                        init_steps=self.init_steps,
-                        init_mode=self.init_mode,
-                        control_mode=self.control_mode,
-                        goal_sampling_mode=self.goal_sampling_mode,
-                        max_distance_to_goal=self.max_distance_to_goal,
-                    )
-                    env_ids.append(env_id)
-                self.c_envs = binding.vectorize(*env_ids)
+                env_ids.append(env_id)
+            self.c_envs = binding.vectorize(*env_ids)
 
-                binding.vec_reset(self.c_envs, seed)
-                self.terminals[:] = 1
+            binding.vec_reset(self.c_envs, seed)
+            self.terminals[:] = 1
+            self.tick = 0
+
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+    def set_curriculum_progress(self, agent_steps):
+        """Force curriculum progress based on global agent-step count."""
+        if self.goal_sampling_mode != 2 or self.goal_curriculum is None:
+            return
+        try:
+            agent_steps_int = int(agent_steps)
+        except (TypeError, ValueError):
+            return
+        self.goal_curriculum.agent_steps = max(0, agent_steps_int)
+        if self.goal_curriculum.step_interval is not None:
+            target_idx = min(
+                self.goal_curriculum.agent_steps // self.goal_curriculum.step_interval,
+                len(self.goal_curriculum.distances) - 1,
+            )
+            if target_idx != self.goal_curriculum.current_idx:
+                self.goal_curriculum.current_idx = target_idx
+                self.max_distance_to_goal = self.goal_curriculum.current_distance
 
     def get_global_agent_state(self):
         """Get current global state of all active agents.
@@ -418,8 +457,6 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(struct.pack("i", track_index))
 
         # Count total entities
-        print(len(map_data.get("objects", [])))
-        print(len(map_data.get("roads", [])))
         num_objects = len(map_data.get("objects", []))
         num_roads = len(map_data.get("roads", []))
         # num_entities = num_objects + num_roads

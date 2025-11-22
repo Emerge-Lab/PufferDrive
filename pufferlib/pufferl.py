@@ -513,7 +513,15 @@ class PuffeRL:
                             path=bin_path,
                             silent=True,
                         )
-                        pufferlib.utils.render_videos(self.config, self.vecenv, self.logger, self.global_step, bin_path)
+                        pufferlib.utils.render_videos(
+                            self.config,
+                            self.vecenv,
+                            self.logger,
+                            self.global_step,
+                            bin_path,
+                            epoch=self.epoch,
+                            max_distance_to_goal=self.stats.get("max_distance_to_goal"),
+                        )
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
@@ -554,6 +562,11 @@ class PuffeRL:
             # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
+
+        # Push global agent-steps to the env curriculum so pacing matches training progress
+        driver_env = getattr(self.vecenv, "driver_env", None)
+        if driver_env is not None and hasattr(driver_env, "set_curriculum_progress"):
+            driver_env.set_curriculum_progress(agent_steps)
 
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:
@@ -1278,7 +1291,12 @@ def load_env(env_name, args):
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
     make_env = env_module.env_creator(env_name)
-    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **args["vec"])
+    env_kwargs = dict(args["env"])
+    total_steps = env_kwargs.get("goal_curriculum_total_timesteps")
+    if isinstance(total_steps, str) and total_steps.lower() == "auto":
+        env_kwargs["goal_curriculum_total_timesteps"] = args["train"].get("total_timesteps")
+
+    return pufferlib.vector.make(make_env, env_kwargs=env_kwargs, **args["vec"])
 
 
 def load_policy(args, vecenv, env_name=""):

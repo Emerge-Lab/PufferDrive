@@ -28,7 +28,7 @@ typedef struct
     int init_mode;
     int control_mode;
     int goal_sampling_mode;
-    int max_distance_to_goal;
+    float max_distance_to_goal;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
