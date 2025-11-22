@@ -349,10 +349,18 @@ class Drive(pufferlib.PufferEnv):
         """Collect and save expert trajectories with bptt_horizon length sequences."""
         trajectory_length = 91
 
-        # TODO: Map these to the new joint action space
+        # Check for unsupported dynamics models
+        if self.dynamics_model == "jerk":
+            raise NotImplementedError(
+                "Expert data collection is not yet implemented for jerk dynamics model. "
+                "Only classic dynamics model is currently supported."
+            )
 
-        # Collect full expert trajectories - both discrete and continuous
-        expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
+        # Collect full expert trajectories - discrete is now (T, N) for joint actions
+        # Joint discrete action space: single integer per agent
+        expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 1), dtype=np.float32)
+
+        # Continuous actions are always (T, N, 2)
         expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
         expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
 
@@ -364,12 +372,13 @@ class Drive(pufferlib.PufferEnv):
         num_sequences = min(self.num_agents, max_expert_sequences)
 
         # Preallocate sequences
-        discrete_sequences = np.zeros((num_sequences, bptt_horizon, 2), dtype=np.float32)
+        discrete_sequences = np.zeros((num_sequences, bptt_horizon, 1), dtype=np.float32)
         continuous_sequences = np.zeros((num_sequences, bptt_horizon, 2), dtype=np.float32)
         obs_sequences = np.zeros((num_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
 
         # Take one sequence per agent (starting from timestep 0)
         for agent_idx in range(num_sequences):
+            # For joint discrete, reshape to (bptt_horizon, 1)
             discrete_sequences[agent_idx] = expert_actions_discrete[:bptt_horizon, agent_idx, :]
             continuous_sequences[agent_idx] = expert_actions_continuous[:bptt_horizon, agent_idx, :]
             obs_sequences[agent_idx] = expert_observations_full[:bptt_horizon, agent_idx, :]
@@ -402,7 +411,13 @@ class Drive(pufferlib.PufferEnv):
                 (discrete_actions, continuous_actions, observations)
             If return_both=False:
                 (actions, observations) where actions match the env's action type
+
+        Note:
+            For classic discrete actions, the shape is (n_samples, bptt_horizon, 1) for joint actions.
+            For continuous actions, the shape is always (n_samples, bptt_horizon, 2).
+            Jerk dynamics model is not currently supported for expert data.
         """
+
         discrete_path = os.path.join(self.human_data_dir, f"expert_actions_discrete_h{self.bptt_horizon}.pt")
         continuous_path = os.path.join(self.human_data_dir, f"expert_actions_continuous_h{self.bptt_horizon}.pt")
         observations_path = os.path.join(self.human_data_dir, f"expert_observations_h{self.bptt_horizon}.pt")
@@ -424,28 +439,6 @@ class Drive(pufferlib.PufferEnv):
             else:  # discrete
                 actions = torch.load(discrete_path, map_location="cpu")[indices]
             return actions, sampled_obs
-
-    def compute_realism_metrics(self, discrete_actions, continuous_actions):
-        """Compute realism metrics from expert action samples.
-
-        Args:
-            discrete_actions: Tensor of shape (n_samples, bptt_horizon, 2) with discrete actions
-            continuous_actions: Tensor of shape (n_samples, bptt_horizon, 2) with continuous actions
-
-        Returns:
-            Dictionary with realism metrics.
-        """
-        metrics = {}
-
-        with torch.no_grad():
-            # Flatten along the bptt_horizon
-            continuous_accel = continuous_actions[:, :, 0].flatten()
-            continuous_steer = continuous_actions[:, :, 1].flatten()
-
-            metrics["expert_accel_histogram"] = continuous_accel.cpu().numpy()
-            metrics["expert_steer_histogram"] = continuous_steer.cpu().numpy()
-
-        return metrics
 
     def get_road_edge_polylines(self):
         """Get road edge polylines for all scenarios.

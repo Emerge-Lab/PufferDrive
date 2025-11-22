@@ -2414,7 +2414,8 @@ void c_step(Drive* env){
 }
 
 void c_collect_expert_data(Drive* env, float* expert_actions_discrete_out, float* expert_actions_continuous_out, float* expert_obs_out) {
-    int max_obs = 7 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
 
     int original_timestep = env->timestep;
 
@@ -2436,7 +2437,7 @@ void c_collect_expert_data(Drive* env, float* expert_actions_discrete_out, float
                 expert_actions_continuous_out[continuous_offset] = continuous_accel;
                 expert_actions_continuous_out[continuous_offset + 1] = continuous_steer;
 
-                // Discretize and store discrete actions
+                // Discretize acceleration - find closest value in ACCELERATION_VALUES
                 int best_accel_idx = 0;
                 float min_accel_diff = fabsf(continuous_accel - ACCELERATION_VALUES[0]);
                 for (int j = 1; j < 7; j++) {
@@ -2458,9 +2459,13 @@ void c_collect_expert_data(Drive* env, float* expert_actions_discrete_out, float
                     }
                 }
 
-                int discrete_offset = t * env->active_agent_count * 2 + i * 2;
-                expert_actions_discrete_out[discrete_offset] = (float)best_accel_idx;
-                expert_actions_discrete_out[discrete_offset + 1] = (float)best_steer_idx;
+                // Compute joint discrete action: action = accel_idx * num_steer + steer_idx
+                int num_steer = 13;
+                int joint_action = best_accel_idx * num_steer + best_steer_idx;
+
+                // Store joint discrete action as single element (matching MultiDiscrete([91]))
+                int discrete_offset = t * env->active_agent_count + i;
+                expert_actions_discrete_out[discrete_offset] = (float)joint_action;
             }
         }
 

@@ -427,10 +427,8 @@ class PuffeRL:
                 human_observations = human_observations.to(device)
 
                 # Use helper function to compute realism metrics
-                realism_metrics = self.vecenv.driver_env.compute_realism_metrics(
-                    discrete_human_actions, continuous_human_actions
-                )
-                self.realism.update(realism_metrics)
+                self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
+                self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
 
                 # Select appropriate action type for training
                 use_continuous = self.vecenv.driver_env._action_type_flag == 1
@@ -610,14 +608,14 @@ class PuffeRL:
         }
 
         for k, v in self.realism.items():
-            if k.endswith("_histogram"):
-                if hasattr(self.logger, "wandb") and self.logger.wandb:
-                    import wandb
+            # if k.endswith("_histogram"):
+            #     if hasattr(self.logger, "wandb") and self.logger.wandb:
+            #         import wandb
 
-                    metric_name = k.replace("_histogram", "")
-                    logs[f"realism/{metric_name}"] = wandb.Histogram(v)
-            else:
-                logs[f"realism/{k}"] = v
+            #         metric_name = k.replace("_histogram", "")
+            #         logs[f"eval/{metric_name}"] = wandb.Histogram(v)
+            # else:
+            logs[f"eval/{k}"] = v
 
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:
