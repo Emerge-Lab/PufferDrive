@@ -1466,6 +1466,50 @@ void remove_bad_trajectories(Drive* env){
     env->timestep = 0;
 }
 
+static int find_forward_projection_on_lane(Entity* lane, Entity* agent, int* out_segment_idx, float* out_fraction) {
+    int best_idx = -1;
+    float best_dist_sq = 1e30f;
+
+    for (int i = 1; i < lane->array_size; i++) {
+        float x0 = lane->traj_x[i - 1];
+        float y0 = lane->traj_y[i - 1];
+        float x1 = lane->traj_x[i];
+        float y1 = lane->traj_y[i];
+        float dx = x1 - x0;
+        float dy = y1 - y0;
+        float seg_len_sq = dx * dx + dy * dy;
+        if (seg_len_sq < 1e-6f) continue;
+
+        float to_agent_x = agent->x - x0;
+        float to_agent_y = agent->y - y0;
+        float t = (to_agent_x * dx + to_agent_y * dy) / seg_len_sq;
+        if (t < 0.0f) t = 0.0f;
+        else if (t > 1.0f) t = 1.0f;
+
+        float proj_x = x0 + t * dx;
+        float proj_y = y0 + t * dy;
+
+        float rel_x = proj_x - agent->x;
+        float rel_y = proj_y - agent->y;
+        float forward = rel_x * agent->heading_x + rel_y * agent->heading_y;
+        if (forward < 0.0f) continue;
+
+        float dist_sq = rel_x * rel_x + rel_y * rel_y;
+        if (dist_sq < best_dist_sq) {
+            best_dist_sq = dist_sq;
+            best_idx = i;
+            *out_fraction = t;
+        }
+    }
+
+    if (best_idx != -1) {
+        *out_segment_idx = best_idx;
+        return 1;
+    }
+
+    return 0;
+}
+
 
 void compute_new_goal(Drive* env, int agent_idx) {
     Entity* agent = &env->entities[agent_idx];
@@ -2005,51 +2049,6 @@ void compute_observations(Drive* env) {
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
     }
 }
-
-static int find_forward_projection_on_lane(Entity* lane, Entity* agent, int* out_segment_idx, float* out_fraction) {
-    int best_idx = -1;
-    float best_dist_sq = 1e30f;
-
-    for (int i = 1; i < lane->array_size; i++) {
-        float x0 = lane->traj_x[i - 1];
-        float y0 = lane->traj_y[i - 1];
-        float x1 = lane->traj_x[i];
-        float y1 = lane->traj_y[i];
-        float dx = x1 - x0;
-        float dy = y1 - y0;
-        float seg_len_sq = dx * dx + dy * dy;
-        if (seg_len_sq < 1e-6f) continue;
-
-        float to_agent_x = agent->x - x0;
-        float to_agent_y = agent->y - y0;
-        float t = (to_agent_x * dx + to_agent_y * dy) / seg_len_sq;
-        if (t < 0.0f) t = 0.0f;
-        else if (t > 1.0f) t = 1.0f;
-
-        float proj_x = x0 + t * dx;
-        float proj_y = y0 + t * dy;
-
-        float rel_x = proj_x - agent->x;
-        float rel_y = proj_y - agent->y;
-        float forward = rel_x * agent->heading_x + rel_y * agent->heading_y;
-        if (forward < 0.0f) continue;
-
-        float dist_sq = rel_x * rel_x + rel_y * rel_y;
-        if (dist_sq < best_dist_sq) {
-            best_dist_sq = dist_sq;
-            best_idx = i;
-            *out_fraction = t;
-        }
-    }
-
-    if (best_idx != -1) {
-        *out_segment_idx = best_idx;
-        return 1;
-    }
-
-    return 0;
-}
-
 
 void c_reset(Drive* env){
     env->timestep = env->init_steps;
