@@ -561,7 +561,9 @@ class PuffeRL:
                             path=bin_path,
                             silent=True,
                         )
-                        pufferlib.utils.render_videos(self.config, self.vecenv, self.logger, self.global_step, bin_path)
+                        pufferlib.utils.render_videos(
+                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
+                        )
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
@@ -1121,12 +1123,20 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         # Roll out trained policy in the simulator
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
 
+        print(f"\nCollected trajectories on {len(np.unique(gt_trajectories['scenario_id']))} scenarios.")
+
         if args["eval"]["wosac_sanity_check"]:
             evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
 
         # Analyze and compute metrics
+        agent_state = vecenv.driver_env.get_global_agent_state()
+        road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
         results = evaluator.compute_metrics(
-            gt_trajectories, simulated_trajectories, args["eval"]["wosac_aggregate_results"]
+            gt_trajectories,
+            simulated_trajectories,
+            agent_state,
+            road_edge_polylines,
+            args["eval"]["wosac_aggregate_results"],
         )
 
         if args["eval"]["wosac_aggregate_results"]:

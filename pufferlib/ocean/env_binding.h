@@ -614,8 +614,8 @@ static PyObject* vec_close(PyObject* self, PyObject* args) {
 }
 
 static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 5) {
-        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 5 arguments");
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 7 arguments");
         return NULL;
     }
 
@@ -632,10 +632,13 @@ static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
     PyObject* z_arr = PyTuple_GetItem(args, 3);
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
     PyObject* id_arr = PyTuple_GetItem(args, 5);
+    PyObject* length_arr = PyTuple_GetItem(args, 6);
+    PyObject* width_arr = PyTuple_GetItem(args, 7);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
         !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(id_arr)) {
+        !PyArray_Check(id_arr) || !PyArray_Check(length_arr) ||
+        !PyArray_Check(width_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -645,14 +648,16 @@ static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
     float* z_data = (float*)PyArray_DATA((PyArrayObject*)z_arr);
     float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
     int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
+    float* length_data = (float*)PyArray_DATA((PyArrayObject*)length_arr);
+    float* width_data = (float*)PyArray_DATA((PyArrayObject*)width_arr);
 
-    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data);
+    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data, length_data, width_data);
 
     Py_RETURN_NONE;
 }
 static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 6 arguments");
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 8 arguments");
         return NULL;
     }
 
@@ -667,10 +672,13 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     PyObject* z_arr = PyTuple_GetItem(args, 3);
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
     PyObject* id_arr = PyTuple_GetItem(args, 5);
+    PyObject* length_arr = PyTuple_GetItem(args, 6);
+    PyObject* width_arr = PyTuple_GetItem(args, 7);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
         !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(id_arr)) {
+        !PyArray_Check(id_arr) || !PyArray_Check(length_arr) ||
+        !PyArray_Check(width_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -680,6 +688,8 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     PyArrayObject* z_array = (PyArrayObject*)z_arr;
     PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
     PyArrayObject* id_array = (PyArrayObject*)id_arr;
+    PyArrayObject* length_array = (PyArrayObject*)length_arr;
+    PyArrayObject* width_array = (PyArrayObject*)width_arr;
 
     // Get base pointers to the arrays
     float* x_base = (float*)PyArray_DATA(x_array);
@@ -687,6 +697,8 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     float* z_base = (float*)PyArray_DATA(z_array);
     float* heading_base = (float*)PyArray_DATA(heading_array);
     int* id_base = (int*)PyArray_DATA(id_array);
+    float* length_base = (float*)PyArray_DATA(length_array);
+    float* width_base = (float*)PyArray_DATA(width_array);
 
     // Iterate through environments and write to correct offsets
     int offset = 0;
@@ -699,7 +711,9 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
                                 &y_base[offset],
                                 &z_base[offset],
                                 &heading_base[offset],
-                                &id_base[offset]);
+                                &id_base[offset],
+                                &length_base[offset],
+                                &width_base[offset]);
 
         // Move offset forward by the number of agents in this environment
         offset += drive->active_agent_count;
@@ -821,6 +835,60 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
 
     Py_RETURN_NONE;
 }
+
+static PyObject* vec_get_road_edge_counts(PyObject* self, PyObject* args) {
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) return NULL;
+
+    int total_polylines = 0, total_points = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive* drive = (Drive*)vec->envs[i];
+        int np, tp;
+        c_get_road_edge_counts(drive, &np, &tp);
+        total_polylines += np;
+        total_points += tp;
+    }
+    return Py_BuildValue("(ii)", total_polylines, total_points);
+}
+
+static PyObject* vec_get_road_edge_polylines(PyObject* self, PyObject* args) {
+    if (PyTuple_Size(args) != 5) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_road_edge_polylines requires 5 arguments");
+        return NULL;
+    }
+
+    VecEnv* vec = unpack_vecenv(args);
+    if (!vec) return NULL;
+
+    PyObject* x_arr = PyTuple_GetItem(args, 1);
+    PyObject* y_arr = PyTuple_GetItem(args, 2);
+    PyObject* lengths_arr = PyTuple_GetItem(args, 3);
+    PyObject* scenario_ids_arr = PyTuple_GetItem(args, 4);
+
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
+        !PyArray_Check(lengths_arr) || !PyArray_Check(scenario_ids_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+        return NULL;
+    }
+
+    float* x_base = (float*)PyArray_DATA((PyArrayObject*)x_arr);
+    float* y_base = (float*)PyArray_DATA((PyArrayObject*)y_arr);
+    int* lengths_base = (int*)PyArray_DATA((PyArrayObject*)lengths_arr);
+    int* scenario_ids_base = (int*)PyArray_DATA((PyArrayObject*)scenario_ids_arr);
+
+    int poly_offset = 0, pt_offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive* drive = (Drive*)vec->envs[i];
+        int np, tp;
+        c_get_road_edge_counts(drive, &np, &tp);
+        c_get_road_edge_polylines(drive, &x_base[pt_offset], &y_base[pt_offset],
+                                  &lengths_base[poly_offset], &scenario_ids_base[poly_offset]);
+        poly_offset += np;
+        pt_offset += tp;
+    }
+    Py_RETURN_NONE;
+}
+
 static double unpack(PyObject* kwargs, char* key) {
     PyObject* val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
@@ -1002,6 +1070,8 @@ static PyMethodDef methods[] = {
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
     {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},
     {"vec_get_global_ground_truth_trajectories", vec_get_global_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories from vectorized env"},
+    {"vec_get_road_edge_counts", vec_get_road_edge_counts, METH_VARARGS, "Get road edge polyline counts from vectorized env"},
+    {"vec_get_road_edge_polylines", vec_get_road_edge_polylines, METH_VARARGS, "Get road edge polylines from vectorized env"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}
 };

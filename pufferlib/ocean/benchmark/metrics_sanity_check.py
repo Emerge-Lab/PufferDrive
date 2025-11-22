@@ -32,302 +32,51 @@ def evaluate_wosac(config, vecenv, policy, policy_name="policy"):
 
     # Collect simulated trajectories
     simulated_trajectories = evaluator.collect_simulated_trajectories(config, vecenv, policy)
+    agent_state = vecenv.driver_env.get_global_agent_state()
+    road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
 
-    # Optional sanity check
-    if config["wosac"].get("sanity_check", False):
-        evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
+    results = {}
+    for num_gt in [0, 1, 2, 8, 16, 32]:
+        modified_sim = replace_rollouts_with_gt(simulated_trajectories, gt_trajectories, num_gt)
+        scene_results = evaluator.compute_metrics(gt_trajectories, modified_sim, agent_state, road_edge_polylines)
 
-    # Compute metrics
-    results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories)
+        results[num_gt] = {
+            "ade": scene_results["ade"].mean(),
+            "min_ade": scene_results["min_ade"].mean(),
+            "likelihood_linear_speed": scene_results["likelihood_linear_speed"].mean(),
+            "likelihood_linear_acceleration": scene_results["likelihood_linear_acceleration"].mean(),
+            "likelihood_angular_speed": scene_results["likelihood_angular_speed"].mean(),
+            "likelihood_angular_acceleration": scene_results["likelihood_angular_acceleration"].mean(),
+            "likelihood_distance_to_nearest_object": scene_results["likelihood_distance_to_nearest_object"].mean(),
+            "likelihood_time_to_collision": scene_results["likelihood_time_to_collision"].mean(),
+            "likelihood_collision_indication": scene_results["likelihood_collision_indication"].mean(),
+            "likelihood_distance_to_road_edge": scene_results["likelihood_distance_to_road_edge"].mean(),
+            "likelihood_offroad_indication": scene_results["likelihood_offroad_indication"].mean(),
+            "realism_meta_score": scene_results["realism_meta_score"].mean(),
+        }
 
-    return {
-        "policy": policy_name,
-        "ade": results["ade"].mean(),
-        "min_ade": results["min_ade"].mean(),
-        "likelihood_linear_speed": results["likelihood_linear_speed"].mean(),
-        "likelihood_linear_acceleration": results["likelihood_linear_acceleration"].mean(),
-        "likelihood_angular_speed": results["likelihood_angular_speed"].mean(),
-        "likelihood_angular_acceleration": results["likelihood_angular_acceleration"].mean(),
-        "realism_metametric": results["realism_metametric"].mean(),
-    }
-
-
-def evaluate_wosac_ground_truth(config, vecenv):
-    """Run WOSAC evaluation using ground truth as the policy (perfect replay)."""
-    print("Running WOSAC evaluation for ground truth...")
-
-    evaluator = WOSACEvaluator(config)
-
-    # Collect ground truth trajectories
-    gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
-
-    # Use ground truth as simulated (perfect replay)
-    # For this, we need to broadcast GT to match rollout dimensions
-    simulated_trajectories = {}
-    num_rollouts = config["wosac"]["num_rollouts"]
-
-    for key in gt_trajectories:
-        if key in ["x", "y", "z", "heading"]:
-            # Broadcast ground truth across rollouts
-            gt_shape = gt_trajectories[key].shape
-            simulated_trajectories[key] = np.broadcast_to(
-                gt_trajectories[key], (gt_shape[0], num_rollouts, gt_shape[2])
-            ).copy()
-        else:
-            simulated_trajectories[key] = gt_trajectories[key].copy()
-
-    # Compute metrics
-    results = evaluator.compute_metrics(gt_trajectories, simulated_trajectories)
-
-    return {
-        "policy": "ground_truth",
-        "ade": results["ade"].mean(),
-        "min_ade": results["min_ade"].mean(),
-        "likelihood_linear_speed": results["likelihood_linear_speed"].mean(),
-        "likelihood_linear_acceleration": results["likelihood_linear_acceleration"].mean(),
-        "likelihood_angular_speed": results["likelihood_angular_speed"].mean(),
-        "likelihood_angular_acceleration": results["likelihood_angular_acceleration"].mean(),
-        "realism_metametric": results["realism_metametric"].mean(),
-    }
+    return results
 
 
-def evaluate_wosac_random(config, vecenv, policy):
-    """Run WOSAC evaluation with a random policy."""
-    print("Running WOSAC evaluation for random policy...")
+def format_results_table(results):
+    lines = [
+        "## WOSAC Log-Likelihood Validation Results\n",
+        "| GT Rollouts | ADE    | minADE | Linear Speed | Linear Accel | Angular Speed | Angular Accel | Dist Obj | TTC    | Collision | Dist Road | Offroad | Metametric |",
+        "|-------------|--------|--------|--------------|--------------|---------------|---------------|----------|--------|-----------|-----------|---------|------------|\n",
+    ]
 
-    class RandomPolicy:
-        """Random action policy wrapper."""
-
-        def __init__(self, action_space):
-            self.action_space = action_space
-
-        def forward_eval(self, obs, state):
-            batch_size = obs.shape[0]
-            # Generate random actions
-            if hasattr(self.action_space, "nvec"):  # MultiDiscrete
-                actions = torch.tensor(
-                    [[np.random.randint(0, n) for n in self.action_space.nvec] for _ in range(batch_size)],
-                    dtype=torch.long,
-                )
-            else:  # Continuous
-                actions = torch.tensor(self.action_space.sample()).unsqueeze(0).repeat(batch_size, 1)
-
-            # Return dummy values for value estimate
-            value = torch.zeros(batch_size, 1)
-            return actions, value
-
-    random_policy = RandomPolicy(vecenv.single_action_space)
-    return evaluate_wosac(config, vecenv, random_policy, policy_name="random")
-
-
-def evaluate_collision_rate(config, vecenv, policy, policy_name="policy", num_episodes=100):
-    """Evaluate collision rate in SDC-only control mode."""
-    print(f"Running collision rate evaluation for {policy_name}...")
-
-    device = config["train"]["device"]
-    num_agents = vecenv.num_agents
-
-    # Initialize LSTM state if needed
-    state = {}
-    if config["train"]["use_rnn"]:
-        state = dict(
-            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+    for num_gt in sorted(results.keys()):
+        label = f"{num_gt:2d} (random)" if num_gt == 0 else f"{num_gt:2d} (all GT)" if num_gt == 32 else f"{num_gt:2d}"
+        r = results[num_gt]
+        lines.append(
+            f"| {label:11s} | {r['ade']:6.4f} | {r['min_ade']:6.4f} | {r['likelihood_linear_speed']:12.4f} | "
+            f"{r['likelihood_linear_acceleration']:12.4f} | {r['likelihood_angular_speed']:13.4f} | "
+            f"{r['likelihood_angular_acceleration']:13.4f} | {r['likelihood_distance_to_nearest_object']:8.4f} | "
+            f"{r['likelihood_time_to_collision']:6.4f} | {r['likelihood_collision_indication']:9.4f} | "
+            f"{r['likelihood_distance_to_road_edge']:9.4f} | {r['likelihood_offroad_indication']:7.4f} | {r['realism_meta_score']:10.4f} |"
         )
 
-    # Track collision statistics
-    total_steps = 0
-    vehicle_collisions = 0
-    offroad_collisions = 0
-    episodes_completed = 0
-
-    ob, info = vecenv.reset()
-
-    while episodes_completed < num_episodes:
-        with torch.no_grad():
-            ob_tensor = torch.as_tensor(ob).to(device)
-
-            if hasattr(policy, "forward_eval"):
-                logits, value = policy.forward_eval(ob_tensor, state)
-            else:
-                # Random policy
-                if hasattr(vecenv.single_action_space, "nvec"):
-                    action = np.array([[np.random.randint(0, n) for n in vecenv.single_action_space.nvec]])
-                else:
-                    action = vecenv.single_action_space.sample()
-                    if isinstance(action, np.ndarray):
-                        action = action.reshape(1, -1)
-                ob, rewards, terminals, truncations, info = vecenv.step(action)
-                total_steps += 1
-
-                # Check for episode completion
-                if terminals.any() or truncations.any():
-                    episodes_completed += 1
-                continue
-
-            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-            action = action.cpu().numpy().reshape(vecenv.action_space.shape)
-
-            # Clip continuous actions
-            if isinstance(logits, torch.distributions.Normal):
-                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-
-        ob, rewards, terminals, truncations, info = vecenv.step(action)
-        total_steps += 1
-
-        # Parse collision info from environment logs
-        for info_dict in info:
-            if isinstance(info_dict, dict):
-                vehicle_collisions += info_dict.get("vehicle_collision_count", 0)
-                offroad_collisions += info_dict.get("offroad_collision_count", 0)
-
-        # Check for episode completion
-        if terminals.any() or truncations.any():
-            episodes_completed += 1
-
-    # Calculate rates
-    vehicle_collision_rate = vehicle_collisions / total_steps if total_steps > 0 else 0
-    offroad_collision_rate = offroad_collisions / total_steps if total_steps > 0 else 0
-    total_collision_rate = (vehicle_collisions + offroad_collisions) / total_steps if total_steps > 0 else 0
-
-    return {
-        "policy": policy_name,
-        "total_steps": total_steps,
-        "vehicle_collisions": vehicle_collisions,
-        "offroad_collisions": offroad_collisions,
-        "vehicle_collision_rate": vehicle_collision_rate,
-        "offroad_collision_rate": offroad_collision_rate,
-        "total_collision_rate": total_collision_rate,
-    }
-
-
-def evaluate_collision_rate_random(config, vecenv, num_episodes=100):
-    """Evaluate collision rate with random policy."""
-    print("Running collision rate evaluation for random policy...")
-
-    class RandomPolicy:
-        """Dummy random policy."""
-
-        pass
-
-    random_policy = RandomPolicy()
-    return evaluate_collision_rate(config, vecenv, random_policy, policy_name="random", num_episodes=num_episodes)
-
-
-def load_config_programmatic(env_name):
-    """Load config without command-line argument parsing."""
-    import configparser
-    import ast
-    import glob
-    from collections import defaultdict
-
-    puffer_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-    puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
-    puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
-
-    # Find the config file for this environment
-    for path in glob.glob(puffer_config_dir, recursive=True):
-        p = configparser.ConfigParser()
-        p.read([puffer_default_config, path])
-        if env_name in p["base"]["env_name"].split():
-            break
-    else:
-        raise ValueError(f"No config for env_name {env_name}")
-
-    # Parse config into nested dict
-    def puffer_type(value):
-        try:
-            return ast.literal_eval(value)
-        except:
-            return value
-
-    # Unpack to nested dict, handling both top-level and nested keys
-    parsed = {}
-    for section in p.sections():
-        for key in p[section]:
-            parsed[key] = puffer_type(p[section][key])
-
-    args = defaultdict(dict)
-    for key, value in parsed.items():
-        next = args
-        for subkey in key.split("."):
-            prev = next
-            next = next.setdefault(subkey, {})
-        prev[subkey] = value
-
-    args["train"]["use_rnn"] = args.get("rnn_name") is not None
-
-    # Ensure base-level keys exist
-    if "package" not in args:
-        args["package"] = "ocean"
-    if "env_name" not in args:
-        args["env_name"] = env_name
-
-    # Ensure vec section exists with defaults
-    if "vec" not in args:
-        args["vec"] = {}
-    vec_defaults = {
-        "backend": "serial",
-        "num_envs": 1,
-        "num_workers": 1,
-        "batch_size": 1,
-        "zero_copy": False,
-        "seed": 1,
-    }
-    for key, default_value in vec_defaults.items():
-        if key not in args["vec"]:
-            args["vec"][key] = default_value
-
-    # Ensure env section exists with defaults
-    if "env" not in args:
-        args["env"] = {}
-    env_defaults = {
-        "num_agents": 1,
-        "action_type": "discrete",
-        "dynamics_model": "classic",
-        "reward_vehicle_collision": -0.1,
-        "reward_offroad_collision": -0.1,
-        "reward_ade": 0.0,
-        "dt": 0.1,
-        "reward_goal": 1.0,
-        "reward_goal_post_respawn": 0.5,
-        "goal_radius": 2.0,
-        "goal_behavior": 0,
-        "collision_behavior": 0,
-        "offroad_behavior": 0,
-        "scenario_length": 91,
-        "resample_frequency": 91,
-        "num_maps": 100,
-        "init_steps": 0,
-        "control_mode": "control_vehicles",
-        "init_mode": "create_all_valid",
-    }
-    for key, default_value in env_defaults.items():
-        if key not in args["env"]:
-            args["env"][key] = default_value
-
-    # Ensure wosac section exists with defaults
-    if "wosac" not in args:
-        args["wosac"] = {}
-
-    wosac_defaults = {
-        "backend": "PufferEnv",
-        "enabled": False,
-        "num_rollouts": 32,
-        "init_steps": 10,
-        "num_total_wosac_agents": 256,
-        "control_mode": "control_tracks_to_predict",
-        "init_mode": "create_only_controlled",
-        "goal_behavior": 0,
-        "goal_radius": 2.0,
-        "sanity_check": False,
-    }
-
-    for key, default_value in wosac_defaults.items():
-        if key not in args["wosac"]:
-            args["wosac"][key] = default_value
-
-    return dict(args)
+    return "\n".join(lines)
 
 
 def main():
