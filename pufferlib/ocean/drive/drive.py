@@ -22,6 +22,10 @@ class Drive(pufferlib.PufferEnv):
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
         reward_ade=0.0,
+        use_guided_autonomy=0,
+        guidance_speed_weight=0.0,
+        guidance_heading_weight=0.0,
+        waypoint_reach_threshold=2.0,
         goal_behavior=0,
         goal_radius=2.0,
         collision_behavior=0,
@@ -57,6 +61,10 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.reward_ade = reward_ade
+        self.use_guided_autonomy = use_guided_autonomy
+        self.guidance_speed_weight = guidance_speed_weight
+        self.guidance_heading_weight = guidance_heading_weight
+        self.waypoint_reach_threshold = waypoint_reach_threshold
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
@@ -169,6 +177,10 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal=reward_goal,
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 reward_ade=reward_ade,
+                use_guided_autonomy=use_guided_autonomy,
+                guidance_speed_weight=guidance_speed_weight,
+                guidance_heading_weight=guidance_heading_weight,
+                waypoint_reach_threshold=waypoint_reach_threshold,
                 goal_radius=goal_radius,
                 goal_behavior=self.goal_behavior,
                 collision_behavior=self.collision_behavior,
@@ -242,6 +254,10 @@ class Drive(pufferlib.PufferEnv):
                         reward_goal=self.reward_goal,
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_ade=self.reward_ade,
+                        use_guided_autonomy=self.use_guided_autonomy,
+                        guidance_speed_weight=self.guidance_speed_weight,
+                        guidance_heading_weight=self.guidance_heading_weight,
+                        waypoint_reach_threshold=self.waypoint_reach_threshold,
                         goal_radius=self.goal_radius,
                         goal_behavior=self.goal_behavior,
                         collision_behavior=self.collision_behavior,
