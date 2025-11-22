@@ -104,13 +104,11 @@ class Drive(nn.Module):
 
         self.full_scene_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.observation_size, input_size)),
-            nn.LayerNorm(input_size),
-            nn.GELU(),
         )
 
         self.shared_embedding = nn.Sequential(
-            nn.GELU(),
             pufferlib.pytorch.layer_init(nn.Linear(4 * input_size, hidden_size)),
+            nn.GELU(),
         )
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
 
@@ -156,7 +154,7 @@ class Drive(nn.Module):
         concat_features = torch.cat([ego_features, road_features, partner_features, full_scene_context], dim=1)
 
         # Pass through shared embedding
-        embedding = F.relu(self.shared_embedding(concat_features))
+        embedding = self.shared_embedding(concat_features)
 
         return embedding
 
