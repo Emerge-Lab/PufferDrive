@@ -527,12 +527,25 @@ def process_all_maps():
 
     # Process each JSON file
     for i, map_path in enumerate(json_files[:10000]):
-        binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
-        binary_path = binary_dir / binary_file
+        # Hardcode: if file is CARLA_4_000.json, always save as map_000.bin
+        if map_path.name == "CARLA_4_000.json":
+            binary_file = "map_000.bin"
+            binary_path = binary_dir / binary_file
+            unique_map_id = 0
+        else:
+            binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
+            binary_path = binary_dir / binary_file
+            unique_map_id = i
+
+        print(f"Processing {map_path.name} -> {binary_file}")
+        load_map(str(map_path), unique_map_id, str(binary_path))
+
+        # binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
+        # binary_path = binary_dir / binary_file
 
         print(f"Processing {map_path.name} -> {binary_file}")
         # try:
-        load_map(str(map_path), i, str(binary_path))
+        # load_map(str(map_path), i, str(binary_path))
         # except Exception as e:
         #     print(f"Error processing {map_path.name}: {e}")
 

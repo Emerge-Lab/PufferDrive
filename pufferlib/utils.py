@@ -159,7 +159,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {e}")
 
 
-def render_videos(config, vecenv, logger, global_step, bin_path):
+def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
     """
     Generate and log training videos using C-based rendering.
 
@@ -249,6 +249,10 @@ def render_videos(config, vecenv, logger, global_step, bin_path):
 
         if result.returncode == 0 or (result.returncode == 1 and vids_exist):
             # Move both generated videos to the model directory
+            # videos = [
+            #    ("resources/drive/output_topdown.mp4", f"epoch_topdown.mp4"),
+            #    ("resources/drive/output_agent.mp4", f"epoch_agent.mp4"),
+            # ]
             videos = [
                 ("resources/drive/output_topdown.mp4", f"epoch_{epoch:06d}_topdown.mp4"),
                 ("resources/drive/output_agent.mp4", f"epoch_{epoch:06d}_agent.mp4"),

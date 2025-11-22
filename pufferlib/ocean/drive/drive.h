@@ -384,6 +384,11 @@ struct Graph {
     struct AdjListNode** array;
 };
 
+typedef struct {
+    float dis;
+    float z;
+} DepthPoint;
+
 // Function to create a new adjacency list node
 struct AdjListNode* newAdjListNode(int dest) {
     struct AdjListNode* newNode = malloc(sizeof(struct AdjListNode));
@@ -912,13 +917,13 @@ void set_means(Drive* env) {
 }
 
 DepthPoint compute_3d_distance_to_road_segment(Entity* agent, Entity* lane){
-    int agent_position_x = agent->x;
-    int agent_position_y = agent->y;
-    int agent_position_z = agent->z;
-    int road_x = lane->x;
-    int road_y = lane->y;
-    int road_z = lane->z;
-    float dis = sqrt((agent_position_x - road_x) * (agent_position_x - road_x) +
+    float agent_position_x = agent->x;
+    float agent_position_y = agent->y;
+    float agent_position_z = agent->z;
+    float road_x = lane->x;
+    float road_y = lane->y;
+    float road_z = lane->z;
+    float dis = sqrtf((agent_position_x - road_x) * (agent_position_x - road_x) +
                       (agent_position_y - road_y) * (agent_position_y - road_y) +
                       (agent_position_z - road_z) * (agent_position_z - road_z));
     DepthPoint point;
@@ -1600,7 +1605,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*25];  // Array big enough for all neighboring cells
     int list_size = checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL*25, collision_offsets, 25);
     DepthPoint road_neighbours[list_size];
-    int max_check = min(list_size, 5);
+    int max_check = (list_size < 5) ? list_size : 5;
     if(list_size>0){
         //store an array masuring the distance of the agent with each road segment nearby
         for(int i = 0;i<list_size;i++){
@@ -1717,6 +1722,10 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
             a_long_new = clip(a_long_new, -5.0f, 2.5f);
         }
 
+typedef struct {
+    float dis;
+    float z;
+} DepthPoint;
         if (agent->a_lat * a_lat_new < 0) {
             a_lat_new = 0.0f;
         } else {
@@ -2329,11 +2338,6 @@ Client* make_client(Drive* env){
     client->camera_zoom = 1.0f;
     return client;
 }
-
-typedef struct {
-    float dis;
-    float z;
-} DepthPoint;
 
 // Camera control functions
 void handle_camera_controls(Client* client) {
