@@ -80,6 +80,23 @@ void CloseVideo(VideoRecorder *recorder) {
 void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid, int img_width, int img_height) {
 
     BeginDrawing();
+    // Compute map bounds and center
+   /*
+    float map_left   = env->grid_map->top_left_x;
+    float map_right  = env->grid_map->bottom_right_x;
+    float map_top    = env->grid_map->top_left_y;
+    float map_bottom = env->grid_map->bottom_right_y;
+    float map_width  = map_right - map_left;
+    float map_height_full = map_top - map_bottom;
+    float center_x = (map_left + map_right) / 2.0f;
+    float center_y = (map_top + map_bottom) / 2.0f;
+
+    // Add a margin (10% of width/height)
+    float margin_x = 0.05f * map_width;
+    float margin_y = 0.05f * map_height_full;
+    float camera_fovy = map_height_full + 2 * margin_y;
+    */
+
 
     // Top-down orthographic camera
     Camera3D camera = {0};
@@ -88,6 +105,15 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
     camera.fovy     = map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
+
+	/*
+    Camera3D camera = {0};
+    camera.position = (Vector3){ center_x, center_y, 500.0f };  // above the map center
+    camera.target   = (Vector3){ center_x, center_y, 0.0f };    // look at map center
+    camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
+    camera.fovy     = camera_fovy;
+    camera.projection = CAMERA_ORTHOGRAPHIC;
+    */
 
     client->width = img_width;
     client->height = img_height;
