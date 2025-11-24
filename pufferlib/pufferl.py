@@ -1211,6 +1211,7 @@ def sweep(args=None, env_name=None):
 def controlled_exp(env_name, args=None):
     """Run experiments with all combinations of specified parameter values."""
     import itertools
+    from copy import deepcopy
 
     args = args or load_config(env_name)
     if not args["wandb"] and not args["neptune"]:
@@ -1239,18 +1240,17 @@ def controlled_exp(env_name, args=None):
 
     # Run each combination
     for i, combo in enumerate(combinations, 1):
+        exp_args = deepcopy(args)
+
         # Set parameters
         for key, value in zip(keys, combo):
             section, param = key.split(".")
-            args[section][param] = value
-
-        # Create descriptive tag
-        # args["tag"] = "_".join([f"{param.split('.')[-1]}={v}" for param, v in zip(keys, combo)])
+            exp_args[section][param] = value
 
         print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
 
         # Train
-        train(env_name, args=args)
+        train(env_name, args=exp_args)
 
     print(f"\n✓ Completed all {len(combinations)} experiments")
 
@@ -1463,9 +1463,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = (
-        "Usage: puffer [train, eval, sweep, autotune, profile, export] [env_name] [optional args]. --help for more info"
-    )
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
