@@ -425,24 +425,23 @@ class Drive(pufferlib.PufferEnv):
         continuous_path = os.path.join(self.human_data_dir, f"expert_actions_continuous_h{self.bptt_horizon}.pt")
         observations_path = os.path.join(self.human_data_dir, f"expert_observations_h{self.bptt_horizon}.pt")
 
-        observations_full = torch.load(observations_path, map_location="cpu")
+        observations_full = torch.load(observations_path, map_location="cpu", weights_only=False)
 
         # Sample indices
         indices = torch.randint(0, self._cache_size, (n_samples,))
         sampled_obs = observations_full[indices]
 
         if return_both:
-            discrete_actions = torch.load(discrete_path, map_location="cpu")[indices]
-            continuous_actions = torch.load(continuous_path, map_location="cpu")[indices]
-            return discrete_actions, continuous_actions, sampled_obs
+            discrete_actions = torch.load(discrete_path, map_location="cpu", weights_only=False)
+            continuous_actions = torch.load(continuous_path, map_location="cpu", weights_only=False)
+            return discrete_actions[indices], continuous_actions[indices], sampled_obs
         else:
             # Return only the action type matching the environment
             if self._action_type_flag == 1:  # continuous
-                actions = torch.load(continuous_path, map_location="cpu")[indices]
+                actions = torch.load(continuous_path, map_location="cpu", weights_only=False)
             else:  # discrete
-                actions = torch.load(discrete_path, map_location="cpu")[indices]
-            return actions, sampled_obs
-
+                actions = torch.load(discrete_path, map_location="cpu", weights_only=False)
+            return actions[indices], sampled_obs
     def get_road_edge_polylines(self):
         """Get road edge polylines for all scenarios.
 
