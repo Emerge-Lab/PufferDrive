@@ -1267,6 +1267,53 @@ def sweep(args=None, env_name=None):
         args["train"]["total_timesteps"] = total_timesteps
 
 
+def controlled_exp(env_name, args=None):
+    """Run experiments with all combinations of specified parameter values."""
+    import itertools
+    from copy import deepcopy
+
+    args = args or load_config(env_name)
+    if not args["wandb"] and not args["neptune"]:
+        raise pufferlib.APIUsageError("Targeted experiments require either wandb or neptune")
+
+    # Check if controlled_exp config exists
+    if "controlled_exp" not in args:
+        raise pufferlib.APIUsageError("No [controlled_exp.*] sections found in config")
+
+    # Extract parameters from controlled_exp namespace
+    params = {}
+    for section, section_config in args["controlled_exp"].items():
+        if isinstance(section_config, dict):
+            for param, param_config in section_config.items():
+                if isinstance(param_config, dict) and "values" in param_config:
+                    params[f"{section}.{param}"] = param_config["values"]
+
+    if not params:
+        raise pufferlib.APIUsageError("No parameters with 'values' lists found in [controlled_exp.*] sections")
+
+    # Generate all combinations
+    keys = list(params.keys())
+    combinations = list(itertools.product(*[params[k] for k in keys]))
+
+    print(f"Running a total of {len(combinations)} experiments with parameters: {keys}")
+
+    # Run each combination
+    for i, combo in enumerate(combinations, 1):
+        exp_args = deepcopy(args)
+
+        # Set parameters
+        for key, value in zip(keys, combo):
+            section, param = key.split(".")
+            exp_args[section][param] = value
+
+        print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
+
+        # Train
+        train(env_name, args=exp_args)
+
+    print(f"\n✓ Completed all {len(combinations)} experiments")
+
+
 def profile(args=None, env_name=None, vecenv=None, policy=None):
     args = load_config()
     vecenv = vecenv or load_env(env_name, args)
@@ -1475,9 +1522,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = (
-        "Usage: puffer [train, eval, sweep, autotune, profile, export] [env_name] [optional args]. --help for more info"
-    )
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -1489,6 +1534,8 @@ def main():
         eval(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
+    elif mode == "controlled_exp":
+        controlled_exp(env_name=env_name)
     elif mode == "autotune":
         autotune(env_name=env_name)
     elif mode == "profile":
