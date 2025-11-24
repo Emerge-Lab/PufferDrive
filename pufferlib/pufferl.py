@@ -1399,12 +1399,35 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         if args["save_frames"] > 0:
             ensure_drive_binary()
 
-        state = {}
-        if args["train"]["use_rnn"]:
-            state = dict(
-                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        # Check if adversarial mode (policy is a tuple)
+        adversarial_mode = isinstance(policy, tuple)
+        if adversarial_mode:
+            ref_policy, adv_policy = policy
+            # Compute agent0 indices
+            agent_offsets = vecenv.driver_env.agent_offsets
+            num_envs = vecenv.driver_env.num_envs
+            agent0_indices = torch.tensor(
+                [agent_offsets[i] for i in range(num_envs)], device=device, dtype=torch.int64
             )
+
+        state = {}
+        ref_state = {}
+        if args["train"]["use_rnn"]:
+            if adversarial_mode:
+                # Separate LSTM states for both policies
+                ref_state = dict(
+                    lstm_h=torch.zeros(num_agents, ref_policy.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, ref_policy.hidden_size, device=device),
+                )
+                state = dict(
+                    lstm_h=torch.zeros(num_agents, adv_policy.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, adv_policy.hidden_size, device=device),
+                )
+            else:
+                state = dict(
+                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+                )
 
         frames = []
         while True:
@@ -1426,9 +1449,65 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
             with torch.no_grad():
                 ob = torch.as_tensor(ob).to(device)
-                logits, value = policy.forward_eval(ob, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+                if adversarial_mode:
+                    # Split forward pass: agent0 through ref_policy, others through adv_policy
+                    agent0_mask = torch.isin(torch.arange(num_agents, device=device), agent0_indices)
+
+                    # Initialize output tensors
+                    action_shape = (num_agents,) + tuple(vecenv.single_action_space.shape)
+                    action = torch.zeros(action_shape, dtype=torch.long, device=device)
+                    logits = None
+
+                    # Forward agent0 through reference policy
+                    if agent0_mask.any():
+                        o_ref = ob[agent0_mask]
+                        if args["train"]["use_rnn"]:
+                            ref_state_batch = {
+                                "lstm_h": ref_state["lstm_h"][agent0_mask],
+                                "lstm_c": ref_state["lstm_c"][agent0_mask],
+                            }
+                        else:
+                            ref_state_batch = {}
+
+                        logits_ref, value_ref = ref_policy.forward_eval(o_ref, ref_state_batch)
+                        action_ref, logprob_ref, _ = pufferlib.pytorch.sample_logits(logits_ref)
+
+                        if args["train"]["use_rnn"]:
+                            ref_state["lstm_h"][agent0_mask] = ref_state_batch["lstm_h"]
+                            ref_state["lstm_c"][agent0_mask] = ref_state_batch["lstm_c"]
+
+                        action[agent0_mask] = action_ref.to(action.dtype)
+                        logits = logits_ref
+
+                    # Forward other agents through adversarial policy
+                    if (~agent0_mask).any():
+                        o_adv = ob[~agent0_mask]
+                        if args["train"]["use_rnn"]:
+                            adv_state_batch = {
+                                "lstm_h": state["lstm_h"][~agent0_mask],
+                                "lstm_c": state["lstm_c"][~agent0_mask],
+                            }
+                        else:
+                            adv_state_batch = {}
+
+                        logits_adv, value_adv = adv_policy.forward_eval(o_adv, adv_state_batch)
+                        action_adv, logprob_adv, _ = pufferlib.pytorch.sample_logits(logits_adv)
+
+                        if args["train"]["use_rnn"]:
+                            state["lstm_h"][~agent0_mask] = adv_state_batch["lstm_h"]
+                            state["lstm_c"][~agent0_mask] = adv_state_batch["lstm_c"]
+
+                        action[~agent0_mask] = action_adv.to(action.dtype)
+                        if logits is None:
+                            logits = logits_adv
+
+                    action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+                else:
+                    # Single-policy forward pass
+                    logits, value = policy.forward_eval(ob, state)
+                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                    action = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
             if isinstance(logits, torch.distributions.Normal):
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
@@ -1597,17 +1676,29 @@ def load_policy(args, vecenv, env_name=""):
 
         # Check if this is a dual-policy checkpoint (adversarial mode)
         if isinstance(checkpoint, dict) and "adv_policy" in checkpoint:
-            # Loading from adversarial checkpoint - use adv_policy
-            state_dict = checkpoint["adv_policy"]
+            # Loading from adversarial checkpoint - return both policies
+            # Create reference policy
+            ref_policy = policy_cls(vecenv.driver_env, **args["policy"])
+            if rnn_name is not None:
+                ref_policy = rnn_cls(vecenv.driver_env, ref_policy, **args["rnn"])
+            ref_policy = ref_policy.to(device)
+
+            # Load reference policy state dict
+            ref_state_dict = checkpoint["ref_policy"]
+            ref_state_dict = {k.replace("module.", ""): v for k, v in ref_state_dict.items()}
+            ref_policy.load_state_dict(ref_state_dict)
+
+            # Load adversarial policy state dict (policy already created above)
+            adv_state_dict = checkpoint["adv_policy"]
+            adv_state_dict = {k.replace("module.", ""): v for k, v in adv_state_dict.items()}
+            policy.load_state_dict(adv_state_dict)
+
+            return (ref_policy, policy)  # Return tuple for adversarial mode
         else:
             # Single-policy checkpoint
             state_dict = checkpoint
-
-        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        policy.load_state_dict(state_dict)
-        # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
-        # optim_state = torch.load(state_path)['optimizer_state_dict']
-        # pufferl.optimizer.load_state_dict(optim_state)
+            state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+            policy.load_state_dict(state_dict)
 
     return policy
 
