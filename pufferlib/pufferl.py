@@ -1208,7 +1208,7 @@ def sweep(args=None, env_name=None):
         args["train"]["total_timesteps"] = total_timesteps
 
 
-def targeted_exp(env_name, args=None):
+def controlled_exp(env_name, args=None):
     """Run experiments with all combinations of specified parameter values."""
     import itertools
 
@@ -1216,20 +1216,20 @@ def targeted_exp(env_name, args=None):
     if not args["wandb"] and not args["neptune"]:
         raise pufferlib.APIUsageError("Targeted experiments require either wandb or neptune")
 
-    # Check if targeted_exp config exists
-    if "targeted_exp" not in args:
-        raise pufferlib.APIUsageError("No [targeted_exp.*] sections found in config")
+    # Check if controlled_exp config exists
+    if "controlled_exp" not in args:
+        raise pufferlib.APIUsageError("No [controlled_exp.*] sections found in config")
 
-    # Extract parameters from targeted_exp namespace
+    # Extract parameters from controlled_exp namespace
     params = {}
-    for section, section_config in args["targeted_exp"].items():
+    for section, section_config in args["controlled_exp"].items():
         if isinstance(section_config, dict):
             for param, param_config in section_config.items():
                 if isinstance(param_config, dict) and "values" in param_config:
                     params[f"{section}.{param}"] = param_config["values"]
 
     if not params:
-        raise pufferlib.APIUsageError("No parameters with 'values' lists found in [targeted_exp.*] sections")
+        raise pufferlib.APIUsageError("No parameters with 'values' lists found in [controlled_exp.*] sections")
 
     # Generate all combinations
     keys = list(params.keys())
