@@ -1245,7 +1245,7 @@ def controlled_exp(env_name, args=None):
             args[section][param] = value
 
         # Create descriptive tag
-        args["tag"] = "_".join([f"{param.split('.')[-1]}={v}" for param, v in zip(keys, combo)])
+        # args["tag"] = "_".join([f"{param.split('.')[-1]}={v}" for param, v in zip(keys, combo)])
 
         print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
 
