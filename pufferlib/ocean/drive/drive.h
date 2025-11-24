@@ -95,6 +95,7 @@
 #define LANE_HEADING_PENALTY_THRESHOLD_RAD (M_PI)
 #define LANE_HEADING_PENALTY 0.0f
 #define LANE_ALIGNED_HEADING_THRESHOLD_RAD (M_PI / 3.0f) 
+#define OFFROAD_GOAL_RESPAWN_DISTANCE 10.0f
 
 //GOAL BEHAVIOUR
 #define GOAL_RESPAWN 0
@@ -242,10 +243,71 @@ float relative_distance_2d(float x1, float y1, float x2, float y2){
     return distance;
 }
 
+// Forward declarations for utility helpers defined later
+float point_to_segment_distance_2d(float px, float py, float x1, float y1, float x2, float y2);
+int project_point_onto_lane(Entity* lane, float px, float py, float* out_x, float* out_y, int* out_seg_idx, float* out_t);
+
 float clip(float value, float min, float max) {
     if (value < min) return min;
     if (value > max) return max;
     return value;
+}
+
+// Forward declarations for functions defined later
+void respawn_agent(Drive* env, int agent_idx);
+
+// Find the closest distance from a point to a lane polyline
+float closest_distance_to_lane(Entity* lane, float ax, float ay) {
+    float min_distance = 1e9f;
+    if (!lane || lane->array_size < 2) return min_distance;
+    for (int i = 0; i < lane->array_size - 1; i++) {
+        float dist = point_to_segment_distance_2d(ax, ay, lane->traj_x[i], lane->traj_y[i], lane->traj_x[i + 1], lane->traj_y[i + 1]);
+        if (dist < min_distance) {
+            min_distance = dist;
+        }
+    }
+    return min_distance;
+}
+
+// Project a point onto the closest point of a lane polyline. Returns 1 on success.
+int project_point_onto_lane(Entity* lane, float px, float py, float* out_x, float* out_y, int* out_seg_idx, float* out_t) {
+    float min_distance = 1e9f;
+    int best_idx = -1;
+    float best_t = 0.0f;
+    if (!lane || lane->array_size < 2) return 0;
+
+    for (int i = 0; i < lane->array_size - 1; i++) {
+        float x1 = lane->traj_x[i];
+        float y1 = lane->traj_y[i];
+        float x2 = lane->traj_x[i + 1];
+        float y2 = lane->traj_y[i + 1];
+
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        float seg_len_sq = dx * dx + dy * dy;
+        if (seg_len_sq < 1e-8f) continue;
+
+        float t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq;
+        if (t < 0.0f) t = 0.0f;
+        else if (t > 1.0f) t = 1.0f;
+
+        float proj_x = x1 + t * dx;
+        float proj_y = y1 + t * dy;
+        float dist = point_to_segment_distance_2d(px, py, x1, y1, x2, y2);
+
+        if (dist < min_distance) {
+            min_distance = dist;
+            best_idx = i;
+            best_t = t;
+            if (out_x) *out_x = proj_x;
+            if (out_y) *out_y = proj_y;
+        }
+    }
+
+    if (best_idx == -1) return 0;
+    if (out_seg_idx) *out_seg_idx = best_idx;
+    if (out_t) *out_t = best_t;
+    return 1;
 }
 
 float compute_displacement_error(Entity* agent, int timestep) {
@@ -299,6 +361,17 @@ struct GridMap {
     int* neighbor_cache_count; // number of entities in each cells neighbor cache
     GridMapEntity** neighbor_cache_entities; // preallocated array to hold neighbor entities
 };
+
+// Clamp a goal to stay within the map bounding box.
+void clamp_goal_to_map(GridMap* grid_map, Entity* agent) {
+    if (!grid_map) return;
+    float min_x = grid_map->top_left_x;
+    float max_x = grid_map->bottom_right_x;
+    float max_y = grid_map->top_left_y;
+    float min_y = grid_map->bottom_right_y;
+    agent->goal_position_x = clip(agent->goal_position_x, min_x, max_x);
+    agent->goal_position_y = clip(agent->goal_position_y, min_y, max_y);
+}
 
 struct Drive {
     Client* client;
@@ -1701,14 +1774,50 @@ static int find_forward_projection_on_lane(Entity* lane, Entity* agent, int* out
 
 void compute_new_goal(Drive* env, int agent_idx) {
     Entity* agent = &env->entities[agent_idx];
-    int current_lane = agent->current_lane_idx;
 
-    if (current_lane == -1) return; // No current lane
+    // Refresh lane association; if none, respawn to a valid trajectory start.
+    compute_agent_metrics(env, agent_idx);
+    int current_lane = agent->current_lane_idx;
+    if (current_lane == -1) {
+        respawn_agent(env, agent_idx);
+        compute_agent_metrics(env, agent_idx);
+        current_lane = agent->current_lane_idx;
+        if (current_lane == -1) {
+            // Give up if still off-road; keep existing goal.
+            return;
+        }
+    }
+
+    Entity* lane = &env->entities[current_lane];
+
+    // If agent is far from the lane centerline, respawn to avoid sampling off-road goals.
+    float lane_distance = closest_distance_to_lane(lane, agent->x, agent->y);
+    if (lane_distance > OFFROAD_GOAL_RESPAWN_DISTANCE) {
+        respawn_agent(env, agent_idx);
+        compute_agent_metrics(env, agent_idx);
+        current_lane = env->entities[agent_idx].current_lane_idx;
+        if (current_lane == -1) {
+            return;
+        }
+        lane = &env->entities[current_lane];
+        lane_distance = closest_distance_to_lane(lane, agent->x, agent->y);
+        if (lane_distance > OFFROAD_GOAL_RESPAWN_DISTANCE) {
+            return;
+        }
+    }
+
+    // Project agent onto the lane to avoid sampling from far off-lane positions.
+    float agent_proj_x = agent->x;
+    float agent_proj_y = agent->y;
+    int proj_seg_idx = -1;
+    float proj_t = 0.0f;
+    if (!project_point_onto_lane(lane, agent->x, agent->y, &agent_proj_x, &agent_proj_y, &proj_seg_idx, &proj_t)) {
+        return;
+    }
 
     // Target distance to goal
     float target_distance = env->max_distance_to_goal;
     int current_entity = current_lane;
-    Entity* lane = &env->entities[current_entity];
 
     int initial_segment_idx = 1;
     float initial_fraction = 0.0f;
@@ -1774,21 +1883,23 @@ void compute_new_goal(Drive* env, int agent_idx) {
                 float frac_along = start_fraction + (remaining_distance / segment_length);
                 agent->goal_position_x = prev_x + seg_dx * frac_along;
                 agent->goal_position_y = prev_y + seg_dy * frac_along;
-                // If the sampled goal is still very close, push it forward along the segment direction.
-                float dir_x = seg_dx;
-                float dir_y = seg_dy;
-                float goal_dist = relative_distance_2d(agent->x, agent->y, agent->goal_position_x, agent->goal_position_y);
-                if (goal_dist < 0.5f * target_distance) {
+                agent->sampled_new_goal = 0;
+                // Snap goal to lane geometry and keep it ahead along the lane direction.
+                int proj_seg = -1;
+                float proj_t = 0.0f;
+                if (project_point_onto_lane(lane, agent->goal_position_x, agent->goal_position_y, &agent->goal_position_x, &agent->goal_position_y, &proj_seg, &proj_t)) {
+                    int seg_idx = proj_seg;
+                    // Use the segment direction for ahead check
+                    float dir_x = lane->traj_x[seg_idx + 1] - lane->traj_x[seg_idx];
+                    float dir_y = lane->traj_y[seg_idx + 1] - lane->traj_y[seg_idx];
                     float norm = sqrtf(dir_x * dir_x + dir_y * dir_y);
                     if (norm > 1e-4f) {
                         dir_x /= norm;
                         dir_y /= norm;
-                        agent->goal_position_x = agent->x + dir_x * target_distance;
-                        agent->goal_position_y = agent->y + dir_y * target_distance;
+                        ensure_goal_ahead(env, agent_idx, agent->x, agent->y, dir_x, dir_y);
                     }
+                    clamp_goal_to_map(env->grid_map, agent);
                 }
-                agent->sampled_new_goal = 0;
-                ensure_goal_ahead(env, agent_idx, agent->x, agent->y, dir_x, dir_y);
                 return;
             }
 
@@ -1801,20 +1912,23 @@ void compute_new_goal(Drive* env, int agent_idx) {
         if (num_connected == 0) {
             agent->goal_position_x = lane->traj_x[lane->array_size - 1];
             agent->goal_position_y = lane->traj_y[lane->array_size - 1];
-            // If too close, push it forward along heading.
-            float dir_x = agent->heading_x;
-            float dir_y = agent->heading_y;
-            float goal_dist = relative_distance_2d(agent->x, agent->y, agent->goal_position_x, agent->goal_position_y);
-            if (goal_dist < 0.5f * target_distance) {
-                float norm = sqrtf(dir_x * dir_x + dir_y * dir_y);
-                if (norm > 1e-4f) {
-                    dir_x /= norm;
-                    dir_y /= norm;
-                    agent->goal_position_x = agent->x + dir_x * target_distance;
-                    agent->goal_position_y = agent->y + dir_y * target_distance;
-                }
-            }
             agent->sampled_new_goal = 0;
+            // Snap goal to lane end and keep ahead along lane tangent if available.
+            int proj_seg = lane->array_size - 2;
+            float proj_t = 1.0f;
+            if (project_point_onto_lane(lane, agent->goal_position_x, agent->goal_position_y, &agent->goal_position_x, &agent->goal_position_y, &proj_seg, &proj_t)) {
+                if (proj_seg >= 0 && proj_seg < lane->array_size - 1) {
+                    float dir_x = lane->traj_x[proj_seg + 1] - lane->traj_x[proj_seg];
+                    float dir_y = lane->traj_y[proj_seg + 1] - lane->traj_y[proj_seg];
+                    float norm = sqrtf(dir_x * dir_x + dir_y * dir_y);
+                    if (norm > 1e-4f) {
+                        dir_x /= norm;
+                        dir_y /= norm;
+                        ensure_goal_ahead(env, agent_idx, agent->x, agent->y, dir_x, dir_y);
+                    }
+                }
+                clamp_goal_to_map(env->grid_map, agent);
+            }
             return; // No further lanes to traverse
         }
 
@@ -1864,21 +1978,8 @@ void compute_new_goal(Drive* env, int agent_idx) {
         if (best_idx == -1) {
             agent->goal_position_x = lane->traj_x[lane->array_size - 1];
             agent->goal_position_y = lane->traj_y[lane->array_size - 1];
-            // If this ended up too close, push it forward along the lane tangent or heading.
-            float dir_x = forward_x;
-            float dir_y = forward_y;
-            float goal_dist = relative_distance_2d(agent->x, agent->y, agent->goal_position_x, agent->goal_position_y);
-            if (goal_dist < 0.5f * target_distance) {
-                float norm = sqrtf(dir_x * dir_x + dir_y * dir_y);
-                if (norm > 1e-4f) {
-                    dir_x /= norm;
-                    dir_y /= norm;
-                    agent->goal_position_x = agent->x + dir_x * target_distance;
-                    agent->goal_position_y = agent->y + dir_y * target_distance;
-                }
-            }
             agent->sampled_new_goal = 0;
-            ensure_goal_ahead(env, agent_idx, agent->x, agent->y, dir_x, dir_y);
+            ensure_goal_ahead(env, agent_idx, agent->x, agent->y, forward_x, forward_y);
             return;
         }
 
