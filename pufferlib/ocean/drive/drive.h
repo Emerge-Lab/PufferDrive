@@ -253,10 +253,9 @@ float clip(float value, float min, float max) {
     return value;
 }
 
-// Forward declarations for functions defined later
+// temp forward declerations
 void respawn_agent(Drive* env, int agent_idx);
 
-// Find the closest distance from a point to a lane polyline
 float closest_distance_to_lane(Entity* lane, float ax, float ay) {
     float min_distance = 1e9f;
     if (!lane || lane->array_size < 2) return min_distance;
@@ -269,7 +268,6 @@ float closest_distance_to_lane(Entity* lane, float ax, float ay) {
     return min_distance;
 }
 
-// Project a point onto the closest point of a lane polyline. Returns 1 on success.
 int project_point_onto_lane(Entity* lane, float px, float py, float* out_x, float* out_y, int* out_seg_idx, float* out_t) {
     float min_distance = 1e9f;
     int best_idx = -1;
@@ -362,7 +360,6 @@ struct GridMap {
     GridMapEntity** neighbor_cache_entities; // preallocated array to hold neighbor entities
 };
 
-// Clamp a goal to stay within the map bounding box.
 void clamp_goal_to_map(GridMap* grid_map, Entity* agent) {
     if (!grid_map) return;
     float min_x = grid_map->top_left_x;
@@ -677,7 +674,6 @@ void set_start_position(Drive* env){
     //EndDrawing();
 }
 
-// Align an agent's heading (and velocity direction) to the tangent of its current lane.
 void align_heading_to_lane(Drive* env, int agent_idx) {
     Entity* agent = &env->entities[agent_idx];
     int lane_idx = agent->current_lane_idx;
@@ -738,8 +734,6 @@ void align_heading_to_lane(Drive* env, int agent_idx) {
     }
 }
 
-// Ensure the sampled goal lies ahead of a reference point along a reference direction.
-// If it falls behind, nudge it a small step forward to avoid behind-goal spawns.
 void ensure_goal_ahead(Drive* env, int agent_idx, float ref_x, float ref_y, float dir_x, float dir_y) {
     Entity* agent = &env->entities[agent_idx];
     float norm = sqrtf(dir_x * dir_x + dir_y * dir_y);
@@ -777,7 +771,6 @@ void record_spawn_distance_to_goal(Drive* env, int agent_idx, int log_idx) {
         agent->goal_position_y
     );
 
-    // Guard against invalid values that would pollute logs
     if (spawn_distance < 0 || isnan(spawn_distance) || isinf(spawn_distance)) {
         return;
     }
@@ -1468,7 +1461,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         }
     }
 
-    // Fallback pass ignoring heading penalty to aggressively grab the closest lane
+    // fallback ignoring heading to grab the closest lane
     if (closest_lane_entity_idx == -1 || min_distance > LANE_ALIGN_DISTANCE_THRESHOLD) {
         float fallback_min_distance = min_distance;
         int fallback_lane_idx = closest_lane_entity_idx;
@@ -1494,7 +1487,7 @@ void compute_agent_metrics(Drive* env, int agent_idx) {
         closest_lane_geometry_idx = fallback_geom_idx;
     }
 
-    // Global fallback: scan all lane segments if grid-based search failed
+    // final fallback to scan all lane segments if we haven't found one yet
     // slightly overly defensive and could be removed later on i think
     if (closest_lane_entity_idx == -1) {
         float global_min = min_distance;
@@ -1570,7 +1563,7 @@ bool should_control_agent(Drive* env, int agent_idx){
         return false;
     }
 
-    // Standard mode: check type and expert status
+    // Standard mode: check type, distance to goal, and expert status
     bool type_is_controllable = false;
     if (env->control_mode == CONTROL_VEHICLES) {
         type_is_controllable = (entity->type == VEHICLE);
@@ -1582,7 +1575,7 @@ bool should_control_agent(Drive* env, int agent_idx){
         return false;
     }
 
-    // Require the dataset goal to be at least MIN_DISTANCE_TO_GOAL away (in the agent's local frame).
+    // require the goal to be at least MIN_DISTANCE_TO_GOAL away
     if (entity->traj_x && entity->traj_y && entity->traj_heading && entity->array_size > 0) {
         float cos_heading = cosf(entity->traj_heading[0]);
         float sin_heading = sinf(entity->traj_heading[0]);
@@ -1775,7 +1768,6 @@ static int find_forward_projection_on_lane(Entity* lane, Entity* agent, int* out
 void compute_new_goal(Drive* env, int agent_idx) {
     Entity* agent = &env->entities[agent_idx];
 
-    // Refresh lane association; if none, respawn to a valid trajectory start.
     compute_agent_metrics(env, agent_idx);
     int current_lane = agent->current_lane_idx;
     if (current_lane == -1) {
@@ -1783,14 +1775,13 @@ void compute_new_goal(Drive* env, int agent_idx) {
         compute_agent_metrics(env, agent_idx);
         current_lane = agent->current_lane_idx;
         if (current_lane == -1) {
-            // Give up if still off-road; keep existing goal.
             return;
         }
     }
 
     Entity* lane = &env->entities[current_lane];
 
-    // If agent is far from the lane centerline, respawn to avoid sampling off-road goals.
+    // if agent is far from center line it means they're probably off road so we just respawn them
     float lane_distance = closest_distance_to_lane(lane, agent->x, agent->y);
     if (lane_distance > OFFROAD_GOAL_RESPAWN_DISTANCE) {
         respawn_agent(env, agent_idx);
@@ -1806,7 +1797,6 @@ void compute_new_goal(Drive* env, int agent_idx) {
         }
     }
 
-    // Project agent onto the lane to avoid sampling from far off-lane positions.
     float agent_proj_x = agent->x;
     float agent_proj_y = agent->y;
     int proj_seg_idx = -1;
@@ -1815,7 +1805,6 @@ void compute_new_goal(Drive* env, int agent_idx) {
         return;
     }
 
-    // Target distance to goal
     float target_distance = env->max_distance_to_goal;
     int current_entity = current_lane;
 
@@ -1848,12 +1837,10 @@ void compute_new_goal(Drive* env, int agent_idx) {
     float remaining_distance = target_distance;
     int first_lane = 1;
 
-    // Traverse the topology graph starting from the vehicle's position forward
     while (current_entity != -1) {
         lane = &env->entities[current_entity];
 
         int start_idx = first_lane ? initial_segment_idx : 1;
-        // Ensure start_idx is at least 1 to avoid accessing traj_x[i-1] with i=0
         if (start_idx < 1) start_idx = 1;
         int use_initial_fraction = first_lane;
         first_lane = 0;
@@ -1868,10 +1855,10 @@ void compute_new_goal(Drive* env, int agent_idx) {
             float segment_length = relative_distance_2d(prev_x, prev_y, next_x, next_y);
 
             if (segment_length < 1e-4f) {
-                continue;  // Skip degenerate segments
+                continue;
             }
 
-            // If we start partway through the first segment, only the forward
+            // if we start partway through the first segment, only the forward
             // portion counts toward remaining distance.
             float start_fraction = (use_initial_fraction && i == start_idx) ? initial_fraction : 0.0f;
             if (start_fraction < 0.0f) start_fraction = 0.0f;
@@ -1884,12 +1871,10 @@ void compute_new_goal(Drive* env, int agent_idx) {
                 agent->goal_position_x = prev_x + seg_dx * frac_along;
                 agent->goal_position_y = prev_y + seg_dy * frac_along;
                 agent->sampled_new_goal = 0;
-                // Snap goal to lane geometry and keep it ahead along the lane direction.
                 int proj_seg = -1;
                 float proj_t = 0.0f;
                 if (project_point_onto_lane(lane, agent->goal_position_x, agent->goal_position_y, &agent->goal_position_x, &agent->goal_position_y, &proj_seg, &proj_t)) {
                     int seg_idx = proj_seg;
-                    // Use the segment direction for ahead check
                     float dir_x = lane->traj_x[seg_idx + 1] - lane->traj_x[seg_idx];
                     float dir_y = lane->traj_y[seg_idx + 1] - lane->traj_y[seg_idx];
                     float norm = sqrtf(dir_x * dir_x + dir_y * dir_y);
@@ -1929,10 +1914,9 @@ void compute_new_goal(Drive* env, int agent_idx) {
                 }
                 clamp_goal_to_map(env->grid_map, agent);
             }
-            return; // No further lanes to traverse
+            return;
         }
 
-        // Forward reference: use the current lane tangent near its end; fall back to heading.
         float forward_x = agent->heading_x, forward_y = agent->heading_y;
         if (lane->array_size >= 2) {
             int last_idx = lane->array_size - 1;
@@ -1945,7 +1929,6 @@ void compute_new_goal(Drive* env, int agent_idx) {
             }
         }
 
-        // Prefer lanes whose start is ahead along forward and whose heading aligns with it.
         int best_idx = -1;
         float best_dot = -2.0f;
         for (int c = 0; c < num_connected; c++) {
@@ -1962,7 +1945,6 @@ void compute_new_goal(Drive* env, int agent_idx) {
             dx /= norm;
             dy /= norm;
             float dot = dx * forward_x + dy * forward_y;
-            // Require the start of the candidate lane to be in front of the agent along road flow
             float start_x = next_lane->traj_x[0];
             float start_y = next_lane->traj_y[0];
             float to_start_x = start_x - agent->x;
@@ -1974,7 +1956,6 @@ void compute_new_goal(Drive* env, int agent_idx) {
             }
         }
 
-        // If no forward successor, place goal at the end of the current lane.
         if (best_idx == -1) {
             agent->goal_position_x = lane->traj_x[lane->array_size - 1];
             agent->goal_position_y = lane->traj_y[lane->array_size - 1];
@@ -1986,12 +1967,10 @@ void compute_new_goal(Drive* env, int agent_idx) {
         current_entity = connected_lanes[best_idx];
     }
 
-    // Final safety: ensure goal is ahead when exiting the loop
     ensure_goal_ahead(env, agent_idx, agent->x, agent->y, agent->heading_x, agent->heading_y);
 }
 
-// Precompute a preview goal that will become the next current goal after the agent reaches
-// its present goal. Only used when env->goal_behavior == GOAL_GENERATE_NEW.
+// compute preview goal
 void set_next_goal_preview(Drive* env, int agent_idx) {
     if (env->goal_behavior != GOAL_GENERATE_NEW) return;
     Entity* agent = &env->entities[agent_idx];
@@ -2010,20 +1989,17 @@ void set_next_goal_preview(Drive* env, int agent_idx) {
     float prev_heading_y = agent->heading_y;
     int prev_sampled = agent->sampled_new_goal;
 
-    // Temporarily place the agent at its current goal to sample a future goal forward.
     agent->x = prev_goal_x;
     agent->y = prev_goal_y;
 
     compute_new_goal(env, agent_idx);
 
-    // Ensure the previewed goal lies ahead of the current goal along the previous heading
     ensure_goal_ahead(env, agent_idx, prev_goal_x, prev_goal_y, prev_heading_x, prev_heading_y);
 
     agent->next_goal_position_x = agent->goal_position_x;
     agent->next_goal_position_y = agent->goal_position_y;
     agent->next_goal_valid = 1;
 
-    // Restore original state and current goal.
     agent->goal_position_x = prev_goal_x;
     agent->goal_position_y = prev_goal_y;
     agent->x = prev_x;
@@ -2034,7 +2010,6 @@ void set_next_goal_preview(Drive* env, int agent_idx) {
     agent->sampled_new_goal = prev_sampled;
 }
 
-// After reaching a goal, promote the previewed goal to current and sample a new preview.
 void promote_next_goal(Drive* env, int agent_idx) {
     if (env->goal_behavior != GOAL_GENERATE_NEW) return;
     Entity* agent = &env->entities[agent_idx];
@@ -2053,7 +2028,6 @@ void promote_next_goal(Drive* env, int agent_idx) {
 
 void init_goal_positions(Drive* env){
 
-    // First compute metrics to get current_lane_idx
     for(int x = 0; x < env->active_agent_count; x++){
         int agent_idx = env->active_agent_indices[x];
         compute_agent_metrics(env, agent_idx);
@@ -2906,7 +2880,6 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    // Keep obs indexing consistent with compute_observations (supports preview-next-goal dims)
     int base_ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
     int extra_goal_dim = (env->goal_behavior == GOAL_GENERATE_NEW) ? 2 : 0;
     int ego_dim = base_ego_dim + extra_goal_dim;

@@ -29,7 +29,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior=0,
         dt=0.1,
         scenario_length=None,
-        resample_frequency=None,
+        resample_frequency=91,
         num_maps=100,
         num_agents=512,
         action_type="discrete",
@@ -100,7 +100,8 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
 
         if goal_behavior == 1:
-            ego_features += 2  # preview next-goal relative position when generating new goals
+            # preview next goal + 1
+            ego_features += 2 
 
         self.ego_features = ego_features
         partner_features = 7

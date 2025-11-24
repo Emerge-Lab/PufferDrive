@@ -121,19 +121,6 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         }
         env->entities = load_map_binary(map_file_path, env);
 
-        // Check if map loading failed
-        if (env->entities == NULL) {
-            fprintf(stderr, "Error: Failed to load map file: %s\n", map_file_path);
-            free(env);
-            free(visited_maps);
-            Py_DECREF(agent_offsets);
-            Py_DECREF(map_ids);
-            char error_msg[512];
-            snprintf(error_msg, sizeof(error_msg), "Failed to load map file: %s. Check that the file exists and is a valid map binary.", map_file_path);
-            PyErr_SetString(PyExc_FileNotFoundError, error_msg);
-            return NULL;
-        }
-
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
@@ -221,9 +208,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
         conf.scenario_length = (int)unpack(kwargs, "scenario_length");
     }
     if (conf.scenario_length <= 0) {
-        // Fall back to trajectory length so metrics still flush instead of silently never logging
-        conf.scenario_length = TRAJECTORY_LENGTH;
-        fprintf(stderr, "[drive] scenario_length missing or invalid; defaulting to %d\n", conf.scenario_length);
+        PyErr_SetString(PyExc_ValueError, "scenario_length must be > 0 (set in INI or kwargs)");
+        return -1;
     }
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
@@ -268,15 +254,6 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->init_steps = init_steps;
     env->timestep = init_steps;
     init(env);
-
-    // Check if map loading failed during init
-    if (env->entities == NULL) {
-        fprintf(stderr, "Error: Failed to load map file during init: %s\n", map_file_path);
-        char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg), "Failed to load map file: %s. Check that the file exists and is a valid map binary.", map_file_path);
-        PyErr_SetString(PyExc_FileNotFoundError, error_msg);
-        return -1;
-    }
 
     return 0;
 }

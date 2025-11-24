@@ -501,7 +501,6 @@ class PuffeRL:
                     latest_cpt = max(model_files, key=os.path.getctime)
                     bin_path = f"{model_dir}.bin"
 
-                    # Snapshot current curriculum distance for rendering
                     render_max_distance = None
                     driver_env = getattr(self.vecenv, "driver_env", None)
                     if driver_env is not None:
@@ -525,9 +524,9 @@ class PuffeRL:
                             self.config,
                             self.vecenv,
                             self.logger,
+                            self.epoch,
                             self.global_step,
                             bin_path,
-                            epoch=self.epoch,
                             max_distance_to_goal=render_max_distance,
                         )
 
@@ -560,7 +559,7 @@ class PuffeRL:
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
 
-        # Push global agent-steps to the env curriculum so pacing matches training progress
+        # push global agent-steps to the env curriculum
         driver_env = getattr(self.vecenv, "driver_env", None)
         if driver_env is not None and hasattr(driver_env, "set_curriculum_progress"):
             changed = driver_env.set_curriculum_progress(agent_steps)
