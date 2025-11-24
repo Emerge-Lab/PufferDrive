@@ -420,9 +420,6 @@ class PuffeRL:
             discrete_human_actions, continuous_human_actions, human_observations = (
                 self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
             )
-            discrete_human_actions = discrete_human_actions.to(device)
-            continuous_human_actions = continuous_human_actions.to(device)
-            human_observations = human_observations.to(device)
 
             # Use helper function to compute realism metrics
             self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
@@ -441,10 +438,10 @@ class PuffeRL:
                 lstm_c=None,
             )
 
-            human_logits, _ = self.policy(human_observations, human_state)
+            human_logits, _ = self.policy(human_observations.to(device), human_state)
 
             _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
-                logits=human_logits, action=human_actions
+                logits=human_logits, action=human_actions.to(device)
             )
 
             self.realism["human_log_prob"] = human_log_prob.mean().item()
