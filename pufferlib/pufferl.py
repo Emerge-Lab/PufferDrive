@@ -422,8 +422,8 @@ class PuffeRL:
             )
 
             # Use helper function to compute realism metrics
-            self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
-            self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
+            # self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
+            # self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
 
             # Select appropriate action type for training
             use_continuous = self.vecenv.driver_env._action_type_flag == 1
@@ -566,6 +566,8 @@ class PuffeRL:
         if self.config["eval"]["wosac_realism_eval"] and (
             (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
+            torch.cuda.empty_cache()
+
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
         if self.config["eval"]["human_replay_eval"] and (
