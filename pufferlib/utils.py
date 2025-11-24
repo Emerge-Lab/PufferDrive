@@ -197,7 +197,7 @@ def render_videos(config, vecenv, logger, global_step, bin_path, epoch=None, max
         env = os.environ.copy()
         env["ASAN_OPTIONS"] = "exitcode=0"
 
-        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+        cmd = ["./visualize"]
 
         # Add render configurations
         if config["show_grid"]:
@@ -222,6 +222,8 @@ def render_videos(config, vecenv, logger, global_step, bin_path, epoch=None, max
             cmd.extend(["--control-mode", str(vecenv.driver_env.control_mode)])
         if getattr(vecenv.driver_env, "goal_sampling_mode", None) is not None:
             cmd.extend(["--goal-sampling-mode", str(vecenv.driver_env.goal_sampling_mode)])
+        if getattr(vecenv.driver_env, "goal_behavior", None) is not None:
+            cmd.extend(["--goal-behavior", str(vecenv.driver_env.goal_behavior)])
         if max_distance_to_goal is None:
             max_distance_to_goal = getattr(vecenv.driver_env, "max_distance_to_goal", None)
         if max_distance_to_goal is not None:
@@ -246,8 +248,22 @@ def render_videos(config, vecenv, logger, global_step, bin_path, epoch=None, max
             if getattr(env_cfg, "scenario_length", None):
                 cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
 
+        xvfb_proc = None
+        # Always start a dedicated Xvfb for rendering to avoid relying on whatever DISPLAY is present
+        display_num = 200
+        xvfb_cmd = ["Xvfb", f":{display_num}", "-screen", "0", "1280x720x24", "-nolisten", "tcp", "-ac"]
+        try:
+            xvfb_proc = subprocess.Popen(xvfb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            env["DISPLAY"] = f":{display_num}"
+        except FileNotFoundError:
+            xvfb_proc = None
+        env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+
         # Call C code that runs eval_gif() in subprocess
         result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env)
+        if xvfb_proc:
+            xvfb_proc.terminate()
+            xvfb_proc.wait(timeout=5)
 
         vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
             "resources/drive/output_agent.mp4"

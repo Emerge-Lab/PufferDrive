@@ -14,7 +14,86 @@
 #include "drivenet.h"
 #include "libgen.h"
 #include "../env_config.h"
+#include <dirent.h>
 #define TRAJECTORY_LENGTH_DEFAULT 91
+
+static int count_bin_files(const char* dir_path) {
+    int count = 0;
+    DIR* dir = opendir(dir_path);
+    if (!dir) {
+        return 0;
+    }
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        const char* name = entry->d_name;
+        size_t len = strlen(name);
+        if (len > 4 && strcmp(name + len - 4, ".bin") == 0) {
+            count++;
+        }
+    }
+    closedir(dir);
+    return count;
+}
+
+static char* get_nth_bin(const char* dir_path, int idx) {
+    int count = 0;
+    DIR* dir = opendir(dir_path);
+    if (!dir) {
+        return NULL;
+    }
+    struct dirent* entry;
+    char* chosen = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+        const char* name = entry->d_name;
+        size_t len = strlen(name);
+        if (len > 4 && strcmp(name + len - 4, ".bin") == 0) {
+            if (count == idx) {
+                size_t needed = strlen(dir_path) + 1 + strlen(name) + 1;
+                chosen = (char*)malloc(needed);
+                if (chosen) {
+                    snprintf(chosen, needed, "%s/%s", dir_path, name);
+                }
+                break;
+            }
+            count++;
+        }
+    }
+    closedir(dir);
+    return chosen;
+}
+
+static int cmp_strptr(const void* a, const void* b) {
+    const char* sa = *(const char* const*)a;
+    const char* sb = *(const char* const*)b;
+    return strcmp(sa, sb);
+}
+
+static int collect_bins_into(const char* dir_path, char** out, int max_out) {
+    if (!dir_path || max_out <= 0) {
+        return 0;
+    }
+    int count = 0;
+    DIR* dir = opendir(dir_path);
+    if (!dir) {
+        return 0;
+    }
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL && count < max_out) {
+        const char* name = entry->d_name;
+        size_t len = strlen(name);
+        if (len > 4 && strcmp(name + len - 4, ".bin") == 0) {
+            size_t needed = strlen(dir_path) + 1 + len + 1;
+            char* path = (char*)malloc(needed);
+            if (path) {
+                snprintf(path, needed, "%s/%s", dir_path, name);
+                out[count++] = path;
+            }
+        }
+    }
+    closedir(dir);
+    qsort(out, count, sizeof(char*), cmp_strptr);
+    return count;
+}
 
 typedef struct {
     int pipefd[2];
@@ -213,11 +292,30 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         return -1;
     }
 
-    char map_buffer[100];
+    const char* binary_dir = conf.binary_dir[0] ? conf.binary_dir : "resources/drive/carla_binaries";
+
+    char map_buffer[256];
     if (map_name == NULL) {
         srand(time(NULL));
-        int random_map = rand() % num_maps;
-        sprintf(map_buffer, "resources/drive/binaries/map_%03d.bin", random_map); // random map file
+        int max_slots = 1024;
+        char** map_list = (char**)calloc(max_slots, sizeof(char*));
+        int total = collect_bins_into(binary_dir, map_list, max_slots);
+        if (total == 0) {
+            fprintf(stderr, "No map binaries found in %s\n", binary_dir);
+            free(map_list);
+            return -1;
+        }
+        int effective_total = total;
+        if (num_maps > 0 && num_maps < total) {
+            effective_total = num_maps;
+        }
+        int choice = rand() % effective_total;
+        strncpy(map_buffer, map_list[choice], sizeof(map_buffer) - 1);
+        map_buffer[sizeof(map_buffer) - 1] = '\0';
+        for (int i = 0; i < total; i++) {
+            free(map_list[i]);
+        }
+        free(map_list);
         map_name = map_buffer;
     }
 
@@ -287,7 +385,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.goal_behavior);
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     int log_trajectory = log_trajectories;

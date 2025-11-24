@@ -501,6 +501,14 @@ class PuffeRL:
                     latest_cpt = max(model_files, key=os.path.getctime)
                     bin_path = f"{model_dir}.bin"
 
+                    # Snapshot current curriculum distance for rendering
+                    render_max_distance = None
+                    driver_env = getattr(self.vecenv, "driver_env", None)
+                    if driver_env is not None:
+                        if hasattr(driver_env, "set_curriculum_progress"):
+                            driver_env.set_curriculum_progress(self.global_step)
+                        render_max_distance = getattr(driver_env, "max_distance_to_goal", None)
+
                     # Export to .bin for rendering with raylib
                     try:
                         export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
@@ -520,7 +528,7 @@ class PuffeRL:
                             self.global_step,
                             bin_path,
                             epoch=self.epoch,
-                            max_distance_to_goal=self.stats.get("max_distance_to_goal"),
+                            max_distance_to_goal=render_max_distance,
                         )
 
                     except Exception as e:
@@ -542,13 +550,27 @@ class PuffeRL:
             v = self.stats[k]
             try:
                 v = np.mean(v)
-            except:
-                del self.stats[k]
+            except Exception as e:
+                raise RuntimeError(f"Failed to aggregate stat '{k}'") from e
+            if isinstance(v, float) and not np.isfinite(v):
+                raise ValueError(f"Stat '{k}' became non-finite ({v}); investigate training instability.")
 
             self.stats[k] = v
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
+
+        # Push global agent-steps to the env curriculum so pacing matches training progress
+        driver_env = getattr(self.vecenv, "driver_env", None)
+        if driver_env is not None and hasattr(driver_env, "set_curriculum_progress"):
+            changed = driver_env.set_curriculum_progress(agent_steps)
+            if changed and hasattr(self.vecenv, "notify"):
+                # Signal worker envs to rebuild with the new curriculum distance
+                self.vecenv.notify()
+            cur = getattr(driver_env, "goal_curriculum", None)
+            self.stats["max_distance_to_goal"] = getattr(driver_env, "max_distance_to_goal", 0.0)
+            self.stats["goal_curriculum_step"] = cur.current_idx if cur else 0
+
         logs = {
             "SPS": dist_sum(self.sps, device),
             "agent_steps": agent_steps,
@@ -562,11 +584,6 @@ class PuffeRL:
             # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
-
-        # Push global agent-steps to the env curriculum so pacing matches training progress
-        driver_env = getattr(self.vecenv, "driver_env", None)
-        if driver_env is not None and hasattr(driver_env, "set_curriculum_progress"):
-            driver_env.set_curriculum_progress(agent_steps)
 
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:

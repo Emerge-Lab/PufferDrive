@@ -76,18 +76,31 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     float max_distance_to_goal = unpack(kwargs, "max_distance_to_goal");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
+    PyObject* map_files_list = PyDict_GetItemString(kwargs, "map_files");
+    Py_ssize_t map_files_len = 0;
+    if (map_files_list && PyList_Check(map_files_list)) {
+        map_files_len = PyList_Size(map_files_list);
+    }
+
+    int map_count = map_files_len > 0 ? (int)map_files_len : num_maps;
+    if (map_count <= 0) {
+        PyErr_SetString(PyExc_ValueError, "No map files available to initialize environments");
+        return NULL;
+    }
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
     int env_count = 0;
     int max_envs = num_agents;
     int maps_checked = 0;
+    int* visited_maps = calloc(map_count, sizeof(int));
     PyObject* agent_offsets = PyList_New(max_envs+1);
     PyObject* map_ids = PyList_New(max_envs);
     // getting env count
     while(total_agent_count < num_agents && env_count < max_envs){
         char map_file[100];
-        int map_id = rand() % num_maps;
+        int map_id = rand() % map_count;
+        int already_checked = visited_maps ? visited_maps[map_id] : 0;
         Drive* env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
@@ -95,16 +108,45 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         env->goal_behavior = goal_behavior;
         env->goal_sampling_mode = goal_sampling_mode;
         env->max_distance_to_goal = max_distance_to_goal;
-        sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-        env->entities = load_map_binary(map_file, env);
+        const char* map_file_path = NULL;
+        if (map_files_len > 0 && map_id < map_files_len) {
+            PyObject* path_obj = PyList_GetItem(map_files_list, map_id);
+            if (PyUnicode_Check(path_obj)) {
+                map_file_path = PyUnicode_AsUTF8(path_obj);
+            }
+        }
+        if (map_file_path == NULL) {
+            sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
+            map_file_path = map_file;
+        }
+        env->entities = load_map_binary(map_file_path, env);
+
+        // Check if map loading failed
+        if (env->entities == NULL) {
+            fprintf(stderr, "Error: Failed to load map file: %s\n", map_file_path);
+            free(env);
+            free(visited_maps);
+            Py_DECREF(agent_offsets);
+            Py_DECREF(map_ids);
+            char error_msg[512];
+            snprintf(error_msg, sizeof(error_msg), "Failed to load map file: %s. Check that the file exists and is a valid map binary.", map_file_path);
+            PyErr_SetString(PyExc_FileNotFoundError, error_msg);
+            return NULL;
+        }
+
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
         if(env->active_agent_count == 0) {
-            maps_checked++;
+            if (visited_maps) {
+                visited_maps[map_id] = 1;
+            }
+            if (!already_checked) {
+                maps_checked++;
+            }
 
             // Safeguard: if we've checked all available maps and found no active agents, raise an error
-            if(maps_checked >= num_maps) {
+            if(maps_checked >= map_count) {
                 for(int j=0;j<env->num_entities;j++) {
                     free_entity(&env->entities[j]);
                 }
@@ -115,8 +157,9 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
                 free(env);
                 Py_DECREF(agent_offsets);
                 Py_DECREF(map_ids);
+                free(visited_maps);
                 char error_msg[256];
-                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                sprintf(error_msg, "No controllable agents found in any of the %d available maps", map_count);
                 PyErr_SetString(PyExc_ValueError, error_msg);
                 return NULL;
             }
@@ -163,6 +206,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
+    free(visited_maps);
     return tuple;
 }
 
@@ -177,8 +221,9 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
         conf.scenario_length = (int)unpack(kwargs, "scenario_length");
     }
     if (conf.scenario_length <= 0) {
-        PyErr_SetString(PyExc_ValueError, "scenario_length must be > 0 (set in INI or kwargs)");
-        return -1;
+        // Fall back to trajectory length so metrics still flush instead of silently never logging
+        conf.scenario_length = TRAJECTORY_LENGTH;
+        fprintf(stderr, "[drive] scenario_length missing or invalid; defaulting to %d\n", conf.scenario_length);
     }
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
@@ -201,13 +246,38 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
+    PyObject* map_files_list = PyDict_GetItemString(kwargs, "map_files");
+    Py_ssize_t map_files_len = 0;
+    if (map_files_list && PyList_Check(map_files_list)) {
+        map_files_len = PyList_Size(map_files_list);
+    }
     char map_file[100];
-    sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
+    const char* map_file_path = NULL;
+    if (map_files_len > 0 && map_id < map_files_len) {
+        PyObject* path_obj = PyList_GetItem(map_files_list, map_id);
+        if (PyUnicode_Check(path_obj)) {
+            map_file_path = PyUnicode_AsUTF8(path_obj);
+        }
+    }
+    if (map_file_path == NULL) {
+        sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
+        map_file_path = map_file;
+    }
     env->num_agents = max_agents;
-    env->map_name = strdup(map_file);
+    env->map_name = strdup(map_file_path);
     env->init_steps = init_steps;
     env->timestep = init_steps;
     init(env);
+
+    // Check if map loading failed during init
+    if (env->entities == NULL) {
+        fprintf(stderr, "Error: Failed to load map file during init: %s\n", map_file_path);
+        char error_msg[512];
+        snprintf(error_msg, sizeof(error_msg), "Failed to load map file: %s. Check that the file exists and is a valid map binary.", map_file_path);
+        PyErr_SetString(PyExc_FileNotFoundError, error_msg);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -219,11 +289,14 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "episode_return", log->episode_return);
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    assign_to_dict(dict, "avg_spawn_distance_to_goal", log->avg_spawn_distance_to_goal);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
     assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
     assign_to_dict(dict, "score", log->score);
     assign_to_dict(dict, "avg_offroad_per_agent", log->avg_offroad_per_agent);
     assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
-    assign_to_dict(dict, "avg_initial_distance_to_goal", log->avg_initial_distance_to_goal);
+    assign_to_dict(dict, "no_current_lane_rate", log->no_current_lane_rate);
+    assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
+    assign_to_dict(dict, "avg_initial_distance_to_goal", 0.0f);
     return 0;
 }
