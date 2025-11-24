@@ -1774,7 +1774,21 @@ void compute_new_goal(Drive* env, int agent_idx) {
                 float frac_along = start_fraction + (remaining_distance / segment_length);
                 agent->goal_position_x = prev_x + seg_dx * frac_along;
                 agent->goal_position_y = prev_y + seg_dy * frac_along;
+                // If the sampled goal is still very close, push it forward along the segment direction.
+                float dir_x = seg_dx;
+                float dir_y = seg_dy;
+                float goal_dist = relative_distance_2d(agent->x, agent->y, agent->goal_position_x, agent->goal_position_y);
+                if (goal_dist < 0.5f * target_distance) {
+                    float norm = sqrtf(dir_x * dir_x + dir_y * dir_y);
+                    if (norm > 1e-4f) {
+                        dir_x /= norm;
+                        dir_y /= norm;
+                        agent->goal_position_x = agent->x + dir_x * target_distance;
+                        agent->goal_position_y = agent->y + dir_y * target_distance;
+                    }
+                }
                 agent->sampled_new_goal = 0;
+                ensure_goal_ahead(env, agent_idx, agent->x, agent->y, dir_x, dir_y);
                 return;
             }
 
@@ -1787,6 +1801,19 @@ void compute_new_goal(Drive* env, int agent_idx) {
         if (num_connected == 0) {
             agent->goal_position_x = lane->traj_x[lane->array_size - 1];
             agent->goal_position_y = lane->traj_y[lane->array_size - 1];
+            // If too close, push it forward along heading.
+            float dir_x = agent->heading_x;
+            float dir_y = agent->heading_y;
+            float goal_dist = relative_distance_2d(agent->x, agent->y, agent->goal_position_x, agent->goal_position_y);
+            if (goal_dist < 0.5f * target_distance) {
+                float norm = sqrtf(dir_x * dir_x + dir_y * dir_y);
+                if (norm > 1e-4f) {
+                    dir_x /= norm;
+                    dir_y /= norm;
+                    agent->goal_position_x = agent->x + dir_x * target_distance;
+                    agent->goal_position_y = agent->y + dir_y * target_distance;
+                }
+            }
             agent->sampled_new_goal = 0;
             return; // No further lanes to traverse
         }
@@ -1837,8 +1864,21 @@ void compute_new_goal(Drive* env, int agent_idx) {
         if (best_idx == -1) {
             agent->goal_position_x = lane->traj_x[lane->array_size - 1];
             agent->goal_position_y = lane->traj_y[lane->array_size - 1];
+            // If this ended up too close, push it forward along the lane tangent or heading.
+            float dir_x = forward_x;
+            float dir_y = forward_y;
+            float goal_dist = relative_distance_2d(agent->x, agent->y, agent->goal_position_x, agent->goal_position_y);
+            if (goal_dist < 0.5f * target_distance) {
+                float norm = sqrtf(dir_x * dir_x + dir_y * dir_y);
+                if (norm > 1e-4f) {
+                    dir_x /= norm;
+                    dir_y /= norm;
+                    agent->goal_position_x = agent->x + dir_x * target_distance;
+                    agent->goal_position_y = agent->y + dir_y * target_distance;
+                }
+            }
             agent->sampled_new_goal = 0;
-            ensure_goal_ahead(env, agent_idx, agent->x, agent->y, forward_x, forward_y);
+            ensure_goal_ahead(env, agent_idx, agent->x, agent->y, dir_x, dir_y);
             return;
         }
 
