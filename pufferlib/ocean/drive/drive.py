@@ -442,6 +442,7 @@ class Drive(pufferlib.PufferEnv):
             else:  # discrete
                 actions = torch.load(discrete_path, map_location="cpu", weights_only=False)
             return actions[indices], sampled_obs
+
     def get_road_edge_polylines(self):
         """Get road edge polylines for all scenarios.
 

@@ -534,7 +534,7 @@ class PuffeRL:
             self.last_log_step = self.global_step
             profile.clear()
 
-        if self.epoch % config["checkpoint_interval"] == 0 or done_training:
+        if (self.epoch - 1) % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
@@ -567,12 +567,12 @@ class PuffeRL:
                         print(f"Failed to export model weights: {e}")
 
         if self.config["eval"]["wosac_realism_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
         if self.config["eval"]["human_replay_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
@@ -1305,6 +1305,9 @@ def controlled_exp(env_name, args=None):
         for key, value in zip(keys, combo):
             section, param = key.split(".")
             exp_args[section][param] = value
+
+        # Create descriptive tag
+        # exp_args["tag"] = "_".join([f"{param.split('.')[-1]}={v}" for param, v in zip(keys, combo)])
 
         print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
 
