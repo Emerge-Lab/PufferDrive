@@ -1208,6 +1208,53 @@ def sweep(args=None, env_name=None):
         args["train"]["total_timesteps"] = total_timesteps
 
 
+def targeted_exp(env_name, args=None):
+    """Run experiments with all combinations of specified parameter values."""
+    import itertools
+
+    args = args or load_config(env_name)
+    if not args["wandb"] and not args["neptune"]:
+        raise pufferlib.APIUsageError("Targeted experiments require either wandb or neptune")
+
+    # Check if targeted_exp config exists
+    if "targeted_exp" not in args:
+        raise pufferlib.APIUsageError("No [targeted_exp.*] sections found in config")
+
+    # Extract parameters from targeted_exp namespace
+    params = {}
+    for section, section_config in args["targeted_exp"].items():
+        if isinstance(section_config, dict):
+            for param, param_config in section_config.items():
+                if isinstance(param_config, dict) and "values" in param_config:
+                    params[f"{section}.{param}"] = param_config["values"]
+
+    if not params:
+        raise pufferlib.APIUsageError("No parameters with 'values' lists found in [targeted_exp.*] sections")
+
+    # Generate all combinations
+    keys = list(params.keys())
+    combinations = list(itertools.product(*[params[k] for k in keys]))
+
+    print(f"Running a total of {len(combinations)} experiments with parameters: {keys}")
+
+    # Run each combination
+    for i, combo in enumerate(combinations, 1):
+        # Set parameters
+        for key, value in zip(keys, combo):
+            section, param = key.split(".")
+            args[section][param] = value
+
+        # Create descriptive tag
+        args["tag"] = "_".join([f"{param.split('.')[-1]}={v}" for param, v in zip(keys, combo)])
+
+        print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
+
+        # Train
+        train(env_name, args=args)
+
+    print(f"\n✓ Completed all {len(combinations)} experiments")
+
+
 def profile(args=None, env_name=None, vecenv=None, policy=None):
     args = load_config()
     vecenv = vecenv or load_env(env_name, args)
@@ -1430,6 +1477,8 @@ def main():
         eval(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
+    elif mode == "targeted_exp":
+        targeted_exp(env_name=env_name)
     elif mode == "autotune":
         autotune(env_name=env_name)
     elif mode == "profile":
