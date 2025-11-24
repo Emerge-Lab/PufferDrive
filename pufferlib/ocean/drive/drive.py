@@ -25,8 +25,8 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior=0,
         offroad_behavior=0,
         dt=0.1,
-        scenario_length=None,
-        resample_frequency=91,
+        scenario_length=91,
+        resample_frequency=910,
         num_maps=100,
         num_agents=512,
         action_type="discrete",
@@ -37,6 +37,12 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        control_non_vehicles=False,
+        num_agents_per_world=32,
+        vehicle_width=2.0,
+        vehicle_length=4.5,
+        vehicle_height=1.8,
+        goal_curriculum=30.0,
     ):
         # env
         self.dt = dt
@@ -80,18 +86,20 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 0
         elif self.control_mode_str == "control_agents":
             self.control_mode = 1
-        elif self.control_mode_str == "control_tracks_to_predict":
+        elif self.control_mode_str == "control_wosac":
             self.control_mode = 2
         elif self.control_mode_str == "control_sdc_only":
             self.control_mode = 3
         else:
             raise ValueError(
-                f"control_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.control_mode_str}"
+                f"control_mode must be one of 'control_vehicles', 'control_wosac', or 'control_agents'. Got: {self.control_mode_str}"
             )
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
         elif self.init_mode_str == "create_only_controlled":
             self.init_mode = 1
+        elif self.init_mode_str == "dynamic_no_agents":
+            self.init_mode = 0  # All created agents are valid
         else:
             raise ValueError(
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
@@ -138,6 +146,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            ini_file="pufferlib/config/ocean/drive.ini",
         )
 
         self.num_agents = num_agents
@@ -210,6 +219,7 @@ class Drive(pufferlib.PufferEnv):
                     init_steps=self.init_steps,
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
+                    ini_file="pufferlib/config/ocean/drive.ini",
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
@@ -255,7 +265,7 @@ class Drive(pufferlib.PufferEnv):
         """Get current global state of all active agents.
 
         Returns:
-            dict with keys 'x', 'y', 'z', 'heading', 'id' containing numpy arrays
+            dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
             of shape (num_active_agents,)
         """
         num_agents = self.num_agents
@@ -266,10 +276,19 @@ class Drive(pufferlib.PufferEnv):
             "z": np.zeros(num_agents, dtype=np.float32),
             "heading": np.zeros(num_agents, dtype=np.float32),
             "id": np.zeros(num_agents, dtype=np.int32),
+            "length": np.zeros(num_agents, dtype=np.float32),
+            "width": np.zeros(num_agents, dtype=np.float32),
         }
 
         binding.vec_get_global_agent_state(
-            self.c_envs, states["x"], states["y"], states["z"], states["heading"], states["id"]
+            self.c_envs,
+            states["x"],
+            states["y"],
+            states["z"],
+            states["heading"],
+            states["id"],
+            states["length"],
+            states["width"],
         )
 
         return states
@@ -307,6 +326,32 @@ class Drive(pufferlib.PufferEnv):
             trajectories[key] = trajectories[key][:, None]
 
         return trajectories
+
+    def get_road_edge_polylines(self):
+        """Get road edge polylines for all scenarios.
+
+        Returns:
+            dict with keys 'x', 'y', 'lengths', 'scenario_id' containing numpy arrays.
+            x, y are flattened point coordinates; lengths indicates points per polyline.
+        """
+        num_polylines, total_points = binding.vec_get_road_edge_counts(self.c_envs)
+
+        polylines = {
+            "x": np.zeros(total_points, dtype=np.float32),
+            "y": np.zeros(total_points, dtype=np.float32),
+            "lengths": np.zeros(num_polylines, dtype=np.int32),
+            "scenario_id": np.zeros(num_polylines, dtype=np.int32),
+        }
+
+        binding.vec_get_road_edge_polylines(
+            self.c_envs,
+            polylines["x"],
+            polylines["y"],
+            polylines["lengths"],
+            polylines["scenario_id"],
+        )
+
+        return polylines
 
     def render(self):
         binding.vec_render(self.c_envs, 0)

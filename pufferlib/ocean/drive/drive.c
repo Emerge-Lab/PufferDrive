@@ -19,7 +19,7 @@ void test_drivenet() {
 
     //Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights* weights = load_weights("puffer_drive_weights.bin");
-    DriveNet* net = init_drivenet(weights, num_agents);
+    DriveNet* net = init_drivenet(weights, num_agents, CLASSIC);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents*num_actions; i++) {
@@ -43,17 +43,20 @@ void demo() {
     }
 
     Drive env = {
-        .human_agent_idx = 0,
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
-	    .map_name = "resources/drive/binaries/map_000.bin",
         .init_steps = conf.init_steps,
+        .max_controlled_agents = -1,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
+        .goal_behavior = conf.goal_behavior,
+        .init_mode = conf.init_mode,
+        .control_mode = conf.control_mode,
+        .ini_file = (char*)ini_file,
     };
     allocate(&env);
     c_reset(&env);
