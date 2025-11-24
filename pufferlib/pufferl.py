@@ -1477,8 +1477,8 @@ def main():
         eval(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
-    elif mode == "targeted_exp":
-        targeted_exp(env_name=env_name)
+    elif mode == "controlled_exp":
+        controlled_exp(env_name=env_name)
     elif mode == "autotune":
         autotune(env_name=env_name)
     elif mode == "profile":
