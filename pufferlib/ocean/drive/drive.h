@@ -38,7 +38,8 @@
 // Control modes
 #define CONTROL_VEHICLES 0
 #define CONTROL_AGENTS 1
-#define CONTROL_TRACKS_TO_PREDICT 2
+#define CONTROL_WOSAC 2
+#define CONTROL_SDC_ONLY 3
 
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
@@ -1800,29 +1801,34 @@ bool should_control_agent(Drive* env, int agent_idx){
 
     Entity* entity = &env->entities[agent_idx];
 
-    // Shrink agent size for collision checking
-    entity->width *= 0.7f; // TODO: Move this somewhere else
+    // TODO: Move this elsewhere or remove
+    entity->width  *= 0.7f;
     entity->length *= 0.7f;
 
-    // Special mode: control only agents in prediction track list
-    if (env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
-        for (int j = 0; j < env->num_tracks_to_predict; j++) {
-            if (env->tracks_to_predict_indices[j] == agent_idx) {
-                return true;
-            }
-        }
-        return false;
+    if (env->control_mode == CONTROL_SDC_ONLY) {
+        return agent_idx == env->sdc_track_index;
     }
 
-    // Standard mode: check type, distance to goal, and expert status
-    bool type_is_controllable = false;
-    if (env->control_mode == CONTROL_VEHICLES) {
-        type_is_controllable = (entity->type == VEHICLE);
-    } else {  // CONTROL_AGENTS mode
-        type_is_controllable = (entity->type == VEHICLE || entity->type == PEDESTRIAN || entity->type == CYCLIST);
+    bool is_vehicle      = (entity->type == VEHICLE);
+    bool is_ped_or_bike  = (entity->type == PEDESTRIAN || entity->type == CYCLIST);
+    bool type_is_valid   = false;
+
+    switch (env->control_mode) {
+        case CONTROL_WOSAC:
+            // Valid types only, ignore expert flag and goal distance
+            return (is_vehicle || is_ped_or_bike);
+
+        case CONTROL_VEHICLES:
+            type_is_valid = is_vehicle;
+            break;
+
+        default:
+            type_is_valid = (is_vehicle || is_ped_or_bike);
+            break;
     }
 
-    if (!type_is_controllable || entity->mark_as_expert) {
+    // Filter invalid types or experts
+    if (!type_is_valid || entity->mark_as_expert) {
         return false;
     }
 
@@ -1924,7 +1930,7 @@ void set_active_agents(Drive* env){
 
 void remove_bad_trajectories(Drive* env){
 
-    if (env->control_mode != CONTROL_TRACKS_TO_PREDICT) {
+    if (env->control_mode != CONTROL_WOSAC) {
         return; // Leave all trajectories in WOSAC control mode
     }
 
@@ -2117,10 +2123,13 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
             acceleration *= ACCELERATION_VALUES[6];
             steering *= STEERING_VALUES[12];
         } else { // discrete
-            int (*action_array)[2] = (int(*)[2])env->actions;
-            int acceleration_index = action_array[action_idx][0];
-            int steering_index = action_array[action_idx][1];
-
+            // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
+            int* action_array = (int*)env->actions;
+            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
+            int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+            int action_val = action_array[action_idx];
+            int acceleration_index = action_val / num_steer;
+            int steering_index = action_val % num_steer;
             acceleration = ACCELERATION_VALUES[acceleration_index];
             steering = STEERING_VALUES[steering_index];
         }
@@ -2136,7 +2145,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         float speed = sqrtf(vx*vx + vy*vy);
 
         // Update speed with acceleration
-        speed = speed + 0.5f*acceleration*env->dt;
+        speed = speed + acceleration*env->dt;
         speed = clipSpeed(speed);
 
         // Compute yaw rate
@@ -2262,7 +2271,19 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     return;
 }
 
-void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* id_out) {
+static inline int get_track_id_or_placeholder(Drive* env, int agent_idx) {
+    if (env->tracks_to_predict_indices == NULL || env->num_tracks_to_predict == 0) {
+        return -1;
+    }
+    for (int k = 0; k < env->num_tracks_to_predict; k++) {
+        if (env->tracks_to_predict_indices[k] == agent_idx) {
+            return env->tracks_to_predict_indices[k];
+        }
+    }
+    return -1;
+}
+
+void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* id_out, float* length_out, float* width_out) {
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
@@ -2272,7 +2293,9 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
-        id_out[i] = env->tracks_to_predict_indices[i];
+        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        length_out[i] = agent->length;
+        width_out[i] = agent->width;
     }
 }
 
@@ -2280,7 +2303,7 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
-        id_out[i] = env->tracks_to_predict_indices[i];
+        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
         scenario_id_out[i] = agent->scenario_id;
 
         for(int t = env->init_steps; t < agent->array_size; t++){
@@ -2291,6 +2314,35 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
             z_out[out_idx] = agent->traj_z[t];
             heading_out[out_idx] = agent->traj_heading[t];
             valid_out[out_idx] = agent->traj_valid[t];
+        }
+    }
+}
+
+void c_get_road_edge_counts(Drive* env, int* num_polylines_out, int* total_points_out) {
+    int count = 0, points = 0;
+    for(int i = env->num_objects; i < env->num_entities; i++) {
+        if(env->entities[i].type == ROAD_EDGE) {
+            count++;
+            points += env->entities[i].array_size;
+        }
+    }
+    *num_polylines_out = count;
+    *total_points_out = points;
+}
+
+void c_get_road_edge_polylines(Drive* env, float* x_out, float* y_out, int* lengths_out, int* scenario_ids_out) {
+    int poly_idx = 0, pt_idx = 0;
+    for(int i = env->num_objects; i < env->num_entities; i++) {
+        Entity* e = &env->entities[i];
+        if(e->type == ROAD_EDGE) {
+            lengths_out[poly_idx] = e->array_size;
+            scenario_ids_out[poly_idx] = e->scenario_id;
+            for(int j = 0; j < e->array_size; j++) {
+                x_out[pt_idx] = e->traj_x[j] + env->world_mean_x;
+                y_out[pt_idx] = e->traj_y[j] + env->world_mean_y;
+                pt_idx++;
+            }
+            poly_idx++;
         }
     }
 }
@@ -2904,7 +2956,8 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int max_obs = 10 + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
+    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
@@ -2928,7 +2981,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
-    int obs_idx = 10;  // Start after ego obs
+    int obs_idx = ego_dim;  // Start after ego obs
     for(int j = 0; j < MAX_AGENTS - 1; j++) {
         if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 7;  // Move to next agent observation
@@ -3476,7 +3529,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
     EndMode3D();
 
     // Draw track indices for the tracks to predict
-    if (mode == 1 && env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
+    if (mode == 1 && env->control_mode == CONTROL_WOSAC) {
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;

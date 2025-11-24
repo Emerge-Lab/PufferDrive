@@ -68,6 +68,13 @@ def test_drive_training():
         )
         args["wandb"] = False
         args["neptune"] = False
+        args["eval"] = {
+            "eval_interval": 10000,
+            "num_episodes": 4,
+            "wosac_realism_eval": False,
+            "human_replay_eval": True,
+            "human_replay_num_agents": 8,
+        }
 
         # Load components
         print("Loading environment and policy...")
@@ -75,7 +82,7 @@ def test_drive_training():
         policy = load_policy(args, vecenv, env_name)
 
         # Initialize training
-        train_config = dict(**args["train"], env=env_name)
+        train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
         pufferl = PuffeRL(train_config, vecenv, policy, logger=None)
 
         # Train until reaching 50K steps
