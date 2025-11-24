@@ -192,6 +192,7 @@ def compute_time_to_collision(
     eval_indices = torch.nonzero(evaluated_object_mask, as_tuple=False).squeeze(-1)
     num_eval = eval_indices.numel()
 
+    # TODO: Convert to torch
     speed = metrics.compute_kinematic_features(
         x=center_x.cpu().numpy(),
         y=center_y.cpu().numpy(),
