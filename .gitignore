@@ -165,6 +165,8 @@ pufferlib/ocean/impulse_wars/benchmark/
 # Ignore data files
 data/
 pufferlib/resources/drive/binaries/
+pufferlib/resources/drive/binaries/training/
+pufferlib/resources/drive/binaries/validation/
 
 # But keep map_000.bin for the training test
 !pufferlib/resources/drive/binaries/map_000.bin

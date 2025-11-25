@@ -1037,9 +1037,11 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
+    args["env"]["map_dir"] = args["eval"]["map_dir"]
+    dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     if wosac_enabled:
-        print(f"Running WOSAC realism evaluation. \n")
+        print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
         backend = args["eval"]["backend"]
@@ -1089,7 +1091,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         return results
 
     elif human_replay_enabled:
-        print("Running human replay evaluation.\n")
+        print(f"Running human replay evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
         backend = args["eval"].get("backend", "PufferEnv")

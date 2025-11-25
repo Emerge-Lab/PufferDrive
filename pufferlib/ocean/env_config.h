@@ -27,6 +27,7 @@ typedef struct
     int init_steps;
     int init_mode;
     int control_mode;
+    char map_dir[256];
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -89,6 +90,11 @@ static int handler(
         env_config->init_mode = atoi(value);
     } else if (MATCH("env", "control_mode")) {
         env_config->control_mode = atoi(value);
+    } else if (MATCH("env", "map_dir")) {
+        strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);
+        env_config->map_dir[sizeof(env_config->map_dir) - 1] = '\0'; // Ensure null-termination
+    } else {
+        return 0;  // Unknown section/name, indicate failure to handle
     }
 
     #undef MATCH

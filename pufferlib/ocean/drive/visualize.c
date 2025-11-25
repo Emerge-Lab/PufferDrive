@@ -217,7 +217,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     if (map_name == NULL) {
         srand(time(NULL));
         int random_map = rand() % num_maps;
-        sprintf(map_buffer, "resources/drive/binaries/map_%03d.bin", random_map); // random map file
+        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map); // random map file
         map_name = map_buffer;
     }
 
