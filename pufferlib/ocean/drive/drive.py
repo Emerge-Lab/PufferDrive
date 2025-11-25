@@ -3,8 +3,11 @@ import gymnasium
 import json
 import struct
 import os
+import configparser
+from pathlib import Path
 import pufferlib
 from pufferlib.ocean.drive import binding
+from pufferlib.ocean.drive.curriculum import GoalCurriculum
 
 
 class Drive(pufferlib.PufferEnv):
@@ -37,11 +40,19 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        goal_sampling_mode="fixed_from_dataset",
+        max_distance_to_goal=100.0,
+        goal_curriculum_start_distance=5.0,
+        goal_curriculum_end_distance=None,
+        goal_curriculum_steps=5,
+        goal_curriculum_schedule="linear",
+        goal_curriculum_total_timesteps=None,
+        binary_dir=None,
+        ini_file="pufferlib/config/ocean/drive.ini",
     ):
         # env
         self.dt = dt
         self.render_mode = render_mode
-        self.num_maps = num_maps
         self.report_interval = report_interval
         self.reward_vehicle_collision = reward_vehicle_collision
         self.reward_offroad_collision = reward_offroad_collision
@@ -52,10 +63,33 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.reward_ade = reward_ade
+        self.ini_file = ini_file
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.max_distance_to_goal = max_distance_to_goal
+        self.goal_curriculum_start_distance = goal_curriculum_start_distance
+        self.goal_curriculum_end_distance = goal_curriculum_end_distance
+        self.goal_curriculum_steps = goal_curriculum_steps
+        self.goal_curriculum_schedule = goal_curriculum_schedule
+        self.goal_curriculum_total_timesteps = goal_curriculum_total_timesteps
+        self.goal_curriculum = None
+        ini_scenario_length = None
+        ini_resample_frequency = None
+        if self.ini_file and os.path.exists(self.ini_file):
+            config = configparser.ConfigParser()
+            config.read(self.ini_file)
+            ini_scenario_length = config.getint("env", "scenario_length", fallback=None)
+            ini_resample_frequency = config.getint("env", "resample_frequency", fallback=None)
+
+        self.scenario_length = self.scenario_length if self.scenario_length is not None else ini_scenario_length
+        if self.resample_frequency is None:
+            self.resample_frequency = (
+                ini_resample_frequency
+                if ini_resample_frequency is not None
+                else (self.scenario_length if self.scenario_length is not None else 0)
+            )
 
         # Observation space calculation
         if dynamics_model == "classic":
@@ -64,6 +98,10 @@ class Drive(pufferlib.PufferEnv):
             ego_features = 10
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+
+        if goal_behavior == 1:
+            # preview next goal + 1
+            ego_features += 2 
 
         self.ego_features = ego_features
         partner_features = 7
@@ -76,6 +114,7 @@ class Drive(pufferlib.PufferEnv):
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
 
+        # TODO: Convert all these to enums
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
         elif self.control_mode_str == "control_agents":
@@ -97,6 +136,29 @@ class Drive(pufferlib.PufferEnv):
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
             )
 
+        if goal_sampling_mode == "fixed_from_dataset":
+            self.goal_sampling_mode = 0
+        elif goal_sampling_mode == "random_within_radius":
+            self.goal_sampling_mode = 1
+        elif goal_sampling_mode == "randomized_curriculum":
+            self.goal_sampling_mode = 2
+            end_distance = goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            self.goal_curriculum = GoalCurriculum(
+                start_distance=goal_curriculum_start_distance,
+                end_distance=end_distance,
+                steps=goal_curriculum_steps,
+                schedule=goal_curriculum_schedule,
+                total_timesteps=goal_curriculum_total_timesteps,
+            )
+            self.max_distance_to_goal = self.goal_curriculum.current_distance
+            self.goal_curriculum_step_interval = self.goal_curriculum.step_interval
+            self.goal_curriculum_total_timesteps = self.goal_curriculum.total_timesteps
+
+        else:
+            raise ValueError(
+                f"goal_sampling_mode must be one of 'fixed_from_dataset', 'random_within_radius', or 'randomized_curriculum'. Got: {goal_sampling_mode}"
+            )
+
         if action_type == "discrete":
             if dynamics_model == "classic":
                 # Joint action space (assume dependence)
@@ -114,30 +176,33 @@ class Drive(pufferlib.PufferEnv):
 
         self._action_type_flag = 0 if action_type == "discrete" else 1
 
-        # Check if resources directory exists
-        binary_path = "resources/drive/binaries/map_000.bin"
-        if not os.path.exists(binary_path):
-            raise FileNotFoundError(
-                f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
-            )
+        binary_dir = resolve_binary_dir(binary_dir, ini_file)
+        self.map_files = collect_map_files(binary_dir=binary_dir, limit=num_maps)
+        if not self.map_files:
+            raise FileNotFoundError("No map binaries found for the configured selection")
 
         # Check maps availability
-        available_maps = len([name for name in os.listdir("resources/drive/binaries") if name.endswith(".bin")])
+        available_maps = len(self.map_files)
         if num_maps > available_maps:
             raise ValueError(
-                f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
+                f"num_maps ({num_maps}) exceeds available maps ({available_maps}). "
+                "Reduce num_maps or add more binaries to the configured directory."
             )
+        self.num_maps = len(self.map_files)
         self.max_controlled_agents = int(max_controlled_agents)
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             num_agents=num_agents,
-            num_maps=num_maps,
+            num_maps=self.num_maps,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            goal_sampling_mode=self.goal_sampling_mode,
+            max_distance_to_goal=self.max_distance_to_goal,
+            map_files=self.map_files,
         )
 
         self.num_agents = num_agents
@@ -168,18 +233,87 @@ class Drive(pufferlib.PufferEnv):
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
-                scenario_length=(int(scenario_length) if scenario_length is not None else None),
+                scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
-                ini_file="pufferlib/config/ocean/drive.ini",
+                ini_file=self.ini_file,
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
+                goal_sampling_mode=self.goal_sampling_mode,
+                max_distance_to_goal=self.max_distance_to_goal,
+                map_files=self.map_files,
             )
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
+
+    def _rebuild_envs(self, seed=None):
+        """Reinitialize C envs so curriculum changes reach the simulator."""
+        if seed is None:
+            seed = np.random.randint(0, 2**32 - 1)
+
+        if hasattr(self, "c_envs"):
+            binding.vec_close(self.c_envs)
+
+        agent_offsets, map_ids, num_envs = binding.shared(
+            num_agents=self.num_agents,
+            num_maps=self.num_maps,
+            init_mode=self.init_mode,
+            control_mode=self.control_mode,
+            init_steps=self.init_steps,
+            max_controlled_agents=self.max_controlled_agents,
+            goal_behavior=self.goal_behavior,
+            goal_sampling_mode=self.goal_sampling_mode,
+            max_distance_to_goal=self.max_distance_to_goal,
+            map_files=self.map_files,
+        )
+
+        env_ids = []
+        for i in range(num_envs):
+            cur = agent_offsets[i]
+            nxt = agent_offsets[i + 1]
+            env_id = binding.env_init(
+                self.observations[cur:nxt],
+                self.actions[cur:nxt],
+                self.rewards[cur:nxt],
+                self.terminals[cur:nxt],
+                self.truncations[cur:nxt],
+                seed,
+                action_type=self._action_type_flag,
+                human_agent_idx=self.human_agent_idx,
+                reward_vehicle_collision=self.reward_vehicle_collision,
+                reward_offroad_collision=self.reward_offroad_collision,
+                reward_goal=self.reward_goal,
+                reward_goal_post_respawn=self.reward_goal_post_respawn,
+                reward_ade=self.reward_ade,
+                goal_radius=self.goal_radius,
+                goal_behavior=self.goal_behavior,
+                collision_behavior=self.collision_behavior,
+                offroad_behavior=self.offroad_behavior,
+                dt=self.dt,
+                scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
+                max_controlled_agents=self.max_controlled_agents,
+                map_id=map_ids[i],
+                max_agents=nxt - cur,
+                ini_file=self.ini_file,
+                init_steps=self.init_steps,
+                init_mode=self.init_mode,
+                control_mode=self.control_mode,
+                goal_sampling_mode=self.goal_sampling_mode,
+                max_distance_to_goal=self.max_distance_to_goal,
+                map_files=self.map_files,
+            )
+            env_ids.append(env_id)
+
+        self.agent_offsets = agent_offsets
+        self.map_ids = map_ids
+        self.num_envs = num_envs
+        self.c_envs = binding.vectorize(*env_ids)
+        binding.vec_reset(self.c_envs, seed)
+        self.terminals[:] = 1
+        self.tick = 0
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -191,65 +325,61 @@ class Drive(pufferlib.PufferEnv):
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
+
         info = []
         if self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs)
-            if log:
-                info.append(log)
-                # print(log)
-        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
-            self.tick = 0
-            will_resample = 1
-            if will_resample:
-                binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(
-                    num_agents=self.num_agents,
-                    num_maps=self.num_maps,
-                    init_mode=self.init_mode,
-                    control_mode=self.control_mode,
-                    init_steps=self.init_steps,
-                    max_controlled_agents=self.max_controlled_agents,
-                    goal_behavior=self.goal_behavior,
+            log = binding.vec_log(self.c_envs) or {}
+            if self.goal_sampling_mode == 2 and self.goal_curriculum is not None:
+                log.update(
+                    {
+                        "max_distance_to_goal": float(self.max_distance_to_goal),
+                        "goal_curriculum_step": int(self.goal_curriculum.current_idx),
+                    }
                 )
-                env_ids = []
-                seed = np.random.randint(0, 2**32 - 1)
-                for i in range(num_envs):
-                    cur = agent_offsets[i]
-                    nxt = agent_offsets[i + 1]
-                    env_id = binding.env_init(
-                        self.observations[cur:nxt],
-                        self.actions[cur:nxt],
-                        self.rewards[cur:nxt],
-                        self.terminals[cur:nxt],
-                        self.truncations[cur:nxt],
-                        seed,
-                        action_type=self._action_type_flag,
-                        human_agent_idx=self.human_agent_idx,
-                        reward_vehicle_collision=self.reward_vehicle_collision,
-                        reward_offroad_collision=self.reward_offroad_collision,
-                        reward_goal=self.reward_goal,
-                        reward_goal_post_respawn=self.reward_goal_post_respawn,
-                        reward_ade=self.reward_ade,
-                        goal_radius=self.goal_radius,
-                        goal_behavior=self.goal_behavior,
-                        collision_behavior=self.collision_behavior,
-                        offroad_behavior=self.offroad_behavior,
-                        dt=self.dt,
-                        scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
-                        max_controlled_agents=self.max_controlled_agents,
-                        map_id=map_ids[i],
-                        max_agents=nxt - cur,
-                        ini_file="pufferlib/config/ocean/drive.ini",
-                        init_steps=self.init_steps,
-                        init_mode=self.init_mode,
-                        control_mode=self.control_mode,
-                    )
-                    env_ids.append(env_id)
-                self.c_envs = binding.vectorize(*env_ids)
+            info.append(log)
 
-                binding.vec_reset(self.c_envs, seed)
-                self.terminals[:] = 1
+        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+            if self.goal_sampling_mode == 2 and self.goal_curriculum is not None:
+                if self.goal_curriculum.step_interval is None:
+                    self.goal_curriculum.advance_one_stage()
+                    self.max_distance_to_goal = self.goal_curriculum.current_distance
+                else:
+                    self.goal_curriculum.agent_steps += self.resample_frequency * self.num_agents
+                    target_idx = min(
+                        self.goal_curriculum.agent_steps // self.goal_curriculum.step_interval,
+                        len(self.goal_curriculum.distances) - 1,
+                    )
+                    self.goal_curriculum.current_idx = target_idx
+                    self.max_distance_to_goal = self.goal_curriculum.current_distance
+
+            seed = np.random.randint(0, 2**32 - 1)
+            self._rebuild_envs(seed=seed)
+
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+    def set_curriculum_progress(self, agent_steps):
+        """Force curriculum progress based on global agent-step count. Returns True if distance changed."""
+        if self.goal_sampling_mode != 2 or self.goal_curriculum is None:
+            return False
+        agent_steps_int = int(agent_steps)
+        prev_distance = self.max_distance_to_goal
+        self.goal_curriculum.agent_steps = max(0, agent_steps_int)
+        if self.goal_curriculum.step_interval is not None:
+            target_idx = min(
+                self.goal_curriculum.agent_steps // self.goal_curriculum.step_interval,
+                len(self.goal_curriculum.distances) - 1,
+            )
+            if target_idx != self.goal_curriculum.current_idx:
+                self.goal_curriculum.current_idx = target_idx
+                self.max_distance_to_goal = self.goal_curriculum.current_distance
+        if self.max_distance_to_goal != prev_distance:
+            self._rebuild_envs()
+            return True
+        return False
+
+    def notify(self):
+        """Called from vector workers when a curriculum change is broadcast."""
+        self._rebuild_envs()
 
     def get_global_agent_state(self):
         """Get current global state of all active agents.
@@ -379,8 +509,6 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(struct.pack("i", track_index))
 
         # Count total entities
-        print(len(map_data.get("objects", [])))
-        print(len(map_data.get("roads", [])))
         num_objects = len(map_data.get("objects", []))
         num_roads = len(map_data.get("roads", []))
         # num_entities = num_objects + num_roads
@@ -509,36 +637,69 @@ def load_map(map_name, unique_map_id, binary_output=None):
         save_map_binary(map_data, binary_output, unique_map_id)
 
 
-def process_all_maps():
-    """Process all maps and save them as binaries"""
-    from pathlib import Path
+def process_maps(source_dir, output_dir, prefix="map", limit=None, start_index=0):
+    """Process maps from source_dir into output_dir using the provided prefix."""
+    source_dir = Path(source_dir)
+    output_dir = Path(output_dir)
 
-    # Create the binaries directory if it doesn't exist
-    binary_dir = Path("resources/drive/binaries")
-    binary_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Path to the training data
-    data_dir = Path("data/processed/training")
-
-    # Get all JSON files in the training directory
-    json_files = sorted(data_dir.glob("*.json"))
+    json_files = sorted(source_dir.glob("*.json"))
+    if limit is not None:
+        json_files = json_files[:limit]
 
     print(f"Found {len(json_files)} JSON files")
 
     # Process each JSON file
-    for i, map_path in enumerate(json_files[:10000]):
-        binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
-        binary_path = binary_dir / binary_file
+    for i, map_path in enumerate(json_files):
+        map_idx = start_index + i
+        binary_file = f"{prefix}_{map_idx:03d}.bin"
+        binary_path = output_dir / binary_file
 
         print(f"Processing {map_path.name} -> {binary_file}")
         # try:
-        load_map(str(map_path), i, str(binary_path))
+        load_map(str(map_path), map_idx, str(binary_path))
         # except Exception as e:
         #     print(f"Error processing {map_path.name}: {e}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def process_carla_maps(
+    source_dir="data_utils/carla/carla", output_dir="resources/drive/carla_binaries", prefix="carla_map", limit=None
+):
+    """Process Carla JSON maps into binaries."""
+    process_maps(source_dir=source_dir, output_dir=output_dir, prefix=prefix, limit=limit)
+
+
+def collect_map_files(binary_dir, limit):
+    """Collect map binaries from a directory with an optional limit."""
+    if not binary_dir:
+        binary_dir = "resources/drive/binaries"
+    path = Path(binary_dir)
+    if not path.exists():
+        return []
+    files = sorted(str(p) for p in path.glob("*.bin"))
+    if limit is not None:
+        files = files[:limit]
+    return files
+
+
+def resolve_binary_dir(binary_dir, ini_path):
+    """Resolve binary directory, preferring explicit arg, then ini, then default."""
+    if binary_dir:
+        return binary_dir
+    if ini_path and os.path.exists(ini_path):
+        config = configparser.ConfigParser()
+        config.read(ini_path)
+        ini_dir = config.get("env", "binary_dir", fallback=None)
+        if ini_dir:
+            return ini_dir
+    return "resources/drive/carla_binaries"
+
+
+def test_performance(timeout=10, atn_cache=1024, num_agents=32):
     import time
+
+    # 0 = fixed_from_dataset, 1 = random_within_radius, 2 = randomized_curriculum
 
     env = Drive(
         num_agents=num_agents,
@@ -547,6 +708,8 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         init_mode="create_all_valid",
         init_steps=0,
         scenario_length=91,
+        goal_sampling_mode="randomized_curriculum",  # "fixed_from_dataset",
+        max_distance_to_goal=1.0,
     )
 
     env.reset()
@@ -568,5 +731,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_all_maps()
+    test_performance()
+    # process_all_maps()

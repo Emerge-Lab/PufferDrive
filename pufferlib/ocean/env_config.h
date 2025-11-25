@@ -27,6 +27,9 @@ typedef struct
     int init_steps;
     int init_mode;
     int control_mode;
+    int goal_sampling_mode;
+    float max_distance_to_goal;
+    char binary_dir[256];
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -89,6 +92,12 @@ static int handler(
         env_config->init_mode = atoi(value);
     } else if (MATCH("env", "control_mode")) {
         env_config->control_mode = atoi(value);
+    } else if (MATCH("env", "goal_sampling_mode")) {
+        env_config->goal_sampling_mode = atoi(value);
+    } else if (MATCH("env", "max_distance_to_goal")) {
+        env_config->max_distance_to_goal = atof(value);
+    } else if (MATCH("env", "binary_dir")) {
+        snprintf(env_config->binary_dir, sizeof(env_config->binary_dir), "%s", value);
     }
 
     #undef MATCH

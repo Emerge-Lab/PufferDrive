@@ -50,6 +50,16 @@ To train with PufferDrive, you need to convert JSON files to map binaries. Run t
 python pufferlib/ocean/drive/drive.py
 ```
 
+Optional Carla maps: place the Carla town JSONs under `data_utils/carla/carla` and convert them to binaries with:
+
+```bash
+python - <<'PY'
+from pufferlib.ocean.drive.drive import process_carla_maps
+process_carla_maps()
+PY
+```
+Set `binary_dir` in `pufferlib/config/ocean/drive.ini` to point to your map binaries (e.g., Waymo defaults in `resources/drive/binaries` or Carla in `resources/drive/carla_binaries`).
+
 ### Downloading Waymo Data
 
 You can download the WOMD data from Hugging Face in two versions:
