@@ -14,7 +14,7 @@
 #include "drivenet.h"
 #include "libgen.h"
 #include "../env_config.h"
-#define TRAJECTORY_LENGTH_DEFAULT 91
+#define TRAJECTORY_LENGTH_DEFAULT 500
 
 typedef struct {
     int pipefd[2];
@@ -101,7 +101,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     // Top-down orthographic camera
     Camera3D camera = {0};
     camera.position = (Vector3){ 0.0f, 0.0f, 500.0f };  // above the scene
-    camera.target   = (Vector3){ 0.0f, 0.0f, 0.0f };  // look at origin
+    camera.target   = (Vector3){ -200.0f, -200.0f, 0.0f };  // look at origin
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
     camera.fovy     = map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
@@ -376,9 +376,25 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         }
     }
 
+
     if (render_topdown) {
         printf("Recording topdown view...\n");
         for(int i = 0; i < frame_count; i++) {
+            int len = env.active_agent_count;
+            for(int j = 0; j < len; j++){
+                int agent_idx = env.active_agent_indices[j];
+                Entity* agent = &env.entities[agent_idx];
+                if(agent->collision_state == 1 || agent->aabb_collision_state == 1){
+                    printf("Step %d: Agent %d pos x=%.3f y=%.3f z=%.3f collision=%d\n", i, j, agent->x, agent->y, agent->z, agent->collision_state);
+                    printf("2d collision = %d\n", agent->aabb_collision_state);
+                }
+            }
+            // // Print agent position (using human_agent_idx)
+            // if (env.active_agent_count > 0 && env.human_agent_idx >= 0 && env.human_agent_idx < env.active_agent_count) {
+            //     int agent_idx = env.active_agent_indices[env.human_agent_idx];
+            //     Entity* agent = &env.entities[agent_idx];
+            //     printf("Step %d: Agent pos x=%.3f y=%.3f z=%.3f\n", i, agent->x, agent->y, agent->z);
+            // }
             if (i % frame_skip == 0) {
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid, img_width, img_height);
                 WriteFrame(&topdown_recorder, img_width, img_height);
@@ -388,7 +404,6 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
             forward(net, env.observations, (int*)env.actions);
             c_step(&env);
         }
-
     }
 
     if (render_agent) {

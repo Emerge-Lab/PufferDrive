@@ -546,6 +546,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
         fread(&entities[i].length, sizeof(float), 1, file);
         fread(&entities[i].height, sizeof(float), 1, file);
         fread(&entities[i].goal_position_x, sizeof(float), 1, file);
+        //fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].goal_position_y, sizeof(float), 1, file);
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
@@ -1455,14 +1456,18 @@ void set_active_agents(Drive* env){
 
     // Iterate through entities to find agents to create and/or control
     for(int i = 0; i < env->num_objects && env->num_actors < MAX_AGENTS; i++){
-
+        printf("Evaluating entity %d/%d\n", i, env->num_objects);
         Entity* entity = &env->entities[i];
-
+        printf("Entity %d type: %d\n", i, entity->type);
         // Skip if not valid at initialization
+        printf("Check");
+        //printf("Entity %d traj_valid at init step %d: %d\n", i, env->init_steps, entity->traj_valid[env->init_steps]);
+        printf("Check complete\n");
         if (entity->traj_valid[env->init_steps] != 1) {
+            //printf("Entity %d is not valid at init step %d\n", i, env->init_steps);
             continue;
         }
-
+        printf("Entity %d is valid at init step %d\n", i, env->init_steps);
         // Determine if entity should be created
         bool should_create = false;
         if (env->init_mode == INIT_ALL_VALID) {
@@ -1472,20 +1477,24 @@ void set_active_agents(Drive* env){
         } else {  // Control all agents
             should_create = (entity->type == VEHICLE || entity->type == PEDESTRIAN || entity->type == CYCLIST);
         }
-
+        printf("Entity %d should_create=%d\n", i, should_create);
         if (!should_create) continue;
 
         env->num_actors++;
 
         // Determine if this agent should be policy-controlled
         bool is_controlled = false;
-
+        printf("Checking if entity %d should be controlled...\n", i);
         is_controlled = should_control_agent(env, i);
-
+        printf("Entity %d: type=%d controlled=%d\n", i, entity->type, is_controlled);
         if(is_controlled){
+            printf("Setting entity %d as active agent.\n", i);
             active_agent_indices[env->active_agent_count] = i;
+            printf("Active agent count before increment: %d\n", env->active_agent_count);
             env->active_agent_count++;
+            printf("Active agent count after increment: %d\n", env->active_agent_count);
             env->entities[i].active_agent = 1;
+            printf("Entity %d marked as active agent.\n", i);
         } else if (env->init_mode != INIT_ONLY_CONTROLLABLE_AGENTS) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
@@ -1497,7 +1506,7 @@ void set_active_agents(Drive* env){
             }
         }
     }
-
+    printf("Total active agents: %d\n", env->active_agent_count);
     // Set up initial active agents
     env->active_agent_indices = (int*)malloc(env->active_agent_count * sizeof(int));
     env->static_agent_indices = (int*)malloc(env->static_agent_count * sizeof(int));
