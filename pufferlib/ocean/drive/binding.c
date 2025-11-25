@@ -68,6 +68,7 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 }
 
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
+    char* map_dir = unpack_str(kwargs, "map_dir");
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
     int init_mode = unpack(kwargs, "init_mode");
@@ -91,7 +92,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         env->control_mode = control_mode;
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
-        sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
+        sprintf(map_file, "%s/map_%03d.bin", map_dir, map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
 
@@ -192,11 +193,12 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
+    char* map_dir = unpack_str(kwargs, "map_dir");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
     char map_file[100];
-    sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
+    sprintf(map_file, "%s/map_%03d.bin", map_dir, map_id);
     env->num_agents = max_agents;
     env->map_name = strdup(map_file);
     env->init_steps = init_steps;
