@@ -13,7 +13,7 @@
 #include "drivenet.h"
 #include "libgen.h"
 #include "../env_config.h"
-#define TRAJECTORY_LENGTH_DEFAULT 91
+#define TRAJECTORY_LENGTH_DEFAULT 500
 
 typedef struct {
     int pipefd[2];
@@ -369,6 +369,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             return -1;
         }
     }
+
 
     if (render_topdown) {
         printf("Recording topdown view...\n");

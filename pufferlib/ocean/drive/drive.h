@@ -553,6 +553,7 @@ Entity *load_map_binary(const char *filename, Drive *env) {
         fread(&entities[i].length, sizeof(float), 1, file);
         fread(&entities[i].height, sizeof(float), 1, file);
         fread(&entities[i].goal_position_x, sizeof(float), 1, file);
+        //fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].goal_position_y, sizeof(float), 1, file);
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
@@ -1543,9 +1544,9 @@ void set_active_agents(Drive *env) {
 
         // Skip if not valid at initialization
         if (entity->traj_valid[env->init_steps] != 1) {
+            //printf("Entity %d is not valid at init step %d\n", i, env->init_steps);
             continue;
         }
-
         // Determine if entity should be created
         bool should_create = false;
         if (env->init_mode == INIT_ALL_VALID) {
@@ -1563,7 +1564,6 @@ void set_active_agents(Drive *env) {
 
         // Determine if this agent should be policy-controlled
         bool is_controlled = false;
-
         is_controlled = should_control_agent(env, i);
 
         if (is_controlled) {
@@ -1581,7 +1581,7 @@ void set_active_agents(Drive *env) {
             }
         }
     }
-
+    printf("Total active agents: %d\n", env->active_agent_count);
     // Set up initial active agents
     env->active_agent_indices = (int *)malloc(env->active_agent_count * sizeof(int));
     env->static_agent_indices = (int *)malloc(env->static_agent_count * sizeof(int));
