@@ -552,7 +552,7 @@ def load_map(map_name, unique_map_id, binary_output=None):
 
 def process_all_maps(
     data_folder="data/processed/training",
-    max_maps=1000,
+    max_maps=10_000,
 ):
     """Process all maps and save them as binaries"""
     from pathlib import Path
