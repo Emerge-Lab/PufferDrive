@@ -74,16 +74,35 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
-    clock_gettime(CLOCK_REALTIME, &ts);
-    srand(ts.tv_nsec);
+
+    // NEW: Optional scenario count and seed for WOSAC evaluation
+    PyObject* num_scenarios_obj = PyDict_GetItemString(kwargs, "num_scenarios");
+    PyObject* map_seed_obj = PyDict_GetItemString(kwargs, "map_seed");
+
+    int num_scenarios = -1;  // -1 means use agent-count mode
+    if (num_scenarios_obj != NULL && num_scenarios_obj != Py_None) {
+        num_scenarios = PyLong_AsLong(num_scenarios_obj);
+    }
+
+    // Set seed if provided (for reproducibility)
+    if (map_seed_obj != NULL && map_seed_obj != Py_None) {
+        int seed = PyLong_AsLong(map_seed_obj);
+        srand(seed);
+    } else {
+        // Existing: use timestamp
+        clock_gettime(CLOCK_REALTIME, &ts);
+        srand(ts.tv_nsec);
+    }
     int total_agent_count = 0;
     int env_count = 0;
-    int max_envs = num_agents;
+    int max_envs = (num_scenarios > 0) ? num_scenarios : num_agents;
     int maps_checked = 0;
     PyObject* agent_offsets = PyList_New(max_envs+1);
     PyObject* map_ids = PyList_New(max_envs);
-    // getting env count
-    while(total_agent_count < num_agents && env_count < max_envs){
+
+    // Main loading loop - condition depends on mode
+    int scenario_mode = (num_scenarios > 0);
+    while(scenario_mode ? (env_count < num_scenarios) : (total_agent_count < num_agents && env_count < max_envs)){
         char map_file[100];
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
@@ -146,7 +165,8 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         free(env);
     }
     //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
-    if(total_agent_count >= num_agents){
+    // Cap total_agent_count only in agent-count mode
+    if(num_scenarios <= 0 && total_agent_count >= num_agents){
         total_agent_count = num_agents;
     }
     PyObject* final_total_agent_count = PyLong_FromLong(total_agent_count);

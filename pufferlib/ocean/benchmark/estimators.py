@@ -2,7 +2,6 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Optional
 
 np.set_printoptions(suppress=True)
 

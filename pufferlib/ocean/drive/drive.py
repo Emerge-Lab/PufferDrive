@@ -37,6 +37,8 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        wosac_num_scenarios=None,
+        wosac_map_seed=None,
     ):
         # env
         self.dt = dt
@@ -129,21 +131,46 @@ class Drive(pufferlib.PufferEnv):
             )
         self.max_controlled_agents = int(max_controlled_agents)
 
-        # Iterate through all maps to count total agents that can be initialized for each map
-        agent_offsets, map_ids, num_envs = binding.shared(
-            num_agents=num_agents,
-            num_maps=num_maps,
-            init_mode=self.init_mode,
-            control_mode=self.control_mode,
-            init_steps=self.init_steps,
-            max_controlled_agents=self.max_controlled_agents,
-            goal_behavior=self.goal_behavior,
-        )
+        # Store WOSAC params as instance vars
+        self.wosac_num_scenarios = wosac_num_scenarios
+        self.wosac_map_seed = wosac_map_seed
 
-        self.num_agents = num_agents
+        # Build kwargs for binding.shared()
+        shared_kwargs = {
+            "num_maps": num_maps,
+            "init_mode": self.init_mode,
+            "control_mode": self.control_mode,
+            "init_steps": self.init_steps,
+            "max_controlled_agents": self.max_controlled_agents,
+            "goal_behavior": self.goal_behavior,
+        }
+
+        # Scenario-count mode: Let binding.shared() determine agent count
+        if self.wosac_num_scenarios is not None:
+            shared_kwargs["num_scenarios"] = self.wosac_num_scenarios
+            shared_kwargs["num_agents"] = 999999  # Dummy, ignored in scenario mode
+            if self.wosac_map_seed is not None:
+                shared_kwargs["map_seed"] = self.wosac_map_seed
+        else:
+            # Agent-count mode: Use input num_agents (existing behavior)
+            shared_kwargs["num_agents"] = num_agents
+
+        # Call binding.shared() - it scans maps and returns actual counts
+        agent_offsets, map_ids, num_envs = binding.shared(**shared_kwargs)
+
+        # Set self.num_agents based on mode
+        if self.wosac_num_scenarios is not None:
+            # Use ACTUAL agent count from loaded scenarios
+            self.num_agents = agent_offsets[-1]
+        else:
+            # Use input parameter (existing behavior)
+            self.num_agents = num_agents
+
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
+
+        # NOW allocate buffers based on actual agent count
         super().__init__(buf=buf)
         env_ids = []
         for i in range(num_envs):
@@ -202,15 +229,24 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(
-                    num_agents=self.num_agents,
-                    num_maps=self.num_maps,
-                    init_mode=self.init_mode,
-                    control_mode=self.control_mode,
-                    init_steps=self.init_steps,
-                    max_controlled_agents=self.max_controlled_agents,
-                    goal_behavior=self.goal_behavior,
-                )
+                # Build kwargs for binding.shared() (same logic as __init__)
+                shared_kwargs = {
+                    "num_maps": self.num_maps,
+                    "init_mode": self.init_mode,
+                    "control_mode": self.control_mode,
+                    "init_steps": self.init_steps,
+                    "max_controlled_agents": self.max_controlled_agents,
+                    "goal_behavior": self.goal_behavior,
+                }
+                if self.wosac_num_scenarios is not None:
+                    shared_kwargs["num_scenarios"] = self.wosac_num_scenarios
+                    shared_kwargs["num_agents"] = 999999
+                    if self.wosac_map_seed is not None:
+                        shared_kwargs["map_seed"] = self.wosac_map_seed
+                else:
+                    shared_kwargs["num_agents"] = self.num_agents
+
+                agent_offsets, map_ids, num_envs = binding.shared(**shared_kwargs)
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):
