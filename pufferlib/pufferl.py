@@ -414,37 +414,37 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
-            # Compute log likelihood loss of human actions under current policy.
-            # 1: Sample a batch of human actions and observations from dataset
-            # Shape: [n_sequences, bptt_horizon, feature_dim]
-            discrete_human_actions, continuous_human_actions, human_observations = (
-                self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
-            )
+            # # Compute log likelihood loss of human actions under current policy.
+            # # 1: Sample a batch of human actions and observations from dataset
+            # # Shape: [n_sequences, bptt_horizon, feature_dim]
+            # discrete_human_actions, continuous_human_actions, human_observations = (
+            #     self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
+            # )
 
-            # Use helper function to compute realism metrics
-            # self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
-            # self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
+            # # Use helper function to compute realism metrics
+            # # self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
+            # # self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
 
-            # Select appropriate action type for training
-            use_continuous = self.vecenv.driver_env._action_type_flag == 1
-            human_actions = continuous_human_actions if use_continuous else discrete_human_actions
+            # # Select appropriate action type for training
+            # use_continuous = self.vecenv.driver_env._action_type_flag == 1
+            # human_actions = continuous_human_actions if use_continuous else discrete_human_actions
 
-            # 2: Compute the log-likelihood of human actions under the current policy,
-            # given the corresponding human observations. A higher likelihood indicates
-            # that the policy behaves more like a human under the same observations.
-            human_state = dict(
-                action=human_actions,
-                lstm_h=None,
-                lstm_c=None,
-            )
+            # # 2: Compute the log-likelihood of human actions under the current policy,
+            # # given the corresponding human observations. A higher likelihood indicates
+            # # that the policy behaves more like a human under the same observations.
+            # human_state = dict(
+            #     action=human_actions,
+            #     lstm_h=None,
+            #     lstm_c=None,
+            # )
 
-            human_logits, _ = self.policy(human_observations.to(device), human_state)
+            # human_logits, _ = self.policy(human_observations.to(device), human_state)
 
-            _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
-                logits=human_logits, action=human_actions.to(device)
-            )
+            # _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
+            #     logits=human_logits, action=human_actions.to(device)
+            # )
 
-            self.realism["human_log_prob"] = human_log_prob.mean().item()
+            # self.realism["human_log_prob"] = human_log_prob.mean().item()
 
             adv = advantages[idx]
             adv = compute_puff_advantage(
@@ -472,16 +472,14 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
-            human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
-            human_loss = human_loss_clipped.mean()
+            # human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
+            # human_loss = human_loss_clipped.mean()
 
             entropy_loss = entropy.mean()
 
             loss = (
-                pg_loss
-                + config["vf_coef"] * v_loss
-                - config["ent_coef"] * entropy_loss
-                - config["human_ll_coef"] * human_loss
+                pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+                # - config["human_ll_coef"] * human_loss
             )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
@@ -497,7 +495,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["human_loss"] += human_loss / self.total_minibatches
+            # losses["human_loss"] += human_loss / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
