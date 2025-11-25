@@ -91,8 +91,11 @@ static int handler(
     } else if (MATCH("env", "control_mode")) {
         env_config->control_mode = atoi(value);
     } else if (MATCH("env", "map_dir")) {
-        strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);
-        env_config->map_dir[sizeof(env_config->map_dir) - 1] = '\0'; // Ensure null-termination
+        if (sscanf(value, "\"%255[^\"]\"", env_config->map_dir) != 1) {
+            strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);
+            env_config->map_dir[sizeof(env_config->map_dir) - 1] = '\0';
+        }
+        //printf("Parsed map_dir: '%s'\n", env_config->map_dir);
     } else {
         return 0;  // Unknown section/name, indicate failure to handle
     }
