@@ -50,6 +50,9 @@ def compute_signed_distances(
     eval_indices = torch.nonzero(evaluated_object_mask, as_tuple=False).squeeze(-1)
     num_eval = eval_indices.numel()
 
+    if num_eval == 0:
+        return torch.empty(0, num_agents, num_rollouts, num_steps, dtype=center_x.dtype, device=center_x.device)
+
     if length.dim() == 2:
         length = length.unsqueeze(-1)
     if width.dim() == 2:
@@ -64,15 +67,7 @@ def compute_signed_distances(
     shrunk_len = boxes[..., 2:3] - 2.0 * shrinking_distance.unsqueeze(-1)
     shrunk_wid = boxes[..., 3:4] - 2.0 * shrinking_distance.unsqueeze(-1)
 
-    boxes = torch.cat(
-        [
-            boxes[..., :2],
-            shrunk_len,
-            shrunk_wid,
-            boxes[..., 4:],
-        ],
-        dim=-1,
-    )
+    boxes = torch.cat([boxes[..., :2], shrunk_len, shrunk_wid, boxes[..., 4:]], dim=-1)
 
     boxes_flat = boxes.reshape(num_agents * num_rollouts * num_steps, 5)
     box_corners = geometry_utils.get_2d_box_corners(boxes_flat)
@@ -80,49 +75,69 @@ def compute_signed_distances(
 
     eval_corners = box_corners[eval_indices]
 
-    batch_size = num_eval * num_agents * num_rollouts * num_steps
+    # MEMORY OPTIMIZATION: Process in chunks instead of creating huge tensors
+    chunk_size = 32  # Process 32 eval agents at a time
+    num_chunks = (num_eval + chunk_size - 1) // chunk_size
 
-    corners_flat_1 = (
-        eval_corners.unsqueeze(1).expand(num_eval, num_agents, num_rollouts, num_steps, 4, 2).reshape(batch_size, 4, 2)
-    )
+    signed_distances_list = []
 
-    corners_flat_2 = (
-        box_corners.unsqueeze(0).expand(num_eval, num_agents, num_rollouts, num_steps, 4, 2).reshape(batch_size, 4, 2)
-    )
+    for chunk_idx in range(num_chunks):
+        start_idx = chunk_idx * chunk_size
+        end_idx = min(start_idx + chunk_size, num_eval)
+        chunk_eval_corners = eval_corners[start_idx:end_idx]
+        chunk_eval_indices = eval_indices[start_idx:end_idx]
+        chunk_num_eval = end_idx - start_idx
 
-    corners_flat_2.neg_()
+        batch_size = chunk_num_eval * num_agents * num_rollouts * num_steps
 
-    minkowski_sum = geometry_utils.minkowski_sum_of_box_and_box_points(corners_flat_1, corners_flat_2)
+        corners_flat_1 = (
+            chunk_eval_corners.unsqueeze(1)
+            .expand(chunk_num_eval, num_agents, num_rollouts, num_steps, 4, 2)
+            .reshape(batch_size, 4, 2)
+        )
 
-    del corners_flat_1, corners_flat_2
+        corners_flat_2 = (
+            box_corners.unsqueeze(0)
+            .expand(chunk_num_eval, num_agents, num_rollouts, num_steps, 4, 2)
+            .reshape(batch_size, 4, 2)
+        )
 
-    query_points = torch.zeros((batch_size, 2), dtype=center_x.dtype, device=center_x.device)
+        corners_flat_2 = -corners_flat_2  # Use assignment instead of in-place
 
-    signed_distances_flat = geometry_utils.signed_distance_from_point_to_convex_polygon(
-        query_points=query_points, polygon_points=minkowski_sum
-    )
+        minkowski_sum = geometry_utils.minkowski_sum_of_box_and_box_points(corners_flat_1, corners_flat_2)
 
-    del minkowski_sum, query_points
+        del corners_flat_1, corners_flat_2
 
-    signed_distances = signed_distances_flat.reshape(num_eval, num_agents, num_rollouts, num_steps)
+        query_points = torch.zeros((batch_size, 2), dtype=center_x.dtype, device=center_x.device)
 
-    eval_shrinking = shrinking_distance[eval_indices]
+        signed_distances_flat = geometry_utils.signed_distance_from_point_to_convex_polygon(
+            query_points=query_points, polygon_points=minkowski_sum
+        )
 
-    signed_distances.sub_(eval_shrinking[:, None, :, :])
-    signed_distances.sub_(shrinking_distance[None, :, :, :])
+        del minkowski_sum, query_points
 
-    agent_indices = torch.arange(num_agents, device=center_x.device)
-    self_mask = eval_indices[:, None] == agent_indices[None, :]
+        chunk_signed_distances = signed_distances_flat.reshape(chunk_num_eval, num_agents, num_rollouts, num_steps)
 
-    self_mask = self_mask.unsqueeze(-1).unsqueeze(-1)
+        eval_shrinking = shrinking_distance[chunk_eval_indices]
+        chunk_signed_distances = chunk_signed_distances - eval_shrinking[:, None, :, :]
+        chunk_signed_distances = chunk_signed_distances - shrinking_distance[None, :, :, :]
 
-    signed_distances.masked_fill_(self_mask, EXTREMELY_LARGE_DISTANCE)
+        agent_indices = torch.arange(num_agents, device=center_x.device)
+        self_mask = chunk_eval_indices[:, None] == agent_indices[None, :]
+        self_mask = self_mask.unsqueeze(-1).unsqueeze(-1)
+        chunk_signed_distances.masked_fill_(self_mask, EXTREMELY_LARGE_DISTANCE)
 
-    eval_valid = valid[eval_indices]
+        eval_valid = valid[chunk_eval_indices]
+        valid_mask = torch.logical_and(eval_valid[:, None, :, :], valid[None, :, :, :])
+        chunk_signed_distances.masked_fill_(~valid_mask, EXTREMELY_LARGE_DISTANCE)
 
-    valid_mask = torch.logical_and(eval_valid[:, None, :, :], valid[None, :, :, :])
+        signed_distances_list.append(chunk_signed_distances)
 
-    signed_distances.masked_fill_(~valid_mask, EXTREMELY_LARGE_DISTANCE)
+        # Clear CUDA cache between chunks
+        if chunk_idx < num_chunks - 1:
+            torch.cuda.empty_cache()
+
+    signed_distances = torch.cat(signed_distances_list, dim=0)
 
     return signed_distances
 
