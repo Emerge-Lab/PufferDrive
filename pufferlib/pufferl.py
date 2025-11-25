@@ -501,7 +501,9 @@ class PuffeRL:
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
+
             loss.backward()
+
             if (mb + 1) % self.accumulate_minibatches == 0:
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
                 self.optimizer.step()
@@ -536,33 +538,11 @@ class PuffeRL:
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
             if self.render and self.epoch % self.render_interval == 0:
-                model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-                model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
-
-                if model_files:
-                    # Take the latest checkpoint
-                    latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
-
-                    # Export to .bin for rendering with raylib
-                    try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
-
-                        export(
-                            args=export_args,
-                            env_name=self.config["env"],
-                            vecenv=self.vecenv,
-                            policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
-                        )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
-
-                    except Exception as e:
-                        print(f"Failed to export model weights: {e}")
-
+                bin_path = self._export_to_bin()
+                if bin_path:
+                    pufferlib.utils.render_videos(
+                        self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
+                    )
         if self.config["eval"]["wosac_realism_eval"] and (
             (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
@@ -574,6 +554,9 @@ class PuffeRL:
             (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
+
+        if done_training:  # Export latest checkpoint to .bin
+            self._export_to_bin()
 
     def mean_and_log(self):
         config = self.config
@@ -588,6 +571,7 @@ class PuffeRL:
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
+
         logs = {
             "SPS": dist_sum(self.sps, device),
             "agent_steps": agent_steps,
@@ -662,6 +646,32 @@ class PuffeRL:
         torch.save(state, state_path + ".tmp")
         os.rename(state_path + ".tmp", state_path)
         return model_path
+
+    def _export_to_bin(self):
+        """Export latest checkpoint to .bin for rendering."""
+        model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+        model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+
+        if not model_files:
+            return None
+
+        latest_cpt = max(model_files, key=os.path.getctime)
+        bin_path = f"{model_dir}.bin"
+
+        try:
+            export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
+            export(
+                args=export_args,
+                env_name=self.config["env"],
+                vecenv=self.vecenv,
+                policy=self.uncompiled_policy,
+                path=bin_path,
+                silent=True,
+            )
+            return bin_path
+        except Exception as e:
+            print(f"Failed to export model weights: {e}")
+            return None
 
     def print_dashboard(self, clear=False, idx=[0], c1="[cyan]", c2="[white]", b1="[bright_cyan]", b2="[bright_white]"):
         config = self.config
@@ -856,8 +866,8 @@ class Profile:
         if epoch % self.frequency != 0:
             return
 
-        # if torch.cuda.is_available():
-        #    torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         tick = time.time()
         if len(self.stack) != 0 and not nest:
@@ -873,8 +883,8 @@ class Profile:
         profile["delta"] += delta
 
     def end(self):
-        # if torch.cuda.is_available():
-        #    torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         end = time.time()
         for i in range(len(self.stack)):
@@ -1247,7 +1257,7 @@ def sweep(args=None, env_name=None):
     points_per_run = args["sweep"]["downsample"]
     target_key = f"environment/{args['sweep']['metric']}"
     for i in range(args["max_runs"]):
-        seed = time.time_ns() & 0xFFFFFFFF
+        seed = 42
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
