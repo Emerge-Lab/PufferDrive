@@ -114,7 +114,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             "--eval.wosac-init-mode",
             str(eval_config.get("wosac_init_mode", "create_all_valid")),
             "--eval.wosac-control-mode",
-            str(eval_config.get("wosac_control_mode", "control_tracks_to_predict")),
+            str(eval_config.get("wosac_control_mode", "control_wosac")),
             "--eval.wosac-init-steps",
             str(eval_config.get("wosac_init_steps", 10)),
             "--eval.wosac-goal-behavior",
@@ -151,12 +151,20 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
                         step=global_step,
                     )
         else:
-            print(f"WOSAC evaluation failed with exit code {result.returncode}: {result.stderr}")
+            print(f"WOSAC evaluation failed with exit code {result.returncode}")
+            print(f"Error: {result.stderr}")
+
+            # Check for memory issues
+            stderr_lower = result.stderr.lower()
+            if "out of memory" in stderr_lower or "cuda out of memory" in stderr_lower:
+                print("GPU out of memory. Skipping this WOSAC evaluation.")
 
     except subprocess.TimeoutExpired:
-        print("WOSAC evaluation timed out")
+        print("WOSAC evaluation timed out after 600 seconds")
+    except MemoryError as e:
+        print(f"WOSAC evaluation ran out of memory. Skipping this evaluation: {e}")
     except Exception as e:
-        print(f"Failed to run WOSAC evaluation: {e}")
+        print(f"Failed to run WOSAC evaluation: {type(e).__name__}: {e}")
 
 
 def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
@@ -194,88 +202,119 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
         # TODO: Fix memory leaks so that this is not needed
         # Suppress AddressSanitizer exit code (temp)
-        env = os.environ.copy()
-        env["ASAN_OPTIONS"] = "exitcode=0"
+        env_vars = os.environ.copy()
+        env_vars["ASAN_OPTIONS"] = "exitcode=0"
 
-        cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+        # Base command (without map/output paths)
+        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
-        # Add render configurations
-        if config["show_grid"]:
-            cmd.append("--show-grid")
-        if config["obs_only"]:
-            cmd.append("--obs-only")
-        if config["show_lasers"]:
-            cmd.append("--lasers")
-        if config["show_human_logs"]:
-            cmd.append("--log-trajectories")
-        if vecenv.driver_env.goal_radius is not None:
-            cmd.extend(["--goal-radius", str(vecenv.driver_env.goal_radius)])
-        if vecenv.driver_env.init_steps > 0:
-            cmd.extend(["--init-steps", str(vecenv.driver_env.init_steps)])
-        if config["render_map"] is not None:
-            map_path = config["render_map"]
-            if os.path.exists(map_path):
-                cmd.extend(["--map-name", map_path])
-        if vecenv.driver_env.init_mode is not None:
-            cmd.extend(["--init-mode", str(vecenv.driver_env.init_mode)])
-        if vecenv.driver_env.control_mode is not None:
-            cmd.extend(["--control-mode", str(vecenv.driver_env.control_mode)])
+        # Render config flags
+        if config.get("show_grid", False):
+            base_cmd.append("--show-grid")
+        if config.get("obs_only", False):
+            base_cmd.append("--obs-only")
+        if config.get("show_lasers", False):
+            base_cmd.append("--lasers")
+        if config.get("show_human_logs", False):
+            base_cmd.append("--log-trajectories")
 
-        # Specify output paths for videos
-        cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
-        cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
-
-        # Add environment configuration
         env_cfg = getattr(vecenv, "driver_env", None)
         if env_cfg is not None:
-            n_policy = getattr(env_cfg, "max_controlled_agents", -1)
+            if getattr(env_cfg, "control_non_vehicles", False):
+                base_cmd.append("--control-non-vehicles")
+            if getattr(env_cfg, "goal_radius", None) is not None:
+                base_cmd.extend(["--goal-radius", str(env_cfg.goal_radius)])
+            if getattr(env_cfg, "init_steps", 0) > 0:
+                base_cmd.extend(["--init-steps", str(env_cfg.init_steps)])
+            if getattr(env_cfg, "init_mode", None) is not None:
+                base_cmd.extend(["--init-mode", str(env_cfg.init_mode)])
+            if getattr(env_cfg, "control_mode", None) is not None:
+                base_cmd.extend(["--control-mode", str(env_cfg.control_mode)])
+            if getattr(env_cfg, "control_all_agents", False):
+                base_cmd.append("--pure-self-play")
+            if getattr(env_cfg, "deterministic_agent_selection", False):
+                base_cmd.append("--deterministic-selection")
+
+            # Policy-controlled agents (prefer num_policy_controlled_agents, fallback to max_controlled_agents)
+            n_policy = getattr(env_cfg, "num_policy_controlled_agents", getattr(env_cfg, "max_controlled_agents", -1))
             try:
                 n_policy = int(n_policy)
             except (TypeError, ValueError):
                 n_policy = -1
             if n_policy > 0:
-                cmd += ["--num-policy-controlled-agents", str(n_policy)]
+                base_cmd += ["--num-policy-controlled-agents", str(n_policy)]
+
             if getattr(env_cfg, "num_maps", False):
-                cmd.extend(["--num-maps", str(env_cfg.num_maps)])
+                base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
             if getattr(env_cfg, "scenario_length", None):
-                cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
+                base_cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
 
-        # Call C code that runs eval_gif() in subprocess
-        result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env)
-
-        vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
-            "resources/drive/output_agent.mp4"
-        )
-
-        if result.returncode == 0 or (result.returncode == 1 and vids_exist):
-            # Move both generated videos to the model directory
-            # videos = [
-            #    ("resources/drive/output_topdown.mp4", f"epoch_topdown.mp4"),
-            #    ("resources/drive/output_agent.mp4", f"epoch_agent.mp4"),
-            # ]
-            videos = [
-                ("resources/drive/output_topdown.mp4", f"epoch_{epoch:06d}_topdown.mp4"),
-                ("resources/drive/output_agent.mp4", f"epoch_{epoch:06d}_agent.mp4"),
-            ]
-
-            for source_vid, target_filename in videos:
-                if os.path.exists(source_vid):
-                    target_gif = os.path.join(video_output_dir, target_filename)
-                    shutil.move(source_vid, target_gif)
-
-                    # Log to wandb if available
-                    if hasattr(logger, "wandb") and logger.wandb:
-                        import wandb
-
-                        view_type = "world_state" if "topdown" in target_filename else "agent_view"
-                        logger.wandb.log(
-                            {f"render/{view_type}": wandb.Video(target_gif, format="mp4")},
-                            step=global_step,
-                        )
-                else:
-                    print(f"Video generation completed but {source_vid} not found")
+        # Handle single or multiple map rendering
+        render_maps = config.get("render_map", None)
+        if render_maps is None:
+            render_maps = [None]
+        elif isinstance(render_maps, (str, os.PathLike)):
+            render_maps = [render_maps]
         else:
-            print(f"C rendering failed with exit code {result.returncode}: {result.stdout}")
+            # Ensure list-like
+            render_maps = list(render_maps)
+
+        # Collect videos to log as lists so W&B shows all in the same step
+        videos_to_log_world = []
+        videos_to_log_agent = []
+
+        for i, map_path in enumerate(render_maps):
+            cmd = list(base_cmd)  # copy
+            if map_path is not None and os.path.exists(map_path):
+                cmd.extend(["--map-name", str(map_path)])
+
+            # Output paths (overwrite each iteration; then moved/renamed)
+            cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
+            cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+
+            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env_vars)
+
+            vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
+                "resources/drive/output_agent.mp4"
+            )
+
+            if result.returncode == 0 or (result.returncode == 1 and vids_exist):
+                videos = [
+                    (
+                        "resources/drive/output_topdown.mp4",
+                        f"epoch_{epoch:06d}_map{i:02d}_topdown.mp4" if map_path else f"epoch_{epoch:06d}_topdown.mp4",
+                    ),
+                    (
+                        "resources/drive/output_agent.mp4",
+                        f"epoch_{epoch:06d}_map{i:02d}_agent.mp4" if map_path else f"epoch_{epoch:06d}_agent.mp4",
+                    ),
+                ]
+
+                for source_vid, target_filename in videos:
+                    if os.path.exists(source_vid):
+                        target_path = os.path.join(video_output_dir, target_filename)
+                        shutil.move(source_vid, target_path)
+                        # Accumulate for a single wandb.log call
+                        if hasattr(logger, "wandb") and logger.wandb:
+                            import wandb
+
+                            if "topdown" in target_filename:
+                                videos_to_log_world.append(wandb.Video(target_path, format="mp4"))
+                            else:
+                                videos_to_log_agent.append(wandb.Video(target_path, format="mp4"))
+                    else:
+                        print(f"Video generation completed but {source_vid} not found")
+            else:
+                print(f"C rendering failed (map index {i}) with exit code {result.returncode}: {result.stdout}")
+
+        # Log all videos at once so W&B keeps all of them under the same step
+        if hasattr(logger, "wandb") and logger.wandb and (videos_to_log_world or videos_to_log_agent):
+            payload = {}
+            if videos_to_log_world:
+                payload["render/world_state"] = videos_to_log_world
+            if videos_to_log_agent:
+                payload["render/agent_view"] = videos_to_log_agent
+            logger.wandb.log(payload, step=global_step)
 
     except subprocess.TimeoutExpired:
         print("C rendering timed out")
