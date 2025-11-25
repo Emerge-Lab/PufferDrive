@@ -59,9 +59,9 @@ class Drive(pufferlib.PufferEnv):
 
         # Observation space calculation
         if dynamics_model == "classic":
-            ego_features = 7
+            ego_features = 8
         elif dynamics_model == "jerk":
-            ego_features = 10
+            ego_features = 11
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
 
@@ -528,7 +528,7 @@ def process_all_maps():
     # Process each JSON file
     for i, map_path in enumerate(json_files[:10000]):
         # Hardcode: if file is CARLA_4_000.json, always save as map_000.bin
-        if map_path.name == "CARLA_4_000.json":
+        if map_path.name == "CARLA_5.json":
             binary_file = "map_000.bin"
             binary_path = binary_dir / binary_file
             unique_map_id = 0
