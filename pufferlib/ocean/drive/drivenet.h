@@ -47,7 +47,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
     int hidden_size = 256;
     int input_size = 64;
 
-    int ego_dim = (dynamics_model == JERK) ? 10 : 7;
+    int ego_dim = (dynamics_model == JERK) ? 11 : 8;
 
     // Determine action space size based on dynamics model
     int action_size, logit_sizes[2];
