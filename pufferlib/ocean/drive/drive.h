@@ -1581,7 +1581,7 @@ void set_active_agents(Drive *env) {
             }
         }
     }
-    printf("Total active agents: %d\n", env->active_agent_count);
+    //printf("Total active agents: %d\n", env->active_agent_count);
     // Set up initial active agents
     env->active_agent_indices = (int *)malloc(env->active_agent_count * sizeof(int));
     env->static_agent_indices = (int *)malloc(env->static_agent_count * sizeof(int));
