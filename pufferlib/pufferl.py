@@ -535,7 +535,7 @@ class PuffeRL:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
-            if self.render and self.epoch % self.render_interval == 0:
+            if self.render and (self.epoch - 1) % self.render_interval == 0:
                 bin_path = self._export_to_bin()
                 if bin_path:
                     pufferlib.utils.render_videos(

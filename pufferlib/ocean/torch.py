@@ -100,6 +100,7 @@ class Drive(nn.Module):
         self.partner_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(PARTNER_FEATURES, input_size)),
             nn.LayerNorm(input_size),
+            nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
