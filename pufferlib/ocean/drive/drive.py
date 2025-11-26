@@ -49,6 +49,7 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        map_dir="resources/drive/binaries/training",
     ):
         # env
         self.dt = dt
@@ -92,6 +93,7 @@ class Drive(pufferlib.PufferEnv):
         self.control_mode_str = control_mode
         self.save_expert_data = save_expert_data
         self.max_expert_sequences = int(max_expert_sequences)
+        self.map_dir = map_dir
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
@@ -132,14 +134,14 @@ class Drive(pufferlib.PufferEnv):
         self._action_type_flag = 0 if action_type == "discrete" else 1
 
         # Check if resources directory exists
-        binary_path = "resources/drive/binaries/map_000.bin"
+        binary_path = f"{map_dir}/map_000.bin"
         if not os.path.exists(binary_path):
             raise FileNotFoundError(
                 f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
             )
 
         # Check maps availability
-        available_maps = len([name for name in os.listdir("resources/drive/binaries") if name.endswith(".bin")])
+        available_maps = len([name for name in os.listdir(map_dir) if name.endswith(".bin")])
         if num_maps > available_maps:
             raise ValueError(
                 f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
@@ -148,6 +150,7 @@ class Drive(pufferlib.PufferEnv):
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
+            map_dir=map_dir,
             num_agents=num_agents,
             num_maps=num_maps,
             init_mode=self.init_mode,
@@ -197,6 +200,7 @@ class Drive(pufferlib.PufferEnv):
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
+                map_dir=map_dir,
             )
             env_ids.append(env_id)
 
@@ -238,6 +242,7 @@ class Drive(pufferlib.PufferEnv):
                     init_steps=self.init_steps,
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
+                    map_dir=self.map_dir,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
@@ -275,6 +280,7 @@ class Drive(pufferlib.PufferEnv):
                         init_steps=self.init_steps,
                         init_mode=self.init_mode,
                         control_mode=self.control_mode,
+                        map_dir=self.map_dir,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -777,24 +783,28 @@ def load_map(map_name, unique_map_id, binary_output=None):
         save_map_binary(map_data, binary_output, unique_map_id)
 
 
-def process_all_maps():
+def process_all_maps(
+    data_folder="data/processed/training",
+    max_maps=10_000,
+):
     """Process all maps and save them as binaries"""
     from pathlib import Path
 
-    # Create the binaries directory if it doesn't exist
-    binary_dir = Path("resources/drive/binaries")
-    binary_dir.mkdir(parents=True, exist_ok=True)
-
     # Path to the training data
-    data_dir = Path("data/processed/training")
+    data_dir = Path(data_folder)
+    dataset_name = data_dir.name
+
+    # Create the binaries directory if it doesn't exist
+    binary_dir = Path(f"resources/drive/binaries/{dataset_name}")
+    binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
 
-    print(f"Found {len(json_files)} JSON files")
+    print(f"Found {len(json_files)} JSON files in {data_folder}. Processing up to {max_maps} maps -> binaries.")
 
     # Process each JSON file
-    for i, map_path in enumerate(json_files[:10000]):
+    for i, map_path in enumerate(json_files[:max_maps]):
         binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
         binary_path = binary_dir / binary_file
 
@@ -837,4 +847,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 if __name__ == "__main__":
     # test_performance()
-    process_all_maps()
+    # Process the train dataset
+    process_all_maps(data_folder="data/processed/training")
+    # Process the validation/test dataset
+    # process_all_maps(data_folder="data/processed/validation")
