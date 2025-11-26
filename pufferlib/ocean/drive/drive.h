@@ -2510,7 +2510,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         }
 
         // draw an arrow above the car pointing in the direction that the partner is going
-        float arrow_length = 7.5f;
+        float arrow_length = 4.5f;
         float arrow_x = x + arrow_length*cosf(partner_angle);
         float arrow_y = y + arrow_length*sinf(partner_angle);
         float arrow_x_world;
@@ -2524,7 +2524,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
             DrawLine3D((Vector3){partner_x, partner_y, 1}, (Vector3){arrow_x_world, arrow_y_world, 1}, PUFF_WHITE);
         }
         // Calculate perpendicular offsets for arrow head
-        float arrow_size = 2.0f;  // Size of the arrow head
+        float arrow_size = 0.8f;  // Size of the arrow head
         float dx = arrow_x - x;
         float dy = arrow_y - y;
         float length = sqrtf(dx*dx + dy*dy);
@@ -2534,7 +2534,6 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
             dy /= length;
 
             // Calculate perpendicular vector
-
             float perp_x = -dy * arrow_size;
             float perp_y = dx * arrow_size;
 
@@ -2831,7 +2830,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
 
                 // Select car model
                 Model car_model = client->cars[i % 6];  // Default: cycle through all 6 car sprites
-    
+
                 if(agent_index == env->human_agent_idx){
                     car_model = client->cars[0];  // Ego agent always uses red car (cars[0])
                 }
