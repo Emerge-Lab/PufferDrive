@@ -34,6 +34,7 @@
 // Initialization modes
 #define INIT_ALL_VALID 0
 #define INIT_ONLY_CONTROLLABLE_AGENTS 1
+#define INIT_RANDOM_AGENTS 2
 
 // Control modes
 #define CONTROL_VEHICLES 0
@@ -433,7 +434,10 @@ struct Drive {
     int* tracks_to_predict_indices;
     int init_mode;
     int control_mode;
-    env_init_config conf;
+    int num_agents_per_world;
+    float vehicle_width;
+    float vehicle_length;
+    float vehicle_height;
     int goal_sampling_mode;
     float max_distance_to_goal;
 };
@@ -638,7 +642,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
     fread(&env->num_objects, sizeof(int), 1, file);     // Can be 0 for random_agents_init init_mode
     fread(&env->num_roads, sizeof(int), 1, file);
     int num_bin_entities = env->num_objects + env->num_roads;
-    if (env->conf.init_mode == RANDOM_AGENTS_INIT) {
+    if (env->init_mode == INIT_RANDOM_AGENTS) {
         Entity read_bin_entities[num_bin_entities];
         // Read all binaries into temporary array
         for (int i = 0; i < num_bin_entities; i++) {
@@ -690,7 +694,7 @@ Entity* load_map_binary(const char* filename, Drive* env) {
             read_bin_entities[i].initialized = 1;
         }
 
-        env->num_objects = env->conf.num_agents_per_world;
+        env->num_objects = env->num_agents_per_world;
         env->num_entities = env->num_objects + env->num_roads;
         Entity* entities = (Entity*)malloc(env->num_entities * sizeof(Entity));
 
@@ -842,7 +846,7 @@ void init_agents_random_start(Drive* env) {
                         entity.traj_y[start_point_geometry_idx],
                         entity.traj_z[start_point_geometry_idx],
                         heading,
-                        env->conf.vehicle_width, env->conf.vehicle_length, env->conf.vehicle_height
+                        env->vehicle_width, env->vehicle_length, env->vehicle_height
                     );
                     if (valid_spawn) {
                         start_x = entity.traj_x[start_point_geometry_idx];
@@ -897,9 +901,9 @@ void init_agents_random_start(Drive* env) {
             agent.heading_x = cosf(agent.heading);
             agent.heading_y = sinf(agent.heading);
             agent.traj_valid[0] = 1;
-            agent.height = env->conf.vehicle_height;
-            agent.width = env->conf.vehicle_width;
-            agent.length = env->conf.vehicle_length;
+            agent.height = env->vehicle_height;
+            agent.width = env->vehicle_width;
+            agent.length = env->vehicle_length;
             agent.goal_position_x = goal_x;
             agent.goal_position_y = goal_y;
             agent.goal_position_z = goal_z;
@@ -1942,7 +1946,7 @@ void set_active_agents(Drive* env){
 
         // Determine if entity should be created
         bool should_create = false;
-        if (env->init_mode == INIT_ALL_VALID) {
+        if (env->init_mode == INIT_ALL_VALID || env->init_mode == INIT_RANDOM_AGENTS) {
             should_create = true;  // All valid entities
         } else if (env->control_mode == CONTROL_VEHICLES) {
             should_create = (entity->type == VEHICLE);
@@ -2405,15 +2409,10 @@ void init(Drive* env){
     seed_prng_once();  // seed rand() for this process
     env->human_agent_idx = 0;
     env->timestep = 0;
-    env_init_config conf = {0};
-    if(ini_parse(env->ini_file, handler, &conf) < 0) {
-        printf("Error while loading %s", env->ini_file);
-    }
-    env->conf = conf;
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
-    if (conf.init_mode == RANDOM_AGENTS_INIT) {
+    if (env->init_mode == INIT_RANDOM_AGENTS) {
         init_agents_random_start(env);
     }
     init_topology_graph(env);

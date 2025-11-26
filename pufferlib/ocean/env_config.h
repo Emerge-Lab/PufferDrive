@@ -10,8 +10,8 @@ typedef enum{
     UNKNOWN_INIT_MODE = -1,
     DEFAULT_INIT_MODE = 0,
     RANDOM_AGENTS_INIT = 1,
-    INIT_ALL_VALID = 2,
-    INIT_ONLY_CONTROLLABLE_AGENTS = 3,
+    ALL_VALID_INIT = 2,
+    CONTROLLABLE_AGENTS_INIT = 3,
 } Init_Mode;
 
 // Config struct for parsing INI files - contains all environment configuration
@@ -107,9 +107,9 @@ static int handler(
         } else if (strcmp(value, "\"random_agents_init\"") == 0 || strcmp(value, "random_agents_init") == 0) {
             env_config->init_mode = RANDOM_AGENTS_INIT;  // RANDOM_AGENTS_INIT
         } else if (strcmp(value, "\"create_all_valid\"") == 0) {
-            env_config->init_mode = INIT_ALL_VALID;  // CREATE_ALL_VALID
+            env_config->init_mode = ALL_VALID_INIT;  // CREATE_ALL_VALID
         } else if (strcmp(value, "\"create_only_controlled\"") == 0) {
-            env_config->init_mode = INIT_ONLY_CONTROLLABLE_AGENTS;  // INIT_ONLY_CONTROLLABLE_AGENTS
+            env_config->init_mode = CONTROLLABLE_AGENTS_INIT;  // CONTROLLABLE_AGENTS_INIT
         } else {
             raise_error_with_message(ERROR_INVALID_CONFIG, "Unknown init_mode value: %s", value);
             env_config->init_mode = UNKNOWN_INIT_MODE;  // Default to UNKNOWN

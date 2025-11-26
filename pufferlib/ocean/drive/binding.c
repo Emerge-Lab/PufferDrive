@@ -75,17 +75,14 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     float max_distance_to_goal = unpack(kwargs, "max_distance_to_goal");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
+    int init_mode = unpack(kwargs, "init_mode");
+    int num_agents_per_world = unpack(kwargs, "num_agents_per_world");
 
     // Get configs
     char* ini_file = unpack_str(kwargs, "ini_file");
     env_init_config conf = {0};
     if(ini_parse(ini_file, handler, &conf) < 0) {
         raise_error_with_message(ERROR_UNKNOWN, "Error while loading %s", ini_file);
-    }
-    Init_Mode init_mode = conf.init_mode;
-    int num_agents_per_world = -1;
-    if (init_mode == RANDOM_AGENTS_INIT) {
-        num_agents_per_world = conf.num_agents_per_world;
     }
 
     PyObject* map_files_list = PyDict_GetItemString(kwargs, "map_files");
@@ -113,7 +110,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         char map_file[100];
         int map_id = rand() % map_count;
         int already_checked = visited_maps ? visited_maps[map_id] : 0;
-        if (init_mode == RANDOM_AGENTS_INIT) {
+        if (init_mode == INIT_RANDOM_AGENTS) {
             // Store map_id
             PyObject* map_id_obj = PyLong_FromLong(map_id);
             PyList_SetItem(map_ids, env_count, map_id_obj);
@@ -249,6 +246,10 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->dt = conf.dt;
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
+    env->num_agents_per_world = (int)unpack(kwargs, "num_agents_per_world");
+    env->vehicle_width = (float)unpack(kwargs, "vehicle_width");
+    env->vehicle_length = (float)unpack(kwargs, "vehicle_length");
+    env->vehicle_height = (float)unpack(kwargs, "vehicle_height");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->goal_sampling_mode = (int)unpack(kwargs, "goal_sampling_mode");

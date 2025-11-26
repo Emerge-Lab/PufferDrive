@@ -282,17 +282,21 @@ static int make_gif_from_frames(const char *pattern, int fps,
 }
 
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior, int goal_sampling_mode, float max_distance_to_goal) {
+int eval_gif(
+    const char* map_name, const char* policy_name, const char* binary_dir, 
+    int show_grid, int obs_only, int lasers, 
+    int log_trajectories, int frame_skip, float goal_radius, 
+    int init_steps, int max_controlled_agents, const char* view_mode, 
+    const char* output_topdown, const char* output_agent, int num_maps, 
+    int scenario_length_override, int init_mode, int control_mode, 
+    int goal_behavior, int goal_sampling_mode, float max_distance_to_goal, 
+    int dynamics_model, int reward_vehicle_collision, int reward_offroad_collision, 
+    int reward_ade, int collision_behavior, int offroad_behavior, 
+    float dt, float scenario_length, int num_agents_per_world, 
+    float vehicle_length, float vehicle_width, float vehicle_height) {
 
     // Parse configuration from INI file
-    env_init_config conf = {0};  // Initialize to zero
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
-    if(ini_parse(ini_file, handler, &conf) < 0) {
-        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
-        return -1;
-    }
-
-    const char* binary_dir = conf.binary_dir[0] ? conf.binary_dir : "resources/drive/carla_binaries";
 
     char map_buffer[256];
     if (map_name == NULL) {
@@ -335,29 +339,33 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         RAISE_FILE_ERROR(policy_name);
     }
     fclose(policy_file);
-    printf("Goal Sampling Distance: %.2f\n", conf.max_distance_to_goal);
     Drive env = {
-        .dynamics_model = conf.dynamics_model,
-        .reward_vehicle_collision = conf.reward_vehicle_collision,
-        .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_ade = conf.reward_ade,
+        .dynamics_model = dynamics_model,
+        .reward_vehicle_collision = reward_vehicle_collision,
+        .reward_offroad_collision = reward_offroad_collision,
+        .reward_ade = reward_ade,
         .goal_radius = goal_radius,
-        .dt = conf.dt,
+        .dt = dt,
 	    .map_name = (char*)map_name,
         .init_steps = init_steps,
         .max_controlled_agents = max_controlled_agents,
-        .collision_behavior = conf.collision_behavior,
-        .offroad_behavior = conf.offroad_behavior,
+        .collision_behavior = collision_behavior,
+        .offroad_behavior = offroad_behavior,
         .goal_behavior = goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,
         .goal_sampling_mode = goal_sampling_mode,
         .max_distance_to_goal = max_distance_to_goal,
+        .num_agents_per_world = num_agents_per_world,
+        .vehicle_length = vehicle_length,
+        .vehicle_width = vehicle_width,
+        .vehicle_height = vehicle_height,
     };
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
-                          (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
-    env.ini_file = (char*)ini_file;
+                          (scenario_length > 0) ? scenario_length : TRAJECTORY_LENGTH_DEFAULT;
+    // Ensure ini_file is heap-allocated for c_close()
+    env.ini_file = strdup(ini_file);
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -489,9 +497,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     // Clean up resources
     free(client);
     free_allocated(&env);
-    printf("Freeing drivenet and weights...\n");
     free_drivenet(net);
-    printf("Freeing weights...\n");
     free(weights);
     return 0;
 }
@@ -503,23 +509,42 @@ int main(int argc, char* argv[]) {
         raise_error_with_message(ERROR_UNKNOWN, "Error while loading %s", ini_file);
     }
 
+    // Default parameters from config
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
     int log_trajectories = 1;
     int frame_skip = 1;
-    float goal_radius = 2.0f;
-    int init_steps = 0;
+    float goal_radius = conf.goal_radius;
+    int init_steps = conf.init_steps;
     const char* map_name = NULL;
     const char* policy_name = "resources/drive/puffer_drive_weights.bin";
+    const char* binary_dir = conf.binary_dir[0] ? conf.binary_dir : "resources/drive/carla_binaries";
     int max_controlled_agents = -1;
     int num_maps = 1;
-    int scenario_length_cli = -1;
+    int scenario_length_cli = conf.scenario_length;
     int init_mode = 0;
-    int control_mode = 0;
+    if (conf.init_mode == ALL_VALID_INIT || conf.init_mode == RANDOM_AGENTS_INIT) {
+        init_mode = 0;
+    } else if (conf.init_mode == CONTROLLABLE_AGENTS_INIT) {
+        init_mode = 1;
+    }
+    int control_mode = conf.control_mode;
     int goal_behavior = 0;
     int goal_sampling_mode = conf.goal_sampling_mode;
     float max_distance_to_goal = conf.max_distance_to_goal;
+    int dynamics_model = conf.dynamics_model;
+    int reward_vehicle_collision = conf.reward_vehicle_collision;
+    int reward_offroad_collision = conf.reward_offroad_collision;
+    int reward_ade = conf.reward_ade;
+    int collision_behavior = conf.collision_behavior;
+    int offroad_behavior = conf.offroad_behavior;
+    float dt = conf.dt;
+    float scenario_length = conf.scenario_length;
+    int num_agents_per_world = conf.num_agents_per_world;
+    float vehicle_length = conf.vehicle_length;
+    float vehicle_width = conf.vehicle_width;
+    float vehicle_height = conf.vehicle_height;
 
     const char* view_mode = "topdown";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
@@ -566,6 +591,14 @@ int main(int argc, char* argv[]) {
                 i++;
             } else {
                 fprintf(stderr, "Error: --policy-name option requires a policy file path\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--binary-dir") == 0) {
+            if (i + 1 < argc) {
+                binary_dir = argv[i + 1];
+                i++;
+            } else {
+                fprintf(stderr, "Error: --binary-dir option requires a directory path\n");
                 return 1;
             }
         } else if (strcmp(argv[i], "--view") == 0) {
@@ -640,9 +673,81 @@ int main(int argc, char* argv[]) {
                 goal_behavior = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--dynamics-model") == 0) {
+            if (i + 1 < argc) {
+                dynamics_model = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--reward-vehicle-collision") == 0) {
+            if (i + 1 < argc) {
+                reward_vehicle_collision = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--reward-offroad-collision") == 0) {
+            if (i + 1 < argc) {
+                reward_offroad_collision = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--reward-ade") == 0) {
+            if (i + 1 < argc) {
+                reward_ade = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--collision-behavior") == 0) {
+            if (i + 1 < argc) {
+                collision_behavior = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--offroad-behavior") == 0) {
+            if (i + 1 < argc) {
+                offroad_behavior = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--dt") == 0) {
+            if (i + 1 < argc) {
+                dt = atof(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--scenario-length") == 0) {
+            if (i + 1 < argc) {
+                scenario_length = atof(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--num-agents-per-world") == 0) {
+            if (i + 1 < argc) {
+                num_agents_per_world = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "vehicle_length") == 0) {
+            if (i + 1 < argc) {
+                vehicle_length = atof(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "vehicle_width") == 0) {
+            if (i + 1 < argc) {
+                vehicle_width = atof(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "vehicle_height") == 0) {
+            if (i + 1 < argc) {
+                vehicle_height = atof(argv[i + 1]);
+                i++;
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode, goal_behavior, goal_sampling_mode, max_distance_to_goal);
+    eval_gif(
+        map_name, policy_name, binary_dir, 
+        show_grid, obs_only, lasers, 
+        log_trajectories, frame_skip, goal_radius, 
+        init_steps, max_controlled_agents, view_mode, 
+        output_topdown, output_agent, num_maps, 
+        scenario_length_cli, init_mode, control_mode, 
+        goal_behavior, goal_sampling_mode, max_distance_to_goal,
+        dynamics_model, reward_vehicle_collision, reward_offroad_collision,
+        reward_ade, collision_behavior, offroad_behavior, 
+        dt, scenario_length, num_agents_per_world, 
+        vehicle_length, vehicle_width, vehicle_height
+    );
     return 0;
 }

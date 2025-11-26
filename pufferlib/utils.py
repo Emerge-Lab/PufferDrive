@@ -232,6 +232,32 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path, max_dist
                 base_cmd.extend(["--goal-sampling-mode", str(env_cfg.goal_sampling_mode)])
             if getattr(env_cfg, "goal_behavior", None) is not None:
                 base_cmd.extend(["--goal-behavior", str(env_cfg.goal_behavior)])
+            # Additional args mirrored from C argv parsing
+            if getattr(env_cfg, "dynamics_model", None) is not None:
+                print(f'Dynamics model: {str(env_cfg.dynamics_model)}')
+                base_cmd.extend(["--dynamics-model", str(env_cfg.dynamics_model)])
+            if getattr(env_cfg, "reward_vehicle_collision", None) is not None:
+                base_cmd.extend(["--reward-vehicle-collision", str(env_cfg.reward_vehicle_collision)])
+            if getattr(env_cfg, "reward_offroad_collision", None) is not None:
+                base_cmd.extend(["--reward-offroad-collision", str(env_cfg.reward_offroad_collision)])
+            if getattr(env_cfg, "reward_ade", None) is not None:
+                base_cmd.extend(["--reward-ade", str(env_cfg.reward_ade)])
+            if getattr(env_cfg, "collision_behavior", None) is not None:
+                base_cmd.extend(["--collision-behavior", str(env_cfg.collision_behavior)])
+            if getattr(env_cfg, "offroad_behavior", None) is not None:
+                base_cmd.extend(["--offroad-behavior", str(env_cfg.offroad_behavior)])
+            if getattr(env_cfg, "dt", None) is not None:
+                base_cmd.extend(["--dt", str(env_cfg.dt)])
+            if getattr(env_cfg, "scenario_length", None) is not None:
+                base_cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
+            if getattr(env_cfg, "num_agents_per_world", None) is not None:
+                base_cmd.extend(["--num-agents-per-world", str(env_cfg.num_agents_per_world)])
+            if getattr(env_cfg, "vehicle_length", None) is not None:
+                base_cmd.extend(["--vehicle_length", str(env_cfg.vehicle_length)])
+            if getattr(env_cfg, "vehicle_width", None) is not None:
+                base_cmd.extend(["--vehicle_width", str(env_cfg.vehicle_width)])
+            if getattr(env_cfg, "vehicle_height", None) is not None:
+                base_cmd.extend(["--vehicle_height", str(env_cfg.vehicle_height)])
 
             # Policy-controlled agents (prefer num_policy_controlled_agents, fallback to max_controlled_agents)
             n_policy = getattr(env_cfg, "num_policy_controlled_agents", getattr(env_cfg, "max_controlled_agents", -1))
@@ -271,10 +297,15 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path, max_dist
             if map_path is not None and os.path.exists(map_path):
                 cmd.extend(["--map-name", str(map_path)])
 
+            # Optional: explicitly pass binary_dir to the C visualize runner
+            binary_dir = getattr(env_cfg, "binary_dir", None)
+            if binary_dir is not None:
+                cmd.extend(["--binary-dir", str(binary_dir)])
+
             # Output paths (overwrite each iteration; then moved/renamed)
             cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
             cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
-
+            print(f"Running cmd: {' '.join(cmd)}")
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env_vars)
 
             vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
