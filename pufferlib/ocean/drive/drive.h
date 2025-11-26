@@ -250,6 +250,8 @@ float relative_distance_2d(float x1, float y1, float x2, float y2){
 // Forward declarations for utility helpers defined later
 float point_to_segment_distance_2d(float px, float py, float x1, float y1, float x2, float y2);
 int project_point_onto_lane(Entity* lane, float px, float py, float* out_x, float* out_y, int* out_seg_idx, float* out_t);
+int check_aabb_collision(Entity* car1, Entity* car2);
+void respawn_agent(Drive* env, int agent_idx);
 
 float clip(float value, float min, float max) {
     if (value < min) return min;
@@ -257,8 +259,6 @@ float clip(float value, float min, float max) {
     return value;
 }
 
-// temp forward declerations
-void respawn_agent(Drive* env, int agent_idx);
 
 float closest_distance_to_lane(Entity* lane, float ax, float ay) {
     float min_distance = 1e9f;
@@ -568,7 +568,6 @@ bool is_valid_spawn_point(Drive* env, int agent_idx, float start_x, float start_
         agent_corners[i][0] = mock_agent.x + (offsets[i][0]*half_length*cos_heading - offsets[i][1]*half_width*sin_heading);
         agent_corners[i][1] = mock_agent.y + (offsets[i][0]*half_length*sin_heading + offsets[i][1]*half_width*cos_heading);
     }
-    int collided = 0;
 
     // Vehicle collision check
     for (int i = 0; i < env->num_entities; i++) {
@@ -579,7 +578,6 @@ bool is_valid_spawn_point(Drive* env, int agent_idx, float start_x, float start_
         if (entity->type == VEHICLE) {
             if (entity->initialized == 0) continue; // Skip uninitialized entities
             if(check_aabb_collision(&mock_agent, entity)) {
-                collided = VEHICLE_COLLISION;
                 return false; // Collision detected with existing vehicle at spawn point
             }
         }
@@ -2527,7 +2525,6 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         } else { // discrete
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
             int* action_array = (int*)env->actions;
-            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
             int action_val = action_array[action_idx];
             int acceleration_index = action_val / num_steer;
@@ -3630,7 +3627,6 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
 
                 // --- Draw the car  ---
 
-                Vector3 carPos = { position.x, position.y, position.z };
                 Color car_color = GRAY;              // default for static
                 if (is_expert) car_color = GOLD;      // expert replay
                 if (is_active_agent) car_color = BLUE; // policy-controlled
@@ -3808,7 +3804,6 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
 
     // Draw track indices for the tracks to predict
     if (mode == 1 && env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
-        float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;
 
