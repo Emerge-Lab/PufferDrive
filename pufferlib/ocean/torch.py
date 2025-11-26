@@ -92,23 +92,33 @@ class Drive(nn.Module):
         )
 
         self.road_encoder = nn.Sequential(
-            FusedLinearReluMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),  # Cuda kernel
-            # nn.ReLU(),
-            # pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
-        )
-        self.partner_encoder = nn.Sequential(
-            FusedLinearReluMax(PARTNER_FEATURES, input_size),  # Cuda kernel
+            pufferlib.pytorch.layer_init(nn.Linear(ROAD_FEATURES_AFTER_ONEHOT, input_size)),
             nn.LayerNorm(input_size),
-            # pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
+
+        self.partner_encoder = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(PARTNER_FEATURES, input_size)),
+            nn.LayerNorm(input_size),
+            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+        )
+
+        # self.road_encoder = nn.Sequential(
+        #     FusedLinearReluMax(ROAD_FEATURES_AFTER_ONEHOT, input_size),  # Cuda kernel
+        # )
+        # self.partner_encoder = nn.Sequential(
+        #     FusedLinearReluMax(PARTNER_FEATURES, input_size),  # Cuda kernel
+        #     nn.LayerNorm(input_size),
+        # )
 
         self.full_scene_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.observation_size, input_size)),
+            nn.LayerNorm(input_size),
         )
 
         self.shared_embedding = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(4 * input_size, hidden_size)),
             nn.GELU(),
+            pufferlib.pytorch.layer_init(nn.Linear(4 * input_size, hidden_size)),
         )
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
 
@@ -145,16 +155,17 @@ class Drive(nn.Module):
         road_objects = torch.cat([road_continuous, road_onehot], dim=2)
 
         ego_features = self.ego_encoder(ego_obs)
-        partner_features = self.partner_encoder(partner_objects.contiguous())
-
-        road_features = self.road_encoder(road_objects.contiguous())
+        # partner_features = self.partner_encoder(partner_objects.contiguous())
+        # road_features = self.road_encoder(road_objects.contiguous())
 
         full_scene_context = self.full_scene_encoder(observations)
 
-        concat_features = torch.cat([ego_features, road_features, partner_features, full_scene_context], dim=1)
+        partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
+        road_features, _ = self.road_encoder(road_objects).max(dim=1)
 
         # Pass through shared embedding
-        embedding = self.shared_embedding(concat_features)
+        concat_features = torch.cat([ego_features, road_features, partner_features, full_scene_context], dim=1)
+        embedding = F.relu(self.shared_embedding(concat_features))
 
         return embedding
 
