@@ -532,7 +532,6 @@ void set_start_position(Drive* env){
         e->x = e->traj_x[step];
         e->y = e->traj_y[step];
         e->z = e->traj_z[step];
-
         if(e->type > CYCLIST || e->type == 0){
             continue;
         }
@@ -2264,6 +2263,9 @@ struct Client {
     float camera_zoom;
     Camera3D camera;
     Model cars[6];
+    Model cyclist;
+    Model pedestrian;
+    ModelAnimation* cycle_anim;
     int car_assignments[MAX_AGENTS];  // To keep car model assignments consistent per vehicle
     Vector3 default_camera_position;
     Vector3 default_camera_target;
@@ -2283,6 +2285,11 @@ Client* make_client(Drive* env){
     client->cars[3] = LoadModel("resources/drive/YellowCar.glb");
     client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
     client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
+    client->cyclist = LoadModel("resources/drive/cyclist.glb");
+    client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
+    int animCount = 0;
+    int animCountCyc = 0;
+    client->cycle_anim = LoadModelAnimations("resources/drive/cyclist.glb", &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
@@ -2824,7 +2831,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
 
                 // Select car model
                 Model car_model = client->cars[i % 6];  // Default: cycle through all 6 car sprites
-
+    
                 if(agent_index == env->human_agent_idx){
                     car_model = client->cars[0];  // Ego agent always uses red car (cars[0])
                 }
@@ -2861,7 +2868,22 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 //     rlPopMatrix();
                 //     continue;
                 // }
-
+                if(env->entities[i].type == CYCLIST){
+                    scale = (Vector3){
+                        0.01,
+                        0.01,
+                        0.01
+                    };
+                    car_model = client->cyclist;
+                }
+                if(env->entities[i].type == PEDESTRIAN ){
+                    scale = (Vector3){
+                        2,
+                        2,
+                        2
+                    };
+                    car_model = client->pedestrian;
+                }
                 DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, WHITE);
                 {
                     float cos_heading = env->entities[i].heading_x;
