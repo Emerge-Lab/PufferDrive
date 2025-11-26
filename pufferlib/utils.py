@@ -159,7 +159,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {e}")
 
 
-def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
+def render_videos(config, vecenv, logger, epoch, global_step, bin_path, max_distance_to_goal=None):
     """
     Generate and log training videos using C-based rendering.
 
@@ -170,6 +170,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         epoch: Current training epoch
         global_step: Current global training step
         bin_path: Path to the exported .bin model weights file
+        max_distance_to_goal: Optional override for maximum goal distance used by the renderer
 
     Returns:
         None. Prints error messages if rendering fails.
@@ -196,6 +197,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         # Suppress AddressSanitizer exit code (temp)
         env_vars = os.environ.copy()
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
+        env_vars.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
 
         # Base command (without map/output paths)
         base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
@@ -226,6 +228,10 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
                 base_cmd.append("--pure-self-play")
             if getattr(env_cfg, "deterministic_agent_selection", False):
                 base_cmd.append("--deterministic-selection")
+            if getattr(env_cfg, "goal_sampling_mode", None) is not None:
+                base_cmd.extend(["--goal-sampling-mode", str(env_cfg.goal_sampling_mode)])
+            if getattr(env_cfg, "goal_behavior", None) is not None:
+                base_cmd.extend(["--goal-behavior", str(env_cfg.goal_behavior)])
 
             # Policy-controlled agents (prefer num_policy_controlled_agents, fallback to max_controlled_agents)
             n_policy = getattr(env_cfg, "num_policy_controlled_agents", getattr(env_cfg, "max_controlled_agents", -1))
@@ -240,6 +246,11 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
                 base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
             if getattr(env_cfg, "scenario_length", None):
                 base_cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
+            if max_distance_to_goal is None:
+                max_distance_to_goal = getattr(env_cfg, "max_distance_to_goal", None)
+
+        if max_distance_to_goal is not None:
+            base_cmd.extend(["--max-distance-to-goal", str(max_distance_to_goal)])
 
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)

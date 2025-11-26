@@ -42,12 +42,14 @@ struct DriveNet {
     Multidiscrete* multidiscrete;
 };
 
-DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
+DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model, int goal_behavior) {
     DriveNet* net = calloc(1, sizeof(DriveNet));
     int hidden_size = 256;
     int input_size = 64;
 
-    int ego_dim = (dynamics_model == JERK) ? 10 : 7;
+    int base_ego_dim = (dynamics_model == JERK) ? 10 : 7;
+    int extra_goal_dim = (goal_behavior == GOAL_GENERATE_NEW) ? 2 : 0;
+    int ego_dim = base_ego_dim + extra_goal_dim;
 
     // Determine action space size based on dynamics model
     int action_size, logit_sizes[2];

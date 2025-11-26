@@ -18,7 +18,8 @@ class Drive(nn.Module):
         self.hidden_size = hidden_size
 
         # Determine ego dimension from environment's dynamics model
-        self.ego_dim = 10 if env.dynamics_model == "jerk" else 7
+        base_ego_dim = 10 if env.dynamics_model == "jerk" else 7
+        self.ego_dim = base_ego_dim + (2 if getattr(env, "goal_behavior", 0) == 1 else 0)
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
