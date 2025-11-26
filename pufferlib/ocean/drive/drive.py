@@ -728,12 +728,6 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=32):
     env = Drive(
         num_agents=num_agents,
         num_maps=1,
-        control_mode="control_vehicles",
-        init_mode="create_all_valid",
-        init_steps=0,
-        scenario_length=91,
-        goal_sampling_mode="randomized_curriculum",  # "fixed_from_dataset",
-        max_distance_to_goal=1.0,
     )
 
     env.reset()

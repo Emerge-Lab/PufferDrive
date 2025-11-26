@@ -232,10 +232,15 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path, max_dist
                 base_cmd.extend(["--goal-sampling-mode", str(env_cfg.goal_sampling_mode)])
             if getattr(env_cfg, "goal_behavior", None) is not None:
                 base_cmd.extend(["--goal-behavior", str(env_cfg.goal_behavior)])
-            # Additional args mirrored from C argv parsing
             if getattr(env_cfg, "dynamics_model", None) is not None:
-                print(f'Dynamics model: {str(env_cfg.dynamics_model)}')
-                base_cmd.extend(["--dynamics-model", str(env_cfg.dynamics_model)])
+                dynamics_value = env_cfg.dynamics_model
+                if isinstance(dynamics_value, str):
+                    if dynamics_value.lower() == "classic":
+                        dynamics_value = 0
+                    elif dynamics_value.lower() == "jerk":
+                        dynamics_value = 1
+                print(f'Dynamics model: {dynamics_value}')
+                base_cmd.extend(["--dynamics-model", str(dynamics_value)])
             if getattr(env_cfg, "reward_vehicle_collision", None) is not None:
                 base_cmd.extend(["--reward-vehicle-collision", str(env_cfg.reward_vehicle_collision)])
             if getattr(env_cfg, "reward_offroad_collision", None) is not None:
