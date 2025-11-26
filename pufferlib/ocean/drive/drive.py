@@ -668,7 +668,7 @@ def process_maps(source_dir, output_dir, prefix="map", limit=None, start_index=0
 
 
 def process_carla_maps(
-    source_dir="data_utils/carla/carla", output_dir="resources/drive/carla_binaries", prefix="carla_map", limit=None
+    source_dir="data/", output_dir="resources/drive/carla_binaries", prefix="carla_map", limit=None
 ):
     """Process Carla JSON maps into binaries."""
     process_maps(source_dir=source_dir, output_dir=output_dir, prefix=prefix, limit=limit)
@@ -735,5 +735,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=32):
 
 
 if __name__ == "__main__":
-    test_performance()
-    # process_all_maps()
+    # test_performance()
+    process_carla_maps()

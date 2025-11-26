@@ -335,7 +335,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         RAISE_FILE_ERROR(policy_name);
     }
     fclose(policy_file);
-
+    printf("Goal Sampling Distance: %.2f\n", conf.max_distance_to_goal);
     Drive env = {
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
@@ -357,6 +357,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
+    env.ini_file = (char*)ini_file;
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -375,7 +376,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 6.0f; // Can be used to increase the video quality
+    float scale = 2.0f; // Can be used to increase the video quality
 
     // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
@@ -488,12 +489,20 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     // Clean up resources
     free(client);
     free_allocated(&env);
+    printf("Freeing drivenet and weights...\n");
     free_drivenet(net);
+    printf("Freeing weights...\n");
     free(weights);
     return 0;
 }
 
 int main(int argc, char* argv[]) {
+    const char* ini_file = "pufferlib/config/ocean/drive.ini";
+    env_init_config conf = {0};
+    if(ini_parse(ini_file, handler, &conf) < 0) {
+        raise_error_with_message(ERROR_UNKNOWN, "Error while loading %s", ini_file);
+    }
+
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
@@ -509,10 +518,10 @@ int main(int argc, char* argv[]) {
     int init_mode = 0;
     int control_mode = 0;
     int goal_behavior = 0;
-    int goal_sampling_mode = 0;
-    float max_distance_to_goal = 100.0f;
+    int goal_sampling_mode = conf.goal_sampling_mode;
+    float max_distance_to_goal = conf.max_distance_to_goal;
 
-    const char* view_mode = "both";  // "both", "topdown", "agent"
+    const char* view_mode = "topdown";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
     const char* output_agent = NULL;
 
