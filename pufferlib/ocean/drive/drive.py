@@ -597,12 +597,9 @@ def process_all_maps(
 
     # Process maps in parallel with progress bar
     with Pool(num_workers) as pool:
-        results = list(tqdm(
-            pool.imap(_process_single_map, tasks),
-            total=len(tasks),
-            desc="Processing maps",
-            unit="map"
-        ))
+        results = list(
+            tqdm(pool.imap(_process_single_map, tasks), total=len(tasks), desc="Processing maps", unit="map")
+        )
 
     # Collect statistics
     successful = sum(1 for _, _, success, _ in results if success)
