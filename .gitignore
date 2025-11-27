@@ -171,6 +171,9 @@ pufferlib/resources/drive/binaries/validation/
 !pufferlib/resources/drive/binaries/map_000.bin
 !pufferlib/resources/drive/binaries/training/map_000.bin
 
+# Ignore human demonstration data
+pufferlib/resources/drive/human_demonstrations/*
+
 # Compiled drive binary in root
 /drive
 /visualize

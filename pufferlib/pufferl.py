@@ -219,6 +219,7 @@ class PuffeRL:
         self.stats = defaultdict(list)
         self.last_stats = defaultdict(list)
         self.losses = {}
+        self.realism = {}
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -350,6 +351,7 @@ class PuffeRL:
         a = config["prio_alpha"]
         clip_coef = config["clip_coef"]
         vf_clip = config["vf_clip_coef"]
+        human_clip = config["human_clip_coef"]
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
 
@@ -412,6 +414,36 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
+            # Compute log likelihood loss of human actions under current policy.
+            # 1: Sample a batch of human actions and observations from dataset
+            # Shape: [n_sequences, bptt_horizon, feature_dim]
+            discrete_human_actions, continuous_human_actions, human_observations = (
+                self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
+            )
+
+            # Use helper function to compute realism metrics
+            # self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
+            # self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
+
+            # Select appropriate action type for training
+            use_continuous = self.vecenv.driver_env._action_type_flag == 1
+            human_actions = continuous_human_actions if use_continuous else discrete_human_actions
+
+            # 2: Compute the log-likelihood of human actions under the current policy,
+            # given the corresponding human observations. A higher likelihood indicates
+            # that the policy behaves more like a human under the same observations.
+            human_state = dict(
+                action=human_actions,
+                lstm_h=None,
+                lstm_c=None,
+            )
+
+            human_logits, _ = self.policy(human_observations.to(device), human_state)
+
+            _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
+                logits=human_logits, action=human_actions.to(device)
+            )
+
             adv = advantages[idx]
             adv = compute_puff_advantage(
                 mb_values,
@@ -438,9 +470,17 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
+            human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
+            human_loss = human_loss_clipped.mean()
+
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            loss = (
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - config["ent_coef"] * entropy_loss
+                - config["human_ll_coef"] * human_loss
+            )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -455,10 +495,14 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["human_loss"] += human_loss / self.total_minibatches
+            self.realism["human_log_prob"] = human_log_prob.mean().item()
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
+
             loss.backward()
+
             if (mb + 1) % self.accumulate_minibatches == 0:
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
                 self.optimizer.step()
@@ -488,47 +532,28 @@ class PuffeRL:
             self.last_log_step = self.global_step
             profile.clear()
 
-        if self.epoch % config["checkpoint_interval"] == 0 or done_training:
+        if (self.epoch - 1) % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
-            if self.render and self.epoch % self.render_interval == 0:
-                model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-                model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
-
-                if model_files:
-                    # Take the latest checkpoint
-                    latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
-
-                    # Export to .bin for rendering with raylib
-                    try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
-
-                        export(
-                            args=export_args,
-                            env_name=self.config["env"],
-                            vecenv=self.vecenv,
-                            policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
-                        )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
-
-                    except Exception as e:
-                        print(f"Failed to export model weights: {e}")
-
+            if self.render and (self.epoch - 1) % self.render_interval == 0:
+                bin_path = self._export_to_bin()
+                if bin_path:
+                    pufferlib.utils.render_videos(
+                        self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
+                    )
         if self.config["eval"]["wosac_realism_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
         if self.config["eval"]["human_replay_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
+
+        if done_training:  # Export latest checkpoint to .bin
+            self._export_to_bin()
 
     def mean_and_log(self):
         config = self.config
@@ -543,6 +568,7 @@ class PuffeRL:
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
+
         logs = {
             "SPS": dist_sum(self.sps, device),
             "agent_steps": agent_steps,
@@ -556,6 +582,16 @@ class PuffeRL:
             # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
+
+        for k, v in self.realism.items():
+            # if k.endswith("_histogram"):
+            #     if hasattr(self.logger, "wandb") and self.logger.wandb:
+            #         import wandb
+
+            #         metric_name = k.replace("_histogram", "")
+            #         logs[f"eval/{metric_name}"] = wandb.Histogram(v)
+            # else:
+            logs[f"eval/{k}"] = v
 
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:
@@ -600,11 +636,39 @@ class PuffeRL:
             "update": self.epoch,
             "model_name": model_name,
             "run_id": run_id,
+            "max_expert_sequences": self.vecenv.driver_env.max_expert_sequences,
+            "bptt_horizon": self.config["bptt_horizon"],
         }
         state_path = os.path.join(path, "trainer_state.pt")
         torch.save(state, state_path + ".tmp")
         os.rename(state_path + ".tmp", state_path)
         return model_path
+
+    def _export_to_bin(self):
+        """Export latest checkpoint to .bin for rendering."""
+        model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+        model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+
+        if not model_files:
+            return None
+
+        latest_cpt = max(model_files, key=os.path.getctime)
+        bin_path = f"{model_dir}.bin"
+
+        try:
+            export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
+            export(
+                args=export_args,
+                env_name=self.config["env"],
+                vecenv=self.vecenv,
+                policy=self.uncompiled_policy,
+                path=bin_path,
+                silent=True,
+            )
+            return bin_path
+        except Exception as e:
+            print(f"Failed to export model weights: {e}")
+            return None
 
     def print_dashboard(self, clear=False, idx=[0], c1="[cyan]", c2="[white]", b1="[bright_cyan]", b2="[bright_white]"):
         config = self.config
@@ -799,8 +863,8 @@ class Profile:
         if epoch % self.frequency != 0:
             return
 
-        # if torch.cuda.is_available():
-        #    torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         tick = time.time()
         if len(self.stack) != 0 and not nest:
@@ -816,8 +880,8 @@ class Profile:
         profile["delta"] += delta
 
     def end(self):
-        # if torch.cuda.is_available():
-        #    torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         end = time.time()
         for i in range(len(self.stack)):
@@ -1034,6 +1098,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     """Evaluate a policy."""
 
     args = args or load_config(env_name)
+    args["env"]["save_expert_data"] = False
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
@@ -1191,7 +1256,7 @@ def sweep(args=None, env_name=None):
     points_per_run = args["sweep"]["downsample"]
     target_key = f"environment/{args['sweep']['metric']}"
     for i in range(args["max_runs"]):
-        seed = time.time_ns() & 0xFFFFFFFF
+        seed = 42
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -1248,6 +1313,9 @@ def controlled_exp(env_name, args=None):
         for key, value in zip(keys, combo):
             section, param = key.split(".")
             exp_args[section][param] = value
+
+        # Create descriptive tag
+        # exp_args["tag"] = "_".join([f"{param.split('.')[-1]}={v}" for param, v in zip(keys, combo)])
 
         print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
 

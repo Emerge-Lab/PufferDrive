@@ -85,7 +85,13 @@ void compute_puff_advantage_cpu(torch::Tensor values, torch::Tensor rewards,
 }
 
 TORCH_LIBRARY(pufferlib, m) {
-   m.def("compute_puff_advantage(Tensor(a!) values, Tensor(b!) rewards, Tensor(c!) dones, Tensor(d!) importance, Tensor(e!) advantages, float gamma, float lambda, float rho_clip, float c_clip) -> ()");
+    m.def("compute_puff_advantage(Tensor(a!) values, Tensor(b!) rewards, Tensor(c!) dones, Tensor(d!) importance, Tensor(e!) advantages, float gamma, float lambda, float rho_clip, float c_clip) -> ()");
+    m.def("linear_max_fused(Tensor x, Tensor weight, Tensor bias) -> Tensor");
+    m.def("linear_max_fused_backward(Tensor grad_out, Tensor x, Tensor weight) -> (Tensor grad_x, Tensor grad_weight, Tensor grad_bias)");
+    m.def("linear_relu_max(Tensor x, Tensor weight, Tensor bias) -> Tensor");
+    m.def("linear_relu_max_backward(Tensor grad_out, Tensor x, Tensor weight, Tensor bias) -> (Tensor grad_x, Tensor grad_weight, Tensor grad_bias)");
+    m.def("linear_relu_linear_max(Tensor x, Tensor weight1, Tensor bias1, Tensor weight2, Tensor bias2) -> Tensor");
+    m.def("linear_relu_linear_max_backward(Tensor grad_out, Tensor x, Tensor weight1, Tensor bias1, Tensor weight2) -> (Tensor grad_x, Tensor grad_weight1, Tensor grad_bias1, Tensor grad_weight2, Tensor grad_bias2)");
  }
 
 TORCH_LIBRARY_IMPL(pufferlib, CPU, m) {
