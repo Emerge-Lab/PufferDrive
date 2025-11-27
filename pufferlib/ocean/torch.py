@@ -26,7 +26,7 @@ class Drive(nn.Module):
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
-        max_road_objects = 13
+        max_road_objects = 15
         self.road_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(max_road_objects, input_size)),
             nn.LayerNorm(input_size),
