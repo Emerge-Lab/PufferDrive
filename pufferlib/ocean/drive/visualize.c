@@ -13,7 +13,7 @@
 #include "drivenet.h"
 #include "libgen.h"
 #include "../env_config.h"
-#define TRAJECTORY_LENGTH_DEFAULT 500
+#define TRAJECTORY_LENGTH_DEFAULT 91
 
 typedef struct {
     int pipefd[2];
@@ -69,32 +69,8 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
                        int frame_count, float *path, int log_trajectories, int show_grid, int img_width, int img_height,
                        int zoom_in) {
     BeginDrawing();
-    // Compute map bounds and center
-   /*
-    float map_left   = env->grid_map->top_left_x;
-    float map_right  = env->grid_map->bottom_right_x;
-    float map_top    = env->grid_map->top_left_y;
-    float map_bottom = env->grid_map->bottom_right_y;
-    float map_width  = map_right - map_left;
-    float map_height_full = map_top - map_bottom;
-    float center_x = (map_left + map_right) / 2.0f;
-    float center_y = (map_top + map_bottom) / 2.0f;
-
-    // Add a margin (10% of width/height)
-    float margin_x = 0.05f * map_width;
-    float margin_y = 0.05f * map_height_full;
-    float camera_fovy = map_height_full + 2 * margin_y;
-    */
-
 
     // Top-down orthographic camera
-
-
-    int screenWidth  = 1920;
-    int screenHeight = 1080;
-
-    float aspect = (float)screenWidth / (float)screenHeight;
-
     Camera3D camera = {0};
 
     if (zoom_in) {                                       // Zoom in on part of the map
@@ -118,18 +94,9 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
     camera.fovy     = camera_fovy;
     camera.projection = CAMERA_ORTHOGRAPHIC;
-    */
 
     client->width = img_width;
     client->height = img_height;
-
-    Vector3 origin = { 0, 0, 0 };
-
-    // convert 3D → 2D screen coordinates
-    Vector2 sp = GetWorldToScreen(origin, camera);
-
-    DrawCircleV(sp, 5, RED);
-    DrawText("Origin", (int)sp.x + 8, (int)sp.y - 10, 20, RED);
 
     Color road = (Color){35, 35, 37, 255};
     ClearBackground(road);
@@ -306,11 +273,9 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
 
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
-    printf("Top-left: (%.1f, %.1f), Bottom-right: (%.1f, %.1f)\n",
-           env.grid_map->top_left_x, env.grid_map->top_left_y,
-           env.grid_map->bottom_right_x, env.grid_map->bottom_right_y);
+
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 1.0f; // Can be used to increase the video quality
+    float scale = 6.0f; // Can be used to increase the video quality
 
     // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
@@ -388,7 +353,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         }
     }
 
-
     if (render_topdown) {
         printf("Recording topdown view...\n");
         for (int i = 0; i < frame_count; i++) {
@@ -402,6 +366,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             forward(net, env.observations, (int *)env.actions);
             c_step(&env);
         }
+
     }
 
     if (render_agent) {
