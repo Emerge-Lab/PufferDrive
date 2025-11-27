@@ -124,6 +124,9 @@ WOSAC evaluation with random policy:
 puffer eval puffer_drive --eval.wosac-realism-eval True
 ```
 
+- **Small clean eval dataset**. A clean validation set with 229 scenarios can be downloaded [here](daphne-cornelisse/pufferdrive_wosac_val_clean).
+- **Large eval dataset**. [TODO]
+
 WOSAC evaluation with your checkpoint (must be .pt file):
 ```bash
 puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-trained-policy>.pt
