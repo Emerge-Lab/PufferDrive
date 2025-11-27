@@ -88,6 +88,13 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
 
 
     // Top-down orthographic camera
+
+
+    int screenWidth  = 1920;
+    int screenHeight = 1080;
+
+    float aspect = (float)screenWidth / (float)screenHeight;
+
     Camera3D camera = {0};
 
     if (zoom_in) {                                       // Zoom in on part of the map
@@ -102,7 +109,8 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
 
     camera.up = (Vector3){0.0f, -1.0f, 0.0f};
     camera.projection = CAMERA_ORTHOGRAPHIC;
-
+    // Vector2 sp2 = GetWorldToScreen((Vector3){-225, -225, 0}, camera);
+    // DrawCircleV(sp2, 10, YELLOW);
 	/*
     Camera3D camera = {0};
     camera.position = (Vector3){ center_x, center_y, 500.0f };  // above the map center
@@ -114,6 +122,14 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
 
     client->width = img_width;
     client->height = img_height;
+
+    Vector3 origin = { 0, 0, 0 };
+
+    // convert 3D → 2D screen coordinates
+    Vector2 sp = GetWorldToScreen(origin, camera);
+
+    DrawCircleV(sp, 5, RED);
+    DrawText("Origin", (int)sp.x + 8, (int)sp.y - 10, 20, RED);
 
     Color road = (Color){35, 35, 37, 255};
     ClearBackground(road);
@@ -290,9 +306,11 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
 
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
-
+    printf("Top-left: (%.1f, %.1f), Bottom-right: (%.1f, %.1f)\n",
+           env.grid_map->top_left_x, env.grid_map->top_left_y,
+           env.grid_map->bottom_right_x, env.grid_map->bottom_right_y);
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 6.0f; // Can be used to increase the video quality
+    float scale = 1.0f; // Can be used to increase the video quality
 
     // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
