@@ -21,10 +21,10 @@ class Drive(nn.Module):
         self.partner_features = env.partner_features
         self.max_road_objects = env.max_road_objects
         self.road_features = env.road_features
-        self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
+        self.road_features_after_onehot = env.road_features + 7  # 7 is the number of one-hot encoded categories
 
         # Determine ego dimension from environment's dynamics model
-        self.ego_dim = 10 if env.dynamics_model == "jerk" else 7
+        self.ego_dim = 11 if env.dynamics_model == "jerk" else 8
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
@@ -32,14 +32,12 @@ class Drive(nn.Module):
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
-
         self.road_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.road_features_after_onehot, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
-
         self.partner_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.partner_features, input_size)),
             nn.LayerNorm(input_size),
