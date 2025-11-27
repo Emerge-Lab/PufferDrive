@@ -82,6 +82,7 @@ class Drive(nn.Module):
         road_categorical = road_objects[:, :, self.road_features - 1]
         road_onehot = F.one_hot(road_categorical.long(), num_classes=7)  # Shape: [batch, ROAD_MAX_OBJECTS, 7]
         road_objects = torch.cat([road_continuous, road_onehot], dim=2)
+        print(road_objects.shape)
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
         road_features, _ = self.road_encoder(road_objects).max(dim=1)
