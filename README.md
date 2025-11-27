@@ -1,5 +1,8 @@
 # PufferDrive
 
+<img align="left" style="width:260px" src="https://github.com/Emerge-Lab/PufferDrive/tree/main/pufferlib/resources/drive/pufferdrive_20fps_long.gif" width="288px">
+
+**PufferDrive is a fast and friendly driving simulator for training and evaluating RL agents**
 
 ## Installation
 
