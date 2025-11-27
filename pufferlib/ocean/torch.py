@@ -18,7 +18,7 @@ class Drive(nn.Module):
         self.hidden_size = hidden_size
 
         # Determine ego dimension from environment's dynamics model
-        self.ego_dim = 10 if env.dynamics_model == "jerk" else 7
+        self.ego_dim = 11 if env.dynamics_model == "jerk" else 8
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
@@ -26,14 +26,14 @@ class Drive(nn.Module):
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
-        max_road_objects = 13
+        max_road_objects = 15
         self.road_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(max_road_objects, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
-        max_partner_objects = 7
+        max_partner_objects = 8
         self.partner_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(max_partner_objects, input_size)),
             nn.LayerNorm(input_size),
@@ -65,17 +65,17 @@ class Drive(nn.Module):
 
     def encode_observations(self, observations, state=None):
         ego_dim = self.ego_dim
-        partner_dim = 63 * 7
-        road_dim = 200 * 7
+        partner_dim = 63 * 8
+        road_dim = 200 * 8
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
 
-        partner_objects = partner_obs.view(-1, 63, 7)
-        road_objects = road_obs.view(-1, 200, 7)
-        road_continuous = road_objects[:, :, :6]  # First 6 features
-        road_categorical = road_objects[:, :, 6]
-        road_onehot = F.one_hot(road_categorical.long(), num_classes=7)  # Shape: [batch, 200, 7]
+        partner_objects = partner_obs.view(-1, 63, 8)
+        road_objects = road_obs.view(-1, 200, 8)
+        road_continuous = road_objects[:, :, :7]  # First 7 features
+        road_categorical = road_objects[:, :, 7]
+        road_onehot = F.one_hot(road_categorical.long(), num_classes=8)  # Shape: [batch, 200, 8]
         road_objects = torch.cat([road_continuous, road_onehot], dim=2)
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)

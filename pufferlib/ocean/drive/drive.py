@@ -62,15 +62,15 @@ class Drive(pufferlib.PufferEnv):
 
         # Observation space calculation
         if dynamics_model == "classic":
-            ego_features = 7
+            ego_features = 8
         elif dynamics_model == "jerk":
-            ego_features = 10
+            ego_features = 11
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
 
         self.ego_features = ego_features
-        partner_features = 7
-        road_features = 7
+        partner_features = 8
+        road_features = 8
         max_partner_objects = 63
         max_road_objects = 200
         self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
@@ -422,6 +422,8 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(struct.pack("i", track_index))
 
         # Count total entities
+        print(len(map_data.get("objects", [])))
+        print(len(map_data.get("roads", [])))
         num_objects = len(map_data.get("objects", []))
         num_roads = len(map_data.get("roads", []))
         # num_entities = num_objects + num_roads
