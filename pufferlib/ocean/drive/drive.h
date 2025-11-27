@@ -1620,7 +1620,7 @@ void c_close(Drive* env){
 void allocate(Drive* env){
     init(env);
     int ego_dim = (env->dynamics_model == JERK) ? 11 : 8;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = ego_dim + 8*(MAX_AGENTS - 1) + 8*MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
     env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
@@ -1663,8 +1663,8 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     }
 
     //To update agent's z-coordinate based on road elevation of 5 nearest elements
-    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*125];  // Array big enough for all neighboring cells
-    int list_size = checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL*125, collision_offsets, 125);
+    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*100];  // Array big enough for all neighboring cells
+    int list_size = checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL*100, collision_offsets, 100);
     DepthPoint road_neighbours[list_size];
     int max_check = (list_size < 10) ? list_size : 10;
     int diffarray[max_check-1];
@@ -1695,7 +1695,7 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         for(int i = 0; i <= max_diff_idx; i++) {
             sum_z += road_neighbours[i].z;
         }
-        // if(agent_idx == 0 || agent_idx == 1){
+        // if(agent_idx == 0 || agent_idx == 5){
         //     printf("Agent %d z updated from %f to %f, with %d neighbors. The list size is : %d\n", agent_idx, agent->z, sum_z / (max_diff_idx+1), max_diff_idx, list_size);
         //     printf("Agents x and y position: %f , %f\n", agent->x, agent->y);
         //     printf("road neighbor z values: ");
@@ -1910,7 +1910,7 @@ void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_o
 
 void compute_observations(Drive* env) {
     int ego_dim = (env->dynamics_model == JERK) ? 11 : 8;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = ego_dim + 8*(MAX_AGENTS - 1) + 8*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
@@ -1969,33 +1969,36 @@ void compute_observations(Drive* env) {
             // Store original relative positions
             float dx = other_entity->x - ego_entity->x;
             float dy = other_entity->y - ego_entity->y;
-            float dist = (dx*dx + dy*dy);
+            float dz = other_entity->z - ego_entity->z;
+            float dist = (dx*dx + dy*dy + dz*dz);
             if(dist > 2500.0f) continue;
             // Rotate to ego vehicle's frame
             float rel_x = dx*cos_heading + dy*sin_heading;
             float rel_y = -dx*sin_heading + dy*cos_heading;
+            float rel_z = dz;  // No rotation needed for vertical component
             // Store observations with correct indexing
             obs[obs_idx] = rel_x * 0.02f;
             obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH;
-            obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN;
+            obs[obs_idx + 2] = rel_z * 0.02f;
+            obs[obs_idx + 3] = other_entity->width / MAX_VEH_WIDTH;
+            obs[obs_idx + 4] = other_entity->length / MAX_VEH_LEN;
             // relative heading
             float rel_heading_x = other_entity->heading_x * ego_entity->heading_x +
                      other_entity->heading_y * ego_entity->heading_y;  // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
             float rel_heading_y = other_entity->heading_y * ego_entity->heading_x -
                                 other_entity->heading_x * ego_entity->heading_y;  // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
 
-            obs[obs_idx + 4] = rel_heading_x;
-            obs[obs_idx + 5] = rel_heading_y;
+            obs[obs_idx + 5] = rel_heading_x;
+            obs[obs_idx + 6] = rel_heading_y;
             // obs[obs_idx + 4] = cosf(rel_heading) / MAX_ORIENTATION_RAD;
             // obs[obs_idx + 5] = sinf(rel_heading) / MAX_ORIENTATION_RAD;
             // // relative speed
             float other_speed = sqrtf(other_entity->vx*other_entity->vx + other_entity->vy*other_entity->vy);
-            obs[obs_idx + 6] = other_speed / MAX_SPEED;
+            obs[obs_idx + 7] = other_speed / MAX_SPEED;
             cars_seen++;
-            obs_idx += 7;  // Move to next observation slot
+            obs_idx += 8;  // Move to next observation slot
         }
-        int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 7;
+        int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 8;
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
         // map observations
@@ -2033,8 +2036,10 @@ void compute_observations(Drive* env) {
             float mid_z = (start_z + end_z) / 2.0f;
             float rel_x = mid_x - ego_entity->x;
             float rel_y = mid_y - ego_entity->y;
+            float rel_z = mid_z - ego_entity->z;
             float x_obs = rel_x*cos_heading + rel_y*sin_heading;
             float y_obs = -rel_x*sin_heading + rel_y*cos_heading;
+            float z_obs = rel_z;
             float length = relative_distance_3d(mid_x, mid_y, mid_z, end_x, end_y, end_z);
             float width = 0.1;
             // Calculate angle from ego to midpoint (vector from ego to midpoint)
@@ -2052,14 +2057,15 @@ void compute_observations(Drive* env) {
             float sin_angle = -dx_norm*sin_heading + dy_norm*cos_heading;
             obs[obs_idx] = x_obs * 0.02f;
             obs[obs_idx + 1] = y_obs * 0.02f;
-            obs[obs_idx + 2] = length / MAX_ROAD_SEGMENT_LENGTH;
-            obs[obs_idx + 3] = width / MAX_ROAD_SCALE;
-            obs[obs_idx + 4] = cos_angle;
-            obs[obs_idx + 5] = sin_angle;
-            obs[obs_idx + 6] = entity->type - 4.0f;
-            obs_idx += 7;
+            obs[obs_idx + 2] = z_obs * 0.02f;
+            obs[obs_idx + 3] = length / MAX_ROAD_SEGMENT_LENGTH;
+            obs[obs_idx + 4] = width / MAX_ROAD_SCALE;
+            obs[obs_idx + 5] = cos_angle;
+            obs[obs_idx + 6] = sin_angle;
+            obs[obs_idx + 7] = entity->type - 4.0f;
+            obs_idx += 8;
         }
-        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 7;
+        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 8;
         // Set the entire block to 0 at once
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
     }
@@ -2534,8 +2540,8 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? 11 : 8;
+    int max_obs = ego_dim + 8*(MAX_AGENTS - 1) + 8*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
@@ -2562,7 +2568,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
     int obs_idx = ego_dim;  // Start after ego obs
     for(int j = 0; j < MAX_AGENTS - 1; j++) {
         if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
-            obs_idx += 7;  // Move to next agent observation
+            obs_idx += 8;  // Move to next agent observation
             continue;
         }
         // Draw position of other agents
@@ -2704,12 +2710,12 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
             }
         }
 
-        obs_idx += 7;  // Move to next agent observation (7 values per agent)
+        obs_idx += 8;  // Move to next agent observation (8 values per agent)
     }
     // Then draw map observations
-    int map_start_idx = 7 + 7*(MAX_AGENTS - 1);  // Start after agent observations
+    int map_start_idx = 8 + 8*(MAX_AGENTS - 1);  // Start after agent observations
     for(int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {  // Loop through potential map entities
-        int entity_idx = map_start_idx + k*7;
+        int entity_idx = map_start_idx + k*8;
         if(agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0){
             continue;
         }

@@ -66,8 +66,8 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
 
         self.ego_features = ego_features
-        partner_features = 7
-        road_features = 7
+        partner_features = 8
+        road_features = 8
         max_partner_objects = 63
         max_road_objects = 200
         self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
@@ -528,7 +528,7 @@ def process_all_maps():
     # Process each JSON file
     for i, map_path in enumerate(json_files[:10000]):
         # Hardcode: if file is CARLA_4_000.json, always save as map_000.bin
-        if map_path.name == "CARLA_5.json":
+        if map_path.name == "CARLA_13.json":
             binary_file = "map_000.bin"
             binary_path = binary_dir / binary_file
             unique_map_id = 0
