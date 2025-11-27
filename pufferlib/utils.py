@@ -239,7 +239,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path, max_dist
                         dynamics_value = 0
                     elif dynamics_value.lower() == "jerk":
                         dynamics_value = 1
-                print(f'Dynamics model: {dynamics_value}')
+                print(f"Dynamics model: {dynamics_value}")
                 base_cmd.extend(["--dynamics-model", str(dynamics_value)])
             if getattr(env_cfg, "reward_vehicle_collision", None) is not None:
                 base_cmd.extend(["--reward-vehicle-collision", str(env_cfg.reward_vehicle_collision)])
@@ -311,7 +311,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path, max_dist
             cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
             cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
             print(f"Running cmd: {' '.join(cmd)}")
-            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env_vars)
+            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1200, env=env_vars)
 
             vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
                 "resources/drive/output_agent.mp4"

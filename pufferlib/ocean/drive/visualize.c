@@ -283,16 +283,16 @@ static int make_gif_from_frames(const char *pattern, int fps,
 
 
 int eval_gif(
-    const char* map_name, const char* policy_name, const char* binary_dir, 
-    int show_grid, int obs_only, int lasers, 
-    int log_trajectories, int frame_skip, float goal_radius, 
-    int init_steps, int max_controlled_agents, const char* view_mode, 
-    const char* output_topdown, const char* output_agent, int num_maps, 
-    int scenario_length_override, int init_mode, int control_mode, 
-    int goal_behavior, int goal_sampling_mode, float max_distance_to_goal, 
-    int dynamics_model, int reward_vehicle_collision, int reward_offroad_collision, 
-    int reward_ade, int collision_behavior, int offroad_behavior, 
-    float dt, float scenario_length, int num_agents_per_world, 
+    const char* map_name, const char* policy_name, const char* binary_dir,
+    int show_grid, int obs_only, int lasers,
+    int log_trajectories, int frame_skip, float goal_radius,
+    int init_steps, int max_controlled_agents, const char* view_mode,
+    const char* output_topdown, const char* output_agent, int num_maps,
+    int scenario_length_override, int init_mode, int control_mode,
+    int goal_behavior, int goal_sampling_mode, float max_distance_to_goal,
+    int dynamics_model, int reward_vehicle_collision, int reward_offroad_collision,
+    int reward_ade, int collision_behavior, int offroad_behavior,
+    float dt, float scenario_length, int num_agents_per_world,
     float vehicle_length, float vehicle_width, float vehicle_height) {
 
     // Parse configuration from INI file
@@ -546,7 +546,7 @@ int main(int argc, char* argv[]) {
     float vehicle_width = conf.vehicle_width;
     float vehicle_height = conf.vehicle_height;
 
-    const char* view_mode = "topdown";  // "both", "topdown", "agent"
+    const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
     const char* output_agent = NULL;
 
@@ -737,16 +737,16 @@ int main(int argc, char* argv[]) {
     }
 
     eval_gif(
-        map_name, policy_name, binary_dir, 
-        show_grid, obs_only, lasers, 
-        log_trajectories, frame_skip, goal_radius, 
-        init_steps, max_controlled_agents, view_mode, 
-        output_topdown, output_agent, num_maps, 
-        scenario_length_cli, init_mode, control_mode, 
+        map_name, policy_name, binary_dir,
+        show_grid, obs_only, lasers,
+        log_trajectories, frame_skip, goal_radius,
+        init_steps, max_controlled_agents, view_mode,
+        output_topdown, output_agent, num_maps,
+        scenario_length_cli, init_mode, control_mode,
         goal_behavior, goal_sampling_mode, max_distance_to_goal,
         dynamics_model, reward_vehicle_collision, reward_offroad_collision,
-        reward_ade, collision_behavior, offroad_behavior, 
-        dt, scenario_length, num_agents_per_world, 
+        reward_ade, collision_behavior, offroad_behavior,
+        dt, scenario_length, num_agents_per_world,
         vehicle_length, vehicle_width, vehicle_height
     );
     return 0;

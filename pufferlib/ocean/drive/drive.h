@@ -98,7 +98,7 @@
 #define LANE_ALIGN_DISTANCE_THRESHOLD 20.0f
 #define LANE_HEADING_PENALTY_THRESHOLD_RAD (M_PI)
 #define LANE_HEADING_PENALTY 0.0f
-#define LANE_ALIGNED_HEADING_THRESHOLD_RAD (M_PI / 3.0f) 
+#define LANE_ALIGNED_HEADING_THRESHOLD_RAD (M_PI / 3.0f)
 #define OFFROAD_GOAL_RESPAWN_DISTANCE 10.0f
 
 //GOAL BEHAVIOUR
@@ -2447,6 +2447,7 @@ void c_close(Drive* env){
     }
     free(env->grid_map->cells);
     free(env->grid_map->cell_entities_count);
+    free(env->grid_map->cell_roadlanes_count);
     free(env->neighbor_offsets);
 
     for(int i = 0; i < grid_cell_count; i++){
