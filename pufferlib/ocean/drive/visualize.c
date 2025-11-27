@@ -162,10 +162,16 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
 
     // Top-down orthographic camera
     Camera3D camera = {0};
+    float pad = 5.0f;
+    float left   = env->grid_map->top_left_x - pad;
+    float right  = env->grid_map->bottom_right_x + pad;
+    float bottom = env->grid_map->bottom_right_y - pad;
+    float top    = env->grid_map->top_left_y + pad;
+
     camera.position = (Vector3){ 0.0f, 0.0f, 500.0f };  // above the scene
     camera.target   = (Vector3){ 0.0f, 0.0f, 0.0f };  // look at origin
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
-    camera.fovy     = map_height;
+    camera.fovy     = map_height * 4.0f;
     camera.projection = CAMERA_ORTHOGRAPHIC;
 
     client->width = img_width;
@@ -175,6 +181,13 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     ClearBackground(road);
     BeginMode3D(camera);
     rlEnableDepthTest();
+
+    // Override raylib's projection with exact bounds you want
+    rlMatrixMode(RL_PROJECTION);
+    rlLoadIdentity();
+    rlOrtho(left, right*5.0f, bottom, top*5.0f, -1000.0f, 1000.0f);
+    rlMatrixMode(RL_MODELVIEW);
+    rlLoadIdentity();
 
     // Draw human replay trajectories if enabled
     if(log_trajectories){
@@ -384,7 +397,7 @@ int eval_gif(
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 2.0f; // Can be used to increase the video quality
+    float scale = 6.0f; // Can be used to increase the video quality
 
     // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
