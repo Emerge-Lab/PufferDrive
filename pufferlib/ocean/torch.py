@@ -79,6 +79,7 @@ class Drive(nn.Module):
         print(road_onehot.shape)
         print(road_continuous.shape)
         road_objects = torch.cat([road_continuous, road_onehot], dim=2)
+        print(road_objects.shape)
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
         road_features, _ = self.road_encoder(road_objects).max(dim=1)
