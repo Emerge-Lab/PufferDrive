@@ -364,9 +364,6 @@ def compute_map_features(
             scenario_x_list.append(road_edge_polylines["x"][start:end])
             scenario_y_list.append(road_edge_polylines["y"][start:end])
 
-        if not scenario_x_list:
-            continue
-
         scenario_polyline_x = torch.as_tensor(np.concatenate(scenario_x_list), dtype=torch.float32, device=x_t.device)
         scenario_polyline_y = torch.as_tensor(np.concatenate(scenario_y_list), dtype=torch.float32, device=x_t.device)
         scenario_lengths_t = torch.as_tensor(scenario_lengths, dtype=torch.int64, device=x_t.device)

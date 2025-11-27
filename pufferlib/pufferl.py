@@ -545,8 +545,6 @@ class PuffeRL:
         if self.config["eval"]["wosac_realism_eval"] and (
             (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
-            torch.cuda.empty_cache()
-
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
         if self.config["eval"]["human_replay_eval"] and (
