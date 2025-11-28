@@ -1330,7 +1330,24 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     env_module = importlib.import_module(module_name)
     env_name = args["env_name"]
     make_env = env_module.env_creator(env_name)
-    pufferlib.vector.autotune(make_env, batch_size=args["train"]["batch_size"])
+
+    # Create a temporary env to get num_agents for multi-agent environments
+    temp_env = make_env(**args["env"])
+    num_agents_per_env = temp_env.num_agents
+    temp_env.close()
+
+    # For multi-agent envs, convert train.batch_size (agent-steps) to orchestrator env count
+    # For single-agent envs, this division results in the same value
+    train_batch_size = args["train"]["batch_size"]
+    orchestrator_batch_size = train_batch_size // num_agents_per_env
+
+    print(f"Autotune configuration:")
+    print(f"  Training batch size: {train_batch_size} agent-steps")
+    print(f"  Agents per environment: {num_agents_per_env}")
+    print(f"  Orchestrator batch size: {orchestrator_batch_size} environments")
+    print()
+
+    pufferlib.vector.autotune(make_env, batch_size=orchestrator_batch_size, env_kwargs=args["env"])
 
 
 def load_env(env_name, args):
