@@ -5,6 +5,8 @@ import struct
 import os
 import pufferlib
 from pufferlib.ocean.drive import binding
+from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
 
 
 class Drive(pufferlib.PufferEnv):
@@ -421,8 +423,6 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(struct.pack("i", track_index))
 
         # Count total entities
-        print(len(map_data.get("objects", [])))
-        print(len(map_data.get("roads", [])))
         num_objects = len(map_data.get("objects", []))
         num_roads = len(map_data.get("roads", []))
         # num_entities = num_objects + num_roads
@@ -551,12 +551,32 @@ def load_map(map_name, unique_map_id, binary_output=None):
         save_map_binary(map_data, binary_output, unique_map_id)
 
 
+def _process_single_map(args):
+    """Worker function to process a single map file"""
+    i, map_path, binary_path = args
+    try:
+        load_map(str(map_path), i, str(binary_path))
+        return (i, map_path.name, True, None)
+    except Exception as e:
+        return (i, map_path.name, False, str(e))
+
+
 def process_all_maps(
     data_folder="data/processed/training",
     max_maps=10_000,
+    num_workers=None,
 ):
-    """Process all maps and save them as binaries"""
+    """Process all maps and save them as binaries using multiprocessing
+
+    Args:
+        data_folder: Path to the folder containing JSON map files
+        max_maps: Maximum number of maps to process
+        num_workers: Number of parallel workers (defaults to cpu_count())
+    """
     from pathlib import Path
+
+    if num_workers is None:
+        num_workers = cpu_count()
 
     # Path to the training data
     data_dir = Path(data_folder)
@@ -569,18 +589,28 @@ def process_all_maps(
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
 
-    print(f"Found {len(json_files)} JSON files in {data_folder}. Processing up to {max_maps} maps -> binaries.")
-
-    # Process each JSON file
+    # Prepare arguments for parallel processing
+    tasks = []
     for i, map_path in enumerate(json_files[:max_maps]):
-        binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
+        binary_file = f"map_{i:03d}.bin"
         binary_path = binary_dir / binary_file
+        tasks.append((i, map_path, binary_path))
 
-        print(f"Processing {map_path.name} -> {binary_file}")
-        # try:
-        load_map(str(map_path), i, str(binary_path))
-        # except Exception as e:
-        #     print(f"Error processing {map_path.name}: {e}")
+    # Process maps in parallel with progress bar
+    with Pool(num_workers) as pool:
+        results = list(
+            tqdm(pool.imap(_process_single_map, tasks), total=len(tasks), desc="Processing maps", unit="map")
+        )
+
+    # Collect statistics
+    successful = sum(1 for _, _, success, _ in results if success)
+    failed = sum(1 for _, _, success, _ in results if not success)
+
+    if failed > 0:
+        print(f"\nFailed {failed}/{len(results)} files:")
+        for i, name, success, error in results:
+            if not success:
+                print(f"  {name}: {error}")
 
 
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
