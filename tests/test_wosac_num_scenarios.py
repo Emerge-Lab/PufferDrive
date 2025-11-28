@@ -104,8 +104,9 @@ class TestScenarioCountMode:
 
         # Check all map_ids are unique
         unique_maps = set(env.map_ids)
-        assert len(unique_maps) == len(env.map_ids), \
+        assert len(unique_maps) == len(env.map_ids), (
             f"Expected all unique maps, got {len(unique_maps)} unique out of {len(env.map_ids)}"
+        )
         assert len(env.map_ids) == 50, "Should have loaded 50 scenarios"
 
         env.close()
@@ -125,8 +126,7 @@ class TestScenarioCountMode:
         # Verify no duplicates
         map_ids_list = list(env.map_ids)
         unique_maps = set(map_ids_list)
-        assert len(unique_maps) == 500, \
-            f"Expected 500 unique maps, got {len(unique_maps)}"
+        assert len(unique_maps) == 500, f"Expected 500 unique maps, got {len(unique_maps)}"
         assert len(unique_maps) == len(map_ids_list), "All scenarios should be unique"
 
         env.close()
