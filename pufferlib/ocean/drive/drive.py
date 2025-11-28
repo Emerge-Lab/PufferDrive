@@ -135,6 +135,17 @@ class Drive(pufferlib.PufferEnv):
             )
         self.max_controlled_agents = int(max_controlled_agents)
 
+        # Validate scenario count against available maps
+        if num_scenarios is not None and num_scenarios > num_maps:
+            import warnings
+
+            warnings.warn(
+                f"num_scenarios ({num_scenarios}) exceeds num_maps ({num_maps}). "
+                f"Clamping to {num_maps} scenarios (sampling without replacement).",
+                UserWarning,
+            )
+            num_scenarios = num_maps
+
         # Iterate through all maps to count total agents that can be initialized for each map
         # Support scenario-count mode for WOSAC evaluation
         if num_scenarios is not None:
