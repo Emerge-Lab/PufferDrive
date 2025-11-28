@@ -797,8 +797,8 @@ def autotune(
     batch_size,
     max_envs=194,
     model_forward_s=0.0,
-    max_env_ram_gb=32,
-    max_batch_vram_gb=0.05,
+    max_env_ram_gb=None,
+    max_batch_vram_gb=None,
     time_per_test=5,
 ):
     """Determine the optimal vectorization parameters for your system"""
@@ -806,6 +806,30 @@ def autotune(
 
     if batch_size is None:
         raise ValueError("batch_size must not be None")
+
+    # Auto-detect hardware limits if not specified
+    if max_env_ram_gb is None:
+        # Use 80% of available system RAM to leave room for OS and other processes
+        total_ram_gb = psutil.virtual_memory().total / 1e9
+        max_env_ram_gb = total_ram_gb * 0.8
+        print(f"Auto-detected max RAM: {max_env_ram_gb:.2f} GB (80% of {total_ram_gb:.2f} GB total)")
+
+    if max_batch_vram_gb is None:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # Use 80% of GPU VRAM to leave room for model and gradients
+                total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+                max_batch_vram_gb = total_vram_gb * 0.8
+                print(f"Auto-detected max VRAM: {max_batch_vram_gb:.2f} GB (80% of {total_vram_gb:.2f} GB total)")
+            else:
+                # No GPU, use conservative default
+                max_batch_vram_gb = 0.05
+                print("No GPU detected, using default max_batch_vram_gb=0.05 GB")
+        except ImportError:
+            # torch not available, use conservative default
+            max_batch_vram_gb = 0.05
+            print("PyTorch not available, using default max_batch_vram_gb=0.05 GB")
 
     if max_envs < batch_size:
         raise ValueError("max_envs < min_batch_size")
