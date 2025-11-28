@@ -532,7 +532,6 @@ void set_start_position(Drive* env){
         e->x = e->traj_x[step];
         e->y = e->traj_y[step];
         e->z = e->traj_z[step];
-
         if(e->type > CYCLIST || e->type == 0){
             continue;
         }
@@ -2264,6 +2263,9 @@ struct Client {
     float camera_zoom;
     Camera3D camera;
     Model cars[6];
+    Model cyclist;
+    Model pedestrian;
+    ModelAnimation* cycle_anim;
     int car_assignments[MAX_AGENTS];  // To keep car model assignments consistent per vehicle
     Vector3 default_camera_position;
     Vector3 default_camera_target;
@@ -2283,6 +2285,11 @@ Client* make_client(Drive* env){
     client->cars[3] = LoadModel("resources/drive/YellowCar.glb");
     client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
     client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
+    client->cyclist = LoadModel("resources/drive/cyclist.glb");
+    client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
+    int animCount = 0;
+    int animCountCyc = 0;
+    client->cycle_anim = LoadModelAnimations("resources/drive/cyclist.glb", &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
@@ -2503,7 +2510,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         }
 
         // draw an arrow above the car pointing in the direction that the partner is going
-        float arrow_length = 7.5f;
+        float arrow_length = 4.5f;
         float arrow_x = x + arrow_length*cosf(partner_angle);
         float arrow_y = y + arrow_length*sinf(partner_angle);
         float arrow_x_world;
@@ -2517,7 +2524,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
             DrawLine3D((Vector3){partner_x, partner_y, 1}, (Vector3){arrow_x_world, arrow_y_world, 1}, PUFF_WHITE);
         }
         // Calculate perpendicular offsets for arrow head
-        float arrow_size = 2.0f;  // Size of the arrow head
+        float arrow_size = 0.8f;  // Size of the arrow head
         float dx = arrow_x - x;
         float dy = arrow_y - y;
         float length = sqrtf(dx*dx + dy*dy);
@@ -2527,7 +2534,6 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
             dy /= length;
 
             // Calculate perpendicular vector
-
             float perp_x = -dy * arrow_size;
             float perp_y = dx * arrow_size;
 
@@ -2816,29 +2822,33 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 DrawSphere(arrowEnd, 0.2f, car_color);  // arrow tip
 
             }
-            else {
+            else { // Agent view
                 rlPushMatrix();
                 // Translate to position, rotate around Y axis, then draw
                 rlTranslatef(position.x, position.y, position.z);
                 rlRotatef(heading*RAD2DEG, 0.0f, 0.0f, 1.0f);  // Convert radians to degrees
-                // Determine color based on status
-                Color object_color = PUFF_BACKGROUND2;  // fill color unused for model tint
-                Color outline_color = PUFF_CYAN;        // not used for model tint
-                Model car_model = client->cars[5];
-                if(is_active_agent){
-                    car_model = client->cars[client->car_assignments[i %64]];
-                }
+
+                // Select car model
+                Model car_model = client->cars[i % 6];  // Default: cycle through all 6 car sprites
+
                 if(agent_index == env->human_agent_idx){
-                    object_color = PUFF_CYAN;
-                    outline_color = PUFF_WHITE;
+                    car_model = client->cars[0];  // Ego agent always uses red car (cars[0])
                 }
-                if(is_active_agent && env->entities[i].collision_state > 0) {
-                    car_model = client->cars[0];  // Collided agent
+                else if(is_active_agent){
+                    // Use cars 1-5 for other active agents to avoid red
+                    int car_idx = client->car_assignments[i % 64];
+                    if(car_idx == 0) car_idx = 1;  // Skip red car for non-ego agents
+                    car_model = client->cars[car_idx % 6];
+
+                    if(env->entities[i].collision_state > 0) {
+                        car_model = client->cars[0];  // Collided agents use red
+                    }
                 }
                 // Draw obs for human selected agent
                 if(agent_index == env->human_agent_idx && !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
                     draw_agent_obs(env, agent_index, mode, obs_only, lasers);
                 }
+
                 // Draw cube for cars static and active
                 // Calculate scale factors based on desired size and model dimensions
 
@@ -2853,11 +2863,26 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                     size.y / model_size.y,
                     size.z / model_size.z
                 };
-                if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
-                    rlPopMatrix();
-                    continue;
+                // if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
+                //     rlPopMatrix();
+                //     continue;
+                // }
+                if(env->entities[i].type == CYCLIST){
+                    scale = (Vector3){
+                        0.01,
+                        0.01,
+                        0.01
+                    };
+                    car_model = client->cyclist;
                 }
-
+                if(env->entities[i].type == PEDESTRIAN ){
+                    scale = (Vector3){
+                        2,
+                        2,
+                        2
+                    };
+                    car_model = client->pedestrian;
+                }
                 DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, WHITE);
                 {
                     float cos_heading = env->entities[i].heading_x;

@@ -217,7 +217,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     if (map_name == NULL) {
         srand(time(NULL));
         int random_map = rand() % num_maps;
-        sprintf(map_buffer, "resources/drive/binaries/map_%03d.bin", random_map); // random map file
+        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map); // random map file
         map_name = map_buffer;
     }
 
@@ -263,12 +263,12 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     env.human_agent_idx = 0;
 
     c_reset(&env);
+
     // Make client for rendering
     Client* client = (Client*)calloc(1, sizeof(Client));
     env.client = client;
 
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
-
     SetTargetFPS(6000);
 
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
@@ -280,8 +280,18 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
     int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
+
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
+
+    // Load the textures and models
+    client->puffers = LoadTexture("resources/puffers_128.png");
+    client->cars[0] = LoadModel("resources/drive/RedCar.glb");
+    client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
+    client->cars[2] = LoadModel("resources/drive/BlueCar.glb");
+    client->cars[3] = LoadModel("resources/drive/YellowCar.glb");
+    client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
+    client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
 
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
