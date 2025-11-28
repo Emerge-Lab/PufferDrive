@@ -234,16 +234,30 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(
-                    num_agents=self.num_agents,
-                    num_maps=self.num_maps,
-                    init_mode=self.init_mode,
-                    control_mode=self.control_mode,
-                    init_steps=self.init_steps,
-                    max_controlled_agents=self.max_controlled_agents,
-                    goal_behavior=self.goal_behavior,
-                    map_dir=self.map_dir,
-                )
+                if self.num_scenarios is not None:
+                    agent_offsets, map_ids, num_envs = binding.shared(
+                        num_agents=999999,
+                        num_maps=self.num_maps,
+                        init_mode=self.init_mode,
+                        control_mode=self.control_mode,
+                        init_steps=self.init_steps,
+                        max_controlled_agents=self.max_controlled_agents,
+                        goal_behavior=self.goal_behavior,
+                        map_dir=self.map_dir,
+                        num_scenarios=self.num_scenarios,
+                        map_seed=self.scenario_seed,
+                    )
+                else:
+                    agent_offsets, map_ids, num_envs = binding.shared(
+                        num_agents=self.num_agents,
+                        num_maps=self.num_maps,
+                        init_mode=self.init_mode,
+                        control_mode=self.control_mode,
+                        init_steps=self.init_steps,
+                        max_controlled_agents=self.max_controlled_agents,
+                        goal_behavior=self.goal_behavior,
+                        map_dir=self.map_dir,
+                    )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):
