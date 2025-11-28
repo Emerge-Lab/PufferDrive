@@ -817,6 +817,7 @@ def autotune(
     if max_batch_vram_gb is None:
         try:
             import torch
+
             if torch.cuda.is_available():
                 # Use 80% of GPU VRAM to leave room for model and gradients
                 total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
