@@ -95,6 +95,12 @@ def main():
     config["env"]["control_mode"] = config["eval"]["wosac_control_mode"]
     config["env"]["init_steps"] = config["eval"]["wosac_init_steps"]
     config["env"]["goal_behavior"] = config["eval"]["wosac_goal_behavior"]
+    config["env"]["goal_radius"] = config["eval"]["wosac_goal_radius"]
+
+    if config["eval"].get("wosac_num_scenarios") is not None:
+        config["env"]["num_scenarios"] = config["eval"]["wosac_num_scenarios"]
+    if config["eval"].get("wosac_map_seed") is not None:
+        config["env"]["scenario_seed"] = config["eval"]["wosac_map_seed"]
 
     vecenv = load_env(args.env, config)
     policy = load_policy(config, vecenv, args.env)
