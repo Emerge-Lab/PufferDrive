@@ -39,8 +39,8 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
-        wosac_num_scenarios=None,
-        wosac_map_seed=None,
+        num_scenarios=None,
+        scenario_seed=None,
         map_dir="resources/drive/binaries/training",
     ):
         # env
@@ -137,7 +137,7 @@ class Drive(pufferlib.PufferEnv):
 
         # Iterate through all maps to count total agents that can be initialized for each map
         # Support scenario-count mode for WOSAC evaluation
-        if wosac_num_scenarios is not None:
+        if num_scenarios is not None:
             # Scenario-count mode: load exactly N scenarios
             agent_offsets, map_ids, num_envs = binding.shared(
                 map_dir=map_dir,
@@ -148,12 +148,12 @@ class Drive(pufferlib.PufferEnv):
                 init_steps=self.init_steps,
                 max_controlled_agents=self.max_controlled_agents,
                 goal_behavior=self.goal_behavior,
-                num_scenarios=wosac_num_scenarios,
-                map_seed=wosac_map_seed,
+                num_scenarios=num_scenarios,
+                map_seed=scenario_seed,
             )
             self.num_agents = agent_offsets[-1]  # Actual agent count from scenarios
-            self.wosac_num_scenarios = wosac_num_scenarios
-            self.wosac_map_seed = wosac_map_seed
+            self.num_scenarios = num_scenarios
+            self.scenario_seed = scenario_seed
         else:
             # Agent-count mode: original behavior
             agent_offsets, map_ids, num_envs = binding.shared(
@@ -167,8 +167,8 @@ class Drive(pufferlib.PufferEnv):
                 goal_behavior=self.goal_behavior,
             )
             self.num_agents = num_agents
-            self.wosac_num_scenarios = None
-            self.wosac_map_seed = None
+            self.num_scenarios = None
+            self.scenario_seed = None
 
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids

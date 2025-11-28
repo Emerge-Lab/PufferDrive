@@ -20,7 +20,7 @@ class TestScenarioCountMode:
         env = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=5,
+            num_scenarios=5,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             init_steps=10,
@@ -39,8 +39,8 @@ class TestScenarioCountMode:
         env1 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=3,
-            wosac_map_seed=42,
+            num_scenarios=3,
+            scenario_seed=42,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -49,8 +49,8 @@ class TestScenarioCountMode:
         env2 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=3,
-            wosac_map_seed=42,
+            num_scenarios=3,
+            scenario_seed=42,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -67,8 +67,8 @@ class TestScenarioCountMode:
         env1 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=5,
-            wosac_map_seed=42,
+            num_scenarios=5,
+            scenario_seed=42,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -77,8 +77,8 @@ class TestScenarioCountMode:
         env2 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=5,
-            wosac_map_seed=99,
+            num_scenarios=5,
+            scenario_seed=99,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -95,8 +95,8 @@ class TestScenarioCountMode:
         env = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=50,
-            wosac_map_seed=789,
+            num_scenarios=50,
+            scenario_seed=789,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -115,8 +115,8 @@ class TestScenarioCountMode:
         env = drive.Drive(
             num_maps=1000,
             num_agents=999999,
-            wosac_num_scenarios=500,
-            wosac_map_seed=12345,
+            num_scenarios=500,
+            scenario_seed=12345,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -136,8 +136,8 @@ class TestScenarioCountMode:
         env = drive.Drive(
             num_maps=100,
             num_agents=999999,  # This should be ignored
-            wosac_num_scenarios=3,
-            wosac_map_seed=123,
+            num_scenarios=3,
+            scenario_seed=123,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -157,8 +157,8 @@ class TestScenarioCountMode:
         env = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=1,
-            wosac_map_seed=1,
+            num_scenarios=1,
+            scenario_seed=1,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -174,8 +174,8 @@ class TestScenarioCountMode:
         env = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=20,
-            wosac_map_seed=456,
+            num_scenarios=20,
+            scenario_seed=456,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -207,11 +207,11 @@ class TestBackwardCompatibility:
         env.close()
 
     def test_agent_count_with_none_scenarios(self):
-        """Test explicitly setting wosac_num_scenarios=None uses agent-count mode."""
+        """Test explicitly setting num_scenarios=None uses agent-count mode."""
         env = drive.Drive(
             num_maps=100,
             num_agents=50,
-            wosac_num_scenarios=None,
+            num_scenarios=None,
             control_mode="control_vehicles",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -227,8 +227,8 @@ class TestBackwardCompatibility:
             env = drive.Drive(
                 num_maps=100,
                 num_agents=999999,
-                wosac_num_scenarios=2,
-                wosac_map_seed=789,
+                num_scenarios=2,
+                scenario_seed=789,
                 control_mode=control_mode,
                 init_mode="create_all_valid",
                 scenario_length=91,
@@ -246,8 +246,8 @@ class TestOffsetConsistency:
         env = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=10,
-            wosac_map_seed=111,
+            num_scenarios=10,
+            scenario_seed=111,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -264,8 +264,8 @@ class TestOffsetConsistency:
         env = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=5,
-            wosac_map_seed=222,
+            num_scenarios=5,
+            scenario_seed=222,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -280,8 +280,8 @@ class TestOffsetConsistency:
         env = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=7,
-            wosac_map_seed=333,
+            num_scenarios=7,
+            scenario_seed=333,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -293,15 +293,15 @@ class TestOffsetConsistency:
 
 
 class TestSeedBehavior:
-    """Tests for map_seed parameter."""
+    """Tests for scenario_seed parameter."""
 
     def test_no_seed_random_maps(self):
         """Test that without seed, maps are random (probabilistic test)."""
         env1 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=5,
-            # No wosac_map_seed
+            num_scenarios=5,
+            # No scenario_seed
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -310,8 +310,8 @@ class TestSeedBehavior:
         env2 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=5,
-            # No wosac_map_seed
+            num_scenarios=5,
+            # No scenario_seed
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -332,8 +332,8 @@ class TestSeedBehavior:
         env1 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=3,
-            wosac_map_seed=0,
+            num_scenarios=3,
+            scenario_seed=0,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
@@ -342,8 +342,8 @@ class TestSeedBehavior:
         env2 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            wosac_num_scenarios=3,
-            wosac_map_seed=0,
+            num_scenarios=3,
+            scenario_seed=0,
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
