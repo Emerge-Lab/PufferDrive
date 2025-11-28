@@ -1324,12 +1324,13 @@ def ensure_drive_binary():
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
+    args = args or load_config(env_name)
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
     env_name = args["env_name"]
     make_env = env_module.env_creator(env_name)
-    pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
+    pufferlib.vector.autotune(make_env, batch_size=args["train"]["batch_size"])
 
 
 def load_env(env_name, args):
