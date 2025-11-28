@@ -106,7 +106,8 @@ class Drive(pufferlib.PufferEnv):
                 # Multi discrete (assume independence)
                 # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
             elif dynamics_model == "jerk":
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([4, 3])
+                # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
             else:
                 raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
