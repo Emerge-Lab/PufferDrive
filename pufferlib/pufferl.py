@@ -1347,7 +1347,7 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     print(f"  Orchestrator batch size: {orchestrator_batch_size} environments")
     print()
 
-    pufferlib.vector.autotune(make_env, batch_size=orchestrator_batch_size, env_kwargs=args["env"])
+    pufferlib.vector.autotune(lambda: make_env(**args["env"]), batch_size=orchestrator_batch_size)
 
 
 def load_env(env_name, args):
