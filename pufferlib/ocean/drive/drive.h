@@ -38,7 +38,6 @@
 #define CONTROL_VEHICLES 0
 #define CONTROL_AGENTS 1
 #define CONTROL_WOSAC 2
-#define CONTROL_TRACKS_TO_PREDICT 2
 #define CONTROL_SDC_ONLY 3
 
 // Minimum distance to goal position
