@@ -292,6 +292,8 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     client->cars[3] = LoadModel("resources/drive/YellowCar.glb");
     client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
     client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
+    client->cyclist = LoadModel("resources/drive/cyclist.glb");
+    client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
 
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
