@@ -3072,10 +3072,10 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 // if(is_active_agent && (env->entities[i].collision_state > 0 || env->entities[i].aabb_collision_state > 0)) {
                 //     car_model = client->cars[0];  // Collided agent
                 // }
-                // // Draw obs for human selected agent
-                // if(agent_index == env->human_agent_idx && !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
-                //     draw_agent_obs(env, agent_index, mode, obs_only, lasers);
-                // }
+                // Draw obs for human selected agent
+                if(agent_index == env->human_agent_idx && !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
+                    draw_agent_obs(env, agent_index, mode, obs_only, lasers);
+                }
                 // Draw cube for cars static and active
                 // Calculate scale factors based on desired size and model dimensions
 
