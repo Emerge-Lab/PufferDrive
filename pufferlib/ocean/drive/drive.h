@@ -1483,29 +1483,6 @@ bool should_control_agent(Drive *env, int agent_idx) {
     if (!type_is_valid || entity->mark_as_expert) {
         return false;
     }
-
-    // Special mode: control only agents in prediction track list
-    if (env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
-        for (int j = 0; j < env->num_tracks_to_predict; j++) {
-            if (env->tracks_to_predict_indices[j] == agent_idx) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Standard mode: check type, distance to goal, and expert status
-    bool type_is_controllable = false;
-    if (env->control_mode == CONTROL_VEHICLES) {
-        type_is_controllable = (entity->type == VEHICLE);
-    } else {  // CONTROL_AGENTS mode
-        type_is_controllable = (entity->type == VEHICLE || entity->type == PEDESTRIAN || entity->type == CYCLIST);
-    }
-
-    if (!type_is_controllable || entity->mark_as_expert) {
-        return false;
-    }
-
     // Check distance to goal in agent's local frame
     float cos_heading = cosf(entity->traj_heading[0]);
     float sin_heading = sinf(entity->traj_heading[0]);
