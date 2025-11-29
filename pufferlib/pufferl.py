@@ -1331,13 +1331,9 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     env_name = args["env_name"]
     make_env = env_module.env_creator(env_name)
 
-    # Create a temporary env to get num_agents for multi-agent environments
-    temp_env = make_env(**args["env"])
-    num_agents_per_env = temp_env.num_agents
-    temp_env.close()
-
     # For multi-agent envs, convert train.batch_size (agent-steps) to orchestrator env count
     # For single-agent envs, this division results in the same value
+    num_agents_per_env = args["env"].get("num_agents", 1)
     train_batch_size = args["train"]["batch_size"]
     orchestrator_batch_size = train_batch_size // num_agents_per_env
 
@@ -1347,7 +1343,14 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     print(f"  Orchestrator batch size: {orchestrator_batch_size} environments")
     print()
 
-    pufferlib.vector.autotune(lambda: make_env(**args["env"]), batch_size=orchestrator_batch_size)
+    pufferlib.vector.autotune(
+        lambda: make_env(**args["env"]),
+        batch_size=orchestrator_batch_size,
+        max_env_ram_gb=args.get("max_env_ram_gb"),
+        max_batch_vram_gb=args.get("max_batch_vram_gb"),
+        max_envs=args.get("max_envs", 194),
+        time_per_test=args.get("autotune_time", 5),
+    )
 
 
 def load_env(env_name, args):
@@ -1428,6 +1431,10 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--neptune-project", type=str, default="ablations")
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
+    parser.add_argument("--max-env-ram-gb", type=float, default=None, help="Max RAM (GB) for autotune (overrides auto-detection)")
+    parser.add_argument("--max-batch-vram-gb", type=float, default=None, help="Max VRAM (GB) for autotune (overrides auto-detection)")
+    parser.add_argument("--max-envs", type=int, default=194, help="Max environments for autotune")
+    parser.add_argument("--autotune-time", type=int, default=5, help="Time per test (seconds) for autotune")
     args = parser.parse_known_args()[0]
 
     if config_dir is None:
