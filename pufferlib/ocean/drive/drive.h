@@ -3036,28 +3036,51 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
 
             }
             else {
+
                 rlPushMatrix();
                 // Translate to position, rotate around Y axis, then draw
                 rlTranslatef(position.x, position.y, position.z);
                 rlRotatef(heading*RAD2DEG, 0.0f, 0.0f, 1.0f);  // Convert radians to degrees
-                // Determine color based on status
-                Color object_color = PUFF_BACKGROUND2;  // fill color unused for model tint
-                Color outline_color = PUFF_CYAN;        // not used for model tint
-                Model car_model = client->cars[5];
-                if(is_active_agent){
-                    car_model = client->cars[client->car_assignments[i %64]];
-                }
+
+                // Select car model
+                Model car_model = client->cars[i % 6];  // Default: cycle through all 6 car sprites
+
                 if(agent_index == env->human_agent_idx){
-                    object_color = PUFF_CYAN;
-                    outline_color = PUFF_WHITE;
+                    car_model = client->cars[0];  // Ego agent always uses red car (cars[0])
                 }
-                if(is_active_agent && (env->entities[i].collision_state > 0 || env->entities[i].aabb_collision_state > 0)) {
-                    car_model = client->cars[0];  // Collided agent
+                else if(is_active_agent){
+                    // Use cars 1-5 for other active agents to avoid red
+                    int car_idx = client->car_assignments[i % 64];
+                    if(car_idx == 0) car_idx = 1;  // Skip red car for non-ego agents
+                    car_model = client->cars[car_idx % 6];
+
+                    if(env->entities[i].collision_state > 0) {
+                        car_model = client->cars[0];  // Collided agents use red
+                    }
                 }
-                // Draw obs for human selected agent
-                if(agent_index == env->human_agent_idx && !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
-                    draw_agent_obs(env, agent_index, mode, obs_only, lasers);
-                }
+
+                // rlPushMatrix();
+                // // Translate to position, rotate around Y axis, then draw
+                // rlTranslatef(position.x, position.y, position.z);
+                // rlRotatef(heading*RAD2DEG, 0.0f, 0.0f, 1.0f);  // Convert radians to degrees
+                // // Determine color based on status
+                // Color object_color = PUFF_BACKGROUND2;  // fill color unused for model tint
+                // Color outline_color = PUFF_CYAN;        // not used for model tint
+                // Model car_model = client->cars[5];
+                // if(is_active_agent){
+                //     car_model = client->cars[client->car_assignments[i %64]];
+                // }
+                // if(agent_index == env->human_agent_idx){
+                //     object_color = PUFF_CYAN;
+                //     outline_color = PUFF_WHITE;
+                // }
+                // if(is_active_agent && (env->entities[i].collision_state > 0 || env->entities[i].aabb_collision_state > 0)) {
+                //     car_model = client->cars[0];  // Collided agent
+                // }
+                // // Draw obs for human selected agent
+                // if(agent_index == env->human_agent_idx && !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
+                //     draw_agent_obs(env, agent_index, mode, obs_only, lasers);
+                // }
                 // Draw cube for cars static and active
                 // Calculate scale factors based on desired size and model dimensions
 
