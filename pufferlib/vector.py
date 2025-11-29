@@ -795,7 +795,7 @@ def check_envs(envs, driver):
 def autotune(
     env_creator,
     batch_size,
-    max_envs=194,
+    max_envs=None,
     model_forward_s=0.0,
     max_env_ram_gb=None,
     max_batch_vram_gb=None,

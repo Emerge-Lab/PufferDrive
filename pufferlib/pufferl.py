@@ -1337,10 +1337,22 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     train_batch_size = args["train"]["batch_size"]
     orchestrator_batch_size = train_batch_size // num_agents_per_env
 
+    # max_envs must be at least as large as the batch size
+    max_envs = args.get("max_envs")
+    if max_envs is None:
+        # Default to 2x the batch size to allow for testing different configurations
+        max_envs = orchestrator_batch_size * 2
+    elif max_envs < orchestrator_batch_size:
+        raise ValueError(
+            f"max_envs ({max_envs}) must be >= orchestrator_batch_size ({orchestrator_batch_size}). "
+            f"Either increase --max-envs or reduce train.batch_size in the config."
+        )
+
     print(f"Autotune configuration:")
     print(f"  Training batch size: {train_batch_size} agent-steps")
     print(f"  Agents per environment: {num_agents_per_env}")
     print(f"  Orchestrator batch size: {orchestrator_batch_size} environments")
+    print(f"  Max environments to test: {max_envs}")
     print()
 
     pufferlib.vector.autotune(
@@ -1348,7 +1360,7 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
         batch_size=orchestrator_batch_size,
         max_env_ram_gb=args.get("max_env_ram_gb"),
         max_batch_vram_gb=args.get("max_batch_vram_gb"),
-        max_envs=args.get("max_envs", 194),
+        max_envs=max_envs,
         time_per_test=args.get("autotune_time", 5),
     )
 
@@ -1433,7 +1445,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
     parser.add_argument("--max-env-ram-gb", type=float, default=None, help="Max RAM (GB) for autotune (overrides auto-detection)")
     parser.add_argument("--max-batch-vram-gb", type=float, default=None, help="Max VRAM (GB) for autotune (overrides auto-detection)")
-    parser.add_argument("--max-envs", type=int, default=194, help="Max environments for autotune")
+    parser.add_argument("--max-envs", type=int, default=None, help="Max environments for autotune (default: 2x batch size)")
     parser.add_argument("--autotune-time", type=int, default=5, help="Time per test (seconds) for autotune")
     args = parser.parse_known_args()[0]
 
