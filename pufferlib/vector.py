@@ -854,7 +854,7 @@ def autotune(
     while time.time() - start < time_per_test:
         idle_ram = max(idle_ram, psutil.Process().memory_info().rss)
         s = time.time()
-        if env.done:
+        if hasattr(env, "done") and env.done:
             env.reset()
             reset_times.append(time.time() - s)
         else:
@@ -864,10 +864,10 @@ def autotune(
 
     env.close()
     sum_time = sum(step_times) + sum(reset_times)
-    reset_percent = 100 * sum(reset_times) / sum_time
-    sps = steps * num_agents / sum_time
-    step_variance = 100 * np.std(step_times) / np.mean(step_times)
-    reset_mean = np.mean(reset_times)
+    reset_percent = 100 * sum(reset_times) / sum_time if sum_time > 0 else 0
+    sps = steps * num_agents / sum_time if sum_time > 0 else 0
+    step_variance = 100 * np.std(step_times) / np.mean(step_times) if len(step_times) > 0 else 0
+    reset_mean = np.mean(reset_times) if len(reset_times) > 0 else 0
     ram_usage = max(1, (idle_ram - load_ram)) / 1e9
 
     obs_size_gb = np.prod(obs_space.shape) * np.dtype(obs_space.dtype).itemsize * num_agents / 1e9
