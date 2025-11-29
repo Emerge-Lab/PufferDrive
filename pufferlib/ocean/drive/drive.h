@@ -1400,29 +1400,29 @@ bool should_control_agent(Drive* env, int agent_idx){
         return false;
     }
 
-    //printf("Entity %d control mode: %d\n", agent_idx, env->control_mode);
-    env->control_mode = 2; // TEMPORARY OVERRIDE FOR TESTING
-    // Special mode: control only agents in prediction track list
-    if (env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
-        for (int j = 0; j < env->num_tracks_to_predict; j++) {
-            if (env->tracks_to_predict_indices[j] == agent_idx) {
-                return true;
-            }
-        }
-        return false;
-    }
+    // //printf("Entity %d control mode: %d\n", agent_idx, env->control_mode);
+    // env->control_mode = 2; // TEMPORARY OVERRIDE FOR TESTING
+    // // Special mode: control only agents in prediction track list
+    // if (env->control_mode == CONTROL_TRACKS_TO_PREDICT) {
+    //     for (int j = 0; j < env->num_tracks_to_predict; j++) {
+    //         if (env->tracks_to_predict_indices[j] == agent_idx) {
+    //             return true;
+    //         }
+    //     }
+    //     return false;
+    // }
 
-    // Standard mode: check type, distance to goal, and expert status
-    bool type_is_controllable = false;
-    if (env->control_mode == CONTROL_VEHICLES) {
-        type_is_controllable = (entity->type == VEHICLE);
-    } else {  // CONTROL_AGENTS mode
-        type_is_controllable = (entity->type == VEHICLE || entity->type == PEDESTRIAN || entity->type == CYCLIST);
-    }
+    // // Standard mode: check type, distance to goal, and expert status
+    // bool type_is_controllable = false;
+    // if (env->control_mode == CONTROL_VEHICLES) {
+    //     type_is_controllable = (entity->type == VEHICLE);
+    // } else {  // CONTROL_AGENTS mode
+    //     type_is_controllable = (entity->type == VEHICLE || entity->type == PEDESTRIAN || entity->type == CYCLIST);
+    // }
 
-    if (!type_is_controllable || entity->mark_as_expert) {
-        return false;
-    }
+    // if (!type_is_controllable || entity->mark_as_expert) {
+    //     return false;
+    // }
 
     // Check distance to goal in agent's local frame
     float cos_heading = cosf(entity->traj_heading[0]);
