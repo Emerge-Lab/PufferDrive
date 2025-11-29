@@ -38,7 +38,6 @@
 #define CONTROL_VEHICLES 0
 #define CONTROL_AGENTS 1
 #define CONTROL_WOSAC 2
-#define CONTROL_TRACKS_TO_PREDICT 2
 #define CONTROL_SDC_ONLY 3
 
 // Minimum distance to goal position
@@ -1526,10 +1525,6 @@ void set_active_agents(Drive* env){
 }
 
 void remove_bad_trajectories(Drive* env){
-
-    if (env->control_mode != CONTROL_TRACKS_TO_PREDICT) {
-        return; // Leave all trajectories in WOSAC control mode
-    }
 
     if (env->control_mode != CONTROL_WOSAC) {
         return; // Leave all trajectories in WOSAC control mode
