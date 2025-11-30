@@ -66,11 +66,20 @@
 #define GRID_CELL_SIZE 5.0f
 #define MAX_ENTITIES_PER_CELL 30 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
-// Max road segment observation entities
+// Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 200
 #define MAX_AGENTS 64
+#define STOP_AGENT 1
+#define REMOVE_AGENT 2
 
-// Observation Space Constants
+#define ROAD_FEATURES 7
+#define PARTNER_FEATURES 7
+
+// Ego features depend on dynamics model
+#define EGO_FEATURES_CLASSIC 7
+#define EGO_FEATURES_JERK 10
+
+// Observation normalization constants
 #define MAX_SPEED 100.0f
 #define MAX_VEH_LEN 30.0f
 #define MAX_VEH_WIDTH 15.0f
@@ -84,10 +93,8 @@
 #define MAX_RG_COORD 1000.0f
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
-#define STOP_AGENT 1
-#define REMOVE_AGENT 2
 
-//GOAL BEHAVIOUR
+// Goal behavior
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
@@ -1506,8 +1513,8 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int max_obs = ego_dim + PARTNER_FEATURES*(MAX_AGENTS - 1) + ROAD_FEATURES*MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
     env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
@@ -1787,8 +1794,8 @@ void c_get_road_edge_polylines(Drive* env, float* x_out, float* y_out, int* leng
 }
 
 void compute_observations(Drive* env) {
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int max_obs = ego_dim + PARTNER_FEATURES*(MAX_AGENTS - 1) + ROAD_FEATURES*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
@@ -2399,8 +2406,8 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int max_obs = ego_dim + PARTNER_FEATURES*(MAX_AGENTS - 1) + ROAD_FEATURES*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self

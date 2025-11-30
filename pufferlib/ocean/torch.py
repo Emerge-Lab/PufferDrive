@@ -11,19 +11,17 @@ from pufferlib.models import Convolutional as Conv  # noqa: F401
 
 Recurrent = pufferlib.models.LSTMWrapper
 
-MAX_PARTNER_OBJECTS = 63
-MAX_ROAD_OBJECTS = 200
-
-ROAD_FEATURES = 7
-ROAD_FEATURES_AFTER_ONEHOT = 13
-PARTNER_FEATURES = 7
-
 
 class Drive(nn.Module):
     def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
         super().__init__()
         self.hidden_size = hidden_size
         self.observation_size = env.single_observation_space.shape[0]
+        self.max_partner_objects = env.max_partner_objects
+        self.partner_features = env.partner_features
+        self.max_road_objects = env.max_road_objects
+        self.road_features = env.road_features
+        self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
 
         # Determine ego dimension from environment's dynamics model
         self.ego_dim = 10 if env.dynamics_model == "jerk" else 7
@@ -36,14 +34,14 @@ class Drive(nn.Module):
         )
 
         self.road_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(ROAD_FEATURES_AFTER_ONEHOT, input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(self.road_features_after_onehot, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
         self.partner_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(PARTNER_FEATURES, input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(self.partner_features, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
@@ -73,17 +71,17 @@ class Drive(nn.Module):
 
     def encode_observations(self, observations, state=None):
         ego_dim = self.ego_dim
-        partner_dim = MAX_PARTNER_OBJECTS * PARTNER_FEATURES
-        road_dim = MAX_ROAD_OBJECTS * ROAD_FEATURES
+        partner_dim = self.max_partner_objects * self.partner_features
+        road_dim = self.max_road_objects * self.road_features_after_onehot
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
 
-        partner_objects = partner_obs.view(-1, MAX_PARTNER_OBJECTS, PARTNER_FEATURES)
+        partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
 
-        road_objects = road_obs.view(-1, MAX_ROAD_OBJECTS, ROAD_FEATURES)
-        road_continuous = road_objects[:, :, : ROAD_FEATURES - 1]
-        road_categorical = road_objects[:, :, ROAD_FEATURES - 1]
+        road_objects = road_obs.view(-1, self.max_road_objects, self.road_features)
+        road_continuous = road_objects[:, :, : self.road_features - 1]
+        road_categorical = road_objects[:, :, self.road_features - 1]
         road_onehot = F.one_hot(road_categorical.long(), num_classes=7)  # Shape: [batch, ROAD_MAX_OBJECTS, 7]
         road_objects = torch.cat([road_continuous, road_onehot], dim=2)
         ego_features = self.ego_encoder(ego_obs)

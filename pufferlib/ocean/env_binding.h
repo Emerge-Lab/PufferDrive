@@ -981,5 +981,22 @@ static PyModuleDef module = {
 
 PyMODINIT_FUNC PyInit_binding(void) {
     import_array();
-    return PyModule_Create(&module);
+    PyObject* m = PyModule_Create(&module);  // Changed variable name from 'module' to 'm'
+
+    if (m == NULL) {
+        return NULL;
+    }
+
+    // Make constants accessible from Python
+    PyModule_AddIntConstant(m, "MAX_ROAD_SEGMENT_OBSERVATIONS", MAX_ROAD_SEGMENT_OBSERVATIONS);
+    PyModule_AddIntConstant(m, "MAX_AGENTS", MAX_AGENTS);
+    PyModule_AddIntConstant(m, "TRAJECTORY_LENGTH", TRAJECTORY_LENGTH);
+    PyModule_AddIntConstant(m, "MAX_ENTITIES_PER_CELL", MAX_ENTITIES_PER_CELL);
+
+    PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
+    PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
+    PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC", EGO_FEATURES_CLASSIC);
+    PyModule_AddIntConstant(m, "EGO_FEATURES_JERK", EGO_FEATURES_JERK);
+
+    return m;
 }
