@@ -67,8 +67,8 @@
 #define MAX_ENTITIES_PER_CELL 30 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
 // Observation constants
-#define MAX_ROAD_SEGMENT_OBSERVATIONS 200
-#define MAX_AGENTS 64
+#define MAX_ROAD_SEGMENT_OBSERVATIONS 128
+#define MAX_AGENTS 32
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
