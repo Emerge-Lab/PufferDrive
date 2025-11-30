@@ -47,7 +47,7 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
     int hidden_size = 256;
     int input_size = 64;
 
-    int ego_dim = (dynamics_model == JERK) ? 10 : 7;
+    int ego_dim = (dynamics_model == JERK) ? 11 : 8;
 
     // Determine action space size based on dynamics model
     int action_size, logit_sizes[2];
@@ -66,8 +66,8 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
     net->num_agents = num_agents;
     net->ego_dim = ego_dim;
     net->obs_self = calloc(num_agents*ego_dim, sizeof(float));
-    net->obs_partner = calloc(num_agents*63*7, sizeof(float));
-    net->obs_road = calloc(num_agents*200*13, sizeof(float));
+    net->obs_partner = calloc(num_agents*63*8, sizeof(float));
+    net->obs_road = calloc(num_agents*200*15, sizeof(float));
     net->partner_linear_output = calloc(num_agents*63*input_size, sizeof(float));
     net->road_linear_output = calloc(num_agents*200*input_size, sizeof(float));
     net->partner_linear_output_two = calloc(num_agents*63*input_size, sizeof(float));
@@ -77,10 +77,10 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
     net->ego_encoder = make_linear(weights, num_agents, ego_dim, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
-    net->road_encoder = make_linear(weights, num_agents, 13, input_size);
+    net->road_encoder = make_linear(weights, num_agents, 15, input_size);
     net->road_layernorm = make_layernorm(weights, num_agents, input_size);
     net->road_encoder_two = make_linear(weights, num_agents, input_size, input_size);
-    net->partner_encoder = make_linear(weights, num_agents, 7, input_size);
+    net->partner_encoder = make_linear(weights, num_agents, 8, input_size);
     net->partner_layernorm = make_layernorm(weights, num_agents, input_size);
     net->partner_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->partner_max = make_max_dim1(num_agents, 63, input_size);
@@ -137,13 +137,13 @@ void forward(DriveNet* net, float* observations, int* actions) {
 
     // Clear previous observations
     memset(net->obs_self, 0, net->num_agents * ego_dim * sizeof(float));
-    memset(net->obs_partner, 0, net->num_agents * 63 * 7 * sizeof(float));
-    memset(net->obs_road, 0, net->num_agents * 200 * 13 * sizeof(float));
+    memset(net->obs_partner, 0, net->num_agents * 63 * 8 * sizeof(float));
+    memset(net->obs_road, 0, net->num_agents * 200 * 15 * sizeof(float));
 
     for (int b = 0; b < net->num_agents; b++) {
-        int b_offset = b * (ego_dim + 63*7 + 200*7);
+        int b_offset = b * (ego_dim + 63*8 + 200*8);
         int partner_offset = b_offset + ego_dim;
-        int road_offset = b_offset + ego_dim + 63*7;
+        int road_offset = b_offset + ego_dim + 63*8;
 
         // Process self observation
         for(int i = 0; i < ego_dim; i++) {
@@ -152,21 +152,21 @@ void forward(DriveNet* net, float* observations, int* actions) {
 
         // Process partner observation
         for(int i = 0; i < 63; i++) {
-            for(int j = 0; j < 7; j++) {
-                net->obs_partner[b*63*7 + i*7 + j] = observations[partner_offset + i*7 + j];
+            for(int j = 0; j < 8; j++) {
+                net->obs_partner[b*63*8 + i*8 + j] = observations[partner_offset + i*8 + j];
             }
         }
 
         // Process road observation
         for(int i = 0; i < 200; i++) {
-            for(int j = 0; j < 7; j++) {
-                net->obs_road[b*200*13 + i*13 + j] = observations[road_offset + i*7 + j];
+            for(int j = 0; j < 8; j++) {
+                net->obs_road[b*200*15 + i*15 + j] = observations[road_offset + i*8 + j];
             }
-            for(int j = 0; j < 7; j++) {
-                if(j == observations[road_offset+i*7 + 6]) {
-                    net->obs_road[b*200*13 + i*13 + 6 + j] = 1.0f;
+            for(int j = 0; j < 8; j++) {
+                if(j == observations[road_offset+i*8 + 7]) {
+                    net->obs_road[b*200*15 + i*15 + 7 + j] = 1.0f;
                 } else {
-                    net->obs_road[b*200*13 + i*13 + 6 + j] = 0.0f;
+                    net->obs_road[b*200*15 + i*15 + 7 + j] = 0.0f;
                 }
             }
         }
@@ -178,11 +178,11 @@ void forward(DriveNet* net, float* observations, int* actions) {
     linear(net->ego_encoder_two, net->ego_layernorm->output);
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < 63; obj++) {
-            // Get the 7 features for this object
-            float* obj_features = &net->obs_partner[b*63*7 + obj*7];
+            // Get the 8 features for this object
+            float* obj_features = &net->obs_partner[b*63*8 + obj*8];
             // Apply linear layer to this object
             _linear(obj_features, net->partner_encoder->weights, net->partner_encoder->bias,
-                   &net->partner_linear_output[b*63*64 + obj*64], 1, 7, 64);
+                   &net->partner_linear_output[b*63*64 + obj*64], 1, 8, 64);
         }
     }
 
@@ -207,11 +207,11 @@ void forward(DriveNet* net, float* observations, int* actions) {
     // Process road objects: apply linear to each object individually
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < 200; obj++) {
-            // Get the 13 features for this object
-            float* obj_features = &net->obs_road[b*200*13 + obj*13];
+            // Get the 15 features for this object
+            float* obj_features = &net->obs_road[b*200*15 + obj*15];
             // Apply linear layer to this object
             _linear(obj_features, net->road_encoder->weights, net->road_encoder->bias,
-                   &net->road_linear_output[b*200*64 + obj*64], 1, 13, 64);
+                   &net->road_linear_output[b*200*64 + obj*64], 1, 15, 64);
         }
     }
 
