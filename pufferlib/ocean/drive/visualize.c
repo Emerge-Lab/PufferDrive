@@ -355,6 +355,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     if (render_topdown) {
         printf("Recording topdown view...\n");
+        fflush(stdout);
+        for(int i = 0; i < frame_count; i++) {
         for (int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid,
