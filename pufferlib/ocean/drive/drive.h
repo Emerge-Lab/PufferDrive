@@ -1520,7 +1520,6 @@ void set_active_agents(Drive *env) {
 
         // Skip if not valid at initialization
         if (entity->traj_valid[env->init_steps] != 1) {
-            //printf("Entity %d is not valid at init step %d\n", i, env->init_steps);
             continue;
         }
         // Determine if entity should be created
@@ -1557,7 +1556,6 @@ void set_active_agents(Drive *env) {
             }
         }
     }
-    //printf("Total active agents: %d\n", env->active_agent_count);
     // Set up initial active agents
     env->active_agent_indices = (int *)malloc(env->active_agent_count * sizeof(int));
     env->static_agent_indices = (int *)malloc(env->static_agent_count * sizeof(int));
@@ -1778,18 +1776,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         for(int i = 0; i <= max_diff_idx; i++) {
             sum_z += road_neighbours[i].z;
         }
-        // if(agent_idx == 0 || agent_idx == 5){
-        //     printf("Agent %d z updated from %f to %f, with %d neighbors. The list size is : %d\n", agent_idx, agent->z, sum_z / (max_diff_idx+1), max_diff_idx, list_size);
-        //     printf("Agents x and y position: %f , %f\n", agent->x, agent->y);
-        //     printf("road neighbor z values: ");
-        //     for(int i = 0;i<max_check;i++){
-        //         printf("%f ", road_neighbours[i].z);
-        //         printf("\n");
-        //         printf("distance: %f ", road_neighbours[i].dis);
-        //     }
-        //     printf("-----------------------");
-        //     printf("\n");
-        // }
         agent->z = sum_z / (max_diff_idx+1);
     }
 
@@ -1895,11 +1881,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         } else {
             a_long_new = clip(a_long_new, -5.0f, 2.5f);
         }
-
-        typedef struct {
-            float dis;
-            float z;
-        } DepthPoint;
 
         if (agent->a_lat * a_lat_new < 0) {
             a_lat_new = 0.0f;

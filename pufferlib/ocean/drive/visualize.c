@@ -334,8 +334,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     printf("Rendering: %s\n", view_mode);
 
-    fflush(stdout);
-
     int rendered_frames = 0;
     double startTime = GetTime();
 
@@ -359,7 +357,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     if (render_topdown) {
         printf("Recording topdown view...\n");
-        fflush(stdout);
         for(int i = 0; i < frame_count; i++) {
         for (int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
