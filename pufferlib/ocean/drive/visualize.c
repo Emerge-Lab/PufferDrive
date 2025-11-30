@@ -78,15 +78,14 @@ void CloseVideo(VideoRecorder *recorder) {
 }
 
 void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid, int img_width, int img_height) {
-
     BeginDrawing();
 
     // Top-down orthographic camera
     Camera3D camera = {0};
-    camera.position = (Vector3){ 0.0f, 0.0f, 500.0f };  // above the scene
-    camera.target   = (Vector3){ 0.0f, 0.0f, 0.0f };  // look at origin
+    camera.position = (Vector3){ env->grid_map->top_left_x, env->grid_map->bottom_right_y, 500.0f };  // above the scene
+    camera.target   = (Vector3){ env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0.0f };  // look at origin
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
-    camera.fovy     = map_height;
+    camera.fovy     = 2*map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
 
     client->width = img_width;
@@ -96,7 +95,6 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     ClearBackground(road);
     BeginMode3D(camera);
     rlEnableDepthTest();
-
     // Draw human replay trajectories if enabled
     if(log_trajectories){
     for(int i=0; i<env->active_agent_count; i++){
@@ -272,6 +270,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     SetTargetFPS(6000);
 
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
+
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
