@@ -211,8 +211,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         return -1;
     }
 
-    printf("[DEBUG] Loaded INI config from %s\n", ini_file);
-    fflush(stdout);
 
     char map_buffer[100];
     if (map_name == NULL) {
@@ -239,9 +237,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
     fclose(policy_file);
 
-    printf("[DEBUG] Policy file exists: %s\n", policy_name);
-    fflush(stdout);
-
     Drive env = {
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
@@ -264,29 +259,17 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
                                                          : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
-    printf("[DEBUG] Allocated environment.\n");
-    fflush(stdout);
-
     // Set which vehicle to focus on for obs mode
     env.human_agent_idx = 0;
 
     c_reset(&env);
 
-    printf("[DEBUG] Environment reset.\n");
-    fflush(stdout);
-
     // Make client for rendering
     Client *client = (Client *)calloc(1, sizeof(Client));
     env.client = client;
 
-    printf("[DEBUG] Client allocated.\n");
-    fflush(stdout);
-
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
     SetTargetFPS(6000);
-
-    printf("[DEBUG] Window config set.\n");
-    fflush(stdout);
 
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
 
@@ -301,9 +284,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
-
-    printf("[DEBUG] Window initialized: %dx%d\n", img_width, img_height);
-    fflush(stdout);
 
     // Load the textures and models
     client->puffers = LoadTexture("resources/puffers_128.png");
@@ -322,8 +302,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
 
-    printf("[DEBUG] Frame count: %d\n", frame_count);
-    fflush(stdout);
     int log_trajectory = log_trajectories;
     char filename_topdown[256];
     char filename_agent[256];
@@ -351,9 +329,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         sprintf(filename_agent, "%s/video/%s_agent.mp4", policy_base, map);
     }
 
-    printf("[DEBUG] Output filenames: topdown=%s, agent=%s\n", filename_topdown, filename_agent);
-    fflush(stdout);
-
     bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
     bool render_agent = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "agent") == 0);
 
@@ -371,8 +346,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             CloseWindow();
             return -1;
         }
-    printf("[DEBUG] Opened topdown video recorder.\n");
-    fflush(stdout);
     }
 
     if (render_agent) {
@@ -382,8 +355,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             CloseWindow();
             return -1;
         }
-    printf("[DEBUG] Opened agent video recorder.\n");
-    fflush(stdout);
     }
 
     if (render_topdown) {
@@ -396,7 +367,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
                                   img_width, img_height, zoom_in);
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
-                if (i % 30 == 0) { printf("[DEBUG] Topdown frame %d written\n", i); fflush(stdout); }
             }
             int (*actions)[2] = (int (*)[2])env.actions;
             forward(net, env.observations, (int *)env.actions);
@@ -418,7 +388,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
                 renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
                 WriteFrame(&agent_recorder, img_width, img_height);
                 rendered_frames++;
-                if (i % 30 == 0) { printf("[DEBUG] Agent frame %d written\n", i); fflush(stdout); }
             }
             int (*actions)[2] = (int (*)[2])env.actions;
             forward(net, env.observations, (int *)env.actions);
