@@ -334,8 +334,6 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     printf("Rendering: %s\n", view_mode);
 
-    fflush(stdout);
-
     int rendered_frames = 0;
     double startTime = GetTime();
 
@@ -358,7 +356,6 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     if (render_topdown) {
         printf("Recording topdown view...\n");
-        fflush(stdout);
         for(int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid, img_width, img_height);
@@ -366,7 +363,6 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
                 rendered_frames++;
             }
             int (*actions)[2] = (int(*)[2])env.actions;
-            printf("Size of observations: %d\n", env.observations);
 
             forward(net, env.observations, (int*)env.actions);
             c_step(&env);
