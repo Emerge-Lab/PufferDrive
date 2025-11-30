@@ -163,7 +163,7 @@ void forward(DriveNet* net, float* observations, int* actions) {
                 net->obs_road[b*200*13 + i*13 + j] = observations[road_offset + i*8 + j];
             }
             for(int j = 0; j < 8; j++) {
-                if(j == observations[road_offset+i*8 + 8]) {
+                if(j == observations[road_offset+i*8 + 7]) {
                     net->obs_road[b*200*13 + i*13 + 8 + j] = 1.0f;
                 } else {
                     net->obs_road[b*200*13 + i*13 + 7 + j] = 0.0f;
@@ -182,7 +182,7 @@ void forward(DriveNet* net, float* observations, int* actions) {
             float* obj_features = &net->obs_partner[b*63*8 + obj*8];
             // Apply linear layer to this object
             _linear(obj_features, net->partner_encoder->weights, net->partner_encoder->bias,
-                   &net->partner_linear_output[b*63*64 + obj*64], 1, 7, 64);
+                   &net->partner_linear_output[b*63*64 + obj*64], 1, 8, 64);
         }
     }
 
