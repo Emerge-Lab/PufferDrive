@@ -180,7 +180,7 @@ void forward(DriveNet *net, float *observations, int *actions) {
             }
             for(int j = 0; j < 8; j++) {
                 if(j == observations[road_offset+i*8 + 7]) {
-                    net->obs_road[b*200*13 + i*13 + 8 + j] = 1.0f;
+                    net->obs_road[b*200*15 + i*15 + 7 + j] = 1.0f;
                 } else {
                     net->obs_road[b * MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES_ONEHOT + i * ROAD_FEATURES_ONEHOT + 7 + j] = 0.0f;
                 }
