@@ -204,7 +204,9 @@ static int make_gif_from_frames(const char *pattern, int fps,
 
 
 int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
-
+    // Debug: print entry into function
+    printf("[DEBUG] Entered eval_gif()\n");
+    fflush(stdout);
     // Parse configuration from INI file
     env_init_config conf = {0};  // Initialize to zero
     const char* ini_file = "pufferlib/config/ocean/drive.ini";
@@ -212,6 +214,9 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         return -1;
     }
+
+    printf("[DEBUG] Loaded INI config from %s\n", ini_file);
+    fflush(stdout);
 
     char map_buffer[100];
     if (map_name == NULL) {
@@ -232,11 +237,17 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     }
     fclose(map_file);
 
+    printf("[DEBUG] Map file exists: %s\n", map_name);
+    fflush(stdout);
+
     FILE* policy_file = fopen(policy_name, "rb");
     if (policy_file == NULL) {
         RAISE_FILE_ERROR(policy_name);
     }
     fclose(policy_file);
+
+    printf("[DEBUG] Policy file exists: %s\n", policy_name);
+    fflush(stdout);
 
     Drive env = {
         .dynamics_model = conf.dynamics_model,
@@ -255,21 +266,36 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .control_mode = control_mode,
     };
 
+    printf("[DEBUG] Drive struct initialized.\n");
+    fflush(stdout);
+
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
                           (conf.scenario_length > 0) ? conf.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
+
+    printf("[DEBUG] Allocated environment.\n");
+    fflush(stdout);
 
     // Set which vehicle to focus on for obs mode
     env.human_agent_idx = 0;
 
     c_reset(&env);
 
+    printf("[DEBUG] Environment reset.\n");
+    fflush(stdout);
+
     // Make client for rendering
     Client* client = (Client*)calloc(1, sizeof(Client));
     env.client = client;
 
+    printf("[DEBUG] Client allocated.\n");
+    fflush(stdout);
+
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
     SetTargetFPS(6000);
+
+    printf("[DEBUG] Window config set.\n");
+    fflush(stdout);
 
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
@@ -284,6 +310,9 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
+    printf("[DEBUG] Window initialized: %dx%d\n", img_width, img_height);
+    fflush(stdout);
+
     // Load the textures and models
     client->puffers = LoadTexture("resources/puffers_128.png");
     client->cars[0] = LoadModel("resources/drive/RedCar.glb");
@@ -293,11 +322,20 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
     client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
 
+    printf("[DEBUG] Textures and models loaded.\n");
+    fflush(stdout);
+
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
     DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
+    printf("[DEBUG] Weights loaded and DriveNet initialized.\n");
+    fflush(stdout);
+
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
+
+    printf("[DEBUG] Frame count: %d\n", frame_count);
+    fflush(stdout);
     int log_trajectory = log_trajectories;
     char filename_topdown[256];
     char filename_agent[256];
@@ -325,10 +363,15 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         sprintf(filename_agent, "%s/video/%s_agent.mp4", policy_base, map);
     }
 
+    printf("[DEBUG] Output filenames: topdown=%s, agent=%s\n", filename_topdown, filename_agent);
+    fflush(stdout);
+
     bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
     bool render_agent = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "agent") == 0);
 
     printf("Rendering: %s\n", view_mode);
+
+    fflush(stdout);
 
     int rendered_frames = 0;
     double startTime = GetTime();
@@ -340,6 +383,8 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
             CloseWindow();
             return -1;
         }
+    printf("[DEBUG] Opened topdown video recorder.\n");
+    fflush(stdout);
     }
 
     if (render_agent) {
@@ -348,6 +393,8 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
             CloseWindow();
             return -1;
         }
+    printf("[DEBUG] Opened agent video recorder.\n");
+    fflush(stdout);
     }
 
     if (render_topdown) {
@@ -358,6 +405,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid, img_width, img_height);
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
+                if (i % 30 == 0) { printf("[DEBUG] Topdown frame %d written\n", i); fflush(stdout); }
             }
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, (int*)env.actions);
@@ -374,6 +422,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
                 renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
                 WriteFrame(&agent_recorder, img_width, img_height);
                 rendered_frames++;
+                if (i % 30 == 0) { printf("[DEBUG] Agent frame %d written\n", i); fflush(stdout); }
             }
             int (*actions)[2] = (int(*)[2])env.actions;
             forward(net, env.observations, (int*)env.actions);
@@ -387,6 +436,25 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     printf("Wrote %d frames in %.2f seconds (%.2f FPS) to %s \n",
            rendered_frames, elapsedTime, writeFPS, filename_topdown);
+
+    // Print file sizes for output videos
+    struct stat st;
+    if (render_topdown) {
+        if (stat(filename_topdown, &st) == 0) {
+            printf("[DEBUG] Topdown video file size: %lld bytes\n", (long long)st.st_size);
+        } else {
+            printf("[DEBUG] Could not stat topdown video file: %s\n", filename_topdown);
+        }
+        fflush(stdout);
+    }
+    if (render_agent) {
+        if (stat(filename_agent, &st) == 0) {
+            printf("[DEBUG] Agent video file size: %lld bytes\n", (long long)st.st_size);
+        } else {
+            printf("[DEBUG] Could not stat agent video file: %s\n", filename_agent);
+        }
+        fflush(stdout);
+    }
 
     if (render_topdown) {
         CloseVideo(&topdown_recorder);
