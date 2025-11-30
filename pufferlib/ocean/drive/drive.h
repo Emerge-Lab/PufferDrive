@@ -2223,15 +2223,15 @@ void c_step(Drive* env){
 
         if(collision_state > 0){
             if(collision_state == VEHICLE_COLLISION){
-                env->rewards[i] = env->reward_vehicle_collision;
-                env->logs[i].episode_return += env->reward_vehicle_collision;
+                env->rewards[i] = env->collision_weights[i];
+                env->logs[i].episode_return += env->collision_weights[i];
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].avg_collisions_per_agent += 1.0f;
             }
             else if(collision_state == OFFROAD){
-                env->rewards[i] = env->reward_offroad_collision;
+                env->rewards[i] = env->offroad_weights[i];
                 env->logs[i].offroad_rate = 1.0f;
-                env->logs[i].episode_return += env->reward_offroad_collision;
+                env->logs[i].episode_return += env->offroad_weights[i];
                 env->logs[i].avg_offroad_per_agent += 1.0f;
             }
             if(!env->entities[agent_idx].reached_goal_this_episode){
@@ -2250,16 +2250,17 @@ void c_step(Drive* env){
         if (distance_to_goal < env->goal_radius){
 
             if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1){
-                env->rewards[i] += env->reward_goal_post_respawn;
-                env->logs[i].episode_return += env->reward_goal_post_respawn;
+                float scaled_post_respawn_reward = env->reward_goal_post_respawn * env->goal_weights[i];
+                env->rewards[i] += scaled_post_respawn_reward;
+                env->logs[i].episode_return += scaled_post_respawn_reward;
             } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
-                env->rewards[i] += env->reward_goal;
-                env->logs[i].episode_return += env->reward_goal;
+                env->rewards[i] += env->goal_weights[i];
+                env->logs[i].episode_return += env->goal_weights[i];
                 env->entities[agent_idx].sampled_new_goal = 1;
                 env->logs[i].num_goals_reached += 1;
             } else { // Zero out the velocity so that the agent stops at the goal
-                env->rewards[i] = env->reward_goal;
-                env->logs[i].episode_return = env->reward_goal;
+                env->rewards[i] = env->goal_weights[i];
+                env->logs[i].episode_return = env->goal_weights[i];
                 env->logs[i].num_goals_reached = 1;
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx=env->entities[agent_idx].vy = 0.0f;
