@@ -64,12 +64,22 @@
 
 // Grid cell size
 #define GRID_CELL_SIZE 5.0f
-#define MAX_ENTITIES_PER_CELL 30    // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
+#define MAX_ENTITIES_PER_CELL 30 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
-// Max road segment observation entities
+// Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 200
 #define MAX_AGENTS 64
-// Observation Space Constants
+#define STOP_AGENT 1
+#define REMOVE_AGENT 2
+
+#define ROAD_FEATURES 7
+#define PARTNER_FEATURES 7
+
+// Ego features depend on dynamics model
+#define EGO_FEATURES_CLASSIC 7
+#define EGO_FEATURES_JERK 10
+
+// Observation normalization constants
 #define MAX_SPEED 100.0f
 #define MAX_VEH_LEN 30.0f
 #define MAX_VEH_WIDTH 15.0f
@@ -83,10 +93,8 @@
 #define MAX_RG_COORD 1000.0f
 #define MAX_ROAD_SCALE 100.0f
 #define MAX_ROAD_SEGMENT_LENGTH 100.0f
-#define STOP_AGENT 1
-#define REMOVE_AGENT 2
 
-//GOAL BEHAVIOUR
+// Goal behavior
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
@@ -275,7 +283,6 @@ struct GridMap {
     int cell_size_y;
     int* cell_entities_count;  // number of entities in each cell of the GridMap
     GridMapEntity** cells;  // list of gridEntities in each cell of the GridMap
-
     // Extras/Optimizations
     int vision_range;
     int* neighbor_cache_count; // number of entities in each cells neighbor cache
@@ -512,8 +519,6 @@ Entity* load_map_binary(const char* filename, Drive* env) {
 }
 
 void set_start_position(Drive* env){
-    //InitWindow(800, 600, "GPU Drive");
-    //BeginDrawing();
     for(int i = 0; i < env->num_entities; i++){
         int is_active = 0;
         for(int j = 0; j < env->active_agent_count; j++){
@@ -570,7 +575,6 @@ void set_start_position(Drive* env){
         e->steering_angle = 0.0f;
         e->wheelbase = 0.6f * e->length;
     }
-    //EndDrawing();
 }
 
 int getGridIndex(Drive* env, float x1, float y1) {
@@ -845,9 +849,6 @@ void cache_neighbor_offsets(Drive* env){
             memcpy(&env->grid_map->neighbor_cache_entities[i][dst_idx],
                 env->grid_map->cells[src_idx],
                 grid_count * sizeof(GridMapEntity));
-            // for(int k = 0; k < grid_count; k++){
-            //     env->grid_map->neighbor_cache_entities[i][dst_idx + k] = env->grid_map->cells[src_idx][k];
-            // }
             base_index += grid_count;
         }
     }
@@ -1512,8 +1513,8 @@ void c_close(Drive* env){
 
 void allocate(Drive* env){
     init(env);
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int max_obs = ego_dim + PARTNER_FEATURES*(MAX_AGENTS - 1) + ROAD_FEATURES*MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float*)calloc(env->active_agent_count*max_obs, sizeof(float));
     env->actions = (float*)calloc(env->active_agent_count*2, sizeof(float));
     env->rewards = (float*)calloc(env->active_agent_count, sizeof(float));
@@ -1797,8 +1798,8 @@ void c_get_road_edge_polylines(Drive* env, float* x_out, float* y_out, int* leng
 }
 
 void compute_observations(Drive* env) {
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int max_obs = ego_dim + PARTNER_FEATURES*(MAX_AGENTS - 1) + ROAD_FEATURES*MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
@@ -1872,9 +1873,8 @@ void compute_observations(Drive* env) {
 
             obs[obs_idx + 4] = rel_heading_x;
             obs[obs_idx + 5] = rel_heading_y;
-            // obs[obs_idx + 4] = cosf(rel_heading) / MAX_ORIENTATION_RAD;
-            // obs[obs_idx + 5] = sinf(rel_heading) / MAX_ORIENTATION_RAD;
-            // // relative speed
+
+            // relative speed
             float other_speed = sqrtf(other_entity->vx*other_entity->vx + other_entity->vy*other_entity->vy);
             obs[obs_idx + 6] = other_speed / MAX_SPEED;
             cars_seen++;
@@ -2410,8 +2410,8 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7*(MAX_AGENTS - 1) + 7*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int max_obs = ego_dim + PARTNER_FEATURES*(MAX_AGENTS - 1) + ROAD_FEATURES*MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     float* agent_obs = &observations[agent_index][0];
     // self
@@ -2514,7 +2514,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         }
 
         // draw an arrow above the car pointing in the direction that the partner is going
-        float arrow_length = 4.5f;
+        float arrow_length = 2.5f;
         float arrow_x = x + arrow_length*cosf(partner_angle);
         float arrow_y = y + arrow_length*sinf(partner_angle);
         float arrow_x_world;
@@ -2528,7 +2528,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
             DrawLine3D((Vector3){partner_x, partner_y, 1}, (Vector3){arrow_x_world, arrow_y_world, 1}, PUFF_WHITE);
         }
         // Calculate perpendicular offsets for arrow head
-        float arrow_size = 0.8f;  // Size of the arrow head
+        float arrow_size = 0.3f;  // Size of the arrow head
         float dx = arrow_x - x;
         float dy = arrow_y - y;
         float length = sqrtf(dx*dx + dy*dy);
@@ -2804,7 +2804,6 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 }
 
                 // --- Draw the car  ---
-
                 Vector3 carPos = { position.x, position.y, position.z };
                 Color car_color = GRAY;              // default for static
                 if (is_expert) car_color = GOLD;      // expert replay
@@ -2889,15 +2888,13 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 }
                 DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, WHITE);
                 {
-                    float cos_heading = env->entities[i].heading_x;
-                    float sin_heading = env->entities[i].heading_y;
                     float half_len = env->entities[i].length * 0.5f;
                     float half_width = env->entities[i].width * 0.5f;
                     Vector3 corners[4] = {
-                        (Vector3){ 0 + ( half_len * cos_heading - half_width * sin_heading), 0 + ( half_len * sin_heading + half_width * cos_heading), 0 },
-                        (Vector3){ 0 + ( half_len * cos_heading + half_width * sin_heading), 0 + ( half_len * sin_heading - half_width * cos_heading), 0 },
-                        (Vector3){ 0 + (-half_len * cos_heading + half_width * sin_heading), 0 + (-half_len * sin_heading - half_width * cos_heading), 0 },
-                        (Vector3){ 0 + (-half_len * cos_heading - half_width * sin_heading), 0 + (-half_len * sin_heading + half_width * cos_heading), 0 },
+                        (Vector3){  half_len, -half_width, 0 },  // Front-left
+                        (Vector3){  half_len,  half_width, 0 },  // Front-right
+                        (Vector3){ -half_len,  half_width, 0 },  // Back-right
+                        (Vector3){ -half_len, -half_width, 0 },  // Back-left
                     };
                     Color wire_color = GRAY;                 // static
                     if (!is_active_agent && env->entities[i].mark_as_expert == 1) wire_color = GOLD;  // expert replay

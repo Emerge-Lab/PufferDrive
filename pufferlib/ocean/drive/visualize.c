@@ -292,6 +292,8 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     client->cars[3] = LoadModel("resources/drive/YellowCar.glb");
     client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
     client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
+    client->cyclist = LoadModel("resources/drive/cyclist.glb");
+    client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
 
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
@@ -369,6 +371,11 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         c_reset(&env);
         printf("Recording agent view...\n");
         for(int i = 0; i < frame_count; i++) {
+            // Check if selected agent has reached the first goal and stop recording
+            int human_idx = env.active_agent_indices[env.human_agent_idx];
+            if(env.entities[human_idx].reached_goal_this_episode) {
+                break;
+            }
             if (i % frame_skip == 0) {
                 renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
                 WriteFrame(&agent_recorder, img_width, img_height);
