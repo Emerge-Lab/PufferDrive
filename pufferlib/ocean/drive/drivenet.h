@@ -57,10 +57,9 @@ DriveNet* init_drivenet(Weights* weights, int num_agents, int dynamics_model) {
         logit_sizes[0] = 7 * 13;
         action_dim = 1;
     } else {  // JERK
-        action_size = 7;   // 4 + 3
-        logit_sizes[0] = 4;
-        logit_sizes[1] = 3;
-        action_dim = 2;
+        action_size = 4 * 3; // Joint action space (4 longitudinal × 3 lateral = 12)
+        logit_sizes[0] = 4 * 3;
+        action_dim = 1;
     }
 
     net->num_agents = num_agents;

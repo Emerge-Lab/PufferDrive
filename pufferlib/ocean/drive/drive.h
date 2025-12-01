@@ -1636,9 +1636,13 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
             // Symmetric scaling for lateral jerk
             a_lat = action_array_f[action_idx][1] * JERK_LAT[2];
         } else { // discrete
-            int (*action_array)[2] = (int(*)[2])env->actions;
-            int a_long_idx = action_array[action_idx][0];
-            int a_lat_idx = action_array[action_idx][1];
+            // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
+            int* action_array = (int*)env->actions;
+            int num_long = sizeof(JERK_LONG) / sizeof(JERK_LONG[0]);
+            int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+            int action_val = action_array[action_idx];
+            int a_long_idx = action_val / num_lat;
+            int a_lat_idx = action_val % num_lat;
             a_long = JERK_LONG[a_long_idx];
             a_lat = JERK_LAT[a_lat_idx];
         }
