@@ -67,7 +67,7 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
     return 0;
 }
 
-// Fisher-Yates shuffle for sampling without replacement
+// Fisher-Yates shuffle for sampling without replacement in scenario mode
 static void shuffle_indices(int* arr, int n) {
     for(int i = n-1; i > 0; i--) {
         int j = rand() % (i+1);
@@ -86,46 +86,65 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
 
-    // NEW: Optional scenario count and seed for WOSAC evaluation
     PyObject* num_scenarios_obj = PyDict_GetItemString(kwargs, "num_scenarios");
     PyObject* map_seed_obj = PyDict_GetItemString(kwargs, "map_seed");
 
-    int num_scenarios = -1;  // -1 means use agent-count mode
+    int num_scenarios = -1;
     if (num_scenarios_obj != NULL && num_scenarios_obj != Py_None) {
         num_scenarios = PyLong_AsLong(num_scenarios_obj);
     }
 
-    // Set seed if provided (for reproducibility)
-    if (map_seed_obj != NULL && map_seed_obj != Py_None) {
+    int scenario_mode = (num_scenarios > 0);
+
+    if (scenario_mode && map_seed_obj != NULL && map_seed_obj != Py_None) {
         int seed = PyLong_AsLong(map_seed_obj);
         srand(seed);
     } else {
-        // Existing: use timestamp
         clock_gettime(CLOCK_REALTIME, &ts);
         srand(ts.tv_nsec);
     }
+
     int total_agent_count = 0;
     int env_count = 0;
     int max_envs = (num_scenarios > 0) ? num_scenarios : num_agents;
     PyObject* agent_offsets = PyList_New(max_envs+1);
     PyObject* map_ids = PyList_New(max_envs);
 
-    // Create shuffled array of map indices for sampling without replacement
-    int* map_indices = malloc(num_maps * sizeof(int));
-    for(int i = 0; i < num_maps; i++) {
-        map_indices[i] = i;
-    }
-    shuffle_indices(map_indices, num_maps);
+    int* map_indices = NULL;
 
-    // Main loading loop - iterate through shuffled maps
-    int scenario_mode = (num_scenarios > 0);
-    for(int i = 0; i < num_maps; i++) {
+    if (scenario_mode) {
+        // Scenario mode: sampling WITHOUT replacement (Fisher-Yates shuffle)
+        map_indices = malloc(num_maps * sizeof(int));
+        if (!map_indices) {
+            Py_DECREF(agent_offsets);
+            Py_DECREF(map_ids);
+            PyErr_SetString(PyExc_MemoryError, "Failed to allocate map_indices");
+            return NULL;
+        }
+        for(int i = 0; i < num_maps; i++) {
+            map_indices[i] = i;
+        }
+        shuffle_indices(map_indices, num_maps);
+    }
+
+    // Main loading loop
+    int map_idx = 0;
+    int maps_checked = 0;
+    while(1) {
         // Stop conditions depend on mode
+        if(scenario_mode && map_idx >= num_maps) break;
         if(scenario_mode && env_count >= num_scenarios) break;
         if(!scenario_mode && total_agent_count >= num_agents) break;
 
         char map_file[100];
-        int map_id = map_indices[i];
+        int map_id;
+
+        if (scenario_mode) {
+            map_id = map_indices[map_idx];
+        } else {
+            map_id = rand() % num_maps;
+        }
+        map_idx++;
         Drive* env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
@@ -137,6 +156,27 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if(env->active_agent_count == 0) {
+            if (!scenario_mode) {
+                maps_checked++;
+
+                // Safeguard: if we've checked all available maps and found no active agents, raise an error
+                if(maps_checked >= num_maps) {
+                    for(int j=0;j<env->num_entities;j++) {
+                        free_entity(&env->entities[j]);
+                    }
+                    free(env->entities);
+                    free(env->active_agent_indices);
+                    free(env->static_agent_indices);
+                    free(env->expert_static_agent_indices);
+                    free(env);
+                    Py_DECREF(agent_offsets);
+                    Py_DECREF(map_ids);
+                    char error_msg[256];
+                    sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                    PyErr_SetString(PyExc_ValueError, error_msg);
+                    return NULL;
+                }
+            }
             for(int j=0;j<env->num_entities;j++) {
                 free_entity(&env->entities[j]);
             }
@@ -166,7 +206,6 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         free(env);
     }
     //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
-    // Cap total_agent_count only in agent-count mode
     if(num_scenarios <= 0 && total_agent_count >= num_agents){
         total_agent_count = num_agents;
     }
@@ -177,7 +216,6 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     PyObject* resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject* resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
 
-    // Clean up before return
     free(map_indices);
 
     PyObject* tuple = PyTuple_New(3);

@@ -1053,12 +1053,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
         args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
         args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
-
-        # Pass WOSAC-specific map selection params if provided
-        if args["eval"].get("wosac_num_scenarios") is not None:
-            args["env"]["num_scenarios"] = args["eval"]["wosac_num_scenarios"]
-        if args["eval"].get("wosac_map_seed") is not None:
-            args["env"]["scenario_seed"] = args["eval"]["wosac_map_seed"]
+        args["env"]["num_scenarios"] = args["eval"]["wosac_num_scenarios"]
+        args["env"]["scenario_seed"] = args["eval"]["wosac_map_seed"]
 
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)

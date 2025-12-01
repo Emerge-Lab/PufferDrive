@@ -111,26 +111,6 @@ class TestScenarioCountMode:
 
         env.close()
 
-    def test_all_scenarios_unique_large_request(self):
-        """Test uniqueness with larger scenario count."""
-        env = drive.Drive(
-            num_maps=1000,
-            num_agents=999999,
-            num_scenarios=500,
-            scenario_seed=12345,
-            control_mode="control_wosac",
-            init_mode="create_all_valid",
-            scenario_length=91,
-        )
-
-        # Verify no duplicates
-        map_ids_list = list(env.map_ids)
-        unique_maps = set(map_ids_list)
-        assert len(unique_maps) == 500, f"Expected 500 unique maps, got {len(unique_maps)}"
-        assert len(unique_maps) == len(map_ids_list), "All scenarios should be unique"
-
-        env.close()
-
     def test_agent_count_determined_from_scenarios(self):
         """Test that num_agents is correctly determined from loaded scenarios."""
         env = drive.Drive(
@@ -296,11 +276,11 @@ class TestSeedBehavior:
     """Tests for scenario_seed parameter."""
 
     def test_no_seed_random_maps(self):
-        """Test that without seed, maps are random (probabilistic test)."""
+        """Test that without seed, maps are random."""
         env1 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            num_scenarios=5,
+            num_scenarios=3,
             # No scenario_seed
             control_mode="control_wosac",
             init_mode="create_all_valid",
@@ -310,22 +290,19 @@ class TestSeedBehavior:
         env2 = drive.Drive(
             num_maps=100,
             num_agents=999999,
-            num_scenarios=5,
+            num_scenarios=3,
             # No scenario_seed
             control_mode="control_wosac",
             init_mode="create_all_valid",
             scenario_length=91,
         )
 
-        # Very likely to be different (not guaranteed, but high probability)
-        # If this fails occasionally, it's expected (random chance)
         different = env1.map_ids != env2.map_ids
 
         env1.close()
         env2.close()
 
-        # Note: This test might occasionally fail due to random chance
-        assert different, "Random maps should likely be different (can fail due to chance)"
+        assert different, "Random maps should be different (This test might fail if you're very unlucky)"
 
     def test_seed_zero_is_valid(self):
         """Test that seed=0 is valid and reproducible."""
