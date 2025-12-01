@@ -41,9 +41,9 @@ class Drive(pufferlib.PufferEnv):
         init_mode="random_agents_init",
         control_mode="control_vehicles",
         num_agents_per_world=32,
-        vehicle_width = 2.0,
-        vehicle_length = 4.5,
-        vehicle_height = 1.8,
+        vehicle_width=2.0,
+        vehicle_length=4.5,
+        vehicle_height=1.8,
         goal_sampling_mode="randomized_curriculum",
         max_distance_to_goal=100.0,
         goal_curriculum_start_distance=5.0,
@@ -105,7 +105,7 @@ class Drive(pufferlib.PufferEnv):
 
         if goal_behavior == 1:
             # preview next goal + 1
-            ego_features += 2 
+            ego_features += 2
 
         self.ego_features = ego_features
         partner_features = 7
@@ -154,7 +154,9 @@ class Drive(pufferlib.PufferEnv):
             self.goal_sampling_mode = 1
         elif goal_sampling_mode == "randomized_curriculum":
             self.goal_sampling_mode = 2
-            end_distance = goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            end_distance = (
+                goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            )
             self.goal_curriculum = GoalCurriculum(
                 start_distance=goal_curriculum_start_distance,
                 end_distance=end_distance,
@@ -256,9 +258,9 @@ class Drive(pufferlib.PufferEnv):
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
                 num_agents_per_world=self.num_agents_per_world,
-                vehicle_height = self.vehicle_height,
-                vehicle_length = self.vehicle_length,
-                vehicle_width = self.vehicle_width,
+                vehicle_height=self.vehicle_height,
+                vehicle_length=self.vehicle_length,
+                vehicle_width=self.vehicle_width,
                 goal_sampling_mode=self.goal_sampling_mode,
                 max_distance_to_goal=self.max_distance_to_goal,
                 map_files=self.map_files,
@@ -322,9 +324,9 @@ class Drive(pufferlib.PufferEnv):
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
                 num_agents_per_world=self.num_agents_per_world,
-                vehicle_height = self.vehicle_height,
-                vehicle_length = self.vehicle_length,
-                vehicle_width = self.vehicle_width,
+                vehicle_height=self.vehicle_height,
+                vehicle_length=self.vehicle_length,
+                vehicle_width=self.vehicle_width,
                 goal_sampling_mode=self.goal_sampling_mode,
                 max_distance_to_goal=self.max_distance_to_goal,
                 map_files=self.map_files,
@@ -688,7 +690,10 @@ def process_maps(source_dir, output_dir, prefix="map", limit=None, start_index=0
 
 
 def process_carla_maps(
-    source_dir="data_utils/carla/carla", output_dir="resources/drive/carla_binaries", prefix="carla_map", limit=None
+    source_dir="data_utils/carla/carla_valid_files",
+    output_dir="resources/drive/carla_binaries",
+    prefix="carla_map",
+    limit=None,
 ):
     """Process Carla JSON maps into binaries."""
     process_maps(source_dir=source_dir, output_dir=output_dir, prefix=prefix, limit=limit)
@@ -749,5 +754,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=32):
 
 
 if __name__ == "__main__":
-    test_performance()
-    # process_carla_maps()
+    # test_performance()
+    process_carla_maps()
