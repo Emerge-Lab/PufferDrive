@@ -963,6 +963,10 @@ class WandbLogger:
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     args = args or load_config(env_name)
+    # NOTE: Should we put something like this ? I don't know if people will try to train with a fixed number of scenarios.
+    assert args.get("env", {}).get("num_scenarios") is None, (
+        "Sorry folks, training with a fixed number of scenarios is not supported."
+    )
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     if "LOCAL_RANK" in os.environ:

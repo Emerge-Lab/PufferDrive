@@ -243,29 +243,16 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                shared_kwargs = {
-                    "map_dir": self.map_dir,
-                    "num_maps": self.num_maps,
-                    "num_agents": self.num_agents,
-                    "init_mode": self.init_mode,
-                    "control_mode": self.control_mode,
-                    "init_steps": self.init_steps,
-                    "max_controlled_agents": self.max_controlled_agents,
-                    "goal_behavior": self.goal_behavior,
-                }
-                if self.num_scenarios is not None:
-                    # NOTE: I think that we should change the see to get different scenarios on resample (if training with num_scenarios mode)
-                    if self.scenario_seed is not None:
-                        self.scenario_seed += 1
-                    shared_kwargs.update(
-                        {
-                            "num_scenarios": self.num_scenarios,
-                            "map_seed": self.scenario_seed,
-                        }
-                    )
-                    agent_offsets, map_ids, num_envs = binding.shared(**shared_kwargs)
-                else:
-                    agent_offsets, map_ids, num_envs = binding.shared(**shared_kwargs)
+                agent_offsets, map_ids, num_envs = binding.shared(
+                    num_agents=self.num_agents,
+                    num_maps=self.num_maps,
+                    init_mode=self.init_mode,
+                    control_mode=self.control_mode,
+                    init_steps=self.init_steps,
+                    max_controlled_agents=self.max_controlled_agents,
+                    goal_behavior=self.goal_behavior,
+                    map_dir=self.map_dir,
+                )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):
