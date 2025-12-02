@@ -50,6 +50,7 @@ def test_drive_training():
                 "num_agents": 8,  # 1 env * 8 agents = 8 total <= 16 segments
                 "action_type": "discrete",
                 "num_maps": 1,
+                "map_dir": "resources/drive/binaries",
             }
         )
 

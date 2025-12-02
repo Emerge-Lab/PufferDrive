@@ -60,7 +60,6 @@ Steps [for every scene]:
         Linear acceleration: 0.4658
         Angular speed: 0.5543
         Angular acceleration: 0.6589
-
         Kinematics realism score: 0.5607
         ```
     These scores go to 1.0 if we use the time-dependent estimator, execpt for the smoothing factor that is used to avoid bins with 0 probability.

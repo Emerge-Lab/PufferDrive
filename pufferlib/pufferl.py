@@ -804,7 +804,9 @@ class PuffeRL:
                             path=bin_path,
                             silent=True,
                         )
-                        pufferlib.utils.render_videos(self.config, self.vecenv, self.logger, self.global_step, bin_path)
+                        pufferlib.utils.render_videos(
+                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
+                        )
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
@@ -1356,9 +1358,11 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
+    args["env"]["map_dir"] = args["eval"]["map_dir"]
+    dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     if wosac_enabled:
-        print(f"Running WOSAC realism evaluation. \n")
+        print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
         backend = args["eval"]["backend"]
@@ -1382,12 +1386,20 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         # Roll out trained policy in the simulator
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
 
+        print(f"\nCollected trajectories on {len(np.unique(gt_trajectories['scenario_id']))} scenarios.")
+
         if args["eval"]["wosac_sanity_check"]:
             evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
 
         # Analyze and compute metrics
+        agent_state = vecenv.driver_env.get_global_agent_state()
+        road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
         results = evaluator.compute_metrics(
-            gt_trajectories, simulated_trajectories, args["eval"]["wosac_aggregate_results"]
+            gt_trajectories,
+            simulated_trajectories,
+            agent_state,
+            road_edge_polylines,
+            args["eval"]["wosac_aggregate_results"],
         )
 
         if args["eval"]["wosac_aggregate_results"]:
@@ -1400,7 +1412,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         return results
 
     elif human_replay_enabled:
-        print("Running human replay evaluation.\n")
+        print(f"Running human replay evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
         backend = args["eval"].get("backend", "PufferEnv")
@@ -1594,6 +1606,53 @@ def sweep(args=None, env_name=None):
 
         # Prevent logging final eval steps as training steps
         args["train"]["total_timesteps"] = total_timesteps
+
+
+def controlled_exp(env_name, args=None):
+    """Run experiments with all combinations of specified parameter values."""
+    import itertools
+    from copy import deepcopy
+
+    args = args or load_config(env_name)
+    if not args["wandb"] and not args["neptune"]:
+        raise pufferlib.APIUsageError("Targeted experiments require either wandb or neptune")
+
+    # Check if controlled_exp config exists
+    if "controlled_exp" not in args:
+        raise pufferlib.APIUsageError("No [controlled_exp.*] sections found in config")
+
+    # Extract parameters from controlled_exp namespace
+    params = {}
+    for section, section_config in args["controlled_exp"].items():
+        if isinstance(section_config, dict):
+            for param, param_config in section_config.items():
+                if isinstance(param_config, dict) and "values" in param_config:
+                    params[f"{section}.{param}"] = param_config["values"]
+
+    if not params:
+        raise pufferlib.APIUsageError("No parameters with 'values' lists found in [controlled_exp.*] sections")
+
+    # Generate all combinations
+    keys = list(params.keys())
+    combinations = list(itertools.product(*[params[k] for k in keys]))
+
+    print(f"Running a total of {len(combinations)} experiments with parameters: {keys}")
+
+    # Run each combination
+    for i, combo in enumerate(combinations, 1):
+        exp_args = deepcopy(args)
+
+        # Set parameters
+        for key, value in zip(keys, combo):
+            section, param = key.split(".")
+            exp_args[section][param] = value
+
+        print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
+
+        # Train
+        train(env_name, args=exp_args)
+
+    print(f"\n✓ Completed all {len(combinations)} experiments")
 
 
 def profile(args=None, env_name=None, vecenv=None, policy=None):
@@ -1825,9 +1884,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = (
-        "Usage: puffer [train, eval, sweep, autotune, profile, export] [env_name] [optional args]. --help for more info"
-    )
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -1839,6 +1896,8 @@ def main():
         eval(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
+    elif mode == "controlled_exp":
+        controlled_exp(env_name=env_name)
     elif mode == "autotune":
         autotune(env_name=env_name)
     elif mode == "profile":

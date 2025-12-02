@@ -13,7 +13,7 @@ def histogram_estimate(
     min_val: float,
     max_val: float,
     num_bins: int,
-    additive_smoothing: float = 0.1,
+    additive_smoothing: float,
 ) -> np.ndarray:
     """Computes log-likelihoods of samples based on histograms.
 
@@ -68,7 +68,7 @@ def log_likelihood_estimate_timeseries(
     min_val: float,
     max_val: float,
     num_bins: int,
-    additive_smoothing: float = 0.1,
+    additive_smoothing: float,
     treat_timesteps_independently: bool = True,
     sanity_check: bool = False,
     plot_agent_idx: int = 0,
@@ -118,6 +118,86 @@ def log_likelihood_estimate_timeseries(
         _plot_histogram_sanity_check(log_flat, sim_flat, log_probs, plot_agent_idx)
 
     return log_probs
+
+
+def bernoulli_estimate(
+    log_samples: np.ndarray,
+    sim_samples: np.ndarray,
+    additive_smoothing: float,
+) -> np.ndarray:
+    """Computes log probabilities of samples based on Bernoulli distributions.
+
+    Args:
+        log_samples: Boolean array of shape (n_agents, sample_size)
+        sim_samples: Boolean array of shape (n_agents, sample_size)
+        additive_smoothing: Pseudocount for Laplace smoothing
+
+    Returns:
+        Shape (n_agents, sample_size) - log-likelihood of each log sample
+    """
+    if log_samples.dtype != bool:
+        raise ValueError("log_samples must be boolean array for Bernoulli estimate")
+    if sim_samples.dtype != bool:
+        raise ValueError("sim_samples must be boolean array for Bernoulli estimate")
+
+    return histogram_estimate(
+        log_samples.astype(float),
+        sim_samples.astype(float),
+        min_val=-0.5,
+        max_val=1.5,
+        num_bins=2,
+        additive_smoothing=additive_smoothing,
+    )
+
+
+def log_likelihood_estimate_scenario_level(
+    log_values: np.ndarray,
+    sim_values: np.ndarray,
+    min_val: float,
+    max_val: float,
+    num_bins: int,
+    additive_smoothing: float | None = None,
+    use_bernoulli: bool = False,
+) -> np.ndarray:
+    """Computes log-likelihood estimates for scenario-level features (no time dimension).
+
+    Args:
+        log_values: Shape (n_agents,)
+        sim_values: Shape (n_agents, n_rollouts)
+        min_val: Minimum value for histogram bins (ignored if use_bernoulli=True)
+        max_val: Maximum value for histogram bins (ignored if use_bernoulli=True)
+        num_bins: Number of histogram bins (ignored if use_bernoulli=True)
+        additive_smoothing: Pseudocount for Laplace smoothing
+        use_bernoulli: If True, use Bernoulli estimator for boolean features
+
+    Returns:
+        Shape (n_agents,) - log-likelihood of each log feature
+    """
+    if log_values.ndim != 1:
+        raise ValueError(f"log_values must be 1D, got shape {log_values.shape}")
+    if sim_values.ndim != 2:
+        raise ValueError(f"sim_values must be 2D, got shape {sim_values.shape}")
+
+    log_values_2d = log_values[:, np.newaxis]
+    sim_values_2d = sim_values
+
+    if use_bernoulli:
+        log_likelihood_2d = bernoulli_estimate(
+            log_values_2d.astype(bool),
+            sim_values_2d.astype(bool),
+            additive_smoothing=0.001,
+        )
+    else:
+        log_likelihood_2d = histogram_estimate(
+            log_values_2d,
+            sim_values_2d,
+            min_val=min_val,
+            max_val=max_val,
+            num_bins=num_bins,
+            additive_smoothing=additive_smoothing,
+        )
+
+    return log_likelihood_2d[:, 0]
 
 
 def _plot_histogram_sanity_check(
