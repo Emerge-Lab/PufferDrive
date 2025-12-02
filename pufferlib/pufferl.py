@@ -122,6 +122,7 @@ class PuffeRL:
 
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
+        self.ep_returns = torch.zeros(total_agents, device=device)  # Track cumulative episode returns
         self.free_idx = total_agents
         self.render = config["render"]
         self.render_interval = config["render_interval"]
@@ -218,6 +219,10 @@ class PuffeRL:
                 print(f"Agent 0 indices: {self.agent0_indices.tolist()}")
             else:
                 raise pufferlib.APIUsageError("Adversarial mode requires vecenv.driver_env.agent_offsets")
+
+            # Track completed episode returns separately for ref vs adv agents
+            self.ref_episode_returns = []
+            self.adv_episode_returns = []
 
             # For compatibility, keep self.policy pointing to adv_policy
             self.policy = self.adv_policy
@@ -523,6 +528,28 @@ class PuffeRL:
                 self.terminals[batch_rows, l] = d.float()
                 self.values[batch_rows, l] = value.flatten()
 
+                # Accumulate episode returns (using modified rewards)
+                for idx in range(len(r)):
+                    global_idx = env_id.start + idx
+                    self.ep_returns[global_idx] += r[idx].item()
+
+                # Collect completed episode returns when episodes terminate
+                if self.adversarial_mode:
+                    # Find agents that finished their episode (done or truncated)
+                    done_indices = torch.where(d)[0]
+                    for idx in done_indices:
+                        global_idx = env_id.start + idx
+                        episode_return = self.ep_returns[global_idx].item()
+
+                        # Check if this is agent0 (reference) or adversarial
+                        if global_idx in self.agent0_indices:
+                            self.ref_episode_returns.append(episode_return)
+                        else:
+                            self.adv_episode_returns.append(episode_return)
+
+                        # Reset for next episode
+                        self.ep_returns[global_idx] = 0
+
                 # Store agent IDs for adversarial masking during training
                 agent_ids = torch.arange(env_id.start, env_id.stop, device=device)
                 self.agent_id_buffer[batch_rows, l] = agent_ids
@@ -543,6 +570,10 @@ class PuffeRL:
             profile("eval_misc", epoch)
             for i in info:
                 for k, v in pufferlib.unroll_nested_dict(i):
+                    # Skip episode_return in adversarial mode (we track our own)
+                    if self.adversarial_mode and k == "episode_return":
+                        continue
+
                     if isinstance(v, np.ndarray):
                         v = v.tolist()
                     elif isinstance(v, (list, tuple)):
@@ -790,6 +821,18 @@ class PuffeRL:
 
     def mean_and_log(self):
         config = self.config
+
+        # Add adversarial episode returns to stats before computing means
+        if self.adversarial_mode:
+            if len(self.ref_episode_returns) > 0:
+                self.stats["ref_episode_return"] = self.ref_episode_returns
+            if len(self.adv_episode_returns) > 0:
+                self.stats["adv_episode_return"] = self.adv_episode_returns
+
+            # Clear for next logging interval
+            self.ref_episode_returns = []
+            self.adv_episode_returns = []
+
         for k in list(self.stats.keys()):
             v = self.stats[k]
             try:
@@ -1406,9 +1449,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             # Compute agent0 indices
             agent_offsets = vecenv.driver_env.agent_offsets
             num_envs = vecenv.driver_env.num_envs
-            agent0_indices = torch.tensor(
-                [agent_offsets[i] for i in range(num_envs)], device=device, dtype=torch.int64
-            )
+            agent0_indices = torch.tensor([agent_offsets[i] for i in range(num_envs)], device=device, dtype=torch.int64)
 
         state = {}
         ref_state = {}
