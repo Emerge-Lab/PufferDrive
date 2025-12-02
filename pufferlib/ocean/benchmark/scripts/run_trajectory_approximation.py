@@ -137,6 +137,12 @@ def main():
         default=0.1,
         help='Time step in seconds (default: 0.1)'
     )
+    parser.add_argument(
+        '--min_mean_speed',
+        type=float,
+        default=0.5,
+        help='Minimum mean speed (m/s) to process segment (default: 0.5, filters stationary vehicles)'
+    )
 
     args = parser.parse_args()
 
@@ -165,9 +171,11 @@ def main():
     print(f"Loaded {len(trajectories)} vehicle trajectories")
 
     # Process each trajectory
-    print(f"\nProcessing trajectories (min segment length: {args.min_segment_length})...")
+    print(f"\nProcessing trajectories (min segment length: {args.min_segment_length}, min mean speed: {args.min_mean_speed} m/s)...")
     all_results = []
     viz_count = 0
+    skipped_stationary = 0
+    processed_segments = 0
 
     for traj_idx, traj in enumerate(tqdm(trajectories, desc="Trajectories")):
         # Find valid segments
@@ -179,6 +187,28 @@ def main():
         for seg_idx, (start, end) in enumerate(segments):
             # Extract segment
             segment = extract_segment(traj, start, end)
+
+            # Skip stationary vehicles (parked or stopped in traffic)
+            # Calculate position change and speed statistics
+            position_change = np.sqrt(
+                (segment['x'][-1] - segment['x'][0])**2 +
+                (segment['y'][-1] - segment['y'][0])**2
+            )
+            speed = np.sqrt(segment['vx']**2 + segment['vy']**2)
+            max_speed = np.max(speed)
+            mean_speed = np.mean(speed)
+
+            # Filter out stationary vehicles (moving less than 0.5m total and max speed < 0.5 m/s)
+            if position_change < 0.5 and max_speed < 0.5:
+                skipped_stationary += 1
+                continue  # Skip this segment - stationary vehicle
+
+            # Also skip very slow moving vehicles that won't test the dynamics well
+            if mean_speed < args.min_mean_speed:
+                skipped_stationary += 1
+                continue
+
+            processed_segments += 1
 
             # Initialize states
             classic_state = initialize_classic_state(segment)
@@ -220,7 +250,10 @@ def main():
                 )
                 viz_count += 1
 
-    print(f"\nProcessed {len(all_results)} trajectory segments")
+    print(f"\nProcessing complete:")
+    print(f"  Processed: {processed_segments} moving trajectory segments")
+    print(f"  Skipped: {skipped_stationary} stationary/slow segments")
+    print(f"  Total results: {len(all_results)} segments")
 
     if len(all_results) == 0:
         print("No valid trajectory segments found. Exiting.")
