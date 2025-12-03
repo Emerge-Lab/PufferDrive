@@ -254,6 +254,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->goal_sampling_mode = (int)unpack(kwargs, "goal_sampling_mode");
     env->max_distance_to_goal = (float)unpack(kwargs, "max_distance_to_goal");
+    env->goal_curriculum_end_distance = (float)unpack(kwargs, "goal_curriculum_end_distance");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");

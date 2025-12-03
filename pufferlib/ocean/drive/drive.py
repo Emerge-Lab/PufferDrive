@@ -23,7 +23,7 @@ class Drive(pufferlib.PufferEnv):
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
         reward_ade=0.0,
-        goal_behavior=0,
+        goal_behavior=1,
         goal_radius=2.0,
         collision_behavior=0,
         offroad_behavior=0,
@@ -44,10 +44,10 @@ class Drive(pufferlib.PufferEnv):
         vehicle_width=2.0,
         vehicle_length=4.5,
         vehicle_height=1.8,
-        goal_sampling_mode="randomized_curriculum",
+        goal_sampling_mode="random_within_radius",
         max_distance_to_goal=100.0,
         goal_curriculum_start_distance=5.0,
-        goal_curriculum_end_distance=None,
+        goal_curriculum_end_distance=50.0,
         goal_curriculum_steps=5,
         goal_curriculum_schedule="linear",
         goal_curriculum_total_timesteps=None,
@@ -152,6 +152,30 @@ class Drive(pufferlib.PufferEnv):
             self.goal_sampling_mode = 0
         elif goal_sampling_mode == "random_within_radius":
             self.goal_sampling_mode = 1
+            end_distance = goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            self.goal_curriculum = GoalCurriculum(
+                start_distance=goal_curriculum_start_distance,
+                end_distance=end_distance,
+                steps=goal_curriculum_steps,
+                schedule=goal_curriculum_schedule,
+                total_timesteps=goal_curriculum_total_timesteps,
+            )
+            self.max_distance_to_goal = self.goal_curriculum.current_distance
+            self.goal_curriculum_step_interval = self.goal_curriculum.step_interval
+            self.goal_curriculum_total_timesteps = self.goal_curriculum.total_timesteps
+        elif goal_sampling_mode == "randomized_curriculum":
+            self.goal_sampling_mode = 2
+            end_distance = goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            self.goal_curriculum = GoalCurriculum(
+                start_distance=goal_curriculum_start_distance,
+                end_distance=end_distance,
+                steps=goal_curriculum_steps,
+                schedule=goal_curriculum_schedule,
+                total_timesteps=goal_curriculum_total_timesteps,
+            )
+            self.max_distance_to_goal = self.goal_curriculum.current_distance
+            self.goal_curriculum_step_interval = self.goal_curriculum.step_interval
+            self.goal_curriculum_total_timesteps = self.goal_curriculum.total_timesteps
         elif goal_sampling_mode == "randomized_curriculum":
             self.goal_sampling_mode = 2
             end_distance = (
@@ -263,6 +287,7 @@ class Drive(pufferlib.PufferEnv):
                 vehicle_width=self.vehicle_width,
                 goal_sampling_mode=self.goal_sampling_mode,
                 max_distance_to_goal=self.max_distance_to_goal,
+                goal_curriculum_end_distance=self.goal_curriculum_end_distance,
                 map_files=self.map_files,
             )
             env_ids.append(env_id)
@@ -329,6 +354,7 @@ class Drive(pufferlib.PufferEnv):
                 vehicle_width=self.vehicle_width,
                 goal_sampling_mode=self.goal_sampling_mode,
                 max_distance_to_goal=self.max_distance_to_goal,
+                goal_curriculum_end_distance=self.goal_curriculum_end_distance,
                 map_files=self.map_files,
             )
             env_ids.append(env_id)

@@ -16,6 +16,7 @@ typedef enum {
     ERROR_FILE_NOT_FOUND,
     ERROR_INITIALIZATION_FAILED,
     ERROR_INVALID_CONFIG,
+    ERROR_UNKNOWN_CASE,
     ERROR_UNKNOWN
 } ErrorType;
 
@@ -29,6 +30,7 @@ const char* error_type_to_string(ErrorType type) {
         case ERROR_FILE_NOT_FOUND: return "File Not Found";
         case ERROR_INITIALIZATION_FAILED: return "Initialization Failed";
         case ERROR_INVALID_CONFIG: return "Invalid Configuration";
+        case ERROR_UNKNOWN_CASE: return "Unknown Case";
         default: return "Unknown Error";
     }
 }

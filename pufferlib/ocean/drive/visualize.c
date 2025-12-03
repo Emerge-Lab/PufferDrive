@@ -291,8 +291,9 @@ int eval_gif(
     const char* output_topdown, const char* output_agent, int num_maps,
     int scenario_length_override, int init_mode, int control_mode,
     int goal_behavior, int goal_sampling_mode, float max_distance_to_goal,
-    int dynamics_model, int reward_vehicle_collision, int reward_offroad_collision,
-    int reward_ade, int collision_behavior, int offroad_behavior,
+    float goal_curriculum_end_distance, int dynamics_model, 
+    int reward_vehicle_collision,int reward_offroad_collision, int reward_ade, 
+    int collision_behavior, int offroad_behavior,
     float dt, float scenario_length, int num_agents_per_world,
     float vehicle_length, float vehicle_width, float vehicle_height) {
 
@@ -357,6 +358,7 @@ int eval_gif(
         .control_mode = control_mode,
         .goal_sampling_mode = goal_sampling_mode,
         .max_distance_to_goal = max_distance_to_goal,
+        .goal_curriculum_end_distance = goal_curriculum_end_distance,
         .num_agents_per_world = num_agents_per_world,
         .vehicle_length = vehicle_length,
         .vehicle_width = vehicle_width,
@@ -525,15 +527,18 @@ int main(int argc, char* argv[]) {
     int num_maps = 1;
     int scenario_length_cli = conf.scenario_length;
     int init_mode = 0;
-    if (conf.init_mode == ALL_VALID_INIT || conf.init_mode == RANDOM_AGENTS_INIT) {
+    if (conf.init_mode == ALL_VALID_INIT) {
         init_mode = 0;
     } else if (conf.init_mode == CONTROLLABLE_AGENTS_INIT) {
         init_mode = 1;
+    } else if (conf.init_mode == RANDOM_AGENTS_INIT) {
+        init_mode = 2;
     }
     int control_mode = conf.control_mode;
     int goal_behavior = 0;
     int goal_sampling_mode = conf.goal_sampling_mode;
     float max_distance_to_goal = conf.max_distance_to_goal;
+    float goal_curriculum_end_distance = conf.goal_curriculum_end_distance;
     int dynamics_model = conf.dynamics_model;
     int reward_vehicle_collision = conf.reward_vehicle_collision;
     int reward_offroad_collision = conf.reward_offroad_collision;
@@ -547,9 +552,12 @@ int main(int argc, char* argv[]) {
     float vehicle_width = conf.vehicle_width;
     float vehicle_height = conf.vehicle_height;
 
-    const char* view_mode = "both";  // "both", "topdown", "agent"
+    const char* view_mode = "topdown";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
     const char* output_agent = NULL;
+
+    printf("Configs: \n");
+    printf("init_mode: %d, num_agents_per_world: %d, goal_radius: %.2f, goal_behavior: %d, goal_sampling_mode: %d, max_distance_to_goal: %.2f, goal_curriculum_end_distance: %.2f\n", init_mode, num_agents_per_world, goal_radius, goal_behavior, goal_sampling_mode, max_distance_to_goal, goal_curriculum_end_distance);
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -669,6 +677,11 @@ int main(int argc, char* argv[]) {
                 max_distance_to_goal = atof(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--goal-curriculum-end-distance") == 0) {
+            if (i + 1 < argc) {
+                goal_curriculum_end_distance = atof(argv[i + 1]);
+                i++;
+            }
         } else if (strcmp(argv[i], "--goal-behavior") == 0) {
             if (i + 1 < argc) {
                 goal_behavior = atoi(argv[i + 1]);
@@ -744,7 +757,7 @@ int main(int argc, char* argv[]) {
         init_steps, max_controlled_agents, view_mode,
         output_topdown, output_agent, num_maps,
         scenario_length_cli, init_mode, control_mode,
-        goal_behavior, goal_sampling_mode, max_distance_to_goal,
+        goal_behavior, goal_sampling_mode, max_distance_to_goal, goal_curriculum_end_distance,
         dynamics_model, reward_vehicle_collision, reward_offroad_collision,
         reward_ade, collision_behavior, offroad_behavior,
         dt, scenario_length, num_agents_per_world,

@@ -40,6 +40,7 @@ typedef struct {
     int control_mode;
     int goal_sampling_mode;
     float max_distance_to_goal;
+    float goal_curriculum_end_distance;
     char binary_dir[256];
 } env_init_config;
 
@@ -103,13 +104,13 @@ static int handler(
         env_config->control_mode = atoi(value);
     } else if (MATCH("env", "init_mode")) {
         if (strcmp(value, "\"default\"") == 0 || strcmp(value, "default") == 0) {
-            env_config->init_mode = DEFAULT_INIT_MODE;  // DEFAULT
+            env_config->init_mode = DEFAULT_INIT_MODE;
         } else if (strcmp(value, "\"random_agents_init\"") == 0 || strcmp(value, "random_agents_init") == 0) {
-            env_config->init_mode = RANDOM_AGENTS_INIT;  // RANDOM_AGENTS_INIT
+            env_config->init_mode = RANDOM_AGENTS_INIT;
         } else if (strcmp(value, "\"create_all_valid\"") == 0) {
-            env_config->init_mode = ALL_VALID_INIT;  // CREATE_ALL_VALID
+            env_config->init_mode = ALL_VALID_INIT;
         } else if (strcmp(value, "\"create_only_controlled\"") == 0) {
-            env_config->init_mode = CONTROLLABLE_AGENTS_INIT;  // CONTROLLABLE_AGENTS_INIT
+            env_config->init_mode = CONTROLLABLE_AGENTS_INIT;
         } else {
             raise_error_with_message(ERROR_INVALID_CONFIG, "Unknown init_mode value: %s", value);
             env_config->init_mode = UNKNOWN_INIT_MODE;  // Default to UNKNOWN
@@ -126,9 +127,20 @@ static int handler(
     } else if(MATCH("env", "vehicle_height")) {
         env_config->vehicle_height = atof(value);
     } else if (MATCH("env", "goal_sampling_mode")) {
-        env_config->goal_sampling_mode = atoi(value);
+        if (strcmp(value, "\"fixed_from_dataset\"") == 0 || strcmp(value, "fixed_from_dataset") == 0) {
+            env_config->goal_sampling_mode = 0;
+        } else if (strcmp(value, "\"random_within_radius\"") == 0 || strcmp(value, "random_within_radius") == 0) {
+            env_config->goal_sampling_mode = 1;
+        } else if (strcmp(value, "\"randomized_curriculum\"") == 0 || strcmp(value, "randomized_curriculum") == 0) {
+            env_config->goal_sampling_mode = 2;
+        } else {
+            printf("Warning: Unknown goal_sampling_mode value '%s', defaulting to FIXED_FROM_DATASET\n", value);
+            env_config->goal_sampling_mode = 0;  // Default to FIXED_FROM_DATASET
+        }
     } else if (MATCH("env", "max_distance_to_goal")) {
         env_config->max_distance_to_goal = atof(value);
+    } else if (MATCH("env", "goal_curriculum_end_distance")) {
+        env_config->goal_curriculum_end_distance = atof(value);
     } else if (MATCH("env", "binary_dir")) {
         snprintf(env_config->binary_dir, sizeof(env_config->binary_dir), "%s", value);
     }
