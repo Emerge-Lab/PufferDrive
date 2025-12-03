@@ -1241,8 +1241,10 @@ void init_grid_map(Drive* env){
     for(int i = 0; i < env->num_entities; i++){
         if(env->entities[i].type > 3 && env->entities[i].type < 7){
             for(int j = 0; j < env->entities[i].array_size - 1; j++){
-                float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
-                float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
+                // float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
+                // float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
+                float x_center = env->entities[i].traj_x[j];
+                float y_center = env->entities[i].traj_y[j];
                 int grid_index = getGridIndex(env, x_center, y_center);
                 if (grid_index == -1) {
                     printf("Warning: Not Supposed to happen, Point (%f, %f) out of grid bounds\n", x_center, y_center);
@@ -1272,8 +1274,10 @@ void init_grid_map(Drive* env){
     for(int i = 0; i < env->num_entities; i++){
         if(env->entities[i].type > 3 && env->entities[i].type < 7){         // NOTE: Only Road Edges, Lines, and Lanes in grid map
             for(int j = 0; j < env->entities[i].array_size - 1; j++){
-                float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
-                float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
+                // float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
+                // float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
+                float x_center = env->entities[i].traj_x[j];
+                float y_center = env->entities[i].traj_y[j];
                 int grid_index = getGridIndex(env, x_center, y_center);
                 add_entity_to_grid(env, grid_index, i, j, cell_entities_insert_index);
                 if (env->entities[i].type == ROAD_LANE) {
