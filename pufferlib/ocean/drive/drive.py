@@ -38,9 +38,13 @@ class Drive(pufferlib.PufferEnv):
         buf=None,
         seed=1,
         init_steps=0,
-        init_mode="create_all_valid",
+        init_mode="random_agents_init",
         control_mode="control_vehicles",
-        goal_sampling_mode="fixed_from_dataset",
+        num_agents_per_world=32,
+        vehicle_width=2.0,
+        vehicle_length=4.5,
+        vehicle_height=1.8,
+        goal_sampling_mode="randomized_curriculum",
         max_distance_to_goal=100.0,
         goal_curriculum_start_distance=5.0,
         goal_curriculum_end_distance=None,
@@ -101,7 +105,7 @@ class Drive(pufferlib.PufferEnv):
 
         if goal_behavior == 1:
             # preview next goal + 1
-            ego_features += 2 
+            ego_features += 2
 
         self.ego_features = ego_features
         partner_features = 7
@@ -113,6 +117,10 @@ class Drive(pufferlib.PufferEnv):
         self.init_steps = init_steps
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
+        self.num_agents_per_world = -1
+        self.vehicle_width = vehicle_width
+        self.vehicle_length = vehicle_length
+        self.vehicle_height = vehicle_height
 
         # TODO: Convert all these to enums
         if self.control_mode_str == "control_vehicles":
@@ -131,6 +139,10 @@ class Drive(pufferlib.PufferEnv):
             self.init_mode = 0
         elif self.init_mode_str == "create_only_controlled":
             self.init_mode = 1
+        elif self.init_mode_str == "random_agents_init":
+            self.init_mode = 2
+            self.num_agents_per_world = num_agents_per_world
+            print(f"Using random_agents_init with {self.num_agents_per_world} agents per world.")
         else:
             raise ValueError(
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
@@ -142,7 +154,9 @@ class Drive(pufferlib.PufferEnv):
             self.goal_sampling_mode = 1
         elif goal_sampling_mode == "randomized_curriculum":
             self.goal_sampling_mode = 2
-            end_distance = goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            end_distance = (
+                goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            )
             self.goal_curriculum = GoalCurriculum(
                 start_distance=goal_curriculum_start_distance,
                 end_distance=end_distance,
@@ -202,7 +216,9 @@ class Drive(pufferlib.PufferEnv):
             goal_behavior=self.goal_behavior,
             goal_sampling_mode=self.goal_sampling_mode,
             max_distance_to_goal=self.max_distance_to_goal,
+            num_agents_per_world=self.num_agents_per_world,
             map_files=self.map_files,
+            ini_file="pufferlib/config/ocean/drive.ini",
         )
 
         self.num_agents = num_agents
@@ -241,6 +257,10 @@ class Drive(pufferlib.PufferEnv):
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
+                num_agents_per_world=self.num_agents_per_world,
+                vehicle_height=self.vehicle_height,
+                vehicle_length=self.vehicle_length,
+                vehicle_width=self.vehicle_width,
                 goal_sampling_mode=self.goal_sampling_mode,
                 max_distance_to_goal=self.max_distance_to_goal,
                 map_files=self.map_files,
@@ -267,7 +287,9 @@ class Drive(pufferlib.PufferEnv):
             goal_behavior=self.goal_behavior,
             goal_sampling_mode=self.goal_sampling_mode,
             max_distance_to_goal=self.max_distance_to_goal,
+            num_agents_per_world=self.num_agents_per_world,
             map_files=self.map_files,
+            ini_file="pufferlib/config/ocean/drive.ini",
         )
 
         env_ids = []
@@ -301,6 +323,10 @@ class Drive(pufferlib.PufferEnv):
                 init_steps=self.init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
+                num_agents_per_world=self.num_agents_per_world,
+                vehicle_height=self.vehicle_height,
+                vehicle_length=self.vehicle_length,
+                vehicle_width=self.vehicle_width,
                 goal_sampling_mode=self.goal_sampling_mode,
                 max_distance_to_goal=self.max_distance_to_goal,
                 map_files=self.map_files,
@@ -664,7 +690,10 @@ def process_maps(source_dir, output_dir, prefix="map", limit=None, start_index=0
 
 
 def process_carla_maps(
-    source_dir="data_utils/carla/carla", output_dir="resources/drive/carla_binaries", prefix="carla_map", limit=None
+    source_dir="data_utils/carla/carla_valid_files",
+    output_dir="resources/drive/carla_binaries",
+    prefix="carla_map",
+    limit=None,
 ):
     """Process Carla JSON maps into binaries."""
     process_maps(source_dir=source_dir, output_dir=output_dir, prefix=prefix, limit=limit)
@@ -704,12 +733,6 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=32):
     env = Drive(
         num_agents=num_agents,
         num_maps=1,
-        control_mode="control_vehicles",
-        init_mode="create_all_valid",
-        init_steps=0,
-        scenario_length=91,
-        goal_sampling_mode="randomized_curriculum",  # "fixed_from_dataset",
-        max_distance_to_goal=1.0,
     )
 
     env.reset()
@@ -731,5 +754,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=32):
 
 
 if __name__ == "__main__":
-    test_performance()
-    # process_all_maps()
+    # test_performance()
+    process_carla_maps()
