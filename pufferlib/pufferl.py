@@ -117,6 +117,16 @@ class PuffeRL:
         self.ratio = torch.ones(segments, horizon, device=device)
         self.importance = torch.ones(segments, horizon, device=device)
 
+        # Pre-allocated tensors for combined policy outputs in adversarial mode
+        self._action_canvas = torch.zeros(
+            self.total_agents,
+            *atn_space.shape,
+            device=device,
+            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
+        )
+        self._logprob_canvas = torch.zeros(self.total_agents, device=device)
+        self._value_canvas = torch.zeros(self.total_agents, device=device)
+
         # Track agent IDs for adversarial masking during training
         self.agent_id_buffer = torch.zeros(segments, horizon, device=device, dtype=torch.int64)
 
@@ -154,16 +164,11 @@ class PuffeRL:
         self.adversarial_mode = config.get("adversarial", {}).get("adversarial_mode", False)
 
         if self.adversarial_mode:
-            print("\n" + "=" * 60)
-            print("ADVERSARIAL MODE ENABLED")
-            print("=" * 60)
-
             # Reference policy (frozen)
             ref_model_path = config["adversarial"]["reference_model_path"]
             if ref_model_path == "none" or ref_model_path is None:
                 raise pufferlib.APIUsageError("adversarial_mode=True requires reference_model_path to be set")
 
-            print(f"Loading reference policy from: {ref_model_path}")
             ref_state_dict = torch.load(ref_model_path, map_location=device)
             # Clean up state dict keys (remove module., policy., lstm., cell. prefixes)
             cleaned_state_dict = {}
@@ -179,7 +184,6 @@ class PuffeRL:
 
                 cleaned_state_dict[k] = v
             ref_state_dict = cleaned_state_dict
-            print(f"Cleaned state dict: {len(ref_state_dict)} keys")
 
             # Create reference policy with same architecture
             import importlib
@@ -201,12 +205,10 @@ class PuffeRL:
             self.ref_policy.eval()
             for param in self.ref_policy.parameters():
                 param.requires_grad = False
-            print(f"Reference policy loaded and frozen (requires_grad=False)")
 
             # Adversarial policy (trainable) - the provided policy
             self.adv_policy = policy
             self.uncompiled_adv_policy = policy
-            print(f"Adversarial policy created (trainable)")
 
             # Compute agent0 indices (one per environment)
             if hasattr(vecenv.driver_env, "agent_offsets"):
@@ -215,8 +217,6 @@ class PuffeRL:
                 self.agent0_indices = torch.tensor(
                     [self.agent_offsets[i] for i in range(self.num_envs)], device=device, dtype=torch.int64
                 )
-                print(f"Number of environments: {self.num_envs}")
-                print(f"Agent 0 indices: {self.agent0_indices.tolist()}")
             else:
                 raise pufferlib.APIUsageError("Adversarial mode requires vecenv.driver_env.agent_offsets")
 
@@ -224,14 +224,29 @@ class PuffeRL:
             self.ref_episode_returns = []
             self.adv_episode_returns = []
 
+            # Cache for agent0 indices
+            self._cached_agent_offsets = None
+            self._cached_agent0_indices = None
+
             # For compatibility, keep self.policy pointing to adv_policy
             self.policy = self.adv_policy
             self.uncompiled_policy = self.uncompiled_adv_policy
 
             # Torch compile (if enabled)
             if config["compile"]:
-                print("Warning: torch.compile with adversarial mode not fully tested. Disabling recommended.")
+                # Compile adversarial policy
                 self.adv_policy = torch.compile(policy, mode=config["compile_mode"])
+                self.adv_policy.forward_eval = torch.compile(policy.forward_eval, mode=config["compile_mode"])
+
+                # Compile reference policy (read-only during eval)
+                self.ref_policy = torch.compile(self.ref_policy, mode=config["compile_mode"])
+                self.ref_policy.forward_eval = torch.compile(self.ref_policy.forward_eval, mode=config["compile_mode"])
+
+                # Compile sampling function
+                pufferlib.pytorch.sample_logits = torch.compile(
+                    pufferlib.pytorch.sample_logits, mode=config["compile_mode"]
+                )
+
                 self.policy = self.adv_policy
 
             # Optimizer only trains adversarial policy
@@ -275,10 +290,6 @@ class PuffeRL:
             raise ValueError(f"Unknown optimizer: {config['optimizer']}")
 
         self.optimizer = optimizer
-
-        if self.adversarial_mode:
-            print(f"Optimizer created for adversarial policy only")
-            print("=" * 60 + "\n")
 
         # LSTM Initialization (moved after adversarial setup to handle dual policies)
         if config["use_rnn"]:
@@ -398,11 +409,16 @@ class PuffeRL:
                     # Refresh agent0_indices in case of environment resampling
                     # (agent_offsets can change when envs resample maps)
                     if hasattr(self.vecenv.driver_env, "agent_offsets"):
-                        self.agent_offsets = self.vecenv.driver_env.agent_offsets
-                        self.num_envs = self.vecenv.driver_env.num_envs
-                        self.agent0_indices = torch.tensor(
-                            [self.agent_offsets[i] for i in range(self.num_envs)], device=device, dtype=torch.int64
-                        )
+                        current_offsets = self.vecenv.driver_env.agent_offsets
+                        if current_offsets != self._cached_agent_offsets:
+                            self.agent_offsets = current_offsets
+                            self.num_envs = self.vecenv.driver_env.num_envs
+                            self._cached_agent0_indices = torch.tensor(
+                                [self.agent_offsets[i] for i in range(self.num_envs)], device=device, dtype=torch.int64
+                            )
+                            self._cached_agent_offsets = current_offsets
+
+                        self.agent0_indices = self._cached_agent0_indices
 
                     # Determine which agents in current batch are agent0
                     batch_indices = torch.arange(env_id.start, env_id.stop, device=device)
@@ -412,9 +428,11 @@ class PuffeRL:
                     batch_size = len(o_device)
                     # Action shape matches action space (includes action dimensions)
                     action_shape = (batch_size,) + tuple(self.vecenv.single_action_space.shape)
-                    action = torch.zeros(action_shape, dtype=torch.long, device=device)
-                    logprob = torch.zeros(batch_size, device=device)
-                    value = torch.zeros(batch_size, device=device)
+
+                    # Reuse pre-allocated canvas tensors
+                    action = self._action_canvas[:batch_size]
+                    logprob = self._logprob_canvas[:batch_size]
+                    value = self._value_canvas[:batch_size]
 
                     # Prepare LSTM states if needed
                     if config["use_rnn"]:
@@ -428,20 +446,18 @@ class PuffeRL:
                     logits = None
                     if agent0_mask.any():
                         o_ref = o_device[agent0_mask]
-                        state_ref = {k: v for k, v in state.items()}  # Copy state dict
-
                         if config["use_rnn"]:
-                            state_ref["lstm_h"] = h_ref_batch[agent0_mask]
-                            state_ref["lstm_c"] = c_ref_batch[agent0_mask]
+                            state["lstm_h"] = h_ref_batch[agent0_mask]
+                            state["lstm_c"] = c_ref_batch[agent0_mask]
 
                         # Use forward_eval() method
-                        logits_ref, value_ref = self.ref_policy.forward_eval(o_ref, state_ref)
+                        logits_ref, value_ref = self.ref_policy.forward_eval(o_ref, state)
                         action_ref, logprob_ref, _ = pufferlib.pytorch.sample_logits(logits_ref)
 
                         if config["use_rnn"]:
                             # Update reference LSTM states
-                            h_ref_batch[agent0_mask] = state_ref["lstm_h"]
-                            c_ref_batch[agent0_mask] = state_ref["lstm_c"]
+                            h_ref_batch[agent0_mask] = state["lstm_h"]
+                            c_ref_batch[agent0_mask] = state["lstm_c"]
 
                         # Place ref policy outputs in correct positions
                         # Note: action keeps its shape from sample_logits, just ensure correct dtype
@@ -454,20 +470,18 @@ class PuffeRL:
                     # Forward adversarial observations through adversarial policy
                     if (~agent0_mask).any():
                         o_adv = o_device[~agent0_mask]
-                        state_adv = {k: v for k, v in state.items()}  # Copy state dict
-
                         if config["use_rnn"]:
-                            state_adv["lstm_h"] = h_adv_batch[~agent0_mask]
-                            state_adv["lstm_c"] = c_adv_batch[~agent0_mask]
+                            state["lstm_h"] = h_adv_batch[~agent0_mask]
+                            state["lstm_c"] = c_adv_batch[~agent0_mask]
 
                         # Use forward_eval() method
-                        logits_adv, value_adv = self.adv_policy.forward_eval(o_adv, state_adv)
+                        logits_adv, value_adv = self.adv_policy.forward_eval(o_adv, state)
                         action_adv, logprob_adv, _ = pufferlib.pytorch.sample_logits(logits_adv)
 
                         if config["use_rnn"]:
                             # Update adversarial LSTM states
-                            h_adv_batch[~agent0_mask] = state_adv["lstm_h"]
-                            c_adv_batch[~agent0_mask] = state_adv["lstm_c"]
+                            h_adv_batch[~agent0_mask] = state["lstm_h"]
+                            c_adv_batch[~agent0_mask] = state["lstm_c"]
 
                         # Place adv policy outputs in correct positions
                         # Note: action keeps its shape from sample_logits, just ensure correct dtype
@@ -528,10 +542,8 @@ class PuffeRL:
                 self.terminals[batch_rows, l] = d.float()
                 self.values[batch_rows, l] = value.flatten()
 
-                # Accumulate episode returns (using modified rewards)
-                for idx in range(len(r)):
-                    global_idx = env_id.start + idx
-                    self.ep_returns[global_idx] += r[idx].item()
+                # Accumulate episode returns (using modified rewards) - vectorized
+                self.ep_returns[env_id] += r
 
                 # Collect completed episode returns when episodes terminate
                 if self.adversarial_mode:
