@@ -586,36 +586,7 @@ bool is_valid_spawn_point(Drive* env, int agent_idx, float start_x, float start_
             }
         }
     }
-
-    // Offroad check
-    // int list_size = 0;
-    // GridMapEntity* entity_list = checkNeighbors(env, mock_agent.x, mock_agent.y, collision_offsets, &list_size, COLLISION_VISION_RANGE*COLLISION_VISION_RANGE);
-    // for (int i = 0; i < list_size ; i++) {
-    //     if(entity_list[i].entity_idx == -1) continue;
-    //     Entity* entity;
-    //     entity = &env->entities[entity_list[i].entity_idx];
-
-    //     // Check for offroad collision with road edges
-    //     if(entity->type == ROAD_EDGE) {
-    //         int geometry_idx = entity_list[i].geometry_idx;
-    //         float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
-    //         float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
-    //         for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
-    //             int next = (k + 1) % 4;
-    //             if (check_line_intersection(agent_corners[k], agent_corners[next], start, end)) {
-    //                 collided = OFFROAD;
-    //                 printf("Invalid Spawn: collision with road edge (Entity ID: %d)\n", entity->id);
-    //                 break;
-    //             }
-    //         }
-    //     }
-
-    //     if (collided == OFFROAD) break;
-    // }
-
-    // Cleanup
-    // free(entity_list);
-    return true; // No collisions detected
+    return true;
 }
 
 
@@ -786,8 +757,6 @@ Entity* load_map_binary(const char* filename, Drive* env) {
 void init_agents_random_start(Drive* env) {
     Entity* entities = env->entities;
     float goal_radius = env->goal_radius;
-    // int rel_neighbor_offsets_cnt = 0;
-    // int* rel_neighbor_offsets = get_relative_neighbor_offsets(env, goal_radius, &rel_neighbor_offsets_cnt);
 
     for (int agent_idx=0; agent_idx<env->num_entities; agent_idx++){
         if (entities[agent_idx].type != VEHICLE) {
@@ -865,21 +834,6 @@ void init_agents_random_start(Drive* env) {
                 continue;
             }
 
-            // Get goal point info
-            float goal_x = -0.5, goal_y = -0.5, goal_z = -0.5;
-            // bool is_valid_goal = get_valid_goal(
-            //     env,
-            //     start_x, start_y, start_z,
-            //     rand_grid_row, rand_grid_col,
-            //     rel_neighbor_offsets, rel_neighbor_offsets_cnt,
-            //     &goal_x, &goal_y, &goal_z
-            // );
-            // If no surrounding cell with goal curriculum, repeat
-            // if (!is_valid_goal) {
-            //     printf("No valid goals found around start point (%.2f, %.2f, %.2f)\n", start_x, start_y, start_z);
-            //     continue;
-            // }
-            // Else break with given start and goal
             agent.initialized = 1;
             agent.array_size = 1;
             agent.traj_x = (float*)calloc(agent.array_size, sizeof(float));
@@ -904,9 +858,6 @@ void init_agents_random_start(Drive* env) {
             agent.height = env->vehicle_height;
             agent.width = env->vehicle_width;
             agent.length = env->vehicle_length;
-            agent.goal_position_x = goal_x;
-            agent.goal_position_y = goal_y;
-            agent.goal_position_z = goal_z;
 
             agent.mark_as_expert = 0;
             agent.goal_radius = goal_radius;
@@ -915,8 +866,6 @@ void init_agents_random_start(Drive* env) {
         entities[agent_idx] = agent;
 
     }
-
-    // free(rel_neighbor_offsets);
 }
 
 void set_start_position(Drive* env){
@@ -1241,8 +1190,6 @@ void init_grid_map(Drive* env){
     for(int i = 0; i < env->num_entities; i++){
         if(env->entities[i].type > 3 && env->entities[i].type < 7){
             for(int j = 0; j < env->entities[i].array_size - 1; j++){
-                // float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
-                // float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
                 float x_center = env->entities[i].traj_x[j];
                 float y_center = env->entities[i].traj_y[j];
                 int grid_index = getGridIndex(env, x_center, y_center);
@@ -1274,8 +1221,6 @@ void init_grid_map(Drive* env){
     for(int i = 0; i < env->num_entities; i++){
         if(env->entities[i].type > 3 && env->entities[i].type < 7){         // NOTE: Only Road Edges, Lines, and Lanes in grid map
             for(int j = 0; j < env->entities[i].array_size - 1; j++){
-                // float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j+1]) / 2;
-                // float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j+1]) / 2;
                 float x_center = env->entities[i].traj_x[j];
                 float y_center = env->entities[i].traj_y[j];
                 int grid_index = getGridIndex(env, x_center, y_center);
