@@ -350,6 +350,7 @@ int eval_gif(const char* map_name, const char* policy_name, const char* ref_poli
     DriveNet* adv_net = NULL;
     Weights* weights = NULL;
     Weights* ref_weights = NULL;
+    int sdc_active_idx = -1;  // SDC's index in active_agent_indices
 
     printf("Active agents in map: %d\n", env.active_agent_count);
 
@@ -361,7 +362,26 @@ int eval_gif(const char* map_name, const char* policy_name, const char* ref_poli
             return -1;
         }
 
-        printf("Adversarial mode: SDC index=%d\n", sdc_index);
+        // Find SDC's index in active_agent_indices from sdc_track_index (entity index)
+        // If --sdc-index was provided, use it; otherwise compute from sdc_track_index
+        if (sdc_index >= 0) {
+            sdc_active_idx = sdc_index;
+        } else {
+            // Find which active agent corresponds to sdc_track_index
+            for (int i = 0; i < env.active_agent_count; i++) {
+                if (env.active_agent_indices[i] == env.sdc_track_index) {
+                    sdc_active_idx = i;
+                    break;
+                }
+            }
+        }
+
+        if (sdc_active_idx < 0 || sdc_active_idx >= env.active_agent_count) {
+            printf("Warning: SDC (entity %d) not found in active agents, using agent 0 as SDC\n", env.sdc_track_index);
+            sdc_active_idx = 0;
+        }
+
+        printf("Adversarial mode: SDC active_idx=%d (entity_idx=%d)\n", sdc_active_idx, env.sdc_track_index);
         printf("  ref_policy (SDC): %s\n", ref_policy_name);
         printf("  adv_policy (adversaries): %s\n", policy_name);
 
@@ -447,7 +467,7 @@ int eval_gif(const char* map_name, const char* policy_name, const char* ref_poli
             }
             if (adversarial_mode) {
                 forward_adversarial(ref_net, adv_net, env.observations, (int*)env.actions,
-                                   env.active_agent_count, sdc_index, obs_size_with_target,
+                                   env.active_agent_count, sdc_active_idx, obs_size_with_target,
                                    obs_size_without_target, target_features);
             } else {
                 forward(net, env.observations, (int*)env.actions);
@@ -473,7 +493,7 @@ int eval_gif(const char* map_name, const char* policy_name, const char* ref_poli
             }
             if (adversarial_mode) {
                 forward_adversarial(ref_net, adv_net, env.observations, (int*)env.actions,
-                                   env.active_agent_count, sdc_index, obs_size_with_target,
+                                   env.active_agent_count, sdc_active_idx, obs_size_with_target,
                                    obs_size_without_target, target_features);
             } else {
                 forward(net, env.observations, (int*)env.actions);

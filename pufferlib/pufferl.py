@@ -881,6 +881,7 @@ class PuffeRL:
                                 path=adv_bin_path,
                                 silent=True,
                             )
+                            # C visualizer computes SDC index from sdc_track_index in the map file
                             pufferlib.utils.render_videos(
                                 self.config,
                                 self.vecenv,
@@ -889,7 +890,6 @@ class PuffeRL:
                                 self.global_step,
                                 adv_bin_path,
                                 ref_bin_path=ref_bin_path,
-                                sdc_index=self.sdc_index,
                             )
                         else:
                             # Standard mode: single policy

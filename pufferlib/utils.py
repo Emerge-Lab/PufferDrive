@@ -167,7 +167,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {type(e).__name__}: {e}")
 
 
-def render_videos(config, vecenv, logger, epoch, global_step, bin_path, ref_bin_path=None, sdc_index=0):
+def render_videos(config, vecenv, logger, epoch, global_step, bin_path, ref_bin_path=None):
     """
     Generate and log training videos using C-based rendering.
 
@@ -179,7 +179,6 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path, ref_bin_
         global_step: Current global training step
         bin_path: Path to the exported .bin model weights file (adv_policy in adversarial mode)
         ref_bin_path: Path to the ref_policy weights (for adversarial mode, None otherwise)
-        sdc_index: Index of the SDC agent (for adversarial mode)
 
     Returns:
         None. Prints error messages if rendering fails.
@@ -223,7 +222,6 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path, ref_bin_
         if adversarial_mode:
             base_cmd.extend(["--adversarial"])
             base_cmd.extend(["--ref-policy", expected_ref_weights_path])
-            base_cmd.extend(["--sdc-index", str(sdc_index)])
 
         # Render config flags
         if config.get("show_grid", False):
