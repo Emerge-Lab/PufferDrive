@@ -72,8 +72,12 @@ class Drive(pufferlib.PufferEnv):
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
 
+        # TARGET_FEATURES is always included in observation (zeros for agents without targets)
+        # This ensures fixed observation size for all agents
+        self.target_features = binding.TARGET_FEATURES
         self.num_obs = (
             self.ego_features
+            + self.target_features  # Always included for fixed buffer layout
             + self.max_partner_objects * self.partner_features
             + self.max_road_objects * self.road_features
         )
@@ -192,6 +196,7 @@ class Drive(pufferlib.PufferEnv):
             )
             env_ids.append(env_id)
 
+        self.env_ids = env_ids  # Store individual env handles for direct access
         self.c_envs = binding.vectorize(*env_ids)
 
     def reset(self, seed=0):
@@ -266,6 +271,7 @@ class Drive(pufferlib.PufferEnv):
                         map_dir=self.map_dir,
                     )
                     env_ids.append(env_id)
+                self.env_ids = env_ids  # Store individual env handles for direct access
                 self.c_envs = binding.vectorize(*env_ids)
 
                 binding.vec_reset(self.c_envs, seed)
@@ -376,7 +382,7 @@ class Drive(pufferlib.PufferEnv):
         Returns list of offsets where each agent's observation starts in the flat buffer.
         Length is active_agent_count + 1 (last element is total size).
         """
-        return binding.get_agent_obs_offsets(self.c_envs[env_idx])
+        return binding.get_agent_obs_offsets(self.env_ids[env_idx])
 
     def set_targets(self, env_idx, target_indices):
         """Set target assignments for adversarial training.
@@ -386,7 +392,7 @@ class Drive(pufferlib.PufferEnv):
             target_indices: List of entity indices (one per active agent)
                            -1 means no target, >=0 means target that entity
         """
-        binding.set_targets(self.c_envs[env_idx], target_indices)
+        binding.set_targets(self.env_ids[env_idx], target_indices)
 
 
 def calculate_area(p1, p2, p3):

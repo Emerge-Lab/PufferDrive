@@ -1825,15 +1825,10 @@ void compute_observations(Drive* env) {
     int offset = 0;
     for (int i = 0; i < env->active_agent_count; i++) {
         env->agent_obs_offsets[i] = offset;
-        Entity* ego = &env->entities[env->active_agent_indices[i]];
 
-        // Compute this agent's observation size
-        int agent_obs_size = ego_dim;
-        if (ego->has_target) {
-            agent_obs_size += TARGET_FEATURES;  // Add target slot only if this agent has target
-        }
-        agent_obs_size += PARTNER_FEATURES * (MAX_AGENTS - 1);
-        agent_obs_size += ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+        // Fixed observation size for all agents (always include TARGET_FEATURES slot)
+        // This ensures consistent buffer layout for PufferLib
+        int agent_obs_size = ego_dim + TARGET_FEATURES + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
 
         offset += agent_obs_size;
     }
@@ -1879,33 +1874,33 @@ void compute_observations(Drive* env) {
 
         int obs_idx = ego_dim;
 
-        // Target observation (only if THIS agent has a target)
-        if (ego_entity->has_target) {
-            if (ego_entity->target_agent_idx >= 0 && ego_entity->target_agent_idx < env->num_entities) {
-                Entity* target = &env->entities[ego_entity->target_agent_idx];
-                if (target->x != INVALID_POSITION && target->respawn_timestep == -1) {
-                    float dx = target->x - ego_entity->x;
-                    float dy = target->y - ego_entity->y;
-                    float rel_x = dx * cos_heading + dy * sin_heading;
-                    float rel_y = -dx * sin_heading + dy * cos_heading;
-                    float rel_heading_x = target->heading_x * ego_entity->heading_x +
-                                          target->heading_y * ego_entity->heading_y;
-                    float rel_heading_y = target->heading_y * ego_entity->heading_x -
-                                          target->heading_x * ego_entity->heading_y;
-                    float target_speed = sqrtf(target->vx * target->vx + target->vy * target->vy);
+        // Target observation slot (always present for fixed observation size)
+        // If agent has a target, fill with target info; otherwise leave as zeros
+        if (ego_entity->has_target && ego_entity->target_agent_idx >= 0 && ego_entity->target_agent_idx < env->num_entities) {
+            Entity* target = &env->entities[ego_entity->target_agent_idx];
+            if (target->x != INVALID_POSITION && target->respawn_timestep == -1) {
+                float dx = target->x - ego_entity->x;
+                float dy = target->y - ego_entity->y;
+                float rel_x = dx * cos_heading + dy * sin_heading;
+                float rel_y = -dx * sin_heading + dy * cos_heading;
+                float rel_heading_x = target->heading_x * ego_entity->heading_x +
+                                      target->heading_y * ego_entity->heading_y;
+                float rel_heading_y = target->heading_y * ego_entity->heading_x -
+                                      target->heading_x * ego_entity->heading_y;
+                float target_speed = sqrtf(target->vx * target->vx + target->vy * target->vy);
 
-                    obs[obs_idx + 0] = rel_x * 0.02f;
-                    obs[obs_idx + 1] = rel_y * 0.02f;
-                    obs[obs_idx + 2] = target->width / MAX_VEH_WIDTH;
-                    obs[obs_idx + 3] = target->length / MAX_VEH_LEN;
-                    obs[obs_idx + 4] = rel_heading_x;
-                    obs[obs_idx + 5] = rel_heading_y;
-                    obs[obs_idx + 6] = target_speed / MAX_SPEED;
-                }
+                obs[obs_idx + 0] = rel_x * 0.02f;
+                obs[obs_idx + 1] = rel_y * 0.02f;
+                obs[obs_idx + 2] = target->width / MAX_VEH_WIDTH;
+                obs[obs_idx + 3] = target->length / MAX_VEH_LEN;
+                obs[obs_idx + 4] = rel_heading_x;
+                obs[obs_idx + 5] = rel_heading_y;
+                obs[obs_idx + 6] = target_speed / MAX_SPEED;
             }
-            obs_idx += TARGET_FEATURES;  // Move index forward only if agent has target
+            // else: target not valid, leave as zeros (buffer was zeroed)
         }
-        // Note: if agent has no target, obs_idx stays at ego_dim (no target slot added)
+        // else: no target, leave TARGET_FEATURES as zeros (buffer was zeroed)
+        obs_idx += TARGET_FEATURES;  // Always advance past target slot
 
         // Relative Pos of other cars
         int cars_seen = 0;

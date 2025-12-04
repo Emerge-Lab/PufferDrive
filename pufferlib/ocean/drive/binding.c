@@ -1,12 +1,21 @@
+// Include Python.h first for PyObject type
+#include <Python.h>
+
 #include "drive.h"
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
-#include "../env_binding.h"
 
-// Custom method implementations
+// Forward declare custom methods
 static PyObject* get_agent_obs_offsets(PyObject* self, PyObject* args);
 static PyObject* set_targets(PyObject* self, PyObject* args);
+
+// Define custom methods for the Python module
+#define MY_METHODS \
+    {"get_agent_obs_offsets", (PyCFunction)get_agent_obs_offsets, METH_VARARGS, "Get heterogeneous observation offsets"}, \
+    {"set_targets", (PyCFunction)set_targets, METH_VARARGS, "Set target assignments for adversarial training"}
+
+#include "../env_binding.h"
 
 static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
     PyObject* obs = PyDict_GetItemString(kwargs, "observations");
@@ -327,8 +336,3 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
     return 0;
 }
-
-#undef MY_METHODS
-#define MY_METHODS \
-    {"get_agent_obs_offsets", (PyCFunction)get_agent_obs_offsets, METH_VARARGS, "Get heterogeneous observation offsets"}, \
-    {"set_targets", (PyCFunction)set_targets, METH_VARARGS, "Set target assignments for adversarial training"}

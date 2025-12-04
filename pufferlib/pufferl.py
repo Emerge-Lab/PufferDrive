@@ -441,54 +441,46 @@ class PuffeRL:
 
                         self.sdc_indices = self._cached_sdc_indices
 
-                    # Extract heterogeneous observations using offsets
-                    # For each agent in batch, get its observation from the packed buffer
+                    # Separate observations by SDC vs adversarial agents
+                    # SDC (ref_policy) gets observations WITHOUT target features
+                    # Adversaries (adv_policy) get observations WITH target features
                     o_ref_list = []
                     o_adv_list = []
                     ref_indices = []
                     adv_indices = []
 
-                    # Get observation offsets for first environment in batch (assume all same structure)
-                    # In practice, we need offsets per environment
-                    obs_offsets_per_env = {}
-                    for env_idx in range(
-                        env_id.start // (self.agent_offsets[1] - self.agent_offsets[0]),
-                        env_id.stop // (self.agent_offsets[1] - self.agent_offsets[0]) + 1,
-                    ):
-                        if env_idx < len(self.vecenv.driver_env.c_envs):
-                            obs_offsets_per_env[env_idx] = self.vecenv.driver_env.get_agent_obs_offsets(env_idx)
+                    # Get observation layout info from environment
+                    ego_features = self.vecenv.driver_env.ego_features
+                    target_features = self.vecenv.driver_env.target_features
 
                     for global_idx in range(env_id.start, env_id.stop):
                         # Find which environment this agent belongs to
                         env_idx = None
-                        local_idx = None
                         for e_idx in range(self.num_envs):
                             env_start = self.agent_offsets[e_idx]
                             env_end = self.agent_offsets[e_idx + 1]
                             if env_start <= global_idx < env_end:
                                 env_idx = e_idx
-                                local_idx = global_idx - env_start
                                 break
 
                         if env_idx is None:
                             continue
 
-                        # Get observation offsets for this environment
-                        if env_idx not in obs_offsets_per_env:
-                            obs_offsets_per_env[env_idx] = self.vecenv.driver_env.get_agent_obs_offsets(env_idx)
-
-                        obs_offsets = obs_offsets_per_env[env_idx]
-                        obs_start = obs_offsets[local_idx]
-                        obs_end = obs_offsets[local_idx + 1]
-
-                        # Extract this agent's observation
-                        agent_obs = o_device[obs_start:obs_end]
+                        # Get this agent's observation (o_device is 2D: [num_agents, num_obs])
+                        agent_obs = o_device[global_idx]
 
                         # Group by SDC vs adversarial
                         if global_idx == self.sdc_indices[env_idx].item():
-                            o_ref_list.append(agent_obs)
+                            # SDC: Remove target features to match ref_policy's expected input
+                            # Observation layout: [ego_features | TARGET_FEATURES | partner | road]
+                            # Ref policy expects: [ego_features | partner | road]
+                            obs_for_ref = torch.cat(
+                                [agent_obs[:ego_features], agent_obs[ego_features + target_features :]]
+                            )
+                            o_ref_list.append(obs_for_ref)
                             ref_indices.append(global_idx - env_id.start)
                         else:
+                            # Adversary: Use full observation including target
                             o_adv_list.append(agent_obs)
                             adv_indices.append(global_idx - env_id.start)
 
