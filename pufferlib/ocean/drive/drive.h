@@ -74,6 +74,7 @@
 
 #define ROAD_FEATURES 7
 #define PARTNER_FEATURES 7
+#define TARGET_FEATURES 7
 
 // Ego features depend on dynamics model
 #define EGO_FEATURES_CLASSIC 7
@@ -205,6 +206,10 @@ struct Entity {
     float jerk_lat;
     float steering_angle;
     float wheelbase;
+
+    // Target tracking (for adversarial training)
+    int has_target;
+    int target_agent_idx;
 };
 
 void free_entity(Entity* entity){
@@ -340,6 +345,8 @@ struct Drive {
     int* tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    int* agent_obs_offsets;  // Offset into observation buffer for each agent (heterogeneous sizes)
+    int total_obs_size;      // Total size of heterogeneous observation buffer
 };
 
 void add_log(Drive* env) {
@@ -1466,7 +1473,14 @@ void init_goal_positions(Drive* env){
 void init(Drive* env){
     env->human_agent_idx = 0;
     env->timestep = 0;
+    env->agent_obs_offsets = NULL;
+    env->total_obs_size = 0;
     env->entities = load_map_binary(env->map_name, env);
+    // Initialize target tracking fields for all entities
+    for (int i = 0; i < env->num_entities; i++) {
+        env->entities[i].has_target = 0;
+        env->entities[i].target_agent_idx = -1;
+    }
     set_means(env);
     init_grid_map(env);
     if (env->goal_behavior==GOAL_GENERATE_NEW) init_topology_graph(env);
@@ -1509,6 +1523,9 @@ void c_close(Drive* env){
     freeTopologyGraph(env->topology_graph);
     // free(env->map_name);
     free(env->ini_file);
+    if (env->agent_obs_offsets != NULL) {
+        free(env->agent_obs_offsets);
+    }
 }
 
 void allocate(Drive* env){
@@ -1799,11 +1816,36 @@ void c_get_road_edge_polylines(Drive* env, float* x_out, float* y_out, int* leng
 
 void compute_observations(Drive* env) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    int max_obs = ego_dim + PARTNER_FEATURES*(MAX_AGENTS - 1) + ROAD_FEATURES*MAX_ROAD_SEGMENT_OBSERVATIONS;
-    memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
-    float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
+
+    // Step 1: Compute per-agent observation sizes and offsets (heterogeneous)
+    if (env->agent_obs_offsets == NULL) {
+        env->agent_obs_offsets = (int*)malloc((env->active_agent_count + 1) * sizeof(int));
+    }
+
+    int offset = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        env->agent_obs_offsets[i] = offset;
+        Entity* ego = &env->entities[env->active_agent_indices[i]];
+
+        // Compute this agent's observation size
+        int agent_obs_size = ego_dim;
+        if (ego->has_target) {
+            agent_obs_size += TARGET_FEATURES;  // Add target slot only if this agent has target
+        }
+        agent_obs_size += PARTNER_FEATURES * (MAX_AGENTS - 1);
+        agent_obs_size += ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+
+        offset += agent_obs_size;
+    }
+    env->agent_obs_offsets[env->active_agent_count] = offset;  // End marker
+    env->total_obs_size = offset;
+
+    // Step 2: Zero out entire heterogeneous buffer
+    memset(env->observations, 0, env->total_obs_size * sizeof(float));
+
+    // Step 3: Fill observations for each agent
     for(int i = 0; i < env->active_agent_count; i++) {
-        float* obs = &observations[i][0];
+        float* obs = &env->observations[env->agent_obs_offsets[i]];
         Entity* ego_entity = &env->entities[env->active_agent_indices[i]];
         if(ego_entity->type > 3) break;
 
@@ -1828,7 +1870,6 @@ void compute_observations(Drive* env) {
 
         if (env->dynamics_model == JERK) {
             obs[6] = ego_entity->steering_angle / M_PI;
-            // Asymmetric normalization for a_long to match action space
             obs[7] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
             obs[8] = ego_entity->a_lat / JERK_LAT[2];
             obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
@@ -1836,8 +1877,37 @@ void compute_observations(Drive* env) {
             obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
         }
 
-        // Relative Pos of other cars
         int obs_idx = ego_dim;
+
+        // Target observation (only if THIS agent has a target)
+        if (ego_entity->has_target) {
+            if (ego_entity->target_agent_idx >= 0 && ego_entity->target_agent_idx < env->num_entities) {
+                Entity* target = &env->entities[ego_entity->target_agent_idx];
+                if (target->x != INVALID_POSITION && target->respawn_timestep == -1) {
+                    float dx = target->x - ego_entity->x;
+                    float dy = target->y - ego_entity->y;
+                    float rel_x = dx * cos_heading + dy * sin_heading;
+                    float rel_y = -dx * sin_heading + dy * cos_heading;
+                    float rel_heading_x = target->heading_x * ego_entity->heading_x +
+                                          target->heading_y * ego_entity->heading_y;
+                    float rel_heading_y = target->heading_y * ego_entity->heading_x -
+                                          target->heading_x * ego_entity->heading_y;
+                    float target_speed = sqrtf(target->vx * target->vx + target->vy * target->vy);
+
+                    obs[obs_idx + 0] = rel_x * 0.02f;
+                    obs[obs_idx + 1] = rel_y * 0.02f;
+                    obs[obs_idx + 2] = target->width / MAX_VEH_WIDTH;
+                    obs[obs_idx + 3] = target->length / MAX_VEH_LEN;
+                    obs[obs_idx + 4] = rel_heading_x;
+                    obs[obs_idx + 5] = rel_heading_y;
+                    obs[obs_idx + 6] = target_speed / MAX_SPEED;
+                }
+            }
+            obs_idx += TARGET_FEATURES;  // Move index forward only if agent has target
+        }
+        // Note: if agent has no target, obs_idx stays at ego_dim (no target slot added)
+
+        // Relative Pos of other cars
         int cars_seen = 0;
         for(int j = 0; j < MAX_AGENTS; j++) {
             int index = -1;

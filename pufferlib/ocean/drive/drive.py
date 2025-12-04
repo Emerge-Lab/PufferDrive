@@ -139,7 +139,7 @@ class Drive(pufferlib.PufferEnv):
         self.max_controlled_agents = int(max_controlled_agents)
 
         # Iterate through all maps to count total agents that can be initialized for each map
-        agent_offsets, map_ids, num_envs, sdc_indices = binding.shared(
+        agent_offsets, map_ids, num_envs, sdc_indices, sdc_entity_indices = binding.shared(
             map_dir=map_dir,
             num_agents=num_agents,
             num_maps=num_maps,
@@ -155,6 +155,7 @@ class Drive(pufferlib.PufferEnv):
         self.map_ids = map_ids
         self.num_envs = num_envs
         self.sdc_indices = sdc_indices
+        self.sdc_entity_indices = sdc_entity_indices
         super().__init__(buf=buf)
         env_ids = []
         for i in range(num_envs):
@@ -214,7 +215,7 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs, sdc_indices = binding.shared(
+                agent_offsets, map_ids, num_envs, sdc_indices, sdc_entity_indices = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     init_mode=self.init_mode,
@@ -229,6 +230,7 @@ class Drive(pufferlib.PufferEnv):
                 self.map_ids = map_ids
                 self.num_envs = num_envs
                 self.sdc_indices = sdc_indices
+                self.sdc_entity_indices = sdc_entity_indices
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):
@@ -367,6 +369,24 @@ class Drive(pufferlib.PufferEnv):
 
     def close(self):
         binding.vec_close(self.c_envs)
+
+    def get_agent_obs_offsets(self, env_idx=0):
+        """Get heterogeneous observation offsets for a specific environment.
+
+        Returns list of offsets where each agent's observation starts in the flat buffer.
+        Length is active_agent_count + 1 (last element is total size).
+        """
+        return binding.get_agent_obs_offsets(self.c_envs[env_idx])
+
+    def set_targets(self, env_idx, target_indices):
+        """Set target assignments for adversarial training.
+
+        Args:
+            env_idx: Environment index
+            target_indices: List of entity indices (one per active agent)
+                           -1 means no target, >=0 means target that entity
+        """
+        binding.set_targets(self.c_envs[env_idx], target_indices)
 
 
 def calculate_area(p1, p2, p3):

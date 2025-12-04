@@ -4,6 +4,10 @@
 #define MY_PUT
 #include "../env_binding.h"
 
+// Custom method implementations
+static PyObject* get_agent_obs_offsets(PyObject* self, PyObject* args);
+static PyObject* set_targets(PyObject* self, PyObject* args);
+
 static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
     PyObject* obs = PyDict_GetItemString(kwargs, "observations");
     if (!PyObject_TypeCheck(obs, &PyArray_Type)) {
@@ -83,7 +87,8 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int maps_checked = 0;
     PyObject* agent_offsets = PyList_New(max_envs+1);
     PyObject* map_ids = PyList_New(max_envs);
-    PyObject* sdc_indices = PyList_New(max_envs);  // SDC global indices for each env
+    PyObject* sdc_indices = PyList_New(max_envs);  // SDC global agent indices for each env
+    PyObject* sdc_entity_indices = PyList_New(max_envs);  // SDC entity indices for each env
     // getting env count
     while(total_agent_count < num_agents && env_count < max_envs){
         char map_file[100];
@@ -114,6 +119,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
                 Py_DECREF(agent_offsets);
                 Py_DECREF(map_ids);
                 Py_DECREF(sdc_indices);
+                Py_DECREF(sdc_entity_indices);
                 char error_msg[256];
                 sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
                 PyErr_SetString(PyExc_ValueError, error_msg);
@@ -159,6 +165,10 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         PyObject* sdc_idx_obj = PyLong_FromLong(sdc_global_idx);
         PyList_SetItem(sdc_indices, env_count, sdc_idx_obj);
 
+        // Store SDC entity index (sdc_track_index)
+        PyObject* sdc_entity_obj = PyLong_FromLong(env->sdc_track_index);
+        PyList_SetItem(sdc_entity_indices, env_count, sdc_entity_obj);
+
         total_agent_count += env->active_agent_count;
         env_count++;
         for(int j=0;j<env->num_entities;j++) {
@@ -181,11 +191,13 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     PyObject* resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject* resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
     PyObject* resized_sdc_indices = PyList_GetSlice(sdc_indices, 0, env_count);
-    PyObject* tuple = PyTuple_New(4);
+    PyObject* resized_sdc_entity_indices = PyList_GetSlice(sdc_entity_indices, 0, env_count);
+    PyObject* tuple = PyTuple_New(5);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
     PyTuple_SetItem(tuple, 3, resized_sdc_indices);
+    PyTuple_SetItem(tuple, 4, resized_sdc_entity_indices);
     return tuple;
 }
 
@@ -233,6 +245,69 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     return 0;
 }
 
+// Get observation offsets for heterogeneous observations
+static PyObject* get_agent_obs_offsets(PyObject* self, PyObject* args) {
+    Env* env = unpack_env(args);
+    if (!env) return NULL;
+
+    if (env->agent_obs_offsets == NULL) {
+        // Not yet computed, return empty list
+        return PyList_New(0);
+    }
+
+    // Return list of offsets (length = active_agent_count + 1)
+    PyObject* offsets_list = PyList_New(env->active_agent_count + 1);
+    for (int i = 0; i <= env->active_agent_count; i++) {
+        PyObject* offset_obj = PyLong_FromLong(env->agent_obs_offsets[i]);
+        PyList_SetItem(offsets_list, i, offset_obj);
+    }
+
+    return offsets_list;
+}
+
+// Set target assignments for adversarial training
+static PyObject* set_targets(PyObject* self, PyObject* args) {
+    // First element is env handle, second is target_indices list
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "set_targets requires 2 arguments (env_handle, target_indices)");
+        return NULL;
+    }
+
+    PyObject* handle_obj = PyTuple_GetItem(args, 0);
+    Env* env = (Env*)PyLong_AsVoidPtr(handle_obj);
+    if (!env) {
+        PyErr_SetString(PyExc_ValueError, "Invalid env handle");
+        return NULL;
+    }
+
+    PyObject* target_indices_list = PyTuple_GetItem(args, 1);
+
+    if (!PyList_Check(target_indices_list)) {
+        PyErr_SetString(PyExc_TypeError, "target_indices must be a list");
+        return NULL;
+    }
+
+    int list_size = PyList_Size(target_indices_list);
+    if (list_size != env->active_agent_count) {
+        PyErr_Format(PyExc_ValueError,
+            "target_indices length (%d) must match active_agent_count (%d)",
+            list_size, env->active_agent_count);
+        return NULL;
+    }
+
+    // Set target for each active agent
+    for (int i = 0; i < env->active_agent_count; i++) {
+        PyObject* target_obj = PyList_GetItem(target_indices_list, i);
+        int target_idx = PyLong_AsLong(target_obj);
+
+        int entity_idx = env->active_agent_indices[i];
+        env->entities[entity_idx].target_agent_idx = target_idx;
+        env->entities[entity_idx].has_target = (target_idx >= 0) ? 1 : 0;
+    }
+
+    Py_RETURN_NONE;
+}
+
 static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
@@ -248,3 +323,8 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
     return 0;
 }
+
+#undef MY_METHODS
+#define MY_METHODS \
+    {"get_agent_obs_offsets", (PyCFunction)get_agent_obs_offsets, METH_VARARGS, "Get heterogeneous observation offsets"}, \
+    {"set_targets", (PyCFunction)set_targets, METH_VARARGS, "Set target assignments for adversarial training"}
