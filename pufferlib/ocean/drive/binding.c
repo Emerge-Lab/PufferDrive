@@ -162,6 +162,10 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
             }
             // else: SDC would be truncated, mark as inactive (-1)
         }
+        // If SDC not found or truncated, fallback to agent0 (first agent in this env)
+        if(sdc_global_idx == -1) {
+            sdc_global_idx = total_agent_count;
+        }
         PyObject* sdc_idx_obj = PyLong_FromLong(sdc_global_idx);
         PyList_SetItem(sdc_indices, env_count, sdc_idx_obj);
 

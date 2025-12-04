@@ -215,17 +215,8 @@ class PuffeRL:
                 self.agent_offsets = vecenv.driver_env.agent_offsets
                 self.num_envs = vecenv.driver_env.num_envs
                 self.sdc_indices = torch.tensor(vecenv.driver_env.sdc_indices, device=device, dtype=torch.int64)
-            elif hasattr(vecenv.driver_env, "agent_offsets"):
-                # Fallback to agent0 if sdc_indices not available
-                self.agent_offsets = vecenv.driver_env.agent_offsets
-                self.num_envs = vecenv.driver_env.num_envs
-                self.sdc_indices = torch.tensor(
-                    [self.agent_offsets[i] for i in range(self.num_envs)], device=device, dtype=torch.int64
-                )
             else:
-                raise pufferlib.APIUsageError(
-                    "Adversarial mode requires vecenv.driver_env.sdc_indices or agent_offsets"
-                )
+                raise pufferlib.APIUsageError("Adversarial mode requires vecenv.driver_env.sdc_indices")
 
             # Track completed episode returns separately for ref vs adv agents
             self.ref_episode_returns = []
@@ -571,10 +562,6 @@ class PuffeRL:
                     # Loop through each environment
                     for env_idx in range(self.num_envs):
                         sdc_global_idx = self.sdc_indices[env_idx].item()
-
-                        # Skip if SDC is not an active agent in this environment
-                        if sdc_global_idx < 0:
-                            continue
 
                         # Check if this environment's SDC is in the current batch
                         if env_id.start <= sdc_global_idx < env_id.stop:
@@ -1541,15 +1528,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         adversarial_mode = isinstance(policy, tuple)
         if adversarial_mode:
             ref_policy, adv_policy = policy
-            # Compute SDC indices (use sdc_indices if available, fall back to agent0)
-            agent_offsets = vecenv.driver_env.agent_offsets
-            num_envs = vecenv.driver_env.num_envs
-            if hasattr(vecenv.driver_env, "sdc_indices"):
-                sdc_indices = torch.tensor(vecenv.driver_env.sdc_indices, device=device, dtype=torch.int64)
-            else:
-                sdc_indices = torch.tensor(
-                    [agent_offsets[i] for i in range(num_envs)], device=device, dtype=torch.int64
-                )
+            # Compute SDC indices
+            sdc_indices = torch.tensor(vecenv.driver_env.sdc_indices, device=device, dtype=torch.int64)
 
         state = {}
         ref_state = {}
