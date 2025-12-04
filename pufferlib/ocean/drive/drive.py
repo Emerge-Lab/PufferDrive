@@ -225,6 +225,7 @@ class Drive(pufferlib.PufferEnv):
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
                     map_dir=self.map_dir,
+                    use_all_maps=False,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
