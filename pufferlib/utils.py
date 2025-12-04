@@ -167,7 +167,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {type(e).__name__}: {e}")
 
 
-def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
+def render_videos(config, vecenv, logger, epoch, global_step, bin_path, ref_bin_path=None, sdc_index=0):
     """
     Generate and log training videos using C-based rendering.
 
@@ -177,13 +177,21 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         logger: Logger object with run_id and optional wandb attribute
         epoch: Current training epoch
         global_step: Current global training step
-        bin_path: Path to the exported .bin model weights file
+        bin_path: Path to the exported .bin model weights file (adv_policy in adversarial mode)
+        ref_bin_path: Path to the ref_policy weights (for adversarial mode, None otherwise)
+        sdc_index: Index of the SDC agent (for adversarial mode)
 
     Returns:
         None. Prints error messages if rendering fails.
     """
+    adversarial_mode = ref_bin_path is not None
+
     if not os.path.exists(bin_path):
         print(f"Binary weights file does not exist: {bin_path}")
+        return
+
+    if adversarial_mode and not os.path.exists(ref_bin_path):
+        print(f"Reference policy weights file does not exist: {ref_bin_path}")
         return
 
     run_id = logger.run_id
@@ -197,8 +205,11 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
         # Copy the binary weights to the expected location
         expected_weights_path = "resources/drive/puffer_drive_weights.bin"
+        expected_ref_weights_path = "resources/drive/puffer_drive_ref_weights.bin"
         os.makedirs(os.path.dirname(expected_weights_path), exist_ok=True)
         shutil.copy2(bin_path, expected_weights_path)
+        if adversarial_mode:
+            shutil.copy2(ref_bin_path, expected_ref_weights_path)
 
         # TODO: Fix memory leaks so that this is not needed
         # Suppress AddressSanitizer exit code (temp)
@@ -207,6 +218,12 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
         # Base command (without map/output paths)
         base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+
+        # Adversarial mode flags
+        if adversarial_mode:
+            base_cmd.extend(["--adversarial"])
+            base_cmd.extend(["--ref-policy", expected_ref_weights_path])
+            base_cmd.extend(["--sdc-index", str(sdc_index)])
 
         # Render config flags
         if config.get("show_grid", False):
@@ -322,6 +339,8 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         print(f"Failed to generate GIF: {e}")
 
     finally:
-        # Clean up bin weights file
+        # Clean up bin weights files
         if os.path.exists(expected_weights_path):
             os.remove(expected_weights_path)
+        if adversarial_mode and os.path.exists(expected_ref_weights_path):
+            os.remove(expected_ref_weights_path)

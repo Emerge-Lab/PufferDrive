@@ -203,7 +203,56 @@ static int make_gif_from_frames(const char *pattern, int fps,
 }
 
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
+// Forward pass for adversarial mode: ref_net for SDC, adv_net for other agents
+void forward_adversarial(DriveNet* ref_net, DriveNet* adv_net, float* observations, int* actions, int num_agents, int sdc_index, int obs_size_with_target, int obs_size_without_target, int target_features) {
+    // Temporary buffers for single-agent inference
+    float* sdc_obs = (float*)calloc(obs_size_without_target, sizeof(float));
+    float* adv_obs = (float*)calloc(obs_size_with_target, sizeof(float));
+    int sdc_action[2] = {0, 0};
+    int adv_action[2] = {0, 0};
+
+    int ego_dim = ref_net->ego_dim;
+
+    for (int i = 0; i < num_agents; i++) {
+        float* agent_obs = observations + i * obs_size_with_target;
+        int* agent_action = actions + i * 2;
+
+        if (i == sdc_index) {
+            // SDC uses ref_net (no target features)
+            // Copy ego features
+            memcpy(sdc_obs, agent_obs, ego_dim * sizeof(float));
+            // Skip target features, copy the rest (partner + road)
+            memcpy(sdc_obs + ego_dim, agent_obs + ego_dim + target_features,
+                   (obs_size_without_target - ego_dim) * sizeof(float));
+
+            // Run single-agent inference
+            // Temporarily set num_agents to 1 for ref_net
+            int orig_num_agents = ref_net->num_agents;
+            ref_net->num_agents = 1;
+            forward(ref_net, sdc_obs, sdc_action);
+            ref_net->num_agents = orig_num_agents;
+
+            agent_action[0] = sdc_action[0];
+            agent_action[1] = sdc_action[1];
+        } else {
+            // Adversary uses adv_net (with target features)
+            memcpy(adv_obs, agent_obs, obs_size_with_target * sizeof(float));
+
+            int orig_num_agents = adv_net->num_agents;
+            adv_net->num_agents = 1;
+            forward(adv_net, adv_obs, adv_action);
+            adv_net->num_agents = orig_num_agents;
+
+            agent_action[0] = adv_action[0];
+            agent_action[1] = adv_action[1];
+        }
+    }
+
+    free(sdc_obs);
+    free(adv_obs);
+}
+
+int eval_gif(const char* map_name, const char* policy_name, const char* ref_policy_name, int adversarial_mode, int sdc_index, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};  // Initialize to zero
@@ -295,9 +344,39 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     client->cyclist = LoadModel("resources/drive/cyclist.glb");
     client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
 
-    Weights* weights = load_weights(policy_name);
+    // Load policy weights and create network(s)
+    DriveNet* net = NULL;
+    DriveNet* ref_net = NULL;
+    DriveNet* adv_net = NULL;
+    Weights* weights = NULL;
+    Weights* ref_weights = NULL;
+
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet* net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+
+    if (adversarial_mode) {
+        // Adversarial mode: load both ref_policy (for SDC) and adv_policy (for adversaries)
+        if (ref_policy_name == NULL) {
+            fprintf(stderr, "Error: --ref-policy is required in adversarial mode\n");
+            CloseWindow();
+            return -1;
+        }
+
+        printf("Adversarial mode: SDC index=%d\n", sdc_index);
+        printf("  ref_policy (SDC): %s\n", ref_policy_name);
+        printf("  adv_policy (adversaries): %s\n", policy_name);
+
+        ref_weights = load_weights(ref_policy_name);
+        weights = load_weights(policy_name);
+
+        // ref_net: for SDC, has_target=0 (no target features)
+        ref_net = init_drivenet(ref_weights, 1, env.dynamics_model, 0);
+        // adv_net: for adversaries, has_target=1 (with target features)
+        adv_net = init_drivenet(weights, 1, env.dynamics_model, 1);
+    } else {
+        // Standard mode: single policy for all agents
+        weights = load_weights(policy_name);
+        net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, 0);
+    }
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     int log_trajectory = log_trajectories;
@@ -352,6 +431,12 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         }
     }
 
+    // Calculate observation sizes for adversarial mode
+    int ego_dim = (env.dynamics_model == JERK) ? 10 : 7;
+    int target_features = 7;  // TARGET_FEATURES
+    int obs_size_with_target = ego_dim + target_features + 63*7 + 200*7;
+    int obs_size_without_target = ego_dim + 63*7 + 200*7;
+
     if (render_topdown) {
         printf("Recording topdown view...\n");
         for(int i = 0; i < frame_count; i++) {
@@ -360,8 +445,13 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            int (*actions)[2] = (int(*)[2])env.actions;
-            forward(net, env.observations, (int*)env.actions);
+            if (adversarial_mode) {
+                forward_adversarial(ref_net, adv_net, env.observations, (int*)env.actions,
+                                   env.active_agent_count, sdc_index, obs_size_with_target,
+                                   obs_size_without_target, target_features);
+            } else {
+                forward(net, env.observations, (int*)env.actions);
+            }
             c_step(&env);
         }
 
@@ -381,8 +471,13 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
                 WriteFrame(&agent_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            int (*actions)[2] = (int(*)[2])env.actions;
-            forward(net, env.observations, (int*)env.actions);
+            if (adversarial_mode) {
+                forward_adversarial(ref_net, adv_net, env.observations, (int*)env.actions,
+                                   env.active_agent_count, sdc_index, obs_size_with_target,
+                                   obs_size_without_target, target_features);
+            } else {
+                forward(net, env.observations, (int*)env.actions);
+            }
             c_step(&env);
         }
     }
@@ -405,8 +500,15 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     // Clean up resources
     free(client);
     free_allocated(&env);
-    free_drivenet(net);
-    free(weights);
+    if (adversarial_mode) {
+        free_drivenet(ref_net);
+        free_drivenet(adv_net);
+        free(ref_weights);
+        free(weights);
+    } else {
+        free_drivenet(net);
+        free(weights);
+    }
     return 0;
 }
 
@@ -420,6 +522,9 @@ int main(int argc, char* argv[]) {
     int init_steps = 0;
     const char* map_name = NULL;
     const char* policy_name = "resources/drive/puffer_drive_weights.bin";
+    const char* ref_policy_name = NULL;  // For adversarial mode
+    int adversarial_mode = 0;
+    int sdc_index = 0;  // Which agent is the SDC (default: first agent)
     int max_controlled_agents = -1;
     int num_maps = 1;
     int scenario_length_cli = -1;
@@ -536,9 +641,27 @@ int main(int argc, char* argv[]) {
                 goal_behavior = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--adversarial") == 0) {
+            adversarial_mode = 1;
+        } else if (strcmp(argv[i], "--ref-policy") == 0) {
+            if (i + 1 < argc) {
+                ref_policy_name = argv[i + 1];
+                i++;
+            } else {
+                fprintf(stderr, "Error: --ref-policy option requires a policy file path\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--sdc-index") == 0) {
+            if (i + 1 < argc) {
+                sdc_index = atoi(argv[i + 1]);
+                i++;
+                if (sdc_index < 0) {
+                    sdc_index = 0;
+                }
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode, goal_behavior);
+    eval_gif(map_name, policy_name, ref_policy_name, adversarial_mode, sdc_index, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode, goal_behavior);
     return 0;
 }

@@ -855,23 +855,58 @@ class PuffeRL:
                 if model_files:
                     # Take the latest checkpoint
                     latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
 
                     # Export to .bin for rendering with raylib
                     try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
+                        if self.adversarial_mode:
+                            # Adversarial mode: export both ref_policy and adv_policy
+                            ref_bin_path = f"{model_dir}_ref.bin"
+                            adv_bin_path = f"{model_dir}_adv.bin"
 
-                        export(
-                            args=export_args,
-                            env_name=self.config["env"],
-                            vecenv=self.vecenv,
-                            policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
-                        )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
+                            # Export ref_policy (SDC policy, no target features)
+                            export(
+                                args={"env_name": self.config["env"], **self.config},
+                                env_name=self.config["env"],
+                                vecenv=self.vecenv,
+                                policy=self.ref_policy,
+                                path=ref_bin_path,
+                                silent=True,
+                            )
+                            # Export adv_policy (adversary policy, with target features)
+                            export(
+                                args={"env_name": self.config["env"], **self.config},
+                                env_name=self.config["env"],
+                                vecenv=self.vecenv,
+                                policy=self.uncompiled_policy,
+                                path=adv_bin_path,
+                                silent=True,
+                            )
+                            pufferlib.utils.render_videos(
+                                self.config,
+                                self.vecenv,
+                                self.logger,
+                                self.epoch,
+                                self.global_step,
+                                adv_bin_path,
+                                ref_bin_path=ref_bin_path,
+                                sdc_index=self.sdc_index,
+                            )
+                        else:
+                            # Standard mode: single policy
+                            bin_path = f"{model_dir}.bin"
+                            export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
+
+                            export(
+                                args=export_args,
+                                env_name=self.config["env"],
+                                vecenv=self.vecenv,
+                                policy=self.uncompiled_policy,
+                                path=bin_path,
+                                silent=True,
+                            )
+                            pufferlib.utils.render_videos(
+                                self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
+                            )
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
