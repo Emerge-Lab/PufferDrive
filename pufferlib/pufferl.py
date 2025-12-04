@@ -89,6 +89,7 @@ class PuffeRL:
         batch_size = config["batch_size"]
         horizon = config["bptt_horizon"]
         segments = batch_size // horizon
+        print(f'Total agents: {total_agents}, segments: {segments}, batch_size: {batch_size}, horizon: {horizon}')
         self.segments = segments
         if total_agents > segments:
             raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
@@ -127,10 +128,14 @@ class PuffeRL:
 
         # LSTM
         if config["use_rnn"]:
+            print("Using RNN policy states")
             n = vecenv.agents_per_batch
             h = policy.hidden_size
             self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
             self.lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+            print(f"Total agents: {total_agents}, agents_per_batch of {n}")
+            print(f"Initialized LSTM states for {len(self.lstm_h)} batches, {type(self.lstm_h)}, keys: {list(self.lstm_h.keys())}")
+            print(f"Initialized lstm_c for {len(self.lstm_c)} batches, {type(self.lstm_c)}, keys: {list(self.lstm_c.keys())}")
 
         # Minibatching & gradient accumulation
         minibatch_size = config["minibatch_size"]
@@ -281,6 +286,7 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                print(f'Action shape: {action.shape}, logprob shape: {logprob.shape}')
                 r = torch.clamp(r, -1, 1)
 
             profile("eval_copy", epoch)
@@ -297,7 +303,8 @@ class PuffeRL:
                     self.observations[batch_rows, l] = o
                 else:
                     self.observations[batch_rows, l] = o_device
-
+                print(f'Actions shape: {self.actions.shape}')
+                print(f'batch rows: {batch_rows}, l: {l}, obs shape: {self.observations[batch_rows, l].shape}')
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
                 self.rewards[batch_rows, l] = r
