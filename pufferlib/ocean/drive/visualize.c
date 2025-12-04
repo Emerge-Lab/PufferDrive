@@ -83,10 +83,10 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
 
     // Top-down orthographic camera
     Camera3D camera = {0};
-    camera.position = (Vector3){ 0.0f, 0.0f, 500.0f };  // above the scene
-    camera.target   = (Vector3){ 0.0f, 0.0f, 0.0f };  // look at origin
+    camera.position = (Vector3){ env->grid_map->top_left_x, env->grid_map->bottom_right_y, 500.0f };  // above the scene
+    camera.target   = (Vector3){ env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0.0f };  // look at origin
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
-    camera.fovy     = map_height;
+    camera.fovy     = 2*map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
 
     client->width = img_width;
