@@ -83,6 +83,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int maps_checked = 0;
     PyObject* agent_offsets = PyList_New(max_envs+1);
     PyObject* map_ids = PyList_New(max_envs);
+    PyObject* sdc_indices = PyList_New(max_envs);  // SDC global indices for each env
     // getting env count
     while(total_agent_count < num_agents && env_count < max_envs){
         char map_file[100];
@@ -112,6 +113,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
                 free(env);
                 Py_DECREF(agent_offsets);
                 Py_DECREF(map_ids);
+                Py_DECREF(sdc_indices);
                 char error_msg[256];
                 sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
                 PyErr_SetString(PyExc_ValueError, error_msg);
@@ -135,6 +137,28 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         // Store agent offset
         PyObject* offset = PyLong_FromLong(total_agent_count);
         PyList_SetItem(agent_offsets, env_count, offset);
+
+        // Compute SDC's global index: find sdc_track_index in active_agent_indices, then add offset
+        int sdc_local_idx = -1;  // -1 means SDC not in active agents
+        for(int j = 0; j < env->active_agent_count; j++) {
+            if(env->active_agent_indices[j] == env->sdc_track_index) {
+                sdc_local_idx = j;
+                break;
+            }
+        }
+        // Compute global index, but check it doesn't exceed the num_agents limit
+        int sdc_global_idx = -1;
+        if(sdc_local_idx >= 0) {
+            int candidate_idx = total_agent_count + sdc_local_idx;
+            // Only valid if within the requested agent budget
+            if(candidate_idx < num_agents) {
+                sdc_global_idx = candidate_idx;
+            }
+            // else: SDC would be truncated, mark as inactive (-1)
+        }
+        PyObject* sdc_idx_obj = PyLong_FromLong(sdc_global_idx);
+        PyList_SetItem(sdc_indices, env_count, sdc_idx_obj);
+
         total_agent_count += env->active_agent_count;
         env_count++;
         for(int j=0;j<env->num_entities;j++) {
@@ -156,10 +180,12 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     // resize lists
     PyObject* resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject* resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-    PyObject* tuple = PyTuple_New(3);
+    PyObject* resized_sdc_indices = PyList_GetSlice(sdc_indices, 0, env_count);
+    PyObject* tuple = PyTuple_New(4);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
+    PyTuple_SetItem(tuple, 3, resized_sdc_indices);
     return tuple;
 }
 

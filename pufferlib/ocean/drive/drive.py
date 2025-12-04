@@ -139,7 +139,7 @@ class Drive(pufferlib.PufferEnv):
         self.max_controlled_agents = int(max_controlled_agents)
 
         # Iterate through all maps to count total agents that can be initialized for each map
-        agent_offsets, map_ids, num_envs = binding.shared(
+        agent_offsets, map_ids, num_envs, sdc_indices = binding.shared(
             map_dir=map_dir,
             num_agents=num_agents,
             num_maps=num_maps,
@@ -154,6 +154,7 @@ class Drive(pufferlib.PufferEnv):
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
+        self.sdc_indices = sdc_indices
         super().__init__(buf=buf)
         env_ids = []
         for i in range(num_envs):
@@ -213,7 +214,7 @@ class Drive(pufferlib.PufferEnv):
             will_resample = 1
             if will_resample:
                 binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(
+                agent_offsets, map_ids, num_envs, sdc_indices = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     init_mode=self.init_mode,
@@ -223,6 +224,11 @@ class Drive(pufferlib.PufferEnv):
                     goal_behavior=self.goal_behavior,
                     map_dir=self.map_dir,
                 )
+                # Update stored values
+                self.agent_offsets = agent_offsets
+                self.map_ids = map_ids
+                self.num_envs = num_envs
+                self.sdc_indices = sdc_indices
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):

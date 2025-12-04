@@ -210,23 +210,30 @@ class PuffeRL:
             self.adv_policy = policy
             self.uncompiled_adv_policy = policy
 
-            # Compute agent0 indices (one per environment)
-            if hasattr(vecenv.driver_env, "agent_offsets"):
+            # Compute SDC indices (one per environment)
+            if hasattr(vecenv.driver_env, "sdc_indices"):
                 self.agent_offsets = vecenv.driver_env.agent_offsets
                 self.num_envs = vecenv.driver_env.num_envs
-                self.agent0_indices = torch.tensor(
+                self.sdc_indices = torch.tensor(vecenv.driver_env.sdc_indices, device=device, dtype=torch.int64)
+            elif hasattr(vecenv.driver_env, "agent_offsets"):
+                # Fallback to agent0 if sdc_indices not available
+                self.agent_offsets = vecenv.driver_env.agent_offsets
+                self.num_envs = vecenv.driver_env.num_envs
+                self.sdc_indices = torch.tensor(
                     [self.agent_offsets[i] for i in range(self.num_envs)], device=device, dtype=torch.int64
                 )
             else:
-                raise pufferlib.APIUsageError("Adversarial mode requires vecenv.driver_env.agent_offsets")
+                raise pufferlib.APIUsageError(
+                    "Adversarial mode requires vecenv.driver_env.sdc_indices or agent_offsets"
+                )
 
             # Track completed episode returns separately for ref vs adv agents
             self.ref_episode_returns = []
             self.adv_episode_returns = []
 
-            # Cache for agent0 indices
+            # Cache for SDC indices (updated on resample)
             self._cached_agent_offsets = None
-            self._cached_agent0_indices = None
+            self._cached_sdc_indices = None
 
             # For compatibility, keep self.policy pointing to adv_policy
             self.policy = self.adv_policy
@@ -406,23 +413,24 @@ class PuffeRL:
 
                 # Split forward pass for adversarial mode
                 if self.adversarial_mode:
-                    # Refresh agent0_indices in case of environment resampling
-                    # (agent_offsets can change when envs resample maps)
-                    if hasattr(self.vecenv.driver_env, "agent_offsets"):
+                    # Refresh SDC indices in case of environment resampling
+                    # (sdc_indices can change when envs resample maps)
+                    if hasattr(self.vecenv.driver_env, "sdc_indices"):
+                        current_sdc_indices = self.vecenv.driver_env.sdc_indices
                         current_offsets = self.vecenv.driver_env.agent_offsets
                         if current_offsets != self._cached_agent_offsets:
                             self.agent_offsets = current_offsets
                             self.num_envs = self.vecenv.driver_env.num_envs
-                            self._cached_agent0_indices = torch.tensor(
-                                [self.agent_offsets[i] for i in range(self.num_envs)], device=device, dtype=torch.int64
+                            self._cached_sdc_indices = torch.tensor(
+                                current_sdc_indices, device=device, dtype=torch.int64
                             )
                             self._cached_agent_offsets = current_offsets
 
-                        self.agent0_indices = self._cached_agent0_indices
+                        self.sdc_indices = self._cached_sdc_indices
 
-                    # Determine which agents in current batch are agent0
+                    # Determine which agents in current batch are the SDC (reference policy)
                     batch_indices = torch.arange(env_id.start, env_id.stop, device=device)
-                    agent0_mask = torch.isin(batch_indices, self.agent0_indices)
+                    sdc_mask = torch.isin(batch_indices, self.sdc_indices)
 
                     # Initialize output tensors with correct shapes
                     batch_size = len(o_device)
@@ -441,14 +449,14 @@ class PuffeRL:
                         h_adv_batch = self.adv_lstm_h[env_id.start]
                         c_adv_batch = self.adv_lstm_c[env_id.start]
 
-                    # Forward agent0 observations through reference policy
+                    # Forward SDC observations through reference policy
                     # Note: we need to set 'logits' variable for action clipping check later (line 452)
                     logits = None
-                    if agent0_mask.any():
-                        o_ref = o_device[agent0_mask]
+                    if sdc_mask.any():
+                        o_ref = o_device[sdc_mask]
                         if config["use_rnn"]:
-                            state["lstm_h"] = h_ref_batch[agent0_mask]
-                            state["lstm_c"] = c_ref_batch[agent0_mask]
+                            state["lstm_h"] = h_ref_batch[sdc_mask]
+                            state["lstm_c"] = c_ref_batch[sdc_mask]
 
                         # Use forward_eval() method
                         logits_ref, value_ref = self.ref_policy.forward_eval(o_ref, state)
@@ -456,23 +464,23 @@ class PuffeRL:
 
                         if config["use_rnn"]:
                             # Update reference LSTM states
-                            h_ref_batch[agent0_mask] = state["lstm_h"]
-                            c_ref_batch[agent0_mask] = state["lstm_c"]
+                            h_ref_batch[sdc_mask] = state["lstm_h"]
+                            c_ref_batch[sdc_mask] = state["lstm_c"]
 
                         # Place ref policy outputs in correct positions
                         # Note: action keeps its shape from sample_logits, just ensure correct dtype
-                        action[agent0_mask] = action_ref.to(action.dtype)
-                        logprob[agent0_mask] = logprob_ref
-                        value[agent0_mask] = value_ref.flatten()
+                        action[sdc_mask] = action_ref.to(action.dtype)
+                        logprob[sdc_mask] = logprob_ref
+                        value[sdc_mask] = value_ref.flatten()
 
                         logits = logits_ref  # Save for type check later
 
                     # Forward adversarial observations through adversarial policy
-                    if (~agent0_mask).any():
-                        o_adv = o_device[~agent0_mask]
+                    if (~sdc_mask).any():
+                        o_adv = o_device[~sdc_mask]
                         if config["use_rnn"]:
-                            state["lstm_h"] = h_adv_batch[~agent0_mask]
-                            state["lstm_c"] = c_adv_batch[~agent0_mask]
+                            state["lstm_h"] = h_adv_batch[~sdc_mask]
+                            state["lstm_c"] = c_adv_batch[~sdc_mask]
 
                         # Use forward_eval() method
                         logits_adv, value_adv = self.adv_policy.forward_eval(o_adv, state)
@@ -480,16 +488,16 @@ class PuffeRL:
 
                         if config["use_rnn"]:
                             # Update adversarial LSTM states
-                            h_adv_batch[~agent0_mask] = state["lstm_h"]
-                            c_adv_batch[~agent0_mask] = state["lstm_c"]
+                            h_adv_batch[~sdc_mask] = state["lstm_h"]
+                            c_adv_batch[~sdc_mask] = state["lstm_c"]
 
                         # Place adv policy outputs in correct positions
                         # Note: action keeps its shape from sample_logits, just ensure correct dtype
-                        action[~agent0_mask] = action_adv.to(action.dtype)
-                        logprob[~agent0_mask] = logprob_adv
-                        value[~agent0_mask] = value_adv.flatten()
+                        action[~sdc_mask] = action_adv.to(action.dtype)
+                        logprob[~sdc_mask] = logprob_adv
+                        value[~sdc_mask] = value_adv.flatten()
 
-                        if logits is None:  # If no agent0 in batch, use adv logits for type check
+                        if logits is None:  # If no SDC in batch, use adv logits for type check
                             logits = logits_adv
 
                 else:
@@ -499,27 +507,31 @@ class PuffeRL:
 
                 r = torch.clamp(r, -1, 1)
 
-                # Adversarial reward modification: assign -agent0_reward to other agents in same env
+                # Adversarial reward modification: assign -sdc_reward to other agents in same env
                 if self.adversarial_mode:
                     # Loop through each environment
                     for env_idx in range(self.num_envs):
-                        agent0_global_idx = self.agent0_indices[env_idx]
+                        sdc_global_idx = self.sdc_indices[env_idx].item()
 
-                        # Check if this environment's agent0 is in the current batch
-                        if env_id.start <= agent0_global_idx < env_id.stop:
-                            # Find agent0's position in the current batch
-                            agent0_batch_pos = agent0_global_idx - env_id.start
-                            agent0_reward = r[agent0_batch_pos].item()
+                        # Skip if SDC is not an active agent in this environment
+                        if sdc_global_idx < 0:
+                            continue
+
+                        # Check if this environment's SDC is in the current batch
+                        if env_id.start <= sdc_global_idx < env_id.stop:
+                            # Find SDC's position in the current batch
+                            sdc_batch_pos = sdc_global_idx - env_id.start
+                            sdc_reward = r[sdc_batch_pos].item()
 
                             # Find all agents from this environment in the current batch
                             env_start = self.agent_offsets[env_idx]
                             env_end = self.agent_offsets[env_idx + 1]
 
-                            # Assign -agent0_reward to all adversarial agents in this env
+                            # Assign -sdc_reward to all adversarial agents in this env
                             for global_idx in range(env_start, env_end):
-                                if env_id.start <= global_idx < env_id.stop and global_idx != agent0_global_idx:
+                                if env_id.start <= global_idx < env_id.stop and global_idx != sdc_global_idx:
                                     batch_pos = global_idx - env_id.start
-                                    r[batch_pos] = -agent0_reward
+                                    r[batch_pos] = -sdc_reward
 
             profile("eval_copy", epoch)
             with torch.no_grad():
@@ -553,8 +565,8 @@ class PuffeRL:
                         global_idx = env_id.start + idx
                         episode_return = self.ep_returns[global_idx].item()
 
-                        # Check if this is agent0 (reference) or adversarial
-                        if global_idx in self.agent0_indices:
+                        # Check if this is the SDC (reference) or adversarial agent
+                        if global_idx in self.sdc_indices:
                             self.ref_episode_returns.append(episode_return)
                         else:
                             self.adv_episode_returns.append(episode_return)
@@ -706,10 +718,10 @@ class PuffeRL:
             adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
             # Create loss weight mask for adversarial mode
-            # Agent0 samples get zero weight, adversarial agents get full weight
+            # SDC samples get zero weight, adversarial agents get full weight
             if self.adversarial_mode:
-                is_agent0 = torch.isin(mb_agent_ids_flat, self.agent0_indices)
-                loss_weight = (~is_agent0).float()
+                is_sdc = torch.isin(mb_agent_ids_flat, self.sdc_indices)
+                loss_weight = (~is_sdc).float()
                 # Reshape to match minibatch shape
                 loss_weight = loss_weight.view(mb_logprobs.shape)
             else:
@@ -1470,10 +1482,15 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         adversarial_mode = isinstance(policy, tuple)
         if adversarial_mode:
             ref_policy, adv_policy = policy
-            # Compute agent0 indices
+            # Compute SDC indices (use sdc_indices if available, fall back to agent0)
             agent_offsets = vecenv.driver_env.agent_offsets
             num_envs = vecenv.driver_env.num_envs
-            agent0_indices = torch.tensor([agent_offsets[i] for i in range(num_envs)], device=device, dtype=torch.int64)
+            if hasattr(vecenv.driver_env, "sdc_indices"):
+                sdc_indices = torch.tensor(vecenv.driver_env.sdc_indices, device=device, dtype=torch.int64)
+            else:
+                sdc_indices = torch.tensor(
+                    [agent_offsets[i] for i in range(num_envs)], device=device, dtype=torch.int64
+                )
 
         state = {}
         ref_state = {}
@@ -1516,21 +1533,21 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 ob = torch.as_tensor(ob).to(device)
 
                 if adversarial_mode:
-                    # Split forward pass: agent0 through ref_policy, others through adv_policy
-                    agent0_mask = torch.isin(torch.arange(num_agents, device=device), agent0_indices)
+                    # Split forward pass: SDC through ref_policy, others through adv_policy
+                    sdc_mask = torch.isin(torch.arange(num_agents, device=device), sdc_indices)
 
                     # Initialize output tensors
                     action_shape = (num_agents,) + tuple(vecenv.single_action_space.shape)
                     action = torch.zeros(action_shape, dtype=torch.long, device=device)
                     logits = None
 
-                    # Forward agent0 through reference policy
-                    if agent0_mask.any():
-                        o_ref = ob[agent0_mask]
+                    # Forward SDC through reference policy
+                    if sdc_mask.any():
+                        o_ref = ob[sdc_mask]
                         if args["train"]["use_rnn"]:
                             ref_state_batch = {
-                                "lstm_h": ref_state["lstm_h"][agent0_mask],
-                                "lstm_c": ref_state["lstm_c"][agent0_mask],
+                                "lstm_h": ref_state["lstm_h"][sdc_mask],
+                                "lstm_c": ref_state["lstm_c"][sdc_mask],
                             }
                         else:
                             ref_state_batch = {}
@@ -1539,19 +1556,19 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                         action_ref, logprob_ref, _ = pufferlib.pytorch.sample_logits(logits_ref)
 
                         if args["train"]["use_rnn"]:
-                            ref_state["lstm_h"][agent0_mask] = ref_state_batch["lstm_h"]
-                            ref_state["lstm_c"][agent0_mask] = ref_state_batch["lstm_c"]
+                            ref_state["lstm_h"][sdc_mask] = ref_state_batch["lstm_h"]
+                            ref_state["lstm_c"][sdc_mask] = ref_state_batch["lstm_c"]
 
-                        action[agent0_mask] = action_ref.to(action.dtype)
+                        action[sdc_mask] = action_ref.to(action.dtype)
                         logits = logits_ref
 
                     # Forward other agents through adversarial policy
-                    if (~agent0_mask).any():
-                        o_adv = ob[~agent0_mask]
+                    if (~sdc_mask).any():
+                        o_adv = ob[~sdc_mask]
                         if args["train"]["use_rnn"]:
                             adv_state_batch = {
-                                "lstm_h": state["lstm_h"][~agent0_mask],
-                                "lstm_c": state["lstm_c"][~agent0_mask],
+                                "lstm_h": state["lstm_h"][~sdc_mask],
+                                "lstm_c": state["lstm_c"][~sdc_mask],
                             }
                         else:
                             adv_state_batch = {}
@@ -1560,10 +1577,10 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                         action_adv, logprob_adv, _ = pufferlib.pytorch.sample_logits(logits_adv)
 
                         if args["train"]["use_rnn"]:
-                            state["lstm_h"][~agent0_mask] = adv_state_batch["lstm_h"]
-                            state["lstm_c"][~agent0_mask] = adv_state_batch["lstm_c"]
+                            state["lstm_h"][~sdc_mask] = adv_state_batch["lstm_h"]
+                            state["lstm_c"][~sdc_mask] = adv_state_batch["lstm_c"]
 
-                        action[~agent0_mask] = action_adv.to(action.dtype)
+                        action[~sdc_mask] = action_adv.to(action.dtype)
                         if logits is None:
                             logits = logits_adv
 
