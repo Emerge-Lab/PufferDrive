@@ -139,6 +139,135 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     EndDrawing();
 }
 
+void render3DView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid, int img_width, int img_height) {
+
+    // Calculate map center
+    float center_x = (env->grid_map->top_left_x + env->grid_map->bottom_right_x) / 2.0f;
+    float center_y = (env->grid_map->top_left_y + env->grid_map->bottom_right_y) / 2.0f;
+
+    float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
+    float map_height_world = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+
+
+    // Isometric camera setup - positioned at 45° angle to see Z movement clearly
+    Camera3D camera = { 0 };
+
+    // Calculate camera distance based on map size
+    float camera_distance = fmaxf(map_width, map_height_world) * 1.5f;
+
+    // Position camera at a 45-degree diagonal angle (classic isometric view)
+    // This creates the "wooo" factor and lets you see elevation changes!
+    camera.position = (Vector3){
+        50,-300,40             // Elevated to see Z-axis clearly
+    };
+    camera.target = (Vector3){ 50, 300, 0.0f };  // Look at map center
+    camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };              // Z-axis is up
+    camera.fovy = 45.0f;                                     // Field of view
+    camera.projection = CAMERA_PERSPECTIVE;                  // Perspective for depth
+
+    Vector3 cubePosition = { 0.0f, 0.0f, 0.0f };
+
+
+    // // Cinematic angled perspective camera
+    // Camera3D camera = {0};
+    // // Position camera at an angle (isometric-ish view)
+    // float camera_distance = fmaxf(map_width, map_height_world) * 1.2f;
+    // camera.position = (Vector3){
+    //     center_x - camera_distance * 0.7f,  // offset in x
+    //     center_y - camera_distance * 0.7f,  // offset in y
+    //     camera_distance * 0.8f               // height above scene
+    // };
+    // camera.target = (Vector3){ center_x, center_y, 0.0f };  // look at map center
+    // camera.up = (Vector3){ 0.0f, 0.0f, 1.0f };              // Z is up
+    // camera.fovy = 45.0f;                                     // perspective FOV
+    // camera.projection = CAMERA_PERSPECTIVE;
+
+    client->width = img_width;
+    client->height = img_height;
+
+    Color road = (Color){35, 35, 37, 255};
+    ClearBackground(road);
+    BeginMode3D(camera);
+    rlEnableDepthTest();
+
+    // DrawCube(cubePosition, 2.0f, 2.0f, 2.0f, RED);
+    // DrawCubeWires(cubePosition, 2.0f, 2.0f, 2.0f, MAROON);
+
+    // // Mark the origin with a LARGE red sphere and long axis lines (very visible!)
+    // DrawSphere((Vector3){0.0f, 0.0f, 0.0f}, 10.0f, RED);
+    // // Draw long coordinate axes at origin for visibility
+    // DrawLine3D((Vector3){0.0f, 0.0f, 0.0f}, (Vector3){100.0f, 0.0f, 0.0f}, RED);    // X-axis
+    // DrawLine3D((Vector3){0.0f, 0.0f, 0.0f}, (Vector3){0.0f, 100.0f, 0.0f}, GREEN);  // Y-axis
+    // DrawLine3D((Vector3){0.0f, 0.0f, 0.0f}, (Vector3){0.0f, 0.0f, 100.0f}, BLUE);   // Z-axis
+
+    // Draw the map center
+    // DrawSphere((Vector3){center_x, center_y, 0.0f}, 5.0f, YELLOW);
+    // DrawSphere((Vector3){80, 250, 0.0f}, 5.0f, YELLOW);
+    // DrawSphere((Vector3){-20, 0, 0.0f}, 5.0f, YELLOW);
+    // DrawSphere((Vector3){40, 0, 0.0f}, 5.0f, YELLOW);
+    // DrawSphere((Vector3){45, 0, 0.0f}, 5.0f, YELLOW);
+    // DrawSphere((Vector3){45, -10, 0.0f}, 5.0f, YELLOW);
+    // DrawSphere((Vector3){55, 0, 0.0f}, 5.0f, GREEN);
+    // DrawSphere((Vector3){55, -10, 0.0f}, 5.0f, GREEN);
+    // DrawSphere((Vector3){55, -20, 0.0f}, 5.0f, GREEN);
+    // DrawSphere((Vector3){55, -30, 0.0f}, 5.0f, GREEN);
+    // DrawSphere((Vector3){60, 0, 0.0f}, 5.0f, YELLOW);
+    // DrawSphere((Vector3){-30, -10, 0.0f}, 5.0f, YELLOW);
+    // DrawSphere((Vector3){-40, 0, 0.0f}, 5.0f, YELLOW);
+    // DrawSphere((Vector3){0, -300, 10.0f}, 5.0f, GREEN);
+    // DrawSphere((Vector3){0, -10, 10.0f}, 5.0f, GREEN);
+    // DrawSphere((Vector3){40, -100, 0.0f}, 5.0f, GREEN);
+    // DrawSphere((Vector3){50, -100, 0.0f}, 5.0f, GREEN);
+    // Mark the 4 corners of the map bounds
+    float top_left_x = env->grid_map->top_left_x;
+    float top_left_y = env->grid_map->top_left_y;
+    float bottom_right_x = env->grid_map->bottom_right_x;
+    float bottom_right_y = env->grid_map->bottom_right_y;
+
+    // Draw human replay trajectories if enabled
+    if(log_trajectories){
+        for(int i=0; i<env->active_agent_count; i++){
+            int idx = env->active_agent_indices[i];
+            Vector3 prev_point = {0};
+            bool has_prev = false;
+
+            for(int j = 0; j < env->entities[idx].array_size; j++){
+                float x = env->entities[idx].traj_x[j];
+                float y = env->entities[idx].traj_y[j];
+                float z = env->entities[idx].traj_z[j];  // Use actual Z coordinate!
+                float valid = env->entities[idx].traj_valid[j];
+                //printf("Traj point %d: (%.2f, %.2f, %.2f), valid=%d\n", j, x, y, z, (int)valid);
+                if(!valid) {
+                    has_prev = false;
+                    continue;
+                }
+
+                Vector3 curr_point = {x, y, z + 0.5f};  // Elevate slightly above ground
+
+                if(has_prev) {
+                    DrawLine3D(prev_point, curr_point, Fade(LIGHTGREEN, 0.6f));
+                }
+
+                prev_point = curr_point;
+                has_prev = true;
+            }
+        }
+    }
+
+    // Draw agent trajs
+    if(trajectories){
+        for(int i=0; i<frame_count; i++){
+            DrawSphere((Vector3){path[i*2], path[i*2 +1], 0.8f}, 0.5f, YELLOW);
+        }
+    }
+
+    // Draw scene
+    draw_scene(env, client, 1, obs, lasers, show_grid);
+    EndMode3D();
+    EndDrawing();
+}
+
+
 void renderAgentView(Drive* env, Client* client, int map_height, int obs_only, int lasers, int show_grid) {
     // Agent perspective camera following the selected agent
     int agent_idx = env->active_agent_indices[env->human_agent_idx];
@@ -217,7 +346,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
-        int random_map = rand() % num_maps;
+        int random_map = rand() % 1;
         sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map); // random map file
         map_name = map_buffer;
     }
@@ -305,10 +434,12 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     int log_trajectory = log_trajectories;
     char filename_topdown[256];
     char filename_agent[256];
+    char filename_3d[256];
 
     if (output_topdown != NULL && output_agent != NULL) {
         strcpy(filename_topdown, output_topdown);
         strcpy(filename_agent, output_agent);
+        sprintf(filename_3d, "%s_3d.mp4", output_topdown);
     } else {
         char policy_base[256];
         strcpy(policy_base, policy_name);
@@ -327,17 +458,19 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
         sprintf(filename_topdown, "%s/video/%s_topdown.mp4", policy_base, map);
         sprintf(filename_agent, "%s/video/%s_agent.mp4", policy_base, map);
+        sprintf(filename_3d, "%s/video/%s_3d.mp4", policy_base, map);
     }
 
     bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
     bool render_agent = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "agent") == 0);
+    bool render_3d = (strcmp(view_mode, "3d") == 0);
 
     printf("Rendering: %s\n", view_mode);
 
     int rendered_frames = 0;
     double startTime = GetTime();
 
-    VideoRecorder topdown_recorder, agent_recorder;
+    VideoRecorder topdown_recorder, agent_recorder, view_3d_recorder;
 
     if (render_topdown) {
         if (!OpenVideo(&topdown_recorder, filename_topdown, img_width, img_height)) {
@@ -349,6 +482,15 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     if (render_agent) {
         if (!OpenVideo(&agent_recorder, filename_agent, img_width, img_height)) {
             if (render_topdown) CloseVideo(&topdown_recorder);
+            CloseWindow();
+            return -1;
+        }
+    }
+
+    if (render_3d) {
+        if (!OpenVideo(&view_3d_recorder, filename_3d, img_width, img_height)) {
+            if (render_topdown) CloseVideo(&topdown_recorder);
+            if (render_agent) CloseVideo(&agent_recorder);
             CloseWindow();
             return -1;
         }
@@ -385,6 +527,21 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         }
     }
 
+    if (render_3d) {
+        c_reset(&env);
+        printf("Recording 3D cinematic view...\n");
+        for(int i = 0; i < frame_count; i++) {
+            if (i % frame_skip == 0) {
+                render3DView(&env, client, map_height, obs_only, lasers, 0, frame_count, NULL, log_trajectories, show_grid, img_width, img_height);
+                WriteFrame(&view_3d_recorder, img_width, img_height);
+                rendered_frames++;
+            }
+            int (*actions)[2] = (int(*)[2])env.actions;
+            forward(net, env.observations, (int*)env.actions);
+            c_step(&env);
+        }
+    }
+
     double endTime = GetTime();
     double elapsedTime = endTime - startTime;
     double writeFPS = (elapsedTime > 0) ? rendered_frames / elapsedTime : 0;
@@ -397,6 +554,9 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     }
     if (render_agent) {
         CloseVideo(&agent_recorder);
+    }
+    if (render_3d) {
+        CloseVideo(&view_3d_recorder);
     }
     CloseWindow();
 
@@ -478,12 +638,13 @@ int main(int argc, char* argv[]) {
                 i++;
                 if (strcmp(view_mode, "both") != 0 &&
                     strcmp(view_mode, "topdown") != 0 &&
-                    strcmp(view_mode, "agent") != 0) {
-                    fprintf(stderr, "Error: --view must be 'both', 'topdown', or 'agent'\n");
+                    strcmp(view_mode, "agent") != 0 &&
+                    strcmp(view_mode, "3D") != 0) {
+                    fprintf(stderr, "Error: --view must be 'both', 'topdown', 'agent', or '3D'\n");
                     return 1;
                 }
             } else {
-                fprintf(stderr, "Error: --view option requires a value (both/topdown/agent)\n");
+                fprintf(stderr, "Error: --view option requires a value (both/topdown/agent/3D)\n");
                 return 1;
             }
         } else if (strcmp(argv[i], "--output-topdown") == 0) {

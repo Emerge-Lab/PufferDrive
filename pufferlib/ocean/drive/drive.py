@@ -487,6 +487,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(struct.pack("f", float(obj.get("length", 0.0))))
             f.write(struct.pack("f", float(obj.get("height", 0.0))))
             goal_pos = obj.get("goalPosition", {"x": 0, "y": 0, "z": 0})  # Get goalPosition object with default
+            print(float(goal_pos.get("z", 0.0)))
             f.write(struct.pack("f", float(goal_pos.get("x", 0.0))))  # Get x value
             f.write(struct.pack("f", float(goal_pos.get("y", 0.0))))  # Get y value
             f.write(struct.pack("f", float(goal_pos.get("z", 0.0))))  # Get z value
@@ -584,7 +585,7 @@ def process_all_maps(
     dataset_name = data_dir.name
 
     # Create the binaries directory if it doesn't exist
-    binary_dir = Path(f"resources/drive/binaries/{dataset_name}")
+    binary_dir = Path(f"resources/drive/binaries/extra/{dataset_name}/training")
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Get all JSON files in the training directory
@@ -647,6 +648,6 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/processed/training/onemap")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
