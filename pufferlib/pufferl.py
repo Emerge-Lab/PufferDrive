@@ -193,7 +193,10 @@ class PuffeRL:
             env_module = importlib.import_module(module_name)
             policy_cls = getattr(env_module.torch, config["policy_name"])
 
-            self.ref_policy = policy_cls(vecenv.driver_env, **config["policy"]).to(device)
+            # Create ref_policy with use_target_features=False for legacy checkpoint compatibility
+            # The ref_policy was trained without TARGET_FEATURES in observations
+            ref_policy_config = {**config["policy"], "use_target_features": False}
+            self.ref_policy = policy_cls(vecenv.driver_env, **ref_policy_config).to(device)
 
             # Wrap with RNN if configured
             if config["use_rnn"]:
@@ -1804,7 +1807,14 @@ def load_policy(args, vecenv, env_name=""):
     env_module = importlib.import_module(module_name)
 
     device = args["train"]["device"]
-    policy_cls = getattr(env_module.torch, args["policy_name"])
+
+    # Check if adversarial mode - use AdversarialDrive for the main policy
+    adversarial_mode = args.get("adversarial", {}).get("adversarial_mode", False)
+    if adversarial_mode and hasattr(env_module.torch, "AdversarialDrive"):
+        policy_cls = env_module.torch.AdversarialDrive
+    else:
+        policy_cls = getattr(env_module.torch, args["policy_name"])
+
     policy = policy_cls(vecenv.driver_env, **args["policy"])
 
     rnn_name = args["rnn_name"]

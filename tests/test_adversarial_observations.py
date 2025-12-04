@@ -365,5 +365,167 @@ class TestIntegration:
         assert len(adv_indices) == batch_size - len(sdc_global_indices)
 
 
+class TestPolicyArchitecture:
+    """Test policy architectures handle observations correctly."""
+
+    def _create_valid_obs(self, mock_env, batch_size):
+        """Create valid observations with proper categorical values."""
+        import torch
+
+        ego_dim = 7  # classic
+        target_dim = getattr(mock_env, "target_features", 0)
+        partner_dim = mock_env.max_partner_objects * mock_env.partner_features
+        road_dim = mock_env.max_road_objects * mock_env.road_features
+
+        # Create random obs
+        obs = torch.randn(batch_size, mock_env.num_obs)
+
+        # Fix road categorical features (last feature of each road object must be 0-6)
+        road_start = ego_dim + target_dim + partner_dim
+        for i in range(mock_env.max_road_objects):
+            road_obj_start = road_start + i * mock_env.road_features
+            # Last feature is categorical (road type 0-6)
+            obs[:, road_obj_start + mock_env.road_features - 1] = torch.randint(0, 7, (batch_size,)).float()
+
+        return obs
+
+    def test_drive_policy_with_target_features(self):
+        """Verify Drive policy correctly skips TARGET_FEATURES."""
+        from pufferlib.ocean.drive import binding
+        from pufferlib.ocean.torch import Drive
+        import torch
+
+        # Create a mock env-like object
+        class MockEnv:
+            def __init__(self):
+                self.dynamics_model = "classic"
+                self.max_partner_objects = binding.MAX_AGENTS - 1
+                self.partner_features = binding.PARTNER_FEATURES
+                self.max_road_objects = binding.MAX_ROAD_SEGMENT_OBSERVATIONS
+                self.road_features = binding.ROAD_FEATURES
+                self.target_features = binding.TARGET_FEATURES
+
+                # New observation size (with TARGET_FEATURES)
+                ego_dim = 7  # classic
+                self.num_obs = (
+                    ego_dim
+                    + self.target_features
+                    + self.max_partner_objects * self.partner_features
+                    + self.max_road_objects * self.road_features
+                )
+
+                import gymnasium
+
+                self.single_observation_space = gymnasium.spaces.Box(
+                    low=-1, high=1, shape=(self.num_obs,), dtype=np.float32
+                )
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([91])
+
+        mock_env = MockEnv()
+
+        # Create Drive policy with use_target_features=True (default, skips target slot)
+        policy = Drive(mock_env, use_target_features=True)
+
+        # Create valid observation
+        batch_size = 4
+        obs = self._create_valid_obs(mock_env, batch_size)
+
+        # Forward pass should work
+        actions, value = policy(obs)
+
+        assert value.shape == (batch_size, 1)
+
+    def test_drive_policy_legacy_format(self):
+        """Verify Drive policy works with legacy format (no TARGET_FEATURES)."""
+        from pufferlib.ocean.drive import binding
+        from pufferlib.ocean.torch import Drive
+        import torch
+
+        class MockEnv:
+            def __init__(self):
+                self.dynamics_model = "classic"
+                self.max_partner_objects = binding.MAX_AGENTS - 1
+                self.partner_features = binding.PARTNER_FEATURES
+                self.max_road_objects = binding.MAX_ROAD_SEGMENT_OBSERVATIONS
+                self.road_features = binding.ROAD_FEATURES
+                self.target_features = 0  # No target features in legacy
+
+                # Old observation size (without TARGET_FEATURES)
+                ego_dim = 7
+                self.num_obs = (
+                    ego_dim
+                    + self.max_partner_objects * self.partner_features
+                    + self.max_road_objects * self.road_features
+                )
+
+                import gymnasium
+
+                self.single_observation_space = gymnasium.spaces.Box(
+                    low=-1, high=1, shape=(self.num_obs,), dtype=np.float32
+                )
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([91])
+
+        mock_env = MockEnv()
+
+        # Create Drive policy with use_target_features=False (legacy mode)
+        policy = Drive(mock_env, use_target_features=False)
+
+        # Create valid observation
+        batch_size = 4
+        obs = self._create_valid_obs(mock_env, batch_size)
+
+        # Forward pass should work
+        actions, value = policy(obs)
+
+        assert value.shape == (batch_size, 1)
+
+    def test_adversarial_drive_policy(self):
+        """Verify AdversarialDrive policy uses TARGET_FEATURES."""
+        from pufferlib.ocean.drive import binding
+        from pufferlib.ocean.torch import AdversarialDrive
+        import torch
+
+        class MockEnv:
+            def __init__(self):
+                self.dynamics_model = "classic"
+                self.max_partner_objects = binding.MAX_AGENTS - 1
+                self.partner_features = binding.PARTNER_FEATURES
+                self.max_road_objects = binding.MAX_ROAD_SEGMENT_OBSERVATIONS
+                self.road_features = binding.ROAD_FEATURES
+                self.target_features = binding.TARGET_FEATURES
+
+                ego_dim = 7
+                self.num_obs = (
+                    ego_dim
+                    + self.target_features
+                    + self.max_partner_objects * self.partner_features
+                    + self.max_road_objects * self.road_features
+                )
+
+                import gymnasium
+
+                self.single_observation_space = gymnasium.spaces.Box(
+                    low=-1, high=1, shape=(self.num_obs,), dtype=np.float32
+                )
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([91])
+
+        mock_env = MockEnv()
+
+        # Create AdversarialDrive policy
+        policy = AdversarialDrive(mock_env)
+
+        # Create valid observation
+        batch_size = 4
+        obs = self._create_valid_obs(mock_env, batch_size)
+
+        # Forward pass should work
+        actions, value = policy(obs)
+
+        assert value.shape == (batch_size, 1)
+
+        # Verify it has a target_encoder
+        assert hasattr(policy, "target_encoder")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

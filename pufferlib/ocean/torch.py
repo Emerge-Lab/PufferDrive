@@ -13,7 +13,21 @@ Recurrent = pufferlib.models.LSTMWrapper
 
 
 class Drive(nn.Module):
-    def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
+    """Standard Drive policy for non-adversarial training.
+
+    Observation layout depends on use_target_features:
+    - If True: [ego_dim | TARGET_FEATURES | partner_dim | road_dim] (new format)
+    - If False: [ego_dim | partner_dim | road_dim] (legacy format for old checkpoints)
+
+    Args:
+        env: The environment
+        input_size: Size of encoder hidden layers
+        hidden_size: Size of final embedding
+        use_target_features: If True, observations include TARGET_FEATURES slot to skip.
+                            If False, uses legacy format (for loading old checkpoints).
+    """
+
+    def __init__(self, env, input_size=128, hidden_size=128, use_target_features=True, **kwargs):
         super().__init__()
         self.hidden_size = hidden_size
         self.observation_size = env.single_observation_space.shape[0]
@@ -25,6 +39,12 @@ class Drive(nn.Module):
 
         # Determine ego dimension from environment's dynamics model
         self.ego_dim = 10 if env.dynamics_model == "jerk" else 7
+
+        # TARGET_FEATURES handling
+        # If use_target_features=True, observations have TARGET_FEATURES slot (skipped)
+        # If use_target_features=False, observations are in legacy format (no target slot)
+        self.use_target_features = use_target_features
+        self.target_features = getattr(env, "target_features", 7) if use_target_features else 0
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
@@ -71,11 +91,15 @@ class Drive(nn.Module):
 
     def encode_observations(self, observations, state=None):
         ego_dim = self.ego_dim
+        target_dim = self.target_features
         partner_dim = self.max_partner_objects * self.partner_features
-        road_dim = self.max_road_objects * self.road_features_after_onehot
+
+        # Observation layout: [ego | TARGET_FEATURES | partner | road]
+        # Skip TARGET_FEATURES (this policy doesn't use target info)
         ego_obs = observations[:, :ego_dim]
-        partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
-        road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
+        # Skip target features: observations[:, ego_dim : ego_dim + target_dim]
+        partner_obs = observations[:, ego_dim + target_dim : ego_dim + target_dim + partner_dim]
+        road_obs = observations[:, ego_dim + target_dim + partner_dim :]
 
         partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
 
@@ -92,7 +116,121 @@ class Drive(nn.Module):
 
         # Pass through shared embedding
         embedding = F.relu(self.shared_embedding(concat_features))
-        # embedding = self.shared_embedding(concat_features)
+        return embedding
+
+    def decode_actions(self, flat_hidden):
+        if self.is_continuous:
+            parameters = self.actor(flat_hidden)
+            loc, scale = torch.split(parameters, self.atn_dim, dim=1)
+            std = torch.nn.functional.softplus(scale) + 1e-4
+            action = torch.distributions.Normal(loc, std)
+        else:
+            action = self.actor(flat_hidden)
+            action = torch.split(action, self.atn_dim, dim=1)
+
+        value = self.value_fn(flat_hidden)
+
+        return action, value
+
+
+class AdversarialDrive(nn.Module):
+    """Adversarial Drive policy that uses TARGET_FEATURES to track a target agent.
+
+    Observation layout: [ego_dim | TARGET_FEATURES | partner_dim | road_dim]
+    This policy encodes target features to help adversarial agents track their target.
+    """
+
+    def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.observation_size = env.single_observation_space.shape[0]
+        self.max_partner_objects = env.max_partner_objects
+        self.partner_features = env.partner_features
+        self.max_road_objects = env.max_road_objects
+        self.road_features = env.road_features
+        self.road_features_after_onehot = env.road_features + 6
+
+        # Determine ego dimension from environment's dynamics model
+        self.ego_dim = 10 if env.dynamics_model == "jerk" else 7
+
+        # TARGET_FEATURES for adversarial targeting
+        self.target_features = getattr(env, "target_features", 7)
+
+        self.ego_encoder = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
+            nn.LayerNorm(input_size),
+            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+        )
+
+        # Target encoder for adversarial targeting
+        self.target_encoder = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(self.target_features, input_size)),
+            nn.LayerNorm(input_size),
+            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+        )
+
+        self.road_encoder = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(self.road_features_after_onehot, input_size)),
+            nn.LayerNorm(input_size),
+            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+        )
+
+        self.partner_encoder = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(self.partner_features, input_size)),
+            nn.LayerNorm(input_size),
+            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+        )
+
+        # 4 input streams: ego, target, partner, road
+        self.shared_embedding = nn.Sequential(
+            nn.GELU(),
+            pufferlib.pytorch.layer_init(nn.Linear(4 * input_size, hidden_size)),
+        )
+        self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
+
+        if self.is_continuous:
+            self.atn_dim = (env.single_action_space.shape[0],) * 2
+        else:
+            self.atn_dim = env.single_action_space.nvec.tolist()
+
+        self.actor = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, sum(self.atn_dim)), std=0.01)
+        self.value_fn = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, 1), std=1)
+
+    def forward(self, observations, state=None):
+        hidden = self.encode_observations(observations)
+        actions, value = self.decode_actions(hidden)
+        return actions, value
+
+    def forward_train(self, x, state=None):
+        return self.forward(x, state)
+
+    def encode_observations(self, observations, state=None):
+        ego_dim = self.ego_dim
+        target_dim = self.target_features
+        partner_dim = self.max_partner_objects * self.partner_features
+
+        # Observation layout: [ego | TARGET_FEATURES | partner | road]
+        ego_obs = observations[:, :ego_dim]
+        target_obs = observations[:, ego_dim : ego_dim + target_dim]
+        partner_obs = observations[:, ego_dim + target_dim : ego_dim + target_dim + partner_dim]
+        road_obs = observations[:, ego_dim + target_dim + partner_dim :]
+
+        partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
+
+        road_objects = road_obs.view(-1, self.max_road_objects, self.road_features)
+        road_continuous = road_objects[:, :, : self.road_features - 1]
+        road_categorical = road_objects[:, :, self.road_features - 1]
+        road_onehot = F.one_hot(road_categorical.long(), num_classes=7)
+        road_objects = torch.cat([road_continuous, road_onehot], dim=2)
+
+        ego_features = self.ego_encoder(ego_obs)
+        target_features = self.target_encoder(target_obs)
+        partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
+        road_features, _ = self.road_encoder(road_objects).max(dim=1)
+
+        concat_features = torch.cat([ego_features, target_features, road_features, partner_features], dim=1)
+
+        embedding = F.relu(self.shared_embedding(concat_features))
         return embedding
 
     def decode_actions(self, flat_hidden):
