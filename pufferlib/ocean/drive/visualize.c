@@ -280,12 +280,12 @@ void renderAgentView(Drive* env, Client* client, int map_height, int obs_only, i
     camera.position = (Vector3){
         agent->x - (25.0f * cosf(agent->heading)),
         agent->y - (25.0f * sinf(agent->heading)),
-        15.0f
+        agent->z + 15.0f,
     };
     camera.target = (Vector3){
         agent->x + 40.0f * cosf(agent->heading),
         agent->y + 40.0f * sinf(agent->heading),
-        1.0f
+        agent->z + 1.0f,
     };
     camera.up = (Vector3){ 0.0f, 0.0f, 1.0f };
     camera.fovy = 45.0f;
@@ -585,7 +585,7 @@ int main(int argc, char* argv[]) {
     int control_mode = 0;
     int goal_behavior = 0;
 
-    const char* view_mode = "both";  // "both", "topdown", "agent"
+    const char* view_mode = "3d";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
     const char* output_agent = NULL;
 

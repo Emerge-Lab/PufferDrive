@@ -2448,7 +2448,7 @@ Client* make_client(Drive* env){
     client->default_camera_position = (Vector3){
         0,           // Same X as target
         120.0f,   // 20 units above target
-        175.0f    // 20 units behind target
+        40.0f    // 20 units behind target
     };
     client->default_camera_target = target_pos;
     client->camera.position = client->default_camera_position;
