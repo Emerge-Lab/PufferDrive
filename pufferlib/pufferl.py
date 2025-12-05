@@ -1064,10 +1064,12 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         # Collect ground truth trajectories from the dataset
         gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
 
+        print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
+        print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
+        print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
+
         # Roll out trained policy in the simulator
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
-
-        print(f"\nCollected trajectories on {len(np.unique(gt_trajectories['scenario_id']))} scenarios.")
 
         if args["eval"]["wosac_sanity_check"]:
             evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
@@ -1086,7 +1088,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         if args["eval"]["wosac_aggregate_results"]:
             import json
 
-            print("WOSAC_METRICS_START")
+            print("\nWOSAC_METRICS_START")
             print(json.dumps(results))
             print("WOSAC_METRICS_END")
 
