@@ -41,10 +41,12 @@ class Drive(nn.Module):
         self.ego_dim = 10 if env.dynamics_model == "jerk" else 7
 
         # TARGET_FEATURES handling
-        # If use_target_features=True, observations have TARGET_FEATURES slot (skipped)
-        # If use_target_features=False, observations are in legacy format (no target slot)
+        # Environment ALWAYS produces observations with TARGET_FEATURES slot
+        # use_target_features controls whether we encode them or just skip them
         self.use_target_features = use_target_features
-        self.target_features = getattr(env, "target_features", 7) if use_target_features else 0
+        self.target_features = getattr(env, "target_features", 7)  # Always present in obs
+        # For network architecture sizing (only count if we actually encode targets)
+        self.encoded_target_features = self.target_features if use_target_features else 0
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),

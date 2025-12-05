@@ -1882,8 +1882,11 @@ def load_policy(args, vecenv, env_name=""):
         # Check if this is a dual-policy checkpoint (adversarial mode)
         if isinstance(checkpoint, dict) and "adv_policy" in checkpoint:
             # Loading from adversarial checkpoint - return both policies
-            # Create reference policy
-            ref_policy = policy_cls(vecenv.driver_env, **args["policy"])
+            # Create reference policy using base DriveNet (not AdversarialDrive)
+            ref_policy_cls = getattr(env_module.torch, args["policy_name"])
+            ref_policy_args = args["policy"].copy()
+            ref_policy_args["use_target_features"] = False
+            ref_policy = ref_policy_cls(vecenv.driver_env, **ref_policy_args)
             if rnn_name is not None:
                 ref_policy = rnn_cls(vecenv.driver_env, ref_policy, **args["rnn"])
             ref_policy = ref_policy.to(device)
