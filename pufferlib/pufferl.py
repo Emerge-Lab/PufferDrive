@@ -1324,12 +1324,45 @@ def ensure_drive_binary():
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
+    args = args or load_config(env_name)
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
     env_name = args["env_name"]
     make_env = env_module.env_creator(env_name)
-    pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
+
+    # For multi-agent envs, convert train.batch_size (agent-steps) to orchestrator env count
+    # For single-agent envs, this division results in the same value
+    num_agents_per_env = args["env"].get("num_agents", 1)
+    train_batch_size = args["train"]["batch_size"]
+    orchestrator_batch_size = train_batch_size // num_agents_per_env
+
+    # max_envs must be at least as large as the batch size
+    max_envs = args.get("max_envs")
+    if max_envs is None:
+        # Default to 2x the batch size to allow for testing different configurations
+        max_envs = orchestrator_batch_size * 2
+    elif max_envs < orchestrator_batch_size:
+        raise ValueError(
+            f"max_envs ({max_envs}) must be >= orchestrator_batch_size ({orchestrator_batch_size}). "
+            f"Either increase --max-envs or reduce train.batch_size in the config."
+        )
+
+    print(f"Autotune configuration:")
+    print(f"  Training batch size: {train_batch_size} agent-steps")
+    print(f"  Agents per environment: {num_agents_per_env}")
+    print(f"  Orchestrator batch size: {orchestrator_batch_size} environments")
+    print(f"  Max environments to test: {max_envs}")
+    print()
+
+    pufferlib.vector.autotune(
+        lambda: make_env(**args["env"]),
+        batch_size=orchestrator_batch_size,
+        max_env_ram_gb=args.get("max_env_ram_gb"),
+        max_batch_vram_gb=args.get("max_batch_vram_gb"),
+        max_envs=max_envs,
+        time_per_test=args.get("autotune_time", 5),
+    )
 
 
 def load_env(env_name, args):
@@ -1410,6 +1443,10 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--neptune-project", type=str, default="ablations")
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
+    parser.add_argument("--max-env-ram-gb", type=float, default=None, help="Max RAM (GB) for autotune (overrides auto-detection)")
+    parser.add_argument("--max-batch-vram-gb", type=float, default=None, help="Max VRAM (GB) for autotune (overrides auto-detection)")
+    parser.add_argument("--max-envs", type=int, default=None, help="Max environments for autotune (default: 2x batch size)")
+    parser.add_argument("--autotune-time", type=int, default=5, help="Time per test (seconds) for autotune")
     args = parser.parse_known_args()[0]
 
     if config_dir is None:
