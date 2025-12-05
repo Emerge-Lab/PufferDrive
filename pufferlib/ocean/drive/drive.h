@@ -3096,8 +3096,3 @@ void close_client(Client* client){
     CloseWindow();
     free(client);
 }
-
-static inline const char* get_drive_binary_dir() {
-    const char* dir = getenv("PUFFER_DRIVE_BINARY_DIR");
-    return (dir && dir[0]) ? dir : "resources/drive/binaries";
-}
