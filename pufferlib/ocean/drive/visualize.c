@@ -10,7 +10,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include "error.h"
-#include "drive.h"
 #include "drivenet.h"
 #include "libgen.h"
 #include "../env_config.h"
@@ -263,12 +262,12 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     env.human_agent_idx = 0;
 
     c_reset(&env);
+
     // Make client for rendering
     Client* client = (Client*)calloc(1, sizeof(Client));
     env.client = client;
 
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
-
     SetTargetFPS(6000);
 
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
@@ -280,8 +279,20 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
     int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
+
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
+
+    // Load the textures and models
+    client->puffers = LoadTexture("resources/puffers_128.png");
+    client->cars[0] = LoadModel("resources/drive/RedCar.glb");
+    client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
+    client->cars[2] = LoadModel("resources/drive/BlueCar.glb");
+    client->cars[3] = LoadModel("resources/drive/YellowCar.glb");
+    client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
+    client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
+    client->cyclist = LoadModel("resources/drive/cyclist.glb");
+    client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
 
     Weights* weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
@@ -359,6 +370,11 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         c_reset(&env);
         printf("Recording agent view...\n");
         for(int i = 0; i < frame_count; i++) {
+            // Check if selected agent has reached the first goal and stop recording
+            int human_idx = env.active_agent_indices[env.human_agent_idx];
+            if(env.entities[human_idx].reached_goal_this_episode) {
+                break;
+            }
             if (i % frame_skip == 0) {
                 renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
                 WriteFrame(&agent_recorder, img_width, img_height);
