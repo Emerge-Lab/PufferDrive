@@ -216,9 +216,9 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "episode_return", log->episode_return);
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
-    //assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
-    //assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
     assign_to_dict(dict, "avg_offroad_per_agent", log->avg_offroad_per_agent);
     assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
+    //assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }
