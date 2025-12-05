@@ -552,7 +552,6 @@ Entity *load_map_binary(const char *filename, Drive *env) {
         fread(&entities[i].length, sizeof(float), 1, file);
         fread(&entities[i].height, sizeof(float), 1, file);
         fread(&entities[i].goal_position_x, sizeof(float), 1, file);
-        //fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].goal_position_y, sizeof(float), 1, file);
         fread(&entities[i].goal_position_z, sizeof(float), 1, file);
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
@@ -1743,7 +1742,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         return;
     }
 
-    //To update agent's z-coordinate based on road elevation of 5 nearest elements
+    //To update agent's z-coordinate based on road elevation of 10 nearest elements
     GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*100];  // Array big enough for all neighboring cells
     int list_size = checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL*100, collision_offsets, 100);
     DepthPoint road_neighbours[list_size];
@@ -2309,8 +2308,6 @@ void compute_new_goal(Drive *env, int agent_idx) {
             float seg_dx = next_x - prev_x;
             float seg_dy = next_y - prev_y;
             float seg_dz = next_z - prev_z;
-            //float prev_z = 0;
-            //float next_z = 0;
             float segment_length = relative_distance_3d(prev_x, prev_y, prev_z, next_x, next_y, next_z);
 
             if (remaining_distance <= segment_length) {
