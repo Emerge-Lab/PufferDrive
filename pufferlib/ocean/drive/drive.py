@@ -26,6 +26,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior=0,
         dt=0.1,
         scenario_length=None,
+        termination_mode=None,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
@@ -55,6 +56,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
+        self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
 
@@ -172,6 +174,7 @@ class Drive(pufferlib.PufferEnv):
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
                 scenario_length=(int(scenario_length) if scenario_length is not None else None),
+                termination_mode=int(self.termination_mode),
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
@@ -592,6 +595,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         init_mode="create_all_valid",
         init_steps=0,
         scenario_length=91,
+        termination_mode=1
     )
 
     env.reset()

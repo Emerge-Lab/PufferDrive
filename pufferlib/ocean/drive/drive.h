@@ -311,6 +311,7 @@ struct Drive {
     GridMap* grid_map;
     int* neighbor_offsets;
     int scenario_length;
+    int termination_mode;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_ade;
@@ -2132,6 +2133,21 @@ void c_step(Drive* env){
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
     if(env->timestep == env->scenario_length){
+        add_log(env);
+	    c_reset(env);
+        return;
+    }
+
+    int originals_remaining = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        if (env->entities[agent_idx].respawn_timestep == -1) {
+            originals_remaining = 1;
+            break;
+        }
+    }
+
+    if(!originals_remaining && env->termination_mode==1){
         add_log(env);
 	    c_reset(env);
         return;
