@@ -13,8 +13,12 @@
 <br>
 <br>
 <br>
+<br>
 
 ---
+
+> **Note**: 🚀 `PufferDrive` release `2.0` coming soon and includes extended functionality + documentation. 
+
 
 ## Installation
 
