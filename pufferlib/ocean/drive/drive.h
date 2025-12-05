@@ -1761,7 +1761,7 @@ void compute_observations(Drive* env) {
 
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
-        float ego_speed = sqrtf(ego_entity->vx*ego_entity->vx + ego_entity->vy*ego_entity->vy);
+        float ego_speed = ego_entity->vx * cos_heading + ego_entity->vy * sin_heading;
 
         // Set goal distances
         float goal_x = ego_entity->goal_position_x - ego_entity->x;
@@ -3095,4 +3095,9 @@ void close_client(Client* client){
     UnloadTexture(client->puffers);
     CloseWindow();
     free(client);
+}
+
+static inline const char* get_drive_binary_dir() {
+    const char* dir = getenv("PUFFER_DRIVE_BINARY_DIR");
+    return (dir && dir[0]) ? dir : "resources/drive/binaries";
 }
