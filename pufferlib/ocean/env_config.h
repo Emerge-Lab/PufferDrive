@@ -27,6 +27,10 @@ typedef struct
     int init_steps;
     int init_mode;
     int control_mode;
+    int control_map_binaries_init;
+    int interpretability_eval;
+    int interpretability_num_agents;
+    char interpretability_map_binary[256];
     char map_dir[256];
 } env_init_config;
 
@@ -90,6 +94,26 @@ static int handler(
         env_config->init_mode = atoi(value);
     } else if (MATCH("env", "control_mode")) {
         env_config->control_mode = atoi(value);
+    } else if (MATCH("eval", "control_map_binaries_init")) {
+        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+            env_config->control_map_binaries_init = 1;
+        } else {
+            env_config->control_map_binaries_init = 0;
+        }
+    } else if (MATCH("eval", "interpretability_eval")) {
+        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+            env_config->interpretability_eval = 1;
+        } else {
+            env_config->interpretability_eval = 0;
+        }
+    } else if (MATCH("eval", "interpretability_num_agents")) {
+        env_config->interpretability_num_agents = atoi(value);
+    } else if (MATCH("eval", "interpretability_map_binary")) {
+        if (sscanf(value, "\"%255[^\"]\"", env_config->interpretability_map_binary) != 1) {
+            strncpy(env_config->interpretability_map_binary, value, sizeof(env_config->interpretability_map_binary) - 1);
+            env_config->interpretability_map_binary[sizeof(env_config->interpretability_map_binary) - 1] = '\0';
+        }
+        //printf("Parsed interpretability_map_binary: '%s'\n", env_config->interpretability_map_binary);
     } else if (MATCH("env", "map_dir")) {
         if (sscanf(value, "\"%255[^\"]\"", env_config->map_dir) != 1) {
             strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);

@@ -649,6 +649,7 @@ class HumanReplayEvaluator:
         import pufferlib
 
         num_agents = puffer_env.observation_space.shape[0]
+        atn_dim = puffer_env.single_action_space.nvec.tolist()
         device = args["train"]["device"]
 
         obs, info = puffer_env.reset()
@@ -666,11 +667,55 @@ class HumanReplayEvaluator:
                 logits, value = policy.forward_eval(ob_tensor, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                print(f'Action space shape: {puffer_env.action_space.shape}')
 
             if isinstance(logits, torch.distributions.Normal):
                 action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
             obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
+            print(f'Shapes: obs: {obs.shape}, rewards: {rewards.shape}, dones: {dones.shape}, truncs: {truncs.shape}, info_list len: {len(info_list)}')
+
+            if len(info_list) > 0:  # Happens at the end of episode
+                results = info_list[0]
+                return results
+
+
+class InterpretabilityEvaluator:
+    """Evaluates policies against human replays in PufferDrive."""
+
+    def __init__(self, config: Dict):
+        self.config = config
+        self.sim_steps = 91 - self.config["env"]["init_steps"]
+
+    def rollout(self, args, puffer_env, policy):
+
+        num_agents = puffer_env.observation_space.shape[0]
+        obs_dim = puffer_env.observation_space.shape[1]
+        action_dim = puffer_env.single_action_space.nvec.tolist()
+        device = args["train"]["device"]
+
+        obs, info = puffer_env.reset()
+        state = {}
+        if args["train"]["use_rnn"]:
+            state = dict(
+                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+            )
+
+        for time_id in range(self.sim_steps):
+            # Step policy
+            with torch.no_grad():
+                ob_tensor = torch.as_tensor(obs).to(device)
+                logits, value = policy.forward_eval(ob_tensor, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                print(f'Action space shape: {puffer_env.action_space.shape}')
+
+            if isinstance(logits, torch.distributions.Normal):
+                action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
+
+            obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
+            print(f'Shapes: obs: {obs.shape}, rewards: {rewards.shape}, dones: {dones.shape}, truncs: {truncs.shape}, info_list len: {len(info_list)}')
 
             if len(info_list) > 0:  # Happens at the end of episode
                 results = info_list[0]

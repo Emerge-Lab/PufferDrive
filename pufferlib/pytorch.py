@@ -168,7 +168,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 # taken from torch.distributions.Categorical
 def log_prob(logits, value):
-    print(f'logprob call: Logits shape: {logits.shape}, value shape: {value.shape}')
+    # print(f'logprob call: Logits shape: {logits.shape}, value shape: {value.shape}')
     value = value.long().unsqueeze(-1)
     value, log_pmf = torch.broadcast_tensors(value, logits)
     value = value[..., :1]
@@ -209,15 +209,15 @@ def sample_logits(logits, action=None):
     # This can fail on nans etc
     normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
     probs = logits_to_probs(logits)
-    print(f'logits: {normalized_logits[0, 1, :]}')
-    print(f'probs: {probs[0, 1, :]}')
+    # print(f'logits: {normalized_logits[0, 1, :]}')
+    # print(f'probs: {probs[0, 1, :]}')
 
     probs2 = logits_to_probs(logits=logits)
     assert torch.allclose(probs, probs2), f"Inconsistent probs computation {(probs - probs2).abs().max()}"
-    print(f'proximity: {(probs - probs2).abs().max()}')
+    # print(f'proximity: {(probs - probs2).abs().max()}')
 
     log_probs =  torch.log(probs2)
-    print(f'proximity log: {(log_probs - normalized_logits).abs().max()}')
+    # print(f'proximity log: {(log_probs - normalized_logits).abs().max()}')
     assert torch.allclose(log_probs, normalized_logits), f"Inconsistent log_probs computation {(log_probs - normalized_logits).abs().max()}"
     if action is None:
         probs = torch.nan_to_num(probs, 1e-8, 1e-8, 1e-8)
@@ -229,8 +229,8 @@ def sample_logits(logits, action=None):
 
     assert len(logits) == len(action)
     logprob = log_prob(normalized_logits, action)
-    print(f"logprob: {logprob.shape}p")
-    print(f"logprob sample: {logprob[0, 1]}")
+    # print(f"logprob: {logprob.shape}p")
+    # print(f"logprob sample: {logprob[0, 1]}")
     logits_entropy = entropy(normalized_logits).sum(0)
 
     if is_discrete:

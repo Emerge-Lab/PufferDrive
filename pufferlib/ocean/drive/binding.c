@@ -69,12 +69,15 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     char* map_dir = unpack_str(kwargs, "map_dir");
+    char* interpretability_map_binary = unpack_str(kwargs, "interpretability_map_binary");
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
+    int control_map_binaries_init = unpack(kwargs, "control_map_binaries_init");
+    int interpretability_eval = unpack(kwargs, "interpretability_eval");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
@@ -85,6 +88,31 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     PyObject* map_ids = PyList_New(max_envs);
     // getting env count
     while(total_agent_count < num_agents && env_count < max_envs){
+        if (interpretability_eval) {
+            int interp_map_id = -1;
+            if (control_map_binaries_init) {
+                num_maps = 1;
+                // Find "map_" in the string and parse the ID from there
+                char* map_pos = strstr(interpretability_map_binary, "map_");
+                if (map_pos) {
+                    sscanf(map_pos, "map_%03d.bin", &interp_map_id);
+                }
+                printf("Using interpretability map binary: %s with map_id: %d\n", interpretability_map_binary, interp_map_id);
+            } else {
+                num_maps = 1;
+                interp_map_id = rand() % num_maps;
+            }
+            // Store map_id
+            PyObject* map_id_obj = PyLong_FromLong(interp_map_id);
+            PyList_SetItem(map_ids, env_count, map_id_obj);
+            // Store agent offset
+            PyObject* offset = PyLong_FromLong(total_agent_count);
+            PyList_SetItem(agent_offsets, env_count, offset);
+            total_agent_count += 1;     // By default, only one agent is controlled in interpretability eval
+            env_count++;
+            continue;
+        }
+
         char map_file[100];
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
@@ -127,7 +155,7 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
             free(env->expert_static_agent_indices);
             free(env);
             continue;
-          }
+        }
 
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);
@@ -199,10 +227,12 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
     char map_file[100];
     sprintf(map_file, "%s/map_%03d.bin", map_dir, map_id);
+    printf("Initializing Drive environment with map: %s and max_agents: %d\n", map_file, max_agents);
     env->num_agents = max_agents;
     env->map_name = strdup(map_file);
     env->init_steps = init_steps;
     env->timestep = init_steps;
+    env->interpretability_eval = unpack(kwargs, "interpretability_eval");
     init(env);
     return 0;
 }

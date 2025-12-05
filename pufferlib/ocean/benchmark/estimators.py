@@ -156,7 +156,7 @@ def log_likelihood_estimate_scenario_level(
     min_val: float,
     max_val: float,
     num_bins: int,
-    additive_smoothing: float | None = None,
+    additive_smoothing: float = None,
     use_bernoulli: bool = False,
 ) -> np.ndarray:
     """Computes log-likelihood estimates for scenario-level features (no time dimension).

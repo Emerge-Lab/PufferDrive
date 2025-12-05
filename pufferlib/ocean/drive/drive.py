@@ -27,10 +27,10 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior=0,
         offroad_behavior=0,
         dt=0.1,
-        scenario_length=None,
-        resample_frequency=91,
-        num_maps=100,
-        num_agents=512,
+        scenario_length=91,
+        resample_frequency=9100,
+        num_maps=1,
+        num_agents=1,
         action_type="discrete",
         dynamics_model="classic",
         max_controlled_agents=-1,
@@ -38,8 +38,11 @@ class Drive(pufferlib.PufferEnv):
         seed=1,
         init_steps=0,
         init_mode="create_all_valid",
-        control_mode="control_vehicles",
-        map_dir="resources/drive/binaries/training",
+        control_mode="control_sdc_only",
+        map_dir="resources/drive/binaries/interpretability",
+        interpretability_eval=True,
+        control_map_binaries_init=True,
+        interpretability_map_binary="map_000.bin",
     ):
         # env
         self.dt = dt
@@ -138,16 +141,29 @@ class Drive(pufferlib.PufferEnv):
             )
         self.max_controlled_agents = int(max_controlled_agents)
 
+        # Load interpretability map binaries if specified
+        self.interpretability_eval = interpretability_eval
+        self.control_map_binaries_init = control_map_binaries_init
+        if interpretability_map_binary is not None and len(interpretability_map_binary) > 0:
+            self.interpretability_map_binary = interpretability_map_binary
+            self.num_maps = 1
+            print(f"Using interpretability map binary for initialization: {self.interpretability_map_binary}")
+        else:
+            self.interpretability_map_binary = None
+
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
-            map_dir=map_dir,
+            map_dir=self.map_dir,
             num_agents=num_agents,
-            num_maps=num_maps,
+            num_maps=self.num_maps,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            interpretability_map_binary=self.interpretability_map_binary,
+            interpretability_eval=self.interpretability_eval,
+            control_map_binaries_init=self.control_map_binaries_init,
         )
 
         self.num_agents = num_agents
@@ -155,10 +171,23 @@ class Drive(pufferlib.PufferEnv):
         self.map_ids = map_ids
         self.num_envs = num_envs
         super().__init__(buf=buf)
+        action_dim = self.single_action_space.nvec.tolist()
+        print(f"Action dim: {action_dim}")
+        self.all_transition_observations = np.zeros((self.num_agents, sum(action_dim), *(self.single_observation_space).shape), dtype=self.single_observation_space.dtype)
+        self.all_transition_rewards = np.zeros((self.num_agents, sum(action_dim)), dtype=np.float32)
+        print("All Env Bindings Shapes")
+        print(f"Observations: {self.observations.shape}")
+        print(f"Actions: {self.actions.shape}")
+        print(f"Rewards: {self.rewards.shape}")
+        print(f"Terminals: {self.terminals.shape}")
+        print(f"Truncations: {self.truncations.shape}")
+        print(f"All action observations: {self.all_transition_observations.shape}")
+        print(f"All action rewards: {self.all_transition_rewards.shape}")
         env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i + 1]
+            print(f"obs shape for this env: {self.observations[cur:nxt].shape}")
             env_id = binding.env_init(
                 self.observations[cur:nxt],
                 self.actions[cur:nxt],
@@ -166,6 +195,8 @@ class Drive(pufferlib.PufferEnv):
                 self.terminals[cur:nxt],
                 self.truncations[cur:nxt],
                 seed,
+                self.all_transition_observations[cur:nxt],
+                self.all_transition_rewards[cur:nxt],
                 action_type=self._action_type_flag,
                 human_agent_idx=human_agent_idx,
                 reward_vehicle_collision=reward_vehicle_collision,
@@ -187,6 +218,7 @@ class Drive(pufferlib.PufferEnv):
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
                 map_dir=map_dir,
+                interpretability_eval=self.interpretability_eval,
             )
             env_ids.append(env_id)
 
@@ -201,6 +233,7 @@ class Drive(pufferlib.PufferEnv):
         self.terminals[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
+        # print(f'all trans stats: {self.all_transition_observations}, {self.all_transition_rewards}')
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
@@ -209,6 +242,7 @@ class Drive(pufferlib.PufferEnv):
                 info.append(log)
                 # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+            print(f"Resampling environments, {self.tick} steps completed.")
             self.tick = 0
             will_resample = 1
             if will_resample:
@@ -222,6 +256,9 @@ class Drive(pufferlib.PufferEnv):
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
                     map_dir=self.map_dir,
+                    interpretability_map_binary=self.interpretability_map_binary,
+                    interpretability_eval=self.interpretability_eval,
+                    control_map_binaries_init=self.control_map_binaries_init,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
@@ -235,6 +272,8 @@ class Drive(pufferlib.PufferEnv):
                         self.terminals[cur:nxt],
                         self.truncations[cur:nxt],
                         seed,
+                        self.all_transition_observations[cur:nxt],
+                        self.all_transition_rewards[cur:nxt],
                         action_type=self._action_type_flag,
                         human_agent_idx=self.human_agent_idx,
                         reward_vehicle_collision=self.reward_vehicle_collision,
@@ -256,6 +295,7 @@ class Drive(pufferlib.PufferEnv):
                         init_mode=self.init_mode,
                         control_mode=self.control_mode,
                         map_dir=self.map_dir,
+                        interpretability_eval=self.interpretability_eval,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -263,6 +303,11 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs, seed)
                 self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+    def step_all_transitions(self):
+        print(f'Before: all trans stats: {self.all_transition_observations}, {self.all_transition_rewards}')
+        binding.vec_step_all_transitions(self.c_envs)
+        print(f'After: all trans stats: {self.all_transition_observations}, {self.all_transition_rewards}')
 
     def get_global_agent_state(self):
         """Get current global state of all active agents.
@@ -617,24 +662,20 @@ def process_all_maps(
                 print(f"  {name}: {error}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=10, atn_cache=1024, num_agents=1):
     import time
 
     env = Drive(
         num_agents=num_agents,
-        num_maps=1,
-        control_mode="control_vehicles",
-        init_mode="create_all_valid",
-        init_steps=0,
-        scenario_length=91,
     )
 
     env.reset()
-
+    env.step_all_transitions()
     tick = 0
     actions = np.stack(
         [np.random.randint(0, space.n + 1, (atn_cache, num_agents)) for space in env.single_action_space], axis=-1
     )
+    print(f'Actions: {actions.shape}, {actions.dtype}')
 
     start = time.time()
     while time.time() - start < timeout:
@@ -648,8 +689,8 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
-    # test_performance()
+    test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    # process_all_maps(data_folder="data/processed/interpretable_scenarios")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")

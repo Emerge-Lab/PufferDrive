@@ -49,8 +49,8 @@ static Env* unpack_env(PyObject* args) {
 
 // Python function to initialize the environment
 static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "Environment requires 5 arguments");
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "Environment requires 7 arguments");
         return NULL;
     }
 
@@ -143,6 +143,30 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         return NULL;
     }
     int seed = PyLong_AsLong(seed_arg);
+
+    PyObject* all_trans_obs = PyTuple_GetItem(args, 6);
+    if (!PyObject_TypeCheck(all_trans_obs, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "Observations must be a NumPy array");
+        return NULL;
+    }
+    PyArrayObject* all_trans_observations = (PyArrayObject*)all_trans_obs;
+    if (!PyArray_ISCONTIGUOUS(all_trans_observations)) {
+        PyErr_SetString(PyExc_ValueError, "Observations must be contiguous");
+        return NULL;
+    }
+    env->all_transition_observations = PyArray_DATA(all_trans_observations);
+
+    PyObject* all_trans_rew = PyTuple_GetItem(args, 7);
+    if (!PyObject_TypeCheck(all_trans_rew, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "Observations must be a NumPy array");
+        return NULL;
+    }
+    PyArrayObject* all_trans_rewards = (PyArrayObject*)all_trans_rew;
+    if (!PyArray_ISCONTIGUOUS(all_trans_rewards)) {
+        PyErr_SetString(PyExc_ValueError, "Observations must be contiguous");
+        return NULL;
+    }
+    env->all_transition_rewards = PyArray_DATA(all_trans_rewards);
 
     // Assumes each process has the same number of environments
     srand(seed);
@@ -502,6 +526,24 @@ static PyObject* vec_reset(PyObject* self, PyObject* args) {
         // Assumes each process has the same number of environments
         srand(i + seed*vec->num_envs);
         c_reset(vec->envs[i]);
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject* vec_step_all_transitions(PyObject* self, PyObject* arg) {
+    int num_args = PyTuple_Size(arg);
+    if (num_args != 1) {
+        PyErr_SetString(PyExc_TypeError, "vec_step_all_transitions requires 1 argument");
+        return NULL;
+    }
+
+    VecEnv* vec = unpack_vecenv(arg);
+    if (!vec) {
+        return NULL;
+    }
+
+    for (int i = 0; i < vec->num_envs; i++) {
+        step_all_transitions(vec->envs[i]);
     }
     Py_RETURN_NONE;
 }
@@ -955,6 +997,7 @@ static PyMethodDef methods[] = {
     {"vectorize", vectorize, METH_VARARGS, "Make a vector of environment handles"},
     {"vec_init", (PyCFunction)vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
     {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
+    {"vec_step_all_transitions", vec_step_all_transitions, METH_VARARGS, "Step all transitions in the vector of environments"},
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},

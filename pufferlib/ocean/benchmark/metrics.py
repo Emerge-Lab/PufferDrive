@@ -186,7 +186,7 @@ def compute_interaction_features(
     agent_width: np.ndarray,
     eval_mask: np.ndarray,
     device: torch.device,
-    valid: np.ndarray | None = None,
+    valid: np.ndarray = None,
     corner_rounding_factor: float = 0.7,
     seconds_per_step: float = 0.1,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -304,7 +304,7 @@ def compute_map_features(
     agent_width: np.ndarray,
     road_edge_polylines: dict,
     device: torch.device,
-    valid: np.ndarray | None = None,
+    valid: np.ndarray = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Computes distance to road edge and offroad indication for each agent.
 
