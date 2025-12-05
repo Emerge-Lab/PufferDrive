@@ -73,6 +73,7 @@
 #define REMOVE_AGENT 2
 
 #define ROAD_FEATURES 7
+#define ROAD_FEATURES_ONEHOT 13
 #define PARTNER_FEATURES 7
 
 // Ego features depend on dynamics model

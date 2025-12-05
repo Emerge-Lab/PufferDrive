@@ -172,15 +172,15 @@ void forward(DriveNet* net, float* observations, int* actions) {
         }
 
         // Process road observation
-        for(int i = 0; i < 128; i++) {
+        for(int i = 0; i < MAX_ROAD_SEGMENT_OBSERVATIONS; i++) {
             for(int j = 0; j < 7; j++) {
-                net->obs_road[b*128*13 + i*13 + j] = observations[road_offset + i*7 + j];
+                net->obs_road[b*MAX_ROAD_SEGMENT_OBSERVATIONS*ROAD_FEATURES_ONEHOT + i*ROAD_FEATURES_ONEHOT + j] = observations[road_offset + i*7 + j];
             }
             for(int j = 0; j < 7; j++) {
                 if(j == observations[road_offset+i*7 + 6]) {
-                    net->obs_road[b*128*13 + i*13 + 6 + j] = 1.0f;
+                    net->obs_road[b*MAX_ROAD_SEGMENT_OBSERVATIONS*ROAD_FEATURES_ONEHOT + i*ROAD_FEATURES_ONEHOT + 6 + j] = 1.0f;
                 } else {
-                    net->obs_road[b*128*13 + i*13 + 6 + j] = 0.0f;
+                    net->obs_road[b*MAX_ROAD_SEGMENT_OBSERVATIONS*ROAD_FEATURES_ONEHOT + i*ROAD_FEATURES_ONEHOT + 6 + j] = 0.0f;
                 }
             }
         }
@@ -196,24 +196,24 @@ void forward(DriveNet* net, float* observations, int* actions) {
             float* obj_features = &net->obs_partner[b*max_partners*partner_features + obj*partner_features];
             // Apply linear layer to this object
             _linear(obj_features, net->partner_encoder->weights, net->partner_encoder->bias,
-                   &net->partner_linear_output[b*max_partners*64 + obj*64], 1, partner_features, 64);
+                   &net->partner_linear_output[b*max_partners*NN_INPUT_SIZE + obj*NN_INPUT_SIZE], 1, partner_features, NN_INPUT_SIZE);
         }
     }
 
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_partners; obj++) {
-            float* after_first = &net->partner_linear_output[b*max_partners*64 + obj*64];
+            float* after_first = &net->partner_linear_output[b*max_partners*NN_INPUT_SIZE + obj*NN_INPUT_SIZE];
             _layernorm(after_first, net->partner_layernorm->weights, net->partner_layernorm->bias,
-                        &net->partner_layernorm_output[b*max_partners*64 + obj*64], 1, 64);
+                        &net->partner_layernorm_output[b*max_partners*NN_INPUT_SIZE + obj*NN_INPUT_SIZE], 1, NN_INPUT_SIZE);
         }
     }
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_partners; obj++) {
             // Get the 7 features for this object
-            float* obj_features = &net->partner_layernorm_output[b*max_partners*64 + obj*64];
+            float* obj_features = &net->partner_layernorm_output[b*max_partners*NN_INPUT_SIZE + obj*NN_INPUT_SIZE];
             // Apply linear layer to this object
             _linear(obj_features, net->partner_encoder_two->weights, net->partner_encoder_two->bias,
-                   &net->partner_linear_output_two[b*max_partners*64 + obj*64], 1, 64, 64);
+                   &net->partner_linear_output_two[b*max_partners*NN_INPUT_SIZE + obj*NN_INPUT_SIZE], 1, NN_INPUT_SIZE, NN_INPUT_SIZE);
 
         }
     }
@@ -222,26 +222,26 @@ void forward(DriveNet* net, float* observations, int* actions) {
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_road_obs; obj++) {
             // Get the 13 features for this object
-            float* obj_features = &net->obs_road[b*max_road_obs*(road_features + 6) + obj*(road_features + 6)];
+            float* obj_features = &net->obs_road[b*max_road_obs*ROAD_FEATURES_ONEHOT + obj*ROAD_FEATURES_ONEHOT];
             // Apply linear layer to this object
             _linear(obj_features, net->road_encoder->weights, net->road_encoder->bias,
-                   &net->road_linear_output[b*max_road_obs*64 + obj*64], 1, road_features + 6, 64);
+                   &net->road_linear_output[b*max_road_obs*NN_INPUT_SIZE + obj*NN_INPUT_SIZE], 1, ROAD_FEATURES_ONEHOT, NN_INPUT_SIZE);
         }
     }
 
     // Apply layer norm and second linear to each road object
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_road_obs; obj++) {
-            float* after_first = &net->road_linear_output[b*max_road_obs*64 + obj*64];
+            float* after_first = &net->road_linear_output[b*max_road_obs*NN_INPUT_SIZE + obj*NN_INPUT_SIZE];
             _layernorm(after_first, net->road_layernorm->weights, net->road_layernorm->bias,
-                        &net->road_layernorm_output[b*max_road_obs*64 + obj*64], 1, 64);
+                        &net->road_layernorm_output[b*max_road_obs*NN_INPUT_SIZE + obj*NN_INPUT_SIZE], 1, NN_INPUT_SIZE);
         }
     }
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_road_obs; obj++) {
-            float* after_first = &net->road_layernorm_output[b*max_road_obs*64 + obj*64];
+            float* after_first = &net->road_layernorm_output[b*max_road_obs*NN_INPUT_SIZE + obj*NN_INPUT_SIZE];
             _linear(after_first, net->road_encoder_two->weights, net->road_encoder_two->bias,
-                    &net->road_linear_output_two[b*max_road_obs*64 + obj*64], 1, 64, 64);
+                    &net->road_linear_output_two[b*max_road_obs*NN_INPUT_SIZE + obj*NN_INPUT_SIZE], 1, NN_INPUT_SIZE, NN_INPUT_SIZE);
         }
     }
 
