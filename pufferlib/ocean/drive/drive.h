@@ -2533,7 +2533,6 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
 
     // Draw the diamond faces
     // Top pyramid
-    //printf("Drawing agent %d observations in mode %d\n", agent_index, mode);
     if(mode ==0){
         DrawTriangle3D(top_point, front_point, right_point, PUFF_CYAN);    // Front-right face
         DrawTriangle3D(top_point, right_point, back_point, PUFF_CYAN);     // Back-right face
@@ -2547,7 +2546,6 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawTriangle3D(bottom_point, front_point, left_point, PUFF_CYAN);  // Front-left face
     }
     if(!IsKeyDown(KEY_LEFT_CONTROL) && obs_only==0){
-        //printf("Skipping drawing observations for agent %d\n", agent_index);
         return;
     }
 
@@ -2572,12 +2570,10 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         DrawCircle3D((Vector3){goal_x, goal_y, goal_z}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
 
-    if (mode == 1){
-        printf("Ego Position: %.2f, %.2f, %.2f\n", px, py, pz);
+    if (mode == 1 || mode == 2){
         float goal_x_world = px + (goal_x * heading_self_x - goal_y*heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y*heading_self_x);
         float goal_z_world = pz + goal_z;
-        printf("Goal World: %.2f, %.2f, %.2f\n", goal_x_world, goal_y_world, goal_z_world);
         DrawSphere((Vector3){goal_x_world, goal_y_world, goal_z_world}, 0.5f, LIGHTGREEN);
         DrawCircle3D((Vector3){goal_x_world, goal_y_world, goal_z_world}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
@@ -2647,7 +2643,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
             }
         }
 
-        if(mode ==1){
+        if(mode ==1 || mode ==2){
             Vector3 world_corners[4];
             for (int j = 0; j < 4; j++) {
                 float lx = corners[j].x;
@@ -2674,7 +2670,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
         if(mode ==0){
             DrawLine3D((Vector3){x, y, z}, (Vector3){arrow_x, arrow_y, arrow_z}, PUFF_WHITE);
         }
-        if(mode == 1){
+        if(mode == 1 || mode == 2){
             arrow_x_world = px + (arrow_x * heading_self_x - arrow_y*heading_self_y);
             arrow_y_world = py + (arrow_x * heading_self_y + arrow_y*heading_self_x);
             arrow_z_world = pz + arrow_z;
@@ -2715,7 +2711,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
                 );
             }
 
-            if(mode==1){
+            if(mode==1 || mode==2){
                 float arrow_x_end1_world = px + (arrow_x_end1 * heading_self_x - arrow_y_end1*heading_self_y);
                 float arrow_y_end1_world = py + (arrow_x_end1 * heading_self_y + arrow_y_end1*heading_self_x);
                 float arrow_x_end2_world = px + (arrow_x_end2 * heading_self_x - arrow_y_end2*heading_self_y);
@@ -2771,7 +2767,7 @@ void draw_agent_obs(Drive* env, int agent_index, int mode, int obs_only, int las
             DrawLine3D((Vector3){0,0,0}, (Vector3){x_middle, y_middle, 1}, lineColor);
         }
 
-        if(mode ==1){
+        if(mode ==1 || mode ==2){
             float x_middle_world = px + (x_middle*heading_self_x - y_middle*heading_self_y);
             float y_middle_world = py + (x_middle*heading_self_y + y_middle*heading_self_x);
             float x_start_world = px + (x_start*heading_self_x - y_start*heading_self_y);
@@ -2868,11 +2864,7 @@ void draw_road_edge(Drive* env, float start_x, float start_y, float end_x, float
 
 void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, int show_grid){
    // Draw a grid to help with orientation
-    // DrawGrid(20, 1.0f);
-    //DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->top_left_y, 0}, (Vector3){env->grid_map->bottom_right_x, env->grid_map->top_left_y, 0}, PUFF_CYAN);
-    //DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0}, (Vector3){env->grid_map->top_left_x, env->grid_map->top_left_y, 0}, PUFF_CYAN);
-    //DrawLine3D((Vector3){env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0}, (Vector3){env->grid_map->bottom_right_x, env->grid_map->top_left_y, 0}, PUFF_CYAN);
-    //DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0}, (Vector3){env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0}, PUFF_CYAN);
+
     for(int i = 0; i < env->num_entities; i++) {
         // Draw objects
         if(env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST) {
@@ -2915,7 +2907,8 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
             bool is_expert = (!is_active_agent) && (env->entities[i].mark_as_expert == 1);
 
             // Save current transform
-            if(mode==1){
+            if(mode==2){
+
                 float cos_heading = env->entities[i].heading_x;
                 float sin_heading = env->entities[i].heading_y;
 
@@ -2958,89 +2951,133 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                     continue;
                 }
 
-                // // --- Draw the car using 3D model ---
+                // --- Draw the car using 3D model ---
 
-                // rlPushMatrix();
-                // // Translate to position, rotate around Z axis, then draw
-                // rlTranslatef(position.x, position.y, position.z);
-                // rlRotatef(heading*RAD2DEG, 0.0f, 0.0f, 1.0f);  // Convert radians to degrees
+                rlPushMatrix();
+                // Translate to position, rotate around Z axis, then draw
+                rlTranslatef(position.x, position.y, position.z);
+                rlRotatef(heading*RAD2DEG, 0.0f, 0.0f, 1.0f);  // Convert radians to degrees
 
-                // // Select car model and color
-                // Model car_model = client->cars[i % 6];  // Default: cycle through all 6 car sprites
-                // Color car_tint = WHITE;  // Default tint
+                // Select car model and color
+                Model car_model = client->cars[i % 6];  // Default: cycle through all 6 car sprites
+                Color car_tint = WHITE;  // Default tint
 
-                // if(agent_index == env->human_agent_idx){
-                //     car_model = client->cars[0];  // Ego agent always uses red car (cars[0])
-                // }
-                // else if(is_active_agent){
-                //     // Use cars 1-5 for other active agents to avoid red
-                //     int car_idx = client->car_assignments[i % 64];
-                //     if(car_idx == 0) car_idx = 1;  // Skip red car for non-ego agents
-                //     car_model = client->cars[car_idx % 6];
+                if(agent_index == env->human_agent_idx){
+                    car_model = client->cars[0];  // Ego agent always uses red car (cars[0])
+                }
+                else if(is_active_agent){
+                    // Use cars 1-5 for other active agents to avoid red
+                    int car_idx = client->car_assignments[i % 64];
+                    if(car_idx == 0) car_idx = 1;  // Skip red car for non-ego agents
+                    car_model = client->cars[car_idx % 6];
 
-                //     if(env->entities[i].aabb_collision_state > 0){
-                //         car_model = client->cars[4]; // AABB Collided agents use green car
-                //         car_tint = LIGHTGREEN;  // Apply green tint to make it more visible
-                //     }
-                //     else if(env->entities[i].collision_state > 0) {
-                //         car_model = client->cars[0];  // Collided agents use red
-                //     }
-                // }
-                // else if(is_expert){
-                //     car_tint = GOLD;  // Tint expert cars gold
-                // }
-                // else {
-                //     car_tint = GRAY;  // Tint static cars gray
-                // }
+                    if(env->entities[i].aabb_collision_state > 0){
+                        car_model = client->cars[4]; // AABB Collided agents use green car
+                        car_tint = LIGHTGREEN;  // Apply green tint to make it more visible
+                    }
+                    else if(env->entities[i].collision_state > 0) {
+                        car_model = client->cars[0];  // Collided agents use red
+                    }
+                }
+                else if(is_expert){
+                    car_tint = GOLD;  // Tint expert cars gold
+                }
+                else {
+                    car_tint = GRAY;  // Tint static cars gray
+                }
 
                 // Calculate scale factors based on desired size and model dimensions
-                // BoundingBox bounds = GetModelBoundingBox(car_model);
-                // Vector3 model_size = {
-                //     bounds.max.x - bounds.min.x,
-                //     bounds.max.y - bounds.min.y,
-                //     bounds.max.z - bounds.min.z
-                // };
-                // Vector3 scale = {
-                //     size.x / model_size.x,
-                //     size.y / model_size.y,
-                //     size.z / model_size.z
-                // };
+                BoundingBox bounds = GetModelBoundingBox(car_model);
+                Vector3 model_size = {
+                    bounds.max.x - bounds.min.x,
+                    bounds.max.y - bounds.min.y,
+                    bounds.max.z - bounds.min.z
+                };
+                Vector3 scale = {
+                    size.x / model_size.x,
+                    size.y / model_size.y,
+                    size.z / model_size.z
+                };
 
-                // // Handle different entity types
-                // if(env->entities[i].type == CYCLIST){
-                //     scale = (Vector3){0.01, 0.01, 0.01};
-                //     car_model = client->cyclist;
-                // }
-                // if(env->entities[i].type == PEDESTRIAN){
-                //     scale = (Vector3){2, 2, 2};
-                //     car_model = client->pedestrian;
-                // }
+                // Handle different entity types
+                if(env->entities[i].type == CYCLIST){
+                    scale = (Vector3){0.01, 0.01, 0.01};
+                    car_model = client->cyclist;
+                }
+                if(env->entities[i].type == PEDESTRIAN){
+                    scale = (Vector3){2, 2, 2};
+                    car_model = client->pedestrian;
+                }
 
-                // DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, car_tint);
+                DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, car_tint);
 
-                // {
-                //     float cos_heading = env->entities[i].heading_x;
-                //     float sin_heading = env->entities[i].heading_y;
-                //     float half_len = env->entities[i].length * 0.5f;
-                //     float half_width = env->entities[i].width * 0.5f;
-                //     Vector3 corners[4] = {
-                //         (Vector3){ 0 + ( half_len * cos_heading - half_width * sin_heading), 0 + ( half_len * sin_heading + half_width * cos_heading), 0 },
-                //         (Vector3){ 0 + ( half_len * cos_heading + half_width * sin_heading), 0 + ( half_len * sin_heading - half_width * cos_heading), 0 },
-                //         (Vector3){ 0 + (-half_len * cos_heading + half_width * sin_heading), 0 + (-half_len * sin_heading - half_width * cos_heading), 0 },
-                //         (Vector3){ 0 + (-half_len * cos_heading - half_width * sin_heading), 0 + (-half_len * sin_heading + half_width * cos_heading), 0 },
-                //     };
-                //     Color wire_color = GRAY;                 // static
-                //     if (!is_active_agent && env->entities[i].mark_as_expert == 1) wire_color = GOLD;  // expert replay
-                //     if (is_active_agent) wire_color = BLUE;   // policy
-                //     if (is_active_agent && env->entities[i].aabb_collision_state > 0) wire_color = LIGHTGREEN;
-                //     if (is_active_agent && env->entities[i].collision_state > 0) wire_color = RED;
-                //     rlSetLineWidth(2.0f);
-                //     for (int j = 0; j < 4; j++) {
-                //         DrawLine3D(corners[j], corners[(j+1)%4], wire_color);
-                //     }
-                // }
+                {
+                    float cos_heading = env->entities[i].heading_x;
+                    float sin_heading = env->entities[i].heading_y;
+                    float half_len = env->entities[i].length * 0.5f;
+                    float half_width = env->entities[i].width * 0.5f;
+                    Vector3 corners[4] = {
+                        (Vector3){ 0 + ( half_len * cos_heading - half_width * sin_heading), 0 + ( half_len * sin_heading + half_width * cos_heading), 0 },
+                        (Vector3){ 0 + ( half_len * cos_heading + half_width * sin_heading), 0 + ( half_len * sin_heading - half_width * cos_heading), 0 },
+                        (Vector3){ 0 + (-half_len * cos_heading + half_width * sin_heading), 0 + (-half_len * sin_heading - half_width * cos_heading), 0 },
+                        (Vector3){ 0 + (-half_len * cos_heading - half_width * sin_heading), 0 + (-half_len * sin_heading + half_width * cos_heading), 0 },
+                    };
+                    Color wire_color = GRAY;                 // static
+                    if (!is_active_agent && env->entities[i].mark_as_expert == 1) wire_color = GOLD;  // expert replay
+                    if (is_active_agent) wire_color = BLUE;   // policy
+                    if (is_active_agent && env->entities[i].aabb_collision_state > 0) wire_color = LIGHTGREEN;
+                    if (is_active_agent && env->entities[i].collision_state > 0) wire_color = RED;
+                    rlSetLineWidth(2.0f);
+                    for (int j = 0; j < 4; j++) {
+                        DrawLine3D(corners[j], corners[(j+1)%4], wire_color);
+                    }
+                }
 
-                // rlPopMatrix();
+                rlPopMatrix();
+            }
+            else if(mode==1){
+                float cos_heading = env->entities[i].heading_x;
+                float sin_heading = env->entities[i].heading_y;
+
+                // Calculate half dimensions
+                float half_len = env->entities[i].length * 0.5f;
+                float half_width = env->entities[i].width * 0.5f;
+
+                // Calculate the four corners of the collision box
+                Vector3 corners[4] = {
+                    (Vector3){
+                        position.x + (half_len * cos_heading - half_width * sin_heading),
+                        position.y + (half_len * sin_heading + half_width * cos_heading),
+                        position.z
+                    },
+
+
+                    (Vector3){
+                        position.x + (half_len * cos_heading + half_width * sin_heading),
+                        position.y + (half_len * sin_heading - half_width * cos_heading),
+                        position.z
+                    },
+                   (Vector3){
+                        position.x + (-half_len * cos_heading + half_width * sin_heading),
+                        position.y + (-half_len * sin_heading - half_width * cos_heading),
+                        position.z
+                    },
+                   (Vector3){
+                        position.x + (-half_len * cos_heading - half_width * sin_heading),
+                        position.y + (-half_len * sin_heading + half_width * cos_heading),
+                        position.z
+                    },
+
+
+                };
+
+                if(agent_index == env->human_agent_idx && !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
+                    draw_agent_obs(env, agent_index, mode, obs_only, lasers);
+                }
+                if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
+                    continue;
+                }
+
                 Vector3 carPos = { position.x, position.y, position.z };
                 Color car_color = GRAY;              // default for static
                 if (is_expert) car_color = GOLD;      // expert replay
@@ -3179,10 +3216,6 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 continue;
             }
             if(!IsKeyDown(KEY_LEFT_CONTROL) && obs_only==0){
-                printf("Drawing goal for agent %d at (%.2f, %.2f, %.2f)\n", i,
-                    env->entities[i].goal_position_x,
-                    env->entities[i].goal_position_y,
-                    env->entities[i].goal_position_z);
                 DrawSphere((Vector3){
                     env->entities[i].goal_position_x,
                     env->entities[i].goal_position_y,
@@ -3211,7 +3244,7 @@ void draw_scene(Drive* env, Client* client, int mode, int obs_only, int lasers, 
                 env->entities[i].traj_y[j + 1],
                 env->entities[i].traj_z[j + 1]
             };
-            //printf("Drawing road entity %d from (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)\n", i, start.x, start.y, start.z, end.x, end.y, end.z);
+
             Color lineColor = GRAY;
             if (env->entities[i].type == ROAD_LANE) lineColor = GRAY;
             else if (env->entities[i].type == ROAD_LINE) lineColor = BLUE;

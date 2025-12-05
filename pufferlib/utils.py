@@ -271,6 +271,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
             # Output paths (overwrite each iteration; then moved/renamed)
             cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
             cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+            cmd.extend(["--output-cinematic", "resources/drive/output_cinematic.mp4"])
 
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env_vars)
 

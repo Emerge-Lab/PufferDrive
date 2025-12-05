@@ -139,7 +139,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     EndDrawing();
 }
 
-void render3DView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid, int img_width, int img_height) {
+void renderCinematicView(Drive* env, Client* client, int map_height, int obs, int lasers, int trajectories, int frame_count, float* path, int log_trajectories, int show_grid, int img_width, int img_height) {
 
     // Calculate map center
     float center_x = (env->grid_map->top_left_x + env->grid_map->bottom_right_x) / 2.0f;
@@ -165,23 +165,6 @@ void render3DView(Drive* env, Client* client, int map_height, int obs, int laser
     camera.fovy = 45.0f;                                     // Field of view
     camera.projection = CAMERA_PERSPECTIVE;                  // Perspective for depth
 
-    Vector3 cubePosition = { 0.0f, 0.0f, 0.0f };
-
-
-    // // Cinematic angled perspective camera
-    // Camera3D camera = {0};
-    // // Position camera at an angle (isometric-ish view)
-    // float camera_distance = fmaxf(map_width, map_height_world) * 1.2f;
-    // camera.position = (Vector3){
-    //     center_x - camera_distance * 0.7f,  // offset in x
-    //     center_y - camera_distance * 0.7f,  // offset in y
-    //     camera_distance * 0.8f               // height above scene
-    // };
-    // camera.target = (Vector3){ center_x, center_y, 0.0f };  // look at map center
-    // camera.up = (Vector3){ 0.0f, 0.0f, 1.0f };              // Z is up
-    // camera.fovy = 45.0f;                                     // perspective FOV
-    // camera.projection = CAMERA_PERSPECTIVE;
-
     client->width = img_width;
     client->height = img_height;
 
@@ -190,34 +173,6 @@ void render3DView(Drive* env, Client* client, int map_height, int obs, int laser
     BeginMode3D(camera);
     rlEnableDepthTest();
 
-    // DrawCube(cubePosition, 2.0f, 2.0f, 2.0f, RED);
-    // DrawCubeWires(cubePosition, 2.0f, 2.0f, 2.0f, MAROON);
-
-    // // Mark the origin with a LARGE red sphere and long axis lines (very visible!)
-    // DrawSphere((Vector3){0.0f, 0.0f, 0.0f}, 10.0f, RED);
-    // // Draw long coordinate axes at origin for visibility
-    // DrawLine3D((Vector3){0.0f, 0.0f, 0.0f}, (Vector3){100.0f, 0.0f, 0.0f}, RED);    // X-axis
-    // DrawLine3D((Vector3){0.0f, 0.0f, 0.0f}, (Vector3){0.0f, 100.0f, 0.0f}, GREEN);  // Y-axis
-    // DrawLine3D((Vector3){0.0f, 0.0f, 0.0f}, (Vector3){0.0f, 0.0f, 100.0f}, BLUE);   // Z-axis
-
-    // Draw the map center
-    // DrawSphere((Vector3){center_x, center_y, 0.0f}, 5.0f, YELLOW);
-    // DrawSphere((Vector3){80, 250, 0.0f}, 5.0f, YELLOW);
-    // DrawSphere((Vector3){-20, 0, 0.0f}, 5.0f, YELLOW);
-    // DrawSphere((Vector3){40, 0, 0.0f}, 5.0f, YELLOW);
-    // DrawSphere((Vector3){45, 0, 0.0f}, 5.0f, YELLOW);
-    // DrawSphere((Vector3){45, -10, 0.0f}, 5.0f, YELLOW);
-    // DrawSphere((Vector3){55, 0, 0.0f}, 5.0f, GREEN);
-    // DrawSphere((Vector3){55, -10, 0.0f}, 5.0f, GREEN);
-    // DrawSphere((Vector3){55, -20, 0.0f}, 5.0f, GREEN);
-    // DrawSphere((Vector3){55, -30, 0.0f}, 5.0f, GREEN);
-    // DrawSphere((Vector3){60, 0, 0.0f}, 5.0f, YELLOW);
-    // DrawSphere((Vector3){-30, -10, 0.0f}, 5.0f, YELLOW);
-    // DrawSphere((Vector3){-40, 0, 0.0f}, 5.0f, YELLOW);
-    // DrawSphere((Vector3){0, -300, 10.0f}, 5.0f, GREEN);
-    // DrawSphere((Vector3){0, -10, 10.0f}, 5.0f, GREEN);
-    // DrawSphere((Vector3){40, -100, 0.0f}, 5.0f, GREEN);
-    // DrawSphere((Vector3){50, -100, 0.0f}, 5.0f, GREEN);
     // Mark the 4 corners of the map bounds
     float top_left_x = env->grid_map->top_left_x;
     float top_left_y = env->grid_map->top_left_y;
@@ -262,7 +217,7 @@ void render3DView(Drive* env, Client* client, int map_height, int obs, int laser
     }
 
     // Draw scene
-    draw_scene(env, client, 1, obs, lasers, show_grid);
+    draw_scene(env, client, 2, obs, lasers, show_grid);
     EndMode3D();
     EndDrawing();
 }
@@ -332,7 +287,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
 }
 
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, const char* output_cinematic, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};  // Initialize to zero
@@ -434,12 +389,12 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     int log_trajectory = log_trajectories;
     char filename_topdown[256];
     char filename_agent[256];
-    char filename_3d[256];
+    char filename_cinematic[256];
 
-    if (output_topdown != NULL && output_agent != NULL) {
+    if (output_topdown != NULL && output_agent != NULL && output_cinematic != NULL) {
         strcpy(filename_topdown, output_topdown);
         strcpy(filename_agent, output_agent);
-        sprintf(filename_3d, "%s_3d.mp4", output_topdown);
+        sprintf(filename_cinematic, "%s_cinematic.mp4", output_topdown);
     } else {
         char policy_base[256];
         strcpy(policy_base, policy_name);
@@ -458,19 +413,19 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
         sprintf(filename_topdown, "%s/video/%s_topdown.mp4", policy_base, map);
         sprintf(filename_agent, "%s/video/%s_agent.mp4", policy_base, map);
-        sprintf(filename_3d, "%s/video/%s_3d.mp4", policy_base, map);
+        sprintf(filename_cinematic, "%s/video/%s_cinematic.mp4", policy_base, map);
     }
 
-    bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
-    bool render_agent = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "agent") == 0);
-    bool render_3d = (strcmp(view_mode, "3d") == 0);
+    bool render_topdown = (strcmp(view_mode, "all") == 0 || strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
+    bool render_agent = (strcmp(view_mode, "all") == 0 || strcmp(view_mode, "both") == 0 || strcmp(view_mode, "agent") == 0);
+    bool render_cinematic = (strcmp(view_mode, "all") == 0 || strcmp(view_mode, "cinematic") == 0);
 
     printf("Rendering: %s\n", view_mode);
 
     int rendered_frames = 0;
     double startTime = GetTime();
 
-    VideoRecorder topdown_recorder, agent_recorder, view_3d_recorder;
+    VideoRecorder topdown_recorder, agent_recorder, view_cinematic_recorder;
 
     if (render_topdown) {
         if (!OpenVideo(&topdown_recorder, filename_topdown, img_width, img_height)) {
@@ -487,8 +442,8 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         }
     }
 
-    if (render_3d) {
-        if (!OpenVideo(&view_3d_recorder, filename_3d, img_width, img_height)) {
+    if (render_cinematic) {
+        if (!OpenVideo(&view_cinematic_recorder, filename_cinematic, img_width, img_height)) {
             if (render_topdown) CloseVideo(&topdown_recorder);
             if (render_agent) CloseVideo(&agent_recorder);
             CloseWindow();
@@ -527,13 +482,13 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         }
     }
 
-    if (render_3d) {
+    if (render_cinematic) {
         c_reset(&env);
         printf("Recording 3D cinematic view...\n");
         for(int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
-                render3DView(&env, client, map_height, obs_only, lasers, 0, frame_count, NULL, log_trajectories, show_grid, img_width, img_height);
-                WriteFrame(&view_3d_recorder, img_width, img_height);
+                renderCinematicView(&env, client, map_height, obs_only, lasers, 0, frame_count, NULL, log_trajectories, show_grid, img_width, img_height);
+                WriteFrame(&view_cinematic_recorder, img_width, img_height);
                 rendered_frames++;
             }
             int (*actions)[2] = (int(*)[2])env.actions;
@@ -555,8 +510,8 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     if (render_agent) {
         CloseVideo(&agent_recorder);
     }
-    if (render_3d) {
-        CloseVideo(&view_3d_recorder);
+    if (render_cinematic) {
+        CloseVideo(&view_cinematic_recorder);
     }
     CloseWindow();
 
@@ -585,9 +540,10 @@ int main(int argc, char* argv[]) {
     int control_mode = 0;
     int goal_behavior = 0;
 
-    const char* view_mode = "3d";  // "both", "topdown", "agent"
+    const char* view_mode = "all";  // "all", "both" (renders topdown and agent), "topdown", "agent", "cinematic"
     const char* output_topdown = NULL;
     const char* output_agent = NULL;
+    const char* output_cinematic = NULL;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -636,15 +592,16 @@ int main(int argc, char* argv[]) {
             if (i + 1 < argc) {
                 view_mode = argv[i + 1];
                 i++;
-                if (strcmp(view_mode, "both") != 0 &&
+                if (strcmp(view_mode, "all") !=0 &&
+                    strcmp(view_mode, "both") != 0 &&
                     strcmp(view_mode, "topdown") != 0 &&
                     strcmp(view_mode, "agent") != 0 &&
-                    strcmp(view_mode, "3D") != 0) {
-                    fprintf(stderr, "Error: --view must be 'both', 'topdown', 'agent', or '3D'\n");
+                    strcmp(view_mode, "cinematic") != 0) {
+                    fprintf(stderr, "Error: --view must be 'all', 'both', 'topdown', 'agent', or 'cinematic'\n");
                     return 1;
                 }
             } else {
-                fprintf(stderr, "Error: --view option requires a value (both/topdown/agent/3D)\n");
+                fprintf(stderr, "Error: --view option requires a value (all/both/topdown/agent/cinematic)\n");
                 return 1;
             }
         } else if (strcmp(argv[i], "--output-topdown") == 0) {
@@ -655,6 +612,11 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--output-agent") == 0) {
             if (i + 1 < argc) {
                 output_agent = argv[i + 1];
+                i++;
+            }
+        } else if (strcmp(argv[i], "--output-cinematic") == 0) {
+            if (i + 1 < argc) {
+                output_cinematic = argv[i + 1];
                 i++;
             }
         } else if (strcmp(argv[i], "--init-steps") == 0) {
@@ -698,6 +660,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode, goal_behavior);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, output_cinematic, num_maps, scenario_length_cli, init_mode, control_mode, goal_behavior);
     return 0;
 }
