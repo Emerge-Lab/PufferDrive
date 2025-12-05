@@ -148,7 +148,6 @@ void renderCinematicView(Drive* env, Client* client, int map_height, int obs, in
     float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
     float map_height_world = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
 
-
     // Isometric camera setup - positioned at 45° angle to see Z movement clearly
     Camera3D camera = { 0 };
 
@@ -158,9 +157,9 @@ void renderCinematicView(Drive* env, Client* client, int map_height, int obs, in
     // Position camera at a 45-degree diagonal angle (classic isometric view)
     // This creates the "wooo" factor and lets you see elevation changes!
     camera.position = (Vector3){
-        50,-300,40             // Elevated to see Z-axis clearly
+        center_x+0.15*map_width,center_y-0.4*map_height_world,40             // Elevated to see Z-axis clearly
     };
-    camera.target = (Vector3){ 50, 300, 0.0f };  // Look at map center
+    camera.target = (Vector3){ center_x+0.15*map_width, center_y+0.4*map_height_world, 0.0f };  // Look at map center
     camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };              // Z-axis is up
     camera.fovy = 45.0f;                                     // Field of view
     camera.projection = CAMERA_PERSPECTIVE;                  // Perspective for depth
@@ -540,7 +539,7 @@ int main(int argc, char* argv[]) {
     int control_mode = 0;
     int goal_behavior = 0;
 
-    const char* view_mode = "all";  // "all", "both" (renders topdown and agent), "topdown", "agent", "cinematic"
+    const char* view_mode = "cinematic";  // "all", "both" (renders topdown and agent), "topdown", "agent", "cinematic"
     const char* output_topdown = NULL;
     const char* output_agent = NULL;
     const char* output_cinematic = NULL;
