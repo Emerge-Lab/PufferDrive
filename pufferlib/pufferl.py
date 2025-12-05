@@ -59,7 +59,8 @@ ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None):
+    def __init__(self, args, vecenv, policy, logger=None):
+        config = dict(**args["train"], env=args["env_name"], eval=args.get("eval", {}))
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
@@ -162,6 +163,28 @@ class PuffeRL:
                 pufferlib.pytorch.sample_logits, mode=config["compile_mode"]
             )
 
+        # Adversarial training mode: Load target policy
+        self.adversarial_mode = args["adversarial"]["adversarial_mode"]
+        if self.adversarial_mode:
+            target_config = args.copy()
+            target_config["train"]["load_model_path"] = args["adversarial"]["target_model_path"]
+            target_policy = load_policy(target_config, vecenv)
+            target_policy.eval()
+            for param in target_policy.parameters():
+                param.requires_grad = False
+
+            if config["use_rnn"]:
+                n = vecenv.agents_per_batch
+                h = target_policy.hidden_size
+                self.target_lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+                self.target_lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+
+            self.uncompiled_target_policy = target_policy
+            self.target_policy = target_policy
+            if config["compile"]:
+                self.target_policy = torch.compile(self.target_policy, mode=config["compile_mode"])
+                self.target_policy.forward_eval = torch.compile(self.target_policy, mode=config["compile_mode"])
+
         # Optimizer
         if config["optimizer"] == "adam":
             optimizer = torch.optim.Adam(
@@ -248,11 +271,19 @@ class PuffeRL:
             for k in self.lstm_h:
                 self.lstm_h[k] = torch.zeros(self.lstm_h[k].shape, device=device)
                 self.lstm_c[k] = torch.zeros(self.lstm_c[k].shape, device=device)
+                if self.adversarial_mode:
+                    self.target_lstm_h[k] = torch.zeros(self.target_lstm_h[k].shape, device=device)
+                    self.target_lstm_c[k] = torch.zeros(self.target_lstm_c[k].shape, device=device)
 
         self.full_rows = 0
         while self.full_rows < self.segments:
             profile("env", epoch)
             o, r, d, t, info, env_id, mask = self.vecenv.recv()
+
+            if self.adversarial_mode:
+                agent_offsets = self.vecenv.driver_env.agent_offsets[:-1]
+                target_mask = torch.zeros(self.vecenv.num_agents, dtype=torch.bool)
+                target_mask[torch.as_tensor(agent_offsets, dtype=torch.long)] = True
 
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
@@ -281,6 +312,11 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+
+                if self.adversarial_mode:
+                    target_logits, target_value = self.target_policy.forward_eval(o_device, state)
+                    target_action, target_logprob, _ = pufferlib.pytorch.sample_logits(target_logits)
+
                 r = torch.clamp(r, -1, 1)
 
             profile("eval_copy", epoch)
@@ -288,6 +324,9 @@ class PuffeRL:
                 if config["use_rnn"]:
                     self.lstm_h[env_id.start] = state["lstm_h"]
                     self.lstm_c[env_id.start] = state["lstm_c"]
+                    if self.adversarial_mode:
+                        self.target_lstm_h[env_id.start] = state["lstm_h"]
+                        self.target_lstm_c[env_id.start] = state["lstm_c"]
 
                 # Fast path for fully vectorized envs
                 l = self.ep_lengths[env_id.start].item()
@@ -996,7 +1035,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         logger = WandbLogger(args)
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    pufferl = PuffeRL(args, vecenv, policy, logger)
 
     all_logs = []
     while pufferl.global_step < train_config["total_timesteps"]:
@@ -1263,7 +1302,7 @@ def profile(args=None, env_name=None, vecenv=None, policy=None):
     policy = policy or load_policy(args, vecenv)
 
     train_config = dict(**args["train"], env=args["env_name"], tag=args["tag"])
-    pufferl = PuffeRL(train_config, vecenv, policy, neptune=args["neptune"], wandb=args["wandb"])
+    pufferl = PuffeRL(args, vecenv, policy, neptune=args["neptune"], wandb=args["wandb"])
 
     from torch.profiler import profile, record_function, ProfilerActivity
 
