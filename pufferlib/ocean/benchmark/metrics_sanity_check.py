@@ -89,6 +89,9 @@ def main():
     config["vec"]["num_envs"] = 1
     config["eval"]["enabled"] = True
     config["eval"]["wosac_num_rollouts"] = 32
+    config["env"]["map_dir"] = config["eval"]["map_dir"]
+    config["env"]["num_maps"] = config["eval"]["num_maps"]
+    config["env"]["use_all_maps"] = True
 
     config["env"]["num_agents"] = config["eval"]["wosac_num_agents"]
     config["env"]["init_mode"] = config["eval"]["wosac_init_mode"]
