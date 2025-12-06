@@ -322,6 +322,7 @@ struct Drive {
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_ade;
+    float reward_adversarial;
     char* map_name;
     float world_mean_x;
     float world_mean_y;
@@ -2225,6 +2226,27 @@ void c_step(Drive* env){
             env->logs[i].episode_return += ade_reward;
         }
         env->logs[i].avg_displacement_error = current_ade;
+    }
+    // Adversarial training logic
+    if(env->reward_adversarial != 0.0f) {
+        // First step is to find the SDC inside the active agents (they do not have the same indexations)
+        int sdc_active_index = -1;
+        for(int i = 0; i < env->active_agent_count; i++){
+            int active_agent_idx = env->active_agent_indices[i];
+            if(active_agent_idx == env->sdc_track_index){
+                sdc_active_index = i;
+                break;
+            }
+        }
+        if(sdc_active_index != -1) {
+            float sdc_reward = env->rewards[sdc_active_index];
+            for(int i = 0; i < env->active_agent_count; i++){
+                if (i!= sdc_active_index) {
+                    env->rewards[i] += env->reward_adversarial * (-sdc_reward);
+                    env->logs[i].episode_return += env->reward_adversarial * (-sdc_reward);
+                }
+            }
+        }
     }
 
     if (env->goal_behavior==GOAL_RESPAWN) {
