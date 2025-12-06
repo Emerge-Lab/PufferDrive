@@ -242,6 +242,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
         .reward_ade = conf.reward_ade,
+        .reward_adversarial = conf.reward_adversarial,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
 	    .map_name = (char*)map_name,

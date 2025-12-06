@@ -17,6 +17,7 @@ typedef struct
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     float reward_ade;
+    float reward_adversarial;
     float goal_radius;
     int collision_behavior;
     int offroad_behavior;
@@ -72,7 +73,11 @@ static int handler(
         env_config->reward_vehicle_collision_post_respawn = atof(value);
     } else if (MATCH("env", "reward_ade")) {
         env_config->reward_ade = atof(value);
-    } else if (MATCH("env", "goal_radius")) {
+    }
+    else if (MATCH("env", "reward_adversarial")) {
+        env_config->reward_adversarial = atof(value);
+    }
+    else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
     } else if(MATCH("env", "collision_behavior")){
         env_config->collision_behavior = atoi(value);

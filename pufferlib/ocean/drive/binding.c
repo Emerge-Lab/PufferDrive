@@ -184,6 +184,7 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_ade = conf.reward_ade;
+    env->reward_adversarial = conf.reward_adversarial;
     env->scenario_length = conf.scenario_length;
     env->collision_behavior = conf.collision_behavior;
     env->offroad_behavior = conf.offroad_behavior;
