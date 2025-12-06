@@ -166,6 +166,8 @@ class PuffeRL:
         # Adversarial training mode: Load target policy
         self.adversarial_mode = args["adversarial"]["adversarial_mode"]
         if self.adversarial_mode:
+            # I will use this to mask out the loss of the target agents
+            self.target_agents_buffer = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
             target_config = args.copy()
             target_config["train"]["load_model_path"] = args["adversarial"]["target_model_path"]
             target_policy = load_policy(target_config, vecenv)
@@ -352,6 +354,10 @@ class PuffeRL:
                     self.free_idx += num_full
                     self.full_rows += num_full
 
+                if self.adversarial_mode:
+                    action = torch.where(target_mask[:, None], target_action, action)
+                    self.target_agents_buffer[batch_rows, l] = target_mask
+
                 action = action.cpu().numpy()
                 if isinstance(logits, torch.distributions.Normal):
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
@@ -426,6 +432,8 @@ class PuffeRL:
             mb_values = self.values[idx]
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
+            if self.adversarial_mode:
+                mb_target_mask = self.target_agents_buffer[idx]
 
             profile("train_forward", epoch)
             if not config["use_rnn"]:
@@ -469,15 +477,22 @@ class PuffeRL:
             # Losses
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+            pg_loss = torch.max(pg_loss1, pg_loss2)
 
-            newvalue = newvalue.view(mb_returns.shape)
             v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
-            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
 
-            entropy_loss = entropy.mean()
+            if self.adversarial_mode:
+                loss_weight = (~mb_target_mask).float()
+                pg_loss = (pg_loss * loss_weight).sum() / loss_weight.sum()
+                v_loss = (v_loss * loss_weight).sum() / loss_weight.sum()
+                entropy_loss = (entropy * loss_weight).sum() / loss_weight.sum()
+            else:
+                pg_loss = pg_loss.mean()
+                v_loss = v_loss.mean()
+                entropy_loss = entropy.mean()
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
