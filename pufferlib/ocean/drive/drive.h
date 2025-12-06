@@ -75,6 +75,7 @@
 #define ROAD_FEATURES 7
 #define ROAD_FEATURES_ONEHOT 13
 #define PARTNER_FEATURES 7
+#define TARGET_FEATURES 7
 
 // Ego features depend on dynamics model
 #define EGO_FEATURES_CLASSIC 7
@@ -1801,7 +1802,8 @@ void c_get_road_edge_polylines(Drive* env, float* x_out, float* y_out, int* leng
 
 void compute_observations(Drive* env) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    int max_obs = ego_dim + PARTNER_FEATURES*(MAX_AGENTS - 1) + ROAD_FEATURES*MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int target_dim = (env->reward_adversarial!=0.0) ? TARGET_FEATURES : 0;
+    int max_obs = ego_dim + PARTNER_FEATURES*(MAX_AGENTS - 1) + ROAD_FEATURES*MAX_ROAD_SEGMENT_OBSERVATIONS + target_dim;
     memset(env->observations, 0, max_obs*env->active_agent_count*sizeof(float));
     float (*observations)[max_obs] = (float(*)[max_obs])env->observations;
     for(int i = 0; i < env->active_agent_count; i++) {
@@ -1943,9 +1945,36 @@ void compute_observations(Drive* env) {
             obs[obs_idx + 6] = entity->type - 4.0f;
             obs_idx += 7;
         }
-        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 7;
+        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS + target_dim - list_size) * 7;
         // Set the entire block to 0 at once
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
+        // Target to destroyyyy
+        if (target_dim > 0) {
+            obs_idx += remaining_obs;
+            if(env->active_agent_indices[i]!=env->sdc_track_index){
+                Entity* target_entity = &env->entities[env->sdc_track_index];
+                float dx = target_entity->x - ego_entity->x;
+                float dy = target_entity->y - ego_entity->y;
+                float rel_x = dx*cos_heading + dy*sin_heading;
+                float rel_y = -dx*sin_heading + dy*cos_heading;
+
+                obs[obs_idx] = rel_x * 0.02f;
+                obs[obs_idx + 1] = rel_y * 0.02f;
+                obs[obs_idx + 2] = target_entity->width / MAX_VEH_WIDTH;
+                obs[obs_idx + 3] = target_entity->length / MAX_VEH_LEN;
+                float rel_heading_x = target_entity->heading_x * ego_entity->heading_x +
+                        target_entity->heading_y * ego_entity->heading_y;
+                float rel_heading_y = target_entity->heading_y * ego_entity->heading_x -
+                                    target_entity->heading_x * ego_entity->heading_y;
+
+                obs[obs_idx + 4] = rel_heading_x;
+                obs[obs_idx + 5] = rel_heading_y;
+
+                // relative speed
+                float target_speed = sqrtf(target_entity->vx*target_entity->vx + target_entity->vy*target_entity->vy);
+                obs[obs_idx + 6] = target_speed / MAX_SPEED;
+                }
+         }
     }
 }
 

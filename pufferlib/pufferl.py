@@ -166,10 +166,16 @@ class PuffeRL:
         # Adversarial training mode: Load target policy
         self.adversarial_mode = args["adversarial"]["adversarial_mode"]
         if self.adversarial_mode:
+            if args["env"]["reward_adversarial"] == 0.0:
+                raise pufferlib.APIUsageError("You must set a non-zero reward_adversarial for adversarial training")
+            if args["policy_name"] != "AdversarialDrive":
+                raise pufferlib.APIUsageError("Adversarial training only supported with AdversarialDrive policy")
             # I will use this to mask out the loss of the target agents
             self.target_agents_buffer = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
+            self.target_obs_dim = 7
             target_config = args.copy()
             target_config["train"]["load_model_path"] = args["adversarial"]["target_model_path"]
+            target_config["policy_name"] = "Drive"
             target_policy = load_policy(target_config, vecenv)
             target_policy.eval()
             for param in target_policy.parameters():
@@ -316,7 +322,9 @@ class PuffeRL:
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
 
                 if self.adversarial_mode:
-                    target_logits, target_value = self.target_policy.forward_eval(o_device, state)
+                    target_logits, target_value = self.target_policy.forward_eval(
+                        o_device[:, : -self.target_obs_dim], state
+                    )
                     target_action, target_logprob, _ = pufferlib.pytorch.sample_logits(target_logits)
 
                 r = torch.clamp(r, -1, 1)
@@ -484,11 +492,13 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
 
+            entropy_loss = entropy.view(v_loss.shape)
+
             if self.adversarial_mode:
                 loss_weight = (~mb_target_mask).float()
                 pg_loss = (pg_loss * loss_weight).sum() / loss_weight.sum()
                 v_loss = (v_loss * loss_weight).sum() / loss_weight.sum()
-                entropy_loss = (entropy * loss_weight).sum() / loss_weight.sum()
+                entropy_loss = (entropy_loss * loss_weight).sum() / loss_weight.sum()
             else:
                 pg_loss = pg_loss.mean()
                 v_loss = v_loss.mean()

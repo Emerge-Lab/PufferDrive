@@ -73,11 +73,13 @@ class Drive(pufferlib.PufferEnv):
         self.max_partner_objects = binding.MAX_AGENTS - 1
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
+        self.target_features = binding.TARGET_FEATURES
 
         self.num_obs = (
             self.ego_features
             + self.max_partner_objects * self.partner_features
             + self.max_road_objects * self.road_features
+            + self.target_features
         )
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
