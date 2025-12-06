@@ -51,6 +51,8 @@ def test_drive_training():
                 "action_type": "discrete",
                 "num_maps": 1,
                 "map_dir": "resources/drive/binaries",
+                "init_mode": "create_all_valid",
+                "control_mode": "control_agents",
             }
         )
 
