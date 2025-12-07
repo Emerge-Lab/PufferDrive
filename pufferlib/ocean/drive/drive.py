@@ -630,7 +630,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         init_mode="create_all_valid",
         init_steps=0,
         scenario_length=91,
-        termination_mode=1
+        termination_mode=1,
     )
 
     env.reset()
