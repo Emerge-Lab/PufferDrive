@@ -181,7 +181,7 @@ class Drive(pufferlib.PufferEnv):
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
                 scenario_length=(int(scenario_length) if scenario_length is not None else None),
-                termination_mode=int(self.termination_mode),
+                termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
@@ -630,7 +630,6 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         init_mode="create_all_valid",
         init_steps=0,
         scenario_length=91,
-        termination_mode=1,
     )
 
     env.reset()
