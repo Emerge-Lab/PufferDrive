@@ -1545,6 +1545,12 @@ float normalize_value(float value, float min, float max){
     return (value - min) / (max - min);
 }
 
+static inline float signed_speed_along_heading(Entity* entity) {
+    float speed = sqrtf(entity->vx * entity->vx + entity->vy * entity->vy);
+    float v_dot_heading = entity->vx * entity->heading_x + entity->vy * entity->heading_y;
+    return copysignf(speed, v_dot_heading);
+}
+
 void move_dynamics(Drive* env, int action_idx, int agent_idx){
     Entity* agent = &env->entities[agent_idx];
     if (agent->removed) return;
@@ -1761,7 +1767,9 @@ void compute_observations(Drive* env) {
 
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
-        float ego_speed = ego_entity->vx * cos_heading + ego_entity->vy * sin_heading;
+        float ego_speed = (env->dynamics_model == JERK) ?
+                          signed_speed_along_heading(ego_entity) :
+                          sqrtf(ego_entity->vx * ego_entity->vx + ego_entity->vy * ego_entity->vy);
 
         // Set goal distances
         float goal_x = ego_entity->goal_position_x - ego_entity->x;
@@ -1828,7 +1836,9 @@ void compute_observations(Drive* env) {
             // obs[obs_idx + 4] = cosf(rel_heading) / MAX_ORIENTATION_RAD;
             // obs[obs_idx + 5] = sinf(rel_heading) / MAX_ORIENTATION_RAD;
             // // relative speed
-            float other_speed = sqrtf(other_entity->vx*other_entity->vx + other_entity->vy*other_entity->vy);
+            float other_speed = (env->dynamics_model == JERK) ?
+                                signed_speed_along_heading(other_entity) :
+                                sqrtf(other_entity->vx*other_entity->vx + other_entity->vy*other_entity->vy);
             obs[obs_idx + 6] = other_speed / MAX_SPEED;
             cars_seen++;
             obs_idx += 7;  // Move to next observation slot
