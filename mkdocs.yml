@@ -1,0 +1,39 @@
+site_name: PufferDrive
+site_description: High-throughput autonomous driving simulator built on PufferLib.
+repo_name: Emerge-Lab/PufferDrive
+repo_url: https://github.com/Emerge-Lab/PufferDrive
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: blue
+      accent: amber
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.instant
+    - toc.integrate
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Simulator: simulator.md
+  - Data: data.md
+  - WOMD Editor: womd-editor.md
+  - Visualizer: visualizer.md
+  - Evaluation: evaluation.md
+
+markdown_extensions:
+  - admonition
+  - footnotes
+  - toc:
+      permalink: true
+  - tables
+  - fenced_code
+  - codehilite
+
+plugins:
+  - search

@@ -1,0 +1,41 @@
+# Data
+
+PufferDrive consumes map binaries generated from the Waymo Open Motion Dataset (WOMD) JSON files. This page covers where to obtain data and how to convert it into the binary format expected by the simulator.
+
+## Download options
+- **Mini dataset**: [GPUDrive_mini](https://huggingface.co/datasets/EMERGE-lab/GPUDrive_mini) with ~1k training files for quick experiments.
+- **Full dataset**: [GPUDrive](https://huggingface.co/datasets/EMERGE-lab/GPUDrive) with ~100k scenes for large-scale training.
+- Additional compatible sources: [ScenarioMax](https://github.com/valeoai/ScenarioMax) exports JSON in the same format.
+
+Place raw JSON files under `data/processed/training` (default location read by the conversion script).
+
+## Convert JSON to map binaries
+The conversion script writes compact `.bin` maps to `resources/drive/binaries`:
+
+```bash
+python pufferlib/ocean/drive/drive.py
+```
+
+Notes:
+- The script iterates every JSON file in `data/processed/training` and emits `map_XXX.bin` files.
+- `resources/drive/binaries/map_000.bin` is required at runtime; keep it in version control for tests.
+- If you want to point at a different dataset location or limit the number of maps, adjust `process_all_maps` in `pufferlib/ocean/drive/drive.py` before running.
+
+## Map binary format reference
+The simulator reads the compact binary layout produced by `save_map_binary` in `pufferlib/ocean/drive/drive.py` and parsed by `load_map_binary` in `pufferlib/ocean/drive/drive.h`:
+
+- **Header**: `sdc_track_index` (int), `num_tracks_to_predict` (int) followed by that many `track_index` ints, `num_objects` (int), `num_roads` (int).
+- **Objects (vehicles/pedestrians/cyclists)**: For each object, the writer stores `scenario_id` (`unique_map_id` passed to `load_map`), `type` (`1` vehicle, `2` pedestrian, `3` cyclist), `id`, `array_size` (`TRAJECTORY_LENGTH = 91`), positions `x/y/z[91]`, velocities `vx/vy/vz[91]`, `heading[91]`, `valid[91]`, and scalars `width/length/height`, `goalPosition (x, y, z)`, `mark_as_expert` (int). Missing trajectory entries are zero-padded by the converter.
+- **Road elements**: Each road entry stores `scenario_id`, a remapped `type` (`4` lane, `5` road line, `6` road edge, `7` stop sign, `8` crosswalk, `9` speed bump, `10` driveway), `id`, `array_size` (#points), then `x/y/z` arrays of that length and scalars `width/length/height`, `goalPosition`, `mark_as_expert`. `save_map_binary` also simplifies long polylines (`len(geometry) > 10` and `type <= 16`) with a 0.1 area threshold to keep files small.
+- **Control hints**: `tracks_to_predict` and `mark_as_expert` influence which agents are controllable (`control_mode` in the simulator) versus replayed as experts or static actors (`set_active_agents` in `drive.h`).
+
+Refer to [Simulator](simulator.md) for how the binaries are consumed during resets, observation construction, and reward logging.
+
+
+## Verifying data availability
+- After conversion, `ls resources/drive/binaries | head` should show numbered `.bin` files.
+- If you see `Required directory resources/drive/binaries/map_000.bin not found` during training, rerun the conversion or check paths.
+- To inspect the binary output, convert a single JSON file with `load_map(<json>, <id>, <output_path>)` inside `drive.py`.
+
+## Waymo map editor
+See [WOMD Editor](womd-editor.md) for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the `.bin` format consumed by the simulator.
