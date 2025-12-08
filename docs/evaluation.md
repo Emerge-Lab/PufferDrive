@@ -10,6 +10,7 @@ puffer eval puffer_drive --eval.wosac-realism-eval True
 ```
 
 Add `--load-model-path <path_to_checkpoint>.pt` to score a trained policy instead of a random baseline.
+See [WOSAC Benchmark](benchmark-readme.md) for the metric pipeline and links to the official configs.
 
 ## Human-compatibility
 Test how a policy coexists with human-controlled agents:

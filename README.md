@@ -51,6 +51,7 @@ Compile the C code
 ```
 python setup.py build_ext --inplace --force
 ```
+Run this while your virtual environment is active so the extension is built against the right interpreter.
 
 To test your setup, you can run
 ```

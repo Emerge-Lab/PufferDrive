@@ -29,12 +29,12 @@ puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-
 
 Steps [for every scene]:
 1. Rollout policy in environment K times → (n_agents, n_rollouts, n_steps)
-2. Obtain log data → (n_agents, 1, n_steps)
+2. Obtain log data → (n_agents, k, n_steps)
 3. Obtain features from (x, y, z, heading tuples)
 4. Compute log-likelihood metrics from features
     - a. Flatten across time (assume independence) → (n_agents, n_rollouts * n_steps)
     - b. Use the per-agent simulated features to construct a probability distribution
-    - c. Take the per-agent ground-truth values and find the bin that is closed for each
+    - c. Take the per-agent ground-truth values and find the bin that is closest for each
     - d. Take log of the probability for each bin → (n_agents, n_steps)
 5. Likelihood score is exp(sum(log_probs)/n_steps) → (n_agents, 1) \in [0, 1]
 
@@ -45,7 +45,7 @@ Steps [for every scene]:
     - Interactive realism score: requires grouping agents per scenario, and computing pairwise distances between agents over time.
     - Map realism score: requires access to the map and computing offroad status.
 
-    Those two scores might require heavy computations, so we will consider reimplementic all the metrics in torch.
+    Those two scores might require heavy computations, so we will consider reimplementing all the metrics in torch.
 
 - About the time-independence assumption:
 

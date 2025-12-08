@@ -3,7 +3,7 @@
 Deep dive into how the Drive environment is wired, what it expects as inputs, and how observations/actions/configs are shaped. The environment entrypoint is `pufferlib/ocean/drive/drive.py`, which wraps the C core in `pufferlib/ocean/drive/drive.h` via `binding.c`.
 
 ## Runtime inputs and lifecycle
-- **Map binaries**: The environment expects `resources/drive/binaries/map_000.bin` to exist and `num_maps` to be no larger than the available `.bin` files. During vectorized setup, `binding.shared` samples maps until it accumulates at least `num_agents` controllable entities, skipping maps with no valid agents (`set_active_agents` in `drive.h`).
+- **Map binaries**: The environment scans `resources/drive/binaries` for `map_*.bin` files and requires at least one to load. Keep `num_maps` no larger than what is present on disk. During vectorized setup, `binding.shared` samples maps until it accumulates at least `num_agents` controllable entities, skipping maps with no valid agents (`set_active_agents` in `drive.h`).
 - **Episode length**: Default `scenario_length = 91` to match the Waymo logs (trajectory data is 91 steps), but you can set `env.scenario_length` (CLI or `.ini`) to any positive value. Metrics are logged and `c_reset` is called when `timestep == scenario_length`.
 - **Resampling maps**: Python-side `Drive.step` reinitializes the vectorized environments every `resample_frequency` steps (default `910`, ~10 episodes) with fresh map IDs and seeds.
 - **Initialization controls**:
@@ -32,7 +32,7 @@ Shape is `ego_features + 63 * 7 + 200 * 7` = `1848` for classic dynamics (`ego_f
   4. Length / `MAX_VEH_LEN` (30 m)
   5. Collision flag (1 if the agent collided this step)
   6. Respawn flag (1 if the agent was respawned this episode)
-- **Ego block additions (jerk only)**:
+- **Ego block additions (jerk dynamics model only)**:
   - Steering angle / π
   - Longitudinal acceleration normalized to `[-15, 4]`
   - Lateral acceleration normalized to `[-4, 4]`

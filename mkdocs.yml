@@ -8,24 +8,31 @@ theme:
   name: material
   palette:
     - scheme: default
-      primary: blue
-      accent: amber
+      primary: teal
+      accent: deep orange
+  font:
+    text: "Space Grotesk"
+    code: "JetBrains Mono"
   features:
     - navigation.tabs
     - navigation.top
     - navigation.instant
+    - navigation.expand
     - toc.integrate
     - content.code.copy
+  logo: images/pufferdrive.gif
+  favicon: images/pufferdrive.gif
 
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Simulator: simulator.md
   - Data: data.md
-  - WOSAC: benchmark-readme.md
+  - Evaluation:
+      - Overview: evaluation.md
+      - WOSAC Benchmark: benchmark-readme.md
   - WOMD Editor: womd-editor.md
   - Visualizer: visualizer.md
-  - Evaluation: evaluation.md
 
 markdown_extensions:
   - admonition
@@ -43,3 +50,5 @@ plugins:
 
 extra_javascript:
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+extra_css:
+  - assets/extra.css

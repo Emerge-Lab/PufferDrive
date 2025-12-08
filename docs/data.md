@@ -6,6 +6,32 @@ PufferDrive consumes map binaries generated from the Waymo Open Motion Dataset (
 - **Mini dataset**: [GPUDrive_mini](https://huggingface.co/datasets/EMERGE-lab/GPUDrive_mini) with ~1k training files for quick experiments.
 - **Full dataset**: [GPUDrive](https://huggingface.co/datasets/EMERGE-lab/GPUDrive) with ~100k scenes for large-scale training.
 - Additional compatible sources: [ScenarioMax](https://github.com/valeoai/ScenarioMax) exports JSON in the same format.
+- Included CARLA maps: CARLA exports live in `data_utils/carla/carla`.
+
+### Download via Hugging Face
+Install the CLI once:
+
+```bash
+uv pip install -U "huggingface_hub[cli]"
+```
+
+Download the mini dataset:
+
+```bash
+huggingface-cli download EMERGE-lab/GPUDrive_mini \
+  --repo-type dataset \
+  --local-dir data/processed/training \
+  --include "training/*"
+```
+
+Download the full dataset:
+
+```bash
+huggingface-cli download EMERGE-lab/GPUDrive \
+  --repo-type dataset \
+  --local-dir data/processed/training \
+  --include "training/*"
+```
 
 Place raw JSON files under `data/processed/training` (default location read by the conversion script).
 
@@ -18,7 +44,7 @@ python pufferlib/ocean/drive/drive.py
 
 Notes:
 - The script iterates every JSON file in `data/processed/training` and emits `map_XXX.bin` files.
-- `resources/drive/binaries/map_000.bin` is required at runtime; keep it in version control for tests.
+- `resources/drive/binaries/map_000.bin` ships with the repo for quick smoke tests; generate additional bins for training/eval.
 - If you want to point at a different dataset location or limit the number of maps, adjust `process_all_maps` in `pufferlib/ocean/drive/drive.py` before running.
 
 ## Map binary format reference
@@ -35,6 +61,7 @@ Refer to [Simulator](simulator.md) for how the binaries are consumed during rese
 ## Verifying data availability
 - After conversion, `ls resources/drive/binaries | head` should show numbered `.bin` files.
 - If you see `Required directory resources/drive/binaries/map_000.bin not found` during training, rerun the conversion or check paths.
+- With binaries in place, run `puffer train puffer_drive` from [Getting Started](getting-started.md) as a smoke test that the build, data, and bindings are wired together.
 - To inspect the binary output, convert a single JSON file with `load_map(<json>, <id>, <output_path>)` inside `drive.py`.
 
 ## Waymo map editor
