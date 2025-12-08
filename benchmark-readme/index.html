@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../womd-editor/">
+        <link rel="prev" href="../data/">
       
       
-        <link rel="next" href="../evaluation/">
+        <link rel="next" href="../womd-editor/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Visualizer - PufferDrive</title>
+        <title>WOSAC - PufferDrive</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#visualizer" class="md-skip">
+        <a href="#waymo-open-sim-agent-challenge-wosac-benchmark" class="md-skip">
           Skip to content
         </a>
       
@@ -110,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Visualizer
+              WOSAC
             
           </span>
         </div>
@@ -281,9 +281,11 @@
   
   
   
+    
   
-    <li class="md-tabs__item">
-      <a href="../benchmark-readme/" class="md-tabs__link">
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
         
   
   
@@ -319,11 +321,9 @@
   
   
   
-    
   
-  
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="./" class="md-tabs__link">
+    <li class="md-tabs__item">
+      <a href="../visualizer/" class="md-tabs__link">
         
   
   
@@ -514,10 +514,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../benchmark-readme/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WOSAC
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -533,6 +560,70 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Links
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -568,37 +659,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Visualizer
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../visualizer/" class="md-nav__link">
         
   
   
@@ -614,59 +678,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Dependencies
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#build" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Build
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#run-headless" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Run headless
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -718,30 +729,74 @@
   
 
 
-<h1 id="visualizer">Visualizer<a class="headerlink" href="#visualizer" title="Permanent link">&para;</a></h1>
-<p>PufferDrive ships a Raylib-based visualizer for replaying scenes, exporting videos, and debugging policies.</p>
-<h2 id="dependencies">Dependencies<a class="headerlink" href="#dependencies" title="Permanent link">&para;</a></h2>
-<p>Install the minimal system packages for headless render/export:</p>
-<div class="codehilite"><pre><span></span><code>sudo<span class="w"> </span>apt<span class="w"> </span>update
-sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>ffmpeg<span class="w"> </span>xvfb
+<h1 id="waymo-open-sim-agent-challenge-wosac-benchmark">Waymo Open Sim Agent Challenge (WOSAC) benchmark<a class="headerlink" href="#waymo-open-sim-agent-challenge-wosac-benchmark" title="Permanent link">&para;</a></h1>
+<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
+<p>WOSAC evaluation with random policy</p>
+<div class="codehilite"><pre><span></span><code>puffer<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>puffer_drive<span class="w"> </span>--eval.wosac-realism-eval<span class="w"> </span>True
 </code></pre></div>
 
-<p>On environments without sudo, install them into your conda/venv:</p>
-<div class="codehilite"><pre><span></span><code>conda<span class="w"> </span>install<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>xorg-x11-server-xvfb-cos6-x86_64<span class="w"> </span>ffmpeg
+<p>WOSAC evaluation with your checkpoint</p>
+<div class="codehilite"><pre><span></span><code>puffer<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>puffer_drive<span class="w"> </span>--eval.wosac-realism-eval<span class="w"> </span>True<span class="w"> </span>--load-model-path<span class="w"> </span>&lt;your-trained-policy&gt;.pt
 </code></pre></div>
 
-<h2 id="build">Build<a class="headerlink" href="#build" title="Permanent link">&para;</a></h2>
-<p>Compile the visualizer binary from the repo root:</p>
-<div class="codehilite"><pre><span></span><code>bash<span class="w"> </span>scripts/build_ocean.sh<span class="w"> </span>visualize<span class="w"> </span><span class="nb">local</span>
-</code></pre></div>
-
-<p>If you need to force a rebuild, remove the cached binary first (<code>rm ./visualize</code>).</p>
-<h2 id="run-headless">Run headless<a class="headerlink" href="#run-headless" title="Permanent link">&para;</a></h2>
-<p>Launch the visualizer with a virtual display and export an <code>.mp4</code>:</p>
-<div class="codehilite"><pre><span></span><code>xvfb-run<span class="w"> </span>-s<span class="w"> </span><span class="s2">&quot;-screen 0 1280x720x24&quot;</span><span class="w"> </span>./visualize
-</code></pre></div>
-
-<p>Adjust the screen size and color depth as needed. The <code>xvfb-run</code> wrapper allows Raylib to render without an attached display, which is convenient for servers and CI jobs.</p>
+<h2 id="links">Links<a class="headerlink" href="#links" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="https://waymo.com/open/challenges/2025/sim-agents/">Challenge and leaderboard</a></li>
+<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/tutorial/tutorial_sim_agents.ipynb">Sim agent challenge tutorial</a></li>
+<li><a href="https://arxiv.org/pdf/2305.12032">Reference paper introducing WOSAC</a></li>
+<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/metrics.py">Metrics entry point</a></li>
+<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/estimators.py">Log-likelihood estimators</a></li>
+<li>Configurations <a href="https://github.com/waymo-research/waymo-open-dataset/blob/99a4cb3ff07e2fe06c2ce73da001f850f628e45a/src/waymo_open_dataset/protos/sim_agents_metrics.proto#L51">proto file</a> <a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/challenge_2025_sim_agents_config.textproto">default sim agent challenge configs</a></li>
+</ul>
+<h2 id="implementation">Implementation<a class="headerlink" href="#implementation" title="Permanent link">&para;</a></h2>
+<ul>
+<li>For the sim agent challenge we compute the log likelihood with <code>aggregate_objects=False</code>, which means that we use <a href="https://github.com/waymo-research/waymo-open-dataset/blob/99a4cb3ff07e2fe06c2ce73da001f850f628e45a/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/estimators.py#L17"><code>_log_likelihood_estimate_timeseries_agent_level()</code></a></li>
+<li>As such, the interpretation is as follows:</li>
+</ul>
+<p>Steps [for every scene]:
+1. Rollout policy in environment K times → (n_agents, n_rollouts, n_steps)
+2. Obtain log data → (n_agents, 1, n_steps)
+3. Obtain features from (x, y, z, heading tuples)
+4. Compute log-likelihood metrics from features
+    - a. Flatten across time (assume independence) → (n_agents, n_rollouts * n_steps)
+    - b. Use the per-agent simulated features to construct a probability distribution
+    - c. Take the per-agent ground-truth values and find the bin that is closed for each
+    - d. Take log of the probability for each bin → (n_agents, n_steps)
+5. Likelihood score is exp(sum(log_probs)/n_steps) → (n_agents, 1) \in [0, 1]</p>
+<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li>
+<p>Currently, only kinematics realism score is implemented. Next steps would be to add the interactive realism score, and the map realism score:</p>
+<ul>
+<li>Interactive realism score: requires grouping agents per scenario, and computing pairwise distances between agents over time.</li>
+<li>Map realism score: requires access to the map and computing offroad status.</li>
+</ul>
+<p>Those two scores might require heavy computations, so we will consider reimplementic all the metrics in torch.</p>
+</li>
+<li>
+<p>About the time-independence assumption:</p>
+<ol>
+<li>
+<p>This is the assumption used in the official WOSAC evaluation, their argument is that it would give more flexibility to the sim agents models:</p>
+<blockquote>
+<p>Given the time series nature of simulation data, two choices emerge for how to treat samples over multiple timesteps for a given object for a given run segment: to treat them as time-independent or time-dependent samples. In the latter case, users would be expected to not only reconstruct the general behaviors present in the logged data in one rollout, but also recreate those behaviors over the exact same time intervals. To allow more flexibility in agent behavior, we use the former formulation when computing NLLs, defining each component metric m as an average (in log-space) over the time-axis, masked by validity.</p>
+</blockquote>
+</li>
+<li>
+<p>However this will lead to the score of a perfect logged oracle being inferior to 1.0, and makes it less interpretable. Here are the scores of a logged oracle using the time-independence assumption (setup: 1024 agents, 48 rollouts):</p>
+<p>```
+Linear speed: 0.5640
+Linear acceleration: 0.4658
+Angular speed: 0.5543
+Angular acceleration: 0.6589</p>
+<p>Kinematics realism score: 0.5607
+```
+    These scores go to 1.0 if we use the time-dependent estimator, execpt for the smoothing factor that is used to avoid bins with 0 probability.</p>
+</li>
+</ol>
+<p>Using the time-dependent estimator means generating n_steps histograms per agent, using num_rollouts samples per histogram, while time-independence means generating one histogram per agent using n_rollouts * n_steps samples. With the speed of PufferDrive,  we might be able to increase n_rollouts to have more samples per histogram.</p>
+</li>
+</ul>
 
 
 

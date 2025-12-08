@@ -285,6 +285,25 @@
   
   
     <li class="md-tabs__item">
+      <a href="../benchmark-readme/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  WOSAC
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
       <a href="../womd-editor/" class="md-tabs__link">
         
   
@@ -580,6 +599,112 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#drive-readme-c-core-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Drive README (C core notes)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Drive README (C core notes)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#agent-initialization-and-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent initialization and control
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent initialization and control">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#init_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        init_mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#control_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        control_mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#termination-conditions-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Termination conditions (done)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logged-performance-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logged performance metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Logged performance metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#metric-aggregation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metric aggregation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#effect-of-respawning-on-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Effect of respawning on metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -603,6 +728,33 @@
     
   
     Data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmark-readme/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WOSAC
   
 
     
@@ -796,6 +948,93 @@
 <li><code>pufferlib/ocean/drive/drive.c</code>: Small C demo/perf harness and network parity test runner for the C policy head.</li>
 <li><code>pufferlib/ocean/drive/drivenet.h</code>: Lightweight C inference network used by the visualizer/demo to mirror the Torch policy outputs.</li>
 </ul>
+<h2 id="drive-readme-c-core-notes">Drive README (C core notes)<a class="headerlink" href="#drive-readme-c-core-notes" title="Permanent link">&para;</a></h2>
+<h3 id="agent-initialization-and-control">Agent initialization and control<a class="headerlink" href="#agent-initialization-and-control" title="Permanent link">&para;</a></h3>
+<h4 id="init_mode"><code>init_mode</code><a class="headerlink" href="#init_mode" title="Permanent link">&para;</a></h4>
+<p>Determines which agents are <strong>created</strong> in the environment.</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_all_valid</code></td>
+<td>Create all entities valid at initialization (<code>traj_valid[init_steps] == 1</code>).</td>
+</tr>
+<tr>
+<td><code>create_only_controlled</code></td>
+<td>Create only those agents that are controlled by the policy.</td>
+</tr>
+</tbody>
+</table>
+<h4 id="control_mode"><code>control_mode</code><a class="headerlink" href="#control_mode" title="Permanent link">&para;</a></h4>
+<p>Determines which created agents are <strong>controlled</strong> by the policy.</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>control_vehicles</code> (default)</td>
+<td>Control only valid <strong>vehicles</strong> (not experts, beyond <code>MIN_DISTANCE_TO_GOAL</code>, under <code>MAX_AGENTS</code>).</td>
+</tr>
+<tr>
+<td><code>control_agents</code></td>
+<td>Control all valid <strong>agent types</strong> (vehicles, cyclists, pedestrians).</td>
+</tr>
+<tr>
+<td><code>control_tracks_to_predict</code> <em>(WOMD only)</em></td>
+<td>Control agents listed in the <code>tracks_to_predict</code> metadata.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="termination-conditions-done">Termination conditions (<code>done</code>)<a class="headerlink" href="#termination-conditions-done" title="Permanent link">&para;</a></h3>
+<p>Episodes are never truncated before reaching <code>episode_len</code>. The <code>goal_behavior</code> argument controls agent behavior after reaching a goal early:</p>
+<ul>
+<li><strong><code>goal_behavior=0</code> (default):</strong> Agents respawn at their initial position after reaching their goal (last valid log position).</li>
+<li><strong><code>goal_behavior=1</code>:</strong> Agents receive new goals indefinitely after reaching each goal.</li>
+<li><strong><code>goal_behavior=2</code>:</strong> Agents stop after reaching their goal.</li>
+</ul>
+<h3 id="logged-performance-metrics">Logged performance metrics<a class="headerlink" href="#logged-performance-metrics" title="Permanent link">&para;</a></h3>
+<p>We record multiple performance metrics during training, aggregated over all <em>active agents</em> (alive and controlled). Key metrics include:</p>
+<ul>
+<li><code>score</code>: Goals reached cleanly (goal was achieved without collision or going off-road)</li>
+<li><code>collision_rate</code>: Binary flag (0 or 1) if agent hit another vehicle.</li>
+<li><code>offroad_rate</code>: Binary flag (0 or 1) if agent left road bounds.</li>
+<li><code>completion_rate</code>: Whether the agent reached its goal in this episode (even if it collided or went off-road).</li>
+</ul>
+<h4 id="metric-aggregation">Metric aggregation<a class="headerlink" href="#metric-aggregation" title="Permanent link">&para;</a></h4>
+<p>The <code>num_agents</code> parameter in <code>drive.ini</code> defines the total number of agents used to collect experience. At runtime, Puffer uses <code>num_maps</code> to create enough environments to populate the buffer with <code>num_agents</code>, distributing them evenly across <code>num_envs</code>.</p>
+<p>Because agents are respawned immediately after reaching their goal, they remain active throughout the episode.</p>
+<p>At the end of each episode (i.e., when <code>timestep == TRAJECTORY_LENGTH</code>), metrics are logged once via:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">env</span><span class="o">-&gt;</span><span class="n">timestep</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">TRAJECTORY_LENGTH</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">add_log</span><span class="p">(</span><span class="n">env</span><span class="p">);</span>
+<span class="w">    </span><span class="n">c_reset</span><span class="p">(</span><span class="n">env</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Metrics are normalized and aggregated in <code>vec_log</code> (<code>pufferlib/ocean/env_binding.h</code>). They are averaged over all active agents across all environments. For example, the aggregated collision rate is computed as:</p>
+<div class="arithmatex">\[
+r^{agg}_{\text{collision}} = \frac{\mathbb{I}[\text{collided in episode}]}{N}
+\]</div>
+<p>where <span class="arithmatex">\(N\)</span> is the number of controlled agents.</p>
+<p>Since these metrics do not capture <em>multiple</em> events per agent, we additionally log the <strong>average number of collision and off-road events per episode</strong>. This is computed as:</p>
+<div class="arithmatex">\[
+c^{avg}_{\text{collision}} = \frac{\text{total number of collision events across all agents and environments}}{N}
+\]</div>
+<p>where <span class="arithmatex">\(N\)</span> is the total number of controlled agents. For example, an <code>avg_collisions_per_agent</code> value of 4 indicates that, on average, each agent collides four times per episode.</p>
+<p><img alt="Collision/off-road aggregation examples" src="../images/examples_a_b.png" /></p>
+<h4 id="effect-of-respawning-on-metrics">Effect of respawning on metrics<a class="headerlink" href="#effect-of-respawning-on-metrics" title="Permanent link">&para;</a></h4>
+<p>By default, agents are reset to their initial position when they reach their goal before the episode ends. Upon respawn, <code>respawn_timestep</code> is updated from <code>-1</code> to the current step index. After an agent respawns, all other agents are removed from the environment, so collisions with other agents cannot occur post-respawn.</p>
+<p><img alt="Pre- and post-respawn environment" src="../images/pre_and_post_respawn.png" /></p>
+<p><img alt="Example respawn collision case" src="../images/realistic_collision_event_post_respawn.png" /></p>
 
 
 
@@ -855,6 +1094,8 @@
     
     
       <script src="../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       
     
   </body>
