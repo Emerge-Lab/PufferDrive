@@ -66,7 +66,7 @@ class Drive(nn.Module):
 
     def encode_observations(self, observations, state=None):
         ego_dim = self.ego_dim
-        partner_dim = 63 * 7
+        partner_dim = 63 * 7  # Remove magical numbers
         road_dim = 200 * 7
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]

@@ -47,6 +47,8 @@
 #define GOAL_RANDOM_WITHIN_RADIUS 1
 #define GOAL_RANDOMIZED_CURRICULUM 2
 
+#define MIN_POINTS_IN_RADIUS_TO_SAMPLE_GOAL 5
+
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
 
@@ -77,7 +79,7 @@
 
 // Max road segment observation entities
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 200
-#define MAX_AGENTS 256
+#define MAX_AGENTS 64
 // Observation Space Constants
 #define MAX_SPEED 100.0f
 #define MAX_VEH_LEN 30.0f
@@ -2392,13 +2394,9 @@ void promote_next_goal(Drive* env, int agent_idx) {
     set_next_goal_preview(env, agent_idx);
 }
 
-bool get_valid_radius_curriculum_goal(Drive* env, float start_point_x, float start_point_y, float start_point_z,
-                    int start_grid_row, int start_grid_col,
-                    int* rel_neighbor_offsets, int rel_neighbor_offsets_cnt,
-                    float* goal_x, float* goal_y, float* goal_z) {
-    float goal_radius = env->goal_radius;
-
-    int valid_goals_count = 0;
+int get_goals_count_in_radius(Drive* env, int start_grid_row, int start_grid_col,
+                    int* rel_neighbor_offsets, int rel_neighbor_offsets_cnt) {
+    int goals_count = 0;
     int i = 0;
     while (i < rel_neighbor_offsets_cnt) {
         int offset_row = rel_neighbor_offsets[i++];
@@ -2408,55 +2406,101 @@ bool get_valid_radius_curriculum_goal(Drive* env, float start_point_x, float sta
         // Check grid bounds
         if (neighbor_grid_row < 0 || neighbor_grid_row >= env->grid_map->grid_rows ||
             neighbor_grid_col < 0 || neighbor_grid_col >= env->grid_map->grid_cols) {
-            // printf("Invalid neighbor offset (%d, %d) for grid index (%d, %d)\n", neighbor_grid_row, neighbor_grid_col, offset_row, offset_col);
             continue;
         }
 
-        valid_goals_count += env->grid_map->cell_roadlanes_count[neighbor_grid_row * env->grid_map->grid_cols + neighbor_grid_col];
+        goals_count += env->grid_map->cell_roadlanes_count[neighbor_grid_row * env->grid_map->grid_cols + neighbor_grid_col];
     }
-    if (valid_goals_count == 0) {
-        printf("Valid goals count is zero at (%d, %d), roadlane_cnt: %d\n", start_grid_row, start_grid_col, env->grid_map->cell_roadlanes_count[start_grid_row * env->grid_map->grid_cols + start_grid_col]);
+    return goals_count;
+}
+
+bool get_valid_radius_curriculum_goal(Drive* env, float start_point_x, float start_point_y, float start_point_z,
+                    int start_grid_row, int start_grid_col,
+                    int* rel_neighbor_offsets, int rel_neighbor_offsets_cnt,
+                    float* goal_x, float* goal_y, float* goal_z) {
+    float goal_radius = env->goal_radius;
+
+    int goals_count = get_goals_count_in_radius(env, start_grid_row, start_grid_col,
+                                        rel_neighbor_offsets, rel_neighbor_offsets_cnt);
+    if (goals_count == 0) {
+        printf("Candidate goals count is zero at (%d, %d), roadlane_cnt: %d\n", start_grid_row, start_grid_col, env->grid_map->cell_roadlanes_count[start_grid_row * env->grid_map->grid_cols + start_grid_col]);
         printf("Grid cols: %d, Grid rows: %d\n", env->grid_map->grid_cols,  env->grid_map->grid_rows);
         return false;
     }
 
-    int rand_goal_idx = rand() % valid_goals_count;
-    i = 0;
-    while (1) {
-        int offset_row = rel_neighbor_offsets[i++];
-        int offset_col = rel_neighbor_offsets[i++];
-        int neighbor_grid_row = start_grid_row + offset_row;
-        int neighbor_grid_col = start_grid_col + offset_col;
-        // Check grid bounds
-        if (neighbor_grid_row < 0 || neighbor_grid_row >= env->grid_map->grid_rows ||
-            neighbor_grid_col < 0 || neighbor_grid_col >= env->grid_map->grid_cols) {
-            continue;
+    // No validation or rejection for very few goals count
+    bool goal_validation_enabled = true;
+    if (goals_count < MIN_POINTS_IN_RADIUS_TO_SAMPLE_GOAL) {
+        goal_validation_enabled = false;
+    }
+
+    while(1) {
+        // printf("%d goals to sample from\n", goals_count);
+        int rand_goal_idx = rand() % goals_count;
+        int i = 0;
+        bool goal_candidate_found = false;
+        // Retrieve the random goal point
+        while (!goal_candidate_found) {
+            int offset_row = rel_neighbor_offsets[i++];
+            int offset_col = rel_neighbor_offsets[i++];
+            int neighbor_grid_row = start_grid_row + offset_row;
+            int neighbor_grid_col = start_grid_col + offset_col;
+            // Check grid bounds
+            if (neighbor_grid_row < 0 || neighbor_grid_row >= env->grid_map->grid_rows ||
+                neighbor_grid_col < 0 || neighbor_grid_col >= env->grid_map->grid_cols) {
+                continue;
+            }
+
+            int current_grid_cell_idx = neighbor_grid_row * env->grid_map->grid_cols + neighbor_grid_col;
+            int current_grid_cell_roadlane_count = env->grid_map->cell_roadlanes_count[current_grid_cell_idx];
+            if (rand_goal_idx - current_grid_cell_roadlane_count < 0) {
+                // This is the grid cell containing the goal
+                // Find the specific road lane within this cell
+                int lane_idx = rand_goal_idx;
+                int cnt = 0;
+                for (int j = 0; j < env->grid_map->cell_entities_count[current_grid_cell_idx]; j++) {
+                    int entity_idx = env->grid_map->cells[current_grid_cell_idx][j].entity_idx;
+                    Entity entity = env->entities[entity_idx];
+                    if (entity.type != ROAD_LANE) {
+                        continue;
+                    }
+                    if (cnt == lane_idx) {
+                        // Goal Candidate Found
+                        int goal_point_geometry_idx = env->grid_map->cells[current_grid_cell_idx][j].geometry_idx;
+                        *goal_x = entity.traj_x[goal_point_geometry_idx];
+                        *goal_y = entity.traj_y[goal_point_geometry_idx];
+                        *goal_z = entity.traj_z[goal_point_geometry_idx];
+                        goal_candidate_found = true;
+                        break;
+                    }
+                    cnt++;
+                }
+            } else {
+                rand_goal_idx -= current_grid_cell_roadlane_count;
+            }
         }
 
-        int current_grid_cell_idx = neighbor_grid_row * env->grid_map->grid_cols + neighbor_grid_col;
-        int current_grid_cell_roadlane_count = env->grid_map->cell_roadlanes_count[current_grid_cell_idx];
-        if (rand_goal_idx - current_grid_cell_roadlane_count < 0) {
-            // This is the grid cell containing the goal
-            // Find the specific road lane within this cell
-            int lane_idx = rand_goal_idx;
-            int cnt = 0;
-            for (int j = 0; j < env->grid_map->cell_entities_count[current_grid_cell_idx]; j++) {
-                int entity_idx = env->grid_map->cells[current_grid_cell_idx][j].entity_idx;
-                Entity entity = env->entities[entity_idx];
-                if (entity.type != ROAD_LANE) {
-                    continue;
-                }
-                if (cnt == lane_idx) {
-                    int goal_point_geometry_idx = env->grid_map->cells[current_grid_cell_idx][j].geometry_idx;
-                    *goal_x = entity.traj_x[goal_point_geometry_idx];
-                    *goal_y = entity.traj_y[goal_point_geometry_idx];
-                    *goal_z = entity.traj_z[goal_point_geometry_idx];
-                    return true;
-                }
-                cnt++;
+        if (goal_validation_enabled) {
+            // Validate it so that agent is active
+            float dist_to_goal = sqrtf((start_point_x - *goal_x) * (start_point_x - *goal_x) +
+                                        (start_point_y - *goal_y) * (start_point_y - *goal_y));
+            // printf("Sampled goal (%f, %f), distance to start (%f, %f): %f\n", *goal_x, *goal_y, start_point_x, start_point_y, dist_to_goal);
+            if (dist_to_goal < env->goal_radius) {
+                // Invalid goal, resample
+                // printf("Resampling goal, distance to goal %f less than goal radius %f\n", dist_to_goal, env->goal_radius);
+                continue;
             }
+
+            // Reject if distance to goal is more than Curriculum Radius
+            if (dist_to_goal > env->goal_curriculum_end_distance) {
+                // printf("Resampling goal, distance to goal %f greater than curriculum radius %f\n", dist_to_goal, env->goal_curriculum_end_distance);
+                continue;
+            }
+
+            // Valid goal found
+            return true;
         } else {
-            rand_goal_idx -= current_grid_cell_roadlane_count;
+            return true;
         }
     }
     return false;
@@ -2489,9 +2533,9 @@ void init_goal_positions(Drive* env){
         // Compute relative offsets once
         env->radial_neighbor_offsets_cnt = 0;
         int* radial_offsets = radial_neighbor_offsets(env, env->goal_curriculum_end_distance, &env->radial_neighbor_offsets_cnt);
-        printf("Computed %d radial neighbor offsets for radius goal sampling with radius %f\n", env->radial_neighbor_offsets_cnt/2, env->goal_curriculum_end_distance);
+        // printf("Computed %d radial neighbor offsets for radius goal sampling with radius %f\n", env->radial_neighbor_offsets_cnt/2, env->goal_curriculum_end_distance);
         // for(int i = 0;i < env->radial_neighbor_offsets_cnt; i+=2){
-        //     printf("Offset (%d, %d)\n", radial_offsets[i], radial_offsets[i+1]);
+            // printf("Offset (%d, %d)\n", radial_offsets[i], radial_offsets[i+1]);
         // }
         for (int x = 0; x < env->active_agent_count; x++) {
             int agent_idx = env->active_agent_indices[x];
@@ -2510,18 +2554,25 @@ void init_goal_positions(Drive* env){
                 agent->goal_position_y = goal_y;
                 agent->init_goal_x = goal_x;
                 agent->init_goal_y = goal_y;
-                printf("Goal (%f, %f) to agent %d at (%f, %f, %f)\n", goal_x, goal_y, agent_idx, agent->x, agent->y, agent->z);
+                printf("Goal (%f, %f) to agent %d at (%f, %f, %f): distance_to_goal = %f\n", goal_x, goal_y, agent_idx, agent->x, agent->y, agent->z, sqrt((agent->x - goal_x)*(agent->x - goal_x) + (agent->y-goal_y)*(agent->y-goal_y)));
             } else {
-                raise_error_with_message(ERROR_UNKNOWN_CASE, 
+                raise_error_with_message(ERROR_UNKNOWN_CASE,
                     "Failed to find valid goal within radius for agent %d\n Stats: start = (%f, %f, %f)", agent_idx, agent->x, agent->y, agent->z);
             }
         }
+
+        free(radial_offsets);
     }
     if (env->goal_behavior == GOAL_GENERATE_NEW) {
         for(int x = 0; x < env->active_agent_count; x++) {
             int agent_idx = env->active_agent_indices[x];
             env->entities[agent_idx].next_goal_valid = 0;
             set_next_goal_preview(env, agent_idx);
+
+            Entity* agent = &env->entities[agent_idx];
+            float goal_x = env->entities[agent_idx].next_goal_position_x;
+            float goal_y = env->entities[agent_idx].next_goal_position_y;
+            printf("Goal (%f, %f) to agent %d at (%f, %f, %f): distance_to_goal = %f\n", goal_x, goal_y, agent_idx, agent->x, agent->y, agent->z, sqrt((agent->x - goal_x)*(agent->x - goal_x) + (agent->y-goal_y)*(agent->y-goal_y)));
         }
     }
 }
@@ -2601,6 +2652,10 @@ void c_close(Drive* env){
     freeTopologyGraph(env->topology_graph);
     // free(env->map_name);
     free(env->ini_file);
+    // Free tracks_to_predict_indices if allocated
+    if (env->tracks_to_predict_indices != NULL) {
+        free(env->tracks_to_predict_indices);
+    }
 }
 
 void allocate(Drive* env){

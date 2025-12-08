@@ -291,8 +291,8 @@ int eval_gif(
     const char* output_topdown, const char* output_agent, int num_maps,
     int scenario_length_override, int init_mode, int control_mode,
     int goal_behavior, int goal_sampling_mode, float max_distance_to_goal,
-    float goal_curriculum_end_distance, int dynamics_model, 
-    int reward_vehicle_collision,int reward_offroad_collision, int reward_ade, 
+    float goal_curriculum_end_distance, int dynamics_model,
+    int reward_vehicle_collision,int reward_offroad_collision, int reward_ade,
     int collision_behavior, int offroad_behavior,
     float dt, float scenario_length, int num_agents_per_world,
     float vehicle_length, float vehicle_width, float vehicle_height) {
@@ -401,30 +401,36 @@ int eval_gif(
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     int log_trajectory = log_trajectories;
-    char filename_topdown[256];
-    char filename_agent[256];
+    char filename_topdown[1024];
+    char filename_agent[1024];
 
     if (output_topdown != NULL && output_agent != NULL) {
-        strcpy(filename_topdown, output_topdown);
-        strcpy(filename_agent, output_agent);
+        strncpy(filename_topdown, output_topdown, sizeof(filename_topdown) - 1);
+        filename_topdown[sizeof(filename_topdown) - 1] = '\0';
+        strncpy(filename_agent, output_agent, sizeof(filename_agent) - 1);
+        filename_agent[sizeof(filename_agent) - 1] = '\0';
     } else {
-        char policy_base[256];
-        strcpy(policy_base, policy_name);
-        *strrchr(policy_base, '.') = '\0';
+        char policy_base[512];
+        strncpy(policy_base, policy_name, sizeof(policy_base) - 1);
+        policy_base[sizeof(policy_base) - 1] = '\0';
+        char* dot = strrchr(policy_base, '.');
+        if (dot) *dot = '\0';
 
         char map[256];
-        strcpy(map, basename((char*)map_name));
-        *strrchr(map, '.') = '\0';
+        strncpy(map, basename((char*)map_name), sizeof(map) - 1);
+        map[sizeof(map) - 1] = '\0';
+        dot = strrchr(map, '.');
+        if (dot) *dot = '\0';
 
         // Create video directory if it doesn't exist
-        char video_dir[256];
-        sprintf(video_dir, "%s/video", policy_base);
-        char mkdir_cmd[512];
+        char video_dir[768];
+        snprintf(video_dir, sizeof(video_dir), "%s/video", policy_base);
+        char mkdir_cmd[1024];
         snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", video_dir);
         system(mkdir_cmd);
 
-        sprintf(filename_topdown, "%s/video/%s_topdown.mp4", policy_base, map);
-        sprintf(filename_agent, "%s/video/%s_agent.mp4", policy_base, map);
+        snprintf(filename_topdown, sizeof(filename_topdown), "%s/video/%s_topdown.mp4", policy_base, map);
+        snprintf(filename_agent, sizeof(filename_agent), "%s/video/%s_agent.mp4", policy_base, map);
     }
 
     bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
@@ -535,7 +541,7 @@ int main(int argc, char* argv[]) {
         init_mode = 2;
     }
     int control_mode = conf.control_mode;
-    int goal_behavior = 0;
+    int goal_behavior = conf.goal_behavior;
     int goal_sampling_mode = conf.goal_sampling_mode;
     float max_distance_to_goal = conf.max_distance_to_goal;
     float goal_curriculum_end_distance = conf.goal_curriculum_end_distance;
@@ -552,12 +558,9 @@ int main(int argc, char* argv[]) {
     float vehicle_width = conf.vehicle_width;
     float vehicle_height = conf.vehicle_height;
 
-    const char* view_mode = "topdown";  // "both", "topdown", "agent"
+    const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
     const char* output_agent = NULL;
-
-    printf("Configs: \n");
-    printf("init_mode: %d, num_agents_per_world: %d, goal_radius: %.2f, goal_behavior: %d, goal_sampling_mode: %d, max_distance_to_goal: %.2f, goal_curriculum_end_distance: %.2f\n", init_mode, num_agents_per_world, goal_radius, goal_behavior, goal_sampling_mode, max_distance_to_goal, goal_curriculum_end_distance);
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -749,6 +752,9 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+
+    printf("Configs: \n");
+    printf("init_mode: %d, num_agents_per_world: %d, goal_radius: %.2f, goal_behavior: %d, goal_sampling_mode: %d, max_distance_to_goal: %.2f, goal_curriculum_end_distance: %.2f\n", init_mode, num_agents_per_world, goal_radius, goal_behavior, goal_sampling_mode, max_distance_to_goal, goal_curriculum_end_distance);
 
     eval_gif(
         map_name, policy_name, binary_dir,

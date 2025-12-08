@@ -152,7 +152,9 @@ class Drive(pufferlib.PufferEnv):
             self.goal_sampling_mode = 0
         elif goal_sampling_mode == "random_within_radius":
             self.goal_sampling_mode = 1
-            end_distance = goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            end_distance = (
+                goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            )
             self.goal_curriculum = GoalCurriculum(
                 start_distance=goal_curriculum_start_distance,
                 end_distance=end_distance,
@@ -165,7 +167,9 @@ class Drive(pufferlib.PufferEnv):
             self.goal_curriculum_total_timesteps = self.goal_curriculum.total_timesteps
         elif goal_sampling_mode == "randomized_curriculum":
             self.goal_sampling_mode = 2
-            end_distance = goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            end_distance = (
+                goal_curriculum_end_distance if goal_curriculum_end_distance is not None else max_distance_to_goal
+            )
             self.goal_curriculum = GoalCurriculum(
                 start_distance=goal_curriculum_start_distance,
                 end_distance=end_distance,
@@ -780,5 +784,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=32):
 
 
 if __name__ == "__main__":
-    # test_performance()
-    process_carla_maps()
+    test_performance()
+    # process_carla_maps()
