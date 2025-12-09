@@ -103,7 +103,7 @@
 #define LANE_ALIGNED_HEADING_THRESHOLD_RAD (M_PI / 3.0f)
 #define OFFROAD_GOAL_RESPAWN_DISTANCE 10.0f
 
-//GOAL REACHING BEHAVIOUR(Includes goal respawn behavior)
+// GOAL REACHING BEHAVIOUR(Includes goal resampling behavior)
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
@@ -2554,7 +2554,7 @@ void init_goal_positions(Drive* env){
                 agent->goal_position_y = goal_y;
                 agent->init_goal_x = goal_x;
                 agent->init_goal_y = goal_y;
-                printf("Goal (%f, %f) to agent %d at (%f, %f, %f): distance_to_goal = %f\n", goal_x, goal_y, agent_idx, agent->x, agent->y, agent->z, sqrt((agent->x - goal_x)*(agent->x - goal_x) + (agent->y-goal_y)*(agent->y-goal_y)));
+                // printf("Goal (%f, %f) to agent %d at (%f, %f, %f): distance_to_goal = %f\n", goal_x, goal_y, agent_idx, agent->x, agent->y, agent->z, sqrt((agent->x - goal_x)*(agent->x - goal_x) + (agent->y-goal_y)*(agent->y-goal_y)));
             } else {
                 raise_error_with_message(ERROR_UNKNOWN_CASE,
                     "Failed to find valid goal within radius for agent %d\n Stats: start = (%f, %f, %f)", agent_idx, agent->x, agent->y, agent->z);
@@ -2572,7 +2572,7 @@ void init_goal_positions(Drive* env){
             Entity* agent = &env->entities[agent_idx];
             float goal_x = env->entities[agent_idx].next_goal_position_x;
             float goal_y = env->entities[agent_idx].next_goal_position_y;
-            printf("Goal (%f, %f) to agent %d at (%f, %f, %f): distance_to_goal = %f\n", goal_x, goal_y, agent_idx, agent->x, agent->y, agent->z, sqrt((agent->x - goal_x)*(agent->x - goal_x) + (agent->y-goal_y)*(agent->y-goal_y)));
+            // printf("Goal (%f, %f) to agent %d at (%f, %f, %f): distance_to_goal = %f\n", goal_x, goal_y, agent_idx, agent->x, agent->y, agent->z, sqrt((agent->x - goal_x)*(agent->x - goal_x) + (agent->y-goal_y)*(agent->y-goal_y)));
         }
     }
 }
@@ -2611,10 +2611,10 @@ void init(Drive* env){
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     env->logs_capacity = 0;
-    set_active_agents(env);     // TODO
+    set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
-    remove_bad_trajectories(env);       // TODO
-    set_start_position(env);        // TODO(Can skip for dynamic agents)
+    remove_bad_trajectories(env);
+    set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));
 
@@ -3060,29 +3060,8 @@ void compute_observations(Drive* env) {
 void c_reset(Drive* env){
     env->timestep = env->init_steps;
     set_start_position(env);
-    if (env->goal_sampling_mode == GOAL_FIXED_FROM_DATASET) {
-        init_goal_positions(env);
-    } else {
-        for (int x = 0; x < env->active_agent_count; x++) {
-            int agent_idx = env->active_agent_indices[x];
-            compute_agent_metrics(env, agent_idx);
-        }
-        for (int x = 0; x < env->active_agent_count; x++) {
-            int agent_idx = env->active_agent_indices[x];
-            compute_new_goal(env, agent_idx);
-            if (isnan(env->entities[agent_idx].goal_position_x) ||
-                isnan(env->entities[agent_idx].goal_position_y) ||
-                isinf(env->entities[agent_idx].goal_position_x) ||
-                isinf(env->entities[agent_idx].goal_position_y) ||
-                env->entities[agent_idx].goal_position_x == INVALID_POSITION ||
-                env->entities[agent_idx].goal_position_y == INVALID_POSITION) {
-                env->entities[agent_idx].goal_position_x = env->entities[agent_idx].x;
-                env->entities[agent_idx].goal_position_y = env->entities[agent_idx].y;
-            }
-            env->entities[agent_idx].init_goal_x = env->entities[agent_idx].goal_position_x;
-            env->entities[agent_idx].init_goal_y = env->entities[agent_idx].goal_position_y;
-        }
-    }
+    init_goal_positions(env);
+
     // Align headings to lanes now that lanes have been identified
     for (int x = 0; x < env->active_agent_count; x++) {
         int agent_idx = env->active_agent_indices[x];

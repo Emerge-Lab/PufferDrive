@@ -142,7 +142,6 @@ class Drive(pufferlib.PufferEnv):
         elif self.init_mode_str == "random_agents_init":
             self.init_mode = 2
             self.num_agents_per_world = num_agents_per_world
-            print(f"Using random_agents_init with {self.num_agents_per_world} agents per world.")
         else:
             raise ValueError(
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
