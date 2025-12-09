@@ -1100,12 +1100,13 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         backend = args["eval"].get("backend", "PufferEnv")
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
         args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
         args["env"]["scenario_length"] = 91  # Standard scenario length
 
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
+
+        print(f"Effective number of scenarios used: {len(vecenv.driver_env.agent_offsets) - 1}")
 
         evaluator = HumanReplayEvaluator(args)
 
