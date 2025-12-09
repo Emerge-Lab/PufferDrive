@@ -303,7 +303,11 @@ int eval_gif(
     char map_buffer[256];
     if (map_name == NULL) {
         srand(time(NULL));
-        int max_slots = 1024;
+        int max_slots = count_bin_files(binary_dir);
+        if (max_slots <= 0) {
+            fprintf(stderr, "No map binaries found in %s\n", binary_dir);
+            return -1;
+        }
         char** map_list = (char**)calloc(max_slots, sizeof(char*));
         int total = collect_bins_into(binary_dir, map_list, max_slots);
         if (total == 0) {
