@@ -29,7 +29,7 @@ typedef struct
     int control_mode;
     int control_map_binaries_init;
     int interpretability_eval;
-    int interpretability_num_agents;
+    int interpretability_eval_num_agents;
     char interpretability_map_binary[256];
     char map_dir[256];
 } env_init_config;
@@ -106,8 +106,8 @@ static int handler(
         } else {
             env_config->interpretability_eval = 0;
         }
-    } else if (MATCH("eval", "interpretability_num_agents")) {
-        env_config->interpretability_num_agents = atoi(value);
+    } else if (MATCH("eval", "interpretability_eval_num_agents")) {
+        env_config->interpretability_eval_num_agents = atoi(value);
     } else if (MATCH("eval", "interpretability_map_binary")) {
         if (sscanf(value, "\"%255[^\"]\"", env_config->interpretability_map_binary) != 1) {
             strncpy(env_config->interpretability_map_binary, value, sizeof(env_config->interpretability_map_binary) - 1);

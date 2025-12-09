@@ -7,6 +7,7 @@ from typing import Dict
 import matplotlib.pyplot as plt
 import configparser
 import os
+import copy
 
 import pufferlib
 from pufferlib.ocean.benchmark import metrics
@@ -667,13 +668,13 @@ class HumanReplayEvaluator:
                 logits, value = policy.forward_eval(ob_tensor, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
-                print(f'Action space shape: {puffer_env.action_space.shape}')
+                # print(f'Action space shape: {puffer_env.action_space.shape}')
 
             if isinstance(logits, torch.distributions.Normal):
                 action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
             obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
-            print(f'Shapes: obs: {obs.shape}, rewards: {rewards.shape}, dones: {dones.shape}, truncs: {truncs.shape}, info_list len: {len(info_list)}')
+            # print(f'Shapes: obs: {obs.shape}, rewards: {rewards.shape}, dones: {dones.shape}, truncs: {truncs.shape}, info_list len: {len(info_list)}')
 
             if len(info_list) > 0:  # Happens at the end of episode
                 results = info_list[0]
@@ -685,9 +686,32 @@ class InterpretabilityEvaluator:
 
     def __init__(self, config: Dict):
         self.config = config
-        self.sim_steps = 91 - self.config["env"]["init_steps"]
+        self.interpret_step = 4
 
-    def rollout(self, args, puffer_env, policy):
+    def compute_interpreted_next_state_value(self, current_state_value, probs, all_transitions_rewards, all_transitions_values, sampled_action, gamma=0.98):
+        """Compute the value of the next state after the interpret step, using all transitions values and action probabilities."""
+        # Compute current state value using bellman expectation equation
+        assert torch.sum(probs).item() - 1.0 < 1e-5, f'Probs do not sum to 1! Sum: {torch.sum(probs).item()}'
+        print(f'probs: {probs.shape}\nall_transitions_rewards: {all_transitions_rewards.shape}\nall_transitions_values: {all_transitions_values.shape}')
+        bellman_eqn_value = all_transitions_rewards + gamma * all_transitions_values
+        print(f'bellman equation shapes: {bellman_eqn_value.shape}\n\n')
+        bellman_expected_value = torch.sum(probs * bellman_eqn_value)
+        print(f'Bellman expected value: {bellman_expected_value}, Current state value: {current_state_value}')
+        
+        # Impl assumes one agent for simplicity
+        all_trans_dimn = all_transitions_values.shape[0]
+        expected_value = all_transitions_values[sampled_action]
+        expected_reward = all_transitions_rewards[sampled_action]
+
+        print(f'Probablity of sampled action {sampled_action}: {probs[sampled_action]}')
+
+        diff = current_state_value - (torch.sum(probs * (all_transitions_rewards + gamma * all_transitions_values)) 
+                                      - probs[sampled_action] * (expected_reward + gamma * expected_value))
+        
+        computed_value = (diff/probs[sampled_action] - expected_reward) / gamma
+        return computed_value
+
+    def interpret(self, args, puffer_env, policy):
 
         num_agents = puffer_env.observation_space.shape[0]
         obs_dim = puffer_env.observation_space.shape[1]
@@ -695,6 +719,7 @@ class InterpretabilityEvaluator:
         device = args["train"]["device"]
 
         obs, info = puffer_env.reset()
+        ob_tensor = torch.as_tensor(obs).to(device)
         state = {}
         if args["train"]["use_rnn"]:
             state = dict(
@@ -702,21 +727,159 @@ class InterpretabilityEvaluator:
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
-        for time_id in range(self.sim_steps):
-            # Step policy
+        # Step policy up to interpret step
+        for time_id in range(self.interpret_step):
             with torch.no_grad():
-                ob_tensor = torch.as_tensor(obs).to(device)
                 logits, value = policy.forward_eval(ob_tensor, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
-                print(f'Action space shape: {puffer_env.action_space.shape}')
 
             if isinstance(logits, torch.distributions.Normal):
                 action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
             obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
-            print(f'Shapes: obs: {obs.shape}, rewards: {rewards.shape}, dones: {dones.shape}, truncs: {truncs.shape}, info_list len: {len(info_list)}')
-
+            ob_tensor = torch.as_tensor(obs).to(device)
+            # print(f'Action: {action_np}')
             if len(info_list) > 0:  # Happens at the end of episode
                 results = info_list[0]
                 return results
+        
+        # Now process the interpret_step
+        with torch.no_grad():
+            # Get all transitions for the current state
+            all_transitions_obs, all_transition_rewards = puffer_env.step_all_transitions()
+            all_trans_rewards_np = torch.as_tensor(all_transition_rewards).to(device)[0]
+            all_trans_obs_tensor = torch.as_tensor(all_transitions_obs).to(device)[0]
+            trans_dimn = all_trans_obs_tensor.shape[0]
+            
+            # Eval to get current state value and probs
+            logits, current_state_value = policy.forward_eval(ob_tensor, state)
+            action, logprob, logits_entropy, probs = pufferlib.pytorch.sample_logits(logits, return_all_probs=True)
+            interpret_policy = copy.deepcopy(policy)
+            print(f'logits shape: {logits[0].shape} logprob shape: {logprob.shape}, action shape: {action.shape}')
+            print(f'logits_entropy_shape: {logits_entropy.shape}, logits_entropy: {logits_entropy}')
+            
+            # Values of all transitions from the current state
+            all_trans_values = torch.zeros((num_agents, trans_dimn, 1), device=device)
+            before_state = state.copy()
+            for i in range(trans_dimn):
+                # Take a copy of previous LSTM state
+                prev_lstm_state = state.copy()
+                trans_obs_tensor = all_trans_obs_tensor[i].unsqueeze(0)
+                
+                trans_logits, trans_value = policy.forward_eval(trans_obs_tensor, prev_lstm_state)
+                all_trans_values[0, i] = trans_value
+                
+            # print(f'All transitions values shape: {all_trans_values.shape}')
+            # print(f'All transitions values: {all_trans_values.cpu().numpy()}')
+            for key in before_state.keys():
+                assert torch.all(before_state[key] == state[key]), f"LSTM state was modified during all transitions evaluation! Before: {before_state[key]}, After: {state[key]}"
+
+            # Step with the sampled action
+            action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+            obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
+            ob_tensor = torch.as_tensor(obs).to(device)
+            _, value = policy.forward_eval(ob_tensor, state)   # Value of state after interpret step
+
+            value = value[0][0]
+            value_from_all_trans = all_trans_values[0, action_np][0][0]
+            print(f'Action: {action_np}')
+            print(f'Value at interpret step: {value}')
+            print(f'Value from all transitions at action {action_np}: {value_from_all_trans}')
+
+            assert np.allclose(obs, all_transitions_obs[0, action_np[0][0], :]), \
+                f"Observation mismatch at interpret step! obs: {obs}, all_transitions_obs: {all_transitions_obs[0, action_np[0][0], :]}"
+            assert value == value_from_all_trans, f"Value mismatch at interpret step! Value: {value}, All transitions value: {value_from_all_trans}"
+
+
+            computed_next_value = self.compute_interpreted_next_state_value(
+                current_state_value=current_state_value[0][0],
+                probs=probs[0][0],
+                all_transitions_rewards=all_trans_rewards_np,
+                all_transitions_values=all_trans_values.squeeze(0).squeeze(-1),
+                sampled_action=action[0][0],
+                gamma=0.98,   # TODO: Make as config
+            )
+            print(f'Computed next state value from all transitions: {computed_next_value}')
+
+            next_state_obs_actual = ob_tensor.copy_(torch.as_tensor(obs).to(device))
+
+            # --------------------------------------------------
+            # Optimize a candidate input observation to match
+            # `next_state_obs_actual` by backpropagating only into
+            # the input. Freeze all policy weights (including encoder)
+            # and use the `before_state` LSTM state as the starting state.
+            # --------------------------------------------------
+            interpret_policy.eval()
+            for p in interpret_policy.parameters():
+                p.requires_grad = False
+
+            # Create and optimize the candidate input under an enabled-grad context
+            loss_fn = torch.nn.MSELoss()
+            num_opt_steps = 500
+
+            # Use a detached copy of the LSTM state so forward_eval can
+            # mutate its copy without altering the original `before_state`.
+            opt_state = {k: v.clone().detach() for k, v in before_state.items()}
+
+            with torch.enable_grad():
+                # Create a learnable observation initialized near the actual
+                # next-state observation: next_state_obs_actual + small noise.
+                # Detach `next_state_obs_actual` so we don't keep its graph.
+                noise_eps = 2e-1
+                noise = torch.randn_like(ob_tensor, device=device) * noise_eps
+                # pred_obs_param = torch.nn.Parameter(next_state_obs_actual.detach().clone() + noise)
+                pred_obs_param = torch.nn.Parameter(noise)
+
+                # Optimizer operating only on the predicted observation
+                optimizer = torch.optim.Adam([pred_obs_param], lr=1e-2)
+
+                target_value = computed_next_value.detach()
+
+                for it in range(num_opt_steps):
+                    optimizer.zero_grad()
+
+                    # Clone LSTM state per-iteration so the forward graph is fresh
+                    iter_state = {k: v.clone().detach() for k, v in before_state.items()}
+
+                    # Forward the predicted observation through the policy so gradients
+                    # flow into `pred_obs_param` only.
+                    logits_pred, value_pred = interpret_policy.forward_eval(pred_obs_param, iter_state)
+
+                    # Primary loss: L2 between predicted value (from predicted obs)
+                    # and the computed next-state value (interpreted target).
+                    # `value_pred` shape is (batch, 1) so broadcast the target.
+                    loss = loss_fn(value_pred, target_value.expand_as(value_pred))      # TODO: Add proximity with current obs
+
+                    # Use retain_graph=True to avoid "second backward" errors
+                    # when parts of the graph are reused internally.
+                    loss.backward(retain_graph=True)
+                    optimizer.step()
+
+                    if it % 50 == 0:
+                        try:
+                            loss_val = float(loss.item())
+                            vp = float(value_pred.view(-1)[0].item())
+                            tgt = float(target_value.item())
+                        except Exception:
+                            loss_val = 0.0
+                            vp = None
+                            tgt = None
+                        print(f"Input optimization iter {it}/{num_opt_steps}, loss: {loss_val:.6e}, pred_value: {vp}, target: {tgt}")
+
+                    # early stop
+                    if loss.item() < 1e-9:
+                        break
+
+                optimized_obs = pred_obs_param.detach()
+
+            # Compute the policy value for the optimized observation (for inspection)
+            with torch.no_grad():
+                _, final_value = interpret_policy.forward_eval(optimized_obs, opt_state)
+
+            print(f"Optimized observation final loss: {loss.item():.6e}")
+            try:
+                print(f"Final value from policy on optimized obs: {final_value[0][0]}")
+                print(f'Difference from predicted obs vs actual next obs: {torch.norm(optimized_obs - next_state_obs_actual).item():.6e}')
+            except Exception:
+                print(f"Final value (raw): {final_value}")

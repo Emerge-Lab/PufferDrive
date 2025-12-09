@@ -89,7 +89,6 @@ class PuffeRL:
         batch_size = config["batch_size"]
         horizon = config["bptt_horizon"]
         segments = batch_size // horizon
-        print(f'Total agents: {total_agents}, segments: {segments}, batch_size: {batch_size}, horizon: {horizon}')
         self.segments = segments
         if total_agents > segments:
             raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
@@ -128,14 +127,14 @@ class PuffeRL:
 
         # LSTM
         if config["use_rnn"]:
-            print("Using RNN policy states")
+            # print("Using RNN policy states")
             n = vecenv.agents_per_batch
             h = policy.hidden_size
             self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
             self.lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
-            print(f"Total agents: {total_agents}, agents_per_batch of {n}")
-            print(f"Initialized LSTM states for {len(self.lstm_h)} batches, {type(self.lstm_h)}, keys: {list(self.lstm_h.keys())}")
-            print(f"Initialized lstm_c for {len(self.lstm_c)} batches, {type(self.lstm_c)}, keys: {list(self.lstm_c.keys())}")
+            # print(f"Total agents: {total_agents}, agents_per_batch of {n}")
+            # print(f"Initialized LSTM states for {len(self.lstm_h)} batches, {type(self.lstm_h)}, keys: {list(self.lstm_h.keys())}")
+            # print(f"Initialized lstm_c for {len(self.lstm_c)} batches, {type(self.lstm_c)}, keys: {list(self.lstm_c.keys())}")
 
         # Minibatching & gradient accumulation
         minibatch_size = config["minibatch_size"]
@@ -286,7 +285,7 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                print(f'Action shape: {action.shape}, logprob shape: {logprob.shape}')
+                # print(f'Action shape: {action.shape}, logprob shape: {logprob.shape}')
                 r = torch.clamp(r, -1, 1)
 
             profile("eval_copy", epoch)
@@ -303,8 +302,8 @@ class PuffeRL:
                     self.observations[batch_rows, l] = o
                 else:
                     self.observations[batch_rows, l] = o_device
-                print(f'Actions shape: {self.actions.shape}')
-                print(f'batch rows: {batch_rows}, l: {l}, obs shape: {self.observations[batch_rows, l].shape}')
+                    # print(f'Actions shape: {self.actions.shape}')
+                    # print(f'batch rows: {batch_rows}, l: {l}, obs shape: {self.observations[batch_rows, l].shape}')
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
                 self.rewards[batch_rows, l] = r
@@ -1044,6 +1043,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
+    interpretability_evaluator_enabled = args["eval"]["interpretability_eval"]
     args["env"]["map_dir"] = args["eval"]["map_dir"]
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
@@ -1122,6 +1122,23 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print("HUMAN_REPLAY_METRICS_END")
 
         return results
+    
+    elif interpretability_evaluator_enabled:
+        print(f"Running interpretability evaluation with {dataset_name} dataset.\n")
+        from pufferlib.ocean.benchmark.evaluator import InterpretabilityEvaluator
+
+        backend = args["eval"].get("backend", "PufferEnv")
+        args["vec"] = dict(backend=backend, num_envs=1)
+        args["env"]["num_agents"] = args["eval"]["interpretability_eval_num_agents"]
+        args["env"]["control_mode"] = args["eval"]["interpretability_eval_control_mode"]
+        map_to_interpret = args["eval"]["interpretability_map_binary"]
+
+        vecenv = vecenv or load_env(env_name, args)
+        policy = policy or load_policy(args, vecenv, env_name)
+
+        evaluator = InterpretabilityEvaluator(args)
+        evaluator.interpret(args, vecenv, policy)
+        
     else:  # Standard evaluation: Render
         backend = args["vec"]["backend"]
         if backend != "PufferEnv":
@@ -1447,8 +1464,26 @@ def load_config(env_name, config_dir=None):
         except:
             return value
 
+    # Get already defined CLI argument names to avoid conflicts
+    existing_args = {action.dest for action in parser._actions}
+
+    # Override defaults for hardcoded CLI args with values from config [base] section
+    if "base" in p.sections():
+        for key in p["base"]:
+            dest_name = key.replace("-", "_")
+            if dest_name in existing_args:
+                # Find the action and update its default
+                for action in parser._actions:
+                    if action.dest == dest_name:
+                        action.default = puffer_type(p["base"][key])
+                        break
+
     for section in p.sections():
         for key in p[section]:
+            # Skip if this key conflicts with an existing hardcoded CLI argument
+            dest_name = key.replace("-", "_")
+            if dest_name in existing_args:
+                continue
             fmt = f"--{key}" if section == "base" else f"--{section}.{key}"
             parser.add_argument(fmt.replace("_", "-"), default=puffer_type(p[section][key]), type=puffer_type)
 

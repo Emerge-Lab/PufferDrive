@@ -188,7 +188,7 @@ def entropy_probs(logits, probs):
     return -p_log_p.sum(-1)
 
 
-def sample_logits(logits, action=None):
+def sample_logits(logits, action=None, return_all_probs=False):
     is_discrete = isinstance(logits, torch.Tensor)
     if isinstance(logits, torch.distributions.Normal):
         batch = logits.loc.shape[0]
@@ -209,8 +209,7 @@ def sample_logits(logits, action=None):
     # This can fail on nans etc
     normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
     probs = logits_to_probs(logits)
-    # print(f'logits: {normalized_logits[0, 1, :]}')
-    # print(f'probs: {probs[0, 1, :]}')
+    # print(f'logits: {normalized_logits}')
 
     probs2 = logits_to_probs(logits=logits)
     assert torch.allclose(probs, probs2), f"Inconsistent probs computation {(probs - probs2).abs().max()}"
@@ -233,7 +232,11 @@ def sample_logits(logits, action=None):
     # print(f"logprob sample: {logprob[0, 1]}")
     logits_entropy = entropy(normalized_logits).sum(0)
 
+    assert torch.allclose(probs.sum(-1), torch.ones_like(probs.sum(-1))), f"Probs do not sum to 1: max deviation { (probs.sum(-1) - 1).abs().max()}"
+
     if is_discrete:
         return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0)
 
+    if return_all_probs:
+        return action.T, logprob.sum(0), logits_entropy, probs
     return action.T, logprob.sum(0), logits_entropy

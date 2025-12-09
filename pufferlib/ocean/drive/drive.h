@@ -2332,9 +2332,10 @@ void step_all_transitions(Drive* env) {
     memset(env->all_transition_rewards, 0, env->active_agent_count * action_dims * sizeof(float));
 
     for (int action_val = 0; action_val < action_dims; action_val++) {
-        // Create a copy of current entities
+        // Create a copy of current state(entities, timestep, etc...)
         Entity* entity_copies = (Entity*)calloc(env->num_entities, sizeof(Entity));
         memcpy(entity_copies, env->entities, env->num_entities * sizeof(Entity));
+        int timestep_copy = env->timestep;
 
         // Step all entities
         step_with_action_val(env, action_val);
@@ -2357,6 +2358,7 @@ void step_all_transitions(Drive* env) {
 
         // Reset to last state using current entity copies
         memcpy(env->entities, entity_copies, env->num_entities * sizeof(Entity));
+        env->timestep = timestep_copy;
         
         // Free memory
         free(entity_copies);

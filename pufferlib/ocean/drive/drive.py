@@ -305,9 +305,8 @@ class Drive(pufferlib.PufferEnv):
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def step_all_transitions(self):
-        print(f'Before: all trans stats: {self.all_transition_observations}, {self.all_transition_rewards}')
         binding.vec_step_all_transitions(self.c_envs)
-        print(f'After: all trans stats: {self.all_transition_observations}, {self.all_transition_rewards}')
+        return (self.all_transition_observations, self.all_transition_rewards)
 
     def get_global_agent_state(self):
         """Get current global state of all active agents.
@@ -670,19 +669,54 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1):
     )
 
     env.reset()
-    env.step_all_transitions()
+
     tick = 0
     actions = np.stack(
         [np.random.randint(0, space.n + 1, (atn_cache, num_agents)) for space in env.single_action_space], axis=-1
     )
-    print(f'Actions: {actions.shape}, {actions.dtype}')
+    # print(f'Actions: {actions.shape}, {actions.dtype}')
 
     start = time.time()
     while time.time() - start < timeout:
+        # Check all step transition and step
+        env.step_all_transitions()
         atn = actions[tick % atn_cache]
+        # atn = np.full((num_agents, 1), 19, dtype=np.int32)
+        print(f'Stepping with atn: {atn}')
+        # print(f'Step stats\n\n\n')
+        # print(f'Obs: {env.observations}\n\n\n Rewards:{env.rewards}\n\n\n Terminals:{env.terminals}\n\n\n Truncations:{env.truncations}')
+        # print(f'After: all trans stats\n Obs: {env.all_transition_observations}\n\n\n Rewards:{env.all_transition_rewards}')
+        atn_obsn = env.all_transition_observations[:, atn[0][0], :]
+        atn_rewn = env.all_transition_rewards[:, atn[0][0]]
+        print(f'Atn Obsn: {atn_obsn.shape}\n\n\n Atn Rewn:{atn_rewn}')
+        print(f'Env Obsn: {env.observations.shape}\n\n\n Env Rewn:{type(env.all_transition_rewards)}')
+        
+        # print(f'shapes: env obs {env.observations.shape}, atn_obsn {atn_obsn.shape}, env rewn {env.rewards.shape}, atn_rewn {atn_rewn.shape}')
+        
         env.step(atn)
+        try:
+            assert np.allclose(env.observations, atn_obsn), f"Observations do not match, off by {np.abs(env.observations - atn_obsn).max()}!"
+            assert np.allclose(env.rewards, atn_rewn), f"Rewards do not match, off by {np.abs(env.rewards - atn_rewn).max()}!"
+        except AssertionError as e:
+            # Log observations to file for debugging
+            with open('obs_comparison.txt', 'w') as f:
+                f.write("=== Environment Observations ===\n")
+                f.write(f"Shape: {env.observations.shape}\n")
+                np.savetxt(f, env.observations, fmt='%.6f')
+                f.write("\n\n=== Action Transition Observations ===\n")
+                f.write(f"Shape: {atn_obsn.shape}\n")
+                np.savetxt(f, atn_obsn, fmt='%.6f')
+                f.write("\n\n=== Difference (env - atn) ===\n")
+                diff = env.observations - atn_obsn
+                f.write(f"Max diff: {np.abs(diff).max()}\n")
+                f.write(f"Non-zero diff indices: {np.argwhere(np.abs(diff) > 1e-6).tolist()}\n")
+                np.savetxt(f, diff, fmt='%.6f')
+            print("Logged observations to obs_comparison.txt")
+            raise e
+            
         tick += 1
-
+        break
+    print(f'No single_step_transition errors after {tick} steps in {time.time() - start} seconds.')
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
 
     env.close()
