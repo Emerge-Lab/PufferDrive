@@ -170,3 +170,28 @@ body {
 .feature-card p {
   margin: 0;
 }
+
+@media (max-width: 768px) {
+  .hero {
+    flex-direction: column;
+    text-align: center;
+    padding: 1.25rem;
+  }
+
+  .hero img {
+    width: 130px;
+    margin: 0 auto;
+  }
+
+  .hero .cta {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero .cta a {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+}
