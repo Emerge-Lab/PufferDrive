@@ -152,6 +152,7 @@ struct Log {
     float lane_alignment_rate;
     float avg_displacement_error;
     float avg_spawn_distance_to_goal;
+    float avg_initial_distance_to_goal;
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
@@ -448,6 +449,7 @@ struct Drive {
 };
 
 void add_log(Drive* env) {
+    env->log.avg_initial_distance_to_goal = 0.0f;   // Doesnt accumulate over timesteps
     for(int i = 0; i < env->active_agent_count; i++){
         Entity* e = &env->entities[env->active_agent_indices[i]];
 
@@ -476,6 +478,7 @@ void add_log(Drive* env) {
         env->log.avg_displacement_error += displacement_error;
         float spawn_distance = env->logs[i].avg_spawn_distance_to_goal;
         env->log.avg_spawn_distance_to_goal += spawn_distance;
+        env->log.avg_initial_distance_to_goal += env->logs[i].avg_initial_distance_to_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         if (env->logs[i].episode_length > 0.0f) {
@@ -1038,6 +1041,7 @@ void record_spawn_distance_to_goal(Drive* env, int agent_idx, int log_idx) {
     );
 
     if (spawn_distance < 0 || isnan(spawn_distance) || isinf(spawn_distance)) {
+        printf("Warning: Invalid spawn distance to goal for agent %d: %f\n", agent_idx, spawn_distance);
         return;
     }
 
@@ -1047,6 +1051,9 @@ void record_spawn_distance_to_goal(Drive* env, int agent_idx, int log_idx) {
     if (agent->spawn_count > 0) {
         env->logs[log_idx].avg_spawn_distance_to_goal =
             agent->spawn_distance_sum / agent->spawn_count;
+    }
+    if (!agent->reached_goal_this_episode) {
+        env->logs[log_idx].avg_initial_distance_to_goal = spawn_distance;
     }
 }
 

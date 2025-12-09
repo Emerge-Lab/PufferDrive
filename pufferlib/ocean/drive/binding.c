@@ -300,6 +300,6 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
     assign_to_dict(dict, "no_current_lane_rate", log->no_current_lane_rate);
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
-    assign_to_dict(dict, "avg_initial_distance_to_goal", 0.0f);
+    assign_to_dict(dict, "avg_initial_distance_to_goal", log->avg_initial_distance_to_goal);
     return 0;
 }
