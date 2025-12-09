@@ -1089,7 +1089,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             import json
 
             print("\nWOSAC_METRICS_START")
-            print(json.dumps(results))
+            print(json.dumps(results, indent=4))
             print("WOSAC_METRICS_END")
 
         return results
