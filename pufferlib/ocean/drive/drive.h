@@ -160,6 +160,8 @@ struct Log {
     float avg_collisions_per_agent;
     float missing_lane_steps;
     float no_current_lane_rate;
+    float map_observation_ratio;
+    float map_observation_ratio_variance;
 };
 
 typedef struct Entity Entity;
@@ -485,11 +487,19 @@ void add_log(Drive* env) {
             float no_lane_ratio = env->logs[i].missing_lane_steps / env->logs[i].episode_length;
             env->log.no_current_lane_rate += no_lane_ratio;
         }
+        env->log.map_observation_ratio += env->logs[i].map_observation_ratio;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
         env->log.static_agent_count += env->static_agent_count;
         env->log.n += 1;
+    }
+
+    // Aggregation within env
+    float mean_obs_ratio = env->log.map_observation_ratio / (float)(env->active_agent_count);
+    for(int i = 0; i < env->active_agent_count; i++){
+        float obs_ratio = env->logs[i].map_observation_ratio;
+        env->log.map_observation_ratio_variance += (obs_ratio - mean_obs_ratio) * (obs_ratio - mean_obs_ratio);
     }
 }
 
@@ -1435,13 +1445,14 @@ void cache_neighbor_offsets(Drive* env){
     }
 }
 
-int get_neighbor_cache_entities(Drive* env, int cell_idx, GridMapEntity* entities, int max_entities) {
+int get_neighbor_cache_entities(Drive* env, int cell_idx, GridMapEntity* entities, int max_entities, int* points_in_vision_cnt) {
     GridMap* grid_map = env->grid_map;
     if (cell_idx < 0 || cell_idx >= (grid_map->grid_cols * grid_map->grid_rows)) {
         return 0; // Invalid cell index
     }
 
     int count = grid_map->neighbor_cache_count[cell_idx];
+    *points_in_vision_cnt = count;
     // Limit to available space
     if (count > max_entities) {
         count = max_entities;
@@ -3004,7 +3015,11 @@ void compute_observations(Drive* env) {
         GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*25];
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
 
-        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
+        int points_in_vision_cnt = 0;
+        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS, &points_in_vision_cnt);
+        float map_observation_ratio = (float)points_in_vision_cnt / (float)MAX_ROAD_SEGMENT_OBSERVATIONS;
+        env->logs[i].map_observation_ratio = map_observation_ratio;
+
 
         for(int k = 0; k < list_size; k++) {
             int entity_idx = entity_list[k].entity_idx;
