@@ -5,6 +5,8 @@ import struct
 import os
 import pufferlib
 from pufferlib.ocean.drive import binding
+from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
 
 
 class Drive(pufferlib.PufferEnv):
@@ -37,6 +39,7 @@ class Drive(pufferlib.PufferEnv):
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        map_dir="resources/drive/binaries/training",
     ):
         # env
         self.dt = dt
@@ -58,35 +61,40 @@ class Drive(pufferlib.PufferEnv):
         self.dynamics_model = dynamics_model
 
         # Observation space calculation
-        if dynamics_model == "classic":
-            ego_features = 7
-        elif dynamics_model == "jerk":
-            ego_features = 10
-        else:
-            raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+        self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
+            dynamics_model
+        )
 
-        self.ego_features = ego_features
-        partner_features = 7
-        road_features = 7
-        max_partner_objects = 63
-        max_road_objects = 200
-        self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
+        # Extract observation shapes from constants
+        # These need to be defined in C, since they determine the shape of the arrays
+        self.max_road_objects = binding.MAX_ROAD_SEGMENT_OBSERVATIONS
+        self.max_partner_objects = binding.MAX_AGENTS - 1
+        self.partner_features = binding.PARTNER_FEATURES
+        self.road_features = binding.ROAD_FEATURES
+
+        self.num_obs = (
+            self.ego_features
+            + self.max_partner_objects * self.partner_features
+            + self.max_road_objects * self.road_features
+        )
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+
         self.init_steps = init_steps
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
+        self.map_dir = map_dir
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
         elif self.control_mode_str == "control_agents":
             self.control_mode = 1
-        elif self.control_mode_str == "control_tracks_to_predict":
+        elif self.control_mode_str == "control_wosac":
             self.control_mode = 2
         elif self.control_mode_str == "control_sdc_only":
             self.control_mode = 3
         else:
             raise ValueError(
-                f"control_mode must be one of 'control_vehicles', 'control_tracks_to_predict', or 'control_agents'. Got: {self.control_mode_str}"
+                f"control_mode must be one of 'control_vehicles', 'control_wosac', or 'control_agents'. Got: {self.control_mode_str}"
             )
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
@@ -104,7 +112,8 @@ class Drive(pufferlib.PufferEnv):
                 # Multi discrete (assume independence)
                 # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
             elif dynamics_model == "jerk":
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([4, 3])
+                # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
             else:
                 raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
@@ -115,23 +124,23 @@ class Drive(pufferlib.PufferEnv):
         self._action_type_flag = 0 if action_type == "discrete" else 1
 
         # Check if resources directory exists
-        binary_dir = os.getenv("PUFFER_DRIVE_BINARY_DIR", "resources/drive/binaries")
-        binary_path = os.path.join(binary_dir, "map_000.bin")
+        binary_path = f"{map_dir}/map_000.bin"
         if not os.path.exists(binary_path):
             raise FileNotFoundError(
                 f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
             )
 
         # Check maps availability
-        available_maps = len([name for name in os.listdir(binary_dir) if name.endswith(".bin")])
+        available_maps = len([name for name in os.listdir(map_dir) if name.endswith(".bin")])
         if num_maps > available_maps:
             raise ValueError(
-                f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to {binary_dir}."
+                f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
             )
         self.max_controlled_agents = int(max_controlled_agents)
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
+            map_dir=map_dir,
             num_agents=num_agents,
             num_maps=num_maps,
             init_mode=self.init_mode,
@@ -177,6 +186,7 @@ class Drive(pufferlib.PufferEnv):
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
+                map_dir=map_dir,
             )
             env_ids.append(env_id)
 
@@ -211,6 +221,7 @@ class Drive(pufferlib.PufferEnv):
                     init_steps=self.init_steps,
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
+                    map_dir=self.map_dir,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
@@ -244,6 +255,7 @@ class Drive(pufferlib.PufferEnv):
                         init_steps=self.init_steps,
                         init_mode=self.init_mode,
                         control_mode=self.control_mode,
+                        map_dir=self.map_dir,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -318,6 +330,32 @@ class Drive(pufferlib.PufferEnv):
 
         return trajectories
 
+    def get_road_edge_polylines(self):
+        """Get road edge polylines for all scenarios.
+
+        Returns:
+            dict with keys 'x', 'y', 'lengths', 'scenario_id' containing numpy arrays.
+            x, y are flattened point coordinates; lengths indicates points per polyline.
+        """
+        num_polylines, total_points = binding.vec_get_road_edge_counts(self.c_envs)
+
+        polylines = {
+            "x": np.zeros(total_points, dtype=np.float32),
+            "y": np.zeros(total_points, dtype=np.float32),
+            "lengths": np.zeros(num_polylines, dtype=np.int32),
+            "scenario_id": np.zeros(num_polylines, dtype=np.int32),
+        }
+
+        binding.vec_get_road_edge_polylines(
+            self.c_envs,
+            polylines["x"],
+            polylines["y"],
+            polylines["lengths"],
+            polylines["scenario_id"],
+        )
+
+        return polylines
+
     def render(self):
         binding.vec_render(self.c_envs, 0)
 
@@ -389,8 +427,6 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(struct.pack("i", track_index))
 
         # Count total entities
-        print(len(map_data.get("objects", [])))
-        print(len(map_data.get("roads", [])))
         num_objects = len(map_data.get("objects", []))
         num_roads = len(map_data.get("roads", []))
         # num_entities = num_objects + num_roads
@@ -519,32 +555,66 @@ def load_map(map_name, unique_map_id, binary_output=None):
         save_map_binary(map_data, binary_output, unique_map_id)
 
 
-def process_all_maps():
-    """Process all maps and save them as binaries"""
+def _process_single_map(args):
+    """Worker function to process a single map file"""
+    i, map_path, binary_path = args
+    try:
+        load_map(str(map_path), i, str(binary_path))
+        return (i, map_path.name, True, None)
+    except Exception as e:
+        return (i, map_path.name, False, str(e))
+
+
+def process_all_maps(
+    data_folder="data/processed/training",
+    max_maps=10_000,
+    num_workers=None,
+):
+    """Process all maps and save them as binaries using multiprocessing
+
+    Args:
+        data_folder: Path to the folder containing JSON map files
+        max_maps: Maximum number of maps to process
+        num_workers: Number of parallel workers (defaults to cpu_count())
+    """
     from pathlib import Path
 
-    # Create the binaries directory if it doesn't exist
-    binary_dir = Path(os.getenv("PUFFER_DRIVE_BINARY_DIR", "resources/drive/binaries"))
-    binary_dir.mkdir(parents=True, exist_ok=True)
+    if num_workers is None:
+        num_workers = cpu_count()
 
     # Path to the training data
-    data_dir = Path("data/processed/training")
+    data_dir = Path(data_folder)
+    dataset_name = data_dir.name
+
+    # Create the binaries directory if it doesn't exist
+    binary_dir = Path(f"resources/drive/binaries/{dataset_name}")
+    binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
 
-    print(f"Found {len(json_files)} JSON files")
-
-    # Process each JSON file
-    for i, map_path in enumerate(json_files[:10000]):
-        binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
+    # Prepare arguments for parallel processing
+    tasks = []
+    for i, map_path in enumerate(json_files[:max_maps]):
+        binary_file = f"map_{i:03d}.bin"
         binary_path = binary_dir / binary_file
+        tasks.append((i, map_path, binary_path))
 
-        print(f"Processing {map_path.name} -> {binary_file}")
-        # try:
-        load_map(str(map_path), i, str(binary_path))
-        # except Exception as e:
-        #     print(f"Error processing {map_path.name}: {e}")
+    # Process maps in parallel with progress bar
+    with Pool(num_workers) as pool:
+        results = list(
+            tqdm(pool.imap(_process_single_map, tasks), total=len(tasks), desc="Processing maps", unit="map")
+        )
+
+    # Collect statistics
+    successful = sum(1 for _, _, success, _ in results if success)
+    failed = sum(1 for _, _, success, _ in results if not success)
+
+    if failed > 0:
+        print(f"\nFailed {failed}/{len(results)} files:")
+        for i, name, success, error in results:
+            if not success:
+                print(f"  {name}: {error}")
 
 
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
@@ -579,4 +649,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 if __name__ == "__main__":
     # test_performance()
-    process_all_maps()
+    # Process the train dataset
+    process_all_maps(data_folder="data/processed/training")
+    # Process the validation/test dataset
+    # process_all_maps(data_folder="data/processed/validation")
