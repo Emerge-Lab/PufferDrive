@@ -8498,30 +8498,6 @@
       "type": "lane"
     },
     {
-      "id": 153,
-      "geometry": [
-        {
-          "x": 483.57669417363644,
-          "y": -926.730644946561,
-          "z": -4.12267745022832
-        }
-      ],
-      "map_element_id": 153,
-      "type": "other"
-    },
-    {
-      "id": 154,
-      "geometry": [
-        {
-          "x": 514.6234467465374,
-          "y": -909.9056626828519,
-          "z": -4.24901152063843
-        }
-      ],
-      "map_element_id": 154,
-      "type": "other"
-    },
-    {
       "id": 151502801,
       "geometry": [
         {
@@ -8839,6 +8815,7 @@
           "z": 0
         }
       ],
+      "map_element_id": 750721785,
       "type": "road_edge"
     }
   ],
@@ -8854,6 +8831,6 @@
     "frame_interval_micros": 100000,
     "frame_count": 91,
     "duration_seconds": 9,
-    "editor_exported_at": "2025-12-06T20:57:23.324Z"
+    "editor_exported_at": "2025-12-10T21:24:10.006Z"
   }
 }
