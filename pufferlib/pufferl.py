@@ -1290,30 +1290,22 @@ def sanity(env_name, args=None):
         load_map(str(json_path), idx, str(output_path))
         binaries.append((name, output_path))
 
-    previous_binary_dir = os.environ.get("PUFFER_DRIVE_BINARY_DIR")
     runs = []
-    try:
-        os.environ["PUFFER_DRIVE_BINARY_DIR"] = str(binary_dir.resolve())
-        for name, binary in binaries:
-            map_zero = binary_dir / "map_000.bin"
-            shutil.copy2(binary, map_zero)
+    for name, binary in binaries:
+        map_zero = binary_dir / "map_000.bin"
+        shutil.copy2(binary, map_zero)
 
-            run_args = {
-                **args,
-                "env": {**args["env"], "num_maps": 1},
-                "train": {**args["train"], "render_map": str(map_zero)},
-            }
-            if run_args.get("wandb"):
-                run_args["wandb_name"] = name
+        run_args = {
+            **args,
+            "env": {**args["env"], "num_maps": 1, "map_dir": str(binary_dir)},
+            "train": {**args["train"], "render_map": str(map_zero)},
+        }
+        if run_args.get("wandb"):
+            run_args["wandb_name"] = name
 
-            print(f"Running sanity map '{name}' from {binary.name}")
-            run_logs = train(env_name=env_name, args=run_args)
-            runs.append({"map": name, "logs": run_logs})
-    finally:
-        if previous_binary_dir is None:
-            os.environ.pop("PUFFER_DRIVE_BINARY_DIR", None)
-        else:
-            os.environ["PUFFER_DRIVE_BINARY_DIR"] = previous_binary_dir
+        print(f"Running sanity map '{name}' from {binary.name}")
+        run_logs = train(env_name=env_name, args=run_args)
+        runs.append({"map": name, "logs": run_logs})
 
     print("Sanity checklist:")
     for entry in runs:
