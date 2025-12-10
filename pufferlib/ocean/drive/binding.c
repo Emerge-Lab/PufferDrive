@@ -68,7 +68,6 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 }
 
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
-    char* map_dir = unpack_str(kwargs, "map_dir");
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
     int init_mode = unpack(kwargs, "init_mode");
@@ -81,18 +80,22 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int env_count = 0;
     int max_envs = num_agents;
     int maps_checked = 0;
+    const char* binary_dir = getenv("PUFFER_DRIVE_BINARY_DIR");
+    if (!binary_dir || !binary_dir[0]) {
+        binary_dir = "resources/drive/binaries";
+    }
     PyObject* agent_offsets = PyList_New(max_envs+1);
     PyObject* map_ids = PyList_New(max_envs);
     // getting env count
     while(total_agent_count < num_agents && env_count < max_envs){
-        char map_file[100];
+        char map_file[512];
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
-        sprintf(map_file, "%s/map_%03d.bin", map_dir, map_id);
+        snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", binary_dir, map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
 
@@ -193,12 +196,15 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
-    char* map_dir = unpack_str(kwargs, "map_dir");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
-    char map_file[100];
-    sprintf(map_file, "%s/map_%03d.bin", map_dir, map_id);
+    char map_file[512];
+    const char* binary_dir = getenv("PUFFER_DRIVE_BINARY_DIR");
+    if (!binary_dir || !binary_dir[0]) {
+        binary_dir = "resources/drive/binaries";
+    }
+    snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", binary_dir, map_id);
     env->num_agents = max_agents;
     env->map_name = strdup(map_file);
     env->init_steps = init_steps;
@@ -209,16 +215,16 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
 
 static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "n", log->n);
-    assign_to_dict(dict, "score", log->score);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
-    assign_to_dict(dict, "collision_rate", log->collision_rate);
     assign_to_dict(dict, "episode_length", log->episode_length);
+    assign_to_dict(dict, "collision_rate", log->collision_rate);
     assign_to_dict(dict, "episode_return", log->episode_return);
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
+    assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
     assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
+    assign_to_dict(dict, "score", log->score);
     assign_to_dict(dict, "avg_offroad_per_agent", log->avg_offroad_per_agent);
     assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
-    //assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }
