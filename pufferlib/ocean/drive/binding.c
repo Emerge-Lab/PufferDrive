@@ -85,14 +85,14 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     PyObject* map_ids = PyList_New(max_envs);
     // getting env count
     while(total_agent_count < num_agents && env_count < max_envs){
-        char map_file[100];
+        char map_file[512];
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
-        sprintf(map_file, "%s/map_%03d.bin", map_dir, map_id);
+        snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
 
@@ -197,8 +197,8 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
-    char map_file[100];
-    sprintf(map_file, "%s/map_%03d.bin", map_dir, map_id);
+    char map_file[512];
+    snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
     env->num_agents = max_agents;
     env->map_name = strdup(map_file);
     env->init_steps = init_steps;
