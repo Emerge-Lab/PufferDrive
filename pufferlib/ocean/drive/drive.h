@@ -1734,7 +1734,7 @@ static inline int get_track_id_or_placeholder(Drive* env, int agent_idx) {
     return -1;
 }
 
-void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* id_out, float* length_out, float* width_out) {
+void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* id_out, int* track_id_out, float* length_out, float* width_out) {
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
@@ -1744,17 +1744,21 @@ void c_get_global_agent_state(Drive* env, float* x_out, float* y_out, float* z_o
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        // Proposition, keeping this info makes things easier for a lot of stuff ahah
+        id_out[i] = env->entities[agent_idx].id;
+        // Still keep this for WOSAC it looks ugly, I will think about it later
+        track_id_out[i] = get_track_id_or_placeholder(env, agent_idx);
         length_out[i] = agent->length;
         width_out[i] = agent->width;
     }
 }
 
-void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* valid_out, int* id_out, int* scenario_id_out) {
+void c_get_global_ground_truth_trajectories(Drive* env, float* x_out, float* y_out, float* z_out, float* heading_out, int* valid_out, int* id_out, int* track_id_out, int* scenario_id_out) {
     for(int i = 0; i < env->active_agent_count; i++){
         int agent_idx = env->active_agent_indices[i];
         Entity* agent = &env->entities[agent_idx];
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        id_out[i] = env->entities[agent_idx].id;
+        track_id_out[i] = get_track_id_or_placeholder(env, agent_idx);
         scenario_id_out[i] = agent->scenario_id;
 
         for(int t = env->init_steps; t < agent->array_size; t++){

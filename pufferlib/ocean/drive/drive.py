@@ -283,6 +283,7 @@ class Drive(pufferlib.PufferEnv):
             "z": np.zeros(num_agents, dtype=np.float32),
             "heading": np.zeros(num_agents, dtype=np.float32),
             "id": np.zeros(num_agents, dtype=np.int32),
+            "track_id": np.zeros(num_agents, dtype=np.int32),
             "length": np.zeros(num_agents, dtype=np.float32),
             "width": np.zeros(num_agents, dtype=np.float32),
         }
@@ -294,6 +295,7 @@ class Drive(pufferlib.PufferEnv):
             states["z"],
             states["heading"],
             states["id"],
+            states["track_id"],
             states["length"],
             states["width"],
         )
@@ -315,6 +317,7 @@ class Drive(pufferlib.PufferEnv):
             "heading": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
             "valid": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
+            "track_id": np.zeros(num_agents, dtype=np.int32),
             "scenario_id": np.zeros(num_agents, dtype=np.int32),
         }
 
@@ -326,6 +329,7 @@ class Drive(pufferlib.PufferEnv):
             trajectories["heading"],
             trajectories["valid"],
             trajectories["id"],
+            trajectories["track_id"],
             trajectories["scenario_id"],
         )
 

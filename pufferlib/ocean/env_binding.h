@@ -614,8 +614,8 @@ static PyObject* vec_close(PyObject* self, PyObject* args) {
 }
 
 static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 7) {
-        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 7 arguments");
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 8 arguments");
         return NULL;
     }
 
@@ -632,12 +632,13 @@ static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
     PyObject* z_arr = PyTuple_GetItem(args, 3);
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
     PyObject* id_arr = PyTuple_GetItem(args, 5);
-    PyObject* length_arr = PyTuple_GetItem(args, 6);
-    PyObject* width_arr = PyTuple_GetItem(args, 7);
+    PyObject* track_id_arr = PyTuple_GetItem(args, 6);
+    PyObject* length_arr = PyTuple_GetItem(args, 7);
+    PyObject* width_arr = PyTuple_GetItem(args, 8);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
         !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(id_arr) || !PyArray_Check(length_arr) ||
+        !PyArray_Check(id_arr) || !PyArray_Check(track_id_arr) || !PyArray_Check(length_arr) ||
         !PyArray_Check(width_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
@@ -648,16 +649,16 @@ static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
     float* z_data = (float*)PyArray_DATA((PyArrayObject*)z_arr);
     float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
     int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
+    int* track_id_data = (int*)PyArray_DATA((PyArrayObject*)track_id_arr);
     float* length_data = (float*)PyArray_DATA((PyArrayObject*)length_arr);
     float* width_data = (float*)PyArray_DATA((PyArrayObject*)width_arr);
 
-    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data, length_data, width_data);
-
+    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data, track_id_data, length_data, width_data);
     Py_RETURN_NONE;
 }
 static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 8) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 8 arguments");
+    if (PyTuple_Size(args) != 9) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 9 arguments");
         return NULL;
     }
 
@@ -672,12 +673,13 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     PyObject* z_arr = PyTuple_GetItem(args, 3);
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
     PyObject* id_arr = PyTuple_GetItem(args, 5);
-    PyObject* length_arr = PyTuple_GetItem(args, 6);
-    PyObject* width_arr = PyTuple_GetItem(args, 7);
+    PyObject* track_id_arr = PyTuple_GetItem(args, 6);
+    PyObject* length_arr = PyTuple_GetItem(args, 7);
+    PyObject* width_arr = PyTuple_GetItem(args, 8);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
         !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(id_arr) || !PyArray_Check(length_arr) ||
+        !PyArray_Check(id_arr) || !PyArray_Check(track_id_arr) || !PyArray_Check(length_arr) ||
         !PyArray_Check(width_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
@@ -688,6 +690,7 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     PyArrayObject* z_array = (PyArrayObject*)z_arr;
     PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
     PyArrayObject* id_array = (PyArrayObject*)id_arr;
+    PyArrayObject* track_id_array = (PyArrayObject*)track_id_arr;
     PyArrayObject* length_array = (PyArrayObject*)length_arr;
     PyArrayObject* width_array = (PyArrayObject*)width_arr;
 
@@ -697,6 +700,7 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     float* z_base = (float*)PyArray_DATA(z_array);
     float* heading_base = (float*)PyArray_DATA(heading_array);
     int* id_base = (int*)PyArray_DATA(id_array);
+    int* track_id_base = (int*)PyArray_DATA(track_id_array);
     float* length_base = (float*)PyArray_DATA(length_array);
     float* width_base = (float*)PyArray_DATA(width_array);
 
@@ -712,6 +716,7 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
                                 &z_base[offset],
                                 &heading_base[offset],
                                 &id_base[offset],
+                                &track_id_base[offset],
                                 &length_base[offset],
                                 &width_base[offset]);
 
@@ -723,8 +728,8 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
 }
 
 static PyObject* get_ground_truth_trajectories(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 7) {
-        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 7 arguments");
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 8 arguments");
         return NULL;
     }
 
@@ -742,11 +747,12 @@ static PyObject* get_ground_truth_trajectories(PyObject* self, PyObject* args) {
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
     PyObject* valid_arr = PyTuple_GetItem(args, 5);
     PyObject* id_arr = PyTuple_GetItem(args, 6);
-    PyObject* scenario_id_arr = PyTuple_GetItem(args, 7);
+    PyObject* track_id_arr = PyTuple_GetItem(args, 7);
+    PyObject* scenario_id_arr = PyTuple_GetItem(args, 8);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
         !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
+        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(track_id_arr) || !PyArray_Check(scenario_id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -757,16 +763,17 @@ static PyObject* get_ground_truth_trajectories(PyObject* self, PyObject* args) {
     float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
     int* valid_data = (int*)PyArray_DATA((PyArrayObject*)valid_arr);
     int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
+    int* track_id_data = (int*)PyArray_DATA((PyArrayObject*)track_id_arr);
     int* scenario_id_data = (int*)PyArray_DATA((PyArrayObject*)scenario_id_arr);
 
-    c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data, scenario_id_data);
+    c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data, track_id_data, scenario_id_data);
 
     Py_RETURN_NONE;
 }
 
 static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 8) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 8 arguments");
+    if (PyTuple_Size(args) != 9) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 9 arguments");
         return NULL;
     }
 
@@ -782,11 +789,12 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
     PyObject* heading_arr = PyTuple_GetItem(args, 4);
     PyObject* valid_arr = PyTuple_GetItem(args, 5);
     PyObject* id_arr = PyTuple_GetItem(args, 6);
-    PyObject* scenario_id_arr = PyTuple_GetItem(args, 7);
+    PyObject* track_id_arr = PyTuple_GetItem(args, 7);
+    PyObject* scenario_id_arr = PyTuple_GetItem(args, 8);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
         !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
+        !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(track_id_arr) || !PyArray_Check(scenario_id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -797,6 +805,7 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
     PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
     PyArrayObject* valid_array = (PyArrayObject*)valid_arr;
     PyArrayObject* id_array = (PyArrayObject*)id_arr;
+    PyArrayObject* track_id_array = (PyArrayObject*)track_id_arr;
     PyArrayObject* scenario_id_array = (PyArrayObject*)scenario_id_arr;
 
     // Get base pointers to the arrays
@@ -806,6 +815,7 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
     float* heading_base = (float*)PyArray_DATA(heading_array);
     int* valid_base = (int*)PyArray_DATA(valid_array);
     int* id_base = (int*)PyArray_DATA(id_array);
+    int* track_id_base = (int*)PyArray_DATA(track_id_array);
     int* scenario_id_base = (int*)PyArray_DATA(scenario_id_array);
 
     // Get number of timesteps from array shape
@@ -826,6 +836,7 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
                                               &heading_base[traj_offset],
                                               &valid_base[traj_offset],
                                               &id_base[agent_offset],
+                                              &track_id_base[agent_offset],
                                               &scenario_id_base[agent_offset]);
 
         // Move offsets forward
