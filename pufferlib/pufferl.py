@@ -1042,7 +1042,43 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args["env"]["use_all_maps"] = True
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
-    if wosac_enabled:
+    if True:  # Will add condition later
+        print(f"Running Planning evaluation with {dataset_name} dataset. \n")
+        from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator, PlanningEvaluator
+
+        # To clear later
+        backend = args["eval"]["backend"]
+        assert backend == "PufferEnv", "PLEASE"
+
+        args["vec"] = dict(backend=backend, num_envs=1)
+        args["eval"]["wosac_num_rollouts"] = 1
+        args["env"]["control_mode"] = "control_sdc_only"
+        args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
+
+        vecenv = vecenv or load_env(env_name, args)
+        policy = policy or load_policy(args, vecenv, env_name)
+
+        # Step 0: collect gt trajectories
+        wosac_evaluator = WOSACEvaluator(args)
+        gt_args = args.copy()
+        gt_args["env"]["control_mode"] = "control_wosac"
+        gt_vecenv = load_env(env_name, gt_args)
+        gt_trajectories = wosac_evaluator.collect_ground_truth_trajectories(gt_vecenv)
+        agent_state = gt_vecenv.driver_env.get_global_agent_state()
+        road_edge_polylines = gt_vecenv.driver_env.get_road_edge_polylines()
+
+        # Step 1: collect the sdc trajectories on each scenario
+        planning_trajectories = wosac_evaluator.collect_simulated_trajectories(args, vecenv, policy)
+
+        evaluator = PlanningEvaluator(args)
+
+        combined_trajectories = evaluator.combine_trajectories(gt_trajectories, planning_trajectories)
+
+        results = evaluator.compute_metrics(combined_trajectories, agent_state, road_edge_polylines)
+
+        print(results)
+
+    elif wosac_enabled:
         print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 

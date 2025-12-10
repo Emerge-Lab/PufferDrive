@@ -117,7 +117,13 @@ class WOSACEvaluator:
                 if isinstance(logits, torch.distributions.Normal):
                     action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-                obs, _, _, _, _ = puffer_env.step(action_np)
+                obs, _, _, _, infos = puffer_env.step(action_np)
+                if len(infos) > 0:  # Happens at the end of episode
+                    results = infos[0]
+                    print("RESULTS TO COMPARE")
+                    import pprint
+
+                    pprint.pprint(results)
 
         return trajectories
 
@@ -672,6 +678,101 @@ class HumanReplayEvaluator:
 
             obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
 
+            breakpoint()
+
             if len(info_list) > 0:  # Happens at the end of episode
                 results = info_list[0]
                 return results
+
+
+class PlanningEvaluator:
+    """
+    Alternative to HumanReplayEvaluator, where instead of computing the metrics inside the simulator,
+    we collect the trajectories and compute the metrics using torch.
+
+    On the paper it is a bad idea because it is slower, but it will also enable us to evaluate trajectories coming from
+    other codebases (e.g, SMART)
+    """
+
+    def __init__(self, config: Dict):
+        self.config = config
+        self.sim_steps = 91 - self.config["env"]["init_steps"]
+        self.device = config.get("train", {}).get("device", "cuda")
+
+    # Will need improvements, but first idea is to rely on the fact that the same maps are used in eval mode, so I can
+    # obtain the ground truth trajectories by instantiating the env in control_wosac mode
+    # I propose to put this logic in puffer.py for now
+
+    def combine_trajectories(self, gt_trajectories, planning_trajectories):
+        """
+        Combine ground truth trajectories and simulated trajectories into a single dictionary
+        Args:
+            gt_trajectories: dict with keys 'x', 'y', 'z', 'heading', 'id' of shape (num_agents, 1, num_steps)
+            planning_trajectories: dict with keys 'x', 'y', 'z', 'heading', 'id' of shape (num_agents, 1, num_steps)
+        Returns:
+            trajectories: dict with keys 'x', 'y', 'z', 'heading', 'id' of shape (num_agents, num_steps)
+        """
+
+        # It's simple, I take gt_trajectories, and using the id field of simulated_trajectories I replace the SDC trajectory
+
+        for scenario_id, id in enumerate(planning_trajectories["id"][:, 0, 0]):
+            # Find the lines of gt trajectories that have the same scenario id
+            scenario_indices = np.where(gt_trajectories["scenario_id"] == scenario_id)[0]
+            sdc_idx = np.where(gt_trajectories["id"][scenario_indices] == id)[0]
+
+            for key in ["x", "y", "z", "heading"]:
+                gt_trajectories[key][scenario_indices[sdc_idx], 0, :][0] = planning_trajectories[key][scenario_id, 0, :]
+            # Mark the sdc
+            gt_trajectories["id"][scenario_indices[sdc_idx], 0] = -2
+
+        return gt_trajectories
+
+    def compute_metrics(
+        self, combined_trajectories, agent_state, road_edge_polylines, aggregate_results: bool = False
+    ) -> Dict:
+        eval_mask = combined_trajectories["id"][:, 0] == -2
+
+        x = combined_trajectories["x"]
+        y = combined_trajectories["y"]
+        heading = combined_trajectories["heading"]
+        valid = combined_trajectories["valid"]
+        agent_length = agent_state["length"]
+        agent_width = agent_state["width"]
+        scenario_ids = combined_trajectories["scenario_id"]
+
+        # We evaluate the metrics only for the SDCs.
+        eval_x = x[eval_mask]
+        eval_y = y[eval_mask]
+        eval_heading = heading[eval_mask]
+        eval_valid = valid[eval_mask]
+        eval_agent_length = agent_length[eval_mask]
+        eval_agent_width = agent_width[eval_mask]
+        eval_scenario_ids = scenario_ids[eval_mask]
+
+        _, collisions_per_step, _ = metrics.compute_interaction_features(
+            x, y, heading, scenario_ids, agent_length, agent_width, eval_mask, device=self.device
+        )
+
+        _, offroad_per_step = metrics.compute_map_features(
+            eval_x,
+            eval_y,
+            eval_heading,
+            eval_scenario_ids,
+            eval_agent_length,
+            eval_agent_width,
+            road_edge_polylines,
+            device=self.device,
+        )
+
+        collision_indication = np.any(np.where(eval_valid, collisions_per_step, False), axis=2).astype(float)
+        offroad_indication = np.any(np.where(eval_valid, offroad_per_step, False), axis=2).astype(float)
+
+        scene_level_results = pd.DataFrame(
+            {
+                "collision_indication": collision_indication.flatten(),
+                "offroad_indication": offroad_indication.flatten(),
+            },
+            index=eval_scenario_ids.flatten(),
+        )
+
+        return scene_level_results
