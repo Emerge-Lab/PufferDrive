@@ -1810,7 +1810,7 @@ void compute_observations(Drive* env) {
 
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
-        float ego_speed = ego_entity->vx * cos_heading + ego_entity->vy * sin_heading;
+        float ego_speed = sqrtf(ego_entity->vx*ego_entity->vx + ego_entity->vy*ego_entity->vy);
 
         // Set goal distances
         float goal_x = ego_entity->goal_position_x - ego_entity->x;
