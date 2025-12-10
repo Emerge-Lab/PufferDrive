@@ -1052,7 +1052,7 @@ void record_spawn_distance_to_goal(Drive* env, int agent_idx, int log_idx) {
         env->logs[log_idx].avg_spawn_distance_to_goal =
             agent->spawn_distance_sum / agent->spawn_count;
     }
-    if (!agent->reached_goal_this_episode) {
+    if (env->timestep == env->init_steps && !agent->reached_goal_this_episode) {
         env->logs[log_idx].avg_initial_distance_to_goal = spawn_distance;
     }
 }
