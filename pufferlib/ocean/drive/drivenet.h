@@ -242,8 +242,8 @@ void forward(DriveNet *net, float *observations, int *actions) {
         for (int obj = 0; obj < max_road_obs; obj++) {
             float *after_first = &net->road_linear_output[b * max_road_obs * NN_INPUT_SIZE + obj * NN_INPUT_SIZE];
             _layernorm(after_first, net->road_layernorm->weights, net->road_layernorm->bias,
-                       &net->road_layernorm_output[b * 200 * 64 + obj * 64], 1, 64);
-                        &net->road_layernorm_output[b*max_road_obs*NN_INPUT_SIZE + obj*NN_INPUT_SIZE], 1, NN_INPUT_SIZE);
+                       &net->road_layernorm_output[b * max_road_obs * NN_INPUT_SIZE + obj * NN_INPUT_SIZE], 1,
+                       NN_INPUT_SIZE);
         }
     }
     for (int b = 0; b < net->num_agents; b++) {
