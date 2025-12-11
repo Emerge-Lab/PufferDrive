@@ -1722,14 +1722,25 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
     return;
 }
 
+// After some digging in the code I found that the sdc is sometimes in tracks_to_predict sometimes not
+// I leave this ugly thing until we discuss what's the best way
 static inline int get_track_id_or_placeholder(Drive* env, int agent_idx) {
     if (env->tracks_to_predict_indices == NULL || env->num_tracks_to_predict == 0) {
+        if (env->sdc_track_index == agent_idx) {
+             return -2;
+        }
         return -1;
     }
     for (int k = 0; k < env->num_tracks_to_predict; k++) {
         if (env->tracks_to_predict_indices[k] == agent_idx) {
+            if (env->sdc_track_index == agent_idx) {
+                return -3;
+            }
             return env->tracks_to_predict_indices[k];
         }
+    }
+    if (env->sdc_track_index == agent_idx) {
+        return -2;
     }
     return -1;
 }

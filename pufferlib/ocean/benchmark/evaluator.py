@@ -155,7 +155,9 @@ class WOSACEvaluator:
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
+        # This is temporary
         eval_mask = ground_truth_trajectories["track_id"][:, 0] >= 0
+        eval_mask += ground_truth_trajectories["track_id"][:, 0] == -3
 
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
