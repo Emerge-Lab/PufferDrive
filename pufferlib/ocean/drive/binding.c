@@ -301,7 +301,9 @@ static int my_log(PyObject* dict, Log* log) {
     assign_to_dict(dict, "no_current_lane_rate", log->no_current_lane_rate);
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
     assign_to_dict(dict, "avg_initial_distance_to_goal", log->avg_initial_distance_to_goal);
-    assign_to_dict(dict, "map_observation_ratio", log->map_observation_ratio);
-    assign_to_dict(dict, "map_observation_ratio_variance", log->map_observation_ratio_variance);
+    assign_to_dict(dict, "edge_observation_ratio", log->edge_observation_ratio);
+    assign_to_dict(dict, "edge_observation_ratio_variance", log->edge_observation_ratio_variance);
+    assign_to_dict(dict, "lane_observation_ratio", log->lane_observation_ratio);
+    assign_to_dict(dict, "lane_observation_ratio_variance", log->lane_observation_ratio_variance);
     return 0;
 }

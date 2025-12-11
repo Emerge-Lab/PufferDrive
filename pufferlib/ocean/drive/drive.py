@@ -109,10 +109,11 @@ class Drive(pufferlib.PufferEnv):
 
         self.ego_features = ego_features
         partner_features = 7
-        road_features = 7
+        road_features = 6
         max_partner_objects = 63
-        max_road_objects = 200
-        self.num_obs = ego_features + max_partner_objects * partner_features + max_road_objects * road_features
+        max_road_edges = 80
+        max_road_lanes = 80
+        self.num_obs = ego_features + max_partner_objects * partner_features + max_road_edges * road_features + max_road_lanes*road_features
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
         self.init_steps = init_steps
         self.init_mode_str = init_mode
@@ -253,6 +254,7 @@ class Drive(pufferlib.PufferEnv):
         self.map_ids = map_ids
         self.num_envs = num_envs
         super().__init__(buf=buf)
+        print(f'Observation space: {self.observation_space}')
         env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
@@ -296,6 +298,7 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
+        print("Initialized successfully")
 
     def _rebuild_envs(self, seed=None):
         """Reinitialize C envs so curriculum changes reach the simulator."""
@@ -379,6 +382,7 @@ class Drive(pufferlib.PufferEnv):
         self.terminals[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
+        print("Stepped")
         self.tick += 1
 
         info = []
@@ -409,6 +413,7 @@ class Drive(pufferlib.PufferEnv):
 
             seed = np.random.randint(0, 2**32 - 1)
             self._rebuild_envs(seed=seed)
+            print("Rebuilt envs")
 
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
@@ -565,7 +570,8 @@ def save_map_binary(map_data, output_file, unique_map_id):
 
         # Count total entities
         num_objects = len(map_data.get("objects", []))
-        num_roads = len(map_data.get("roads", []))
+        num_road_lines = len([road for road in map_data.get("roads", []) if road.get("type", "") == "road_line"])
+        num_roads = len(map_data.get("roads", [])) - num_road_lines
         # num_entities = num_objects + num_roads
         f.write(struct.pack("i", num_objects))
         f.write(struct.pack("i", num_roads))
@@ -634,7 +640,6 @@ def save_map_binary(map_data, output_file, unique_map_id):
 
         # Write roads
         for idx, road in enumerate(map_data.get("roads", [])):
-            f.write(struct.pack("i", unique_map_id))
 
             geometry = road.get("geometry", [])
             road_type = road.get("map_element_id", 0)
@@ -643,10 +648,12 @@ def save_map_binary(map_data, output_file, unique_map_id):
                 road_type = 2
             elif road_type_word == "road_edge":
                 road_type = 15
+            elif road_type_word == "road_line":
+                continue    # Experimental
+
+            f.write(struct.pack("i", unique_map_id))
             # breakpoint()
-            if len(geometry) > 10 and road_type <= 16:
-                geometry = simplify_polyline(geometry, 0.0)
-            size = len(geometry)
+            
             # breakpoint()
             if road_type >= 0 and road_type <= 3:
                 road_type = 4
@@ -662,6 +669,11 @@ def save_map_binary(map_data, output_file, unique_map_id):
                 road_type = 9
             elif road_type == 20:
                 road_type = 10
+            
+            if len(geometry) > 10 and road_type <= 16 and road_type != 6:   # Dont simplify road edges(already 1m resolution)
+                geometry = simplify_polyline(geometry, 0.1)
+            size = len(geometry)
+
             # Write base entity data
             f.write(struct.pack("i", road_type))  # type
             f.write(struct.pack("i", road.get("id", 0)))  # id
@@ -754,7 +766,7 @@ def resolve_binary_dir(binary_dir, ini_path):
     return "resources/drive/carla_binaries"
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=32):
+def test_performance(timeout=1.0, atn_cache=1024, num_agents=64):
     import time
 
     # 0 = fixed_from_dataset, 1 = random_within_radius, 2 = randomized_curriculum
@@ -783,5 +795,5 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=32):
 
 
 if __name__ == "__main__":
-    # test_performance()
     process_carla_maps()
+    test_performance()
