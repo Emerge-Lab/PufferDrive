@@ -118,7 +118,9 @@ class WOSACEvaluator:
                     action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
                 obs, _, _, _, infos = puffer_env.step(action_np)
-                if len(infos) > 0:  # Happens at the end of episode
+
+                # Useful to compare how many collisions the env sees vs. us
+                if self.num_rollouts == 1 and len(infos) > 0:
                     results = infos[0]
                     print("RESULTS TO COMPARE")
                     import pprint
@@ -149,11 +151,11 @@ class WOSACEvaluator:
             Dictionary with scores per scenario_id
         """
         # Ensure the id order matches exactly for simulated and ground truth
-        assert np.array_equal(simulated_trajectories["id"][:, 0:1, 0], ground_truth_trajectories["id"]), (
+        assert np.array_equal(simulated_trajectories["id"][:, 0, 0], ground_truth_trajectories["id"][:, 0]), (
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
-        eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
+        eval_mask = ground_truth_trajectories["track_id"][:, 0] >= 0
 
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
@@ -714,23 +716,31 @@ class PlanningEvaluator:
         """
 
         # It's simple, I take gt_trajectories, and using the id field of simulated_trajectories I replace the SDC trajectory
+        from copy import deepcopy
 
+        combined_trajectories = deepcopy(gt_trajectories)
         for scenario_id, id in enumerate(planning_trajectories["id"][:, 0, 0]):
-            # Find the lines of gt trajectories that have the same scenario id
+            # I first find everyone that has the same scenario_id
             scenario_indices = np.where(gt_trajectories["scenario_id"] == scenario_id)[0]
+            # Them among people from that scenario I find the one that has the good idx
             sdc_idx = np.where(gt_trajectories["id"][scenario_indices] == id)[0]
+            to_replace_idx = scenario_indices[sdc_idx][0]
 
             for key in ["x", "y", "z", "heading"]:
-                gt_trajectories[key][scenario_indices[sdc_idx], 0, :][0] = planning_trajectories[key][scenario_id, 0, :]
-            # Mark the sdc
-            gt_trajectories["id"][scenario_indices[sdc_idx], 0] = -2
+                combined_trajectories[key][to_replace_idx, 0, :] = planning_trajectories[key][scenario_id, 0, :]
 
-        return gt_trajectories
+            # Mark the sdc
+            combined_trajectories["id"][to_replace_idx, 0] = -1
+
+            # perform same operation on gt_trajectories for comparison purposes
+            gt_trajectories["id"][to_replace_idx, 0] = -1
+
+        return combined_trajectories, gt_trajectories
 
     def compute_metrics(
         self, combined_trajectories, agent_state, road_edge_polylines, aggregate_results: bool = False
     ) -> Dict:
-        eval_mask = combined_trajectories["id"][:, 0] == -2
+        eval_mask = combined_trajectories["id"][:, 0] == -1
 
         x = combined_trajectories["x"]
         y = combined_trajectories["y"]
@@ -767,12 +777,24 @@ class PlanningEvaluator:
         collision_indication = np.any(np.where(eval_valid, collisions_per_step, False), axis=2).astype(float)
         offroad_indication = np.any(np.where(eval_valid, offroad_per_step, False), axis=2).astype(float)
 
+        accuracy = 1.0 - (collision_indication + offroad_indication) + (collision_indication * offroad_indication)
+
         scene_level_results = pd.DataFrame(
             {
                 "collision_indication": collision_indication.flatten(),
                 "offroad_indication": offroad_indication.flatten(),
+                "accuracy": accuracy.flatten(),
             },
             index=eval_scenario_ids.flatten(),
         )
 
-        return scene_level_results
+        if aggregate_results:
+            aggregate_metrics = scene_level_results.mean().to_dict()
+            aggregate_metrics["num_scenarios"] = scene_level_results.shape[0]
+            # Convert numpy types to Python native types
+            return {k: v.item() if hasattr(v, "item") else v for k, v in aggregate_metrics.items()}
+        else:
+            print("\n Scene-level results:\n")
+            print(scene_level_results)
+
+            return scene_level_results
