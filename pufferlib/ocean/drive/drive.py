@@ -283,7 +283,6 @@ class Drive(pufferlib.PufferEnv):
             "z": np.zeros(num_agents, dtype=np.float32),
             "heading": np.zeros(num_agents, dtype=np.float32),
             "id": np.zeros(num_agents, dtype=np.int32),
-            "track_id": np.zeros(num_agents, dtype=np.int32),
             "length": np.zeros(num_agents, dtype=np.float32),
             "width": np.zeros(num_agents, dtype=np.float32),
         }
@@ -295,7 +294,6 @@ class Drive(pufferlib.PufferEnv):
             states["z"],
             states["heading"],
             states["id"],
-            states["track_id"],
             states["length"],
             states["width"],
         )
