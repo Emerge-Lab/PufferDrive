@@ -1492,7 +1492,7 @@ bool should_control_agent(Drive *env, int agent_idx) {
     float local_goal_x = goal_dx * cos_heading + goal_dy * sin_heading;
     float local_goal_y = -goal_dx * sin_heading + goal_dy * cos_heading;
     float distance_to_goal = relative_distance_3d(0, 0, 0, local_goal_x, local_goal_y, goal_dz);
-
+    printf("Agent %d: Distance to goal = %.2f\n", agent_idx, distance_to_goal);
     return distance_to_goal >= MIN_DISTANCE_TO_GOAL;
 }
 
