@@ -1326,10 +1326,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     agent->collision_state = collided;
 
-    // spawn immunity for collisions with other agent cars as agent_idx respawns
-    int is_active_agent = env->entities[agent_idx].active_agent;
-    int respawned = env->entities[agent_idx].respawn_timestep != -1;
-
     if(collided == VEHICLE_COLLISION){
         if(env->collision_behavior==STOP_AGENT && !agent->stopped){ //Stop
             agent->stopped = 1;
@@ -1353,7 +1349,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             agent->removed = 1;
             agent->x = agent->y = -10000.0f;
         }
-        return;
     }
 
     return;
