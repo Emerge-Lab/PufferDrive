@@ -100,6 +100,20 @@ def combine_trajectories(ground_truth_trajectories, planning_trajectories):
     for key in ["x", "y", "z", "heading"]:
         combine_trajectories[key][sdc_mask, :, :] = planning_trajectories[key][sdc_mask, :, :]
 
+    # Check that except for the sdc, the other trajectories match perfectly
+    # Note: the Smart codebase modify the heading data (interpolation to have less invalid data) so I ignore it here
+    for key in ["x", "y", "z"]:
+        gt_data = ground_truth_trajectories[key]
+        planning_data = planning_trajectories[key]
+        diff = np.abs(gt_data - planning_data)
+        diff[sdc_mask, :, :] = 0.0
+
+        # Ignore unvalid data because it might be handled differently across codebases
+        diff = np.where(ground_truth_trajectories["valid"], diff, 0.0)
+        max_diff = np.max(diff)
+
+        assert max_diff < 5e-5, "Trajectories do not match, you should go to sleep"
+
     # Mark the sdc id as -1 to identify them during evaluation
     combine_trajectories["id"][sdc_mask, 0] = -1
     ground_truth_trajectories["id"][sdc_mask, 0] = -1
