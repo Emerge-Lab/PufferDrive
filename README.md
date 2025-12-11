@@ -22,12 +22,14 @@
 
 ## Documentation
 
-A browsable documentation site now lives under `docs/` and is configured with MkDocs Material. To preview locally:
+PufferDrive documentation can be found hosted [here](https://emerge-lab.github.io/PufferDrive/data/).
+
+To preview locally:
 ```
-uv pip install -r docs/requirements.txt  # or pip install -r docs/requirements.txt
+uv pip install -r docs/requirements.txt
 mkdocs serve
 ```
-Open the served URL to explore install steps, data preparation, visualization, and evaluation commands.
+Open the served URL to explore documentation locally.
 
 
 ## Installation
