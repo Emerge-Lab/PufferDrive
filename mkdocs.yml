@@ -24,15 +24,18 @@ theme:
   favicon: images/pufferdrive.gif
 
 nav:
-  - Home: index.md
-  - Getting Started: getting-started.md
-  - Simulator: simulator.md
+  - Get started: index.md
+  - Docs:
+      - Getting started: getting-started.md
+      - Simulator: simulator.md
+      - Interactive scenario editor: womd-editor.md
+      - Visualizer: visualizer.md
   - Data: data.md
-  - Evaluation:
+  - Benchmarks:
       - Overview: evaluation.md
-      - WOSAC Benchmark: benchmark-readme.md
-  - WOMD Editor: womd-editor.md
-  - Visualizer: visualizer.md
+      - WOSAC: benchmark-readme.md
+  - Blog:
+    - pufferdrive 2.0: release-2.0-post.md
 
 markdown_extensions:
   - admonition
@@ -40,7 +43,8 @@ markdown_extensions:
   - toc:
       permalink: true
   - tables
-  - fenced_code
+  - pymdownx.highlight
+  - pymdownx.superfences
   - codehilite
   - pymdownx.arithmatex:
       generic: true
