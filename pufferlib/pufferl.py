@@ -1040,6 +1040,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
     args["env"]["map_dir"] = args["eval"]["map_dir"]
+    args["env"]["num_maps"] = args["eval"]["num_maps"]
+    args["env"]["use_all_maps"] = True
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     if wosac_enabled:
@@ -1049,7 +1051,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         backend = args["eval"]["backend"]
         assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["num_agents"] = args["eval"]["wosac_num_agents"]
         args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
         args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
         args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
@@ -1064,10 +1065,12 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         # Collect ground truth trajectories from the dataset
         gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
 
+        print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
+        print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
+        print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
+
         # Roll out trained policy in the simulator
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
-
-        print(f"\nCollected trajectories on {len(np.unique(gt_trajectories['scenario_id']))} scenarios.")
 
         if args["eval"]["wosac_sanity_check"]:
             evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
@@ -1086,7 +1089,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         if args["eval"]["wosac_aggregate_results"]:
             import json
 
-            print("WOSAC_METRICS_START")
+            print("\nWOSAC_METRICS_START")
             print(json.dumps(results))
             print("WOSAC_METRICS_END")
 
@@ -1098,12 +1101,13 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         backend = args["eval"].get("backend", "PufferEnv")
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
         args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
         args["env"]["scenario_length"] = 91  # Standard scenario length
 
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
+
+        print(f"Effective number of scenarios used: {len(vecenv.driver_env.agent_offsets) - 1}")
 
         evaluator = HumanReplayEvaluator(args)
 

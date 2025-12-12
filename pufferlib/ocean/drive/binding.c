@@ -75,18 +75,20 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
+    int use_all_maps = unpack(kwargs, "use_all_maps");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
     int env_count = 0;
-    int max_envs = num_agents;
+    int max_envs = use_all_maps ? num_maps : num_agents;
+    int map_idx = 0;
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
     // getting env count
-    while (total_agent_count < num_agents && env_count < max_envs) {
+    while (use_all_maps ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
         char map_file[512];
-        int map_id = rand() % num_maps;
+        int map_id = use_all_maps ? map_idx++ : rand() % num_maps;
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
@@ -98,24 +100,26 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            maps_checked++;
+            if (!use_all_maps) {
+                maps_checked++;
 
-            // Safeguard: if we've checked all available maps and found no active agents, raise an error
-            if (maps_checked >= num_maps) {
-                for (int j = 0; j < env->num_entities; j++) {
-                    free_entity(&env->entities[j]);
+                // Safeguard: if we've checked all available maps and found no active agents, raise an error
+                if (maps_checked >= num_maps) {
+                    for (int j = 0; j < env->num_entities; j++) {
+                        free_entity(&env->entities[j]);
+                    }
+                    free(env->entities);
+                    free(env->active_agent_indices);
+                    free(env->static_agent_indices);
+                    free(env->expert_static_agent_indices);
+                    free(env);
+                    Py_DECREF(agent_offsets);
+                    Py_DECREF(map_ids);
+                    char error_msg[256];
+                    sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                    PyErr_SetString(PyExc_ValueError, error_msg);
+                    return NULL;
                 }
-                free(env->entities);
-                free(env->active_agent_indices);
-                free(env->static_agent_indices);
-                free(env->expert_static_agent_indices);
-                free(env);
-                Py_DECREF(agent_offsets);
-                Py_DECREF(map_ids);
-                char error_msg[256];
-                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
-                PyErr_SetString(PyExc_ValueError, error_msg);
-                return NULL;
             }
 
             for (int j = 0; j < env->num_entities; j++) {
@@ -148,7 +152,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     // printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count,
     // num_agents);
-    if (total_agent_count >= num_agents) {
+    if (!use_all_maps && total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
     PyObject *final_total_agent_count = PyLong_FromLong(total_agent_count);
