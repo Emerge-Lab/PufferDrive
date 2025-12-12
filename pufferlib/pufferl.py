@@ -20,6 +20,7 @@ import importlib
 import configparser
 from threading import Thread
 from collections import defaultdict, deque
+from pathlib import Path
 
 import numpy as np
 import psutil
@@ -940,6 +941,7 @@ class WandbLogger:
             save_code=False,
             resume=resume,
             config=args,
+            name=args.get("wandb_name"),
             tags=[args["tag"]] if args["tag"] is not None else [],
         )
         self.wandb = wandb
@@ -1262,6 +1264,71 @@ def controlled_exp(env_name, args=None):
     print(f"\n✓ Completed all {len(combinations)} experiments")
 
 
+def sanity(env_name, args=None):
+    args = args or load_config(env_name)
+    base_dir = Path(__file__).resolve().parent / "resources" / "drive" / "sanity"
+    json_dir = base_dir / "sanity_jsons"
+    binary_dir = base_dir / "sanity_binaries"
+
+    available_maps = {p.stem: p for p in json_dir.glob("*.json")}
+    selected = args.get("sanity_maps")
+    if isinstance(selected, str):
+        selected = [selected]
+
+    if selected:
+        missing = [name for name in selected if name not in available_maps]
+        if missing:
+            raise pufferlib.APIUsageError(f"Unknown sanity maps: {', '.join(sorted(missing))}")
+        chosen = [(name, available_maps[name]) for name in selected]
+    else:
+        chosen = sorted(available_maps.items())
+
+    if not chosen:
+        raise pufferlib.APIUsageError(f"No sanity maps found in {json_dir}")
+
+    from pufferlib.ocean.drive.drive import load_map
+
+    binary_dir.mkdir(parents=True, exist_ok=True)
+    binaries = []
+    for idx, (name, json_path) in enumerate(chosen):
+        output_path = binary_dir / f"{name}.bin"
+        load_map(str(json_path), idx, str(output_path))
+        binaries.append((name, output_path))
+
+    runs = []
+    for name, binary in binaries:
+        map_zero = binary_dir / "map_000.bin"
+        shutil.copy2(binary, map_zero)
+
+        run_args = {
+            **args,
+            "env": {**args["env"], "num_maps": 1, "map_dir": str(binary_dir)},
+            "train": {**args["train"], "render_map": str(map_zero)},
+        }
+        if run_args.get("wandb"):
+            run_args["wandb_name"] = name
+
+        print(f"Running sanity map '{name}' from {binary.name}")
+        run_logs = train(env_name=env_name, args=run_args)
+        runs.append({"map": name, "logs": run_logs})
+
+    print("Sanity checklist:")
+    for entry in runs:
+        name = entry["map"]
+        logs = entry.get("logs") or []
+        final = logs[-1] if logs else {}
+        score = final.get("environment/score")
+        if score is None:
+            status = "unknown (no score)"
+        elif score >= 0.95:
+            status = "✅ Solved"
+        else:
+            status = "❌ unsolved"
+        print(f" - {name}: {status} (score={score})")
+
+    return runs
+
+
 def profile(args=None, env_name=None, vecenv=None, policy=None):
     args = load_config()
     vecenv = vecenv or load_env(env_name, args)
@@ -1415,6 +1482,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--neptune-project", type=str, default="ablations")
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
+    parser.add_argument("--sanity-maps", nargs="*", default=None, help="Optional list of sanity map base names to run")
     args = parser.parse_known_args()[0]
 
     if config_dir is None:
@@ -1470,7 +1538,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export, sanity] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -1490,6 +1558,8 @@ def main():
         profile(env_name=env_name)
     elif mode == "export":
         export(env_name=env_name)
+    elif mode == "sanity":
+        sanity(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 

@@ -17,17 +17,12 @@
 
 ---
 
+**Docs**: https://emerge-lab.github.io/PufferDrive
+
+---
+
 > **Note**: 🚀 `PufferDrive` release `2.0` coming soon and includes extended functionality + documentation
 
-
-## Documentation
-
-A browsable documentation site now lives under `docs/` and is configured with MkDocs Material. To preview locally:
-```
-uv pip install -r docs/requirements.txt  # or pip install -r docs/requirements.txt
-mkdocs serve
-```
-Open the served URL to explore install steps, data preparation, visualization, and evaluation commands.
 
 
 ## Installation
