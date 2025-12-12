@@ -1051,7 +1051,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         backend = args["eval"]["backend"]
         assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["num_agents"] = args["eval"]["wosac_num_agents"]
         args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
         args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
         args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
