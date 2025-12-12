@@ -8,10 +8,10 @@ theme:
   name: material
   palette:
     - scheme: default
-      primary: teal
-      accent: deep orange
+      primary: white
+      accent: teal
   font:
-    text: "Space Grotesk"
+    text: false  # Using custom fonts via CSS
     code: "JetBrains Mono"
   features:
     - navigation.tabs

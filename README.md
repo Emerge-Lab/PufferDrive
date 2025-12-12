@@ -164,3 +164,15 @@ You may be interested in how compatible your agent is with human partners. For t
 ```bash
 puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-trained-policy>.pt
 ```
+
+## Development
+
+<details><summary>Editing the docs</summary>
+
+A browsable documentation site now lives under `docs/` and is configured with MkDocs Material. To preview locally:
+```
+uv pip install -r docs/requirements.txt  # or pip install -r docs/requirements.txt
+mkdocs serve
+```
+Open the served URL to explore install steps, data preparation, visualization, and evaluation commands.
+</details>
