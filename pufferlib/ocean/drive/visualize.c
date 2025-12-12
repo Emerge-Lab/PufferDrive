@@ -418,7 +418,7 @@ int main(int argc, char *argv[]) {
     int init_mode = 0;
     int control_mode = 0;
     int goal_behavior = 0;
-    int zoom_in = 0;
+    int zoom_in = 1;
 
     const char *view_mode = "both"; // "both", "topdown", "agent"
     const char *output_topdown = NULL;
