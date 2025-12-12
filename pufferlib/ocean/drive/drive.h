@@ -2231,9 +2231,9 @@ void c_step(Drive *env) {
         }
     }
 
-    if(!originals_remaining && env->termination_mode==1){
+    if (!originals_remaining && env->termination_mode == 1) {
         add_log(env);
-	    c_reset(env);
+        c_reset(env);
         return;
     }
 
