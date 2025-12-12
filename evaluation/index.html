@@ -614,6 +614,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#sanity-maps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sanity maps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#wosac-distributional-realism" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -755,6 +766,30 @@
 
 <h1 id="evaluation">Evaluation<a class="headerlink" href="#evaluation" title="Permanent link">&para;</a></h1>
 <p>Benchmarks are provided to measure how closely agents match real-world driving behavior and how well they pair with human trajectories.</p>
+<h2 id="sanity-maps">Sanity maps<a class="headerlink" href="#sanity-maps" title="Permanent link">&para;</a></h2>
+<p>Quickly test the training on curated, lightweight scenarios without downloading the full dataset. Each sanity map tests a specific behavior.</p>
+<div class="codehilite"><pre><span></span><code>puffer<span class="w"> </span>sanity<span class="w"> </span>puffer_drive<span class="w"> </span>--wandb<span class="w"> </span>--wandb-name<span class="w"> </span>sanity-demo<span class="w"> </span>--sanity-maps<span class="w"> </span>forward_goal_in_front<span class="w"> </span>s_curve
+</code></pre></div>
+
+<p>Or run them all at once:</p>
+<div class="codehilite"><pre><span></span><code>puffer<span class="w"> </span>sanity<span class="w"> </span>puffer_drive<span class="w"> </span>--wandb<span class="w"> </span>--wandb-name<span class="w"> </span>sanity-all
+</code></pre></div>
+
+<ul>
+<li>Tip:Turn learning-rate annealing off for these short runs (<code>--train.anneal_lr False</code>) to keep the sanity checks from decaying the optimizer mid-run.</li>
+</ul>
+<p>Available maps:
+- <code>forward_goal_in_front</code>: Straight approach to a goal in view.
+- <code>reverse_goal_behind</code>: Backward start with a behind-the-ego goal.
+- <code>two_agent_forward_goal_in_front</code>: Two agents advancing to forward goals.
+- <code>two_agent_reverse_goal_behind</code>: Two agents reversing to rear goals.
+- <code>simple_turn</code>: Single, gentle turn to a nearby goal.
+- <code>s_curve</code>: S-shaped path with alternating curvature.
+- <code>u_turn</code>: U-shaped turn to a goal behind the start.
+- <code>one_or_two_point_turn</code>: Tight turn requiring a small reversal.
+- <code>three_or_four_point_turn</code>: Even tighter turn needing multiple reversals.
+- <code>goal_out_of_sight</code>: Goal starts without direct path; needs some planning.</p>
+<p><img alt="Sanity map gallery placeholder" src="../images/maps_screenshot.png" /></p>
 <h2 id="wosac-distributional-realism">WOSAC distributional realism<a class="headerlink" href="#wosac-distributional-realism" title="Permanent link">&para;</a></h2>
 <p>Evaluate how realistic your policy behaves compared to the Waymo Open Sim Agents Challenge (WOSAC):</p>
 <div class="codehilite"><pre><span></span><code>puffer<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>puffer_drive<span class="w"> </span>--eval.wosac-realism-eval<span class="w"> </span>True
