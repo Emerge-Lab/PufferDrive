@@ -152,7 +152,7 @@ class Drive(pufferlib.PufferEnv):
             use_all_maps=use_all_maps,
         )
 
-        # NOTE: agents_offsets[-1] works in both cases but I wanted to make it explicit that when we use all maps the num_agents value is ignored
+        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if use_all_maps
         self.num_agents = num_agents if not use_all_maps else agent_offsets[-1]
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
