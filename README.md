@@ -17,7 +17,12 @@
 
 ---
 
+**Docs**: https://emerge-lab.github.io/PufferDrive
+
+---
+
 > **Note**: 🚀 `PufferDrive` release `2.0` coming soon and includes extended functionality + documentation
+
 
 
 ## Installation
@@ -41,6 +46,7 @@ Compile the C code
 ```
 python setup.py build_ext --inplace --force
 ```
+Run this while your virtual environment is active so the extension is built against the right interpreter.
 
 To test your setup, you can run
 ```
