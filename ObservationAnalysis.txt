@@ -1,0 +1,25 @@
+thresh=0
+4.301, 3.38
+thresh=0.01
+0.686, 0.115
+thresh=0.1
+0.458,   0.061
+
+Road Entities:
+thresh=0.1
+Total Road Entities: 238
+Total Road Points: 1237
+Total Road Lanes: 124
+Total Road Lane Points: 729
+
+thresh=0.01
+Total Road Entities: 238
+Total Road Points: 1806
+Total Road Lanes: 124
+Total Road Lane Points: 1064
+
+thresh=0
+Total Road Entities: 238
+Total Road Points: 14569
+Total Road Lanes: 124
+Total Road Lane Points: 6405
