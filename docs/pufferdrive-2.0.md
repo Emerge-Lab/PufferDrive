@@ -36,7 +36,7 @@ The results were promising, but it was clear that scale was a major constraint.
 
 Subsequent work showed what becomes possible when scale is no longer the bottleneck.
 
-* [**Gigaflow**](https://arxiv.org/abs/2501.00678) demonstrated that large-scale self-play alone can produce robust, naturalistic driving. Using a highly batched simulator, it trained on the equivalent of **decades of driving experience per hour** and achieved state-of-the-art performance across multiple autonomous driving benchmarks—without using any human data. The system, however, was not open-source.
+* [**Gigaflow**](https://arxiv.org/abs/2501.00678) demonstrated that large-scale self-play alone can produce robust, naturalistic driving. Using a highly batched simulator, it trained on the equivalent of **decades of driving experience per hour** and achieved state-of-the-art performance across multiple autonomous driving benchmarks—without using any human data.
 * [**GPUDrive**](https://arxiv.org/abs/2408.01584), built on [Madrona](https://madrona-engine.github.io/), showed that [similar behavior could be learned](https://arxiv.org/abs/2502.14706) in about one day on a single consumer GPU, using a simple reward function and a standard PPO implementation.
 
 These empirical results support the hypothesis that robust autonomous driving policies can be trained in the billion-sample regime _without any human data_.
@@ -47,12 +47,11 @@ These empirical results support the hypothesis that robust autonomous driving po
 
 ## From GPUDrive to PufferDrive
 
-While GPUDrive delivered impressive raw simulation speed, end-to-end training throughput of around 50K steps per second remained the limiting factor. This held particularly true on large maps such as [CARLA](https://carla.org/). Memory layout and batching overheads, rather than simulation fidelity, became the dominant constraints.
+While GPUDrive delivered impressive raw simulation speed, end-to-end training throughput of around 50K steps per second remained a limiting factor. This was particularly true on large maps such as [CARLA](https://carla.org/). Memory layout and batching overheads, rather than simulation fidelity, became the dominant constraints.
 
 Faster end-to-end training is critical because it enables tighter debugging loops, broader experimentation, and faster scientific and engineering progress. This led directly to the development of **PufferDrive**.
 
-We partnered with Spencer Cheng from [Puffer.ai](https://puffer.ai/) to rebuild the system around the principles of [**PufferLib**](https://arxiv.org/abs/2406.12905). Spencer reimplemented **GPUDrive** and the result was **PufferDrive 1.0**. Training agents to solve the full Waymo Open Dataset took roughly 24 hours with GPUDrive. With PufferDrive, the same results could now be reproduced in about 2 hours. PufferDrive 1.0 reached approximately 200,000 steps per second on a single GPU, scaling linearly across multiple GPUs.
-
+We partnered with Spencer Cheng from [Puffer.ai](https://puffer.ai/) to rebuild the system around the principles of [**PufferLib**](https://arxiv.org/abs/2406.12905). Spencer reimplemented **GPUDrive**. The result was **PufferDrive 1.0**, reaching approximately 200,000 steps per second on a single GPU and scaling linearly across multiple GPUs. Training agents to solve 10,000 maps from the Waymo datset took roughly 24 hours with GPUDrive. [With PufferDrive, the same results could now be reproduced in about 2 hours](https://x.com/spenccheng/status/1959665036483350994).
 
 ## PufferDrive 2.0
 
@@ -60,15 +59,15 @@ PufferDrive 2.0 builds on this foundation and [TODO]:
 
 * Built-in evaluations, including a standard benchmark
 * Support for multiple real-world datasets (WOMD, Carla)
-* Speed improvement
+* Speed improvement (200K -> 300K)
 * Extended browser-based visualization and analysis tools
 
 To our knowledge, PufferDrive 2.0 is among the fastest open-source driving simulators available today, while remaining accessible to new users.
 
-In the remainder of this post, we show highlights of PufferDrive 2.0.
+## Highlights
+TODO
 
 ## Roadmap
-
 TODO
 
 
