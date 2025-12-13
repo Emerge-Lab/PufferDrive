@@ -176,3 +176,17 @@ mkdocs serve
 ```
 Open the served URL to explore install steps, data preparation, visualization, and evaluation commands.
 </details>
+
+
+## Citation
+
+If you use PufferDrive in your research, please cite:
+```bibtex
+@software{pufferdrive2024github,
+  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Eugene Vinitsky},
+  title = {{PufferDrive}: A Fast and Friendly Driving Simulator for Training and Evaluating {RL} Agents},
+  url = {https://github.com/Emerge-Lab/PufferDrive},
+  version = {2.0.0},
+  year = {2024},
+}
+```

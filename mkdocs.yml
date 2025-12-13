@@ -35,7 +35,7 @@ nav:
       - Overview: evaluation.md
       - WOSAC: benchmark-readme.md
   - Blog:
-    - pufferdrive 2.0: release-2.0-post.md
+    - pufferdrive 2.0: pufferdrive-2.0.md
 
 markdown_extensions:
   - admonition

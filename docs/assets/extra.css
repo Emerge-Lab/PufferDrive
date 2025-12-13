@@ -73,6 +73,7 @@ body {
   font-weight: 500;
   color: #666666;
   opacity: 1;
+  font-size: 0.85rem;
 }
 
 .md-tabs__link--active,
