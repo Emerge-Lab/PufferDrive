@@ -23,6 +23,7 @@ typedef struct {
     float dt;
     int goal_behavior;
     int scenario_length;
+    int termination_mode;
     int init_steps;
     int init_mode;
     int control_mode;
@@ -78,6 +79,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->dt = atof(value);
     } else if (MATCH("env", "scenario_length")) {
         env_config->scenario_length = atoi(value);
+    } else if (MATCH("env", "termination_mode")) {
+        env_config->termination_mode = atoi(value);
     } else if (MATCH("env", "init_steps")) {
         env_config->init_steps = atoi(value);
     } else if (MATCH("env", "init_mode")) {
