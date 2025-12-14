@@ -69,7 +69,7 @@
        // gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
 // Observation constants
-#define MAX_ROAD_SEGMENT_OBSERVATIONS 200
+#define MAX_ROAD_SEGMENT_OBSERVATIONS 128
 #define MAX_AGENTS 32
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
@@ -2257,12 +2257,12 @@ void c_step(Drive *env) {
 
         if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION) {
-                env->rewards[i] = env->reward_vehicle_collision;
+                env->rewards[i] += env->reward_vehicle_collision;
                 env->logs[i].episode_return += env->reward_vehicle_collision;
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].avg_collisions_per_agent += 1.0f;
             } else if (collision_state == OFFROAD) {
-                env->rewards[i] = env->reward_offroad_collision;
+                env->rewards[i] += env->reward_offroad_collision;
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].episode_return += env->reward_offroad_collision;
                 env->logs[i].avg_offroad_per_agent += 1.0f;
