@@ -1,6 +1,6 @@
 # Data
 
-PufferDrive consumes map binaries generated from multiple data sources, such as the Waymo Open Motion Dataset (WOMD) JSON files, scenariomax or carla. This page covers where to obtain data and how to convert it into the binary format expected by the simulator.
+PufferDrive consumes map binaries generated from multiple data sources, including the [Waymo Open Motion Dataset (WOMD)](https://github.com/waymo-research/waymo-open-dataset) JSON files, [ScenarioMax](https://github.com/valeoai/V-Max), and [CARLA](https://carla.org/). This page covers how to obtain data and convert it into the binary format expected by the simulator.
 
 ## Download options
 - [`pufferdrive_womd_train`](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_train): **10k scenarios** from the Waymo Open Motion _training_ dataset
@@ -13,7 +13,7 @@ Install the CLI once:
 
 ```bash
 uv pip install -U "huggingface_hub[cli]"
-```
+```https://github.com/valeoai/V-Max
 
 Download:
 ```bash
