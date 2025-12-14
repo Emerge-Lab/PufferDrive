@@ -69,7 +69,7 @@
        // gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
 // Observation constants
-#define MAX_ROAD_SEGMENT_OBSERVATIONS 200
+#define MAX_ROAD_SEGMENT_OBSERVATIONS 128
 #define MAX_AGENTS 32
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
