@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <dirent.h>
 #include "error.h"
 #include "drive.h"
 #include "drivenet.h"
@@ -83,10 +84,10 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
 
     // Top-down orthographic camera
     Camera3D camera = {0};
-    camera.position = (Vector3){ 0.0f, 0.0f, 500.0f };  // above the scene
-    camera.target   = (Vector3){ 0.0f, 0.0f, 0.0f };  // look at origin
+    camera.position = (Vector3){ -120.0f, -150.0f, 500.0f };  // above the scene
+    camera.target   = (Vector3){ -120.0f, -150.0f, 0.0f };  // look at origin
     camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
-    camera.fovy     = map_height;
+    camera.fovy     = map_height*2.5f;                     // set fovy to cover the map height
     camera.projection = CAMERA_ORTHOGRAPHIC;
 
     client->width = img_width;
@@ -134,7 +135,7 @@ void renderTopDownView(Drive* env, Client* client, int map_height, int obs, int 
     }
 
     // Draw scene
-    draw_scene(env, client, 1, obs, lasers, show_grid);
+    draw_scene(env, client, 0, obs, lasers, show_grid);
     EndMode3D();
     EndDrawing();
 }
@@ -203,7 +204,7 @@ static int make_gif_from_frames(const char *pattern, int fps,
 }
 
 
-int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
+int eval_gif(const char* map_name, const char* policy_name, int show_grid, int obs_only, int lasers, int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents, const char* view_mode, const char* output_topdown, const char* output_agent, int num_maps, int scenario_length_override, int init_mode, int control_mode, int goal_behavior, int interpretability_eval) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};  // Initialize to zero
@@ -215,10 +216,36 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     char map_buffer[100];
     if (map_name == NULL) {
-        srand(time(NULL));
-        int random_map = rand() % num_maps;
-        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map); // random map file
-        map_name = map_buffer;
+        if (num_maps == 1) {
+            // Find the first map_*.bin file in conf.map_dir
+            DIR *dir = opendir(conf.map_dir);
+            if (dir) {
+                struct dirent *entry;
+                int found = 0;
+                while ((entry = readdir(dir)) != NULL) {
+                    if (strncmp(entry->d_name, "map_", 4) == 0 && strstr(entry->d_name, ".bin")) {
+                        sprintf(map_buffer, "%s/%s", conf.map_dir, entry->d_name);
+                        found = 1;
+                        break;
+                    }
+                }
+                closedir(dir);
+                if (!found) {
+                    fprintf(stderr, "No map_*.bin file found in %s\n", conf.map_dir);
+                    return -1;
+                }
+            } else {
+                fprintf(stderr, "Could not open map directory: %s\n", conf.map_dir);
+                return -1;
+            }
+            map_name = map_buffer;
+        }
+        else {
+            srand(time(NULL));
+            int random_map = rand() % num_maps;
+            sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map); // random map file
+            map_name = map_buffer;
+        }
     }
 
     if (frame_skip <= 0) {
@@ -253,6 +280,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
         .goal_behavior = goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,
+        .interpretability_eval = interpretability_eval
     };
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override :
@@ -275,7 +303,14 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 6.0f; // Can be used to increase the video quality
+
+    // Validate map dimensions to avoid creating an invalid window size
+    if (!isfinite(map_width) || !isfinite(map_height) || map_width <= 0.0f || map_height <= 0.0f) {
+        fprintf(stderr, "Invalid map dimensions (width x height): %f x %f\n", map_width, map_height);
+        fprintf(stderr, "This likely indicates a corrupted or missing map file. Aborting visualization.\n");
+        return -1;
+    }
+    float scale = 2.0f; // Can be used to increase the video quality
 
     // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
@@ -283,6 +318,7 @@ int eval_gif(const char* map_name, const char* policy_name, int show_grid, int o
 
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
+    printf("Initialized window of size %dx%d\n", img_width, img_height);
 
     // Load the textures and models
     client->puffers = LoadTexture("resources/puffers_128.png");
@@ -420,12 +456,13 @@ int main(int argc, char* argv[]) {
     int init_steps = 0;
     const char* map_name = NULL;
     const char* policy_name = "resources/drive/puffer_drive_weights.bin";
-    int max_controlled_agents = -1;
+    int max_controlled_agents = 1;
     int num_maps = 1;
     int scenario_length_cli = -1;
     int init_mode = 0;
     int control_mode = 0;
     int goal_behavior = 0;
+    int interpretability_eval = 1;
 
     const char* view_mode = "both";  // "both", "topdown", "agent"
     const char* output_topdown = NULL;
@@ -539,6 +576,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode, goal_behavior);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps, 
+        max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode, control_mode, 
+        goal_behavior, interpretability_eval);
     return 0;
 }

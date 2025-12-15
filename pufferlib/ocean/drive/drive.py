@@ -127,7 +127,14 @@ class Drive(pufferlib.PufferEnv):
         self._action_type_flag = 0 if action_type == "discrete" else 1
 
         # Check if resources directory exists
-        binary_path = f"{map_dir}/map_000.bin"
+        if num_maps == 1:
+            files = [f for f in os.listdir(map_dir) if f.endswith(".bin")]
+            map_file = files[0]
+            binary_path = os.path.join(map_dir, map_file)
+            if not os.path.exists(binary_path):
+                raise FileNotFoundError(f"Map file {binary_path} not found.")
+        else:
+            binary_path = f"{map_dir}/map_000.bin"
         if not os.path.exists(binary_path):
             raise FileNotFoundError(
                 f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
@@ -172,22 +179,21 @@ class Drive(pufferlib.PufferEnv):
         self.num_envs = num_envs
         super().__init__(buf=buf)
         action_dim = self.single_action_space.nvec.tolist()
-        print(f"Action dim: {action_dim}")
+        # print(f"Action dim: {action_dim}")
         self.all_transition_observations = np.zeros((self.num_agents, sum(action_dim), *(self.single_observation_space).shape), dtype=self.single_observation_space.dtype)
         self.all_transition_rewards = np.zeros((self.num_agents, sum(action_dim)), dtype=np.float32)
-        print("All Env Bindings Shapes")
-        print(f"Observations: {self.observations.shape}")
-        print(f"Actions: {self.actions.shape}")
-        print(f"Rewards: {self.rewards.shape}")
-        print(f"Terminals: {self.terminals.shape}")
-        print(f"Truncations: {self.truncations.shape}")
-        print(f"All action observations: {self.all_transition_observations.shape}")
-        print(f"All action rewards: {self.all_transition_rewards.shape}")
+        # print("All Env Bindings Shapes")
+        # print(f"Observations: {self.observations.shape}")
+        # print(f"Actions: {self.actions.shape}")
+        # print(f"Rewards: {self.rewards.shape}")
+        # print(f"Terminals: {self.terminals.shape}")
+        # print(f"Truncations: {self.truncations.shape}")
+        # print(f"All action observations: {self.all_transition_observations.shape}")
+        # print(f"All action rewards: {self.all_transition_rewards.shape}")
         env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i + 1]
-            print(f"obs shape for this env: {self.observations[cur:nxt].shape}")
             env_id = binding.env_init(
                 self.observations[cur:nxt],
                 self.actions[cur:nxt],
@@ -723,8 +729,8 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1):
 
 
 if __name__ == "__main__":
-    test_performance()
+    # test_performance()
     # Process the train dataset
     # process_all_maps(data_folder="data/processed/interpretable_scenarios")
     # Process the validation/test dataset
-    # process_all_maps(data_folder="data/processed/validation")
+    process_all_maps(data_folder="data/processed/training")

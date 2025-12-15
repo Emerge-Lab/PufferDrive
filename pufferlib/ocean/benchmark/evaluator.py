@@ -687,29 +687,31 @@ class InterpretabilityEvaluator:
     def __init__(self, config: Dict):
         self.config = config
         self.interpret_step = 4
+        self.episode_len = 91
 
     def compute_interpreted_next_state_value(self, current_state_value, probs, all_transitions_rewards, all_transitions_values, sampled_action, gamma=0.98):
         """Compute the value of the next state after the interpret step, using all transitions values and action probabilities."""
         # Compute current state value using bellman expectation equation
         assert torch.sum(probs).item() - 1.0 < 1e-5, f'Probs do not sum to 1! Sum: {torch.sum(probs).item()}'
-        print(f'probs: {probs.shape}\nall_transitions_rewards: {all_transitions_rewards.shape}\nall_transitions_values: {all_transitions_values.shape}')
+        # print(f'probs: {probs.shape}\nall_transitions_rewards: {all_transitions_rewards.shape}\nall_transitions_values: {all_transitions_values.shape}')
         bellman_eqn_value = all_transitions_rewards + gamma * all_transitions_values
-        print(f'bellman equation shapes: {bellman_eqn_value.shape}\n\n')
+        # print(f'bellman equation shapes: {bellman_eqn_value.shape}\n\n')
         bellman_expected_value = torch.sum(probs * bellman_eqn_value)
-        print(f'Bellman expected value: {bellman_expected_value}, Current state value: {current_state_value}')
+        bellman_expectation_error = current_state_value - bellman_expected_value
+        print(f'Bellman expected curr_state value: {bellman_expected_value}, Current state value: {current_state_value}')
         
         # Impl assumes one agent for simplicity
         all_trans_dimn = all_transitions_values.shape[0]
         expected_value = all_transitions_values[sampled_action]
         expected_reward = all_transitions_rewards[sampled_action]
 
-        print(f'Probablity of sampled action {sampled_action}: {probs[sampled_action]}')
+        # print(f'Probablity of sampled action {sampled_action}: {probs[sampled_action]}')
 
         diff = current_state_value - (torch.sum(probs * (all_transitions_rewards + gamma * all_transitions_values)) 
                                       - probs[sampled_action] * (expected_reward + gamma * expected_value))
         
         computed_value = (diff/probs[sampled_action] - expected_reward) / gamma
-        return computed_value
+        return computed_value, bellman_expectation_error
 
     def interpret(self, args, puffer_env, policy):
 
@@ -727,8 +729,17 @@ class InterpretabilityEvaluator:
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
+        bellman_expectation_error_plots = []
+        obs_changes = []
+
         # Step policy up to interpret step
-        for time_id in range(self.interpret_step):
+        for time_id in range(self.episode_len):
+            # Interpret at the start before taking action
+            self.interpret_current_step(args, puffer_env, policy, state, ob_tensor, log_training=False, 
+                                        bellman_expectation_error_plots=bellman_expectation_error_plots)
+
+            current_obs = ob_tensor.detach().clone()
+
             with torch.no_grad():
                 logits, value = policy.forward_eval(ob_tensor, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
@@ -739,11 +750,100 @@ class InterpretabilityEvaluator:
 
             obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
             ob_tensor = torch.as_tensor(obs).to(device)
-            # print(f'Action: {action_np}')
+            obs_changes.append(torch.nn.MSELoss()(current_obs, ob_tensor).item())
             if len(info_list) > 0:  # Happens at the end of episode
                 results = info_list[0]
-                return results
-        
+                print(f'Interpretation episode ended at time step {time_id}')
+                break
+        # print(f'Obs changes (MSE) per timestep: {obs_changes}')
+        # Plot obs changes per timestep
+        # try:
+        #     import matplotlib.pyplot as plt
+        #     plt.figure(figsize=(8,4))
+        #     iters = list(range(len(obs_changes)))
+        #     plt.plot(iters, obs_changes, marker='o', label='obs_next_MSE')
+        #     plt.xlabel('Timestep Index')
+        #     plt.ylabel('Obs Next State MSE')
+        #     plt.title('Observation Next State MSE per Timestep')
+        #     plt.legend()
+        #     plt.grid(True)
+        #     plt.tight_layout()
+        #     plt.savefig('obs_next_state_MSE_per_timestep.png')
+        #     plt.close()
+        # except Exception as e:
+        #     print(f'Could not plot obs changes per timestep: {e}')
+
+        # Plot bellman expectation error vs policy entropy and final value loss per timestep
+        if len(bellman_expectation_error_plots) > 0:
+            import matplotlib.pyplot as plt
+            bellman_errors = [x[0] for x in bellman_expectation_error_plots]
+            entropies = [x[1] for x in bellman_expectation_error_plots]
+            # third element is final optimized value loss per timestep
+            value_losses = [x[2] for x in bellman_expectation_error_plots]
+
+            plt.figure(figsize=(8,6))
+            plt.scatter(entropies, bellman_errors)
+            plt.xlabel('Policy Entropy at Interpret Step')
+            plt.ylabel('Bellman Expectation Error')
+            plt.title('Bellman Expectation Error vs Policy Entropy at Interpret Step')
+            plt.grid(True)
+            # plt.show()
+            plt.savefig('bellman_expectation_error_vs_policy_entropy_expt2.png')
+
+            # Plot final optimized value loss per interpret timestep and
+            # the obs->next_obs proximity MSE on the same figure.
+            try:
+                obs_next_losses = [x[3] for x in bellman_expectation_error_plots]
+
+                # Filter outliers from value_losses using Median Absolute Deviation (MAD).
+                # Values considered outliers are replaced with NaN so matplotlib skips them.
+                try:
+                    vals = np.array(value_losses, dtype=float)
+                    med = np.nanmedian(vals)
+                    mad = np.nanmedian(np.abs(vals - med))
+                    if mad > 0:
+                        threshold = 3.0 * mad
+                        mask = np.abs(vals - med) <= threshold
+                        filtered_values = vals.copy()
+                        filtered_values[~mask] = np.nan
+                    else:
+                        # Fall back to percentile clipping if MAD is zero
+                        cap = np.nanpercentile(vals, 99)
+                        filtered_values = np.where(vals > cap, np.nan, vals)
+                except Exception:
+                    filtered_values = np.array(value_losses, dtype=float)
+
+                plt.figure(figsize=(8,4))
+                iters = list(range(len(value_losses)))
+                plt.plot(iters, filtered_values, marker='o', label='final_value_loss')
+                plt.plot(iters, obs_next_losses, marker='x', label='predicted_obs_MSE')
+                plt.xlabel('Timestep')
+                plt.ylabel('Loss (MSE)')
+                plt.title('Value MSE vs Predicted Obs MSE')
+                plt.legend()
+                plt.grid(True)
+                plt.tight_layout()
+                plt.savefig('expt2_with_proximity_5.png')
+                plt.close()
+            except Exception as e:
+                print(f'Could not plot final value/obs proximity losses per timestep: {e}')
+
+        print(f'Plotted {len(bellman_expectation_error_plots)} points for Bellman expectation error vs policy entropy')
+
+        # Now at interpret step, run the interpretability check
+        # self.interpret_current_step(args, puffer_env, policy, state, ob_tensor)
+
+    def interpret_current_step(self, args, puffer_env, policy_, lstm_state, ob_tensor_, log_training=True, bellman_expectation_error_plots=[]):
+        num_agents = puffer_env.observation_space.shape[0]
+        obs_dim = puffer_env.observation_space.shape[1]
+        action_dim = puffer_env.single_action_space.nvec.tolist()
+        device = args["train"]["device"]
+
+        # Detach everything from caller's graph
+        state = {k: v.detach().clone() for k, v in lstm_state.items()}
+        current_state_obs = ob_tensor_.detach().clone()
+        interpret_policy = copy.deepcopy(policy_)
+
         # Now process the interpret_step
         with torch.no_grad():
             # Get all transitions for the current state
@@ -752,12 +852,12 @@ class InterpretabilityEvaluator:
             all_trans_obs_tensor = torch.as_tensor(all_transitions_obs).to(device)[0]
             trans_dimn = all_trans_obs_tensor.shape[0]
             
-            # Eval to get current state value and probs
-            logits, current_state_value = policy.forward_eval(ob_tensor, state)
+            # Eval to get current state value and action
+            logits, current_state_value = interpret_policy.forward_eval(current_state_obs, state)
             action, logprob, logits_entropy, probs = pufferlib.pytorch.sample_logits(logits, return_all_probs=True)
-            interpret_policy = copy.deepcopy(policy)
-            print(f'logits shape: {logits[0].shape} logprob shape: {logprob.shape}, action shape: {action.shape}')
-            print(f'logits_entropy_shape: {logits_entropy.shape}, logits_entropy: {logits_entropy}')
+            print(f'Probablity of sampled action {action[0][0]}: {probs[0][0][action[0][0]]}, entropy: {logits_entropy.item()}')
+            # print(f'logits shape: {logits[0].shape} logprob shape: {logprob.shape}, action shape: {action.shape}')
+            # print(f'logits_entropy_shape: {logits_entropy.shape}, logits_entropy: {logits_entropy}')
             
             # Values of all transitions from the current state
             all_trans_values = torch.zeros((num_agents, trans_dimn, 1), device=device)
@@ -767,7 +867,7 @@ class InterpretabilityEvaluator:
                 prev_lstm_state = state.copy()
                 trans_obs_tensor = all_trans_obs_tensor[i].unsqueeze(0)
                 
-                trans_logits, trans_value = policy.forward_eval(trans_obs_tensor, prev_lstm_state)
+                trans_logits, trans_value = interpret_policy.forward_eval(trans_obs_tensor, prev_lstm_state)
                 all_trans_values[0, i] = trans_value
                 
             # print(f'All transitions values shape: {all_trans_values.shape}')
@@ -778,31 +878,33 @@ class InterpretabilityEvaluator:
             # Step with the sampled action
             action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
             obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
-            ob_tensor = torch.as_tensor(obs).to(device)
-            _, value = policy.forward_eval(ob_tensor, state)   # Value of state after interpret step
+            next_state_obs_actual = torch.as_tensor(obs).detach().to(device)
+            _, value = interpret_policy.forward_eval(next_state_obs_actual, state)   # Value of state after interpret step
 
-            value = value[0][0]
+            next_state_value = value[0][0]
             value_from_all_trans = all_trans_values[0, action_np][0][0]
-            print(f'Action: {action_np}')
-            print(f'Value at interpret step: {value}')
+            print(f'Value at next step: {next_state_value}')
             print(f'Value from all transitions at action {action_np}: {value_from_all_trans}')
+            print(f"Difference between current and next obs: {torch.nn.MSELoss()(next_state_obs_actual, current_state_obs).item():.6e}")
 
             assert np.allclose(obs, all_transitions_obs[0, action_np[0][0], :]), \
                 f"Observation mismatch at interpret step! obs: {obs}, all_transitions_obs: {all_transitions_obs[0, action_np[0][0], :]}"
-            assert value == value_from_all_trans, f"Value mismatch at interpret step! Value: {value}, All transitions value: {value_from_all_trans}"
+            assert next_state_value == value_from_all_trans, f"Value mismatch at interpret step! Value: {next_state_value}, All transitions value: {value_from_all_trans}"
 
 
-            computed_next_value = self.compute_interpreted_next_state_value(
+            computed_next_value, bellman_expectation_error = self.compute_interpreted_next_state_value(
                 current_state_value=current_state_value[0][0],
                 probs=probs[0][0],
                 all_transitions_rewards=all_trans_rewards_np,
                 all_transitions_values=all_trans_values.squeeze(0).squeeze(-1),
                 sampled_action=action[0][0],
-                gamma=0.98,   # TODO: Make as config
+                gamma=0.98,   # TODO: Make as config(Same as training)
             )
             print(f'Computed next state value from all transitions: {computed_next_value}')
 
-            next_state_obs_actual = ob_tensor.copy_(torch.as_tensor(obs).to(device))
+            # Defer logging Bellman error/entropy until after optimization
+            # so we can include the final optimized value loss per timestep.
+
 
             # --------------------------------------------------
             # Optimize a candidate input observation to match
@@ -815,26 +917,32 @@ class InterpretabilityEvaluator:
                 p.requires_grad = False
 
             # Create and optimize the candidate input under an enabled-grad context
-            loss_fn = torch.nn.MSELoss()
-            num_opt_steps = 500
+            loss_fn_value = torch.nn.MSELoss()
+            loss_fn_state_proximity = torch.nn.MSELoss()
+            # Give more emphasis to the scalar value-matching loss vs the
+            # high-dimensional observation-proximity loss by default.
+            # You can tune these weights as needed.
+            value_wt = 1.0
+            state_proximity_wt = 5e-8
+            num_opt_steps = 1000
 
-            # Use a detached copy of the LSTM state so forward_eval can
-            # mutate its copy without altering the original `before_state`.
-            opt_state = {k: v.clone().detach() for k, v in before_state.items()}
 
             with torch.enable_grad():
                 # Create a learnable observation initialized near the actual
-                # next-state observation: next_state_obs_actual + small noise.
-                # Detach `next_state_obs_actual` so we don't keep its graph.
+                # next-state observation: `next_state_obs_actual + small noise`.
+                # This helps the optimizer focus on local adjustments rather
+                # than exploring the whole high-dimensional space.
                 noise_eps = 2e-1
-                noise = torch.randn_like(ob_tensor, device=device) * noise_eps
-                # pred_obs_param = torch.nn.Parameter(next_state_obs_actual.detach().clone() + noise)
-                pred_obs_param = torch.nn.Parameter(noise)
+                noise = torch.randn_like(current_state_obs, device=device) * noise_eps
+                pred_obs_param = torch.nn.Parameter(next_state_obs_actual.detach().clone() + noise)
 
                 # Optimizer operating only on the predicted observation
                 optimizer = torch.optim.Adam([pred_obs_param], lr=1e-2)
 
-                target_value = computed_next_value.detach()
+                # target_value = next_state_value.detach()   # Expt1, use actual next state value as target
+                target_value = computed_next_value.detach()  # Expt2, use computed next state value as target
+                proximity_state = current_state_obs.detach()
+                print(f"Starting optimization to match Target value: {target_value.item()}")
 
                 for it in range(num_opt_steps):
                     optimizer.zero_grad()
@@ -849,7 +957,18 @@ class InterpretabilityEvaluator:
                     # Primary loss: L2 between predicted value (from predicted obs)
                     # and the computed next-state value (interpreted target).
                     # `value_pred` shape is (batch, 1) so broadcast the target.
-                    loss = loss_fn(value_pred, target_value.expand_as(value_pred))      # TODO: Add proximity with current obs
+                    loss = value_wt * loss_fn_value(value_pred, target_value.expand_as(value_pred)) + \
+                    state_proximity_wt * loss_fn_state_proximity(pred_obs_param, proximity_state)
+
+                    if it == num_opt_steps - 1:
+                        print(f"Final optimization iter {it}/{num_opt_steps}, loss: {loss.item():.6e}, "
+                              f"pred_value: {value_pred.view(-1)[0].item()}, target: {target_value.item()}")
+
+                    # early stop
+                    if loss.item() < 1e-9:
+                        if log_training:
+                            print(f"Early stopping with value: {value_pred.view(-1)[0].item()}, loss: {loss.item():.6e} at iter {it}")
+                        break
 
                     # Use retain_graph=True to avoid "second backward" errors
                     # when parts of the graph are reused internally.
@@ -865,21 +984,52 @@ class InterpretabilityEvaluator:
                             loss_val = 0.0
                             vp = None
                             tgt = None
-                        print(f"Input optimization iter {it}/{num_opt_steps}, loss: {loss_val:.6e}, pred_value: {vp}, target: {tgt}")
+                        optimized_obs = pred_obs_param.detach()
+                        observation_prediction_loss = torch.norm(optimized_obs - proximity_state).item()
+                        if log_training:
+                            print(f"Input optimization iter {it}/{num_opt_steps}, loss: {loss_val:.6e}, pred_value: {vp}, target: {tgt}, "
+                                f"obs_loss: {observation_prediction_loss:.6e}")
 
-                    # early stop
-                    if loss.item() < 1e-9:
-                        break
+
 
                 optimized_obs = pred_obs_param.detach()
 
             # Compute the policy value for the optimized observation (for inspection)
             with torch.no_grad():
-                _, final_value = interpret_policy.forward_eval(optimized_obs, opt_state)
+                eval_state = {k: v.clone().detach() for k, v in before_state.items()}
+                _, final_value = interpret_policy.forward_eval(optimized_obs, eval_state)
 
             print(f"Optimized observation final loss: {loss.item():.6e}")
             try:
                 print(f"Final value from policy on optimized obs: {final_value[0][0]}")
-                print(f'Difference from predicted obs vs actual next obs: {torch.norm(optimized_obs - next_state_obs_actual).item():.6e}')
+                diff = optimized_obs - next_state_obs_actual
+                D = diff.numel()
+                mse_per_element = torch.mean(diff ** 2).item()
+                rmse = (mse_per_element ** 0.5)
+                l2norm = torch.norm(diff).item()
+                print(f'Difference (L2-norm) from predicted obs vs actual next obs: {l2norm:.6e}\n')
+                print(f'Per-element MSE: {mse_per_element:.6e}, RMSE: {rmse:.6e}, elements: {D}\n')
+                print(f'Loss from predicted obs vs current obs (MSE): {loss_fn_state_proximity(optimized_obs, proximity_state).item():.6e}\n')
             except Exception:
                 print(f"Final value (raw): {final_value}")
+
+            # Compute final per-timestep value loss (MSE between final_value and target)
+            try:
+                with torch.no_grad():
+                    final_value_loss = float(loss_fn_value(final_value, target_value.expand_as(final_value)).item())
+            except Exception:
+                final_value_loss = float('nan')
+
+            # Also compute observation-proximity between optimized observation
+            # and the actual next-state observation (MSE).
+            try:
+                with torch.no_grad():
+                    obs_next_mse = float(loss_fn_state_proximity(optimized_obs, next_state_obs_actual).item())
+            except Exception:
+                obs_next_mse = float('nan')
+
+            # Append Bellman expectation error, entropy, final value loss,
+            # and predicted observation MSE for this interpret timestep.
+            bellman_expectation_error_plots.append(
+                [bellman_expectation_error.item(), logits_entropy.item(), final_value_loss, obs_next_mse]
+            )

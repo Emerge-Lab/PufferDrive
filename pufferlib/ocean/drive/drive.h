@@ -1414,7 +1414,8 @@ void set_active_agents(Drive* env){
     for(int i=0;i<env->expert_static_agent_count;i++){
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
-
+    // printf("Total actors created: %d, Active agents: %d, Static agents: %d, Expert static agents: %d\n",
+    //       env->num_actors, env->active_agent_count, env->static_agent_count, env->expert_static_agent_count);
     return;
 }
 
@@ -1506,6 +1507,7 @@ void init(Drive* env){
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
     remove_bad_trajectories(env);
+    // printf("Final expert static agent count: %d\n", env->expert_static_agent_count);
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log*)calloc(env->active_agent_count, sizeof(Log));

@@ -97,7 +97,6 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
                 if (map_pos) {
                     sscanf(map_pos, "map_%03d.bin", &interp_map_id);
                 }
-                printf("Using interpretability map binary: %s with map_id: %d\n", interpretability_map_binary, interp_map_id);
             } else {
                 num_maps = 1;
                 interp_map_id = rand() % num_maps;
