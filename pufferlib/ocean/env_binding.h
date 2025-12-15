@@ -556,6 +556,11 @@ static int assign_to_dict(PyObject *dict, char *key, float value) {
 }
 
 static PyObject *vec_log(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_log requires 2 arguments");
+        return NULL;
+    }
+
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
@@ -563,23 +568,36 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
 
     // Iterates over logs one float at a time. Will break
     // horribly if Log has non-float data.
+    PyObject *num_agents_arg = PyTuple_GetItem(args, 1);
+    float num_agents = (float)PyLong_AsLong(num_agents_arg);
+
     Log aggregate = {0};
     int num_keys = sizeof(Log) / sizeof(float);
     for (int i = 0; i < vec->num_envs; i++) {
         Env *env = vec->envs[i];
         for (int j = 0; j < num_keys; j++) {
             ((float *)&aggregate)[j] += ((float *)&env->log)[j];
-            ((float *)&env->log)[j] = 0.0f;
         }
     }
 
     PyObject *dict = PyDict_New();
-    if (aggregate.n == 0.0f) {
+
+    // Only log if we have at least num_agents worth of data
+    if (aggregate.n < num_agents) {
         return dict;
     }
 
-    // Average
+    // Got enough data. Reset logs and return metrics
+    for (int i = 0; i < vec->num_envs; i++) {
+        Env *env = vec->envs[i];
+        for (int j = 0; j < num_keys; j++) {
+            ((float *)&env->log)[j] = 0.0f;
+        }
+    }
+
     float n = aggregate.n;
+
+    // Average across agents
     for (int i = 0; i < num_keys; i++) {
         ((float *)&aggregate)[i] /= n;
     }

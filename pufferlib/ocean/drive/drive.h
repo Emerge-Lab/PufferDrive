@@ -69,7 +69,7 @@
        // gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
 // Observation constants
-#define MAX_ROAD_SEGMENT_OBSERVATIONS 200
+#define MAX_ROAD_SEGMENT_OBSERVATIONS 128
 #define MAX_AGENTS 32
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
@@ -324,6 +324,7 @@ struct Drive {
     GridMap *grid_map;
     int *neighbor_offsets;
     int scenario_length;
+    int termination_mode;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_ade;
@@ -2215,7 +2216,18 @@ void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
-    if (env->timestep == env->scenario_length) {
+
+    int originals_remaining = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        // Keep flag true if there is at least one agent that has not been respawned yet
+        if (env->entities[agent_idx].respawn_count == 0) {
+            originals_remaining = 1;
+            break;
+        }
+    }
+
+    if (env->timestep == env->scenario_length || (!originals_remaining && env->termination_mode == 1)) {
         add_log(env);
         c_reset(env);
         return;
@@ -2245,12 +2257,12 @@ void c_step(Drive *env) {
 
         if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION) {
-                env->rewards[i] = env->reward_vehicle_collision;
+                env->rewards[i] += env->reward_vehicle_collision;
                 env->logs[i].episode_return += env->reward_vehicle_collision;
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].avg_collisions_per_agent += 1.0f;
             } else if (collision_state == OFFROAD) {
-                env->rewards[i] = env->reward_offroad_collision;
+                env->rewards[i] += env->reward_offroad_collision;
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].episode_return += env->reward_offroad_collision;
                 env->logs[i].avg_offroad_per_agent += 1.0f;

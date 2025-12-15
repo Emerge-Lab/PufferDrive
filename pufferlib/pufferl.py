@@ -1374,18 +1374,14 @@ def ensure_drive_binary():
     binary is always up-to-date with the latest code changes.
     """
     if os.path.exists("./visualize"):
-        print("Removing existing visualize binary...")
         os.remove("./visualize")
 
-    print("Building visualize binary...")
     try:
         result = subprocess.run(
             ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
         )
 
-        if result.returncode == 0:
-            print("Successfully built visualize binary")
-        else:
+        if result.returncode != 0:
             print(f"Build failed: {result.stderr}")
             raise RuntimeError("Failed to build visualize binary for rendering")
     except subprocess.TimeoutExpired:

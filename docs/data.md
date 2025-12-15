@@ -1,10 +1,10 @@
 # Data
 
-PufferDrive consumes map binaries generated from the Waymo Open Motion Dataset (WOMD) JSON files. This page covers where to obtain data and how to convert it into the binary format expected by the simulator.
+PufferDrive consumes map binaries generated from multiple data sources, including the [Waymo Open Motion Dataset (WOMD)](https://github.com/waymo-research/waymo-open-dataset) JSON files, [ScenarioMax](https://github.com/valeoai/V-Max), and [CARLA](https://carla.org/). This page covers how to obtain data and convert it into the binary format expected by the simulator.
 
 ## Download options
-- **Mini dataset**: [GPUDrive_mini](https://huggingface.co/datasets/EMERGE-lab/GPUDrive_mini) with ~1k training files for quick experiments.
-- **Full dataset**: [GPUDrive](https://huggingface.co/datasets/EMERGE-lab/GPUDrive) with ~100k scenes for large-scale training.
+- [`pufferdrive_womd_train`](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_train): **10k scenarios** from the Waymo Open Motion _training_ dataset
+- [`pufferdrive_womd_val`](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val): **10k scenarios** from the Waymo Open Motion _validation_ dataset
 - Additional compatible sources: [ScenarioMax](https://github.com/valeoai/ScenarioMax) exports JSON in the same format.
 - Included CARLA maps: CARLA exports live in `data_utils/carla/carla`.
 
@@ -13,29 +13,19 @@ Install the CLI once:
 
 ```bash
 uv pip install -U "huggingface_hub[cli]"
-```
+```https://github.com/valeoai/V-Max
 
-Download the mini dataset:
-
+Download:
 ```bash
-huggingface-cli download EMERGE-lab/GPUDrive_mini \
+huggingface-cli download daphne-cornelisse/pufferdrive_womd_train \
   --repo-type dataset \
-  --local-dir data/processed/training \
-  --include "training/*"
-```
-
-Download the full dataset:
-
-```bash
-huggingface-cli download EMERGE-lab/GPUDrive \
-  --repo-type dataset \
-  --local-dir data/processed/training \
-  --include "training/*"
+  --local-dir data/processed/training
 ```
 
 Place raw JSON files under `data/processed/training` (default location read by the conversion script).
 
 ## Convert JSON to map binaries
+
 The conversion script writes compact `.bin` maps to `resources/drive/binaries`:
 
 ```bash
@@ -64,5 +54,6 @@ Refer to [Simulator](simulator.md) for how the binaries are consumed during rese
 - With binaries in place, run `puffer train puffer_drive` from [Getting Started](getting-started.md) as a smoke test that the build, data, and bindings are wired together.
 - To inspect the binary output, convert a single JSON file with `load_map(<json>, <id>, <output_path>)` inside `drive.py`.
 
-## Waymo map editor
-See [WOMD Editor](womd-editor.md) for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the `.bin` format consumed by the simulator.
+## Interactive scenario editor
+
+See [Interactive scenario editor](scene-editor.md) for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the `.bin` format consumed by the simulator.

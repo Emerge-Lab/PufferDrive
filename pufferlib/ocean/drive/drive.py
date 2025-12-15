@@ -28,6 +28,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior=0,
         dt=0.1,
         scenario_length=None,
+        termination_mode=None,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
@@ -58,6 +59,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
+        self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
 
@@ -182,6 +184,7 @@ class Drive(pufferlib.PufferEnv):
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
                 scenario_length=(int(scenario_length) if scenario_length is not None else None),
+                termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
@@ -207,7 +210,7 @@ class Drive(pufferlib.PufferEnv):
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs)
+            log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
                 info.append(log)
                 # print(log)
