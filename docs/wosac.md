@@ -19,9 +19,11 @@ puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-
 The default configs aim to emulate the WOSAC settings as closely as possible, but you can adjust them:
 
 ```ini
+[eval]
+map_dir = "resources/drive/binaries/validation" # Dataset to use
+num_maps = 100  # Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)
 wosac_num_rollouts = 32      # Number of policy rollouts per scene
 wosac_init_steps = 10        # When to start the simulation
-wosac_num_agents = 256       # Total number of WOSAC agents to evaluate
 wosac_control_mode = "control_wosac"  # Control the tracks to predict
 wosac_init_mode = "create_all_valid"  # Initialize from the tracks to predict
 wosac_goal_behavior = 2      # Stop when reaching the goal
@@ -39,6 +41,7 @@ checkpoint_interval = 500    # Set equal to eval_interval to use the latest chec
 [eval]
 eval_interval = 500          # Run eval every N epochs
 map_dir = "resources/drive/binaries/training"  # Dataset to use
+num_maps = 20 # Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)
 ```
 
 ## Baselines
@@ -49,7 +52,7 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 |--------|-------------------|-------------------|---------------------|-------------------|--------|------|
 | Ground-truth (UB) | 0.832 | 0.606 | 0.846 | 0.961 | 0 | 0 |
 | π_Base self-play RL | - | - | - | - | - | - |
-| [SMART](https://arxiv.org/abs/2405.15677) | 0.805 | 0.534 | 0.830 | 0.949 | 1.124 | 3.123 |
+| [SMART-tiny-CLSFT](https://arxiv.org/abs/2412.05334) | 0.805 | 0.534 | 0.830 | 0.949 | 1.124 | 3.123 |
 | π_Random | 0.485 | 0.214 | 0.657 | 0.408 | 6.477 | 18.286 |
 
 *Table: WOSAC baselines in PufferDrive on 229 selected clean held-out validation scenarios.*
