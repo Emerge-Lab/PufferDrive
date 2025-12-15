@@ -51,7 +51,7 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 | Method | Realism meta-score | Kinematic metrics | Interactive metrics | Map-based metrics | minADE | ADE |
 |--------|-------------------|-------------------|---------------------|-------------------|--------|------|
 | Ground-truth (UB) | 0.832 | 0.606 | 0.846 | 0.961 | 0 | 0 |
-| π_Base self-play RL | - | - | - | - | - | - |
+| π_Base self-play RL | 0.737 | 0.319 | 0.789 | 0.938 | 10.834 | 11.317 |
 | [SMART-tiny-CLSFT](https://arxiv.org/abs/2412.05334) | 0.805 | 0.534 | 0.830 | 0.949 | 1.124 | 3.123 |
 | π_Random | 0.485 | 0.214 | 0.657 | 0.408 | 6.477 | 18.286 |
 
