@@ -28,7 +28,7 @@ nav:
   - Docs:
       - Getting started: getting-started.md
       - Simulator: simulator.md
-      - Interactive scenario editor: womd-editor.md
+      - Interactive scenario editor: scene-editor.md
       - Visualizer: visualizer.md
   - Data: data.md
   - Benchmarks:

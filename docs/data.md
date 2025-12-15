@@ -56,4 +56,4 @@ Refer to [Simulator](simulator.md) for how the binaries are consumed during rese
 
 ## Interactive scenario editor
 
-See [WOMD Editor](womd-editor.md) for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the `.bin` format consumed by the simulator.
+See [Interactive scenario editor](scene-editor.md) for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the `.bin` format consumed by the simulator.
