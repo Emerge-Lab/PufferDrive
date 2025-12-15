@@ -102,6 +102,16 @@
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
 
+// Collision behavior
+#define COLLISION_IGNORE 0
+#define COLLISION_STOP 1
+#define COLLISION_REMOVE 2
+
+// Offroad behavior
+#define OFFROAD_IGNORE 0
+#define OFFROAD_STOP 1
+#define OFFROAD_REMOVE 2
+
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
@@ -325,6 +335,7 @@ struct Drive {
     int *neighbor_offsets;
     int scenario_length;
     int termination_mode;
+    int min_active_agents;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_ade;
@@ -2227,7 +2238,18 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->timestep == env->scenario_length || (!originals_remaining && env->termination_mode == 1)) {
+    int stopped_agents = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        // Keep flag true if there is at least one agent that has not been respawned yet
+        if (env->entities[agent_idx].stopped == 1) {
+            stopped_agents += 1;
+        }
+    }
+
+    if ((env->timestep == env->scenario_length && env->termination_mode != 2) || 
+        (!originals_remaining && env->termination_mode == 1) || 
+        (env->active_agent_count - stopped_agents < env->min_active_agents && env->termination_mode == 2 && env->timestep > 20)) {
         add_log(env);
         c_reset(env);
         return;
@@ -2329,6 +2351,28 @@ void c_step(Drive *env) {
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
             if (reached_goal) {
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+            }
+        }
+    }
+
+    if (env->collision_behavior== COLLISION_STOP) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            int collision_state = env->entities[agent_idx].collision_state;
+            if (collision_state == VEHICLE_COLLISION) {
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+            }
+        }
+    }
+
+    if (env->collision_behavior== OFFROAD_STOP) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            int collision_state = env->entities[agent_idx].collision_state;
+            if (collision_state == OFFROAD) {
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
             }

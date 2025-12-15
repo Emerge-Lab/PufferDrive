@@ -36,7 +36,7 @@ def download_by_groups(
     max_training_files=20000,
     max_validation_files=None,
     max_testing_files=None,
-    files_per_group=10000,
+    files_per_group=1000,
     max_workers=4,  # Reduced to avoid rate limiting
     use_auth=True,
 ):
@@ -230,10 +230,10 @@ if __name__ == "__main__":
     download_by_groups(
         repo_id="EMERGE-lab/GPUDrive",
         local_dir="data/processed",
-        max_training_files=10000,
+        max_training_files=1000,
         max_validation_files=None,
         max_testing_files=None,
-        files_per_group=10000,
+        files_per_group=1000,
         max_workers=1,  # Reduced from 16 to avoid rate limits
         use_auth=True,
     )

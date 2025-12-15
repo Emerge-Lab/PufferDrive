@@ -24,6 +24,7 @@ typedef struct {
     int goal_behavior;
     int scenario_length;
     int termination_mode;
+    int min_active_agents;
     int init_steps;
     int init_mode;
     int control_mode;
@@ -81,6 +82,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->scenario_length = atoi(value);
     } else if (MATCH("env", "termination_mode")) {
         env_config->termination_mode = atoi(value);
+    } else if (MATCH("env", "min_active_agents")) {
+        env_config->min_active_agents = atoi(value);
     } else if (MATCH("env", "init_steps")) {
         env_config->init_steps = atoi(value);
     } else if (MATCH("env", "init_mode")) {

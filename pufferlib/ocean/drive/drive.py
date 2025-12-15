@@ -29,6 +29,7 @@ class Drive(pufferlib.PufferEnv):
         dt=0.1,
         scenario_length=None,
         termination_mode=None,
+        min_active_agents=1,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
@@ -59,6 +60,7 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.termination_mode = termination_mode
+        self.min_active_agents = min_active_agents
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
 
@@ -182,6 +184,7 @@ class Drive(pufferlib.PufferEnv):
                 dt=dt,
                 scenario_length=(int(scenario_length) if scenario_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
+                min_active_agents=int(self.min_active_agents),
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
