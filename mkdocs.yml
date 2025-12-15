@@ -33,7 +33,7 @@ nav:
   - Data: data.md
   - Benchmarks:
       - Overview: evaluation.md
-      - WOSAC: benchmark-readme.md
+      - WOSAC: wosac.md
   - Blog:
     - pufferdrive 2.0: pufferdrive-2.0.md
 
