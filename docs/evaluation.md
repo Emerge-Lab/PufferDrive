@@ -41,7 +41,7 @@ We provide a PufferDrive implementation of the Waymo Open Sim Agents Challenge (
 puffer eval puffer_drive --eval.wosac-realism-eval True
 ```
 
-Add `--load-model-path <path_to_checkpoint>.pt` to score a trained policy instead of a random baseline.
+Add `--load-model-path <path_to_checkpoint>.pt` to score a trained policy, instead of a random baseline.
 
 See [the WOSAC benchmark page](wosac.md) for the metric pipeline and all the details.
 
