@@ -490,7 +490,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../womd-editor/" class="md-nav__link">
+      <a href="../scene-editor/" class="md-nav__link">
         
   
   
@@ -731,13 +731,41 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#running-a-single-evaluation-from-a-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running a single evaluation from a checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log-evals-to-wb-during-training" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log evals to W&amp;B during training
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
-  <a href="#links" class="md-nav__link">
+  <a href="#baselines" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Links
+        Baselines
       
     </span>
   </a>
@@ -745,21 +773,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#implementation" class="md-nav__link">
+  <a href="#useful-links" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Implementation
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Notes
+        Useful links
       
     </span>
   </a>
@@ -889,71 +906,101 @@
   
 
 
-<h1 id="waymo-open-sim-agent-challenge-wosac-benchmark">Waymo Open Sim Agent Challenge (WOSAC) benchmark<a class="headerlink" href="#waymo-open-sim-agent-challenge-wosac-benchmark" title="Permanent link">&para;</a></h1>
+<h1 id="waymo-open-sim-agent-challenge-wosac-benchmark">Waymo Open Sim Agent Challenge (WOSAC) Benchmark<a class="headerlink" href="#waymo-open-sim-agent-challenge-wosac-benchmark" title="Permanent link">&para;</a></h1>
+<p>We provide a re-implementation of the <a href="https://waymo.com/research/the-waymo-open-sim-agents-challenge/">Waymo Open Sim Agent Challenge (WOSAC)</a>, which measures <em>distributional realism</em> of simulated trajectories compared to logged human trajectories. Our version preserves the original logic and metric weighting but uses PyTorch on GPU for the metrics computation, unlike the original TensorFlow CPU implementation. The code is also simplified for clarity, making it easier to understand, adapt, and extend.</p>
+<p><strong>Note:</strong> In PufferDrive, agents are conditioned on a "goal" represented as a single (x, y) position, reflecting that drivers typically have a high-level destination in mind. Evaluating whether an agent matches human distributional properties can be decomposed into: (1) inferring a person's intended direction from context (1 second in WOSAC) and (2) navigating toward that goal in a human-like manner. We focus on the second component, though the evaluation could be adapted to include behavior prediction as in the original WOSAC.</p>
+<p>[TODO: ADD bar graphs]</p>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
-<p>WOSAC evaluation with random policy
-<div class="highlight"><pre><span></span><code>puffer<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>puffer_drive<span class="w"> </span>--eval.wosac-realism-eval<span class="w"> </span>True
-</code></pre></div></p>
-<p>WOSAC evaluation with your checkpoint
+<h3 id="running-a-single-evaluation-from-a-checkpoint">Running a single evaluation from a checkpoint<a class="headerlink" href="#running-a-single-evaluation-from-a-checkpoint" title="Permanent link">&para;</a></h3>
+<p>The <code>[eval]</code> section in <code>drive.ini</code> contains all relevant configurations. To run the WOSAC eval once:</p>
 <div class="highlight"><pre><span></span><code>puffer<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>puffer_drive<span class="w"> </span>--eval.wosac-realism-eval<span class="w"> </span>True<span class="w"> </span>--load-model-path<span class="w"> </span>&lt;your-trained-policy&gt;.pt
-</code></pre></div></p>
-<h2 id="links">Links<a class="headerlink" href="#links" title="Permanent link">&para;</a></h2>
+</code></pre></div>
+<p>The default configs aim to emulate the WOSAC settings as closely as possible, but you can adjust them:</p>
+<div class="highlight"><pre><span></span><code><span class="na">wosac_num_rollouts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">32</span><span class="w">      </span><span class="c1"># Number of policy rollouts per scene</span>
+<span class="na">wosac_init_steps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">10</span><span class="w">        </span><span class="c1"># When to start the simulation</span>
+<span class="na">wosac_num_agents</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">256</span><span class="w">       </span><span class="c1"># Total number of WOSAC agents to evaluate</span>
+<span class="na">wosac_control_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;control_wosac&quot;</span><span class="w">  </span><span class="c1"># Control the tracks to predict</span>
+<span class="na">wosac_init_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;create_all_valid&quot;</span><span class="w">  </span><span class="c1"># Initialize from the tracks to predict</span>
+<span class="na">wosac_goal_behavior</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">2</span><span class="w">      </span><span class="c1"># Stop when reaching the goal</span>
+<span class="na">wosac_goal_radius</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">2.0</span><span class="w">      </span><span class="c1"># Can shrink goal radius for WOSAC evaluation</span>
+</code></pre></div>
+<h3 id="log-evals-to-wb-during-training">Log evals to W&amp;B during training<a class="headerlink" href="#log-evals-to-wb-during-training" title="Permanent link">&para;</a></h3>
+<p>During experimentation, logging key metrics directly to W&amp;B avoids a post-training step. Evaluations can be enabled during training, with results logged under a separate <code>eval/</code> section. The main configuration options:</p>
+<div class="highlight"><pre><span></span><code><span class="k">[train]</span>
+<span class="na">checkpoint_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">500</span><span class="w">    </span><span class="c1"># Set equal to eval_interval to use the latest checkpoint</span>
+
+<span class="k">[eval]</span>
+<span class="na">eval_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">500</span><span class="w">          </span><span class="c1"># Run eval every N epochs</span>
+<span class="na">map_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;resources/drive/binaries/training&quot;</span><span class="w">  </span><span class="c1"># Dataset to use</span>
+</code></pre></div>
+<h2 id="baselines">Baselines<a class="headerlink" href="#baselines" title="Permanent link">&para;</a></h2>
+<p>We provide baselines on a small curated dataset from the WOMD validation set with perfect ground-truth (no collisions or off-road events from labeling mistakes).</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Realism meta-score</th>
+<th>Kinematic metrics</th>
+<th>Interactive metrics</th>
+<th>Map-based metrics</th>
+<th>minADE</th>
+<th>ADE</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ground-truth (UB)</td>
+<td>0.832</td>
+<td>0.606</td>
+<td>0.846</td>
+<td>0.961</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>π_Base self-play RL</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><a href="https://arxiv.org/abs/2405.15677">SMART</a></td>
+<td>0.805</td>
+<td>0.534</td>
+<td>0.830</td>
+<td>0.949</td>
+<td>1.124</td>
+<td>3.123</td>
+</tr>
+<tr>
+<td>π_Random</td>
+<td>0.485</td>
+<td>0.214</td>
+<td>0.657</td>
+<td>0.408</td>
+<td>6.477</td>
+<td>18.286</td>
+</tr>
+</tbody>
+</table>
+<p><em>Table: WOSAC baselines in PufferDrive on 229 selected clean held-out validation scenarios.</em></p>
+<hr />
+<blockquote>
+<p>✏️ Download the dataset from <a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean">Hugging Face</a> to reproduce these results or benchmark your policy.</p>
+</blockquote>
+<hr />
+<h2 id="useful-links">Useful links<a class="headerlink" href="#useful-links" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="https://waymo.com/open/challenges/2025/sim-agents/">Challenge and leaderboard</a></li>
+<li><a href="https://waymo.com/open/challenges/2025/sim-agents/">WOSAC challenge and leaderboard</a></li>
 <li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/tutorial/tutorial_sim_agents.ipynb">Sim agent challenge tutorial</a></li>
 <li><a href="https://arxiv.org/pdf/2305.12032">Reference paper introducing WOSAC</a></li>
 <li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/metrics.py">Metrics entry point</a></li>
 <li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/estimators.py">Log-likelihood estimators</a></li>
-<li>Configurations <a href="https://github.com/waymo-research/waymo-open-dataset/blob/99a4cb3ff07e2fe06c2ce73da001f850f628e45a/src/waymo_open_dataset/protos/sim_agents_metrics.proto#L51">proto file</a> <a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/challenge_2025_sim_agents_config.textproto">default sim agent challenge configs</a></li>
-</ul>
-<h2 id="implementation">Implementation<a class="headerlink" href="#implementation" title="Permanent link">&para;</a></h2>
-<ul>
-<li>For the sim agent challenge we compute the log likelihood with <code>aggregate_objects=False</code>, which means that we use <a href="https://github.com/waymo-research/waymo-open-dataset/blob/99a4cb3ff07e2fe06c2ce73da001f850f628e45a/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/estimators.py#L17"><code>_log_likelihood_estimate_timeseries_agent_level()</code></a></li>
-<li>As such, the interpretation is as follows:</li>
-</ul>
-<p>Steps [for every scene]:
-1. Rollout policy in environment K times → (n_agents, n_rollouts, n_steps)
-2. Obtain log data → (n_agents, k, n_steps)
-3. Obtain features from (x, y, z, heading tuples)
-4. Compute log-likelihood metrics from features
-    - a. Flatten across time (assume independence) → (n_agents, n_rollouts * n_steps)
-    - b. Use the per-agent simulated features to construct a probability distribution
-    - c. Take the per-agent ground-truth values and find the bin that is closest for each
-    - d. Take log of the probability for each bin → (n_agents, n_steps)
-5. Likelihood score is exp(sum(log_probs)/n_steps) → (n_agents, 1) \in [0, 1]</p>
-<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
-<ul>
-<li>
-<p>Currently, only kinematics realism score is implemented. Next steps would be to add the interactive realism score, and the map realism score:</p>
-<ul>
-<li>Interactive realism score: requires grouping agents per scenario, and computing pairwise distances between agents over time.</li>
-<li>Map realism score: requires access to the map and computing offroad status.</li>
-</ul>
-<p>Those two scores might require heavy computations, so we will consider reimplementing all the metrics in torch.</p>
-</li>
-<li>
-<p>About the time-independence assumption:</p>
-<ol>
-<li>
-<p>This is the assumption used in the official WOSAC evaluation, their argument is that it would give more flexibility to the sim agents models:</p>
-<blockquote>
-<p>Given the time series nature of simulation data, two choices emerge for how to treat samples over multiple timesteps for a given object for a given run segment: to treat them as time-independent or time-dependent samples. In the latter case, users would be expected to not only reconstruct the general behaviors present in the logged data in one rollout, but also recreate those behaviors over the exact same time intervals. To allow more flexibility in agent behavior, we use the former formulation when computing NLLs, defining each component metric m as an average (in log-space) over the time-axis, masked by validity.</p>
-</blockquote>
-</li>
-<li>
-<p>However this will lead to the score of a perfect logged oracle being inferior to 1.0, and makes it less interpretable. Here are the scores of a logged oracle using the time-independence assumption (setup: 1024 agents, 48 rollouts):</p>
-<p><div class="highlight"><pre><span></span><code>Linear speed: 0.5640
-Linear acceleration: 0.4658
-Angular speed: 0.5543
-Angular acceleration: 0.6589
-
-Kinematics realism score: 0.5607
-</code></pre></div>
-    These scores go to 1.0 if we use the time-dependent estimator, execpt for the smoothing factor that is used to avoid bins with 0 probability.</p>
-</li>
-</ol>
-<p>Using the time-dependent estimator means generating n_steps histograms per agent, using num_rollouts samples per histogram, while time-independence means generating one histogram per agent using n_rollouts * n_steps samples. With the speed of PufferDrive,  we might be able to increase n_rollouts to have more samples per histogram.</p>
-</li>
+<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/99a4cb3ff07e2fe06c2ce73da001f850f628e45a/src/waymo_open_dataset/protos/sim_agents_metrics.proto#L51">Configurations proto file</a></li>
+<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/challenge_2025_sim_agents_config.textproto">Default sim agent challenge configs</a></li>
 </ul>
 
 

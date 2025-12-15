@@ -490,7 +490,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../womd-editor/" class="md-nav__link">
+      <a href="../scene-editor/" class="md-nav__link">
         
   
   
@@ -674,10 +674,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#waymo-map-editor" class="md-nav__link">
+  <a href="#interactive-scenario-editor" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Waymo map editor
+        Interactive scenario editor
       
     </span>
   </a>
@@ -779,7 +779,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../benchmark-readme/" class="md-nav__link">
+      <a href="../wosac/" class="md-nav__link">
         
   
   
@@ -915,29 +915,24 @@
 
 
 <h1 id="data">Data<a class="headerlink" href="#data" title="Permanent link">&para;</a></h1>
-<p>PufferDrive consumes map binaries generated from the Waymo Open Motion Dataset (WOMD) JSON files. This page covers where to obtain data and how to convert it into the binary format expected by the simulator.</p>
+<p>PufferDrive consumes map binaries generated from multiple data sources, including the <a href="https://github.com/waymo-research/waymo-open-dataset">Waymo Open Motion Dataset (WOMD)</a> JSON files, <a href="https://github.com/valeoai/V-Max">ScenarioMax</a>, and <a href="https://carla.org/">CARLA</a>. This page covers how to obtain data and convert it into the binary format expected by the simulator.</p>
 <h2 id="download-options">Download options<a class="headerlink" href="#download-options" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Mini dataset</strong>: <a href="https://huggingface.co/datasets/EMERGE-lab/GPUDrive_mini">GPUDrive_mini</a> with ~1k training files for quick experiments.</li>
-<li><strong>Full dataset</strong>: <a href="https://huggingface.co/datasets/EMERGE-lab/GPUDrive">GPUDrive</a> with ~100k scenes for large-scale training.</li>
+<li><a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_train"><code>pufferdrive_womd_train</code></a>: <strong>10k scenarios</strong> from the Waymo Open Motion <em>training</em> dataset</li>
+<li><a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val"><code>pufferdrive_womd_val</code></a>: <strong>10k scenarios</strong> from the Waymo Open Motion <em>validation</em> dataset</li>
 <li>Additional compatible sources: <a href="https://github.com/valeoai/ScenarioMax">ScenarioMax</a> exports JSON in the same format.</li>
 <li>Included CARLA maps: CARLA exports live in <code>data_utils/carla/carla</code>.</li>
 </ul>
 <h3 id="download-via-hugging-face">Download via Hugging Face<a class="headerlink" href="#download-via-hugging-face" title="Permanent link">&para;</a></h3>
 <p>Install the CLI once:</p>
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span><span class="s2">&quot;huggingface_hub[cli]&quot;</span>
-</code></pre></div>
-<p>Download the mini dataset:</p>
-<div class="highlight"><pre><span></span><code>huggingface-cli<span class="w"> </span>download<span class="w"> </span>EMERGE-lab/GPUDrive_mini<span class="w"> </span><span class="se">\</span>
+<span class="sb">```</span>https://github.com/valeoai/V-Max
+
+Download:
+<span class="sb">```</span>bash
+huggingface-cli<span class="w"> </span>download<span class="w"> </span>daphne-cornelisse/pufferdrive_womd_train<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--local-dir<span class="w"> </span>data/processed/training<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--include<span class="w"> </span><span class="s2">&quot;training/*&quot;</span>
-</code></pre></div>
-<p>Download the full dataset:</p>
-<div class="highlight"><pre><span></span><code>huggingface-cli<span class="w"> </span>download<span class="w"> </span>EMERGE-lab/GPUDrive<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--local-dir<span class="w"> </span>data/processed/training<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--include<span class="w"> </span><span class="s2">&quot;training/*&quot;</span>
+<span class="w">  </span>--local-dir<span class="w"> </span>data/processed/training
 </code></pre></div>
 <p>Place raw JSON files under <code>data/processed/training</code> (default location read by the conversion script).</p>
 <h2 id="convert-json-to-map-binaries">Convert JSON to map binaries<a class="headerlink" href="#convert-json-to-map-binaries" title="Permanent link">&para;</a></h2>
@@ -964,8 +959,8 @@
 <li>With binaries in place, run <code>puffer train puffer_drive</code> from <a href="../getting-started/">Getting Started</a> as a smoke test that the build, data, and bindings are wired together.</li>
 <li>To inspect the binary output, convert a single JSON file with <code>load_map(&lt;json&gt;, &lt;id&gt;, &lt;output_path&gt;)</code> inside <code>drive.py</code>.</li>
 </ul>
-<h2 id="waymo-map-editor">Waymo map editor<a class="headerlink" href="#waymo-map-editor" title="Permanent link">&para;</a></h2>
-<p>See <a href="../womd-editor/">WOMD Editor</a> for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the <code>.bin</code> format consumed by the simulator.</p>
+<h2 id="interactive-scenario-editor">Interactive scenario editor<a class="headerlink" href="#interactive-scenario-editor" title="Permanent link">&para;</a></h2>
+<p>See <a href="../scene-editor/">Interactive scenario editor</a> for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the <code>.bin</code> format consumed by the simulator.</p>
 
 
 

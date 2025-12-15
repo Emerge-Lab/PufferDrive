@@ -14,7 +14,7 @@
         <link rel="prev" href="../data/">
       
       
-        <link rel="next" href="../benchmark-readme/">
+        <link rel="next" href="../wosac/">
       
       
         
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#evaluation" class="md-skip">
+        <a href="#evaluations-and-benchmarks" class="md-skip">
           Skip to content
         </a>
       
@@ -490,7 +490,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../womd-editor/" class="md-nav__link">
+      <a href="../scene-editor/" class="md-nav__link">
         
   
   
@@ -698,7 +698,7 @@
   <a href="#sanity-maps" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sanity maps
+        Sanity maps 🐛
       
     </span>
   </a>
@@ -706,10 +706,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#wosac-distributional-realism" class="md-nav__link">
+  <a href="#distributional-realism-benchmark" class="md-nav__link">
     <span class="md-ellipsis">
       
-        WOSAC distributional realism
+        Distributional realism benchmark 📊
       
     </span>
   </a>
@@ -717,10 +717,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#human-compatibility" class="md-nav__link">
+  <a href="#human-compatibility-benchmark" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Human-compatibility
+        Human-compatibility benchmark 🤝
       
     </span>
   </a>
@@ -743,7 +743,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../benchmark-readme/" class="md-nav__link">
+      <a href="../wosac/" class="md-nav__link">
         
   
   
@@ -878,9 +878,9 @@
   
 
 
-<h1 id="evaluation">Evaluation<a class="headerlink" href="#evaluation" title="Permanent link">&para;</a></h1>
-<p>Benchmarks are provided to measure how closely agents match real-world driving behavior and how well they pair with human trajectories.</p>
-<h2 id="sanity-maps">Sanity maps<a class="headerlink" href="#sanity-maps" title="Permanent link">&para;</a></h2>
+<h1 id="evaluations-and-benchmarks">Evaluations and benchmarks<a class="headerlink" href="#evaluations-and-benchmarks" title="Permanent link">&para;</a></h1>
+<p>Driving is a safety-critical multi-agent application, making careful evaluation and risk assessment essential. Mistakes in the real world are costly, so simulations are used to catch errors before deployment. To support rapid iteration, evaluations should ideally run efficiently. This is why we also paid attention to optimizing the speed of the evaluations. This page contains an overview of the available benchmarks and evals.</p>
+<h2 id="sanity-maps">Sanity maps 🐛<a class="headerlink" href="#sanity-maps" title="Permanent link">&para;</a></h2>
 <p>Quickly test the training on curated, lightweight scenarios without downloading the full dataset. Each sanity map tests a specific behavior.</p>
 <div class="highlight"><pre><span></span><code>puffer<span class="w"> </span>sanity<span class="w"> </span>puffer_drive<span class="w"> </span>--wandb<span class="w"> </span>--wandb-name<span class="w"> </span>sanity-demo<span class="w"> </span>--sanity-maps<span class="w"> </span>forward_goal_in_front<span class="w"> </span>s_curve
 </code></pre></div>
@@ -888,31 +888,33 @@
 <div class="highlight"><pre><span></span><code>puffer<span class="w"> </span>sanity<span class="w"> </span>puffer_drive<span class="w"> </span>--wandb<span class="w"> </span>--wandb-name<span class="w"> </span>sanity-all
 </code></pre></div>
 <ul>
-<li>Tip:Turn learning-rate annealing off for these short runs (<code>--train.anneal_lr False</code>) to keep the sanity checks from decaying the optimizer mid-run.</li>
+<li>Tip: turn learning-rate annealing off for these short runs (<code>--train.anneal_lr False</code>) to keep the sanity checks from decaying the optimizer mid-run.</li>
 </ul>
-<p>Available maps:
-- <code>forward_goal_in_front</code>: Straight approach to a goal in view.
-- <code>reverse_goal_behind</code>: Backward start with a behind-the-ego goal.
-- <code>two_agent_forward_goal_in_front</code>: Two agents advancing to forward goals.
-- <code>two_agent_reverse_goal_behind</code>: Two agents reversing to rear goals.
-- <code>simple_turn</code>: Single, gentle turn to a nearby goal.
-- <code>s_curve</code>: S-shaped path with alternating curvature.
-- <code>u_turn</code>: U-shaped turn to a goal behind the start.
-- <code>one_or_two_point_turn</code>: Tight turn requiring a small reversal.
-- <code>three_or_four_point_turn</code>: Even tighter turn needing multiple reversals.
-- <code>goal_out_of_sight</code>: Goal starts without direct path; needs some planning.</p>
+<p>Available maps:</p>
+<ul>
+<li><code>forward_goal_in_front</code>: Straight approach to a goal in view.</li>
+<li><code>reverse_goal_behind</code>: Backward start with a behind-the-ego goal.</li>
+<li><code>two_agent_forward_goal_in_front</code>: Two agents advancing to forward goals.</li>
+<li><code>two_agent_reverse_goal_behind</code>: Two agents reversing to rear goals.</li>
+<li><code>simple_turn</code>: Single, gentle turn to a nearby goal.</li>
+<li><code>s_curve</code>: S-shaped path with alternating curvature.</li>
+<li><code>u_turn</code>: U-shaped turn to a goal behind the start.</li>
+<li><code>one_or_two_point_turn</code>: Tight turn requiring a small reversal.</li>
+<li><code>three_or_four_point_turn</code>: Even tighter turn needing multiple reversals.</li>
+<li><code>goal_out_of_sight</code>: Goal starts without direct path; needs some planning.</li>
+</ul>
 <p><img alt="Sanity map gallery placeholder" src="../images/maps_screenshot.png" /></p>
-<h2 id="wosac-distributional-realism">WOSAC distributional realism<a class="headerlink" href="#wosac-distributional-realism" title="Permanent link">&para;</a></h2>
-<p>Evaluate how realistic your policy behaves compared to the Waymo Open Sim Agents Challenge (WOSAC):</p>
+<h2 id="distributional-realism-benchmark">Distributional realism benchmark 📊<a class="headerlink" href="#distributional-realism-benchmark" title="Permanent link">&para;</a></h2>
+<p>We provide a PufferDrive implementation of the Waymo Open Sim Agents Challenge (WOSAC) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior.</p>
 <div class="highlight"><pre><span></span><code>puffer<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>puffer_drive<span class="w"> </span>--eval.wosac-realism-eval<span class="w"> </span>True
 </code></pre></div>
-<p>Add <code>--load-model-path &lt;path_to_checkpoint&gt;.pt</code> to score a trained policy instead of a random baseline.
-See <a href="../benchmark-readme/">WOSAC Benchmark</a> for the metric pipeline and links to the official configs.</p>
-<h2 id="human-compatibility">Human-compatibility<a class="headerlink" href="#human-compatibility" title="Permanent link">&para;</a></h2>
-<p>Test how a policy coexists with human-controlled agents:</p>
+<p>Add <code>--load-model-path &lt;path_to_checkpoint&gt;.pt</code> to score a trained policy, instead of a random baseline.</p>
+<p>See <a href="../wosac/">the WOSAC benchmark page</a> for the metric pipeline and all the details.</p>
+<h2 id="human-compatibility-benchmark">Human-compatibility benchmark 🤝<a class="headerlink" href="#human-compatibility-benchmark" title="Permanent link">&para;</a></h2>
+<p>You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how closely aligned your agent's behavior is to how people drive. You can run it like this:</p>
 <div class="highlight"><pre><span></span><code>puffer<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>puffer_drive<span class="w"> </span>--eval.human-replay-eval<span class="w"> </span>True<span class="w"> </span>--load-model-path<span class="w"> </span>&lt;path_to_checkpoint&gt;.pt
 </code></pre></div>
-<p>During this evaluation the self-driving car (SDC) is controlled by your policy while other agents replay log data.</p>
+<p>During this evaluation the self-driving car (SDC) is controlled by your policy while other agents replay log trajectories.</p>
 
 
 
