@@ -1,4 +1,4 @@
-# WOMD Editor
+# Interactive scenario editor
 
 A browser-based playground for inspecting and editing Waymo Open Motion Dataset (WOMD) scenes. The tool runs fully client-side at <https://womd-editor.vercel.app/> and works directly with the JSON format produced by Waymo/ScenarioMax exports and PufferDrive conversions.
 

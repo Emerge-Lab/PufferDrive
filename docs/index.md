@@ -12,12 +12,14 @@
 </div>
 
 ## Highlights
-- Multi-agent drive environment with batched stepping for speed.
+
+- Multi-agent drive environment that trains agents at 300K steps per second.
 - Scripts to convert Waymo Open Motion Dataset JSON into lightweight binaries (CARLA sample map included).
 - Benchmarks for distributional realism and human compatibility.
 - Raylib-based visualizer for local or headless render/export.
 
 ## Quick start
+
 - Follow [Getting Started](getting-started.md) to install, build the C extensions, and run `puffer train puffer_drive`.
 - Consult [Simulator](simulator.md) for how actions/observations, rewards, and `.ini` settings map to the underlying C environment and Torch policy.
 - Prepare drive map binaries with the steps in [Data](data.md).
@@ -41,7 +43,7 @@
   <div class="step-card">
     <div class="badge">Step 3</div>
     <h3>Train & Evaluate</h3>
-    <p>Run `puffer train puffer_drive` and score policies with WOSAC and human-replay benchmarks.</p>
+    <p>Train agents and evaluate them with WOSAC and human-replay benchmarks.</p>
     <a href="evaluation/">Open guide</a>
   </div>
 </div>
