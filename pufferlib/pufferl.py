@@ -389,6 +389,9 @@ class PuffeRL:
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
 
+            respawn_idx = 6
+            respawn_mask = mb_obs[..., respawn_idx] > 0.5
+            
             profile("train_forward", epoch)
             if not config["use_rnn"]:
                 mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
@@ -428,6 +431,8 @@ class PuffeRL:
             adv = mb_advantages
             adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
+            adv[respawn_mask] = 0
+            
             # Losses
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)

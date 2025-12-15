@@ -2233,23 +2233,14 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         // Keep flag true if there is at least one agent that has not been respawned yet
         if (env->entities[agent_idx].respawn_count == 0) {
-            originals_remaining = 1;
-            break;
+            originals_remaining += 1;
         }
     }
 
-    int stopped_agents = 0;
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        // Keep flag true if there is at least one agent that has not been respawned yet
-        if (env->entities[agent_idx].stopped == 1) {
-            stopped_agents += 1;
-        }
-    }
 
     if ((env->timestep == env->scenario_length && env->termination_mode != 2) || 
-        (!originals_remaining && env->termination_mode == 1) || 
-        (env->active_agent_count - stopped_agents < env->min_active_agents && env->termination_mode == 2 && env->timestep > 20)) {
+        (originals_remaining < 1 && env->termination_mode == 1) || 
+        (originals_remaining < env->min_active_agents && env->termination_mode == 2 && env->timestep > 20)) {
         add_log(env);
         c_reset(env);
         return;
@@ -2357,24 +2348,24 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->collision_behavior== COLLISION_STOP) {
+    if (env->collision_behavior== COLLISION_REMOVE) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             int collision_state = env->entities[agent_idx].collision_state;
             if (collision_state == VEHICLE_COLLISION) {
-                env->entities[agent_idx].stopped = 1;
-                env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+                respawn_agent(env, agent_idx);
+                env->entities[agent_idx].respawn_count++;
             }
         }
     }
 
-    if (env->collision_behavior== OFFROAD_STOP) {
+    if (env->collision_behavior== OFFROAD_REMOVE) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             int collision_state = env->entities[agent_idx].collision_state;
             if (collision_state == OFFROAD) {
-                env->entities[agent_idx].stopped = 1;
-                env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+                respawn_agent(env, agent_idx);
+                env->entities[agent_idx].respawn_count++;
             }
         }
     }
