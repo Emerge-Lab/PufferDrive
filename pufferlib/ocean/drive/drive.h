@@ -2920,11 +2920,15 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 continue;
             }
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
+                // Choose color based on respawn status
+                Color goal_circle_color =
+                    (env->entities[i].respawn_timestep != -1) ? Fade(PURPLE, 0.3f) : Fade(LIGHTGREEN, 0.3f);
+
                 DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 1}, 0.5f,
-                           DARKGREEN);
+                           goal_circle_color);
 
                 DrawCircle3D((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 0.1f},
-                             env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
+                             env->goal_radius, (Vector3){0, 0, 1}, 90.0f, goal_circle_color);
             }
         }
         // Draw road elements

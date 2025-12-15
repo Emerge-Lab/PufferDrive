@@ -653,6 +653,6 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/processed/carla")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")

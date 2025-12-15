@@ -236,6 +236,8 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
                 base_cmd.append("--pure-self-play")
             if getattr(env_cfg, "deterministic_agent_selection", False):
                 base_cmd.append("--deterministic-selection")
+            if getattr(env_cfg, "goal_behavior", None) is not None:
+                base_cmd.extend(["--goal-behavior", str(env_cfg.goal_behavior)])
 
             # Policy-controlled agents (prefer num_policy_controlled_agents, fallback to max_controlled_agents)
             n_policy = getattr(env_cfg, "num_policy_controlled_agents", getattr(env_cfg, "max_controlled_agents", -1))
