@@ -17,7 +17,12 @@
 
 ---
 
+**Docs**: https://emerge-lab.github.io/PufferDrive
+
+---
+
 > **Note**: 🚀 `PufferDrive` release `2.0` coming soon and includes extended functionality + documentation
+
 
 
 ## Installation
@@ -41,6 +46,7 @@ Compile the C code
 ```
 python setup.py build_ext --inplace --force
 ```
+Run this while your virtual environment is active so the extension is built against the right interpreter.
 
 To test your setup, you can run
 ```
@@ -157,4 +163,30 @@ puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-
 You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how closely aligned your agent's behavior is to how people drive. You can run it like this:
 ```bash
 puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-trained-policy>.pt
+```
+
+## Development
+
+<details><summary>Editing the docs</summary>
+
+A browsable documentation site now lives under `docs/` and is configured with MkDocs Material. To preview locally:
+```
+uv pip install -r docs/requirements.txt  # or pip install -r docs/requirements.txt
+mkdocs serve
+```
+Open the served URL to explore install steps, data preparation, visualization, and evaluation commands.
+</details>
+
+
+## Citation
+
+If you use PufferDrive in your research, please cite:
+```bibtex
+@software{pufferdrive2024github,
+  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Eugene Vinitsky},
+  title = {{PufferDrive}: A Fast and Friendly Driving Simulator for Training and Evaluating {RL} Agents},
+  url = {https://github.com/Emerge-Lab/PufferDrive},
+  version = {2.0.0},
+  year = {2025},
+}
 ```
