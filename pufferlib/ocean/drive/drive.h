@@ -2378,8 +2378,13 @@ void c_step(Drive *env) {
             float sdc_reward = env->rewards[sdc_active_index];
             for (int i = 0; i < env->active_agent_count; i++) {
                 if (i != sdc_active_index) {
-                    env->rewards[i] += env->reward_adversarial * (-sdc_reward);
-                    env->logs[i].episode_return += env->reward_adversarial * (-sdc_reward);
+                    // env->rewards[i] += env->reward_adversarial * (-sdc_reward);
+                    // env->logs[i].episode_return += env->reward_adversarial * (-sdc_reward);
+
+                    // Rather totally erase its reward so its only adv
+                    env->logs[i].episode_return += -env->rewards[i];
+                    env->rewards[i] = env->reward_adversarial * (-sdc_reward);
+                    env->logs[i].episode_return += env->rewards[i];
                 }
             }
         }
