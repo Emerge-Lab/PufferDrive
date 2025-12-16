@@ -31,6 +31,13 @@ from .visualizer import (
     plot_aggregate_metrics,
     plot_error_histogram,
 )
+from .kinematic_realism import (
+    compute_kinematic_features,
+    aggregate_features_across_segments,
+    compute_kinematic_realism_score,
+    compute_leave_one_out_baseline,
+    format_kinematic_summary,
+)
 
 __all__ = [
     # Dynamics models
@@ -61,4 +68,10 @@ __all__ = [
     'plot_trajectory_comparison',
     'plot_aggregate_metrics',
     'plot_error_histogram',
+    # Kinematic realism
+    'compute_kinematic_features',
+    'aggregate_features_across_segments',
+    'compute_kinematic_realism_score',
+    'compute_leave_one_out_baseline',
+    'format_kinematic_summary',
 ]

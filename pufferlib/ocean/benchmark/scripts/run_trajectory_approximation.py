@@ -28,6 +28,11 @@ from pufferlib.ocean.benchmark.trajectory_approximation import (
     plot_trajectory_comparison,
     plot_aggregate_metrics,
     plot_error_histogram,
+    compute_kinematic_features,
+    aggregate_features_across_segments,
+    compute_kinematic_realism_score,
+    compute_leave_one_out_baseline,
+    format_kinematic_summary,
 )
 
 
@@ -80,11 +85,12 @@ def save_metrics_to_csv(all_results, output_path):
                 ])
 
 
-def save_summary_to_json(aggregated_classic, aggregated_jerk, output_path):
+def save_summary_to_json(aggregated_classic, aggregated_jerk, kinematic_scores, output_path):
     """Save aggregated metrics to JSON file."""
     summary = {
         'classic': aggregated_classic,
         'jerk': aggregated_jerk,
+        'kinematic_realism': kinematic_scores,
     }
 
     with open(output_path, 'w') as f:
@@ -173,6 +179,9 @@ def main():
     # Process each trajectory
     print(f"\nProcessing trajectories (min segment length: {args.min_segment_length}, min mean speed: {args.min_mean_speed} m/s)...")
     all_results = []
+    all_gt_segments = []  # For kinematic realism
+    all_classic_segments = []  # For kinematic realism
+    all_jerk_segments = []  # For kinematic realism
     viz_count = 0
     skipped_stationary = 0
     processed_segments = 0
@@ -218,11 +227,15 @@ def main():
             classic_traj, classic_actions, classic_errors = approximate_trajectory(
                 classic_dynamics, segment, classic_state, weights=weights
             )
+            # Add valid mask from ground truth
+            classic_traj['valid'] = segment['valid'].copy()
 
             # Approximate with JERK model
             jerk_traj, jerk_actions, jerk_errors = approximate_trajectory(
                 jerk_dynamics, segment, jerk_state, weights=weights
             )
+            # Add valid mask from ground truth
+            jerk_traj['valid'] = segment['valid'].copy()
 
             # Compute metrics
             classic_metrics = compute_all_metrics(classic_traj, segment, segment['valid'])
@@ -237,6 +250,11 @@ def main():
                 'jerk_metrics': jerk_metrics,
             }
             all_results.append(result)
+
+            # Store trajectories for kinematic realism computation
+            all_gt_segments.append(segment)
+            all_classic_segments.append(classic_traj)
+            all_jerk_segments.append(jerk_traj)
 
             # Create visualization for first few segments
             if viz_count < args.max_visualizations:
@@ -271,6 +289,75 @@ def main():
     print(format_metrics_summary(aggregated_classic))
     print(format_metrics_summary(aggregated_jerk))
 
+    # Compute kinematic realism scores
+    print("\nComputing kinematic realism scores...")
+
+    # Compute features for all segments
+    print("  Computing kinematic features...")
+    gt_features_list = []
+    classic_features_list = []
+    jerk_features_list = []
+
+    for i in range(len(all_gt_segments)):
+        gt_feat = compute_kinematic_features(
+            all_gt_segments[i]['x'],
+            all_gt_segments[i]['y'],
+            all_gt_segments[i]['heading'],
+            all_gt_segments[i]['valid'],
+            dt=args.dt
+        )
+        gt_features_list.append(gt_feat)
+
+        classic_feat = compute_kinematic_features(
+            all_classic_segments[i]['x'],
+            all_classic_segments[i]['y'],
+            all_classic_segments[i]['heading'],
+            all_classic_segments[i]['valid'],
+            dt=args.dt
+        )
+        classic_features_list.append(classic_feat)
+
+        jerk_feat = compute_kinematic_features(
+            all_jerk_segments[i]['x'],
+            all_jerk_segments[i]['y'],
+            all_jerk_segments[i]['heading'],
+            all_jerk_segments[i]['valid'],
+            dt=args.dt
+        )
+        jerk_features_list.append(jerk_feat)
+
+    # Aggregate features across population
+    print("  Aggregating population-level features...")
+    gt_population = aggregate_features_across_segments(gt_features_list)
+    classic_population = aggregate_features_across_segments(classic_features_list)
+    jerk_population = aggregate_features_across_segments(jerk_features_list)
+
+    # Compute leave-one-out baseline for ground truth
+    print("  Computing ground truth baseline (leave-one-out)...")
+    gt_baseline_metrics = compute_leave_one_out_baseline(all_gt_segments, dt=args.dt)
+
+    # Compute kinematic realism scores for inverse dynamics
+    print("  Evaluating CLASSIC kinematic realism...")
+    classic_kinematic = compute_kinematic_realism_score(gt_population, classic_population)
+
+    print("  Evaluating JERK kinematic realism...")
+    jerk_kinematic = compute_kinematic_realism_score(gt_population, jerk_population)
+
+    # Print kinematic realism summaries
+    print(format_kinematic_summary(gt_baseline_metrics, 'Ground Truth (Leave-One-Out)'))
+    print(format_kinematic_summary(classic_kinematic, 'CLASSIC'))
+    print(format_kinematic_summary(jerk_kinematic, 'JERK'))
+
+    # Compute realism loss
+    print(f"\n{'='*60}")
+    print("Kinematic Realism Loss (GT Baseline - Inverse Dynamics)")
+    print(f"{'='*60}")
+    classic_loss = gt_baseline_metrics['kinematic_realism_score'] - classic_kinematic['kinematic_realism_score']
+    jerk_loss = gt_baseline_metrics['kinematic_realism_score'] - jerk_kinematic['kinematic_realism_score']
+    print(f"  CLASSIC loss: {classic_loss:.4f}")
+    print(f"  JERK loss:    {jerk_loss:.4f}")
+    print(f"{'='*60}")
+
     # Save results
     print("\nSaving results...")
 
@@ -281,7 +368,14 @@ def main():
 
     # Save aggregated metrics to JSON
     json_path = os.path.join(args.output_dir, 'metrics_summary.json')
-    save_summary_to_json(aggregated_classic, aggregated_jerk, json_path)
+    kinematic_scores = {
+        'ground_truth_baseline': gt_baseline_metrics,
+        'classic': classic_kinematic,
+        'jerk': jerk_kinematic,
+        'classic_realism_loss': classic_loss,
+        'jerk_realism_loss': jerk_loss,
+    }
+    save_summary_to_json(aggregated_classic, aggregated_jerk, kinematic_scores, json_path)
     print(f"  Summary metrics saved to: {json_path}")
 
     # Generate aggregate visualizations
