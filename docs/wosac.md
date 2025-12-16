@@ -63,6 +63,22 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 
 ---
 
+| Method | Realism meta-score | Kinematic metrics | Interactive metrics | Map-based metrics | minADE | ADE |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Ground-truth (UB) | 0.833 | 0.574 | 0.864 | 0.958 | 0 | 0 |
+| $\pi_{\text{Base self-play RL}}$ | 0.737 | 0.323 | 0.792 | 0.930 | 8.530 | 9.088 |
+| [SMART-tiny-CLSFT](https://arxiv.org/abs/2412.05334) | 0.795 | 0.504 | 0.832 | 0.932 | 1.182 | 2.857 |
+| $\pi_{\text{Random}}$ | 0.497 | 0.238 | 0.656 | 0.430 | 6.395 | 18.617 |
+
+*Table: WOSAC baselines in PufferDrive on validation 10k dataset.*
+
+---
+
+> ✏️ Download the dataset from [Hugging Face](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val) to reproduce these results or benchmark your policy.
+
+---
+
+
 ## Useful links
 
 - [WOSAC challenge and leaderboard](https://waymo.com/open/challenges/2025/sim-agents/)
