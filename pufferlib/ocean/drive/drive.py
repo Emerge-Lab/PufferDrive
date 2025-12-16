@@ -41,6 +41,7 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
+        use_all_maps=False,
     ):
         # env
         self.dt = dt
@@ -150,9 +151,11 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            use_all_maps=use_all_maps,
         )
 
-        self.num_agents = num_agents
+        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if use_all_maps
+        self.num_agents = num_agents if not use_all_maps else agent_offsets[-1]
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -225,6 +228,7 @@ class Drive(pufferlib.PufferEnv):
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
                     map_dir=self.map_dir,
+                    use_all_maps=False,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
@@ -656,3 +660,5 @@ if __name__ == "__main__":
     process_all_maps(data_folder="data/processed/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
+    # # Process the validation_interactive dataset
+    # process_all_maps(data_folder="data/processed/validation_interactive")
