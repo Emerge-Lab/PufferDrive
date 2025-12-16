@@ -96,6 +96,19 @@ For more training data compatible with PufferDrive, see [ScenarioMax](https://gi
 <details>
 <summary>Dependencies and usage</summary>
 
+## Local rendering
+
+To launch an interactive renderer, first build:
+```
+bash scripts/build_ocean.sh drive local 
+```
+
+then launch:
+```bash
+./drive
+```
+this will run `demo()` with an existing model checkpoint.
+
 ## Headless server setup
 
 Run the Raylib visualizer on a headless server and export as .mp4. This will rollout the pre-trained policy in the env.
