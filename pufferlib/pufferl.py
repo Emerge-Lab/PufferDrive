@@ -314,17 +314,27 @@ class PuffeRL:
                     env_id=env_id,
                     mask=mask,
                 )
+                if self.adversarial_mode:
+                    target_state = dict(
+                        reward=r,
+                        done=d,
+                        env_id=env_id,
+                        mask=mask,
+                    )
 
                 if config["use_rnn"]:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
+                    if self.adversarial_mode:
+                        target_state["lstm_h"] = self.target_lstm_h[env_id.start]
+                        target_state["lstm_c"] = self.target_lstm_c[env_id.start]
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
 
                 if self.adversarial_mode:
                     target_logits, target_value = self.target_policy.forward_eval(
-                        o_device[:, : -self.target_obs_dim], state
+                        o_device[:, : -self.target_obs_dim], target_state
                     )
                     target_action, target_logprob, _ = pufferlib.pytorch.sample_logits(target_logits)
 
@@ -336,8 +346,8 @@ class PuffeRL:
                     self.lstm_h[env_id.start] = state["lstm_h"]
                     self.lstm_c[env_id.start] = state["lstm_c"]
                     if self.adversarial_mode:
-                        self.target_lstm_h[env_id.start] = state["lstm_h"]
-                        self.target_lstm_c[env_id.start] = state["lstm_c"]
+                        self.target_lstm_h[env_id.start] = target_state["lstm_h"]
+                        self.target_lstm_c[env_id.start] = target_state["lstm_c"]
 
                 # Fast path for fully vectorized envs
                 l = self.ep_lengths[env_id.start].item()
@@ -347,6 +357,12 @@ class PuffeRL:
                     self.observations[batch_rows, l] = o
                 else:
                     self.observations[batch_rows, l] = o_device
+
+                if self.adversarial_mode:
+                    mb_target_mask = target_mask[batch_rows].to(device)
+                    action = torch.where(mb_target_mask[:, None], target_action, action)
+                    logprob = torch.where(mb_target_mask[:, None], target_logprob, logprob)
+                    self.target_agents_buffer[batch_rows, l] = mb_target_mask
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
@@ -362,10 +378,6 @@ class PuffeRL:
                     self.ep_lengths[env_id] = 0
                     self.free_idx += num_full
                     self.full_rows += num_full
-
-                if self.adversarial_mode:
-                    action = torch.where(target_mask[:, None], target_action, action)
-                    self.target_agents_buffer[batch_rows, l] = target_mask
 
                 action = action.cpu().numpy()
                 if isinstance(logits, torch.distributions.Normal):
