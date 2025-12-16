@@ -916,9 +916,11 @@
 <div class="highlight"><pre><span></span><code>puffer<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>puffer_drive<span class="w"> </span>--eval.wosac-realism-eval<span class="w"> </span>True<span class="w"> </span>--load-model-path<span class="w"> </span>&lt;your-trained-policy&gt;.pt
 </code></pre></div>
 <p>The default configs aim to emulate the WOSAC settings as closely as possible, but you can adjust them:</p>
-<div class="highlight"><pre><span></span><code><span class="na">wosac_num_rollouts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">32</span><span class="w">      </span><span class="c1"># Number of policy rollouts per scene</span>
+<div class="highlight"><pre><span></span><code><span class="k">[eval]</span>
+<span class="na">map_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;resources/drive/binaries/validation&quot;</span><span class="w"> </span><span class="c1"># Dataset to use</span>
+<span class="na">num_maps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">100</span><span class="w">  </span><span class="c1"># Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)</span>
+<span class="na">wosac_num_rollouts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">32</span><span class="w">      </span><span class="c1"># Number of policy rollouts per scene</span>
 <span class="na">wosac_init_steps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">10</span><span class="w">        </span><span class="c1"># When to start the simulation</span>
-<span class="na">wosac_num_agents</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">256</span><span class="w">       </span><span class="c1"># Total number of WOSAC agents to evaluate</span>
 <span class="na">wosac_control_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;control_wosac&quot;</span><span class="w">  </span><span class="c1"># Control the tracks to predict</span>
 <span class="na">wosac_init_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;create_all_valid&quot;</span><span class="w">  </span><span class="c1"># Initialize from the tracks to predict</span>
 <span class="na">wosac_goal_behavior</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">2</span><span class="w">      </span><span class="c1"># Stop when reaching the goal</span>
@@ -932,6 +934,7 @@
 <span class="k">[eval]</span>
 <span class="na">eval_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">500</span><span class="w">          </span><span class="c1"># Run eval every N epochs</span>
 <span class="na">map_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;resources/drive/binaries/training&quot;</span><span class="w">  </span><span class="c1"># Dataset to use</span>
+<span class="na">num_maps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">20</span><span class="w"> </span><span class="c1"># Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)</span>
 </code></pre></div>
 <h2 id="baselines">Baselines<a class="headerlink" href="#baselines" title="Permanent link">&para;</a></h2>
 <p>We provide baselines on a small curated dataset from the WOMD validation set with perfect ground-truth (no collisions or off-road events from labeling mistakes).</p>
@@ -959,15 +962,15 @@
 </tr>
 <tr>
 <td>π_Base self-play RL</td>
-<td>-</td>
-<td>-</td>
-<td>-</td>
-<td>-</td>
-<td>-</td>
-<td>-</td>
+<td>0.737</td>
+<td>0.319</td>
+<td>0.789</td>
+<td>0.938</td>
+<td>10.834</td>
+<td>11.317</td>
 </tr>
 <tr>
-<td><a href="https://arxiv.org/abs/2405.15677">SMART</a></td>
+<td><a href="https://arxiv.org/abs/2412.05334">SMART-tiny-CLSFT</a></td>
 <td>0.805</td>
 <td>0.534</td>
 <td>0.830</td>
