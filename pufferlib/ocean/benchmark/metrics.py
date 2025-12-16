@@ -236,11 +236,13 @@ def compute_interaction_features(
     )
 
     unique_scenarios = np.unique(scenario_ids)
+    num_scenarios = unique_scenarios.shape[0]
 
     eval_indices = np.where(eval_mask)[0]
     eval_to_result = {idx: i for i, idx in enumerate(eval_indices)}
 
     for scenario_id in unique_scenarios:
+        print(f"Interaction Features - Processing scenario {scenario_id} out of {num_scenarios}...")
         scenario_mask_np = scenario_ids[:, 0] == scenario_id
         agent_indices = np.where(scenario_mask_np)[0]
         if agent_indices.size == 0:
@@ -341,10 +343,12 @@ def compute_map_features(
     result_offroad = np.zeros((num_agents, num_rollouts, num_steps), dtype=bool)
 
     unique_scenarios = np.unique(scenario_ids)
+    num_scenarios = unique_scenarios.shape[0]
 
     polyline_boundaries = np.cumsum(np.concatenate([[0], road_edge_polylines["lengths"]]))
 
     for scenario_id in unique_scenarios:
+        print(f"Map Features - Processing scenario {scenario_id} out of {num_scenarios}...")
         agent_mask_np = scenario_ids[:, 0] == scenario_id
         agent_indices = np.where(agent_mask_np)[0]
 

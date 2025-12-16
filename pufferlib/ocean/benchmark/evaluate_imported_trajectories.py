@@ -17,6 +17,7 @@ def check_alignment(simulated, ground_truth, tolerance=1e-4):
     diffs = np.abs(sim_x - gt_x) + np.abs(sim_y - gt_y) + np.abs(sim_z - gt_z)
 
     if np.any(diffs > tolerance):
+        print("Tolerance broken by this value: ", np.max(diffs))
         return False
     return True
 
@@ -165,9 +166,9 @@ def evaluate_trajectories(simulated_trajectory_file, args):
         num_agents = gt_trajectories["x"].shape[0]
         sim_trajectories = {k: v[:num_agents] for k, v in simulated_trajectories_original.items()}
 
-        assert check_alignment(sim_trajectories, gt_trajectories), "Code is broken lol"
-
-        # simulated_trajectories_reordered = align_trajectories_by_initial_position(sim_trajectories, gt_trajectories)
+        if not check_alignment(sim_trajectories, gt_trajectories):
+            print("Trajectories are not aligned, attempting to realign by initial positions...")
+            simulated_trajectories_reordered = align_trajectories_by_initial_position(sim_trajectories, gt_trajectories)
 
         agent_state = vecenv.driver_env.get_global_agent_state()
         road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
@@ -184,6 +185,7 @@ def evaluate_trajectories(simulated_trajectory_file, args):
         if args["eval"]["wosac_aggregate_results"]:
             import json
 
+            print("\n")
             print("\n--- WOSAC METRICS START ---")
             print(json.dumps(results, indent=4))
             print("--- WOSAC METRICS END ---")
