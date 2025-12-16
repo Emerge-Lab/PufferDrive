@@ -1,4 +1,3 @@
-#include "drive.h"
 #include "drivenet.h"
 #include <string.h>
 #include "../env_config.h"
@@ -19,7 +18,7 @@ void test_drivenet() {
 
     // Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights *weights = load_weights("puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, num_agents);
+    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {
