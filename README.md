@@ -135,3 +135,27 @@ You may be interested in how compatible your agent is with human partners. For t
 ```bash
 puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-trained-policy>.pt
 ```
+
+
+## Generate Carla Agent Trajectories
+
+The agent trajectories are procedurally genrated assuming a general velocity range without any invalid initial state. We use an external submodule for the Carla XODR processing(`pyxodr`).
+
+For installation initialize submodules and install editable developer requirements:
+
+```bash
+git submodule update --init --recursive
+
+python -m pip install -e . -r requirements-dev.txt
+```
+
+Now run the generate_carla_agents script(Important optional args are num_objects for how many agents to initialize in a map, num_data_per_map for number of data files to generate per map)
+```bash
+python data_utils/carla/generate_carla_agents.py --num_objects 32 --num_data_per_map 8
+```
+
+There is also a specific visualizer for the initial positions of agents on the map
+
+```bash
+python data_utils/carla/plot.py
+```
