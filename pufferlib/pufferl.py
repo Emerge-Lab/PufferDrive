@@ -289,17 +289,24 @@ class PuffeRL:
             profile("env", epoch)
             o, r, d, t, info, env_id, mask = self.vecenv.recv()
 
-            if self.adversarial_mode:
-                agent_offsets = self.vecenv.driver_env.agent_offsets[:-1]
-                target_mask = torch.zeros(self.vecenv.num_agents, dtype=torch.bool)
-                target_mask[torch.as_tensor(agent_offsets, dtype=torch.long)] = True
-
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
 
             done_mask = d + t  # TODO: Handle truncations separately
             self.global_step += int(mask.sum())
 
+            if self.adversarial_mode:
+                agents_per_worker = self.vecenv.agents_per_batch // self.vecenv.workers_per_batch
+                mb_target_mask = torch.zeros(self.vecenv.agents_per_batch, dtype=torch.bool, device=device)
+
+                # Sometimes info contain just what I need, sometimes there is some logging shit
+                env_counter = 0
+                for information in info:
+                    sdc_indices = information.get("sdc_track_index", None)
+                    if sdc_indices is not None:
+                        valid_indices = sdc_indices[sdc_indices != -1]
+                        mb_target_mask[valid_indices + env_counter * agents_per_worker] = True
+                        env_counter += 1
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
             o_device = o.to(device)  # , non_blocking=True)
@@ -359,9 +366,8 @@ class PuffeRL:
                     self.observations[batch_rows, l] = o_device
 
                 if self.adversarial_mode:
-                    mb_target_mask = target_mask[batch_rows].to(device)
                     action = torch.where(mb_target_mask[:, None], target_action, action)
-                    logprob = torch.where(mb_target_mask[:, None], target_logprob, logprob)
+                    logprob = torch.where(mb_target_mask, target_logprob, logprob)
                     self.target_agents_buffer[batch_rows, l] = mb_target_mask
 
                 self.actions[batch_rows, l] = action

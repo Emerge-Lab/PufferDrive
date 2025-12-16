@@ -624,6 +624,51 @@ static PyObject *vec_close(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *get_sdc_track_index(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 1) {
+        PyErr_SetString(PyExc_TypeError, "get_sdc_track_index requires 1 argument");
+        return NULL;
+    }
+
+    Env *env = unpack_env(args);
+    if (!env) {
+        return NULL;
+    }
+
+    Drive *drive = (Drive *)env; // Cast to Drive*
+
+    int track_index = -1;
+    c_get_sdc_track_index(drive, &track_index);
+    return PyLong_FromLong(track_index);
+}
+static PyObject *vec_get_sdc_track_index(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_sdc_track_index requires 2 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject *output_obj = PyTuple_GetItem(args, 1);
+    if (!PyArray_Check(output_obj)) {
+        PyErr_SetString(PyExc_TypeError, "Output array must be a NumPy array");
+        return NULL;
+    }
+
+    PyArrayObject *output_array = (PyArrayObject *)output_obj;
+    int *output_data = (int *)PyArray_DATA(output_array);
+
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *)vec->envs[i];
+        c_get_sdc_track_index(drive, &output_data[i]);
+    }
+
+    Py_RETURN_NONE;
+}
+
 static PyObject *get_global_agent_state(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 7 arguments");
@@ -958,6 +1003,8 @@ static PyMethodDef methods[] = {
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
+    {"get_sdc_track_index", get_sdc_track_index, METH_VARARGS, "Get SDC track index"},
+    {"vec_get_sdc_track_index", vec_get_sdc_track_index, METH_VARARGS, "Get SDC track index from vectorized env"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
     {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},

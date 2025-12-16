@@ -203,14 +203,28 @@ class Drive(pufferlib.PufferEnv):
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
-        return self.observations, []
+
+        info = []
+        sdc_indices = np.zeros(self.num_envs, dtype=np.int32)
+        binding.vec_get_sdc_track_index(self.c_envs, sdc_indices)
+        global_sdc_indices = np.where(sdc_indices == -1, -1, sdc_indices + self.agent_offsets[: self.num_envs])
+        info.append({"sdc_track_index": global_sdc_indices})
+
+        return self.observations, info
 
     def step(self, actions):
         self.terminals[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
+
         info = []
+        # I get the sdc_idx from the environement and I output it in the info
+        sdc_indices = np.zeros(self.num_envs, dtype=np.int32)
+        binding.vec_get_sdc_track_index(self.c_envs, sdc_indices)
+        global_sdc_indices = np.where(sdc_indices == -1, -1, sdc_indices + self.agent_offsets[: self.num_envs])
+        info.append({"sdc_track_index": global_sdc_indices})
+
         if self.tick % self.report_interval == 0:
             log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
@@ -231,6 +245,9 @@ class Drive(pufferlib.PufferEnv):
                     goal_behavior=self.goal_behavior,
                     map_dir=self.map_dir,
                 )
+                self.agent_offsets = agent_offsets
+                self.map_ids = map_ids
+                self.num_envs = num_envs
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
                 for i in range(num_envs):

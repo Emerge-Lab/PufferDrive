@@ -1348,6 +1348,11 @@ bool should_control_agent(Drive *env, int agent_idx) {
         return agent_idx == env->sdc_track_index;
     }
 
+    // Temporary so the sdc is always controlled
+    if (agent_idx == env->sdc_track_index) {
+        return true;
+    }
+
     bool is_vehicle = (entity->type == VEHICLE);
     bool is_ped_or_bike = (entity->type == PEDESTRIAN || entity->type == CYCLIST);
     bool type_is_valid = false;
@@ -1796,6 +1801,18 @@ static inline int get_track_id_or_placeholder(Drive *env, int agent_idx) {
         }
     }
     return -1;
+}
+
+void c_get_sdc_track_index(Drive *env, int *sdc_track_index_out) {
+    int sdc_active_index = -1;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        if (agent_idx == env->sdc_track_index) {
+            sdc_active_index = i;
+            break;
+        }
+    }
+    *sdc_track_index_out = sdc_active_index;
 }
 
 void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out, int *id_out,
