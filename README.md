@@ -100,7 +100,7 @@ For more training data compatible with PufferDrive, see [ScenarioMax](https://gi
 
 To launch an interactive renderer, first build:
 ```
-bash scripts/build_ocean.sh drive local 
+bash scripts/build_ocean.sh drive local
 ```
 
 then launch:
