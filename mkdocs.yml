@@ -1,0 +1,58 @@
+site_name: PufferDrive
+site_description: High-throughput autonomous driving simulator built on PufferLib.
+repo_name: Emerge-Lab/PufferDrive
+repo_url: https://github.com/Emerge-Lab/PufferDrive
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: white
+      accent: teal
+  font:
+    text: false  # Using custom fonts via CSS
+    code: "JetBrains Mono"
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.instant
+    - navigation.expand
+    - toc.integrate
+    - content.code.copy
+  logo: images/pufferdrive.gif
+  favicon: images/pufferdrive.gif
+
+nav:
+  - Get started: index.md
+  - Docs:
+      - Getting started: getting-started.md
+      - Simulator: simulator.md
+      - Interactive scenario editor: scene-editor.md
+      - Visualizer: visualizer.md
+  - Data: data.md
+  - Benchmarks:
+      - Overview: evaluation.md
+      - WOSAC: wosac.md
+  - Blog:
+    - pufferdrive 2.0: pufferdrive-2.0.md
+
+markdown_extensions:
+  - admonition
+  - footnotes
+  - toc:
+      permalink: true
+  - tables
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - codehilite
+  - pymdownx.arithmatex:
+      generic: true
+
+plugins:
+  - search
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+extra_css:
+  - assets/extra.css
