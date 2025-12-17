@@ -41,8 +41,6 @@ class MapType(IntEnum):
     NUM_TYPES = 21
 
 
-
-
 def get_lane_data(lane, type="BOUNDARY", check_dir=True):
     if type == "BOUNDARY":
         points = lane.boundary_line
@@ -302,7 +300,7 @@ def create_lane_link_elements(road_network, roads, road_link_map):
             roads_json_cnt[0].append(len(road_edges))
             roads_json_cnt[1].append(len(road_lines))
             roads_json_cnt[2].append(len(lanes))
-            
+
     print(f"Total roads JSON count: {sum(roads_json_cnt[0]) + sum(roads_json_cnt[1]) + sum(roads_json_cnt[2])}")
     print(f"Lanes count: {sum(roads_json_cnt[2])}")
     total_lane_links = sum(len(obj.lane_links_map) for obj in road_link_map.values())
@@ -915,30 +913,42 @@ if __name__ == "__main__":
     AABB_unit_test()
     parser = argparse.ArgumentParser(description="Process CARLA XODR and generate data.")
 
-    parser.add_argument("--town_names", nargs="+", default=["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"],
-                        help="List of CARLA town names")
-    parser.add_argument("--input_json_base_path", type=str, default="data_utils/carla/carla_py123d",
-                        help="Base path for input JSON files")
-    parser.add_argument("--output_json_root_dir", type=str, default="data/processed/carla_data",
-                        help="Root directory for output JSON files")
-    parser.add_argument("--carla_map_dir", type=str, default="data/CarlaXODRs",
-                        help="Directory containing CARLA XODR files")
-    parser.add_argument("--resolution", type=float, default=0.1,
-                        help="Resolution for road network processing")
-    parser.add_argument("--num_data_per_map", type=int, default=8,
-                        help="Number of data samples per map")
-    parser.add_argument("--num_objects", type=int, default=32,
-                        help="Number of objects per data sample")
-    parser.add_argument("--make_only_first_agent_controllable", action="store_true",
-                        help="If set, only the first agent is controllable")
-    parser.add_argument("--initial_velocity", type=float, default=0.0,
-                        help="Initial velocity for objects (set to None for mean velocity)")
-    parser.add_argument("--init_resample", action="store_true",
-                        help="Enable resampling of initial lane")
-    parser.add_argument("--lane_change_resample", action="store_true",
-                        help="Enable resampling of lane change lane")
-    parser.add_argument("--avg_speed", type=float, default=2.0,
-                        help="Average speed of the objects in m/s")
+    parser.add_argument(
+        "--town_names",
+        nargs="+",
+        default=["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"],
+        help="List of CARLA town names",
+    )
+    parser.add_argument(
+        "--input_json_base_path",
+        type=str,
+        default="data_utils/carla/carla_py123d",
+        help="Base path for input JSON files",
+    )
+    parser.add_argument(
+        "--output_json_root_dir",
+        type=str,
+        default="data/processed/carla_data",
+        help="Root directory for output JSON files",
+    )
+    parser.add_argument(
+        "--carla_map_dir", type=str, default="data/CarlaXODRs", help="Directory containing CARLA XODR files"
+    )
+    parser.add_argument("--resolution", type=float, default=0.1, help="Resolution for road network processing")
+    parser.add_argument("--num_data_per_map", type=int, default=8, help="Number of data samples per map")
+    parser.add_argument("--num_objects", type=int, default=32, help="Number of objects per data sample")
+    parser.add_argument(
+        "--make_only_first_agent_controllable", action="store_true", help="If set, only the first agent is controllable"
+    )
+    parser.add_argument(
+        "--initial_velocity",
+        type=float,
+        default=0.0,
+        help="Initial velocity for objects (set to None for mean velocity)",
+    )
+    parser.add_argument("--init_resample", action="store_true", help="Enable resampling of initial lane")
+    parser.add_argument("--lane_change_resample", action="store_true", help="Enable resampling of lane change lane")
+    parser.add_argument("--avg_speed", type=float, default=2.0, help="Average speed of the objects in m/s")
 
     args = parser.parse_args()
 
