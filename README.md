@@ -190,27 +190,3 @@ If you use PufferDrive in your research, please cite:
   year = {2025},
 }
 ```
-
-
-## Generate Carla Agent Trajectories
-
-The agent trajectories are procedurally generated assuming a general velocity range without any invalid initial state. We use an external submodule for the Carla XODR processing(`pyxodr`).
-
-For installation initialize submodules and install editable developer requirements:
-
-```bash
-git submodule update --init --recursive
-
-python -m pip install -e . -r requirements-dev.txt
-```
-
-Now run the generate_carla_agents script(Important optional args are num_objects for how many agents to initialize in a map, num_data_per_map for number of data files to generate per map, avg_speed to control the gap between subsequent points in the trajectory)
-```bash
-python data_utils/carla/generate_carla_agents.py --num_objects 32 --num_data_per_map 8 --avg_speed 2
-```
-
-There is also a specific visualizer for the initial positions of agents on the map
-
-```bash
-python data_utils/carla/plot.py
-```
