@@ -359,7 +359,8 @@ void add_log(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         Entity *e = &env->entities[env->active_agent_indices[i]];
 
-        float frac_goals_reached = (e->goals_reached_this_episode / e->goals_sampled_this_episode);
+        float sampled_goals = (e->goals_sampled_this_episode > 0) ? (float)e->goals_sampled_this_episode : 1.0f;
+        float frac_goals_reached = ((float)e->goals_reached_this_episode) / sampled_goals;
 
         env->log.completion_rate += frac_goals_reached;
 
@@ -2048,7 +2049,7 @@ void c_step(Drive *env) {
                 env->rewards[i] += env->reward_vehicle_collision;
                 env->logs[i].episode_return += env->reward_vehicle_collision;
                 env->logs[i].collision_rate = 1.0f;
-                env->logs[i].offroad_per_agent += 1.0f;
+                env->logs[i].collisions_per_agent += 1.0f;
             } else if (collision_state == OFFROAD) {
                 env->rewards[i] += env->reward_offroad_collision;
                 env->logs[i].offroad_rate = 1.0f;
