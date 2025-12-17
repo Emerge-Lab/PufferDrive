@@ -2071,11 +2071,14 @@ static int find_forward_projection_on_lane(Entity *lane, Entity *agent, int *out
 }
 
 void compute_new_goal(Drive *env, int agent_idx) {
+
     Entity *agent = &env->entities[agent_idx];
+
     int current_lane = agent->current_lane_idx;
 
     if (current_lane == -1)
         return; // No current lane
+        //Todo: Add fallback mechanism
 
     // Target distance: 40m ahead along the lane topology from agent's current position
     float target_distance = 40.0f;
@@ -2084,7 +2087,12 @@ void compute_new_goal(Drive *env, int agent_idx) {
 
     int initial_segment_idx = 1;
     float initial_fraction = 0.0f;
-    if (!find_forward_projection_on_lane(lane, agent, &initial_segment_idx, &initial_fraction)) {
+
+    printf("Computing new goal for agent %d on lane %d\n", agent_idx, current_lane);
+
+    int goal_on_lane = find_forward_projection_on_lane(lane, agent, &initial_segment_idx, &initial_fraction);
+    
+    if (!goal_on_lane) {
         int forward_idx = -1;
         for (int i = 0; i < lane->array_size; i++) {
             float to_point_x = lane->traj_x[i] - agent->x;
@@ -2095,6 +2103,8 @@ void compute_new_goal(Drive *env, int agent_idx) {
                 break;
             }
         }
+
+        printf("Fallback forward index: %d\n", forward_idx);
 
         if (forward_idx == -1) {
             agent->goal_position_x = lane->traj_x[lane->array_size - 1];
@@ -2936,18 +2946,22 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             Vector3 end = {env->entities[i].traj_x[j + 1], env->entities[i].traj_y[j + 1], 1};
             Color lineColor = GRAY;
             if (env->entities[i].type == ROAD_LANE)
-                lineColor = GRAY;
+                lineColor = PUFF_CYAN;
             else if (env->entities[i].type == ROAD_LINE)
-                lineColor = BLUE;
+                lineColor = PUFF_CYAN;
             else if (env->entities[i].type == ROAD_EDGE)
                 lineColor = WHITE;
             else if (env->entities[i].type == DRIVEWAY)
                 lineColor = RED;
-            if (env->entities[i].type != ROAD_EDGE) {
-                continue;
-            }
+
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-                draw_road_edge(env, start.x, start.y, end.x, end.y);
+                if (env->entities[i].type == ROAD_EDGE) {
+                    draw_road_edge(env, start.x, start.y, end.x, end.y);
+                } else if (env->entities[i].type == ROAD_LANE || env->entities[i].type == ROAD_LINE) {
+                    // Draw road lanes and lines as purple lines
+                    rlSetLineWidth(2.0f);
+                    DrawLine3D(start, end, lineColor);
+                }
             }
         }
     }
