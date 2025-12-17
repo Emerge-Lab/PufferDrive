@@ -126,6 +126,14 @@ static const int collision_offsets[25][2] = {
     {-2, 2},  {-1, 2},  {0, 2},  {1, 2},  {2, 2}   // Bottom row
 };
 
+const Color STONE_GRAY = (Color){80, 80, 80, 255};
+const Color PUFF_RED = (Color){187, 0, 0, 255};
+const Color PUFF_CYAN = (Color){0, 187, 187, 255};
+const Color PUFF_WHITE = (Color){241, 241, 241, 241};
+const Color PUFF_BACKGROUND = (Color){6, 24, 24, 255};
+const Color PUFF_BACKGROUND2 = (Color){18, 72, 72, 255};
+const Color LIGHTGREEN = (Color){152, 255, 152, 255};
+
 struct timespec ts;
 
 typedef struct Drive Drive;
@@ -1396,7 +1404,7 @@ void init(Drive *env) {
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
-    env->grid_map->vision_range = 21;
+    env->grid_map->vision_range = 21; // TODO: Why is this hardcoded?
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     env->logs_capacity = 0;
@@ -1886,7 +1894,8 @@ void compute_observations(Drive *env) {
     }
 }
 
-void compute_new_goal(Drive *env, int agent_idx) {
+void sample_new_goal(Drive *env, int agent_idx) {
+    // Samples a new goal position based on the existing road lane points
     Entity *agent = &env->entities[agent_idx];
     
     float best_x = agent->x;
@@ -2028,6 +2037,7 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
 
+         // TODO: There is redundancy in compute_agent_metrics and the other collision checking function. Clean this up in different PR.
         compute_agent_metrics(env, agent_idx);
         int collision_state = env->entities[agent_idx].collision_state;
 
@@ -2048,9 +2058,12 @@ void c_step(Drive *env) {
             }
         }
 
-        float distance_to_goal =
-            relative_distance_2d(env->entities[agent_idx].x, env->entities[agent_idx].y,
-                                 env->entities[agent_idx].goal_position_x, env->entities[agent_idx].goal_position_y);
+        float distance_to_goal = relative_distance_2d(
+            env->entities[agent_idx].x, 
+            env->entities[agent_idx].y, 
+            env->entities[agent_idx].goal_position_x, 
+            env->entities[agent_idx].goal_position_y
+        );
 
         // Reward agent if it is within X meters of goal
         if (distance_to_goal < env->goal_radius) {
@@ -2062,7 +2075,7 @@ void c_step(Drive *env) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
 
-                compute_new_goal(env, agent_idx);
+                sample_new_goal(env, agent_idx);
             } else { // Zero out the velocity so that the agent stops at the goal
                 env->rewards[i] = env->reward_goal;
                 env->logs[i].episode_return = env->reward_goal;
@@ -2109,14 +2122,6 @@ void c_step(Drive *env) {
 
     compute_observations(env);
 }
-
-const Color STONE_GRAY = (Color){80, 80, 80, 255};
-const Color PUFF_RED = (Color){187, 0, 0, 255};
-const Color PUFF_CYAN = (Color){0, 187, 187, 255};
-const Color PUFF_WHITE = (Color){241, 241, 241, 241};
-const Color PUFF_BACKGROUND = (Color){6, 24, 24, 255};
-const Color PUFF_BACKGROUND2 = (Color){18, 72, 72, 255};
-const Color LIGHTGREEN = (Color){152, 255, 152, 255};
 
 typedef struct Client Client;
 struct Client {
@@ -2249,7 +2254,6 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
     // Draw the diamond faces
     // Top pyramid
-
     if (mode == 0) {
         DrawTriangle3D(top_point, front_point, right_point, PUFF_CYAN); // Front-right face
         DrawTriangle3D(top_point, right_point, back_point, PUFF_CYAN);  // Back-right face
@@ -2556,7 +2560,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 Vector3 corners[4] = {
                     (Vector3){position.x + (half_len * cos_heading - half_width * sin_heading),
                               position.y + (half_len * sin_heading + half_width * cos_heading), position.z},
-
                     (Vector3){position.x + (half_len * cos_heading + half_width * sin_heading),
                               position.y + (half_len * sin_heading - half_width * cos_heading), position.z},
                     (Vector3){position.x + (-half_len * cos_heading + half_width * sin_heading),
@@ -2824,6 +2827,7 @@ void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTe
     UnloadImage(img);
 }
 
+// TODO: This function seems no longer used. Can probably be removed.
 void saveAgentViewImage(Drive *env, Client *client, const char *filename, RenderTexture2D target, int map_height,
                         int obs_only, int lasers, int show_grid) {
     // Agent perspective camera following the human agent
