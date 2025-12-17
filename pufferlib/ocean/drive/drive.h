@@ -309,7 +309,6 @@ struct Drive {
     int action_type;
     int human_agent_idx;
     Entity *entities;
-    Graph *topology_graph;
     int num_entities;
     int num_actors;
     int num_objects;
@@ -620,72 +619,6 @@ void add_entity_to_grid(Drive *env, int grid_index, int entity_idx, int geometry
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
     cell_entities_insert_index[grid_index] = count + 1;
-}
-
-void init_topology_graph(Drive *env) {
-    // Count ROAD_LANE entities
-    int road_lane_count = 0;
-    for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type == ROAD_LANE) {
-            road_lane_count++;
-        }
-    }
-
-    if (road_lane_count == 0) {
-        env->topology_graph = NULL;
-        return;
-    }
-
-    // Create graph with all entities as vertices (we'll only use ROAD_LANE indices)
-    env->topology_graph = createGraph(env->num_entities);
-
-    // Connect ROAD_LANE entities based on geometric connectivity
-    for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type != ROAD_LANE)
-            continue;
-
-        Entity *lane_i = &env->entities[i];
-        if (lane_i->array_size < 2)
-            continue; // Need at least 2 points
-
-        // Get end point of current lane
-        float end_x = lane_i->traj_x[lane_i->array_size - 1];
-        float end_y = lane_i->traj_y[lane_i->array_size - 1];
-        float end_vector_x = lane_i->traj_x[lane_i->array_size - 1] - lane_i->traj_x[lane_i->array_size - 2];
-        float end_vector_y = lane_i->traj_y[lane_i->array_size - 1] - lane_i->traj_y[lane_i->array_size - 2];
-        float end_heading = atan2f(end_vector_y, end_vector_x);
-
-        // Find lanes that start near this lane's end
-        for (int j = 0; j < env->num_entities; j++) {
-            if (i == j || env->entities[j].type != ROAD_LANE)
-                continue;
-
-            Entity *lane_j = &env->entities[j];
-            if (lane_j->array_size < 2)
-                continue;
-
-            // Get start point of potential next lane
-            float start_x = lane_j->traj_x[0];
-            float start_y = lane_j->traj_y[0];
-            float start_vector_x = lane_j->traj_x[1] - lane_j->traj_x[0];
-            float start_vector_y = lane_j->traj_y[1] - lane_j->traj_y[0];
-            float start_heading = atan2f(start_vector_y, start_vector_x);
-
-            // Check if end of lane_i is close to start of lane_j
-            float distance = relative_distance_2d(end_x, end_y, start_x, start_y);
-            float heading_diff = fabsf(end_heading - start_heading);
-
-            // Lane connectivity thresholds:
-            // - 0.01m distance: lanes must connect within 1cm (very strict for clean topology)
-            // - 0.1 (~5.7 degrees) heading difference: allow slight curves
-            if (distance < 0.01f && heading_diff < 0.1f) {
-                // Add directed edge from i to j (lane i connects to lane j)
-                struct AdjListNode *node = newAdjListNode(j);
-                node->next = env->topology_graph->array[i];
-                env->topology_graph->array[i] = node;
-            }
-        }
-    }
 }
 
 void init_grid_map(Drive *env) {
@@ -1528,8 +1461,6 @@ void init(Drive *env) {
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
-    if (env->goal_behavior == GOAL_GENERATE_NEW)
-        init_topology_graph(env);
     env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
@@ -1566,8 +1497,6 @@ void c_close(Drive *env) {
     free(env->grid_map);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
-    freeTopologyGraph(env->topology_graph);
-    // free(env->map_name);
     free(env->ini_file);
 }
 
