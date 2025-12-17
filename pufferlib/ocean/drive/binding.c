@@ -228,6 +228,8 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
     assign_to_dict(dict, "offroad_per_agent", log->offroad_per_agent);
     assign_to_dict(dict, "collisions_per_agent", log->collisions_per_agent);
+    assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
+    assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }
