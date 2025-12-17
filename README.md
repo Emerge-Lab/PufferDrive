@@ -194,7 +194,7 @@ If you use PufferDrive in your research, please cite:
 
 ## Generate Carla Agent Trajectories
 
-The agent trajectories are procedurally genrated assuming a general velocity range without any invalid initial state. We use an external submodule for the Carla XODR processing(`pyxodr`).
+The agent trajectories are procedurally generated assuming a general velocity range without any invalid initial state. We use an external submodule for the Carla XODR processing(`pyxodr`).
 
 For installation initialize submodules and install editable developer requirements:
 
