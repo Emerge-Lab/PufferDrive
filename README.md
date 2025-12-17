@@ -204,9 +204,9 @@ git submodule update --init --recursive
 python -m pip install -e . -r requirements-dev.txt
 ```
 
-Now run the generate_carla_agents script(Important optional args are num_objects for how many agents to initialize in a map, num_data_per_map for number of data files to generate per map)
+Now run the generate_carla_agents script(Important optional args are num_objects for how many agents to initialize in a map, num_data_per_map for number of data files to generate per map, avg_speed to control the gap between subsequent points in the trajectory)
 ```bash
-python data_utils/carla/generate_carla_agents.py --num_objects 32 --num_data_per_map 8
+python data_utils/carla/generate_carla_agents.py --num_objects 32 --num_data_per_map 8 --avg_speed 2
 ```
 
 There is also a specific visualizer for the initial positions of agents on the map

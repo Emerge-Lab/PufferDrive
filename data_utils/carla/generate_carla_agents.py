@@ -591,7 +591,7 @@ def generate_traj_data(
     num_timestamps=90,
     resolution=0.1,
     episode_length=9,
-    max_speed=7,
+    avg_speed=2,
     random_sampling_variation=1,
     init_resample=True,
     lane_change_resample=True,
@@ -602,8 +602,6 @@ def generate_traj_data(
     num_attempts=500,
     initial_velocity=None,  # If None, use calculated velocity; otherwise set to this value (m/s)
 ):
-    # Calculate average speed (70% of max_speed)
-    avg_speed = 0.7 * max_speed
     avg_cons_pts_dist = resolution
     time_step_dur = episode_length / num_timestamps
     sampling_length = int((avg_speed * time_step_dur) / avg_cons_pts_dist)
@@ -766,6 +764,7 @@ def save_object_to_json(
     initial_velocity=None,  # If None, use mean velocity; if 0.0 start at rest; otherwise set to this value (m/s)
     init_resample=True,
     lane_change_resample=True,
+    avg_speed=2,
     obj_length=4.5,
     obj_width=2.0,
     obj_height=1.8,
@@ -781,6 +780,7 @@ def save_object_to_json(
         obj_width=obj_width,
         obj_height=obj_height,
         initial_velocity=initial_velocity,
+        avg_speed=avg_speed,
     )
 
     headings = []
@@ -832,6 +832,7 @@ def generate_data_each_map(
     initial_velocity=None,  # If None, use calculated velocity; if 0.0 start at rest; otherwise set to this value (m/s)
     init_resample=True,
     lane_change_resample=True,
+    avg_speed=2,
 ):
     os.makedirs(output_json_root_dir, exist_ok=True)
     for town_name in town_names:
@@ -889,6 +890,7 @@ def generate_data_each_map(
                     initial_velocity=initial_velocity,
                     init_resample=init_resample,
                     lane_change_resample=lane_change_resample,
+                    avg_speed=avg_speed,
                 )
 
             # Make first agent only controllable
@@ -935,6 +937,8 @@ if __name__ == "__main__":
                         help="Enable resampling of initial lane")
     parser.add_argument("--lane_change_resample", action="store_true",
                         help="Enable resampling of lane change lane")
+    parser.add_argument("--avg_speed", type=float, default=2.0,
+                        help="Average speed of the objects in m/s")
 
     args = parser.parse_args()
 
@@ -949,6 +953,7 @@ if __name__ == "__main__":
     initial_velocity = args.initial_velocity
     init_resample = args.init_resample
     lane_change_resample = args.lane_change_resample
+    avg_speed = args.avg_speed
     generate_data_each_map(
         town_names,
         carla_map_dir,
@@ -961,4 +966,5 @@ if __name__ == "__main__":
         initial_velocity=initial_velocity,
         init_resample=init_resample,
         lane_change_resample=lane_change_resample,
+        avg_speed=avg_speed,
     )
