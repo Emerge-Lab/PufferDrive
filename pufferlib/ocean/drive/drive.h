@@ -1897,8 +1897,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
     Entity *agent = &env->entities[agent_idx];
     float best_x = agent->x;
     float best_y = agent->y;
-    float best_distance_error = 1e30f;
-    int found_goal = 0;
+    float best_distance_error = 1e50f;
     
     // Sample points from all road lanes
     for (int i = env->num_objects; i < env->num_entities; i++) {
@@ -1930,16 +1929,10 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 best_distance_error = distance_error;
                 best_x = point_x;
                 best_y = point_y;
-                found_goal = 1;
             }
         }
     }
-    
-    // Fallback: if no goal found ahead, set goal to straight ahead from current position
-    if (!found_goal) {
-        best_x = agent->x + env->goal_target_distance * agent->heading_x;
-        best_y = agent->y + env->goal_target_distance * agent->heading_y;
-    } 
+
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goals_sampled_this_episode += 1;
@@ -2705,7 +2698,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                            DARKGREEN);
 
                 DrawCircle3D((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 0.1f},
-                             env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
+                             env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.9f));
             }
         }
         // Draw road elements
