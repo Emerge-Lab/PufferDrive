@@ -684,6 +684,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#generate-carla-agent-trajectories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generate CARLA agent trajectories
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -918,31 +929,31 @@
 <p>PufferDrive consumes map binaries generated from multiple data sources, including the <a href="https://github.com/waymo-research/waymo-open-dataset">Waymo Open Motion Dataset (WOMD)</a> JSON files, <a href="https://github.com/valeoai/V-Max">ScenarioMax</a>, and <a href="https://carla.org/">CARLA</a>. This page covers how to obtain data and convert it into the binary format expected by the simulator.</p>
 <h2 id="download-options">Download options<a class="headerlink" href="#download-options" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_train"><code>pufferdrive_womd_train</code></a>: <strong>10k scenarios</strong> from the Waymo Open Motion <em>training</em> dataset</li>
-<li><a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val"><code>pufferdrive_womd_val</code></a>: <strong>10k scenarios</strong> from the Waymo Open Motion <em>validation</em> dataset</li>
+<li><a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_train"><code>pufferdrive_womd_train</code></a>: <strong>10k scenarios</strong> from the Waymo Open Motion <em>training</em> dataset.</li>
+<li><a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val"><code>pufferdrive_womd_val</code></a>: <strong>10k scenarios</strong> from the Waymo Open Motion <em>validation</em> dataset.</li>
 <li>Additional compatible sources: <a href="https://github.com/valeoai/ScenarioMax">ScenarioMax</a> exports JSON in the same format.</li>
-<li>Included CARLA maps: CARLA exports live in <code>data_utils/carla/carla</code>.</li>
+<li>Included <a href="https://carla.org/">CARLA</a> maps: Readily available CARLA maps live in <code>data_utils/carla/carla_py123d</code>.</li>
 </ul>
 <h3 id="download-via-hugging-face">Download via Hugging Face<a class="headerlink" href="#download-via-hugging-face" title="Permanent link">&para;</a></h3>
 <p>Install the CLI once:</p>
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span><span class="s2">&quot;huggingface_hub[cli]&quot;</span>
-<span class="sb">```</span>https://github.com/valeoai/V-Max
-
-Download:
-<span class="sb">```</span>bash
-huggingface-cli<span class="w"> </span>download<span class="w"> </span>daphne-cornelisse/pufferdrive_womd_train<span class="w"> </span><span class="se">\</span>
+</code></pre></div>
+<p>Download:
+<div class="highlight"><pre><span></span><code>huggingface-cli<span class="w"> </span>download<span class="w"> </span>daphne-cornelisse/pufferdrive_womd_train<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--local-dir<span class="w"> </span>data/processed/training
-</code></pre></div>
+</code></pre></div></p>
 <p>Place raw JSON files under <code>data/processed/training</code> (default location read by the conversion script).</p>
 <h2 id="convert-json-to-map-binaries">Convert JSON to map binaries<a class="headerlink" href="#convert-json-to-map-binaries" title="Permanent link">&para;</a></h2>
 <p>The conversion script writes compact <code>.bin</code> maps to <code>resources/drive/binaries</code>:</p>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>pufferlib/ocean/drive/drive.py
 </code></pre></div>
-<p>Notes:
-- The script iterates every JSON file in <code>data/processed/training</code> and emits <code>map_XXX.bin</code> files.
-- <code>resources/drive/binaries/map_000.bin</code> ships with the repo for quick smoke tests; generate additional bins for training/eval.
-- If you want to point at a different dataset location or limit the number of maps, adjust <code>process_all_maps</code> in <code>pufferlib/ocean/drive/drive.py</code> before running.</p>
+<p>Notes:</p>
+<ul>
+<li>The script iterates every JSON file in <code>data/processed/training</code> and emits <code>map_XXX.bin</code> files.</li>
+<li><code>resources/drive/binaries/map_000.bin</code> ships with the repo for quick smoke tests; generate additional bins for training/eval.</li>
+<li>If you want to point at a different dataset location or limit the number of maps, adjust <code>process_all_maps</code> in <code>pufferlib/ocean/drive/drive.py</code> before running.</li>
+</ul>
 <h2 id="map-binary-format-reference">Map binary format reference<a class="headerlink" href="#map-binary-format-reference" title="Permanent link">&para;</a></h2>
 <p>The simulator reads the compact binary layout produced by <code>save_map_binary</code> in <code>pufferlib/ocean/drive/drive.py</code> and parsed by <code>load_map_binary</code> in <code>pufferlib/ocean/drive/drive.h</code>:</p>
 <ul>
@@ -961,6 +972,29 @@ huggingface-cli<span class="w"> </span>download<span class="w"> </span>daphne-co
 </ul>
 <h2 id="interactive-scenario-editor">Interactive scenario editor<a class="headerlink" href="#interactive-scenario-editor" title="Permanent link">&para;</a></h2>
 <p>See <a href="../scene-editor/">Interactive scenario editor</a> for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the <code>.bin</code> format consumed by the simulator.</p>
+<h2 id="generate-carla-agent-trajectories">Generate CARLA agent trajectories<a class="headerlink" href="#generate-carla-agent-trajectories" title="Permanent link">&para;</a></h2>
+<p>The agent trajectories in the provided CARLA maps are procedurally generated assuming a general velocity range without a valid initial state(no collision/offroad). The repository uses an external submodule for CARLA XODR processing (<code>pyxodr</code>).</p>
+<p>To generate your own CARLA agent trajectories, install the submodules and developer requirements (editable install) before running the generator:</p>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>submodule<span class="w"> </span>update<span class="w"> </span>--init<span class="w"> </span>--recursive
+
+python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>-r<span class="w"> </span>requirements-dev.txt
+</code></pre></div>
+<p>Run the generator script. Important optional args:</p>
+<ul>
+<li><code>--num_objects</code>: how many agents to initialize in a map (default: map-dependent)</li>
+<li><code>--num_data_per_map</code>: number of data files to generate per map</li>
+<li><code>--avg_speed</code>: controls the gap between subsequent points in the trajectory</li>
+</ul>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>data_utils/carla/generate_carla_agents.py<span class="w"> </span>--num_objects<span class="w"> </span><span class="m">32</span><span class="w"> </span>--num_data_per_map<span class="w"> </span><span class="m">8</span><span class="w"> </span>--avg_speed<span class="w"> </span><span class="m">2</span>
+</code></pre></div>
+<p>There is also a visualizer for inspecting initial agent positions on the map:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>data_utils/carla/plot.py
+</code></pre></div>
+<p>Notes:</p>
+<ul>
+<li>Base Carla maps that agents are spawned live under <code>data_utils/carla/carla_py123d</code> and the Carla XODRs are at <code>data/CarlaXODRs</code> to interact with the <code>pyxodr</code> submodule for XODR parsing and agent traj generation.</li>
+<li>If you encounter missing binary or map errors, ensure the submodule was initialized and the required packages from <code>requirements-dev.txt</code> are installed.</li>
+</ul>
 
 
 
