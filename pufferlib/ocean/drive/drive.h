@@ -1784,14 +1784,25 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
+// After some digging in the code I found that the sdc is sometimes in tracks_to_predict sometimes not
+// I leave this ugly thing until we discuss what's the best way
 static inline int get_track_id_or_placeholder(Drive *env, int agent_idx) {
-    if (env->tracks_to_predict_indices == NULL || env->num_tracks_to_predict == 0) {
-        return -1;
-    }
-    for (int k = 0; k < env->num_tracks_to_predict; k++) {
-        if (env->tracks_to_predict_indices[k] == agent_idx) {
-            return env->tracks_to_predict_indices[k];
+    bool is_sdc = (agent_idx == env->sdc_track_index);
+    bool is_tracks_to_predict = false;
+    for (int i = 0; i < env->num_tracks_to_predict; i++) {
+        if (env->tracks_to_predict_indices[i] == agent_idx) {
+            is_tracks_to_predict = true;
+            break;
         }
+    }
+    if (is_sdc && !is_tracks_to_predict) {
+        return -2;
+    }
+    if (is_sdc && is_tracks_to_predict) {
+        return -3;
+    }
+    if (is_tracks_to_predict) {
+        return agent_idx;
     }
     return -1;
 }
@@ -1807,18 +1818,19 @@ void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_o
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        id_out[i] = env->entities[agent_idx].id;
         length_out[i] = agent->length;
         width_out[i] = agent->width;
     }
 }
 
 void c_get_global_ground_truth_trajectories(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out,
-                                            int *valid_out, int *id_out, int *scenario_id_out) {
+                                            int *valid_out, int *id_out, int *track_id_out, int *scenario_id_out) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Entity *agent = &env->entities[agent_idx];
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        id_out[i] = env->entities[agent_idx].id;
+        track_id_out[i] = get_track_id_or_placeholder(env, agent_idx);
         scenario_id_out[i] = agent->scenario_id;
 
         for (int t = env->init_steps; t < agent->array_size; t++) {
