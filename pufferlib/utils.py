@@ -228,6 +228,8 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
                 base_cmd.extend(["--goal-radius", str(env_cfg.goal_radius)])
             if getattr(env_cfg, "init_steps", 0) > 0:
                 base_cmd.extend(["--init-steps", str(env_cfg.init_steps)])
+            if getattr(env_cfg, "goal_behavior", None) is not None:
+                base_cmd.extend(["--goal-behavior", str(env_cfg.goal_behavior)])
             if getattr(env_cfg, "init_mode", None) is not None:
                 base_cmd.extend(["--init-mode", str(env_cfg.init_mode)])
             if getattr(env_cfg, "control_mode", None) is not None:

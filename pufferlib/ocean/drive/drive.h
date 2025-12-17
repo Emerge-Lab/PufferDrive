@@ -2510,6 +2510,12 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
 }
 
 void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, int show_grid) {
+
+    // Show timestep in top-left corner
+    char timestep_text[64];
+    snprintf(timestep_text, sizeof(timestep_text), "Timestep: %d", env->timestep);
+    DrawText(timestep_text, 10, 10, 20, PUFF_WHITE);
+
     // Draw a grid to help with orientation
     // DrawGrid(20, 1.0f);
     for (int i = 0; i < env->num_entities; i++) {
