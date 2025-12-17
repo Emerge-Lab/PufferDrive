@@ -23,6 +23,7 @@ class Drive(pufferlib.PufferEnv):
         reward_goal_post_respawn=0.5,
         reward_ade=0.0,
         goal_behavior=0,
+        goal_target_distance=10.0,
         goal_radius=2.0,
         collision_behavior=0,
         offroad_behavior=0,
@@ -54,6 +55,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
         self.goal_behavior = goal_behavior
+        self.goal_target_distance = goal_target_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.reward_ade = reward_ade
@@ -151,6 +153,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            goal_target_distance=self.goal_target_distance,
             use_all_maps=use_all_maps,
         )
 
@@ -180,6 +183,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_ade=reward_ade,
                 goal_radius=goal_radius,
                 goal_behavior=self.goal_behavior,
+                goal_target_distance=self.goal_target_distance,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
@@ -227,6 +231,7 @@ class Drive(pufferlib.PufferEnv):
                     init_steps=self.init_steps,
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
+                    goal_target_distance=self.goal_target_distance,
                     map_dir=self.map_dir,
                     use_all_maps=False,
                 )
@@ -251,6 +256,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_ade=self.reward_ade,
                         goal_radius=self.goal_radius,
                         goal_behavior=self.goal_behavior,
+                        goal_target_distance=self.goal_target_distance,
                         collision_behavior=self.collision_behavior,
                         offroad_behavior=self.offroad_behavior,
                         dt=self.dt,
@@ -657,7 +663,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/carla/")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

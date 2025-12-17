@@ -33,6 +33,7 @@ void test_drivenet() {
 }
 
 void demo() {
+
     // Read configuration from INI file
     env_init_config conf = {0};
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
@@ -53,6 +54,8 @@ void demo() {
         .init_steps = conf.init_steps,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
+        .goal_behavior = conf.goal_behavior,
+        .goal_target_distance = conf.goal_target_distance,
     };
     allocate(&env);
     c_reset(&env);

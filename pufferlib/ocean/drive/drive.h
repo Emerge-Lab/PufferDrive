@@ -337,6 +337,7 @@ struct Drive {
     int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
+    float goal_target_distance;
     char *ini_file;
     char *scenario_id;
     int collision_behavior;
@@ -1954,8 +1955,6 @@ void compute_observations(Drive *env) {
 void compute_new_goal(Drive *env, int agent_idx) {
     Entity *agent = &env->entities[agent_idx];
     
-    float target_distance = 10.0f; // TODO: Make this configurable
-    
     float best_x = agent->x;
     float best_y = agent->y;
     float best_distance_error = 1e30f;
@@ -1985,7 +1984,7 @@ void compute_new_goal(Drive *env, int agent_idx) {
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
             
             // Find point closest to target distance
-            float distance_error = fabsf(distance - target_distance);
+            float distance_error = fabsf(distance - env->goal_target_distance);
             if (distance_error < best_distance_error) {
                 best_distance_error = distance_error;
                 best_x = point_x;

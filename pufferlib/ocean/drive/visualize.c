@@ -192,7 +192,7 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents,
              const char *view_mode, const char *output_topdown, const char *output_agent, int num_maps,
-             int scenario_length_override, int init_mode, int control_mode, int goal_behavior, int zoom_in) {
+             int scenario_length_override, int init_mode, int control_mode, int goal_behavior, float goal_target_distance, int zoom_in) {
 
     // Parse configuration from INI file
     env_init_config conf = {0}; // Initialize to zero
@@ -418,6 +418,7 @@ int main(int argc, char *argv[]) {
     int init_mode = 0;
     int control_mode = 0;
     int goal_behavior = 0;
+    float goal_target_distance = 10.0;
     int zoom_in = 1;
 
     const char *view_mode = "both"; // "both", "topdown", "agent"
@@ -535,6 +536,6 @@ int main(int argc, char *argv[]) {
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps,
              max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode,
-             control_mode, goal_behavior, zoom_in);
+             control_mode, goal_behavior, goal_target_distance, zoom_in);
     return 0;
 }
