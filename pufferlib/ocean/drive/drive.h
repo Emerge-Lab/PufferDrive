@@ -360,9 +360,9 @@ void add_log(Drive *env) {
         Entity *e = &env->entities[env->active_agent_indices[i]];
 
         float frac_goals_reached = (e->goals_reached_this_episode / e->goals_sampled_this_episode);
-        
+
         env->log.completion_rate += frac_goals_reached;
-        
+
         int offroad = env->logs[i].offroad_rate;
         env->log.offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
@@ -371,7 +371,7 @@ void add_log(Drive *env) {
         env->log.offroad_per_agent += offroad_per_agent;
         float collisions_per_agent = env->logs[i].collisions_per_agent;
         env->log.collisions_per_agent += collisions_per_agent;
-        
+
         if (frac_goals_reached == 1.0 && !e->collided_before_goal) {
             env->log.score += 1.0f;
         }
@@ -1897,35 +1897,35 @@ void compute_observations(Drive *env) {
 void sample_new_goal(Drive *env, int agent_idx) {
     // Samples a new goal position based on the existing road lane points
     Entity *agent = &env->entities[agent_idx];
-    
+
     float best_x = agent->x;
     float best_y = agent->y;
     float best_distance_error = 1e30f;
-    
+
     // Sample points from all road lanes
     for (int i = env->num_objects; i < env->num_entities; i++) {
         if (env->entities[i].type != ROAD_LANE)
             continue;
-            
+
         Entity *lane = &env->entities[i];
-        
+
         // Check every point in the lane
         for (int j = 0; j < lane->array_size; j++) {
             float point_x = lane->traj_x[j];
             float point_y = lane->traj_y[j];
-            
+
             // Calculate vector from agent to point
             float to_point_x = point_x - agent->x;
             float to_point_y = point_y - agent->y;
-            
+
             // Check if point is ahead of agent
             float dot = to_point_x * agent->heading_x + to_point_y * agent->heading_y;
             if (dot <= 0.0f)
                 continue;
-            
+
             // Calculate distance to point
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
-            
+
             // Find point closest to target distance
             float distance_error = fabsf(distance - env->goal_target_distance);
             if (distance_error < best_distance_error) {
@@ -1935,7 +1935,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
             }
         }
     }
-    
+
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goals_sampled_this_episode += 1;
@@ -1951,7 +1951,8 @@ void c_reset(Drive *env) {
         env->entities[agent_idx].respawn_count = 0;
         env->entities[agent_idx].collided_before_goal = 0;
         env->entities[agent_idx].goals_reached_this_episode = 0;
-        env->entities[agent_idx].goals_sampled_this_episode = 1; // Initialize to 1 because there is one goal in the data file
+        env->entities[agent_idx].goals_sampled_this_episode =
+            1; // Initialize to 1 because there is one goal in the data file
         env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
@@ -2037,7 +2038,8 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
 
-         // TODO: There is redundancy in compute_agent_metrics and the other collision checking function. Clean this up in different PR.
+        // TODO: There is redundancy in compute_agent_metrics and the other collision checking function. Clean this up
+        // in different PR.
         compute_agent_metrics(env, agent_idx);
         int collision_state = env->entities[agent_idx].collision_state;
 
@@ -2058,12 +2060,9 @@ void c_step(Drive *env) {
             }
         }
 
-        float distance_to_goal = relative_distance_2d(
-            env->entities[agent_idx].x, 
-            env->entities[agent_idx].y, 
-            env->entities[agent_idx].goal_position_x, 
-            env->entities[agent_idx].goal_position_y
-        );
+        float distance_to_goal =
+            relative_distance_2d(env->entities[agent_idx].x, env->entities[agent_idx].y,
+                                 env->entities[agent_idx].goal_position_x, env->entities[agent_idx].goal_position_y);
 
         // Reward agent if it is within X meters of goal
         if (distance_to_goal < env->goal_radius) {
@@ -2085,7 +2084,6 @@ void c_step(Drive *env) {
             env->entities[agent_idx].goals_reached_this_episode += 1;
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
         }
-
 
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
