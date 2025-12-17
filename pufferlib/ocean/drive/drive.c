@@ -62,7 +62,7 @@ void demo() {
     c_render(&env);
     Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
-    // Client* client = make_client(&env);
+    
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {

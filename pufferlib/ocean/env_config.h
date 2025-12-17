@@ -23,7 +23,7 @@ typedef struct {
     float dt;
     int goal_behavior;
     float goal_target_distance;
-    int scenario_length;
+    int episode_length;
     int termination_mode;
     int init_steps;
     int init_mode;
@@ -80,8 +80,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "dt")) {
         env_config->dt = atof(value);
-    } else if (MATCH("env", "scenario_length")) {
-        env_config->scenario_length = atoi(value);
+    } else if (MATCH("env", "episode_length")) {
+        env_config->episode_length = atoi(value);
     } else if (MATCH("env", "termination_mode")) {
         env_config->termination_mode = atoi(value);
     } else if (MATCH("env", "init_steps")) {

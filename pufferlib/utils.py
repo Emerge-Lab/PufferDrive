@@ -250,8 +250,8 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
             if getattr(env_cfg, "num_maps", False):
                 base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
-            if getattr(env_cfg, "scenario_length", None):
-                base_cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
+            if getattr(env_cfg, "episode_length", None):
+                base_cmd.extend(["--episode-length", str(env_cfg.episode_length)])
 
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)

@@ -28,7 +28,7 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior=0,
         offroad_behavior=0,
         dt=0.1,
-        scenario_length=None,
+        episode_length=None,
         termination_mode=None,
         resample_frequency=91,
         num_maps=100,
@@ -60,7 +60,7 @@ class Drive(pufferlib.PufferEnv):
         self.offroad_behavior = offroad_behavior
         self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
-        self.scenario_length = scenario_length
+        self.episode_length = episode_length
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
@@ -187,7 +187,7 @@ class Drive(pufferlib.PufferEnv):
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
-                scenario_length=(int(scenario_length) if scenario_length is not None else None),
+                episode_length=(int(episode_length) if episode_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
@@ -260,7 +260,7 @@ class Drive(pufferlib.PufferEnv):
                         collision_behavior=self.collision_behavior,
                         offroad_behavior=self.offroad_behavior,
                         dt=self.dt,
-                        scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
+                        episode_length=(int(self.episode_length) if self.episode_length is not None else None),
                         max_controlled_agents=self.max_controlled_agents,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
@@ -318,11 +318,11 @@ class Drive(pufferlib.PufferEnv):
         num_agents = self.num_agents
 
         trajectories = {
-            "x": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "y": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "z": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "heading": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "valid": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.int32),
+            "x": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "y": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "z": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "heading": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "valid": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
             "scenario_id": np.zeros(num_agents, dtype=np.int32),
         }
@@ -639,7 +639,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         control_mode="control_vehicles",
         init_mode="create_all_valid",
         init_steps=0,
-        scenario_length=91,
+        episode_length=91,
     )
 
     env.reset()

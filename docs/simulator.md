@@ -5,7 +5,7 @@ Deep dive into how the Drive environment is wired, what it expects as inputs, an
 ## Runtime inputs and lifecycle
 
 - **Map binaries**: The environment scans `resources/drive/binaries` for `map_*.bin` files and requires at least one to load. Keep `num_maps` no larger than what is present on disk. During vectorized setup, `binding.shared` samples maps until it accumulates at least `num_agents` controllable entities, skipping maps with no valid agents (`set_active_agents` in `drive.h`).
-- **Episode length**: Default `scenario_length = 91` to match the Waymo logs (trajectory data is 91 steps), but you can set `env.scenario_length` (CLI or `.ini`) to any positive value. Metrics are logged and `c_reset` is called when `timestep == scenario_length`.
+- **Episode length**: Default `episode_length = 91` to match the Waymo logs (trajectory data is 91 steps), but you can set `env.episode_length` (CLI or `.ini`) to any positive value. Metrics are logged and `c_reset` is called when `timestep = episode_length`.
 - **Resampling maps**: Python-side `Drive.step` reinitializes the vectorized environments every `resample_frequency` steps (default `910`, ~10 episodes) with fresh map IDs and seeds.
 - **Initialization controls**:
   - `init_steps` starts agents from a later timestep in the logged trajectory.
@@ -50,7 +50,7 @@ Shape is `ego_features + 63 * 7 + 200 * 7` = `1848` for classic dynamics (`ego_f
   - Off-road (road-edge intersection): `reward_offroad_collision` (default `-0.2`)
   - Goal reached: `reward_goal` (default `1.0`) or `reward_goal_post_respawn` after a respawn
   - Optional ADE shaping: `reward_ade * avg_displacement_error`, where ADE is accumulated in `compute_agent_metrics`
-- **Termination**: No early truncation; episodes roll to `scenario_length` steps. If `goal_behavior` is respawn, `respawn_agent` resets the pose and marks `respawn_timestep` so the respawn flag shows up in observations.
+- **Termination**: No early truncation; episodes roll to episode_length steps. If `goal_behavior` is respawn, `respawn_agent` resets the pose and marks `respawn_timestep` so the respawn flag shows up in observations.
 - **Logged metrics** (`add_log` aggregates over all active agents across envs):
   - `score`: reached goal without collision/off-road
   - `collision_rate` / `offroad_rate`: fraction of agents with ≥1 event in the episode
@@ -66,7 +66,7 @@ Shape is `ego_features + 63 * 7 + 200 * 7` = `1848` for classic dynamics (`ego_f
 
 Key sections in `pufferlib/config/ocean/drive.ini`:
 
-- **[env]**: Simulator knobs: `num_agents` (policy slots, C core cap 64), `num_maps`, `scenario_length`, `resample_frequency`, `action_type`, `dynamics_model`, rewards, `goal_radius`, `goal_behavior`, `init_steps`, `init_mode`, `control_mode`; rendering toggles `render`, `render_interval`, `obs_only`, `show_grid`, `show_lasers`, `show_human_logs`, `render_map`.
+- **[env]**: Simulator knobs: `num_agents` (policy slots, C core cap 64), `num_maps`, episode_length, `resample_frequency`, `action_type`, `dynamics_model`, rewards, `goal_radius`, `goal_behavior`, `init_steps`, `init_mode`, `control_mode`; rendering toggles `render`, `render_interval`, `obs_only`, `show_grid`, `show_lasers`, `show_human_logs`, `render_map`.
 - **[vec]**: Vectorization sizing (`num_envs`, `num_workers`, `batch_size`; backend defaults to multiprocessing).
 - **[policy]/[rnn]**: Model widths for the Torch policy (`input_size`, `hidden_size`) and optional LSTM wrapper.
 - **[train]**: PPO-style hyperparameters (timesteps, learning rate, clipping, batch/minibatch, BPTT horizon, optimizer choice) merged with any unspecified defaults from `pufferlib/config/default.ini`.

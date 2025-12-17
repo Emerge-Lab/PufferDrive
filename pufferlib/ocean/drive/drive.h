@@ -199,8 +199,8 @@ struct Entity {
     int respawn_timestep;
     int respawn_count;
     int collided_before_goal;
-    int goals_reached_this_episode;
-    int goals_sampled_this_episode;
+    float goals_reached_this_episode;
+    float goals_sampled_this_episode;
     int active_agent;
     float cumulative_displacement;
     int displacement_sample_count;
@@ -328,7 +328,7 @@ struct Drive {
     int dynamics_model;
     GridMap *grid_map;
     int *neighbor_offsets;
-    int scenario_length;
+    int episode_length;
     int termination_mode;
     float reward_vehicle_collision;
     float reward_offroad_collision;
@@ -359,8 +359,7 @@ void add_log(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         Entity *e = &env->entities[env->active_agent_indices[i]];
 
-        float sampled_goals = (e->goals_sampled_this_episode > 0) ? (float)e->goals_sampled_this_episode : 1.0f;
-        float frac_goals_reached = ((float)e->goals_reached_this_episode) / sampled_goals;
+        float frac_goals_reached = (e->goals_reached_this_episode / e->goals_sampled_this_episode);
 
         env->log.completion_rate += frac_goals_reached;
 
@@ -376,7 +375,7 @@ void add_log(Drive *env) {
         if (frac_goals_reached == 1.0 && !e->collided_before_goal) {
             env->log.score += 1.0f;
         }
-        if (!offroad && !collided && !e->goals_reached_this_episode) {
+        if (!offroad && !collided && ! (e->goals_reached_this_episode < 1.0f) ) {
             env->log.dnf_rate += 1.0f;
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
@@ -1353,7 +1352,7 @@ void remove_bad_trajectories(Drive *env) {
         collided_with_indices[i] = -1;
     }
     // move experts through trajectories to check for collisions and remove as illegal agents
-    for (int t = 0; t < env->scenario_length; t++) {
+    for (int t = 0; t < env->episode_length; t++) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             move_expert(env, env->actions, agent_idx);
@@ -1507,7 +1506,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         } else { // discrete
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
             int *action_array = (int *)env->actions;
-            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
             int action_val = action_array[action_idx];
             int acceleration_index = action_val / num_steer;
@@ -1574,7 +1572,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         } else { // discrete
             // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
             int *action_array = (int *)env->actions;
-            int num_long = sizeof(JERK_LONG) / sizeof(JERK_LONG[0]);
             int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
             int action_val = action_array[action_idx];
             int a_long_idx = action_val / num_lat;
@@ -1898,11 +1895,11 @@ void compute_observations(Drive *env) {
 void sample_new_goal(Drive *env, int agent_idx) {
     // Samples a new goal position based on the existing road lane points
     Entity *agent = &env->entities[agent_idx];
-
     float best_x = agent->x;
     float best_y = agent->y;
     float best_distance_error = 1e30f;
-
+    int found_goal = 0;
+    
     // Sample points from all road lanes
     for (int i = env->num_objects; i < env->num_entities; i++) {
         if (env->entities[i].type != ROAD_LANE)
@@ -1933,10 +1930,16 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 best_distance_error = distance_error;
                 best_x = point_x;
                 best_y = point_y;
+                found_goal = 1;
             }
         }
     }
-
+    
+    // Fallback: if no goal found ahead, set goal to straight ahead from current position
+    if (!found_goal) {
+        best_x = agent->x + env->goal_target_distance * agent->heading_x;
+        best_y = agent->y + env->goal_target_distance * agent->heading_y;
+    } 
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goals_sampled_this_episode += 1;
@@ -1951,9 +1954,9 @@ void c_reset(Drive *env) {
         env->entities[agent_idx].respawn_timestep = -1;
         env->entities[agent_idx].respawn_count = 0;
         env->entities[agent_idx].collided_before_goal = 0;
-        env->entities[agent_idx].goals_reached_this_episode = 0;
-        env->entities[agent_idx].goals_sampled_this_episode =
-            1; // Initialize to 1 because there is one goal in the data file
+        env->entities[agent_idx].goals_reached_this_episode = 0.0f;
+        // Initialize to 1 because there is one goal in the data file
+        env->entities[agent_idx].goals_sampled_this_episode = 1.0f; 
         env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
@@ -2014,7 +2017,7 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->timestep == env->scenario_length || (!originals_remaining && env->termination_mode == 1)) {
+    if (env->timestep == env->episode_length || (!originals_remaining && env->termination_mode == 1)) {
         add_log(env);
         c_reset(env);
         return;
@@ -2052,11 +2055,12 @@ void c_step(Drive *env) {
                 env->logs[i].collisions_per_agent += 1.0f;
             } else if (collision_state == OFFROAD) {
                 env->rewards[i] += env->reward_offroad_collision;
-                env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].episode_return += env->reward_offroad_collision;
+                env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].offroad_per_agent += 1.0f;
             }
-            if (!env->entities[agent_idx].goals_reached_this_episode) {
+
+            if (env->entities[agent_idx].goals_reached_this_episode < 1.0) {
                 env->entities[agent_idx].collided_before_goal = 1;
             }
         }
@@ -2074,7 +2078,6 @@ void c_step(Drive *env) {
             } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
-
                 sample_new_goal(env, agent_idx);
             } else { // Zero out the velocity so that the agent stops at the goal
                 env->rewards[i] = env->reward_goal;
@@ -2082,7 +2085,7 @@ void c_step(Drive *env) {
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
             }
-            env->entities[agent_idx].goals_reached_this_episode += 1;
+            env->entities[agent_idx].goals_reached_this_episode += 1.0f;
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
         }
 
@@ -2155,7 +2158,6 @@ Client *make_client(Drive *env) {
     client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
     client->cyclist = LoadModel("resources/drive/cyclist.glb");
     client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
-    int animCount = 0;
     int animCountCyc = 0;
     client->cycle_anim = LoadModelAnimations("resources/drive/cyclist.glb", &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
@@ -2583,7 +2585,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 }
 
                 // --- Draw the car  ---
-                Vector3 carPos = {position.x, position.y, position.z};
                 Color car_color = GRAY; // default for static
                 if (is_expert)
                     car_color = GOLD; // expert replay
@@ -2718,7 +2719,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             if (env->entities[i].type == ROAD_LANE)
                 lineColor = PUFF_CYAN;
             else if (env->entities[i].type == ROAD_LINE)
-                lineColor = LIGHTGREEN;
+                lineColor = WHITE;
             else if (env->entities[i].type == ROAD_EDGE)
                 lineColor = WHITE;
             else if (env->entities[i].type == DRIVEWAY)
@@ -2753,7 +2754,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
     // Draw track indices for the tracks to predict
     if (mode == 1 && env->control_mode == CONTROL_WOSAC) {
-        float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
+        //float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;
 

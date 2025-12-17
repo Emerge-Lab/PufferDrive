@@ -177,11 +177,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     if (ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
-    if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) {
-        conf.scenario_length = (int)unpack(kwargs, "scenario_length");
+    if (kwargs && PyDict_GetItemString(kwargs, "episode_length")) {
+        conf.episode_length = (int)unpack(kwargs, "episode_length");
     }
-    if (conf.scenario_length <= 0) {
-        PyErr_SetString(PyExc_ValueError, "scenario_length must be > 0 (set in INI or kwargs)");
+    if (conf.episode_length <= 0) {
+        PyErr_SetString(PyExc_ValueError, "episode_length must be > 0 (set in INI or kwargs)");
         return -1;
     }
     env->action_type = conf.action_type;
@@ -191,7 +191,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->reward_ade = conf.reward_ade;
-    env->scenario_length = conf.scenario_length;
+    env->episode_length = conf.episode_length;
     env->termination_mode = conf.termination_mode;
     env->collision_behavior = conf.collision_behavior;
     env->offroad_behavior = conf.offroad_behavior;
