@@ -57,3 +57,34 @@ Refer to [Simulator](simulator.md) for how the binaries are consumed during rese
 ## Interactive scenario editor
 
 See [Interactive scenario editor](scene-editor.md) for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the `.bin` format consumed by the simulator.
+
+## Generate CARLA Agent Trajectories
+
+The agent trajectories are procedurally generated assuming a general velocity range without a valid initial state(no collision/offroad). The repository uses an external submodule for CARLA XODR processing (`pyxodr`).
+
+Install the submodules and developer requirements (editable install) before running the generator:
+
+```bash
+git submodule update --init --recursive
+
+python -m pip install -e . -r requirements-dev.txt
+```
+
+Run the generator script. Important optional args:
+- `--num_objects`: how many agents to initialize in a map (default: map-dependent)
+- `--num_data_per_map`: number of data files to generate per map
+- `--avg_speed`: controls the gap between subsequent points in the trajectory
+
+```bash
+python data_utils/carla/generate_carla_agents.py --num_objects 32 --num_data_per_map 8 --avg_speed 2
+```
+
+There is also a visualizer for inspecting initial agent positions on the map:
+
+```bash
+python data_utils/carla/plot.py
+```
+
+Notes:
+- Base Carla Maps that agents are spawned live under `data_utils/carla/carla_py123d` and the Carla XODRs are at `data/CarlaXODRs` to interact with the `pyxodr` submodule for XODR parsing and agent traj generation.
+- If you encounter missing binary or map errors, ensure the submodule was initialized and the required packages from `requirements-dev.txt` are installed.
