@@ -131,17 +131,18 @@ struct timespec ts;
 typedef struct Drive Drive;
 typedef struct Client Client;
 typedef struct Log Log;
-typedef struct Graph Graph;
-typedef struct AdjListNode AdjListNode;
 
 struct Log {
     float episode_return;
     float episode_length;
     float score;
+    float goals_reached_this_episode;
+    float goals_sampled_this_episode;
     float offroad_rate;
     float collision_rate;
-    float num_goals_reached;
     float completion_rate;
+    float offroad_per_agent;
+    float collisions_per_agent;
     float dnf_rate;
     float n;
     float lane_alignment_rate;
@@ -149,8 +150,6 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
-    float avg_offroad_per_agent;
-    float avg_collisions_per_agent;
 };
 
 typedef struct Entity Entity;
@@ -192,9 +191,8 @@ struct Entity {
     int respawn_timestep;
     int respawn_count;
     int collided_before_goal;
-    int sampled_new_goal;
-    int reached_goal_this_episode;
-    int num_goals_reached;
+    int goals_reached_this_episode;
+    int goals_sampled_this_episode;
     int active_agent;
     float cumulative_displacement;
     int displacement_sample_count;
@@ -353,23 +351,23 @@ void add_log(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         Entity *e = &env->entities[env->active_agent_indices[i]];
 
-        if (e->reached_goal_this_episode) {
-            env->log.completion_rate += 1.0f;
-        }
+        float frac_goals_reached = (e->goals_reached_this_episode / e->goals_sampled_this_episode);
+        
+        env->log.completion_rate += frac_goals_reached;
+        
         int offroad = env->logs[i].offroad_rate;
         env->log.offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
         env->log.collision_rate += collided;
-        float avg_offroad_per_agent = env->logs[i].avg_offroad_per_agent;
-        env->log.avg_offroad_per_agent += avg_offroad_per_agent;
-        float avg_collisions_per_agent = env->logs[i].avg_collisions_per_agent;
-        env->log.avg_collisions_per_agent += avg_collisions_per_agent;
-        int num_goals_reached = env->logs[i].num_goals_reached;
-        env->log.num_goals_reached += num_goals_reached;
-        if (e->reached_goal_this_episode && !e->collided_before_goal) {
+        float offroad_per_agent = env->logs[i].offroad_per_agent;
+        env->log.offroad_per_agent += offroad_per_agent;
+        float collisions_per_agent = env->logs[i].collisions_per_agent;
+        env->log.collisions_per_agent += collisions_per_agent;
+        
+        if (frac_goals_reached == 1.0 && !e->collided_before_goal) {
             env->log.score += 1.0f;
         }
-        if (!offroad && !collided && !e->reached_goal_this_episode) {
+        if (!offroad && !collided && !e->goals_reached_this_episode) {
             env->log.dnf_rate += 1.0f;
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
@@ -384,69 +382,6 @@ void add_log(Drive *env) {
         env->log.static_agent_count += env->static_agent_count;
         env->log.n += 1;
     }
-}
-
-struct AdjListNode {
-    int dest;
-    struct AdjListNode *next;
-};
-
-struct Graph {
-    int V;
-    struct AdjListNode **array;
-};
-
-// Function to create a new adjacency list node
-struct AdjListNode *newAdjListNode(int dest) {
-    struct AdjListNode *newNode = malloc(sizeof(struct AdjListNode));
-    newNode->dest = dest;
-    newNode->next = NULL;
-    return newNode;
-}
-
-// Function to create a graph of V vertices
-struct Graph *createGraph(int V) {
-    struct Graph *graph = malloc(sizeof(struct Graph));
-    graph->V = V;
-    graph->array = calloc(V, sizeof(struct AdjListNode *));
-    return graph;
-}
-
-// Function to get next lanes from a given lane entity index
-// Returns the number of next lanes found, fills next_lanes array with entity indices
-int getNextLanes(struct Graph *graph, int entity_idx, int *next_lanes, int max_lanes) {
-    if (!graph || entity_idx < 0 || entity_idx >= graph->V) {
-        return 0;
-    }
-
-    int count = 0;
-    struct AdjListNode *node = graph->array[entity_idx];
-
-    while (node && count < max_lanes) {
-        next_lanes[count] = node->dest;
-        count++;
-        node = node->next;
-    }
-
-    return count;
-}
-
-// Function to free the topology graph
-void freeTopologyGraph(struct Graph *graph) {
-    if (!graph)
-        return;
-
-    for (int i = 0; i < graph->V; i++) {
-        struct AdjListNode *node = graph->array[i];
-        while (node) {
-            struct AdjListNode *temp = node;
-            node = node->next;
-            free(temp);
-        }
-    }
-
-    free(graph->array);
-    free(graph);
 }
 
 Entity *load_map_binary(const char *filename, Drive *env) {
@@ -1247,7 +1182,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         agent->current_lane_idx = -1;
     } else {
         agent->current_lane_idx = closest_lane_entity_idx;
-
         int lane_aligned =
             check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
         agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned;
@@ -1995,7 +1929,7 @@ void compute_new_goal(Drive *env, int agent_idx) {
     
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
-    agent->sampled_new_goal = 0;
+    agent->goals_sampled_this_episode += 1;
 }
 
 void c_reset(Drive *env) {
@@ -2007,7 +1941,8 @@ void c_reset(Drive *env) {
         env->entities[agent_idx].respawn_timestep = -1;
         env->entities[agent_idx].respawn_count = 0;
         env->entities[agent_idx].collided_before_goal = 0;
-        env->entities[agent_idx].reached_goal_this_episode = 0;
+        env->entities[agent_idx].goals_reached_this_episode = 0;
+        env->entities[agent_idx].goals_sampled_this_episode = 1; // Initialize to 1 because there is one goal in the data file
         env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
@@ -2021,7 +1956,6 @@ void c_reset(Drive *env) {
         if (env->goal_behavior == GOAL_GENERATE_NEW) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
             env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
-            env->entities[agent_idx].sampled_new_goal = 0;
         }
 
         compute_agent_metrics(env, agent_idx);
@@ -2102,14 +2036,14 @@ void c_step(Drive *env) {
                 env->rewards[i] += env->reward_vehicle_collision;
                 env->logs[i].episode_return += env->reward_vehicle_collision;
                 env->logs[i].collision_rate = 1.0f;
-                env->logs[i].avg_collisions_per_agent += 1.0f;
+                env->logs[i].offroad_per_agent += 1.0f;
             } else if (collision_state == OFFROAD) {
                 env->rewards[i] += env->reward_offroad_collision;
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].episode_return += env->reward_offroad_collision;
-                env->logs[i].avg_offroad_per_agent += 1.0f;
+                env->logs[i].offroad_per_agent += 1.0f;
             }
-            if (!env->entities[agent_idx].reached_goal_this_episode) {
+            if (!env->entities[agent_idx].goals_reached_this_episode) {
                 env->entities[agent_idx].collided_before_goal = 1;
             }
         }
@@ -2127,22 +2061,18 @@ void c_step(Drive *env) {
             } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
-                env->entities[agent_idx].sampled_new_goal = 1;
-                env->logs[i].num_goals_reached += 1;
+
+                compute_new_goal(env, agent_idx);
             } else { // Zero out the velocity so that the agent stops at the goal
                 env->rewards[i] = env->reward_goal;
                 env->logs[i].episode_return = env->reward_goal;
-                env->logs[i].num_goals_reached = 1;
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
             }
-            env->entities[agent_idx].reached_goal_this_episode = 1;
+            env->entities[agent_idx].goals_reached_this_episode += 1;
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
         }
 
-        if (env->entities[agent_idx].sampled_new_goal && env->goal_behavior == GOAL_GENERATE_NEW) {
-            compute_new_goal(env, agent_idx);
-        }
 
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
@@ -2210,7 +2140,7 @@ Client *make_client(Drive *env) {
     client->width = 1280;
     client->height = 704;
     SetConfigFlags(FLAG_MSAA_4X_HINT);
-    InitWindow(client->width, client->height, "PufferLib Ray GPU Drive");
+    InitWindow(client->width, client->height, "PufferDrive");
     SetTargetFPS(30);
     client->puffers = LoadTexture("resources/puffers_128.png");
     client->cars[0] = LoadModel("resources/drive/RedCar.glb");
