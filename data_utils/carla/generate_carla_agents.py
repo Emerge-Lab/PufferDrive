@@ -948,7 +948,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--init_resample", action="store_true", help="Enable resampling of initial lane")
     parser.add_argument("--lane_change_resample", action="store_true", help="Enable resampling of lane change lane")
-    parser.add_argument("--avg_speed", type=float, default=2.0, help="Average speed of the objects in m/s")
+    parser.add_argument("--avg_speed", type=float, default=1.0, help="Average speed of the objects in m/s")
 
     args = parser.parse_args()
 
