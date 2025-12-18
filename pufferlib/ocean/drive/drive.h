@@ -362,6 +362,8 @@ void add_log(Drive *env) {
         float frac_goals_reached = (e->goals_reached_this_episode / e->goals_sampled_this_episode);
 
         env->log.completion_rate += frac_goals_reached;
+        env->log.goals_reached_this_episode += e->goals_reached_this_episode;
+        env->log.goals_sampled_this_episode += e->goals_sampled_this_episode;
 
         int offroad = env->logs[i].offroad_rate;
         env->log.offroad_rate += offroad;
