@@ -190,12 +190,11 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
 }
 
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
-             int log_trajectories, int frame_skip, int init_steps, int max_controlled_agents, const char *view_mode,
-             const char *output_topdown, const char *output_agent, int num_maps, int init_mode, int control_mode,
-             int goal_behavior, float goal_target_distance, int zoom_in) {
+             int log_trajectories, int frame_skip, const char *view_mode, const char *output_topdown,
+             const char *output_agent, int zoom_in) {
 
     // Parse configuration from INI file
-    env_init_config conf = {0}; // Initialize to zero
+    env_init_config conf = {0};
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
     if (ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
@@ -205,13 +204,13 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
-        int random_map = rand() % num_maps;
-        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map); // random map file
+        int random_map = rand() % conf.num_maps;
+        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map);
         map_name = map_buffer;
     }
 
     if (frame_skip <= 0) {
-        frame_skip = 1; // Default: render every frame
+        frame_skip = 1;
     }
 
     // Check if map file exists
@@ -227,7 +226,10 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
     fclose(policy_file);
 
+    // Initialize environment with all config values from INI [env] section
     Drive env = {
+        .num_agents = conf.num_agents,
+        .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
@@ -235,21 +237,28 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
+        .goal_behavior = conf.goal_behavior,
+        .goal_target_distance = conf.goal_target_distance,
         .dt = conf.dt,
-        .map_name = (char *)map_name,
-        .init_steps = init_steps,
-        .max_controlled_agents = max_controlled_agents,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
-        .goal_behavior = goal_behavior,
-        .goal_target_distance = conf.goal_target_distance,
-        .init_mode = init_mode,
-        .control_mode = control_mode,
+        .init_steps = conf.init_steps,
+        .init_mode = conf.init_mode,
+        .control_mode = conf.control_mode,
+        .max_controlled_agents = conf.num_agents,
+        .map_name = (char *)map_name,
     };
 
     allocate(&env);
+
+    // Check if map has any active agents
+    if (env.active_agent_count == 0) {
+        fprintf(stderr, "Error: Map %s has no controllable agents\n", map_name);
+        free_allocated(&env);
+        return -1;
+    }
 
     // Set which vehicle to focus on for obs mode
     env.human_agent_idx = 0;
@@ -267,9 +276,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 6.0f; // Can be used to increase the video quality
+    float scale = 6.0f;
 
-    // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
     int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
 
@@ -292,7 +300,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
-    int log_trajectory = log_trajectories;
     char filename_topdown[256];
     char filename_agent[256];
 
@@ -308,7 +315,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         strcpy(map, basename((char *)map_name));
         *strrchr(map, '.') = '\0';
 
-        // Create video directory if it doesn't exist
         char video_dir[256];
         sprintf(video_dir, "%s/video", policy_base);
         char mkdir_cmd[512];
@@ -354,7 +360,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            int (*actions)[2] = (int (*)[2])env.actions;
             forward(net, env.observations, (int *)env.actions);
             c_step(&env);
         }
@@ -364,7 +369,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         c_reset(&env);
         printf("Recording agent view...\n");
         for (int i = 0; i < frame_count; i++) {
-            // Check if selected agent has reached the first goal and stop recording
             int human_idx = env.active_agent_indices[env.human_agent_idx];
             if (env.entities[human_idx].respawn_count > 0) {
                 break;
@@ -374,7 +378,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
                 WriteFrame(&agent_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            int (*actions)[2] = (int (*)[2])env.actions;
             forward(net, env.observations, (int *)env.actions);
             c_step(&env);
         }
@@ -384,7 +387,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     double elapsedTime = endTime - startTime;
     double writeFPS = (elapsedTime > 0) ? rendered_frames / elapsedTime : 0;
 
-    printf("Wrote %d frames in %.2f seconds (%.2f FPS) to %s \n", rendered_frames, elapsedTime, writeFPS,
+    printf("Wrote %d frames in %.2f seconds (%.2f FPS) to %s\n", rendered_frames, elapsedTime, writeFPS,
            filename_topdown);
 
     if (render_topdown) {
@@ -395,7 +398,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
     CloseWindow();
 
-    // Clean up resources
     free(client);
     free_allocated(&env);
     free_drivenet(net);
@@ -404,23 +406,18 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 }
 
 int main(int argc, char *argv[]) {
+    // Visualization-only parameters (not in [env] section)
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
     int log_trajectories = 1;
     int frame_skip = 1;
-    int init_steps = 0;
+    int zoom_in = 1;
+    const char *view_mode = "both";
+    
+    // File paths (not in [env] section)
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
-    int max_controlled_agents = -1;
-    int num_maps = 1;
-    int init_mode = 0;
-    int control_mode = 0;
-    int goal_behavior = 1;
-    float goal_target_distance = 10.0;
-    int zoom_in = 1;
-
-    const char *view_mode = "both"; // "both", "topdown", "agent"
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
 
@@ -437,28 +434,13 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--frame-skip") == 0) {
             if (i + 1 < argc) {
                 frame_skip = atoi(argv[i + 1]);
-                i++; // Skip the next argument since we consumed it
+                i++;
                 if (frame_skip <= 0) {
-                    frame_skip = 1; // Ensure valid value
+                    frame_skip = 1;
                 }
             }
-        } else if (strcmp(argv[i], "--map-name") == 0) {
-            // Check if there's a next argument for the map path
-            if (i + 1 < argc) {
-                map_name = argv[i + 1];
-                i++; // Skip the next argument since we used it as map path
-            } else {
-                fprintf(stderr, "Error: --map-name option requires a map file path\n");
-                return 1;
-            }
-        } else if (strcmp(argv[i], "--policy-name") == 0) {
-            if (i + 1 < argc) {
-                policy_name = argv[i + 1];
-                i++;
-            } else {
-                fprintf(stderr, "Error: --policy-name option requires a policy file path\n");
-                return 1;
-            }
+        } else if (strcmp(argv[i], "--zoom-in") == 0) {
+            zoom_in = 1;
         } else if (strcmp(argv[i], "--view") == 0) {
             if (i + 1 < argc) {
                 view_mode = argv[i + 1];
@@ -472,6 +454,22 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "Error: --view option requires a value (both/topdown/agent)\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--map-name") == 0) {
+            if (i + 1 < argc) {
+                map_name = argv[i + 1];
+                i++;
+            } else {
+                fprintf(stderr, "Error: --map-name option requires a map file path\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--policy-name") == 0) {
+            if (i + 1 < argc) {
+                policy_name = argv[i + 1];
+                i++;
+            } else {
+                fprintf(stderr, "Error: --policy-name option requires a policy file path\n");
+                return 1;
+            }
         } else if (strcmp(argv[i], "--output-topdown") == 0) {
             if (i + 1 < argc) {
                 output_topdown = argv[i + 1];
@@ -482,51 +480,10 @@ int main(int argc, char *argv[]) {
                 output_agent = argv[i + 1];
                 i++;
             }
-        } else if (strcmp(argv[i], "--init-steps") == 0) {
-            if (i + 1 < argc) {
-                init_steps = atoi(argv[i + 1]);
-                i++;
-                if (init_steps < 0) {
-                    init_steps = 0;
-                }
-            }
-        } else if (strcmp(argv[i], "--init-mode") == 0) {
-            if (i + 1 < argc) {
-                init_mode = atoi(argv[i + 1]);
-                i++;
-            }
-        } else if (strcmp(argv[i], "--control-mode") == 0) {
-            if (i + 1 < argc) {
-                control_mode = atoi(argv[i + 1]);
-                i++;
-            }
-        } else if (strcmp(argv[i], "--max-controlled-agents") == 0) {
-            if (i + 1 < argc) {
-                max_controlled_agents = atoi(argv[i + 1]);
-                i++;
-            }
-        } else if (strcmp(argv[i], "--num-maps") == 0) {
-            if (i + 1 < argc) {
-                num_maps = atoi(argv[i + 1]);
-                i++;
-            }
-        } else if (strcmp(argv[i], "--goal-behavior") == 0) {
-            if (i + 1 < argc) {
-                goal_behavior = atoi(argv[i + 1]);
-                i++;
-            }
-        } else if (strcmp(argv[i], "--goal-target-distance") == 0) {
-            if (i + 1 < argc) {
-                goal_target_distance = atof(argv[i + 1]);
-                i++;
-            }
-        } else if (strcmp(argv[i], "--zoom-in") == 0) {
-            zoom_in = 1;
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, init_steps,
-             max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, init_mode, control_mode,
-             goal_behavior, goal_target_distance, zoom_in);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, view_mode,
+             output_topdown, output_agent, zoom_in);
     return 0;
 }
