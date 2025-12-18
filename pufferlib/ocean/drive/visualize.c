@@ -246,8 +246,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     };
 
     env.episode_length = (episode_length_override > 0) ? episode_length_override
-                          : (conf.episode_length > 0)   ? conf.episode_length
-                                                         : TRAJECTORY_LENGTH_DEFAULT;
+                         : (conf.episode_length > 0)   ? conf.episode_length
+                                                       : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -417,7 +417,7 @@ int main(int argc, char *argv[]) {
     int episode_length_cli = -1;
     int init_mode = 0;
     int control_mode = 0;
-    int goal_behavior = 0;
+    int goal_behavior = 1;
     float goal_target_distance = 10.0;
     int zoom_in = 1;
 
