@@ -529,6 +529,11 @@ int main(int argc, char *argv[]) {
                 goal_behavior = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--goal-target-distance") == 0) {
+            if (i + 1 < argc) {
+                goal_target_distance = atof(argv[i + 1]);
+                i++;
+            }
         } else if (strcmp(argv[i], "--zoom-in") == 0) {
             zoom_in = 1;
         }
