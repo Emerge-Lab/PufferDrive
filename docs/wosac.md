@@ -78,6 +78,29 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 
 ---
 
+## Evaluating WOSAC agents using Puffer
+
+In this section, we describe how we evaluated SMART-tiny-CLSFT, and how anyone can use this repo to evaluate their Sim Agents model.
+
+**High-level idea**: Our code to evaluate WOSAC takes as input sim_trajectories and ground_truth trajectories, compute some statistics and output scores based on these statistics. If one wants to provide directly its own sim_trajectories as pkl file, if they were generated using the same dataset, we can use them to produce WOSAC scores.
+
+**Command**: `python pufferlib/ocean/benchmark/evaluate_imported_trajectories.py --simulated-file my_rollouts.pkl `
+
+**Instructions**:
+- The rollouts should be generated using the same dataset than the one given in the config file `[eval] map_dir`, you can find the original scenario ids in the `.json` files (`scenario_id` field)
+- If you produce a list of the scenario_ids you want to rollout your model on, you can feed them to your dataloader to run inference only on these scenarios.
+- Then you should save the output of your inferences in a dict containing the following fields:
+```
+x  :  (num_agents, num_rollouts, 81)
+y  :  (num_agents, num_rollouts, 81)
+z  :  (num_agents, num_rollouts, 81)
+heading  :  (num_agents, num_rollouts, 81)
+id  :  (num_agents, num_rollouts, 81)
+```
+- Then you can recompile the code, putting `MAX_AGENTS=256` in `drive.h``
+- Then run: `python pufferlib/ocean/benchmark/evaluate_imported_trajectories.py --simulated-file my_rollouts.pkl`
+
+
 
 ## Useful links
 
