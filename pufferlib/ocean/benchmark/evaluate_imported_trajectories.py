@@ -1,7 +1,7 @@
 import sys
 import pickle
 import numpy as np
-from scipy import cKDTree
+from scipy.spatial import cKDTree
 import pufferlib.pufferl as pufferl
 from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
@@ -48,13 +48,15 @@ def align_trajectories_by_initial_position(simulated, ground_truth, tolerance=1e
 
 def check_alignment(simulated, ground_truth, tolerance=1e-4):
     # Check that initial positions match within a tolerance
-    sim_x = simulated["x"][:, 0, 0]
-    sim_y = simulated["y"][:, 0, 0]
-    sim_z = simulated["z"][:, 0, 0]
-
     gt_x = ground_truth["x"][:, 0, 0]
     gt_y = ground_truth["y"][:, 0, 0]
     gt_z = ground_truth["z"][:, 0, 0]
+
+    num_agents_gt = gt_x.shape[0]
+
+    sim_x = simulated["x"][:num_agents_gt, 0, 0]
+    sim_y = simulated["y"][:num_agents_gt, 0, 0]
+    sim_z = simulated["z"][:num_agents_gt, 0, 0]
 
     diffs = np.maximum(np.maximum(np.abs(gt_x - sim_x), np.abs(gt_y - sim_y)), np.abs(gt_z - sim_z))
 
@@ -74,87 +76,90 @@ def evaluate_trajectories(simulated_trajectory_file, args):
     args["env"]["use_all_maps"] = True
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
-    wosac_enabled = args["eval"]["wosac_realism_eval"]
+    print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
 
-    if wosac_enabled:
-        print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
+    backend = args["eval"]["backend"]
+    assert backend == "PufferEnv", "WOSAC evaluation only supports PufferEnv backend."
+    args["vec"] = dict(backend=backend, num_envs=1)
 
-        backend = args["eval"]["backend"]
-        assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
-        args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["num_agents"] = args["eval"]["wosac_num_agents"]
-        args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
-        args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
-        args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
-        args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
-        args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
+    args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
+    args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
+    args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
+    args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
+    args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
 
-        vecenv = pufferl.load_env(env_name, args)
-        evaluator = WOSACEvaluator(args)
+    vecenv = pufferl.load_env(env_name, args)
+    evaluator = WOSACEvaluator(args)
 
-        # Collect ground truth trajectories from the dataset
-        gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+    # Collect ground truth trajectories from the dataset
+    gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+    num_agents_gt = gt_trajectories["x"].shape[0]
 
-        print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
-        print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
-        print(
-            f"Number of evaluated agents: {np.sum(gt_trajectories['track_id'] >= 0) + np.sum(gt_trajectories['track_id'] == -3)}"
+    print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
+    print(f"Number of controlled agents: {num_agents_gt}")
+    print(
+        f"Number of evaluated agents: {np.sum(gt_trajectories['track_id'] >= 0) + np.sum(gt_trajectories['track_id'] == -3)}"
+    )
+
+    print(f"Loading simulated trajectories from {simulated_trajectory_file}...")
+    with open(simulated_trajectory_file, "rb") as f:
+        sim_trajectories = pickle.load(f)
+
+    if sim_trajectories["x"].shape[0] != gt_trajectories["x"].shape[0]:
+        print("\nThe number of agents in simulated and ground truth trajectories do not match.")
+        print("This is okay if you are running this script on a subset of the val dataset")
+        print("But please also check that in drive.h MAX_AGENTS is set to 256 and recompile")
+
+    if not check_alignment(sim_trajectories, gt_trajectories):
+        print("Trajectories are not aligned, trying to align them, if it fails consider changing the tolerance.")
+        sim_trajectories = align_trajectories_by_initial_position(sim_trajectories, gt_trajectories)
+        assert check_alignment(sim_trajectories, gt_trajectories), (
+            "There might be an issue with the way you generated your data."
         )
+        print("Alignment successful")
+    else:
+        sim_trajectories = {k: v[:num_agents_gt] for k, v in sim_trajectories.items()}
 
-        print(f"Loading simulated trajectories from {simulated_trajectory_file}...")
-        with open(simulated_trajectory_file, "rb") as f:
-            sim_trajectories = pickle.load(f)
+    agent_state = vecenv.driver_env.get_global_agent_state()
+    road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
 
-        if sim_trajectories["x"].shape[0] != gt_trajectories["x"].shape[0]:
-            print("The number of agents in simulated and ground truth trajectories do not match.")
-            print("This is okay if you are running this script on a subset of the val dataset")
-            print("But please also check that in drive.h MAX_AGENTS is set to 256 and recompile")
+    print("\n--- Computing WOSAC Metrics ---")
+    results = evaluator.compute_metrics(
+        gt_trajectories,
+        sim_trajectories,
+        agent_state,
+        road_edge_polylines,
+        args["eval"]["wosac_aggregate_results"],
+    )
 
-        if not check_alignment(sim_trajectories, gt_trajectories):
-            print("Trajectories are not aligned, trying to align them, if it fails consider changing the tolerance.")
-            print("If it still fails, there might be an issue with the way you generated your data ?")
-            sim_trajectories = align_trajectories_by_initial_position(sim_trajectories, gt_trajectories)
-            assert check_alignment(sim_trajectories, gt_trajectories), "The alignment failed, I am very sorry."
+    if args["eval"]["wosac_aggregate_results"]:
+        import json
 
-        agent_state = vecenv.driver_env.get_global_agent_state()
-        road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+        print("\n")
+        print("\n--- WOSAC METRICS START ---")
+        print(json.dumps(results, indent=4))
+        print("--- WOSAC METRICS END ---")
 
-        print("\n--- Computing WOSAC Metrics ---")
-        results = evaluator.compute_metrics(
-            gt_trajectories,
-            sim_trajectories,
-            agent_state,
-            road_edge_polylines,
-            args["eval"]["wosac_aggregate_results"],
-        )
+    vecenv.close()
+    return results
 
-        if args["eval"]["wosac_aggregate_results"]:
-            import json
 
-            print("\n")
-            print("\n--- WOSAC METRICS START ---")
-            print(json.dumps(results, indent=4))
-            print("--- WOSAC METRICS END ---")
-
-        vecenv.close()
-        return results
-
-    if __name__ == "__main__":
-        simulated_file = None
-        if "--simulated-file" in sys.argv:
-            try:
-                idx = sys.argv.index("--simulated-file")
-                simulated_file = sys.argv[idx + 1]
-                sys.argv.pop(idx)
-                sys.argv.pop(idx)
-            except (ValueError, IndexError):
-                print("ERROR: --simulated-file argument found but no value was provided.")
-                sys.exit(1)
-
-        if simulated_file is None:
-            print("ERROR: --simulated-file argument is required.")
+if __name__ == "__main__":
+    simulated_file = None
+    if "--simulated-file" in sys.argv:
+        try:
+            idx = sys.argv.index("--simulated-file")
+            simulated_file = sys.argv[idx + 1]
+            sys.argv.pop(idx)
+            sys.argv.pop(idx)
+        except (ValueError, IndexError):
+            print("ERROR: --simulated-file argument found but no value was provided.")
             sys.exit(1)
 
-        config = pufferl.load_config("puffer_drive")
+    if simulated_file is None:
+        print("ERROR: --simulated-file argument is required.")
+        sys.exit(1)
 
-        evaluate_trajectories(simulated_file, args=config)
+    config = pufferl.load_config("puffer_drive")
+
+    evaluate_trajectories(simulated_file, args=config)
