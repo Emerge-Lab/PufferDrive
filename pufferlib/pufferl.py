@@ -1114,6 +1114,88 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     return all_logs
 
 
+def render_adversarial(env_name, args=None, vecenv=None, policy=None):
+    args = args or load_config(env_name)
+    args["env"]["map_dir"] = args["eval"]["map_dir"]
+
+    backend = args["vec"]["backend"]
+    if backend != "PufferEnv":
+        backend = "Serial"
+
+    args["vec"] = dict(backend=backend, num_envs=1)
+    vecenv = vecenv or load_env(env_name, args)
+    policy = policy or load_policy(args, vecenv, env_name)
+
+    breakpoint()
+
+    # Load target policy:
+    target_config = args.copy()
+    target_config["train"]["load_model_path"] = args["adversarial"]["target_model_path"]
+    target_config["policy_name"] = "Drive"
+    target_policy = load_policy(target_config, vecenv)
+
+    target_obs_dim = 7
+
+    ob, info = vecenv.reset()
+    driver = vecenv.driver_env
+    num_agents = vecenv.observation_space.shape[0]
+    device = args["train"]["device"]
+
+    # Rebuild visualize binary if saving frames (for C-based rendering)
+    if args["save_frames"] > 0:
+        ensure_drive_binary()
+
+    state = {}
+    if args["train"]["use_rnn"]:
+        state = dict(
+            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        )
+        target_state = dict(
+            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        )
+
+    frames = []
+    while True:
+        render = driver.render()
+        if len(frames) < args["save_frames"]:
+            frames.append(render)
+
+        # Screenshot Ocean envs with F12, gifs with control + F12
+        if driver.render_mode == "ansi":
+            print("\033[0;0H" + render + "\n")
+            time.sleep(1 / args["fps"])
+        elif driver.render_mode == "rgb_array":
+            pass
+            # import cv2
+            # render = cv2.cvtColor(render, cv2.COLOR_RGB2BGR)
+            # cv2.imshow('frame', render)
+            # cv2.waitKey(1)
+            # time.sleep(1/args['fps'])
+        breakpoint()
+        with torch.no_grad():
+            ob = torch.as_tensor(ob).to(device)
+            logits, value = policy.forward_eval(ob, state)
+            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+
+            target_logits, target_value = target_policy.forward_eval(ob[:, :-target_obs_dim], target_state)
+            target_action, target_logprob, _ = pufferlib.pytorch.sample_logits(target_logits)
+
+            action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+        if isinstance(logits, torch.distributions.Normal):
+            action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+        ob, r, d, t, info = vecenv.step(action)
+
+        if len(frames) > 0 and len(frames) == args["save_frames"]:
+            import imageio
+
+            imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
+            frames.append("Done")
+
+
 def eval(env_name, args=None, vecenv=None, policy=None):
     """Evaluate a policy."""
 
@@ -1621,6 +1703,8 @@ def main():
         train(env_name=env_name)
     elif mode == "eval":
         eval(env_name=env_name)
+    elif mode == "render_adversarial":
+        render_adversarial(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":
