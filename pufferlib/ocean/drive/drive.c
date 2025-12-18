@@ -56,6 +56,11 @@ void demo() {
         .offroad_behavior = conf.offroad_behavior,
         .goal_behavior = conf.goal_behavior,
         .goal_target_distance = conf.goal_target_distance,
+        .action_type = conf.action_type,
+        .episode_length = conf.episode_length,
+        .termination_mode = conf.termination_mode,
+        .control_mode = 0, // Vehicles
+        .init_mode = 0, // Init all valid
     };
     allocate(&env);
     c_reset(&env);
