@@ -1634,7 +1634,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         } else { // discrete
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
             int *action_array = (int *)env->actions;
-            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
             int action_val = action_array[action_idx];
             int acceleration_index = action_val / num_steer;
@@ -1701,7 +1700,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         } else { // discrete
             // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
             int *action_array = (int *)env->actions;
-            int num_long = sizeof(JERK_LONG) / sizeof(JERK_LONG[0]);
             int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
             int action_val = action_array[action_idx];
             int a_long_idx = action_val / num_lat;
@@ -2127,8 +2125,6 @@ void compute_new_goal(Drive *env, int agent_idx) {
             float prev_y = lane->traj_y[i - 1];
             float next_x = lane->traj_x[i];
             float next_y = lane->traj_y[i];
-            float seg_dx = next_x - prev_x;
-            float seg_dy = next_y - prev_y;
             float segment_length = relative_distance_2d(prev_x, prev_y, next_x, next_y);
 
             if (remaining_distance <= segment_length) {
@@ -2379,7 +2375,6 @@ Client *make_client(Drive *env) {
     client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
     client->cyclist = LoadModel("resources/drive/cyclist.glb");
     client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
-    int animCount = 0;
     int animCountCyc = 0;
     client->cycle_anim = LoadModelAnimations("resources/drive/cyclist.glb", &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
@@ -2803,7 +2798,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 }
 
                 // --- Draw the car  ---
-                Vector3 carPos = {position.x, position.y, position.z};
                 Color car_color = GRAY; // default for static
                 if (is_expert)
                     car_color = GOLD; // expert replay
@@ -2934,15 +2928,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         for (int j = 0; j < env->entities[i].array_size - 1; j++) {
             Vector3 start = {env->entities[i].traj_x[j], env->entities[i].traj_y[j], 1};
             Vector3 end = {env->entities[i].traj_x[j + 1], env->entities[i].traj_y[j + 1], 1};
-            Color lineColor = GRAY;
-            if (env->entities[i].type == ROAD_LANE)
-                lineColor = GRAY;
-            else if (env->entities[i].type == ROAD_LINE)
-                lineColor = BLUE;
-            else if (env->entities[i].type == ROAD_EDGE)
-                lineColor = WHITE;
-            else if (env->entities[i].type == DRIVEWAY)
-                lineColor = RED;
             if (env->entities[i].type != ROAD_EDGE) {
                 continue;
             }
@@ -2969,7 +2954,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
     // Draw track indices for the tracks to predict
     if (mode == 1 && env->control_mode == CONTROL_WOSAC) {
-        float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;
 
