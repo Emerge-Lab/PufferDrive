@@ -375,7 +375,7 @@ void add_log(Drive *env) {
         if (frac_goals_reached == 1.0 && !e->collided_before_goal) {
             env->log.score += 1.0f;
         }
-        if (!offroad && !collided && ! (e->goals_reached_this_episode < 1.0f) ) {
+        if (!offroad && !collided && !(e->goals_reached_this_episode < 1.0f)) {
             env->log.dnf_rate += 1.0f;
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
@@ -1898,7 +1898,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
     float best_x = agent->x;
     float best_y = agent->y;
     float best_distance_error = 1e50f;
-    
+
     // Sample points from all road lanes
     for (int i = env->num_objects; i < env->num_entities; i++) {
         if (env->entities[i].type != ROAD_LANE)
@@ -1949,7 +1949,7 @@ void c_reset(Drive *env) {
         env->entities[agent_idx].collided_before_goal = 0;
         env->entities[agent_idx].goals_reached_this_episode = 0.0f;
         // Initialize to 1 because there is one goal in the data file
-        env->entities[agent_idx].goals_sampled_this_episode = 1.0f; 
+        env->entities[agent_idx].goals_sampled_this_episode = 1.0f;
         env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
@@ -2511,6 +2511,19 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     snprintf(timestep_text, sizeof(timestep_text), "Timestep: %d", env->timestep);
     DrawText(timestep_text, 10, 10, 20, PUFF_WHITE);
 
+    if (show_grid) {
+        float grid_start_x = env->grid_map->top_left_x;
+        float grid_start_y = env->grid_map->bottom_right_y;
+        for (int i = 0; i < env->grid_map->grid_cols; i++) {
+            for (int j = 0; j < env->grid_map->grid_rows; j++) {
+                float x = grid_start_x + i * GRID_CELL_SIZE;
+                float y = grid_start_y + j * GRID_CELL_SIZE;
+                DrawCubeWires((Vector3){x + GRID_CELL_SIZE / 2, y + GRID_CELL_SIZE / 2, 1}, GRID_CELL_SIZE,
+                              GRID_CELL_SIZE, 0.1f, PUFF_BACKGROUND2);
+            }
+        }
+    }
+
     // Draw a grid to help with orientation
     // DrawGrid(20, 1.0f);
     for (int i = 0; i < env->num_entities; i++) {
@@ -2729,25 +2742,12 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
         }
     }
-    if (show_grid) {
-        // Draw grid cells using the stored bounds
-        float grid_start_x = env->grid_map->top_left_x;
-        float grid_start_y = env->grid_map->bottom_right_y;
-        for (int i = 0; i < env->grid_map->grid_cols; i++) {
-            for (int j = 0; j < env->grid_map->grid_rows; j++) {
-                float x = grid_start_x + i * GRID_CELL_SIZE;
-                float y = grid_start_y + j * GRID_CELL_SIZE;
-                DrawCubeWires((Vector3){x + GRID_CELL_SIZE / 2, y + GRID_CELL_SIZE / 2, 1}, GRID_CELL_SIZE,
-                              GRID_CELL_SIZE, 0.1f, PUFF_BACKGROUND2);
-            }
-        }
-    }
 
     EndMode3D();
 
     // Draw track indices for the tracks to predict
     if (mode == 1 && env->control_mode == CONTROL_WOSAC) {
-        //float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
+        // float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;
 
