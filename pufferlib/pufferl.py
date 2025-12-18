@@ -1039,6 +1039,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
+    planning_enabled = args["eval"]["planning_eval"]
     args["env"]["map_dir"] = args["eval"]["map_dir"]
     args["env"]["num_maps"] = args["eval"]["num_maps"]
     args["env"]["use_all_maps"] = True
@@ -1067,7 +1068,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
         print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
-        print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
+        print(f"Number of evaluated agents: {np.sum((gt_trajectories['id'] != -1) | (gt_trajectories['id'] != -2))}")
 
         # Roll out trained policy in the simulator
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
@@ -1090,7 +1091,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             import json
 
             print("\nWOSAC_METRICS_START")
-            print(json.dumps(results))
+            print(json.dumps(results, indent=4))
             print("WOSAC_METRICS_END")
 
         return results
@@ -1121,6 +1122,60 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print("HUMAN_REPLAY_METRICS_END")
 
         return results
+
+    elif planning_enabled:
+        print(f"Running Planning evaluation with {dataset_name} dataset. \n")
+        from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator, PlanningEvaluator
+
+        backend = args["eval"]["backend"]
+        assert backend == "PufferEnv", "Planning evaluation only supports PufferEnv backend."
+
+        args["vec"] = dict(backend=backend, num_envs=1)
+        args["eval"]["wosac_num_rollouts"] = 1
+        args["env"]["control_mode"] = "control_sdc_only"
+        args["env"]["init_steps"] = args["eval"]["planning_init_steps"]
+        args["env"]["goal_behavior"] = args["eval"]["planning_goal_behavior"]
+        args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
+
+        vecenv = vecenv or load_env(env_name, args)
+        policy = policy or load_policy(args, vecenv, env_name)
+
+        # Step 0: collect gt trajectories
+        wosac_evaluator = WOSACEvaluator(args)
+        gt_args = args.copy()
+        gt_args["env"]["control_mode"] = "control_wosac"
+        gt_vecenv = load_env(env_name, gt_args)
+        gt_trajectories = wosac_evaluator.collect_ground_truth_trajectories(gt_vecenv)
+        agent_state = gt_vecenv.driver_env.get_global_agent_state()
+        road_edge_polylines = gt_vecenv.driver_env.get_road_edge_polylines()
+
+        # Step 1: collect the sdc trajectories on each scenario (Wosac with 1 rollout and control_sdc_only)
+        planning_trajectories = wosac_evaluator.collect_simulated_trajectories(args, vecenv, policy)
+
+        evaluator = PlanningEvaluator(args)
+
+        # Combine them to direclty call the metrics computation
+        combined_trajectories = evaluator.combine_trajectories(gt_trajectories, planning_trajectories)
+
+        results = evaluator.compute_metrics(
+            combined_trajectories, agent_state, road_edge_polylines, args["eval"]["planning_aggregate_results"]
+        )
+
+        gt_results = evaluator.compute_metrics(
+            gt_trajectories, agent_state, road_edge_polylines, args["eval"]["planning_aggregate_results"]
+        )
+
+        if args["eval"]["planning_aggregate_results"]:
+            import json
+
+            print("\nPLANNING_METRICS_START")
+            print(json.dumps(results, indent=4))
+            print("PLANNING_METRICS_END")
+
+            print("\nPLANNING_GT_METRICS_START")
+            print(json.dumps(gt_results, indent=4))
+            print("PLANNING_GT_METRICS_END")
+
     else:  # Standard evaluation: Render
         backend = args["vec"]["backend"]
         if backend != "PufferEnv":
