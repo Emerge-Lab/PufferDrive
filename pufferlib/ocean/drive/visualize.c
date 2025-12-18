@@ -191,7 +191,7 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
 
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int log_trajectories, int frame_skip, const char *view_mode, const char *output_topdown,
-             const char *output_agent, int zoom_in) {
+             const char *output_agent, int num_maps, int zoom_in) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};
@@ -204,7 +204,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
-        int random_map = rand() % conf.num_maps;
+        int random_map = rand() % num_maps;
         sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map);
         map_name = map_buffer;
     }
@@ -228,7 +228,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     // Initialize environment with all config values from INI [env] section
     Drive env = {
-        .num_agents = conf.num_agents,
         .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
@@ -247,7 +246,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
-        .max_controlled_agents = conf.num_agents,
         .map_name = (char *)map_name,
     };
 
@@ -414,12 +412,13 @@ int main(int argc, char *argv[]) {
     int frame_skip = 1;
     int zoom_in = 1;
     const char *view_mode = "both";
-    
-    // File paths (not in [env] section)
+
+    // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
+    int num_maps = 1;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -480,10 +479,15 @@ int main(int argc, char *argv[]) {
                 output_agent = argv[i + 1];
                 i++;
             }
+        } else if (strcmp(argv[i], "--num-maps") == 0) {
+            if (i + 1 < argc) {
+                num_maps = atoi(argv[i + 1]);
+                i++;
+            }
         }
     }
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, view_mode,
-             output_topdown, output_agent, zoom_in);
+             output_topdown, output_agent, num_maps, zoom_in);
     return 0;
 }
