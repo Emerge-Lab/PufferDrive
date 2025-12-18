@@ -191,9 +191,8 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
 
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents,
-             const char *view_mode, const char *output_topdown, const char *output_agent, int num_maps,
-             int episode_length_override, int init_mode, int control_mode, int goal_behavior,
-             float goal_target_distance, int zoom_in) {
+             const char *view_mode, const char *output_topdown, const char *output_agent, int num_maps, int init_mode,
+             int control_mode, int goal_behavior, float goal_target_distance, int zoom_in) {
 
     // Parse configuration from INI file
     env_init_config conf = {0}; // Initialize to zero
@@ -232,22 +231,24 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_goal = conf.reward_goal,
+        .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
         .map_name = (char *)map_name,
         .init_steps = init_steps,
         .max_controlled_agents = max_controlled_agents,
+        .episode_length = conf.episode_length,
+        .termination_mode = conf.termination_mode,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .goal_behavior = goal_behavior,
+        .goal_target_distance = conf.goal_target_distance,
         .init_mode = init_mode,
         .control_mode = control_mode,
     };
 
-    env.episode_length = (episode_length_override > 0) ? episode_length_override
-                         : (conf.episode_length > 0)   ? conf.episode_length
-                                                       : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -408,13 +409,11 @@ int main(int argc, char *argv[]) {
     int lasers = 0;
     int log_trajectories = 1;
     int frame_skip = 1;
-    float goal_radius = 2.0f;
     int init_steps = 0;
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     int max_controlled_agents = -1;
     int num_maps = 1;
-    int episode_length_cli = -1;
     int init_mode = 0;
     int control_mode = 0;
     int goal_behavior = 1;
@@ -441,14 +440,6 @@ int main(int argc, char *argv[]) {
                 i++; // Skip the next argument since we consumed it
                 if (frame_skip <= 0) {
                     frame_skip = 1; // Ensure valid value
-                }
-            }
-        } else if (strcmp(argv[i], "--goal-radius") == 0) {
-            if (i + 1 < argc) {
-                goal_radius = atof(argv[i + 1]);
-                i++;
-                if (goal_radius <= 0) {
-                    goal_radius = 2.0f; // Ensure valid value
                 }
             }
         } else if (strcmp(argv[i], "--map-name") == 0) {
@@ -519,11 +510,6 @@ int main(int argc, char *argv[]) {
                 num_maps = atoi(argv[i + 1]);
                 i++;
             }
-        } else if (strcmp(argv[i], "--episode-length") == 0) {
-            if (i + 1 < argc) {
-                episode_length_cli = atoi(argv[i + 1]);
-                i++;
-            }
         } else if (strcmp(argv[i], "--goal-behavior") == 0) {
             if (i + 1 < argc) {
                 goal_behavior = atoi(argv[i + 1]);
@@ -540,7 +526,7 @@ int main(int argc, char *argv[]) {
     }
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps,
-             max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, episode_length_cli, init_mode,
-             control_mode, goal_behavior, goal_target_distance, zoom_in);
+             max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, init_mode, control_mode,
+             goal_behavior, goal_target_distance, zoom_in);
     return 0;
 }
