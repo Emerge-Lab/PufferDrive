@@ -1326,26 +1326,24 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     agent->collision_state = collided;
 
-    if(collided == VEHICLE_COLLISION){
-        if(env->collision_behavior==STOP_AGENT && !agent->stopped){ //Stop
+    if (collided == VEHICLE_COLLISION) {
+        if (env->collision_behavior == STOP_AGENT && !agent->stopped) {
             agent->stopped = 1;
-            agent->vx=agent->vy = 0.0f;
-        }
-        else if(env->collision_behavior==REMOVE_AGENT && !agent->removed){
-            Entity* agent_collided = &env->entities[car_collided_with_index];
+            agent->vx = agent->vy = 0.0f;
+        } else if (env->collision_behavior == REMOVE_AGENT && !agent->removed) {
+            Entity *agent_collided = &env->entities[car_collided_with_index];
             agent->removed = 1;
             agent_collided->removed = 1;
             agent->x = agent->y = -10000.0f;
             agent_collided->x = agent_collided->y = -10000.0f;
         }
     }
-    if(collided == OFFROAD){
+    if (collided == OFFROAD) {
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        if(env->offroad_behavior==STOP_AGENT  && !agent->stopped){ //Stop
+        if (env->offroad_behavior == STOP_AGENT && !agent->stopped) {
             agent->stopped = 1;
-            agent->vx=agent->vy = 0.0f;
-        }
-        else if(env->offroad_behavior==REMOVE_AGENT && !agent->removed){
+            agent->vx = agent->vy = 0.0f;
+        } else if (env->offroad_behavior == REMOVE_AGENT && !agent->removed) {
             agent->removed = 1;
             agent->x = agent->y = -10000.0f;
         }
