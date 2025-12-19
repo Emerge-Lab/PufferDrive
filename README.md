@@ -1,5 +1,29 @@
 # PufferDrive
 
+<img align="left" style="width:260px" src="https://github.com/Emerge-Lab/PufferDrive/blob/main/pufferlib/resources/drive/pufferdrive_20fps_long.gif" width="288px">
+
+**PufferDrive is a fast and friendly driving simulator to train and test RL-based models.**
+
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+---
+
+**Docs**: https://emerge-lab.github.io/PufferDrive
+
+---
+
+> **Note**: 🚀 `PufferDrive` release `2.0` coming soon and includes extended functionality + documentation
+
+
 
 ## Installation
 
@@ -22,6 +46,7 @@ Compile the C code
 ```
 python setup.py build_ext --inplace --force
 ```
+Run this while your virtual environment is active so the extension is built against the right interpreter.
 
 To test your setup, you can run
 ```
@@ -54,8 +79,9 @@ python pufferlib/ocean/drive/drive.py
 
 You can download the WOMD data from Hugging Face in two versions:
 
-- **Mini Dataset**: [GPUDrive_mini](https://huggingface.co/datasets/EMERGE-lab/GPUDrive_mini) contains 1,000 training files and 300 test/validation files
-- **Full Dataset**: [GPUDrive](https://huggingface.co/datasets/EMERGE-lab/GPUDrive) contains 100,000 unique scenes
+- **Mini dataset**: [GPUDrive_mini](https://huggingface.co/datasets/EMERGE-lab/GPUDrive_mini) contains 1,000 training files and 300 test/validation files
+- **Medium dataset**: [10,000 files from the training dataset](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_train)
+- **Large dataset**: [GPUDrive](https://huggingface.co/datasets/EMERGE-lab/GPUDrive) contains 100,000 unique scenes
 
 **Note**: Replace 'GPUDrive_mini' with 'GPUDrive' in your download commands if you want to use the full dataset.
 
@@ -69,6 +95,19 @@ For more training data compatible with PufferDrive, see [ScenarioMax](https://gi
 
 <details>
 <summary>Dependencies and usage</summary>
+
+## Local rendering
+
+To launch an interactive renderer, first build:
+```
+bash scripts/build_ocean.sh drive local
+```
+
+then launch:
+```bash
+./drive
+```
+this will run `demo()` with an existing model checkpoint.
 
 ## Headless server setup
 
@@ -117,12 +156,15 @@ The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color 
 
 ### Distributional realism
 
-We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/main/pufferlib/ocean/benchmark).
+We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/tree/main/pufferlib/ocean/benchmark).
 
 WOSAC evaluation with random policy:
 ```bash
 puffer eval puffer_drive --eval.wosac-realism-eval True
 ```
+
+- **Small clean eval dataset**. A clean validation set with 229 scenarios can be downloaded [here](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean).
+- **Large eval dataset**. [TODO]
 
 WOSAC evaluation with your checkpoint (must be .pt file):
 ```bash
@@ -134,4 +176,30 @@ puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-
 You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how closely aligned your agent's behavior is to how people drive. You can run it like this:
 ```bash
 puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-trained-policy>.pt
+```
+
+## Development
+
+<details><summary>Editing the docs</summary>
+
+A browsable documentation site now lives under `docs/` and is configured with MkDocs Material. To preview locally:
+```
+uv pip install -r docs/requirements.txt  # or pip install -r docs/requirements.txt
+mkdocs serve
+```
+Open the served URL to explore install steps, data preparation, visualization, and evaluation commands.
+</details>
+
+
+## Citation
+
+If you use PufferDrive in your research, please cite:
+```bibtex
+@software{pufferdrive2024github,
+  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Eugene Vinitsky},
+  title = {{PufferDrive}: A Fast and Friendly Driving Simulator for Training and Evaluating {RL} Agents},
+  url = {https://github.com/Emerge-Lab/PufferDrive},
+  version = {2.0.0},
+  year = {2025},
+}
 ```

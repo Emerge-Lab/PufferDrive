@@ -1,0 +1,13 @@
+# Defines the code style for C/C++/CUDA section
+---
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+SortIncludes: false
+---
+Language: Json
+# Don't format .json files
+DisableFormat: true

@@ -3,42 +3,36 @@
 #include <numpy/arrayobject.h>
 
 // Forward declarations for env-specific functions supplied by user
-static int my_log(PyObject* dict, Log* log);
-static int my_init(Env* env, PyObject* args, PyObject* kwargs);
+static int my_log(PyObject *dict, Log *log);
+static int my_init(Env *env, PyObject *args, PyObject *kwargs);
 
-static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs);
+static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs);
 #ifndef MY_SHARED
-static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
-    return NULL;
-}
+static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) { return NULL; }
 #endif
 
-static PyObject* my_get(PyObject* dict, Env* env);
+static PyObject *my_get(PyObject *dict, Env *env);
 #ifndef MY_GET
-static PyObject* my_get(PyObject* dict, Env* env) {
-    return NULL;
-}
+static PyObject *my_get(PyObject *dict, Env *env) { return NULL; }
 #endif
 
-static int my_put(Env* env, PyObject* args, PyObject* kwargs);
+static int my_put(Env *env, PyObject *args, PyObject *kwargs);
 #ifndef MY_PUT
-static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
-    return 0;
-}
+static int my_put(Env *env, PyObject *args, PyObject *kwargs) { return 0; }
 #endif
 
 #ifndef MY_METHODS
 #define MY_METHODS {NULL, NULL, 0, NULL}
 #endif
 
-static Env* unpack_env(PyObject* args) {
-    PyObject* handle_obj = PyTuple_GetItem(args, 0);
+static Env *unpack_env(PyObject *args) {
+    PyObject *handle_obj = PyTuple_GetItem(args, 0);
     if (!PyObject_TypeCheck(handle_obj, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "env_handle must be an integer");
         return NULL;
     }
 
-    Env* env = (Env*)PyLong_AsVoidPtr(handle_obj);
+    Env *env = (Env *)PyLong_AsVoidPtr(handle_obj);
     if (!env) {
         PyErr_SetString(PyExc_ValueError, "Invalid env handle");
         return NULL;
@@ -48,36 +42,36 @@ static Env* unpack_env(PyObject* args) {
 }
 
 // Python function to initialize the environment
-static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
+static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
     if (PyTuple_Size(args) != 6) {
         PyErr_SetString(PyExc_TypeError, "Environment requires 5 arguments");
         return NULL;
     }
 
-    Env* env = (Env*)calloc(1, sizeof(Env));
+    Env *env = (Env *)calloc(1, sizeof(Env));
     if (!env) {
         PyErr_SetString(PyExc_MemoryError, "Failed to allocate environment");
         return NULL;
     }
 
-    PyObject* obs = PyTuple_GetItem(args, 0);
+    PyObject *obs = PyTuple_GetItem(args, 0);
     if (!PyObject_TypeCheck(obs, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Observations must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* observations = (PyArrayObject*)obs;
+    PyArrayObject *observations = (PyArrayObject *)obs;
     if (!PyArray_ISCONTIGUOUS(observations)) {
         PyErr_SetString(PyExc_ValueError, "Observations must be contiguous");
         return NULL;
     }
     env->observations = PyArray_DATA(observations);
 
-    PyObject* act = PyTuple_GetItem(args, 1);
+    PyObject *act = PyTuple_GetItem(args, 1);
     if (!PyObject_TypeCheck(act, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Actions must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* actions = (PyArrayObject*)act;
+    PyArrayObject *actions = (PyArrayObject *)act;
     if (!PyArray_ISCONTIGUOUS(actions)) {
         PyErr_SetString(PyExc_ValueError, "Actions must be contiguous");
         return NULL;
@@ -88,12 +82,12 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         return NULL;
     }
 
-    PyObject* rew = PyTuple_GetItem(args, 2);
+    PyObject *rew = PyTuple_GetItem(args, 2);
     if (!PyObject_TypeCheck(rew, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Rewards must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* rewards = (PyArrayObject*)rew;
+    PyArrayObject *rewards = (PyArrayObject *)rew;
     if (!PyArray_ISCONTIGUOUS(rewards)) {
         PyErr_SetString(PyExc_ValueError, "Rewards must be contiguous");
         return NULL;
@@ -104,12 +98,12 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     }
     env->rewards = PyArray_DATA(rewards);
 
-    PyObject* term = PyTuple_GetItem(args, 3);
+    PyObject *term = PyTuple_GetItem(args, 3);
     if (!PyObject_TypeCheck(term, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Terminals must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* terminals = (PyArrayObject*)term;
+    PyArrayObject *terminals = (PyArrayObject *)term;
     if (!PyArray_ISCONTIGUOUS(terminals)) {
         PyErr_SetString(PyExc_ValueError, "Terminals must be contiguous");
         return NULL;
@@ -120,12 +114,12 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     }
     env->terminals = PyArray_DATA(terminals);
 
-    PyObject* trunc = PyTuple_GetItem(args, 4);
+    PyObject *trunc = PyTuple_GetItem(args, 4);
     if (!PyObject_TypeCheck(trunc, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Truncations must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* truncations = (PyArrayObject*)trunc;
+    PyArrayObject *truncations = (PyArrayObject *)trunc;
     if (!PyArray_ISCONTIGUOUS(truncations)) {
         PyErr_SetString(PyExc_ValueError, "Truncations must be contiguous");
         return NULL;
@@ -136,8 +130,7 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     }
     // env->truncations = PyArray_DATA(truncations);
 
-
-    PyObject* seed_arg = PyTuple_GetItem(args, 5);
+    PyObject *seed_arg = PyTuple_GetItem(args, 5);
     if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "seed must be an integer");
         return NULL;
@@ -151,11 +144,11 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     if (kwargs == NULL) {
         kwargs = PyDict_New();
     } else {
-        Py_INCREF(kwargs);  // We need to increment the reference since we'll be modifying it
+        Py_INCREF(kwargs); // We need to increment the reference since we'll be modifying it
     }
 
     // Add the seed to kwargs
-    PyObject* py_seed = PyLong_FromLong(seed);
+    PyObject *py_seed = PyLong_FromLong(seed);
     if (PyDict_SetItemString(kwargs, "seed", py_seed) < 0) {
         PyErr_SetString(PyExc_RuntimeError, "Failed to set seed in kwargs");
         Py_DECREF(py_seed);
@@ -164,7 +157,7 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     }
     Py_DECREF(py_seed);
 
-    PyObject* empty_args = PyTuple_New(0);
+    PyObject *empty_args = PyTuple_New(0);
     my_init(env, empty_args, kwargs);
     Py_DECREF(kwargs);
     if (PyErr_Occurred()) {
@@ -175,14 +168,14 @@ static PyObject* env_init(PyObject* self, PyObject* args, PyObject* kwargs) {
 }
 
 // Python function to reset the environment
-static PyObject* env_reset(PyObject* self, PyObject* args) {
+static PyObject *env_reset(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 2) {
         PyErr_SetString(PyExc_TypeError, "env_reset requires 2 arguments");
         return NULL;
     }
 
-    Env* env = unpack_env(args);
-    if (!env){
+    Env *env = unpack_env(args);
+    if (!env) {
         return NULL;
     }
     c_reset(env);
@@ -190,15 +183,15 @@ static PyObject* env_reset(PyObject* self, PyObject* args) {
 }
 
 // Python function to step the environment
-static PyObject* env_step(PyObject* self, PyObject* args) {
+static PyObject *env_step(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
     if (num_args != 1) {
         PyErr_SetString(PyExc_TypeError, "vec_render requires 1 argument");
         return NULL;
     }
 
-    Env* env = unpack_env(args);
-    if (!env){
+    Env *env = unpack_env(args);
+    if (!env) {
         return NULL;
     }
     c_step(env);
@@ -206,9 +199,9 @@ static PyObject* env_step(PyObject* self, PyObject* args) {
 }
 
 // Python function to step the environment
-static PyObject* env_render(PyObject* self, PyObject* args) {
-    Env* env = unpack_env(args);
-    if (!env){
+static PyObject *env_render(PyObject *self, PyObject *args) {
+    Env *env = unpack_env(args);
+    if (!env) {
         return NULL;
     }
     c_render(env);
@@ -216,9 +209,9 @@ static PyObject* env_render(PyObject* self, PyObject* args) {
 }
 
 // Python function to close the environment
-static PyObject* env_close(PyObject* self, PyObject* args) {
-    Env* env = unpack_env(args);
-    if (!env){
+static PyObject *env_close(PyObject *self, PyObject *args) {
+    Env *env = unpack_env(args);
+    if (!env) {
         return NULL;
     }
     c_close(env);
@@ -226,12 +219,12 @@ static PyObject* env_close(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
-static PyObject* env_get(PyObject* self, PyObject* args) {
-    Env* env = unpack_env(args);
-    if (!env){
+static PyObject *env_get(PyObject *self, PyObject *args) {
+    Env *env = unpack_env(args);
+    if (!env) {
         return NULL;
     }
-    PyObject* dict = PyDict_New();
+    PyObject *dict = PyDict_New();
     my_get(dict, env);
     if (PyErr_Occurred()) {
         return NULL;
@@ -239,19 +232,19 @@ static PyObject* env_get(PyObject* self, PyObject* args) {
     return dict;
 }
 
-static PyObject* env_put(PyObject* self, PyObject* args, PyObject* kwargs) {
+static PyObject *env_put(PyObject *self, PyObject *args, PyObject *kwargs) {
     int num_args = PyTuple_Size(args);
     if (num_args != 1) {
         PyErr_SetString(PyExc_TypeError, "env_put requires 1 positional argument");
         return NULL;
     }
 
-    Env* env = unpack_env(args);
-    if (!env){
+    Env *env = unpack_env(args);
+    if (!env) {
         return NULL;
     }
 
-    PyObject* empty_args = PyTuple_New(0);
+    PyObject *empty_args = PyTuple_New(0);
     my_put(env, empty_args, kwargs);
     if (PyErr_Occurred()) {
         return NULL;
@@ -261,18 +254,18 @@ static PyObject* env_put(PyObject* self, PyObject* args, PyObject* kwargs) {
 }
 
 typedef struct {
-    Env** envs;
+    Env **envs;
     int num_envs;
 } VecEnv;
 
-static VecEnv* unpack_vecenv(PyObject* args) {
-    PyObject* handle_obj = PyTuple_GetItem(args, 0);
+static VecEnv *unpack_vecenv(PyObject *args) {
+    PyObject *handle_obj = PyTuple_GetItem(args, 0);
     if (!PyObject_TypeCheck(handle_obj, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "env_handle must be an integer");
         return NULL;
     }
 
-    VecEnv* vec = (VecEnv*)PyLong_AsVoidPtr(handle_obj);
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(handle_obj);
     if (!vec) {
         PyErr_SetString(PyExc_ValueError, "Missing or invalid vec env handle");
         return NULL;
@@ -286,18 +279,18 @@ static VecEnv* unpack_vecenv(PyObject* args) {
     return vec;
 }
 
-static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
+static PyObject *vec_init(PyObject *self, PyObject *args, PyObject *kwargs) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "vec_init requires 6 arguments");
         return NULL;
     }
 
-    VecEnv* vec = (VecEnv*)calloc(1, sizeof(VecEnv));
+    VecEnv *vec = (VecEnv *)calloc(1, sizeof(VecEnv));
     if (!vec) {
         PyErr_SetString(PyExc_MemoryError, "Failed to allocate vec env");
         return NULL;
     }
-    PyObject* num_envs_arg = PyTuple_GetItem(args, 5);
+    PyObject *num_envs_arg = PyTuple_GetItem(args, 5);
     if (!PyObject_TypeCheck(num_envs_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "num_envs must be an integer");
         return NULL;
@@ -308,25 +301,25 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         return NULL;
     }
     vec->num_envs = num_envs;
-    vec->envs = (Env**)calloc(num_envs, sizeof(Env*));
+    vec->envs = (Env **)calloc(num_envs, sizeof(Env *));
     if (!vec->envs) {
         PyErr_SetString(PyExc_MemoryError, "Failed to allocate vec env");
         return NULL;
     }
 
-    PyObject* seed_obj = PyTuple_GetItem(args, 6);
+    PyObject *seed_obj = PyTuple_GetItem(args, 6);
     if (!PyObject_TypeCheck(seed_obj, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "seed must be an integer");
         return NULL;
     }
     int seed = PyLong_AsLong(seed_obj);
 
-    PyObject* obs = PyTuple_GetItem(args, 0);
+    PyObject *obs = PyTuple_GetItem(args, 0);
     if (!PyObject_TypeCheck(obs, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Observations must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* observations = (PyArrayObject*)obs;
+    PyArrayObject *observations = (PyArrayObject *)obs;
     if (!PyArray_ISCONTIGUOUS(observations)) {
         PyErr_SetString(PyExc_ValueError, "Observations must be contiguous");
         return NULL;
@@ -336,12 +329,12 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         return NULL;
     }
 
-    PyObject* act = PyTuple_GetItem(args, 1);
+    PyObject *act = PyTuple_GetItem(args, 1);
     if (!PyObject_TypeCheck(act, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Actions must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* actions = (PyArrayObject*)act;
+    PyArrayObject *actions = (PyArrayObject *)act;
     if (!PyArray_ISCONTIGUOUS(actions)) {
         PyErr_SetString(PyExc_ValueError, "Actions must be contiguous");
         return NULL;
@@ -351,12 +344,12 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         return NULL;
     }
 
-    PyObject* rew = PyTuple_GetItem(args, 2);
+    PyObject *rew = PyTuple_GetItem(args, 2);
     if (!PyObject_TypeCheck(rew, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Rewards must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* rewards = (PyArrayObject*)rew;
+    PyArrayObject *rewards = (PyArrayObject *)rew;
     if (!PyArray_ISCONTIGUOUS(rewards)) {
         PyErr_SetString(PyExc_ValueError, "Rewards must be contiguous");
         return NULL;
@@ -366,12 +359,12 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         return NULL;
     }
 
-    PyObject* term = PyTuple_GetItem(args, 3);
+    PyObject *term = PyTuple_GetItem(args, 3);
     if (!PyObject_TypeCheck(term, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Terminals must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* terminals = (PyArrayObject*)term;
+    PyArrayObject *terminals = (PyArrayObject *)term;
     if (!PyArray_ISCONTIGUOUS(terminals)) {
         PyErr_SetString(PyExc_ValueError, "Terminals must be contiguous");
         return NULL;
@@ -381,12 +374,12 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         return NULL;
     }
 
-    PyObject* trunc = PyTuple_GetItem(args, 4);
+    PyObject *trunc = PyTuple_GetItem(args, 4);
     if (!PyObject_TypeCheck(trunc, &PyArray_Type)) {
         PyErr_SetString(PyExc_TypeError, "Truncations must be a NumPy array");
         return NULL;
     }
-    PyArrayObject* truncations = (PyArrayObject*)trunc;
+    PyArrayObject *truncations = (PyArrayObject *)trunc;
     if (!PyArray_ISCONTIGUOUS(truncations)) {
         PyErr_SetString(PyExc_ValueError, "Truncations must be contiguous");
         return NULL;
@@ -400,11 +393,11 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     if (kwargs == NULL) {
         kwargs = PyDict_New();
     } else {
-        Py_INCREF(kwargs);  // We need to increment the reference since we'll be modifying it
+        Py_INCREF(kwargs); // We need to increment the reference since we'll be modifying it
     }
 
     for (int i = 0; i < num_envs; i++) {
-        Env* env = (Env*)calloc(1, sizeof(Env));
+        Env *env = (Env *)calloc(1, sizeof(Env));
         if (!env) {
             PyErr_SetString(PyExc_MemoryError, "Failed to allocate environment");
             Py_DECREF(kwargs);
@@ -415,18 +408,18 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         // // Make sure the log is initialized to 0
         memset(&env->log, 0, sizeof(Log));
 
-        env->observations = (void*)((char*)PyArray_DATA(observations) + i*PyArray_STRIDE(observations, 0));
-        env->actions = (void*)((char*)PyArray_DATA(actions) + i*PyArray_STRIDE(actions, 0));
-        env->rewards = (void*)((char*)PyArray_DATA(rewards) + i*PyArray_STRIDE(rewards, 0));
-        env->terminals = (void*)((char*)PyArray_DATA(terminals) + i*PyArray_STRIDE(terminals, 0));
+        env->observations = (void *)((char *)PyArray_DATA(observations) + i * PyArray_STRIDE(observations, 0));
+        env->actions = (void *)((char *)PyArray_DATA(actions) + i * PyArray_STRIDE(actions, 0));
+        env->rewards = (void *)((char *)PyArray_DATA(rewards) + i * PyArray_STRIDE(rewards, 0));
+        env->terminals = (void *)((char *)PyArray_DATA(terminals) + i * PyArray_STRIDE(terminals, 0));
         // env->truncations = (void*)((char*)PyArray_DATA(truncations) + i*PyArray_STRIDE(truncations, 0));
 
         // Assumes each process has the same number of environments
-        int env_seed = i + seed*vec->num_envs;
+        int env_seed = i + seed * vec->num_envs;
         srand(env_seed);
 
         // Add the seed to kwargs for this environment
-        PyObject* py_seed = PyLong_FromLong(env_seed);
+        PyObject *py_seed = PyLong_FromLong(env_seed);
         if (PyDict_SetItemString(kwargs, "seed", py_seed) < 0) {
             PyErr_SetString(PyExc_RuntimeError, "Failed to set seed in kwargs");
             Py_DECREF(py_seed);
@@ -435,7 +428,7 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         }
         Py_DECREF(py_seed);
 
-        PyObject* empty_args = PyTuple_New(0);
+        PyObject *empty_args = PyTuple_New(0);
         my_init(env, empty_args, kwargs);
         if (PyErr_Occurred()) {
             return NULL;
@@ -446,22 +439,21 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
     return PyLong_FromVoidPtr(vec);
 }
 
-
 // Python function to close the environment
-static PyObject* vectorize(PyObject* self, PyObject* args) {
+static PyObject *vectorize(PyObject *self, PyObject *args) {
     int num_envs = PyTuple_Size(args);
     if (num_envs == 0) {
         PyErr_SetString(PyExc_TypeError, "make_vec requires at least 1 env id");
         return NULL;
     }
 
-    VecEnv* vec = (VecEnv*)calloc(1, sizeof(VecEnv));
+    VecEnv *vec = (VecEnv *)calloc(1, sizeof(VecEnv));
     if (!vec) {
         PyErr_SetString(PyExc_MemoryError, "Failed to allocate vec env");
         return NULL;
     }
 
-    vec->envs = (Env**)calloc(num_envs, sizeof(Env*));
+    vec->envs = (Env **)calloc(num_envs, sizeof(Env *));
     if (!vec->envs) {
         PyErr_SetString(PyExc_MemoryError, "Failed to allocate vec env");
         return NULL;
@@ -469,29 +461,30 @@ static PyObject* vectorize(PyObject* self, PyObject* args) {
 
     vec->num_envs = num_envs;
     for (int i = 0; i < num_envs; i++) {
-        PyObject* handle_obj = PyTuple_GetItem(args, i);
+        PyObject *handle_obj = PyTuple_GetItem(args, i);
         if (!PyObject_TypeCheck(handle_obj, &PyLong_Type)) {
-            PyErr_SetString(PyExc_TypeError, "Env ids must be integers. Pass them as separate args with *env_ids, not as a list.");
+            PyErr_SetString(PyExc_TypeError,
+                            "Env ids must be integers. Pass them as separate args with *env_ids, not as a list.");
             return NULL;
         }
-        vec->envs[i] = (Env*)PyLong_AsVoidPtr(handle_obj);
+        vec->envs[i] = (Env *)PyLong_AsVoidPtr(handle_obj);
     }
 
     return PyLong_FromVoidPtr(vec);
 }
 
-static PyObject* vec_reset(PyObject* self, PyObject* args) {
+static PyObject *vec_reset(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 2) {
         PyErr_SetString(PyExc_TypeError, "vec_reset requires 2 arguments");
         return NULL;
     }
 
-    VecEnv* vec = unpack_vecenv(args);
+    VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
     }
 
-    PyObject* seed_arg = PyTuple_GetItem(args, 1);
+    PyObject *seed_arg = PyTuple_GetItem(args, 1);
     if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "seed must be an integer");
         return NULL;
@@ -500,20 +493,20 @@ static PyObject* vec_reset(PyObject* self, PyObject* args) {
 
     for (int i = 0; i < vec->num_envs; i++) {
         // Assumes each process has the same number of environments
-        srand(i + seed*vec->num_envs);
+        srand(i + seed * vec->num_envs);
         c_reset(vec->envs[i]);
     }
     Py_RETURN_NONE;
 }
 
-static PyObject* vec_step(PyObject* self, PyObject* arg) {
+static PyObject *vec_step(PyObject *self, PyObject *arg) {
     int num_args = PyTuple_Size(arg);
     if (num_args != 1) {
         PyErr_SetString(PyExc_TypeError, "vec_step requires 1 argument");
         return NULL;
     }
 
-    VecEnv* vec = unpack_vecenv(arg);
+    VecEnv *vec = unpack_vecenv(arg);
     if (!vec) {
         return NULL;
     }
@@ -524,20 +517,20 @@ static PyObject* vec_step(PyObject* self, PyObject* arg) {
     Py_RETURN_NONE;
 }
 
-static PyObject* vec_render(PyObject* self, PyObject* args) {
+static PyObject *vec_render(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
     if (num_args != 2) {
         PyErr_SetString(PyExc_TypeError, "vec_render requires 2 arguments");
         return NULL;
     }
 
-    VecEnv* vec = (VecEnv*)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
     if (!vec) {
         PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
         return NULL;
     }
 
-    PyObject* env_id_arg = PyTuple_GetItem(args, 1);
+    PyObject *env_id_arg = PyTuple_GetItem(args, 1);
     if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
         return NULL;
@@ -548,13 +541,13 @@ static PyObject* vec_render(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
-static int assign_to_dict(PyObject* dict, char* key, float value) {
-    PyObject* v = PyFloat_FromDouble(value);
+static int assign_to_dict(PyObject *dict, char *key, float value) {
+    PyObject *v = PyFloat_FromDouble(value);
     if (v == NULL) {
         PyErr_SetString(PyExc_TypeError, "Failed to convert log value");
         return 1;
     }
-    if(PyDict_SetItemString(dict, key, v) < 0) {
+    if (PyDict_SetItemString(dict, key, v) < 0) {
         PyErr_SetString(PyExc_TypeError, "Failed to set log value");
         return 1;
     }
@@ -562,33 +555,51 @@ static int assign_to_dict(PyObject* dict, char* key, float value) {
     return 0;
 }
 
-static PyObject* vec_log(PyObject* self, PyObject* args) {
-    VecEnv* vec = unpack_vecenv(args);
+static PyObject *vec_log(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_log requires 2 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
     }
 
     // Iterates over logs one float at a time. Will break
     // horribly if Log has non-float data.
+    PyObject *num_agents_arg = PyTuple_GetItem(args, 1);
+    float num_agents = (float)PyLong_AsLong(num_agents_arg);
+
     Log aggregate = {0};
     int num_keys = sizeof(Log) / sizeof(float);
     for (int i = 0; i < vec->num_envs; i++) {
-        Env* env = vec->envs[i];
+        Env *env = vec->envs[i];
         for (int j = 0; j < num_keys; j++) {
-            ((float*)&aggregate)[j] += ((float*)&env->log)[j];
-            ((float*)&env->log)[j] = 0.0f;
+            ((float *)&aggregate)[j] += ((float *)&env->log)[j];
         }
     }
 
-    PyObject* dict = PyDict_New();
-    if (aggregate.n == 0.0f) {
+    PyObject *dict = PyDict_New();
+
+    // Only log if we have at least num_agents worth of data
+    if (aggregate.n < num_agents) {
         return dict;
     }
 
-    // Average
+    // Got enough data. Reset logs and return metrics
+    for (int i = 0; i < vec->num_envs; i++) {
+        Env *env = vec->envs[i];
+        for (int j = 0; j < num_keys; j++) {
+            ((float *)&env->log)[j] = 0.0f;
+        }
+    }
+
     float n = aggregate.n;
+
+    // Average across agents
     for (int i = 0; i < num_keys; i++) {
-        ((float*)&aggregate)[i] /= n;
+        ((float *)&aggregate)[i] /= n;
     }
 
     // User populates dict
@@ -598,8 +609,8 @@ static PyObject* vec_log(PyObject* self, PyObject* args) {
     return dict;
 }
 
-static PyObject* vec_close(PyObject* self, PyObject* args) {
-    VecEnv* vec = unpack_vecenv(args);
+static PyObject *vec_close(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
     }
@@ -613,93 +624,97 @@ static PyObject* vec_close(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
-static PyObject* get_global_agent_state(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 5) {
-        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 5 arguments");
+static PyObject *get_global_agent_state(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 7 arguments");
         return NULL;
     }
 
-    Env* env = unpack_env(args);
+    Env *env = unpack_env(args);
     if (!env) {
         return NULL;
     }
 
-    Drive* drive = (Drive*)env; // Cast to Drive*
+    Drive *drive = (Drive *)env; // Cast to Drive*
 
     // Get the numpy arrays from arguments
-    PyObject* x_arr = PyTuple_GetItem(args, 1);
-    PyObject* y_arr = PyTuple_GetItem(args, 2);
-    PyObject* z_arr = PyTuple_GetItem(args, 3);
-    PyObject* heading_arr = PyTuple_GetItem(args, 4);
-    PyObject* id_arr = PyTuple_GetItem(args, 5);
+    PyObject *x_arr = PyTuple_GetItem(args, 1);
+    PyObject *y_arr = PyTuple_GetItem(args, 2);
+    PyObject *z_arr = PyTuple_GetItem(args, 3);
+    PyObject *heading_arr = PyTuple_GetItem(args, 4);
+    PyObject *id_arr = PyTuple_GetItem(args, 5);
+    PyObject *length_arr = PyTuple_GetItem(args, 6);
+    PyObject *width_arr = PyTuple_GetItem(args, 7);
 
-    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
-        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(id_arr)) {
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(id_arr) || !PyArray_Check(length_arr) || !PyArray_Check(width_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
 
-    float* x_data = (float*)PyArray_DATA((PyArrayObject*)x_arr);
-    float* y_data = (float*)PyArray_DATA((PyArrayObject*)y_arr);
-    float* z_data = (float*)PyArray_DATA((PyArrayObject*)z_arr);
-    float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
-    int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
+    float *x_data = (float *)PyArray_DATA((PyArrayObject *)x_arr);
+    float *y_data = (float *)PyArray_DATA((PyArrayObject *)y_arr);
+    float *z_data = (float *)PyArray_DATA((PyArrayObject *)z_arr);
+    float *heading_data = (float *)PyArray_DATA((PyArrayObject *)heading_arr);
+    int *id_data = (int *)PyArray_DATA((PyArrayObject *)id_arr);
+    float *length_data = (float *)PyArray_DATA((PyArrayObject *)length_arr);
+    float *width_data = (float *)PyArray_DATA((PyArrayObject *)width_arr);
 
-    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data);
+    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data, length_data, width_data);
 
     Py_RETURN_NONE;
 }
-static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 6 arguments");
+static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 8) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 8 arguments");
         return NULL;
     }
 
-    VecEnv* vec = unpack_vecenv(args);
+    VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
     }
 
     // Get the numpy arrays from arguments
-    PyObject* x_arr = PyTuple_GetItem(args, 1);
-    PyObject* y_arr = PyTuple_GetItem(args, 2);
-    PyObject* z_arr = PyTuple_GetItem(args, 3);
-    PyObject* heading_arr = PyTuple_GetItem(args, 4);
-    PyObject* id_arr = PyTuple_GetItem(args, 5);
+    PyObject *x_arr = PyTuple_GetItem(args, 1);
+    PyObject *y_arr = PyTuple_GetItem(args, 2);
+    PyObject *z_arr = PyTuple_GetItem(args, 3);
+    PyObject *heading_arr = PyTuple_GetItem(args, 4);
+    PyObject *id_arr = PyTuple_GetItem(args, 5);
+    PyObject *length_arr = PyTuple_GetItem(args, 6);
+    PyObject *width_arr = PyTuple_GetItem(args, 7);
 
-    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
-        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
-        !PyArray_Check(id_arr)) {
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+        !PyArray_Check(id_arr) || !PyArray_Check(length_arr) || !PyArray_Check(width_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
 
-    PyArrayObject* x_array = (PyArrayObject*)x_arr;
-    PyArrayObject* y_array = (PyArrayObject*)y_arr;
-    PyArrayObject* z_array = (PyArrayObject*)z_arr;
-    PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
-    PyArrayObject* id_array = (PyArrayObject*)id_arr;
+    PyArrayObject *x_array = (PyArrayObject *)x_arr;
+    PyArrayObject *y_array = (PyArrayObject *)y_arr;
+    PyArrayObject *z_array = (PyArrayObject *)z_arr;
+    PyArrayObject *heading_array = (PyArrayObject *)heading_arr;
+    PyArrayObject *id_array = (PyArrayObject *)id_arr;
+    PyArrayObject *length_array = (PyArrayObject *)length_arr;
+    PyArrayObject *width_array = (PyArrayObject *)width_arr;
 
     // Get base pointers to the arrays
-    float* x_base = (float*)PyArray_DATA(x_array);
-    float* y_base = (float*)PyArray_DATA(y_array);
-    float* z_base = (float*)PyArray_DATA(z_array);
-    float* heading_base = (float*)PyArray_DATA(heading_array);
-    int* id_base = (int*)PyArray_DATA(id_array);
+    float *x_base = (float *)PyArray_DATA(x_array);
+    float *y_base = (float *)PyArray_DATA(y_array);
+    float *z_base = (float *)PyArray_DATA(z_array);
+    float *heading_base = (float *)PyArray_DATA(heading_array);
+    int *id_base = (int *)PyArray_DATA(id_array);
+    float *length_base = (float *)PyArray_DATA(length_array);
+    float *width_base = (float *)PyArray_DATA(width_array);
 
     // Iterate through environments and write to correct offsets
     int offset = 0;
     for (int i = 0; i < vec->num_envs; i++) {
-        Drive* drive = (Drive*)vec->envs[i];
+        Drive *drive = (Drive *)vec->envs[i];
 
         // Write to the arrays at the current offset
-        c_get_global_agent_state(drive,
-                                &x_base[offset],
-                                &y_base[offset],
-                                &z_base[offset],
-                                &heading_base[offset],
-                                &id_base[offset]);
+        c_get_global_agent_state(drive, &x_base[offset], &y_base[offset], &z_base[offset], &heading_base[offset],
+                                 &id_base[offset], &length_base[offset], &width_base[offset]);
 
         // Move offset forward by the number of agents in this environment
         offset += drive->active_agent_count;
@@ -708,111 +723,105 @@ static PyObject* vec_get_global_agent_state(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
-static PyObject* get_ground_truth_trajectories(PyObject* self, PyObject* args) {
+static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 7 arguments");
         return NULL;
     }
 
-    Env* env = unpack_env(args);
+    Env *env = unpack_env(args);
     if (!env) {
         return NULL;
     }
 
-    Drive* drive = (Drive*)env;
+    Drive *drive = (Drive *)env;
 
     // Get the numpy arrays from arguments
-    PyObject* x_arr = PyTuple_GetItem(args, 1);
-    PyObject* y_arr = PyTuple_GetItem(args, 2);
-    PyObject* z_arr = PyTuple_GetItem(args, 3);
-    PyObject* heading_arr = PyTuple_GetItem(args, 4);
-    PyObject* valid_arr = PyTuple_GetItem(args, 5);
-    PyObject* id_arr = PyTuple_GetItem(args, 6);
-    PyObject* scenario_id_arr = PyTuple_GetItem(args, 7);
+    PyObject *x_arr = PyTuple_GetItem(args, 1);
+    PyObject *y_arr = PyTuple_GetItem(args, 2);
+    PyObject *z_arr = PyTuple_GetItem(args, 3);
+    PyObject *heading_arr = PyTuple_GetItem(args, 4);
+    PyObject *valid_arr = PyTuple_GetItem(args, 5);
+    PyObject *id_arr = PyTuple_GetItem(args, 6);
+    PyObject *scenario_id_arr = PyTuple_GetItem(args, 7);
 
-    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
-        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
         !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
 
-    float* x_data = (float*)PyArray_DATA((PyArrayObject*)x_arr);
-    float* y_data = (float*)PyArray_DATA((PyArrayObject*)y_arr);
-    float* z_data = (float*)PyArray_DATA((PyArrayObject*)z_arr);
-    float* heading_data = (float*)PyArray_DATA((PyArrayObject*)heading_arr);
-    int* valid_data = (int*)PyArray_DATA((PyArrayObject*)valid_arr);
-    int* id_data = (int*)PyArray_DATA((PyArrayObject*)id_arr);
-    int* scenario_id_data = (int*)PyArray_DATA((PyArrayObject*)scenario_id_arr);
+    float *x_data = (float *)PyArray_DATA((PyArrayObject *)x_arr);
+    float *y_data = (float *)PyArray_DATA((PyArrayObject *)y_arr);
+    float *z_data = (float *)PyArray_DATA((PyArrayObject *)z_arr);
+    float *heading_data = (float *)PyArray_DATA((PyArrayObject *)heading_arr);
+    int *valid_data = (int *)PyArray_DATA((PyArrayObject *)valid_arr);
+    int *id_data = (int *)PyArray_DATA((PyArrayObject *)id_arr);
+    int *scenario_id_data = (int *)PyArray_DATA((PyArrayObject *)scenario_id_arr);
 
-    c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data, scenario_id_data);
+    c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data,
+                                           scenario_id_data);
 
     Py_RETURN_NONE;
 }
 
-static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObject* args) {
+static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 8) {
         PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 8 arguments");
         return NULL;
     }
 
-    VecEnv* vec = unpack_vecenv(args);
+    VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
     }
 
     // Get the numpy arrays from arguments
-    PyObject* x_arr = PyTuple_GetItem(args, 1);
-    PyObject* y_arr = PyTuple_GetItem(args, 2);
-    PyObject* z_arr = PyTuple_GetItem(args, 3);
-    PyObject* heading_arr = PyTuple_GetItem(args, 4);
-    PyObject* valid_arr = PyTuple_GetItem(args, 5);
-    PyObject* id_arr = PyTuple_GetItem(args, 6);
-    PyObject* scenario_id_arr = PyTuple_GetItem(args, 7);
+    PyObject *x_arr = PyTuple_GetItem(args, 1);
+    PyObject *y_arr = PyTuple_GetItem(args, 2);
+    PyObject *z_arr = PyTuple_GetItem(args, 3);
+    PyObject *heading_arr = PyTuple_GetItem(args, 4);
+    PyObject *valid_arr = PyTuple_GetItem(args, 5);
+    PyObject *id_arr = PyTuple_GetItem(args, 6);
+    PyObject *scenario_id_arr = PyTuple_GetItem(args, 7);
 
-    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) ||
-        !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
         !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(scenario_id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
 
-    PyArrayObject* x_array = (PyArrayObject*)x_arr;
-    PyArrayObject* y_array = (PyArrayObject*)y_arr;
-    PyArrayObject* z_array = (PyArrayObject*)z_arr;
-    PyArrayObject* heading_array = (PyArrayObject*)heading_arr;
-    PyArrayObject* valid_array = (PyArrayObject*)valid_arr;
-    PyArrayObject* id_array = (PyArrayObject*)id_arr;
-    PyArrayObject* scenario_id_array = (PyArrayObject*)scenario_id_arr;
+    PyArrayObject *x_array = (PyArrayObject *)x_arr;
+    PyArrayObject *y_array = (PyArrayObject *)y_arr;
+    PyArrayObject *z_array = (PyArrayObject *)z_arr;
+    PyArrayObject *heading_array = (PyArrayObject *)heading_arr;
+    PyArrayObject *valid_array = (PyArrayObject *)valid_arr;
+    PyArrayObject *id_array = (PyArrayObject *)id_arr;
+    PyArrayObject *scenario_id_array = (PyArrayObject *)scenario_id_arr;
 
     // Get base pointers to the arrays
-    float* x_base = (float*)PyArray_DATA(x_array);
-    float* y_base = (float*)PyArray_DATA(y_array);
-    float* z_base = (float*)PyArray_DATA(z_array);
-    float* heading_base = (float*)PyArray_DATA(heading_array);
-    int* valid_base = (int*)PyArray_DATA(valid_array);
-    int* id_base = (int*)PyArray_DATA(id_array);
-    int* scenario_id_base = (int*)PyArray_DATA(scenario_id_array);
+    float *x_base = (float *)PyArray_DATA(x_array);
+    float *y_base = (float *)PyArray_DATA(y_array);
+    float *z_base = (float *)PyArray_DATA(z_array);
+    float *heading_base = (float *)PyArray_DATA(heading_array);
+    int *valid_base = (int *)PyArray_DATA(valid_array);
+    int *id_base = (int *)PyArray_DATA(id_array);
+    int *scenario_id_base = (int *)PyArray_DATA(scenario_id_array);
 
     // Get number of timesteps from array shape
-    npy_intp* x_shape = PyArray_DIMS(x_array);
-    int num_timesteps = x_shape[1];  // Second dimension for 2D arrays
+    npy_intp *x_shape = PyArray_DIMS(x_array);
+    int num_timesteps = x_shape[1]; // Second dimension for 2D arrays
 
     // Iterate through environments and write to correct offsets
-    int agent_offset = 0;  // Offset for 1D arrays (id, scenario_id)
-    int traj_offset = 0;   // Offset for 2D arrays (x, y, z, heading, valid)
+    int agent_offset = 0; // Offset for 1D arrays (id, scenario_id)
+    int traj_offset = 0;  // Offset for 2D arrays (x, y, z, heading, valid)
 
     for (int i = 0; i < vec->num_envs; i++) {
-        Drive* drive = (Drive*)vec->envs[i];
+        Drive *drive = (Drive *)vec->envs[i];
 
-        c_get_global_ground_truth_trajectories(drive,
-                                              &x_base[traj_offset],
-                                              &y_base[traj_offset],
-                                              &z_base[traj_offset],
-                                              &heading_base[traj_offset],
-                                              &valid_base[traj_offset],
-                                              &id_base[agent_offset],
-                                              &scenario_id_base[agent_offset]);
+        c_get_global_ground_truth_trajectories(drive, &x_base[traj_offset], &y_base[traj_offset], &z_base[traj_offset],
+                                               &heading_base[traj_offset], &valid_base[traj_offset],
+                                               &id_base[agent_offset], &scenario_id_base[agent_offset]);
 
         // Move offsets forward
         agent_offset += drive->active_agent_count;
@@ -821,8 +830,64 @@ static PyObject* vec_get_global_ground_truth_trajectories(PyObject* self, PyObje
 
     Py_RETURN_NONE;
 }
-static double unpack(PyObject* kwargs, char* key) {
-    PyObject* val = PyDict_GetItemString(kwargs, key);
+
+static PyObject *vec_get_road_edge_counts(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+
+    int total_polylines = 0, total_points = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *)vec->envs[i];
+        int np, tp;
+        c_get_road_edge_counts(drive, &np, &tp);
+        total_polylines += np;
+        total_points += tp;
+    }
+    return Py_BuildValue("(ii)", total_polylines, total_points);
+}
+
+static PyObject *vec_get_road_edge_polylines(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 5) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_road_edge_polylines requires 5 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+
+    PyObject *x_arr = PyTuple_GetItem(args, 1);
+    PyObject *y_arr = PyTuple_GetItem(args, 2);
+    PyObject *lengths_arr = PyTuple_GetItem(args, 3);
+    PyObject *scenario_ids_arr = PyTuple_GetItem(args, 4);
+
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(lengths_arr) ||
+        !PyArray_Check(scenario_ids_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
+        return NULL;
+    }
+
+    float *x_base = (float *)PyArray_DATA((PyArrayObject *)x_arr);
+    float *y_base = (float *)PyArray_DATA((PyArrayObject *)y_arr);
+    int *lengths_base = (int *)PyArray_DATA((PyArrayObject *)lengths_arr);
+    int *scenario_ids_base = (int *)PyArray_DATA((PyArrayObject *)scenario_ids_arr);
+
+    int poly_offset = 0, pt_offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *)vec->envs[i];
+        int np, tp;
+        c_get_road_edge_counts(drive, &np, &tp);
+        c_get_road_edge_polylines(drive, &x_base[pt_offset], &y_base[pt_offset], &lengths_base[poly_offset],
+                                  &scenario_ids_base[poly_offset]);
+        poly_offset += np;
+        pt_offset += tp;
+    }
+    Py_RETURN_NONE;
+}
+
+static double unpack(PyObject *kwargs, char *key) {
+    PyObject *val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
         char error_msg[100];
         snprintf(error_msg, sizeof(error_msg), "Missing required keyword argument '%s'", key);
@@ -849,8 +914,8 @@ static double unpack(PyObject* kwargs, char* key) {
     return 1;
 }
 
-static char* unpack_str(PyObject* kwargs, char* key) {
-    PyObject* val = PyDict_GetItemString(kwargs, key);
+static char *unpack_str(PyObject *kwargs, char *key) {
+    PyObject *val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
         char error_msg[100];
         snprintf(error_msg, sizeof(error_msg), "Missing required keyword argument '%s'", key);
@@ -863,12 +928,12 @@ static char* unpack_str(PyObject* kwargs, char* key) {
         PyErr_SetString(PyExc_TypeError, error_msg);
         return NULL;
     }
-    const char* str_val = PyUnicode_AsUTF8(val);
+    const char *str_val = PyUnicode_AsUTF8(val);
     if (str_val == NULL) {
         // PyUnicode_AsUTF8 sets an error on failure
         return NULL;
     }
-    char* ret = strdup(str_val);
+    char *ret = strdup(str_val);
     if (ret == NULL) {
         PyErr_SetString(PyExc_MemoryError, "strdup failed in unpack_str");
     }
@@ -877,7 +942,8 @@ static char* unpack_str(PyObject* kwargs, char* key) {
 
 // Method table
 static PyMethodDef methods[] = {
-    {"env_init", (PyCFunction)env_init, METH_VARARGS | METH_KEYWORDS, "Init environment with observation, action, reward, terminal, truncation arrays"},
+    {"env_init", (PyCFunction)env_init, METH_VARARGS | METH_KEYWORDS,
+     "Init environment with observation, action, reward, terminal, truncation arrays"},
     {"env_reset", env_reset, METH_VARARGS, "Reset the environment"},
     {"env_step", env_step, METH_VARARGS, "Step the environment"},
     {"env_render", env_render, METH_VARARGS, "Render the environment"},
@@ -895,21 +961,36 @@ static PyMethodDef methods[] = {
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
     {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},
-    {"vec_get_global_ground_truth_trajectories", vec_get_global_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories from vectorized env"},
+    {"vec_get_global_ground_truth_trajectories", vec_get_global_ground_truth_trajectories, METH_VARARGS,
+     "Get ground truth trajectories from vectorized env"},
+    {"vec_get_road_edge_counts", vec_get_road_edge_counts, METH_VARARGS,
+     "Get road edge polyline counts from vectorized env"},
+    {"vec_get_road_edge_polylines", vec_get_road_edge_polylines, METH_VARARGS,
+     "Get road edge polylines from vectorized env"},
     MY_METHODS,
-    {NULL, NULL, 0, NULL}
-};
+    {NULL, NULL, 0, NULL}};
 
 // Module definition
-static PyModuleDef module = {
-    PyModuleDef_HEAD_INIT,
-    "binding",
-    NULL,
-    -1,
-    methods
-};
+static PyModuleDef module = {PyModuleDef_HEAD_INIT, "binding", NULL, -1, methods};
 
 PyMODINIT_FUNC PyInit_binding(void) {
     import_array();
-    return PyModule_Create(&module);
+    PyObject *m = PyModule_Create(&module); // Changed variable name from 'module' to 'm'
+
+    if (m == NULL) {
+        return NULL;
+    }
+
+    // Make constants accessible from Python
+    PyModule_AddIntConstant(m, "MAX_ROAD_SEGMENT_OBSERVATIONS", MAX_ROAD_SEGMENT_OBSERVATIONS);
+    PyModule_AddIntConstant(m, "MAX_AGENTS", MAX_AGENTS);
+    PyModule_AddIntConstant(m, "TRAJECTORY_LENGTH", TRAJECTORY_LENGTH);
+    PyModule_AddIntConstant(m, "MAX_ENTITIES_PER_CELL", MAX_ENTITIES_PER_CELL);
+
+    PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
+    PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
+    PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC", EGO_FEATURES_CLASSIC);
+    PyModule_AddIntConstant(m, "EGO_FEATURES_JERK", EGO_FEATURES_JERK);
+
+    return m;
 }

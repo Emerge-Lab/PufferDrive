@@ -1,11 +1,9 @@
 """WOSAC evaluation class for PufferDrive."""
 
 import torch
-import time
 import numpy as np
 import pandas as pd
-from pprint import pprint
-from typing import Dict, Optional
+from typing import Dict
 import matplotlib.pyplot as plt
 import configparser
 import os
@@ -20,6 +18,11 @@ _METRIC_FIELD_NAMES = [
     "linear_acceleration",
     "angular_speed",
     "angular_acceleration",
+    "distance_to_nearest_object",
+    "time_to_collision",
+    "collision_indication",
+    "distance_to_road_edge",
+    "offroad_indication",
 ]
 
 
@@ -32,6 +35,7 @@ class WOSACEvaluator:
         self.init_steps = config.get("eval", {}).get("wosac_init_steps", 0)
         self.sim_steps = self.num_steps - self.init_steps
         self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
+        self.device = config.get("train", {}).get("device", "cuda")
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
@@ -121,17 +125,17 @@ class WOSACEvaluator:
         self,
         ground_truth_trajectories: Dict,
         simulated_trajectories: Dict,
+        agent_state: Dict,
+        road_edge_polylines: Dict,
         aggregate_results: bool = False,
     ) -> Dict:
         """Compute realism metrics comparing simulated and ground truth trajectories.
 
         Args:
-            ground_truth_trajectories: Dict with keys ['x', 'y', 'z', 'heading', 'id']
-                                Each trajectory has shape (n_agents, n_rollouts, n_steps)
-            simulated_trajectories: Dict with same keys plus 'scenario_id'
-                                shape (n_agents, n_steps) for trajectories
-                                shape (n_agents,) for id
-                                list of length n_agents for scenario_id
+            ground_truth_trajectories: Dict with keys ['x', 'y', 'z', 'heading', 'id', 'scenario_id', 'valid']
+            simulated_trajectories: Dict with keys ['x', 'y', 'z', 'heading', 'id']
+            agent_state: Dict with length and width of agents.
+            road_edge_polylines: Dict with keys ['x', 'y', 'lengths', 'scenario_id']
 
         Note: z-position currently not used.
 
@@ -143,6 +147,8 @@ class WOSACEvaluator:
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
+        eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
+
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
         sim_y = simulated_trajectories["y"]
@@ -151,26 +157,84 @@ class WOSACEvaluator:
         ref_y = ground_truth_trajectories["y"]
         ref_heading = ground_truth_trajectories["heading"]
         ref_valid = ground_truth_trajectories["valid"]
+        agent_length = agent_state["length"]
+        agent_width = agent_state["width"]
+        scenario_ids = ground_truth_trajectories["scenario_id"]
+
+        # We evaluate the metrics only for the Tracks to Predict.
+        eval_sim_x = sim_x[eval_mask]
+        eval_sim_y = sim_y[eval_mask]
+        eval_sim_heading = sim_heading[eval_mask]
+        eval_ref_x = ref_x[eval_mask]
+        eval_ref_y = ref_y[eval_mask]
+        eval_ref_heading = ref_heading[eval_mask]
+        eval_ref_valid = ref_valid[eval_mask]
+        eval_agent_length = agent_length[eval_mask]
+        eval_agent_width = agent_width[eval_mask]
+        eval_scenario_ids = scenario_ids[eval_mask]
 
         # Compute features
         # Kinematics-related features
         sim_linear_speed, sim_linear_accel, sim_angular_speed, sim_angular_accel = metrics.compute_kinematic_features(
-            sim_x, sim_y, sim_heading
+            eval_sim_x, eval_sim_y, eval_sim_heading
         )
 
         ref_linear_speed, ref_linear_accel, ref_angular_speed, ref_angular_accel = metrics.compute_kinematic_features(
-            ref_x, ref_y, ref_heading
+            eval_ref_x, eval_ref_y, eval_ref_heading
         )
 
         # Get the log speed (linear and angular) validity. Since this is computed by
         # a delta between steps i-1 and i+1, we verify that both of these are
         # valid (logical and).
-        speed_validity, acceleration_validity = metrics.compute_kinematic_validity(ref_valid)
+        speed_validity, acceleration_validity = metrics.compute_kinematic_validity(ref_valid[eval_mask])
+
+        # Interaction-related features
+        sim_signed_distances, sim_collision_per_step, sim_time_to_collision = metrics.compute_interaction_features(
+            sim_x, sim_y, sim_heading, scenario_ids, agent_length, agent_width, eval_mask, device=self.device
+        )
+
+        ref_signed_distances, ref_collision_per_step, ref_time_to_collision = metrics.compute_interaction_features(
+            ref_x,
+            ref_y,
+            ref_heading,
+            scenario_ids,
+            agent_length,
+            agent_width,
+            eval_mask,
+            device=self.device,
+            valid=ref_valid,
+        )
+
+        # Map-based features
+        sim_distance_to_road_edge, sim_offroad_per_step = metrics.compute_map_features(
+            eval_sim_x,
+            eval_sim_y,
+            eval_sim_heading,
+            eval_scenario_ids,
+            eval_agent_length,
+            eval_agent_width,
+            road_edge_polylines,
+            device=self.device,
+        )
+
+        ref_distance_to_road_edge, ref_offroad_per_step = metrics.compute_map_features(
+            eval_ref_x,
+            eval_ref_y,
+            eval_ref_heading,
+            eval_scenario_ids,
+            eval_agent_length,
+            eval_agent_width,
+            road_edge_polylines,
+            device=self.device,
+            valid=eval_ref_valid,
+        )
 
         # Compute realism metrics
         # Average Displacement Error (ADE) and minADE
         # Note: This metric is not included in the scoring meta-metric, as per WOSAC rules.
-        ade, min_ade = metrics.compute_displacement_error(sim_x, sim_y, ref_x, ref_y, ref_valid)
+        ade, min_ade = metrics.compute_displacement_error(
+            eval_sim_x, eval_sim_y, eval_ref_x, eval_ref_y, eval_ref_valid
+        )
 
         # Log-likelihood metrics
         # Kinematic features log-likelihoods
@@ -230,6 +294,49 @@ class WOSACEvaluator:
             sanity_check=False,
         )
 
+        min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
+            "distance_to_nearest_object"
+        )
+        distance_to_nearest_object_log_likelihood = estimators.log_likelihood_estimate_timeseries(
+            log_values=ref_signed_distances,
+            sim_values=sim_signed_distances,
+            treat_timesteps_independently=independent_timesteps,
+            min_val=min_val,
+            max_val=max_val,
+            num_bins=num_bins,
+            additive_smoothing=additive_smoothing,
+            sanity_check=False,
+        )
+
+        min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
+            "time_to_collision"
+        )
+        time_to_collision_log_likelihood = estimators.log_likelihood_estimate_timeseries(
+            log_values=ref_time_to_collision,
+            sim_values=sim_time_to_collision,
+            treat_timesteps_independently=independent_timesteps,
+            min_val=min_val,
+            max_val=max_val,
+            num_bins=num_bins,
+            additive_smoothing=additive_smoothing,
+            sanity_check=False,
+        )
+
+        # Map-based features log-likelihoods
+        min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
+            "distance_to_road_edge"
+        )
+        distance_to_road_edge_log_likelihood = estimators.log_likelihood_estimate_timeseries(
+            log_values=ref_distance_to_road_edge,
+            sim_values=sim_distance_to_road_edge,
+            treat_timesteps_independently=independent_timesteps,
+            min_val=min_val,
+            max_val=max_val,
+            num_bins=num_bins,
+            additive_smoothing=additive_smoothing,
+            sanity_check=False,
+        )
+
         speed_likelihood = np.exp(
             metrics._reduce_average_with_validity(
                 linear_speed_log_likelihood,
@@ -262,20 +369,89 @@ class WOSACEvaluator:
             )
         )
 
-        # Get agent IDs and scenario IDs
-        agent_ids = ground_truth_trajectories["id"]
-        scenario_ids = ground_truth_trajectories["scenario_id"]
+        distance_to_nearest_object_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                distance_to_nearest_object_log_likelihood,
+                eval_ref_valid[:, 0, :],
+                axis=1,
+            )
+        )
+
+        time_to_collision_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                time_to_collision_log_likelihood,
+                eval_ref_valid[:, 0, :],
+                axis=1,
+            )
+        )
+
+        distance_to_road_edge_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                distance_to_road_edge_log_likelihood,
+                eval_ref_valid[:, 0, :],
+                axis=1,
+            )
+        )
+
+        # Collision likelihood is computed by aggregating in time. For invalid objects
+        # in the logged scenario, we need to filter possible collisions in simulation.
+        # `sim_collision_indication` shape: (n_samples, n_objects).
+
+        sim_collision_indication = np.any(np.where(eval_ref_valid, sim_collision_per_step, False), axis=2)
+        ref_collision_indication = np.any(np.where(eval_ref_valid, ref_collision_per_step, False), axis=2)
+
+        sim_num_collisions = np.sum(sim_collision_indication, axis=1)
+        ref_num_collisions = np.sum(ref_collision_indication, axis=1)
+
+        collision_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
+            log_values=ref_collision_indication[:, 0],
+            sim_values=sim_collision_indication,
+            min_val=0.0,
+            max_val=1.0,
+            num_bins=2,
+            use_bernoulli=True,
+        )
+        collision_likelihood = np.exp(collision_log_likelihood)
+
+        # Offroad likelihood (same pattern as collision)
+        sim_offroad_indication = np.any(np.where(eval_ref_valid, sim_offroad_per_step, False), axis=2)
+        ref_offroad_indication = np.any(np.where(eval_ref_valid, ref_offroad_per_step, False), axis=2)
+
+        sim_num_offroad = np.sum(sim_offroad_indication, axis=1)
+        ref_num_offroad = np.sum(ref_offroad_indication, axis=1)
+
+        offroad_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
+            log_values=ref_offroad_indication[:, 0],
+            sim_values=sim_offroad_indication,
+            min_val=0.0,
+            max_val=1.0,
+            num_bins=2,
+            use_bernoulli=True,
+        )
+        offroad_likelihood = np.exp(offroad_log_likelihood)
+
+        # Get agent IDs
+        eval_agent_ids = ground_truth_trajectories["id"][eval_mask]
 
         df = pd.DataFrame(
             {
-                "agent_id": agent_ids.flatten(),
-                "scenario_id": scenario_ids.flatten(),
+                "agent_id": eval_agent_ids.flatten(),
+                "scenario_id": eval_scenario_ids.flatten(),
+                "num_collisions_sim": sim_num_collisions.flatten(),
+                "num_collisions_ref": ref_num_collisions.flatten(),
+                "num_offroad_sim": sim_num_offroad.flatten(),
+                "num_offroad_ref": ref_num_offroad.flatten(),
                 "ade": ade,
                 "min_ade": min_ade,
                 "likelihood_linear_speed": speed_likelihood,
                 "likelihood_linear_acceleration": accel_likelihood,
                 "likelihood_angular_speed": angular_speed_likelihood,
                 "likelihood_angular_acceleration": angular_accel_likelihood,
+                "likelihood_distance_to_nearest_object": distance_to_nearest_object_likelihood,
+                "likelihood_time_to_collision": time_to_collision_likelihood,
+                "likelihood_collision_indication": collision_likelihood,
+                "likelihood_distance_to_road_edge": distance_to_road_edge_likelihood,
+                "likelihood_offroad_indication": offroad_likelihood,
             }
         )
 
@@ -283,10 +459,19 @@ class WOSACEvaluator:
             [
                 "ade",
                 "min_ade",
+                "num_collisions_sim",
+                "num_collisions_ref",
+                "num_offroad_sim",
+                "num_offroad_ref",
                 "likelihood_linear_speed",
                 "likelihood_linear_acceleration",
                 "likelihood_angular_speed",
                 "likelihood_angular_acceleration",
+                "likelihood_distance_to_nearest_object",
+                "likelihood_time_to_collision",
+                "likelihood_collision_indication",
+                "likelihood_distance_to_road_edge",
+                "likelihood_offroad_indication",
             ]
         ].mean()
 
