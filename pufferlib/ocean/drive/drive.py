@@ -582,6 +582,7 @@ def process_all_maps(
     data_folder="data/processed/training",
     max_maps=10_000,
     num_workers=None,
+    exclude_towns=None,
 ):
     """Process all maps and save them as binaries using multiprocessing
 
@@ -589,22 +590,31 @@ def process_all_maps(
         data_folder: Path to the folder containing JSON map files
         max_maps: Maximum number of maps to process
         num_workers: Number of parallel workers (defaults to cpu_count())
+        exclude_towns: Optional iterable of town prefixes (case-insensitive) to skip,
+            e.g., ["town03", "town04"]
     """
     from pathlib import Path
 
     if num_workers is None:
         num_workers = cpu_count()
+    use_pool = num_workers > 1
 
     # Path to the training data
     data_dir = Path(data_folder)
     dataset_name = data_dir.name
+    excluded = {town.lower() for town in exclude_towns or []}
 
     # Create the binaries directory if it doesn't exist
     binary_dir = Path(f"resources/drive/binaries/{dataset_name}")
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Get all JSON files in the training directory
-    json_files = sorted(data_dir.glob("*.json"))
+    json_files = []
+    for path in sorted(data_dir.glob("*.json")):
+        stem = path.stem.lower()
+        if any(stem.startswith(town) for town in excluded):
+            continue
+        json_files.append(path)
 
     # Prepare arguments for parallel processing
     tasks = []
@@ -613,11 +623,22 @@ def process_all_maps(
         binary_path = binary_dir / binary_file
         tasks.append((i, map_path, binary_path))
 
-    # Process maps in parallel with progress bar
-    with Pool(num_workers) as pool:
-        results = list(
-            tqdm(pool.imap(_process_single_map, tasks), total=len(tasks), desc="Processing maps", unit="map")
-        )
+    if not tasks:
+        print(f"No maps found in {data_dir.resolve()}")
+        return
+
+    # Process maps with progress bar
+    if use_pool:
+        try:
+            with Pool(num_workers) as pool:
+                results = list(
+                    tqdm(pool.imap(_process_single_map, tasks), total=len(tasks), desc="Processing maps", unit="map")
+                )
+        except PermissionError:
+            print("Permission denied creating worker pool; falling back to serial processing.")
+            results = list(tqdm(map(_process_single_map, tasks), total=len(tasks), desc="Processing maps", unit="map"))
+    else:
+        results = list(tqdm(map(_process_single_map, tasks), total=len(tasks), desc="Processing maps", unit="map"))
 
     # Collect statistics
     successful = sum(1 for _, _, success, _ in results if success)
@@ -663,7 +684,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/carla/")
+    process_all_maps(data_folder="data/carla/", exclude_towns=["town03", "town04"])
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

@@ -2,6 +2,10 @@
 
 A browser-based playground for inspecting and editing Waymo Open Motion Dataset (WOMD) scenes. The tool runs fully client-side at <https://womd-editor.vercel.app/> and works directly with the JSON format produced by Waymo/ScenarioMax exports and PufferDrive conversions.
 
+## Video walkthrough
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/kzJptblJ4Kw?si=1lVRHmM1HjwCkgP5" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+
 ## Quick start
 - Open <https://womd-editor.vercel.app/> in a modern Chromium/Firefox browser.
 - Click **Import JSON…** in the left sidebar and drop one or more scenario files (Waymo/ScenarioMax JSON or editor exports).

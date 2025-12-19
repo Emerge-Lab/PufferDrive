@@ -203,6 +203,9 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         return -1;
     }
 
+    float goal_target_distance_val =
+        (goal_target_distance > 0.0f) ? goal_target_distance : conf.goal_target_distance;
+
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
@@ -241,6 +244,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .goal_behavior = goal_behavior,
+        .goal_target_distance = goal_target_distance_val,
         .init_mode = init_mode,
         .control_mode = control_mode,
     };
@@ -419,7 +423,7 @@ int main(int argc, char *argv[]) {
     int init_mode = 0;
     int control_mode = 0;
     int goal_behavior = 0;
-    float goal_target_distance = 10.0;
+    float goal_target_distance = -1.0f;
     int zoom_in = 1;
 
     const char *view_mode = "both"; // "both", "topdown", "agent"
@@ -528,6 +532,11 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--goal-behavior") == 0) {
             if (i + 1 < argc) {
                 goal_behavior = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--goal-target-distance") == 0) {
+            if (i + 1 < argc) {
+                goal_target_distance = atof(argv[i + 1]);
                 i++;
             }
         } else if (strcmp(argv[i], "--zoom-in") == 0) {
