@@ -1651,22 +1651,22 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float vy = agent->vy;
 
         // Calculate current speed (signed based on direction relative to heading)
-        float speed_magnitude = sqrtf(vx*vx + vy*vy);
+        float speed_magnitude = sqrtf(vx * vx + vy * vy);
         float v_dot_heading = vx * agent->heading_x + vy * agent->heading_y;
         float signed_speed = copysignf(speed_magnitude, v_dot_heading);
 
         // Update speed with acceleration
-        signed_speed = signed_speed + acceleration*env->dt;
+        signed_speed = signed_speed + acceleration * env->dt;
         signed_speed = clipSpeed(signed_speed);
         // Compute yaw rate
         float beta = tanh(.5 * tanf(steering));
 
         // New heading
-        float yaw_rate = (signed_speed*cosf(beta)*tanf(steering)) / agent->length;
+        float yaw_rate = (signed_speed * cosf(beta) * tanf(steering)) / agent->length;
 
         // New velocity
-        float new_vx = signed_speed*cosf(heading + beta);
-        float new_vy = signed_speed*sinf(heading + beta);
+        float new_vx = signed_speed * cosf(heading + beta);
+        float new_vy = signed_speed * sinf(heading + beta);
 
         // Update position
         x = x + (new_vx * env->dt);
@@ -1953,8 +1953,10 @@ void compute_observations(Drive *env) {
             obs[obs_idx + 5] = rel_heading_y;
 
             // relative speed
-            float other_speed_magnitude = sqrtf(other_entity->vx * other_entity->vx + other_entity->vy * other_entity->vy);
-            float other_v_dot_heading = other_entity->vx * other_entity->heading_x + other_entity->vy * other_entity->heading_y;
+            float other_speed_magnitude =
+                sqrtf(other_entity->vx * other_entity->vx + other_entity->vy * other_entity->vy);
+            float other_v_dot_heading =
+                other_entity->vx * other_entity->heading_x + other_entity->vy * other_entity->heading_y;
             float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
             obs[obs_idx + 6] = other_signed_speed / MAX_SPEED;
             cars_seen++;
