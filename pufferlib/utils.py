@@ -109,8 +109,6 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             latest_cpt,
             "--eval.wosac-realism-eval",
             "True",
-            "--eval.wosac-num-agents",
-            str(eval_config.get("wosac_num_agents", 256)),
             "--eval.wosac-init-mode",
             str(eval_config.get("wosac_init_mode", "create_all_valid")),
             "--eval.wosac-control-mode",

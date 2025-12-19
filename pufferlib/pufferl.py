@@ -479,8 +479,11 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
-            human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
-            human_loss = human_loss_clipped.mean()
+            if config["human_sequences"] > 0:
+                human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
+                human_loss = human_loss_clipped.mean()
+            else:
+                human_loss = torch.tensor(0.0, device=device)
 
             entropy_loss = entropy.mean()
 
