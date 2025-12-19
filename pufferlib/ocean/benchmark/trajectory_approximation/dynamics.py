@@ -96,27 +96,31 @@ class JerkDynamics:
     """
     Stateful jerk bicycle model with persistent acceleration state.
 
-    Action space: 12 discrete actions (4 jerk_long × 3 jerk_lat)
+    Action space: Configurable discrete actions (jerk_long × jerk_lat)
     State: {x, y, heading, vx, vy, a_long, a_lat, steering_angle, wheelbase}
 
     Based on drive.h lines 1620-1714
     """
 
-    # Action space constants (from drive.h lines 95-96)
-    JERK_LONG = np.array([-15.0, -4.0, 0.0, 4.0])
-    JERK_LAT = np.array([-4.0, 0.0, 4.0])
+    # Default action space constants (from drive.h lines 95-96)
+    DEFAULT_JERK_LONG = np.array([-15.0, -4.0, 0.0, 4.0])
+    DEFAULT_JERK_LAT = np.array([-4.0, 0.0, 4.0])
 
-    def __init__(self, dt=0.1):
+    def __init__(self, dt=0.1, jerk_long=None, jerk_lat=None):
         """
         Initialize JERK dynamics model.
 
         Args:
             dt: Time step in seconds (default 0.1s = 10 Hz)
+            jerk_long: Longitudinal jerk discretization values (default: [-15, -4, 0, 4])
+            jerk_lat: Lateral jerk discretization values (default: [-4, 0, 4])
         """
         self.dt = dt
+        self.JERK_LONG = np.array(jerk_long) if jerk_long is not None else self.DEFAULT_JERK_LONG
+        self.JERK_LAT = np.array(jerk_lat) if jerk_lat is not None else self.DEFAULT_JERK_LAT
         self.num_jerk_long = len(self.JERK_LONG)
         self.num_jerk_lat = len(self.JERK_LAT)
-        self.num_actions = self.num_jerk_long * self.num_jerk_lat  # 4 * 3 = 12
+        self.num_actions = self.num_jerk_long * self.num_jerk_lat
 
     def step(self, state, action_idx):
         """

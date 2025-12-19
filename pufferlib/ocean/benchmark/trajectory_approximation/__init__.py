@@ -28,6 +28,7 @@ from .error_metrics import (
 )
 from .visualizer import (
     plot_trajectory_comparison,
+    plot_jerk_ablation_trajectory,
     plot_aggregate_metrics,
     plot_error_histogram,
 )
@@ -66,6 +67,7 @@ __all__ = [
     'format_metrics_summary',
     # Visualization
     'plot_trajectory_comparison',
+    'plot_jerk_ablation_trajectory',
     'plot_aggregate_metrics',
     'plot_error_histogram',
     # Kinematic realism

@@ -121,6 +121,127 @@ def plot_trajectory_comparison(ground_truth, classic_approx, jerk_approx,
     plt.close()
 
 
+def plot_jerk_ablation_trajectory(ground_truth, baseline_approx, expanded_approx,
+                                   segment_range, output_path, config_names=None):
+    """
+    Create 6-panel comparison plot for JERK ablation study.
+
+    Panels:
+    - Row 1: XY trajectory, Speed over time, Heading over time
+    - Row 2: Position error, Velocity error, Heading error
+
+    Args:
+        ground_truth: Ground truth trajectory dict
+        baseline_approx: Baseline JERK approximation dict
+        expanded_approx: Expanded JERK approximation dict
+        segment_range: Tuple (start, end) for segment indices
+        output_path: Path to save the plot
+        config_names: Optional tuple of (baseline_name, expanded_name)
+    """
+    if config_names is None:
+        config_names = ('JERK Baseline', 'JERK Expanded')
+
+    baseline_name, expanded_name = config_names
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    start, end = segment_range
+
+    # Time axis
+    t = np.arange(end - start) * 0.1  # 0.1s timestep
+
+    # Panel 1: XY trajectory
+    axes[0, 0].plot(ground_truth['x'], ground_truth['y'],
+                    'k-', label='Ground Truth', linewidth=2)
+    axes[0, 0].plot(baseline_approx['x'], baseline_approx['y'],
+                    'r--', label=baseline_name, alpha=0.7, linewidth=1.5)
+    axes[0, 0].plot(expanded_approx['x'], expanded_approx['y'],
+                    'b--', label=expanded_name, alpha=0.7, linewidth=1.5)
+    axes[0, 0].set_xlabel('X (m)')
+    axes[0, 0].set_ylabel('Y (m)')
+    axes[0, 0].legend()
+    axes[0, 0].set_title('Trajectory Comparison')
+    axes[0, 0].axis('equal')
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Panel 2: Speed over time
+    gt_speed = np.sqrt(ground_truth['vx']**2 + ground_truth['vy']**2)
+    baseline_speed = np.sqrt(baseline_approx['vx']**2 + baseline_approx['vy']**2)
+    expanded_speed = np.sqrt(expanded_approx['vx']**2 + expanded_approx['vy']**2)
+
+    axes[0, 1].plot(t, gt_speed, 'k-', label='Ground Truth', linewidth=2)
+    axes[0, 1].plot(t, baseline_speed, 'r--', label=baseline_name, alpha=0.7, linewidth=1.5)
+    axes[0, 1].plot(t, expanded_speed, 'b--', label=expanded_name, alpha=0.7, linewidth=1.5)
+    axes[0, 1].set_xlabel('Time (s)')
+    axes[0, 1].set_ylabel('Speed (m/s)')
+    axes[0, 1].legend()
+    axes[0, 1].set_title('Speed Profile')
+    axes[0, 1].grid(True, alpha=0.3)
+
+    # Panel 3: Heading over time
+    axes[0, 2].plot(t, ground_truth['heading'] * 180/np.pi,
+                    'k-', label='Ground Truth', linewidth=2)
+    axes[0, 2].plot(t, baseline_approx['heading'] * 180/np.pi,
+                    'r--', label=baseline_name, alpha=0.7, linewidth=1.5)
+    axes[0, 2].plot(t, expanded_approx['heading'] * 180/np.pi,
+                    'b--', label=expanded_name, alpha=0.7, linewidth=1.5)
+    axes[0, 2].set_xlabel('Time (s)')
+    axes[0, 2].set_ylabel('Heading (deg)')
+    axes[0, 2].legend()
+    axes[0, 2].set_title('Heading Profile')
+    axes[0, 2].grid(True, alpha=0.3)
+
+    # Panel 4: Position error over time
+    baseline_pos_error = np.sqrt(
+        (baseline_approx['x'] - ground_truth['x'])**2 +
+        (baseline_approx['y'] - ground_truth['y'])**2
+    )
+    expanded_pos_error = np.sqrt(
+        (expanded_approx['x'] - ground_truth['x'])**2 +
+        (expanded_approx['y'] - ground_truth['y'])**2
+    )
+
+    axes[1, 0].plot(t, baseline_pos_error, 'r-', label=baseline_name, linewidth=1.5)
+    axes[1, 0].plot(t, expanded_pos_error, 'b-', label=expanded_name, linewidth=1.5)
+    axes[1, 0].set_xlabel('Time (s)')
+    axes[1, 0].set_ylabel('Position Error (m)')
+    axes[1, 0].legend()
+    axes[1, 0].set_title('Position Error Over Time')
+    axes[1, 0].grid(True, alpha=0.3)
+
+    # Panel 5: Speed error over time
+    baseline_speed_error = np.abs(baseline_speed - gt_speed)
+    expanded_speed_error = np.abs(expanded_speed - gt_speed)
+
+    axes[1, 1].plot(t, baseline_speed_error, 'r-', label=baseline_name, linewidth=1.5)
+    axes[1, 1].plot(t, expanded_speed_error, 'b-', label=expanded_name, linewidth=1.5)
+    axes[1, 1].set_xlabel('Time (s)')
+    axes[1, 1].set_ylabel('Speed Error (m/s)')
+    axes[1, 1].legend()
+    axes[1, 1].set_title('Speed Error Over Time')
+    axes[1, 1].grid(True, alpha=0.3)
+
+    # Panel 6: Heading error over time
+    from .trajectory_utils import wrap_angle
+    baseline_heading_error = np.abs(wrap_angle(
+        baseline_approx['heading'] - ground_truth['heading']
+    )) * 180/np.pi
+    expanded_heading_error = np.abs(wrap_angle(
+        expanded_approx['heading'] - ground_truth['heading']
+    )) * 180/np.pi
+
+    axes[1, 2].plot(t, baseline_heading_error, 'r-', label=baseline_name, linewidth=1.5)
+    axes[1, 2].plot(t, expanded_heading_error, 'b-', label=expanded_name, linewidth=1.5)
+    axes[1, 2].set_xlabel('Time (s)')
+    axes[1, 2].set_ylabel('Heading Error (deg)')
+    axes[1, 2].legend()
+    axes[1, 2].set_title('Heading Error Over Time')
+    axes[1, 2].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def plot_aggregate_metrics(all_metrics_classic, all_metrics_jerk, output_path):
     """
     Create box plots comparing CLASSIC vs JERK across all trajectories.
