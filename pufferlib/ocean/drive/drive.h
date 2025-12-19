@@ -1592,22 +1592,23 @@ void move_dynamics(Drive* env, int action_idx, int agent_idx){
         float vx = agent->vx;
         float vy = agent->vy;
 
-        // Calculate current speed
-        float speed = sqrtf(vx*vx + vy*vy);
+        // Calculate current speed (signed based on direction relative to heading)
+        float speed_magnitude = sqrtf(vx*vx + vy*vy);
+        float v_dot_heading = vx * agent->heading_x + vy * agent->heading_y;
+        float signed_speed = copysignf(speed_magnitude, v_dot_heading);
 
         // Update speed with acceleration
-        speed = speed + acceleration*env->dt;
-        speed = clipSpeed(speed);
-
+        signed_speed = signed_speed + acceleration*env->dt;
+        signed_speed = clipSpeed(signed_speed);
         // Compute yaw rate
         float beta = tanh(.5*tanf(steering));
 
         // New heading
-        float yaw_rate = (speed*cosf(beta)*tanf(steering)) / agent->length;
+        float yaw_rate = (signed_speed*cosf(beta)*tanf(steering)) / agent->length;
 
         // New velocity
-        float new_vx = speed*cosf(heading + beta);
-        float new_vy = speed*sinf(heading + beta);
+        float new_vx = signed_speed*cosf(heading + beta);
+        float new_vy = signed_speed*sinf(heading + beta);
 
         // Update position
         x = x + (new_vx*env->dt);
