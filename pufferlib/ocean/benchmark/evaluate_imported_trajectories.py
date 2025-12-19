@@ -66,6 +66,32 @@ def check_alignment(simulated, ground_truth, tolerance=1e-4):
     return True
 
 
+def check_consistent_alignment(simulated, ground_truth, tolerance=1e-4):
+    # For planning evaluation, for agents other than the sdc, trajectories should be the same across timesteps.
+
+    gt_x = ground_truth["x"].squeeze()
+    gt_y = ground_truth["y"].squeeze()
+    gt_z = ground_truth["z"].squeeze()
+
+    is_ego = (ground_truth["id"] <= -2).squeeze()
+    is_valid = ground_truth["valid"].squeeze()
+
+    sim_x = simulated["x"].squeeze()
+    sim_y = simulated["y"].squeeze()
+    sim_z = simulated["z"].squeeze()
+
+    diffs = np.maximum(np.maximum(np.abs(gt_x - sim_x), np.abs(gt_y - sim_y)), np.abs(gt_z - sim_z))
+
+    diffs = np.where(is_ego[:, None] | ~is_valid, 0.0, diffs)
+    max_diff = np.max(diffs)
+
+    if max_diff < tolerance:
+        return True
+    else:
+        print("There is a shift of at least: ", max_diff)
+        return False
+
+
 def evaluate_trajectories(simulated_trajectory_file, args):
     """
     Evaluates pre-computed simulated trajectories against live ground truth from the environment.
@@ -76,74 +102,153 @@ def evaluate_trajectories(simulated_trajectory_file, args):
     args["env"]["use_all_maps"] = True
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
-    print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
+    wosac_enabled = args["eval"]["wosac_realism_eval"]
+    planning_enabled = args["eval"]["planning_eval"]
 
-    backend = args["eval"]["backend"]
-    assert backend == "PufferEnv", "WOSAC evaluation only supports PufferEnv backend."
-    args["vec"] = dict(backend=backend, num_envs=1)
+    if wosac_enabled:
+        print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
 
-    args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
-    args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
-    args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
-    args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
-    args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
+        backend = args["eval"]["backend"]
+        assert backend == "PufferEnv", "WOSAC evaluation only supports PufferEnv backend."
+        args["vec"] = dict(backend=backend, num_envs=1)
 
-    vecenv = pufferl.load_env(env_name, args)
-    evaluator = WOSACEvaluator(args)
+        args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
+        args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
+        args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
+        args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
+        args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
 
-    # Collect ground truth trajectories from the dataset
-    gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
-    num_agents_gt = gt_trajectories["x"].shape[0]
+        vecenv = pufferl.load_env(env_name, args)
+        evaluator = WOSACEvaluator(args)
 
-    print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
-    print(f"Number of controlled agents: {num_agents_gt}")
-    print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
+        # Collect ground truth trajectories from the dataset
+        gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+        num_agents_gt = gt_trajectories["x"].shape[0]
 
-    print(f"Loading simulated trajectories from {simulated_trajectory_file}...")
-    with open(simulated_trajectory_file, "rb") as f:
-        sim_trajectories = pickle.load(f)
+        print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
+        print(f"Number of controlled agents: {num_agents_gt}")
+        print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
 
-    if sim_trajectories["x"].shape[0] != gt_trajectories["x"].shape[0]:
-        print("\nThe number of agents in simulated and ground truth trajectories do not match.")
-        print("This is okay if you are running this script on a subset of the val dataset")
-        print("But please also check that in drive.h MAX_AGENTS is set to 256 and recompile")
+        print(f"Loading simulated trajectories from {simulated_trajectory_file}...")
+        with open(simulated_trajectory_file, "rb") as f:
+            sim_trajectories = pickle.load(f)
 
-    if not check_alignment(sim_trajectories, gt_trajectories):
-        print("\nTrajectories are not aligned, trying to align them, if it fails consider changing the tolerance.")
-        sim_trajectories = align_trajectories_by_initial_position(sim_trajectories, gt_trajectories)
-        assert check_alignment(sim_trajectories, gt_trajectories), (
-            "There might be an issue with the way you generated your data."
+        if sim_trajectories["x"].shape[0] != gt_trajectories["x"].shape[0]:
+            print("\nThe number of agents in simulated and ground truth trajectories do not match.")
+            print("This is okay if you are running this script on a subset of the val dataset")
+            print("But please also check that in drive.h MAX_AGENTS is set to 256 and recompile")
+
+        if not check_alignment(sim_trajectories, gt_trajectories):
+            print("\nTrajectories are not aligned, trying to align them, if it fails consider changing the tolerance.")
+            sim_trajectories = align_trajectories_by_initial_position(sim_trajectories, gt_trajectories)
+            assert check_alignment(sim_trajectories, gt_trajectories), (
+                "There might be an issue with the way you generated your data."
+            )
+            print("Alignment successful")
+        else:
+            sim_trajectories = {k: v[:num_agents_gt] for k, v in sim_trajectories.items()}
+
+        # Evaluator code expects to have matching ids between gt and sim trajectories
+        # Since alignment is checked it is safe to do that
+        sim_trajectories["id"][:] = gt_trajectories["id"][..., None]
+
+        agent_state = vecenv.driver_env.get_global_agent_state()
+        road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+
+        print("\n--- Computing WOSAC Metrics ---")
+        results = evaluator.compute_metrics(
+            gt_trajectories,
+            sim_trajectories,
+            agent_state,
+            road_edge_polylines,
+            args["eval"]["wosac_aggregate_results"],
         )
-        print("Alignment successful")
-    else:
-        sim_trajectories = {k: v[:num_agents_gt] for k, v in sim_trajectories.items()}
 
-    # Evaluator code expects to have matching ids between gt and sim trajectories
-    # Since alignment is checked it is safe to do that
-    sim_trajectories["id"][:] = gt_trajectories["id"][..., None]
+        if args["eval"]["wosac_aggregate_results"]:
+            import json
 
-    agent_state = vecenv.driver_env.get_global_agent_state()
-    road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+            print("\n")
+            print("\n--- WOSAC METRICS START ---")
+            print(json.dumps(results, indent=4))
+            print("--- WOSAC METRICS END ---")
 
-    print("\n--- Computing WOSAC Metrics ---")
-    results = evaluator.compute_metrics(
-        gt_trajectories,
-        sim_trajectories,
-        agent_state,
-        road_edge_polylines,
-        args["eval"]["wosac_aggregate_results"],
-    )
+        vecenv.close()
+        return results
 
-    if args["eval"]["wosac_aggregate_results"]:
-        import json
+    elif planning_enabled:
+        print(f"Running Planning evaluation with {dataset_name} dataset. \n")
+        from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator, PlanningEvaluator
 
-        print("\n")
-        print("\n--- WOSAC METRICS START ---")
-        print(json.dumps(results, indent=4))
-        print("--- WOSAC METRICS END ---")
+        backend = args["eval"]["backend"]
+        assert backend == "PufferEnv", "Planning evaluation only supports PufferEnv backend."
 
-    vecenv.close()
-    return results
+        args["vec"] = dict(backend=backend, num_envs=1)
+        args["eval"]["wosac_num_rollouts"] = 1
+        args["env"]["control_mode"] = "control_sdc_only"
+        args["env"]["init_steps"] = args["eval"]["planning_init_steps"]
+        args["env"]["goal_behavior"] = args["eval"]["planning_goal_behavior"]
+        args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
+
+        vecenv = pufferl.load_env(env_name, args)
+
+        wosac_evaluator = WOSACEvaluator(args)
+
+        gt_args = args.copy()
+        gt_args["env"]["control_mode"] = "control_wosac"
+        gt_vecenv = pufferl.load_env(env_name, gt_args)
+        gt_trajectories = wosac_evaluator.collect_ground_truth_trajectories(gt_vecenv)
+        num_agents_gt = gt_trajectories["x"].shape[0]
+
+        agent_state = gt_vecenv.driver_env.get_global_agent_state()
+        road_edge_polylines = gt_vecenv.driver_env.get_road_edge_polylines()
+
+        evaluator = PlanningEvaluator(args)
+
+        with open(simulated_trajectory_file, "rb") as f:
+            sim_trajectories = pickle.load(f)
+
+        if sim_trajectories["x"].shape[0] != gt_trajectories["x"].shape[0]:
+            print("\nThe number of agents in simulated and ground truth trajectories do not match.")
+            print("This is okay if you are running this script on a subset of the val dataset")
+            print("But please also check that in drive.h MAX_AGENTS is set to 256 and recompile")
+
+        if not check_alignment(sim_trajectories, gt_trajectories):
+            print("\nTrajectories are not aligned, trying to align them, if it fails consider changing the tolerance.")
+            sim_trajectories = align_trajectories_by_initial_position(sim_trajectories, gt_trajectories)
+            assert check_alignment(sim_trajectories, gt_trajectories), (
+                "There might be an issue with the way you generated your data."
+            )
+            print("Alignment successful")
+        else:
+            sim_trajectories = {k: v[:num_agents_gt] for k, v in sim_trajectories.items()}
+
+        assert check_consistent_alignment(sim_trajectories, gt_trajectories), (
+            "You should check your data, you can increase tolerance or you should check that you used the same dataset"
+        )
+
+        # Safe to do that because we checked the alignment
+        sim_trajectories["id"] = gt_trajectories["id"]
+        sim_trajectories["valid"] = gt_trajectories["valid"]
+        sim_trajectories["scenario_id"] = gt_trajectories["scenario_id"]
+
+        results = evaluator.compute_metrics(
+            sim_trajectories, agent_state, road_edge_polylines, args["eval"]["planning_aggregate_results"]
+        )
+
+        gt_results = evaluator.compute_metrics(
+            gt_trajectories, agent_state, road_edge_polylines, args["eval"]["planning_aggregate_results"]
+        )
+
+        if args["eval"]["planning_aggregate_results"]:
+            import json
+
+            print("\nPLANNING_METRICS_START")
+            print(json.dumps(results, indent=4))
+            print("PLANNING_METRICS_END")
+
+            print("\nPLANNING_GT_METRICS_START")
+            print(json.dumps(gt_results, indent=4))
+            print("PLANNING_GT_METRICS_END")
 
 
 if __name__ == "__main__":
