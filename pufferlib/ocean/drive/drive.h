@@ -371,7 +371,7 @@ void add_log(Drive *env) {
         float collisions_per_agent = env->logs[i].collisions_per_agent;
         env->log.collisions_per_agent += collisions_per_agent;
 
-        if ((e->goals_reached_this_episode / e->goals_sampled_this_episode) == 1.0 && !e->collided_before_goal) {
+        if ((e->goals_reached_this_episode / e->goals_sampled_this_episode) > 0.9 && !e->collided_before_goal) {
             env->log.score += 1.0f;
         }
         if (!offroad && !collided && !(e->goals_reached_this_episode < 1.0f)) {
