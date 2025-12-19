@@ -1932,6 +1932,13 @@ void sample_new_goal(Drive *env, int agent_idx) {
         }
     }
 
+    // If no valid goal found, use another agent's initial goal
+    if (best_distance_error >= 1e50f && env->active_agent_count > 1) {
+        int other_idx = env->active_agent_indices[(agent_idx + 1) % env->active_agent_count];
+        best_x = env->entities[other_idx].init_goal_x;
+        best_y = env->entities[other_idx].init_goal_y;
+    }
+
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goals_sampled_this_episode += 1;
