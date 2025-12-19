@@ -201,6 +201,7 @@ struct Entity {
     int collided_before_goal;
     float goals_reached_this_episode;
     float goals_sampled_this_episode;
+    int current_goal_reached;
     int active_agent;
     float cumulative_displacement;
     int displacement_sample_count;
@@ -1956,6 +1957,7 @@ void c_reset(Drive *env) {
         env->entities[agent_idx].goals_reached_this_episode = 0.0f;
         // Initialize to 1 because there is one goal in the data file
         env->entities[agent_idx].goals_sampled_this_episode = 1.0f;
+        env->entities[agent_idx].current_goal_reached = 0;
         env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
@@ -2069,15 +2071,16 @@ void c_step(Drive *env) {
                                  env->entities[agent_idx].goal_position_x, env->entities[agent_idx].goal_position_y);
 
         // Reward agent if it is within X meters of goal
-        if (distance_to_goal < env->goal_radius) {
-
+        if (distance_to_goal < env->goal_radius && !env->entities[agent_idx].current_goal_reached) {
             if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
-            } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
+                env->entities[agent_idx].current_goal_reached = 1;
+            } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!env->entities[agent_idx].current_goal_reached)) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
                 sample_new_goal(env, agent_idx);
+                env->entities[agent_idx].current_goal_reached = 0;
             } else { // Zero out the velocity so that the agent stops at the goal
                 env->rewards[i] = env->reward_goal;
                 env->logs[i].episode_return = env->reward_goal;
@@ -2628,7 +2631,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 if (agent_index == env->human_agent_idx) {
                     car_model = client->cars[3]; // Ego agent always uses red car (cars[0])
                 } else if (is_active_agent) {
-                    
+
                     car_model = client->cars[(i % 5) + 1];
 
                     if (env->entities[i].collision_state > 0) {
