@@ -1340,7 +1340,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         corners[i][1] =
             agent->y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
     }
-
+    float buffer = 2.0f; // 0.5m buffer for offroad checking
     GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25]; // Array big enough for all neighboring cells
     int list_size =
         checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL * 25, collision_offsets, 25);
@@ -1355,6 +1355,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         // Check for offroad collision with road edges
         if (entity->type == ROAD_EDGE) {
             int geometry_idx = entity_list[i].geometry_idx;
+            if(entity->traj_z[geometry_idx] > agent->z + buffer || entity->traj_z[geometry_idx] < agent->z - buffer) continue; // Edge is at a different z level
             float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
             float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
             for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
