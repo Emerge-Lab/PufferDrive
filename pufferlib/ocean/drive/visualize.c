@@ -259,7 +259,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
 
     // Set which vehicle to focus on for obs mode
-    env.human_agent_idx = 0;
+    int random_agent_idx = (rand() % 10) + 1;
+    env.human_agent_idx = random_agent_idx;
 
     c_reset(&env);
 
