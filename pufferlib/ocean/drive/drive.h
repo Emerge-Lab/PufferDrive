@@ -2622,17 +2622,14 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 rlTranslatef(position.x, position.y, position.z);
                 rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f); // Convert radians to degrees
 
-                // Select car model
-                Model car_model = client->cars[i % 6]; // Default: cycle through all 6 car sprites
+                // Select car model (skip index 0)
+                Model car_model = client->cars[(i % 5) + 1]; // Cycles through indices 1-5
 
                 if (agent_index == env->human_agent_idx) {
-                    car_model = client->cars[0]; // Ego agent always uses red car (cars[0])
+                    car_model = client->cars[3]; // Ego agent always uses red car (cars[0])
                 } else if (is_active_agent) {
-                    // Use cars 1-5 for other active agents to avoid red
-                    int car_idx = client->car_assignments[i % 64];
-                    if (car_idx == 0)
-                        car_idx = 1; // Skip red car for non-ego agents
-                    car_model = client->cars[car_idx % 6];
+                    
+                    car_model = client->cars[(i % 5) + 1];
 
                     if (env->entities[i].collision_state > 0) {
                         car_model = client->cars[0]; // Collided agents use red
