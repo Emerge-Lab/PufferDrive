@@ -2088,16 +2088,16 @@ void c_step(Drive *env) {
                 env->logs[i].episode_return += env->reward_goal;
                 sample_new_goal(env, agent_idx);
                 env->entities[agent_idx].current_goal_reached = 0;
+                env->entities[agent_idx].goals_reached_this_episode += 1.0f;
             } else { // Zero out the velocity so that the agent stops at the goal
                 env->rewards[i] = env->reward_goal;
                 env->logs[i].episode_return = env->reward_goal;
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+                env->entities[agent_idx].goals_reached_this_episode += 1.0f;
             }
-            env->entities[agent_idx].goals_reached_this_episode += 1.0f;
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
         }
-
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
 
