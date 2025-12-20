@@ -934,6 +934,9 @@ Run this with your virtual environment activated so the compiled extension links
 <p>Once map binaries are available (see <a href="../data/">Data</a>), launch a quick training run to confirm the environment, data, and bindings are wired up correctly:</p>
 <div class="highlight"><pre><span></span><code>puffer<span class="w"> </span>train<span class="w"> </span>puffer_drive
 </code></pre></div>
+<p>For multi-node training(Only uses Data Parallelism with torch ddp)
+<div class="highlight"><pre><span></span><code>torchrun<span class="w"> </span>--standalone<span class="w"> </span>--nnodes<span class="o">=</span><span class="m">1</span><span class="w"> </span>--nproc-per-node<span class="o">=</span><span class="m">6</span><span class="w"> </span>-m<span class="w"> </span>puffer<span class="w"> </span>train<span class="w"> </span>puffer_drive
+</code></pre></div></p>
 <p>If map binaries are missing, follow the steps in <a href="../data/">Data</a> to generate them before training. See <a href="../visualizer/">Visualizer</a> for rendering runs and <a href="../evaluation/">Evaluation</a> for benchmark commands.</p>
 <h2 id="logging-with-weights-biases">Logging with Weights &amp; Biases<a class="headerlink" href="#logging-with-weights-biases" title="Permanent link">&para;</a></h2>
 <p>Enable W&amp;B logging with the built-in CLI flags (the package is already a dependency in <code>setup.py</code>):</p>
