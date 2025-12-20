@@ -73,6 +73,7 @@
 #define MAX_AGENTS 32
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
+#define RESPAWN_AGENT 3
 
 #define ROAD_FEATURES 7
 #define ROAD_FEATURES_ONEHOT 13
@@ -101,16 +102,6 @@
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
-
-// Collision behavior
-#define COLLISION_IGNORE 0
-#define COLLISION_STOP 1
-#define COLLISION_RESPAWN 2
-
-// Offroad behavior
-#define OFFROAD_IGNORE 0
-#define OFFROAD_STOP 1
-#define OFFROAD_RESPAWN 2
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
@@ -2375,7 +2366,7 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->collision_behavior == COLLISION_RESPAWN) {
+    if (env->collision_behavior == RESPAWN_AGENT) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             int collision_state = env->entities[agent_idx].collision_state;
@@ -2386,7 +2377,7 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->offroad_behavior == OFFROAD_RESPAWN) {
+    if (env->offroad_behavior == RESPAWN_AGENT) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             int collision_state = env->entities[agent_idx].collision_state;
