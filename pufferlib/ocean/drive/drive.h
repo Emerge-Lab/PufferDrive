@@ -101,6 +101,7 @@
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
+
 // Collision behavior
 #define COLLISION_IGNORE 0
 #define COLLISION_STOP 1
@@ -2362,7 +2363,7 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->collision_behavior == OFFROAD_RESPAWN) {
+    if (env->offroad_behavior == OFFROAD_RESPAWN) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             int collision_state = env->entities[agent_idx].collision_state;
