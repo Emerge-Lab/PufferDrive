@@ -64,9 +64,6 @@
 
 // Grid cell size
 #define GRID_CELL_SIZE 5.0f
-#define MAX_ENTITIES_PER_CELL                                                                                          \
-    30 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in
-       // gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
@@ -997,36 +994,50 @@ bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2])
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
-int checkNeighbors(Drive *env, float x, float y, GridMapEntity *entity_list, int max_size,
-                   const int (*local_offsets)[2], int offset_size) {
-    // Get the grid index for the given position (x, y)
+GridMapEntity *checkNeighbors(Drive *env, float x, float y, const int (*local_offsets)[2], int offset_size,
+                              int *list_count) {
     int index = getGridIndex(env, x, y);
-    if (index == -1)
-        return 0; // Return 0 size if position invalid
-    // Calculate 2D grid coordinates
+    if (index == -1) {
+        *(list_count) = 0;
+        return NULL;
+    }
+
     int cellsX = env->grid_map->grid_cols;
     int gridX = index % cellsX;
     int gridY = index / cellsX;
     int entity_list_count = 0;
-    // Fill the provided array
+
+    // Calculate entities count in neighboring cells
     for (int i = 0; i < offset_size; i++) {
         int nx = gridX + local_offsets[i][0];
         int ny = gridY + local_offsets[i][1];
-        // Ensure the neighbor is within grid bounds
         if (nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows)
             continue;
         int neighborIndex = ny * env->grid_map->grid_cols + nx;
         int count = env->grid_map->cell_entities_count[neighborIndex];
-        // Add entities from this cell to the list
-        for (int j = 0; j < count && entity_list_count < max_size; j++) {
-            int entityId = env->grid_map->cells[neighborIndex][j].entity_idx;
-            int geometry_idx = env->grid_map->cells[neighborIndex][j].geometry_idx;
-            entity_list[entity_list_count].entity_idx = entityId;
-            entity_list[entity_list_count].geometry_idx = geometry_idx;
-            entity_list_count += 1;
-        }
+        entity_list_count += count;
     }
-    return entity_list_count;
+
+    int entered_entity_count = 0;
+
+    // Fill entity_list with neighboring entities
+    GridMapEntity *entity_list = (GridMapEntity *)calloc(entity_list_count, sizeof(GridMapEntity));
+    for (int i = 0; i < offset_size; i++) {
+        int nx = gridX + local_offsets[i][0];
+        int ny = gridY + local_offsets[i][1];
+        if (nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows)
+            continue;
+        int neighborIndex = ny * env->grid_map->grid_cols + nx;
+        int count = env->grid_map->cell_entities_count[neighborIndex];
+        if (count > 0) {
+            memcpy(&entity_list[entered_entity_count], env->grid_map->cells[neighborIndex],
+                   (size_t)count * sizeof(GridMapEntity));
+        }
+        entered_entity_count += count;
+    }
+
+    *(list_count) = entity_list_count;
+    return entity_list;
 }
 
 int check_aabb_collision(Entity *car1, Entity *car2) {
@@ -1251,9 +1262,9 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             agent->y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
     }
 
-    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25]; // Array big enough for all neighboring cells
-    int list_size =
-        checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL * 25, collision_offsets, 25);
+    // Offroad and lane alignment check
+    int list_size = 0;
+    GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, collision_offsets, 25, &list_size);
     for (int i = 0; i < list_size; i++) {
         if (entity_list[i].entity_idx == -1)
             continue;
@@ -1326,6 +1337,8 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     agent->collision_state = collided;
 
+    // Free allocated memory
+    free(entity_list);
     return;
 }
 
@@ -1966,7 +1979,7 @@ void compute_observations(Drive *env) {
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
         // map observations
-        GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25];
+        GridMapEntity entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS];
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
 
         int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
