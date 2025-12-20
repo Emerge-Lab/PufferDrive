@@ -2522,11 +2522,6 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
 
 void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, int show_grid) {
 
-    // Show timestep in top-left corner
-    char timestep_text[64];
-    snprintf(timestep_text, sizeof(timestep_text), "Timestep: %d", env->timestep);
-    DrawText(timestep_text, 10, 10, 20, PUFF_WHITE);
-
     if (show_grid) {
         float grid_start_x = env->grid_map->top_left_x;
         float grid_start_y = env->grid_map->bottom_right_y;
@@ -2541,7 +2536,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     }
 
     // Draw a grid to help with orientation
-    // DrawGrid(20, 1.0f);
     for (int i = 0; i < env->num_entities; i++) {
         // Draw objects
         if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN ||
@@ -2599,9 +2593,11 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 };
 
                 if (agent_index == env->human_agent_idx &&
-                    !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
+                    (!env->entities[agent_index].metrics_array[REACHED_GOAL_IDX] ||
+                     env->goal_behavior == GOAL_GENERATE_NEW || env->goal_behavior == GOAL_STOP)) {
                     draw_agent_obs(env, agent_index, mode, obs_only, lasers);
                 }
+
                 if ((obs_only || IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx) {
                     continue;
                 }
@@ -2645,9 +2641,10 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         car_model = client->cars[0]; // Collided agents use red
                     }
                 }
-                // Draw obs for human selected agent
+                // Draw obs for selected agent index
                 if (agent_index == env->human_agent_idx &&
-                    !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
+                    (!env->entities[agent_index].metrics_array[REACHED_GOAL_IDX] ||
+                     env->goal_behavior == GOAL_GENERATE_NEW || env->goal_behavior == GOAL_STOP)) {
                     draw_agent_obs(env, agent_index, mode, obs_only, lasers);
                 }
 
@@ -2826,7 +2823,6 @@ void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTe
         }
     }
 
-    // Draw main scene LAST (on top)
     draw_scene(env, client, 1, obs, lasers, show_grid);
 
     EndMode3D();
