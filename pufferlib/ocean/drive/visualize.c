@@ -192,21 +192,15 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents,
              const char *view_mode, const char *output_topdown, const char *output_agent, int num_maps,
-             int scenario_length_override, int init_mode, int control_mode, int goal_behavior, int zoom_in) {
-
-    // Parse configuration from INI file
-    env_init_config conf = {0}; // Initialize to zero
-    const char *ini_file = "pufferlib/config/ocean/drive.ini";
-    if (ini_parse(ini_file, handler, &conf) < 0) {
-        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
-        return -1;
-    }
+             int scenario_length, int init_mode, int control_mode, int goal_behavior, int zoom_in, 
+             int dynamics_model, int reward_vehicle_collision, int reward_offroad_collision, int reward_ade, float dt, 
+             int collision_behavior, int offroad_behavior, const char *map_dir) {
 
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
         int random_map = rand() % num_maps;
-        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map); // random map file
+        sprintf(map_buffer, "%s/map_%03d.bin", map_dir, random_map); // random map file
         map_name = map_buffer;
     }
 
@@ -226,27 +220,25 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         RAISE_FILE_ERROR(policy_name);
     }
     fclose(policy_file);
-
+    
     Drive env = {
-        .dynamics_model = conf.dynamics_model,
-        .reward_vehicle_collision = conf.reward_vehicle_collision,
-        .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_ade = conf.reward_ade,
-        .goal_radius = conf.goal_radius,
-        .dt = conf.dt,
+        .dynamics_model = dynamics_model,
+        .reward_vehicle_collision = reward_vehicle_collision,
+        .reward_offroad_collision = reward_offroad_collision,
+        .reward_ade = reward_ade,
+        .goal_radius = goal_radius,
+        .dt = dt,
         .map_name = (char *)map_name,
         .init_steps = init_steps,
         .max_controlled_agents = max_controlled_agents,
-        .collision_behavior = conf.collision_behavior,
-        .offroad_behavior = conf.offroad_behavior,
+        .collision_behavior = collision_behavior,
+        .offroad_behavior = offroad_behavior,
         .goal_behavior = goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,
     };
 
-    env.scenario_length = (scenario_length_override > 0) ? scenario_length_override
-                          : (conf.scenario_length > 0)   ? conf.scenario_length
-                                                         : TRAJECTORY_LENGTH_DEFAULT;
+    env.scenario_length = scenario_length;
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode
@@ -403,22 +395,38 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 }
 
 int main(int argc, char *argv[]) {
-    int show_grid = 0;
-    int obs_only = 0;
-    int lasers = 0;
+    // Parse configuration from INI file
+    env_init_config conf = {0}; // Initialize to zero
+    const char *ini_file = "pufferlib/config/ocean/drive.ini";
+    if (ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        return -1;
+    }
+
+    int show_grid = conf.show_grid;
+    int obs_only = conf.obs_only;
+    int lasers = conf.show_lasers;
     int log_trajectories = 1;
     int frame_skip = 1;
-    float goal_radius = 2.0f;
-    int init_steps = 0;
+    float goal_radius = conf.goal_radius;
+    int init_steps = conf.init_steps;
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     int max_controlled_agents = -1;
-    int num_maps = 1;
-    int scenario_length_cli = -1;
-    int init_mode = 0;
-    int control_mode = 0;
-    int goal_behavior = 0;
+    int num_maps = conf.num_maps > 0 ? conf.num_maps : 1;
+    int scenario_length_cli = conf.scenario_length;
+    int init_mode = conf.init_mode;
+    int control_mode = conf.control_mode;
+    int goal_behavior = conf.goal_behavior;
     int zoom_in = 1;
+    int dynamics_model = conf.dynamics_model;
+    int reward_vehicle_collision = conf.reward_vehicle_collision;
+    int reward_offroad_collision = conf.reward_offroad_collision;
+    int reward_ade = conf.reward_ade;
+    float dt = conf.dt;
+    int collision_behavior = conf.collision_behavior;
+    int offroad_behavior = conf.offroad_behavior;
+    const char *map_dir = conf.map_dir;
 
     const char *view_mode = "both"; // "both", "topdown", "agent"
     const char *output_topdown = NULL;
@@ -528,13 +536,29 @@ int main(int argc, char *argv[]) {
                 goal_behavior = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--collision-behavior") == 0) {
+            if (i + 1 < argc) {
+                collision_behavior = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--offroad-behavior") == 0) {
+            if (i + 1 < argc) {
+                offroad_behavior = atoi(argv[i + 1]);
+                i++;
+            }
         } else if (strcmp(argv[i], "--zoom-in") == 0) {
             zoom_in = 1;
+        } else if (strcmp(argv[i], "--dynamics-model") == 0) {
+            if (i + 1 < argc) {
+                dynamics_model = atoi(argv[i + 1]);
+                i++;
+            }
         }
     }
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps,
              max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode,
-             control_mode, goal_behavior, zoom_in);
+             control_mode, goal_behavior, zoom_in, dynamics_model, reward_vehicle_collision, reward_offroad_collision, reward_ade, 
+             dt, collision_behavior, offroad_behavior, map_dir);
     return 0;
 }

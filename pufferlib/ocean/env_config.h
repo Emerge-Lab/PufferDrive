@@ -27,6 +27,10 @@ typedef struct {
     int init_steps;
     int init_mode;
     int control_mode;
+    int num_maps;
+    int show_lasers;
+    int show_grid;
+    int obs_only;
     char map_dir[256];
 } env_init_config;
 
@@ -87,12 +91,31 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->init_mode = atoi(value);
     } else if (MATCH("env", "control_mode")) {
         env_config->control_mode = atoi(value);
+    } else if (MATCH("env", "num_maps")) {
+        env_config->num_maps = atoi(value);
+    } else if (MATCH("train", "show_lasers")) {
+        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0) {
+            env_config->show_lasers = 1;
+        } else {
+            env_config->show_lasers = 0;
+        }
+    } else if (MATCH("train", "show_grid")) {
+        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0) {
+            env_config->show_grid = 1;
+        } else {
+            env_config->show_grid = 0;
+        }
+    } else if (MATCH("train", "obs_only")) {
+        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0) {
+            env_config->obs_only = 1;
+        } else {
+            env_config->obs_only = 0;
+        }
     } else if (MATCH("env", "map_dir")) {
         if (sscanf(value, "\"%255[^\"]\"", env_config->map_dir) != 1) {
             strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);
             env_config->map_dir[sizeof(env_config->map_dir) - 1] = '\0';
         }
-        // printf("Parsed map_dir: '%s'\n", env_config->map_dir);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }
