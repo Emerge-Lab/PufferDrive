@@ -1126,11 +1126,11 @@ def render_adversarial(env_name, args=None, vecenv=None, policy=None):
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
 
-    breakpoint()
+    # breakpoint()
 
     # Load target policy:
     target_config = args.copy()
-    target_config["train"]["load_model_path"] = args["adversarial"]["target_model_path"]
+    target_config["load_model_path"] = args["adversarial"]["target_model_path"]
     target_config["policy_name"] = "Drive"
     target_policy = load_policy(target_config, vecenv)
 
@@ -1173,7 +1173,7 @@ def render_adversarial(env_name, args=None, vecenv=None, policy=None):
             # cv2.imshow('frame', render)
             # cv2.waitKey(1)
             # time.sleep(1/args['fps'])
-        breakpoint()
+
         with torch.no_grad():
             ob = torch.as_tensor(ob).to(device)
             logits, value = policy.forward_eval(ob, state)
@@ -1181,6 +1181,13 @@ def render_adversarial(env_name, args=None, vecenv=None, policy=None):
 
             target_logits, target_value = target_policy.forward_eval(ob[:, :-target_obs_dim], target_state)
             target_action, target_logprob, _ = pufferlib.pytorch.sample_logits(target_logits)
+
+            target_mask = torch.zeros_like(target_action, device=device, dtype=bool)
+            sdc_indices = info[0]["sdc_track_index"]
+            valid_indices = sdc_indices[sdc_indices != -1]
+            target_mask[valid_indices] = 1
+
+            action = torch.where(target_mask, target_action, action)
 
             action = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
