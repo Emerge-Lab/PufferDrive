@@ -1673,22 +1673,23 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float vx = agent->vx;
         float vy = agent->vy;
 
-        // Calculate current speed
-        float speed = sqrtf(vx * vx + vy * vy);
+        // Calculate current speed (signed based on direction relative to heading)
+        float speed_magnitude = sqrtf(vx * vx + vy * vy);
+        float v_dot_heading = vx * agent->heading_x + vy * agent->heading_y;
+        float signed_speed = copysignf(speed_magnitude, v_dot_heading);
 
         // Update speed with acceleration
-        speed = speed + acceleration * env->dt;
-        speed = clipSpeed(speed);
-
+        signed_speed = signed_speed + acceleration * env->dt;
+        signed_speed = clipSpeed(signed_speed);
         // Compute yaw rate
         float beta = tanh(.5 * tanf(steering));
 
         // New heading
-        float yaw_rate = (speed * cosf(beta) * tanf(steering)) / agent->length;
+        float yaw_rate = (signed_speed * cosf(beta) * tanf(steering)) / agent->length;
 
         // New velocity
-        float new_vx = speed * cosf(heading + beta);
-        float new_vy = speed * sinf(heading + beta);
+        float new_vx = signed_speed * cosf(heading + beta);
+        float new_vy = signed_speed * sinf(heading + beta);
 
         // Update position
         x = x + (new_vx * env->dt);
@@ -1898,7 +1899,9 @@ void compute_observations(Drive *env) {
 
         float cos_heading = ego_entity->heading_x;
         float sin_heading = ego_entity->heading_y;
-        float ego_speed = sqrtf(ego_entity->vx * ego_entity->vx + ego_entity->vy * ego_entity->vy);
+        float speed_magnitude = sqrtf(ego_entity->vx * ego_entity->vx + ego_entity->vy * ego_entity->vy);
+        float v_dot_heading = ego_entity->vx * ego_entity->heading_x + ego_entity->vy * ego_entity->heading_y;
+        float signed_speed = copysignf(speed_magnitude, v_dot_heading);
 
         // Set goal distances
         float goal_x = ego_entity->goal_position_x - ego_entity->x;
@@ -1910,7 +1913,7 @@ void compute_observations(Drive *env) {
 
         obs[0] = rel_goal_x * 0.005f;
         obs[1] = rel_goal_y * 0.005f;
-        obs[2] = ego_speed / MAX_SPEED;
+        obs[2] = signed_speed / MAX_SPEED;
         obs[3] = ego_entity->width / MAX_VEH_WIDTH;
         obs[4] = ego_entity->length / MAX_VEH_LEN;
         obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
@@ -1973,8 +1976,12 @@ void compute_observations(Drive *env) {
             obs[obs_idx + 5] = rel_heading_y;
 
             // relative speed
-            float other_speed = sqrtf(other_entity->vx * other_entity->vx + other_entity->vy * other_entity->vy);
-            obs[obs_idx + 6] = other_speed / MAX_SPEED;
+            float other_speed_magnitude =
+                sqrtf(other_entity->vx * other_entity->vx + other_entity->vy * other_entity->vy);
+            float other_v_dot_heading =
+                other_entity->vx * other_entity->heading_x + other_entity->vy * other_entity->heading_y;
+            float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
+            obs[obs_idx + 6] = other_signed_speed / MAX_SPEED;
             cars_seen++;
             obs_idx += 7; // Move to next observation slot
         }
@@ -2653,11 +2660,11 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             }
         }
 
-        obs_idx += 7; // Move to next agent observation (7 values per agent)
+        obs_idx += PARTNER_FEATURES; // Move to next agent observation (7 values per agent)
     }
     // Then draw map observations
-    int map_start_idx = 7 + 7 * (MAX_AGENTS - 1);             // Start after agent observations
-    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) { // Loop through potential map entities
+    int map_start_idx = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1); // Start after agent observations
+    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {          // Loop through potential map entities
         int entity_idx = map_start_idx + k * 7;
         if (agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0) {
             continue;
