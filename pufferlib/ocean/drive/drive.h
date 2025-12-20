@@ -101,6 +101,15 @@
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
+// Collision behavior
+#define COLLISION_IGNORE 0
+#define COLLISION_STOP 1
+#define COLLISION_RESPAWN 2
+
+// Offroad behavior
+#define OFFROAD_IGNORE 0
+#define OFFROAD_STOP 1
+#define OFFROAD_RESPAWN 2
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
@@ -2338,6 +2347,28 @@ void c_step(Drive *env) {
             if (reached_goal) {
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+            }
+        }
+    }
+
+    if (env->collision_behavior == COLLISION_RESPAWN) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            int collision_state = env->entities[agent_idx].collision_state;
+            if (collision_state == VEHICLE_COLLISION) {
+                respawn_agent(env, agent_idx);
+                env->entities[agent_idx].respawn_count++;
+            }
+        }
+    }
+
+    if (env->collision_behavior == OFFROAD_RESPAWN) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            int collision_state = env->entities[agent_idx].collision_state;
+            if (collision_state == OFFROAD) {
+                respawn_agent(env, agent_idx);
+                env->entities[agent_idx].respawn_count++;
             }
         }
     }
