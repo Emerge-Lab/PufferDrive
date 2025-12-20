@@ -64,9 +64,6 @@
 
 // Grid cell size
 #define GRID_CELL_SIZE 5.0f
-#define MAX_ENTITIES_PER_CELL                                                                                          \
-    30 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in
-       // gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
@@ -1266,36 +1263,68 @@ bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2])
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
-int checkNeighbors(Drive *env, float x, float y, GridMapEntity *entity_list, int max_size,
-                   const int (*local_offsets)[2], int offset_size) {
-    // Get the grid index for the given position (x, y)
+GridMapEntity *checkNeighbors(Drive *env, float x, float y, const int (*local_offsets)[2], int offset_size,
+                              int *list_count) {
     int index = getGridIndex(env, x, y);
     if (index == -1)
-        return 0; // Return 0 size if position invalid
-    // Calculate 2D grid coordinates
+        return NULL;
+
     int cellsX = env->grid_map->grid_cols;
     int gridX = index % cellsX;
     int gridY = index / cellsX;
     int entity_list_count = 0;
-    // Fill the provided array
+
+    // Calculate entities count in neighboring cells
+    int min_neighbor_index = INT16_MAX;
     for (int i = 0; i < offset_size; i++) {
         int nx = gridX + local_offsets[i][0];
         int ny = gridY + local_offsets[i][1];
-        // Ensure the neighbor is within grid bounds
+        if (nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows)
+            continue;
+        int neighborIndex = ny * env->grid_map->grid_cols + nx;
+        min_neighbor_index = fmin(min_neighbor_index, neighborIndex);
+        int count = env->grid_map->cell_entities_count[neighborIndex];
+        entity_list_count += count;
+    }
+
+    int entered_entity_count = 0;
+
+    // Fill entity_list with neighboring entities
+    GridMapEntity *entity_list = (GridMapEntity *)calloc(entity_list_count, sizeof(GridMapEntity));
+    for (int i = 0; i < offset_size; i++) {
+        int nx = gridX + local_offsets[i][0];
+        int ny = gridY + local_offsets[i][1];
         if (nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows)
             continue;
         int neighborIndex = ny * env->grid_map->grid_cols + nx;
         int count = env->grid_map->cell_entities_count[neighborIndex];
-        // Add entities from this cell to the list
-        for (int j = 0; j < count && entity_list_count < max_size; j++) {
-            int entityId = env->grid_map->cells[neighborIndex][j].entity_idx;
-            int geometry_idx = env->grid_map->cells[neighborIndex][j].geometry_idx;
-            entity_list[entity_list_count].entity_idx = entityId;
-            entity_list[entity_list_count].geometry_idx = geometry_idx;
-            entity_list_count += 1;
+        if (count > 0) {
+            memcpy(&entity_list[entered_entity_count], env->grid_map->cells[neighborIndex],
+                   (size_t)count * sizeof(GridMapEntity));
         }
+        entered_entity_count += count;
     }
-    return entity_list_count;
+
+    if (entered_entity_count != entity_list_count) {
+        printf("Error: Mismatch in entered_entity_count (%d) and entity_list_count (%d)\n", entered_entity_count,
+               entity_list_count);
+    }
+
+    *(list_count) = entity_list_count;
+    return entity_list;
+}
+
+int check_z_collision(Entity *car1, Entity *car2) {
+    float car1_bottom = car1->z;
+    float car1_top = car1->z + car1->height;
+    float car2_bottom = car2->z;
+    float car2_top = car2->z + car2->height;
+
+    // Check for overlap in the z-axis
+    if (car1_top < car2_bottom || car2_top < car1_bottom) {
+        return 0; // No collision
+    }
+    return 1; // Collision
 }
 
 int check_z_collision(Entity *car1, Entity *car2) {
@@ -1537,9 +1566,10 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             agent->y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
     }
     float buffer = 4.0f;                                    // 4.0m buffer for offroad checking
-    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 200]; // Array big enough for all neighboring cells
-    int list_size =
-        checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL * 200, collision_offsets, 200);
+
+    // Offroad and lane alignment check
+    int list_size = 0;
+    GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, collision_offsets, 25, &list_size);
     for (int i = 0; i < list_size; i++) {
         if (entity_list[i].entity_idx == -1)
             continue;
@@ -1637,6 +1667,31 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         }
     }
 
+    if (collided == VEHICLE_COLLISION) {
+        if (env->collision_behavior == STOP_AGENT && !agent->stopped) {
+            agent->stopped = 1;
+            agent->vx = agent->vy = 0.0f;
+        } else if (env->collision_behavior == REMOVE_AGENT && !agent->removed) {
+            Entity *agent_collided = &env->entities[car_collided_with_index];
+            agent->removed = 1;
+            agent_collided->removed = 1;
+            agent->x = agent->y = -10000.0f;
+            agent_collided->x = agent_collided->y = -10000.0f;
+        }
+    }
+    if (collided == OFFROAD) {
+        agent->metrics_array[OFFROAD_IDX] = 1.0f;
+        if (env->offroad_behavior == STOP_AGENT && !agent->stopped) {
+            agent->stopped = 1;
+            agent->vx = agent->vy = 0.0f;
+        } else if (env->offroad_behavior == REMOVE_AGENT && !agent->removed) {
+            agent->removed = 1;
+            agent->x = agent->y = -10000.0f;
+        }
+    }
+
+    // Free allocated memory
+    free(entity_list);
     return;
 }
 
@@ -2325,7 +2380,7 @@ void compute_observations(Drive *env) {
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
         // map observations
-        GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25];
+        GridMapEntity entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS];
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
 
         int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
