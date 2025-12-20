@@ -997,8 +997,10 @@ bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2])
 GridMapEntity *checkNeighbors(Drive *env, float x, float y, const int (*local_offsets)[2], int offset_size,
                               int *list_count) {
     int index = getGridIndex(env, x, y);
-    if (index == -1)
+    if (index == -1) {
+        *(list_count) = 0;
         return NULL;
+    }
 
     int cellsX = env->grid_map->grid_cols;
     int gridX = index % cellsX;
