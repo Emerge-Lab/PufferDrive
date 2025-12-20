@@ -1008,14 +1008,12 @@ GridMapEntity *checkNeighbors(Drive *env, float x, float y, const int (*local_of
     int entity_list_count = 0;
 
     // Calculate entities count in neighboring cells
-    int min_neighbor_index = INT16_MAX;
     for (int i = 0; i < offset_size; i++) {
         int nx = gridX + local_offsets[i][0];
         int ny = gridY + local_offsets[i][1];
         if (nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows)
             continue;
         int neighborIndex = ny * env->grid_map->grid_cols + nx;
-        min_neighbor_index = fmin(min_neighbor_index, neighborIndex);
         int count = env->grid_map->cell_entities_count[neighborIndex];
         entity_list_count += count;
     }
@@ -1036,11 +1034,6 @@ GridMapEntity *checkNeighbors(Drive *env, float x, float y, const int (*local_of
                    (size_t)count * sizeof(GridMapEntity));
         }
         entered_entity_count += count;
-    }
-
-    if (entered_entity_count != entity_list_count) {
-        printf("Error: Mismatch in entered_entity_count (%d) and entity_list_count (%d)\n", entered_entity_count,
-               entity_list_count);
     }
 
     *(list_count) = entity_list_count;
