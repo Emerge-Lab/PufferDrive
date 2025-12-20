@@ -72,7 +72,7 @@ class Drive(nn.Module):
     def encode_observations(self, observations, state=None):
         ego_dim = self.ego_dim
         partner_dim = self.max_partner_objects * self.partner_features
-        road_dim = self.max_road_objects * self.road_features_after_onehot
+        road_dim = self.max_road_objects * self.road_features
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]

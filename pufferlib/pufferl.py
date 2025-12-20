@@ -20,6 +20,7 @@ import importlib
 import configparser
 from threading import Thread
 from collections import defaultdict, deque
+from pathlib import Path
 
 import numpy as np
 import psutil
@@ -940,6 +941,7 @@ class WandbLogger:
             save_code=False,
             resume=resume,
             config=args,
+            name=args.get("wandb_name"),
             tags=[args["tag"]] if args["tag"] is not None else [],
         )
         self.wandb = wandb
@@ -1038,6 +1040,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
     args["env"]["map_dir"] = args["eval"]["map_dir"]
+    args["env"]["num_maps"] = args["eval"]["num_maps"]
+    args["env"]["use_all_maps"] = True
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     if wosac_enabled:
@@ -1047,7 +1051,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         backend = args["eval"]["backend"]
         assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["num_agents"] = args["eval"]["wosac_num_agents"]
         args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
         args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
         args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
@@ -1062,10 +1065,12 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         # Collect ground truth trajectories from the dataset
         gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
 
+        print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
+        print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
+        print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
+
         # Roll out trained policy in the simulator
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
-
-        print(f"\nCollected trajectories on {len(np.unique(gt_trajectories['scenario_id']))} scenarios.")
 
         if args["eval"]["wosac_sanity_check"]:
             evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
@@ -1084,7 +1089,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         if args["eval"]["wosac_aggregate_results"]:
             import json
 
-            print("WOSAC_METRICS_START")
+            print("\nWOSAC_METRICS_START")
             print(json.dumps(results))
             print("WOSAC_METRICS_END")
 
@@ -1096,12 +1101,13 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         backend = args["eval"].get("backend", "PufferEnv")
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
         args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
         args["env"]["scenario_length"] = 91  # Standard scenario length
 
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
+
+        print(f"Effective number of scenarios used: {len(vecenv.driver_env.agent_offsets) - 1}")
 
         evaluator = HumanReplayEvaluator(args)
 
@@ -1257,6 +1263,71 @@ def controlled_exp(env_name, args=None):
     print(f"\n✓ Completed all {len(combinations)} experiments")
 
 
+def sanity(env_name, args=None):
+    args = args or load_config(env_name)
+    base_dir = Path(__file__).resolve().parent / "resources" / "drive" / "sanity"
+    json_dir = base_dir / "sanity_jsons"
+    binary_dir = base_dir / "sanity_binaries"
+
+    available_maps = {p.stem: p for p in json_dir.glob("*.json")}
+    selected = args.get("sanity_maps")
+    if isinstance(selected, str):
+        selected = [selected]
+
+    if selected:
+        missing = [name for name in selected if name not in available_maps]
+        if missing:
+            raise pufferlib.APIUsageError(f"Unknown sanity maps: {', '.join(sorted(missing))}")
+        chosen = [(name, available_maps[name]) for name in selected]
+    else:
+        chosen = sorted(available_maps.items())
+
+    if not chosen:
+        raise pufferlib.APIUsageError(f"No sanity maps found in {json_dir}")
+
+    from pufferlib.ocean.drive.drive import load_map
+
+    binary_dir.mkdir(parents=True, exist_ok=True)
+    binaries = []
+    for idx, (name, json_path) in enumerate(chosen):
+        output_path = binary_dir / f"{name}.bin"
+        load_map(str(json_path), idx, str(output_path))
+        binaries.append((name, output_path))
+
+    runs = []
+    for name, binary in binaries:
+        map_zero = binary_dir / "map_000.bin"
+        shutil.copy2(binary, map_zero)
+
+        run_args = {
+            **args,
+            "env": {**args["env"], "num_maps": 1, "map_dir": str(binary_dir)},
+            "train": {**args["train"], "render_map": str(map_zero)},
+        }
+        if run_args.get("wandb"):
+            run_args["wandb_name"] = name
+
+        print(f"Running sanity map '{name}' from {binary.name}")
+        run_logs = train(env_name=env_name, args=run_args)
+        runs.append({"map": name, "logs": run_logs})
+
+    print("Sanity checklist:")
+    for entry in runs:
+        name = entry["map"]
+        logs = entry.get("logs") or []
+        final = logs[-1] if logs else {}
+        score = final.get("environment/score")
+        if score is None:
+            status = "unknown (no score)"
+        elif score >= 0.95:
+            status = "✅ Solved"
+        else:
+            status = "❌ unsolved"
+        print(f" - {name}: {status} (score={score})")
+
+    return runs
+
+
 def profile(args=None, env_name=None, vecenv=None, policy=None):
     args = load_config()
     vecenv = vecenv or load_env(env_name, args)
@@ -1303,18 +1374,14 @@ def ensure_drive_binary():
     binary is always up-to-date with the latest code changes.
     """
     if os.path.exists("./visualize"):
-        print("Removing existing visualize binary...")
         os.remove("./visualize")
 
-    print("Building visualize binary...")
     try:
         result = subprocess.run(
             ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
         )
 
-        if result.returncode == 0:
-            print("Successfully built visualize binary")
-        else:
+        if result.returncode != 0:
             print(f"Build failed: {result.stderr}")
             raise RuntimeError("Failed to build visualize binary for rendering")
     except subprocess.TimeoutExpired:
@@ -1410,6 +1477,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--neptune-project", type=str, default="ablations")
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
+    parser.add_argument("--sanity-maps", nargs="*", default=None, help="Optional list of sanity map base names to run")
     args = parser.parse_known_args()[0]
 
     if config_dir is None:
@@ -1465,7 +1533,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export, sanity] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -1485,6 +1553,8 @@ def main():
         profile(env_name=env_name)
     elif mode == "export":
         export(env_name=env_name)
+    elif mode == "sanity":
+        sanity(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 

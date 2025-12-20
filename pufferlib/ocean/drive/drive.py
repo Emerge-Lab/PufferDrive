@@ -28,6 +28,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior=0,
         dt=0.1,
         scenario_length=None,
+        termination_mode=None,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
@@ -40,6 +41,7 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
+        use_all_maps=False,
     ):
         # env
         self.dt = dt
@@ -57,6 +59,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
+        self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
 
@@ -148,9 +151,11 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            use_all_maps=use_all_maps,
         )
 
-        self.num_agents = num_agents
+        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if use_all_maps
+        self.num_agents = num_agents if not use_all_maps else agent_offsets[-1]
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -179,6 +184,7 @@ class Drive(pufferlib.PufferEnv):
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
                 scenario_length=(int(scenario_length) if scenario_length is not None else None),
+                termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
@@ -204,7 +210,7 @@ class Drive(pufferlib.PufferEnv):
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs)
+            log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
                 info.append(log)
                 # print(log)
@@ -222,6 +228,7 @@ class Drive(pufferlib.PufferEnv):
                     max_controlled_agents=self.max_controlled_agents,
                     goal_behavior=self.goal_behavior,
                     map_dir=self.map_dir,
+                    use_all_maps=False,
                 )
                 env_ids = []
                 seed = np.random.randint(0, 2**32 - 1)
@@ -367,8 +374,12 @@ def calculate_area(p1, p2, p3):
     # Calculate the area of the triangle using the determinant method
     return 0.5 * abs((p1["x"] - p3["x"]) * (p2["y"] - p1["y"]) - (p1["x"] - p2["x"]) * (p3["y"] - p1["y"]))
 
+def dist(a,b):
+    dx = a['x'] - b['x']
+    dy = a['y'] - b['y']
+    return dx*dx + dy*dy
 
-def simplify_polyline(geometry, polyline_reduction_threshold):
+def simplify_polyline(geometry, polyline_reduction_threshold, max_segment_length):
     """Simplify the given polyline using a method inspired by Visvalingham-Whyatt, optimized for Python."""
     num_points = len(geometry)
     if num_points < 3:
@@ -397,8 +408,7 @@ def simplify_polyline(geometry, polyline_reduction_threshold):
             point2 = geometry[k_1]
             point3 = geometry[k_2]
             area = calculate_area(point1, point2, point3)
-
-            if area < polyline_reduction_threshold:
+            if area < polyline_reduction_threshold and dist(point1,point3) <= max_segment_length:
                 skip[k_1] = True
                 skip_changed = True
                 k = k_2
@@ -508,7 +518,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
                 road_type = 15
             # breakpoint()
             if len(geometry) > 10 and road_type <= 16:
-                geometry = simplify_polyline(geometry, 0.1)
+                geometry = simplify_polyline(geometry, 0.1, 250)
             size = len(geometry)
             # breakpoint()
             if road_type >= 0 and road_type <= 3:
@@ -653,3 +663,5 @@ if __name__ == "__main__":
     process_all_maps(data_folder="data/processed/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
+    # # Process the validation_interactive dataset
+    # process_all_maps(data_folder="data/processed/validation_interactive")
