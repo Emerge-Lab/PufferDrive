@@ -2717,7 +2717,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
                 DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 1}, 0.5f,
-                           LIGHTGREEN);
+                           DARKGREEN);
 
                 DrawCircle3D((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 0.1f},
                              env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.9f));
