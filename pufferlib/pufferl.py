@@ -1373,12 +1373,12 @@ def ensure_drive_binary():
     """Delete existing visualize binary and rebuild it. This ensures the
     binary is always up-to-date with the latest code changes.
     """
-    if os.path.exists("./visualize"):
-        os.remove("./visualize")
+    if os.path.exists("./drive"):
+        os.remove("./drive")
 
     try:
         result = subprocess.run(
-            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
+            ["bash", "scripts/build_ocean.sh", "drive", "local"], capture_output=True, text=True, timeout=300
         )
 
         if result.returncode != 0:

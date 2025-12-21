@@ -20,16 +20,17 @@ conda install -c conda-forge xorg-x11-server-xvfb-cos6-x86_64 ffmpeg
 Compile the visualizer binary from the repo root:
 
 ```bash
-bash scripts/build_ocean.sh visualize local
+bash scripts/build_ocean.sh drive fast
 ```
+use `local` for debugging and `fast` for standard usage.
 
-If you need to force a rebuild, remove the cached binary first (`rm ./visualize`).
+If you need to force a rebuild, remove the cached binary first (`rm ./drive`).
 
 ## Run headless
 Launch the visualizer with a virtual display and export an `.mp4`:
 
 ```bash
-xvfb-run -s "-screen 0 1280x720x24" ./visualize
+xvfb-run -s "-screen 0 1280x720x24" ./drive --<your args>
 ```
 
 Adjust the screen size and color depth as needed. The `xvfb-run` wrapper allows Raylib to render without an attached display, which is convenient for servers and CI jobs.

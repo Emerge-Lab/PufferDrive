@@ -206,7 +206,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
 
         # Base command with only visualization flags (env config comes from INI)
-        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive"]
 
         # Visualization config flags only
         if config.get("show_grid", False):

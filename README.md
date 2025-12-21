@@ -133,19 +133,19 @@ conda install -c conda-forge ffmpeg
 
 1. Build the application:
 ```bash
-bash scripts/build_ocean.sh visualize local
+bash scripts/build_ocean.sh drive fast
 ```
 
 2. Run with virtual display:
 ```bash
-xvfb-run -s "-screen 0 1280x720x24" ./visualize
+xvfb-run -s "-screen 0 1280x720x24" ./drive --view topdown
 ```
 
 The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color depth.
 
 ---
 
-> To force a rebuild, you can delete the cached compiled executable binary using `rm ./visualize`.
+> To force a rebuild, you can delete the cached compiled executable binary using `rm ./drive`.
 
 ---
 
