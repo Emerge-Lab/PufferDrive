@@ -133,6 +133,7 @@ const Color PUFF_WHITE = (Color){241, 241, 241, 241};
 const Color PUFF_BACKGROUND = (Color){6, 24, 24, 255};
 const Color PUFF_BACKGROUND2 = (Color){18, 72, 72, 255};
 const Color LIGHTGREEN = (Color){152, 255, 152, 255};
+const Color LIGHTYELLOW = (Color){255, 255, 152, 255};
 
 struct timespec ts;
 
@@ -1904,7 +1905,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
     Entity *agent = &env->entities[agent_idx];
     float best_x = agent->x;
     float best_y = agent->y;
-    float best_distance_error = 1e50f;
+    float best_distance_error = 1e30f;
 
     // Sample points from all road lanes
     for (int i = env->num_objects; i < env->num_entities; i++) {
@@ -1941,7 +1942,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
     }
 
     // If no valid goal found, use another agent's initial goal
-    if (best_distance_error >= 1e50f && env->active_agent_count > 1) {
+    if (best_distance_error >= 1e30f && env->active_agent_count > 1) {
         int other_idx = env->active_agent_indices[(agent_idx + 1) % env->active_agent_count];
         best_x = env->entities[other_idx].init_goal_x;
         best_y = env->entities[other_idx].init_goal_y;
@@ -2476,7 +2477,7 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
     // Calculate curb dimensions
     float curb_height = 0.5f; // Height of the curb
     float curb_width = 0.3f;  // Width/thickness of the curb
-    float road_z = 0.2f;      // Ensure z-level for roads is below agents
+    float road_z = 0.0f;      // Ensure z-level for roads is below agents
 
     // Calculate direction vector between start and end
     Vector3 direction = {end_x - start_x, end_y - start_y, 0.0f};
@@ -2593,8 +2594,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 };
 
                 if (agent_index == env->human_agent_idx &&
-                    (!env->entities[agent_index].metrics_array[REACHED_GOAL_IDX] ||
-                     env->goal_behavior == GOAL_GENERATE_NEW || env->goal_behavior == GOAL_STOP)) {
+                    !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
                     draw_agent_obs(env, agent_index, mode, obs_only, lasers);
                 }
 
@@ -2632,7 +2632,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 Model car_model = client->cars[(i % 5) + 1]; // Cycles through indices 1-5
 
                 if (agent_index == env->human_agent_idx) {
-                    car_model = client->cars[3]; // Ego agent always uses red car (cars[0])
+                    car_model = client->cars[0]; // Ego agent always uses red car
                 } else if (is_active_agent) {
 
                     car_model = client->cars[(i % 5) + 1];
@@ -2712,13 +2712,12 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 client->camera.up = (Vector3){0, 0, 1};
             }
             // Draw goal position for active agents
-
             if (!is_active_agent || env->entities[i].valid == 0) {
                 continue;
             }
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
                 DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 1}, 0.5f,
-                           DARKGREEN);
+                           LIGHTGREEN);
 
                 DrawCircle3D((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 0.1f},
                              env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.9f));
@@ -2757,7 +2756,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
     // Draw track indices for the tracks to predict
     if (mode == 1 && env->control_mode == CONTROL_WOSAC) {
-        // float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;
 
