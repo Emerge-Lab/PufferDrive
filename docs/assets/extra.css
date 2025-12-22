@@ -87,6 +87,7 @@ body {
   font-weight: 600;
   color: #1a1a1a;
   padding: 0.65rem 1rem;
+  font-size: 0.74rem;
 }
 
 .md-sidebar--primary {
@@ -97,18 +98,25 @@ body {
 
 .md-nav--primary > .md-nav__list > .md-nav__item > .md-nav__link {
   border-radius: 6px;
-  padding: 0.5rem 1rem;
+  padding: 0.45rem 1rem;
   color: #4a4a4a;
   background: transparent;
   font-family: var(--md-text-font);
   font-weight: 500;
+  font-size: 0.74rem;
 }
 
 .md-nav--primary .md-nav__item--nested .md-nav__link {
   border-radius: 6px;
-  padding: 0.4rem 1rem;
-  font-size: 0.9rem;
+  padding: 0.35rem 1rem;
+  font-size: 0.7rem;
   color: #666666;
+}
+
+.md-sidebar--primary [data-md-component="toc"] .md-nav__link,
+.md-sidebar--primary .md-nav--secondary .md-nav__link,
+.md-sidebar--primary .md-nav__item--section .md-nav__link {
+  font-size: 0.7rem;
 }
 
 .md-nav--primary .md-nav__item--nested .md-nav__link:hover {
