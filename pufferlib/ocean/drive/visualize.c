@@ -85,15 +85,6 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
 
     camera.up = (Vector3){0.0f, -1.0f, 0.0f};
     camera.projection = CAMERA_ORTHOGRAPHIC;
-    // Vector2 sp2 = GetWorldToScreen((Vector3){-225, -225, 0}, camera);
-    // DrawCircleV(sp2, 10, YELLOW);
-	/*
-    Camera3D camera = {0};
-    camera.position = (Vector3){ center_x, center_y, 500.0f };  // above the map center
-    camera.target   = (Vector3){ center_x, center_y, 0.0f };    // look at map center
-    camera.up       = (Vector3){ 0.0f, -1.0f, 0.0f };
-    camera.fovy     = camera_fovy;
-    camera.projection = CAMERA_ORTHOGRAPHIC;
 
     client->width = img_width;
     client->height = img_height;
@@ -211,7 +202,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         return -1;
     }
 
-
     char map_buffer[100];
     if (map_name == NULL) {
         srand(time(NULL));
@@ -301,7 +291,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
-
     int log_trajectory = log_trajectories;
     char filename_topdown[256];
     char filename_agent[256];
@@ -357,7 +346,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     if (render_topdown) {
         printf("Recording topdown view...\n");
-        for(int i = 0; i < frame_count; i++) {
         for (int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid,
@@ -369,7 +357,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             forward(net, env.observations, (int *)env.actions);
             c_step(&env);
         }
-
     }
 
     if (render_agent) {
