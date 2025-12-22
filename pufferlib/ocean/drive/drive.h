@@ -2032,7 +2032,7 @@ void c_step(Drive *env) {
         bool within_distance = distance_to_goal < env->goal_radius;
         bool within_speed = current_speed <= env->goal_speed;
 
-        if (within_distance && !env->entities[agent_idx].current_goal_reached) {
+        if (within_distance && within_speed && !env->entities[agent_idx].current_goal_reached) {
             if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;

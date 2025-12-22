@@ -201,6 +201,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
+    env->goal_speed = (float)unpack(kwargs, "goal_speed");
     char *map_dir = unpack_str(kwargs, "map_dir");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
