@@ -49,7 +49,7 @@ Shape is `ego_features + 63 * 7 + 200 * 7` = `1848` for classic dynamics (`ego_f
   - Collision with another actor: `reward_vehicle_collision` (default `-0.5`)
   - Off-road (road-edge intersection): `reward_offroad_collision` (default `-0.2`)
   - Goal reached: `reward_goal` (default `1.0`) or `reward_goal_post_respawn` after a respawn
-  - Optional ADE shaping: `reward_ade * avg_displacement_error`, where ADE is accumulated in `compute_agent_metrics`
+
 - **Termination**: No early truncation; episodes roll to episode_length steps. If `goal_behavior` is respawn, `respawn_agent` resets the pose and marks `respawn_timestep` so the respawn flag shows up in observations.
 - **Logged metrics** (`add_log` aggregates over all active agents across envs):
   - `score`: reached goal without collision/off-road

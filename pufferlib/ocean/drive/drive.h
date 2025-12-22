@@ -60,7 +60,6 @@
 #define OFFROAD_IDX 1
 #define REACHED_GOAL_IDX 2
 #define LANE_ALIGNED_IDX 3
-#define AVG_DISPLACEMENT_ERROR_IDX 4
 
 // Grid cell size
 #define GRID_CELL_SIZE 5.0f
@@ -155,7 +154,7 @@ struct Log {
     float dnf_rate;
     float n;
     float lane_alignment_rate;
-    float avg_displacement_error;
+    float speed_at_goal;
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
@@ -185,7 +184,7 @@ struct Entity {
     float init_goal_y;
     int mark_as_expert;
     int collision_state;
-    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, avg_displacement_error]
+    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned
     float x;
     float y;
     float z;
@@ -204,9 +203,6 @@ struct Entity {
     float goals_sampled_this_episode;
     int current_goal_reached;
     int active_agent;
-    float cumulative_displacement;
-    int displacement_sample_count;
-    float goal_radius;
     int stopped;
     int removed;
 
@@ -250,33 +246,6 @@ float clip(float value, float min, float max) {
     if (value > max)
         return max;
     return value;
-}
-
-float compute_displacement_error(Entity *agent, int timestep) {
-    // Check if timestep is within valid range
-    if (timestep < 0 || timestep >= agent->array_size) {
-        return 0.0f;
-    }
-
-    // Check if reference trajectory is valid at this timestep
-    if (!agent->traj_valid[timestep]) {
-        return 0.0f;
-    }
-
-    // Get reference position at current timestep, skip invalid ones
-    float ref_x = agent->traj_x[timestep];
-    float ref_y = agent->traj_y[timestep];
-
-    if (ref_x == INVALID_POSITION || ref_y == INVALID_POSITION) {
-        return 0.0f;
-    }
-
-    // Compute deltas: Euclidean distance between actual and reference position
-    float dx = agent->x - ref_x;
-    float dy = agent->y - ref_y;
-    float displacement = sqrtf(dx * dx + dy * dy);
-
-    return displacement;
 }
 
 typedef struct GridMapEntity GridMapEntity;
@@ -334,7 +303,6 @@ struct Drive {
     int termination_mode;
     float reward_vehicle_collision;
     float reward_offroad_collision;
-    float reward_ade;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -342,6 +310,7 @@ struct Drive {
     float reward_goal;
     float reward_goal_post_respawn;
     float goal_radius;
+    float goal_speed;
     int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
@@ -381,8 +350,9 @@ void add_log(Drive *env) {
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
         env->log.lane_alignment_rate += lane_aligned;
-        float displacement_error = env->logs[i].avg_displacement_error;
-        env->log.avg_displacement_error += displacement_error;
+
+        float goal_speed = env->logs[i].speed_at_goal;
+        env->log.speed_at_goal += goal_speed;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
@@ -509,13 +479,10 @@ void set_start_position(Drive *env) {
         e->heading_y = sinf(e->heading);
         e->valid = e->traj_valid[env->init_steps];
         e->collision_state = 0;
-        e->metrics_array[COLLISION_IDX] = 0.0f;              // vehicle collision
-        e->metrics_array[OFFROAD_IDX] = 0.0f;                // offroad
-        e->metrics_array[REACHED_GOAL_IDX] = 0.0f;           // reached goal
-        e->metrics_array[LANE_ALIGNED_IDX] = 0.0f;           // lane aligned
-        e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
-        e->cumulative_displacement = 0.0f;
-        e->displacement_sample_count = 0;
+        e->metrics_array[COLLISION_IDX] = 0.0f;    // vehicle collision
+        e->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
+        e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
+        e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
         e->respawn_timestep = -1;
         e->stopped = 0;
         e->removed = 0;
@@ -1061,7 +1028,6 @@ void reset_agent_metrics(Drive *env, int agent_idx) {
     agent->metrics_array[COLLISION_IDX] = 0.0f;    // vehicle collision
     agent->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
-    agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
     agent->collision_state = 0;
 }
 
@@ -1098,18 +1064,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     if (agent->x == INVALID_POSITION)
         return; // invalid agent position
-
-    // Compute displacement error
-    float displacement_error = compute_displacement_error(agent, env->timestep);
-
-    if (displacement_error > 0.0f) { // Only count valid displacements
-        agent->cumulative_displacement += displacement_error;
-        agent->displacement_sample_count++;
-
-        // Compute running average
-        agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] =
-            agent->cumulative_displacement / agent->displacement_sample_count;
-    }
 
     int collided = 0;
     float half_length = agent->length / 2.0f;
@@ -1970,9 +1924,6 @@ void c_reset(Drive *env) {
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-        env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
-        env->entities[agent_idx].cumulative_displacement = 0.0f;
-        env->entities[agent_idx].displacement_sample_count = 0;
         env->entities[agent_idx].stopped = 0;
         env->entities[agent_idx].removed = 0;
 
@@ -1998,9 +1949,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-    env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
-    env->entities[agent_idx].cumulative_displacement = 0.0f;
-    env->entities[agent_idx].displacement_sample_count = 0;
+
     env->entities[agent_idx].respawn_timestep = env->timestep;
     env->entities[agent_idx].stopped = 0;
     env->entities[agent_idx].removed = 0;
@@ -2051,8 +2000,6 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
 
-        // TODO: There is redundancy in compute_agent_metrics and the other collision checking function. Clean this up
-        // in different PR.
         compute_agent_metrics(env, agent_idx);
         int collision_state = env->entities[agent_idx].collision_state;
 
@@ -2078,8 +2025,14 @@ void c_step(Drive *env) {
             relative_distance_2d(env->entities[agent_idx].x, env->entities[agent_idx].y,
                                  env->entities[agent_idx].goal_position_x, env->entities[agent_idx].goal_position_y);
 
-        // Reward agent if it is within X meters of goal
-        if (distance_to_goal < env->goal_radius && !env->entities[agent_idx].current_goal_reached) {
+        float current_speed = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
+                                    env->entities[agent_idx].vy * env->entities[agent_idx].vy);
+
+        // Reward agent if it is within X meters of goal and speed is below threshold
+        bool within_distance = distance_to_goal < env->goal_radius;
+        bool within_speed = current_speed <= env->goal_speed;
+
+        if (within_distance && !env->entities[agent_idx].current_goal_reached) {
             if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
@@ -2098,18 +2051,11 @@ void c_step(Drive *env) {
                 env->entities[agent_idx].goals_reached_this_episode += 1.0f;
             }
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
+            env->logs[i].speed_at_goal = current_speed;
         }
+
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
-
-        // Apply ADE reward
-        float current_ade = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
-        if (current_ade > 0.0f && env->reward_ade != 0.0f) {
-            float ade_reward = env->reward_ade * current_ade;
-            env->rewards[i] += ade_reward;
-            env->logs[i].episode_return += ade_reward;
-        }
-        env->logs[i].avg_displacement_error = current_ade;
     }
 
     if (env->goal_behavior == GOAL_RESPAWN) {

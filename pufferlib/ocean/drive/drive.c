@@ -47,8 +47,8 @@ void demo() {
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
+        .goal_speed = conf.goal_speed,
         .dt = conf.dt,
         .map_name = "resources/drive/binaries/map_000.bin",
         .init_steps = conf.init_steps,
@@ -60,14 +60,14 @@ void demo() {
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
         .control_mode = 0, // Vehicles
-        .init_mode = 0, // Init all valid
+        .init_mode = 0,    // Init all valid
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
     Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
-    
+
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {
@@ -134,7 +134,6 @@ void performance_test() {
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
         .map_name = "resources/drive/binaries/map_000.bin",

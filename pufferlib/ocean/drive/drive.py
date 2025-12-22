@@ -21,10 +21,10 @@ class Drive(pufferlib.PufferEnv):
         reward_offroad_collision=-0.1,
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
-        reward_ade=0.0,
         goal_behavior=0,
         goal_target_distance=10.0,
         goal_radius=2.0,
+        goal_speed=20.0,
         collision_behavior=0,
         offroad_behavior=0,
         dt=0.1,
@@ -54,11 +54,11 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
+        self.goal_speed = goal_speed
         self.goal_behavior = goal_behavior
         self.goal_target_distance = goal_target_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
-        self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
         self.episode_length = episode_length
         self.termination_mode = termination_mode
@@ -180,7 +180,6 @@ class Drive(pufferlib.PufferEnv):
                 reward_offroad_collision=reward_offroad_collision,
                 reward_goal=reward_goal,
                 reward_goal_post_respawn=reward_goal_post_respawn,
-                reward_ade=reward_ade,
                 goal_radius=goal_radius,
                 goal_behavior=self.goal_behavior,
                 goal_target_distance=self.goal_target_distance,
@@ -253,7 +252,6 @@ class Drive(pufferlib.PufferEnv):
                         reward_offroad_collision=self.reward_offroad_collision,
                         reward_goal=self.reward_goal,
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
-                        reward_ade=self.reward_ade,
                         goal_radius=self.goal_radius,
                         goal_behavior=self.goal_behavior,
                         goal_target_distance=self.goal_target_distance,
