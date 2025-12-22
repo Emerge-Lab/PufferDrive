@@ -56,7 +56,7 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model) {
     int road_features = ROAD_FEATURES;
     int input_size = NN_INPUT_SIZE;
     int hidden_size = NN_HIDDEN_SIZE;
-    int road_feat_onehot = road_features + 7; // one-hot extra 6 features for road
+    int road_feat_onehot = road_features + 7; // one-hot extra 7 features for road
 
     // Determine action space size based on dynamics model
     int action_size, logit_sizes[2];
@@ -147,7 +147,7 @@ void forward(DriveNet *net, float *observations, int *actions) {
     int max_road_obs = MAX_ROAD_SEGMENT_OBSERVATIONS;
     int partner_features = PARTNER_FEATURES;
     int road_features = ROAD_FEATURES;
-    int road_feat_onehot = road_features + 6; // one-hot extra 6 features for road
+    int road_feat_onehot = road_features + 7; // one-hot extra 7 features for road
 
     // Clear previous observations
     memset(net->obs_self, 0, net->num_agents * ego_dim * sizeof(float));
@@ -175,14 +175,12 @@ void forward(DriveNet *net, float *observations, int *actions) {
         // Process road observation
         for (int i = 0; i < MAX_ROAD_SEGMENT_OBSERVATIONS; i++) {
             for (int j = 0; j < 8; j++) {
-                net->obs_road[b * MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES_ONEHOT + i * ROAD_FEATURES_ONEHOT + j] =
-                    observations[road_offset + i * 8 + j];
-            }
-            for(int j = 0; j < 8; j++) {
-                if(j == observations[road_offset+i*8 + 7]) {
-                    net->obs_road[b*200*15 + i*15 + 7 + j] = 1.0f;
+                if (j == observations[road_offset + i * 8 + 7]) {
+                    net->obs_road[b * MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES_ONEHOT + i * ROAD_FEATURES_ONEHOT +
+                                  7 + j] = 1.0f;
                 } else {
-                    net->obs_road[b * MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES_ONEHOT + i * ROAD_FEATURES_ONEHOT + 7 + j] = 0.0f;
+                    net->obs_road[b * MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES_ONEHOT + i * ROAD_FEATURES_ONEHOT +
+                                  7 + j] = 0.0f;
                 }
             }
         }
