@@ -264,6 +264,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         # Collect videos to log as lists so W&B shows all in the same step
         videos_to_log_world = []
         videos_to_log_agent = []
+        videos_to_log_cinematic = []
 
         for i, map_path in enumerate(render_maps):
             cmd = list(base_cmd)  # copy
@@ -273,11 +274,14 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
             # Output paths (overwrite each iteration; then moved/renamed)
             cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
             cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+            cmd.extend(["--output-cinematic", "resources/drive/output_cinematic.mp4"])
 
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env_vars)
 
-            vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
-                "resources/drive/output_agent.mp4"
+            vids_exist = (
+                os.path.exists("resources/drive/output_topdown.mp4")
+                and os.path.exists("resources/drive/output_agent.mp4")
+                and os.path.exists("resources/drive/output_cinematic.mp4")
             )
 
             if result.returncode == 0 or (result.returncode == 1 and vids_exist):
@@ -289,6 +293,12 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
                     (
                         "resources/drive/output_agent.mp4",
                         f"epoch_{epoch:06d}_map{i:02d}_agent.mp4" if map_path else f"epoch_{epoch:06d}_agent.mp4",
+                    ),
+                    (
+                        "resources/drive/output_cinematic.mp4",
+                        f"epoch_{epoch:06d}_map{i:02d}_cinematic.mp4"
+                        if map_path
+                        else f"epoch_{epoch:06d}_cinematic.mp4",
                     ),
                 ]
 
@@ -302,20 +312,28 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
                             if "topdown" in target_filename:
                                 videos_to_log_world.append(wandb.Video(target_path, format="mp4"))
-                            else:
+                            elif "agent" in target_filename:
                                 videos_to_log_agent.append(wandb.Video(target_path, format="mp4"))
+                            else:
+                                videos_to_log_cinematic.append(wandb.Video(target_path, format="mp4"))
                     else:
                         print(f"Video generation completed but {source_vid} not found")
             else:
                 print(f"C rendering failed (map index {i}) with exit code {result.returncode}: {result.stdout}")
 
         # Log all videos at once so W&B keeps all of them under the same step
-        if hasattr(logger, "wandb") and logger.wandb and (videos_to_log_world or videos_to_log_agent):
+        if (
+            hasattr(logger, "wandb")
+            and logger.wandb
+            and (videos_to_log_world or videos_to_log_agent or videos_to_log_cinematic)
+        ):
             payload = {}
             if videos_to_log_world:
                 payload["render/world_state"] = videos_to_log_world
             if videos_to_log_agent:
                 payload["render/agent_view"] = videos_to_log_agent
+            if videos_to_log_cinematic:
+                payload["render/cinematic_view"] = videos_to_log_cinematic
             logger.wandb.log(payload, step=global_step)
 
     except subprocess.TimeoutExpired:

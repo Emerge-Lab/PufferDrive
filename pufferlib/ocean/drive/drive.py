@@ -578,7 +578,7 @@ def _process_single_map(args):
 
 
 def process_all_maps(
-    data_folder="data/processed/training",
+    data_folder="data_utils/carla/carla",
     max_maps=10_000,
     num_workers=None,
 ):
@@ -599,7 +599,7 @@ def process_all_maps(
     dataset_name = data_dir.name
 
     # Create the binaries directory if it doesn't exist
-    binary_dir = Path(f"resources/drive/binaries/{dataset_name}")
+    binary_dir = Path(f"resources/drive/binaries/carla/{dataset_name}")
     binary_dir.mkdir(parents=True, exist_ok=True)
 
     # Get all JSON files in the training directory

@@ -11,7 +11,7 @@ void test_drivenet() {
 
     float *observations = calloc(num_agents * num_obs, sizeof(float));
     for (int i = 0; i < num_obs * num_agents; i++) {
-        observations[i] = i % 7;
+        observations[i] = i % 8;
     }
 
     int *actions = calloc(num_agents * num_actions, sizeof(int));
