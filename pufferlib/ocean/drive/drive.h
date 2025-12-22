@@ -121,36 +121,245 @@ static const float offsets[4][2] = {
 static const int collision_offsets[225][2] = {
     /* 15x15 grid: dx, dy from -7 to 7 */
     /* Row -7 */
-    {-7, -7}, {-6, -7}, {-5, -7}, {-4, -7}, {-3, -7}, {-2, -7}, {-1, -7}, {0, -7}, {1, -7}, {2, -7}, {3, -7}, {4, -7}, {5, -7}, {6, -7}, {7, -7},
+    {-7, -7},
+    {-6, -7},
+    {-5, -7},
+    {-4, -7},
+    {-3, -7},
+    {-2, -7},
+    {-1, -7},
+    {0, -7},
+    {1, -7},
+    {2, -7},
+    {3, -7},
+    {4, -7},
+    {5, -7},
+    {6, -7},
+    {7, -7},
     /* Row -6 */
-    {-7, -6}, {-6, -6}, {-5, -6}, {-4, -6}, {-3, -6}, {-2, -6}, {-1, -6}, {0, -6}, {1, -6}, {2, -6}, {3, -6}, {4, -6}, {5, -6}, {6, -6}, {7, -6},
+    {-7, -6},
+    {-6, -6},
+    {-5, -6},
+    {-4, -6},
+    {-3, -6},
+    {-2, -6},
+    {-1, -6},
+    {0, -6},
+    {1, -6},
+    {2, -6},
+    {3, -6},
+    {4, -6},
+    {5, -6},
+    {6, -6},
+    {7, -6},
     /* Row -5 */
-    {-7, -5}, {-6, -5}, {-5, -5}, {-4, -5}, {-3, -5}, {-2, -5}, {-1, -5}, {0, -5}, {1, -5}, {2, -5}, {3, -5}, {4, -5}, {5, -5}, {6, -5}, {7, -5},
+    {-7, -5},
+    {-6, -5},
+    {-5, -5},
+    {-4, -5},
+    {-3, -5},
+    {-2, -5},
+    {-1, -5},
+    {0, -5},
+    {1, -5},
+    {2, -5},
+    {3, -5},
+    {4, -5},
+    {5, -5},
+    {6, -5},
+    {7, -5},
     /* Row -4 */
-    {-7, -4}, {-6, -4}, {-5, -4}, {-4, -4}, {-3, -4}, {-2, -4}, {-1, -4}, {0, -4}, {1, -4}, {2, -4}, {3, -4}, {4, -4}, {5, -4}, {6, -4}, {7, -4},
+    {-7, -4},
+    {-6, -4},
+    {-5, -4},
+    {-4, -4},
+    {-3, -4},
+    {-2, -4},
+    {-1, -4},
+    {0, -4},
+    {1, -4},
+    {2, -4},
+    {3, -4},
+    {4, -4},
+    {5, -4},
+    {6, -4},
+    {7, -4},
     /* Row -3 */
-    {-7, -3}, {-6, -3}, {-5, -3}, {-4, -3}, {-3, -3}, {-2, -3}, {-1, -3}, {0, -3}, {1, -3}, {2, -3}, {3, -3}, {4, -3}, {5, -3}, {6, -3}, {7, -3},
+    {-7, -3},
+    {-6, -3},
+    {-5, -3},
+    {-4, -3},
+    {-3, -3},
+    {-2, -3},
+    {-1, -3},
+    {0, -3},
+    {1, -3},
+    {2, -3},
+    {3, -3},
+    {4, -3},
+    {5, -3},
+    {6, -3},
+    {7, -3},
     /* Row -2 */
-    {-7, -2}, {-6, -2}, {-5, -2}, {-4, -2}, {-3, -2}, {-2, -2}, {-1, -2}, {0, -2}, {1, -2}, {2, -2}, {3, -2}, {4, -2}, {5, -2}, {6, -2}, {7, -2},
+    {-7, -2},
+    {-6, -2},
+    {-5, -2},
+    {-4, -2},
+    {-3, -2},
+    {-2, -2},
+    {-1, -2},
+    {0, -2},
+    {1, -2},
+    {2, -2},
+    {3, -2},
+    {4, -2},
+    {5, -2},
+    {6, -2},
+    {7, -2},
     /* Row -1 */
-    {-7, -1}, {-6, -1}, {-5, -1}, {-4, -1}, {-3, -1}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {2, -1}, {3, -1}, {4, -1}, {5, -1}, {6, -1}, {7, -1},
+    {-7, -1},
+    {-6, -1},
+    {-5, -1},
+    {-4, -1},
+    {-3, -1},
+    {-2, -1},
+    {-1, -1},
+    {0, -1},
+    {1, -1},
+    {2, -1},
+    {3, -1},
+    {4, -1},
+    {5, -1},
+    {6, -1},
+    {7, -1},
     /* Row 0 */
-    {-7, 0}, {-6, 0}, {-5, 0}, {-4, 0}, {-3, 0}, {-2, 0}, {-1, 0}, {0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 0}, {5, 0}, {6, 0}, {7, 0},
+    {-7, 0},
+    {-6, 0},
+    {-5, 0},
+    {-4, 0},
+    {-3, 0},
+    {-2, 0},
+    {-1, 0},
+    {0, 0},
+    {1, 0},
+    {2, 0},
+    {3, 0},
+    {4, 0},
+    {5, 0},
+    {6, 0},
+    {7, 0},
     /* Row 1 */
-    {-7, 1}, {-6, 1}, {-5, 1}, {-4, 1}, {-3, 1}, {-2, 1}, {-1, 1}, {0, 1}, {1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}, {6, 1}, {7, 1},
+    {-7, 1},
+    {-6, 1},
+    {-5, 1},
+    {-4, 1},
+    {-3, 1},
+    {-2, 1},
+    {-1, 1},
+    {0, 1},
+    {1, 1},
+    {2, 1},
+    {3, 1},
+    {4, 1},
+    {5, 1},
+    {6, 1},
+    {7, 1},
     /* Row 2 */
-    {-7, 2}, {-6, 2}, {-5, 2}, {-4, 2}, {-3, 2}, {-2, 2}, {-1, 2}, {0, 2}, {1, 2}, {2, 2}, {3, 2}, {4, 2}, {5, 2}, {6, 2}, {7, 2},
+    {-7, 2},
+    {-6, 2},
+    {-5, 2},
+    {-4, 2},
+    {-3, 2},
+    {-2, 2},
+    {-1, 2},
+    {0, 2},
+    {1, 2},
+    {2, 2},
+    {3, 2},
+    {4, 2},
+    {5, 2},
+    {6, 2},
+    {7, 2},
     /* Row 3 */
-    {-7, 3}, {-6, 3}, {-5, 3}, {-4, 3}, {-3, 3}, {-2, 3}, {-1, 3}, {0, 3}, {1, 3}, {2, 3}, {3, 3}, {4, 3}, {5, 3}, {6, 3}, {7, 3},
+    {-7, 3},
+    {-6, 3},
+    {-5, 3},
+    {-4, 3},
+    {-3, 3},
+    {-2, 3},
+    {-1, 3},
+    {0, 3},
+    {1, 3},
+    {2, 3},
+    {3, 3},
+    {4, 3},
+    {5, 3},
+    {6, 3},
+    {7, 3},
     /* Row 4 */
-    {-7, 4}, {-6, 4}, {-5, 4}, {-4, 4}, {-3, 4}, {-2, 4}, {-1, 4}, {0, 4}, {1, 4}, {2, 4}, {3, 4}, {4, 4}, {5, 4}, {6, 4}, {7, 4},
+    {-7, 4},
+    {-6, 4},
+    {-5, 4},
+    {-4, 4},
+    {-3, 4},
+    {-2, 4},
+    {-1, 4},
+    {0, 4},
+    {1, 4},
+    {2, 4},
+    {3, 4},
+    {4, 4},
+    {5, 4},
+    {6, 4},
+    {7, 4},
     /* Row 5 */
-    {-7, 5}, {-6, 5}, {-5, 5}, {-4, 5}, {-3, 5}, {-2, 5}, {-1, 5}, {0, 5}, {1, 5}, {2, 5}, {3, 5}, {4, 5}, {5, 5}, {6, 5}, {7, 5},
+    {-7, 5},
+    {-6, 5},
+    {-5, 5},
+    {-4, 5},
+    {-3, 5},
+    {-2, 5},
+    {-1, 5},
+    {0, 5},
+    {1, 5},
+    {2, 5},
+    {3, 5},
+    {4, 5},
+    {5, 5},
+    {6, 5},
+    {7, 5},
     /* Row 6 */
-    {-7, 6}, {-6, 6}, {-5, 6}, {-4, 6}, {-3, 6}, {-2, 6}, {-1, 6}, {0, 6}, {1, 6}, {2, 6}, {3, 6}, {4, 6}, {5, 6}, {6, 6}, {7, 6},
+    {-7, 6},
+    {-6, 6},
+    {-5, 6},
+    {-4, 6},
+    {-3, 6},
+    {-2, 6},
+    {-1, 6},
+    {0, 6},
+    {1, 6},
+    {2, 6},
+    {3, 6},
+    {4, 6},
+    {5, 6},
+    {6, 6},
+    {7, 6},
     /* Row 7 */
-    {-7, 7}, {-6, 7}, {-5, 7}, {-4, 7}, {-3, 7}, {-2, 7}, {-1, 7}, {0, 7}, {1, 7}, {2, 7}, {3, 7}, {4, 7}, {5, 7}, {6, 7}, {7, 7}
-};
+    {-7, 7},
+    {-6, 7},
+    {-5, 7},
+    {-4, 7},
+    {-3, 7},
+    {-2, 7},
+    {-1, 7},
+    {0, 7},
+    {1, 7},
+    {2, 7},
+    {3, 7},
+    {4, 7},
+    {5, 7},
+    {6, 7},
+    {7, 7}};
 
 struct timespec ts;
 
@@ -257,11 +466,11 @@ float relative_distance(float a, float b) {
     return distance;
 }
 
-float relative_distance_3d(float x1, float y1, float z1, float x2, float y2, float z2){
+float relative_distance_3d(float x1, float y1, float z1, float x2, float y2, float z2) {
     float dx = x2 - x1;
     float dy = y2 - y1;
     float dz = z2 - z1;
-    float distance = sqrtf(dx*dx + dy*dy + dz*dz);
+    float distance = sqrtf(dx * dx + dy * dy + dz * dz);
     return distance;
 }
 
@@ -601,10 +810,10 @@ void set_start_position(Drive *env) {
         e->valid = e->traj_valid[env->init_steps];
         e->collision_state = 0;
         e->aabb_collision_state = 0;
-        e->metrics_array[COLLISION_IDX] = 0.0f; // vehicle collision
-        e->metrics_array[OFFROAD_IDX] = 0.0f; // offroad
-        e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
-        e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+        e->metrics_array[COLLISION_IDX] = 0.0f;              // vehicle collision
+        e->metrics_array[OFFROAD_IDX] = 0.0f;                // offroad
+        e->metrics_array[REACHED_GOAL_IDX] = 0.0f;           // reached goal
+        e->metrics_array[LANE_ALIGNED_IDX] = 0.0f;           // lane aligned
         e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
         e->cumulative_displacement = 0.0f;
         e->displacement_sample_count = 0;
@@ -982,10 +1191,9 @@ void set_means(Drive *env) {
             env->entities[i].goal_position_z -= mean_z;
         }
     }
-
 }
 
-DepthPoint compute_z_distance_to_road_segment(Entity* agent, Entity* lane){
+DepthPoint compute_z_distance_to_road_segment(Entity *agent, Entity *lane) {
     float agent_position_x = agent->x;
     float agent_position_y = agent->y;
     float agent_position_z = agent->z;
@@ -1098,22 +1306,9 @@ int check_z_collision(Entity *car1, Entity *car2) {
 
     // Check for overlap in the z-axis
     if (car1_top < car2_bottom || car2_top < car1_bottom) {
-        return 0;  // No collision
+        return 0; // No collision
     }
-    return 1;  // Collision
-}
-
-int check_z_collision(Entity* car1, Entity* car2) {
-    float car1_bottom = car1->z;
-    float car1_top = car1->z + car1->height;
-    float car2_bottom = car2->z;
-    float car2_top = car2->z + car2->height;
-
-    // Check for overlap in the z-axis
-    if (car1_top < car2_bottom || car2_top < car1_bottom) {
-        return 0;  // No collision
-    }
-    return 1;  // Collision
+    return 1; // Collision
 }
 
 int check_aabb_collision(Entity *car1, Entity *car2) {
@@ -1207,11 +1402,12 @@ int collision_check(Drive *env, int agent_idx) {
             continue; // Skip respawning entities
         float x1 = entity->x;
         float y1 = entity->y;
-        float dist = ((x1 - agent->x)*(x1 - agent->x) + (y1 - agent->y)*(y1 - agent->y));
-        if(dist > 225.0f) continue;
-        if(check_aabb_collision(agent, entity)) {
+        float dist = ((x1 - agent->x) * (x1 - agent->x) + (y1 - agent->y) * (y1 - agent->y));
+        if (dist > 225.0f)
+            continue;
+        if (check_aabb_collision(agent, entity)) {
             agent->aabb_collision_state = 1;
-            if(check_z_collision(agent,entity)){
+            if (check_z_collision(agent, entity)) {
                 car_collided_with_index = index;
                 break;
             }
@@ -1340,7 +1536,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         corners[i][1] =
             agent->y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
     }
-    float buffer = 2.0f; // 0.5m buffer for offroad checking
+    float buffer = 2.0f;                                   // 0.5m buffer for offroad checking
     GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25]; // Array big enough for all neighboring cells
     int list_size =
         checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL * 25, collision_offsets, 25);
@@ -1355,7 +1551,8 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         // Check for offroad collision with road edges
         if (entity->type == ROAD_EDGE) {
             int geometry_idx = entity_list[i].geometry_idx;
-            if(entity->traj_z[geometry_idx] > agent->z + buffer || entity->traj_z[geometry_idx] < agent->z - buffer) continue; // Edge is at a different z level
+            if (entity->traj_z[geometry_idx] > agent->z + buffer || entity->traj_z[geometry_idx] < agent->z - buffer)
+                continue; // Edge is at a different z level
             float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
             float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
             for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
@@ -1636,13 +1833,8 @@ void init_goal_positions(Drive *env) {
     }
 }
 
-int compare_depthpoint(const void* a, const void* b) {
-    float diff = ((DepthPoint*)a)->dis - ((DepthPoint*)b)->dis;
-    return (diff > 0) - (diff < 0); // returns 1, 0, or -1
-}
-
-int compare_depthpoint(const void* a, const void* b) {
-    float diff = ((DepthPoint*)a)->dis - ((DepthPoint*)b)->dis;
+int compare_depthpoint(const void *a, const void *b) {
+    float diff = ((DepthPoint *)a)->dis - ((DepthPoint *)b)->dis;
     return (diff > 0) - (diff < 0); // returns 1, 0, or -1
 }
 
@@ -1743,18 +1935,20 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         return;
     }
 
-    //To update agent's z-coordinate based on road elevation of 10 nearest elements
-    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL*100];  // Array big enough for all neighboring cells
-    int list_size = checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL*100, collision_offsets, 100);
+    // To update agent's z-coordinate based on road elevation of 10 nearest elements
+    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 100]; // Array big enough for all neighboring cells
+    int list_size =
+        checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL * 100, collision_offsets, 100);
     DepthPoint road_neighbours[list_size];
     int max_check = (list_size < 10) ? list_size : 10;
-    int diffarray[max_check-1];
-    if(list_size>0){
-        //store an array masuring the distance of the agent with each road segment nearby
-        for(int i = 0;i<list_size;i++){
-            if(entity_list[i].entity_idx == -1 ) continue;
-            Entity* entity = &env->entities[entity_list[i].entity_idx];
-            if(entity->type == ROAD_EDGE || entity->type == ROAD_LANE || entity->type == ROAD_LINE){
+    int diffarray[max_check - 1];
+    if (list_size > 0) {
+        // store an array masuring the distance of the agent with each road segment nearby
+        for (int i = 0; i < list_size; i++) {
+            if (entity_list[i].entity_idx == -1)
+                continue;
+            Entity *entity = &env->entities[entity_list[i].entity_idx];
+            if (entity->type == ROAD_EDGE || entity->type == ROAD_LANE || entity->type == ROAD_LINE) {
                 DepthPoint val = compute_z_distance_to_road_segment(agent, entity);
                 road_neighbours[i] = val;
             }
@@ -1763,9 +1957,9 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         qsort(road_neighbours, list_size, sizeof(DepthPoint), compare_depthpoint);
         int max_diff_idx = 0;
         float max_diff = -1e9;
-        for(int i = 0; i < max_check-1; i++){
-            diffarray[i] = road_neighbours[i+1].dis - road_neighbours[i].dis;
-            if(diffarray[i] > max_diff) {
+        for (int i = 0; i < max_check - 1; i++) {
+            diffarray[i] = road_neighbours[i + 1].dis - road_neighbours[i].dis;
+            if (diffarray[i] > max_diff) {
                 max_diff = diffarray[i];
                 max_diff_idx = i;
             }
@@ -1773,10 +1967,10 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // max_diff_idx now holds the index of the maximum value in diffarray
 
         float sum_z = 0.0f;
-        for(int i = 0; i <= max_diff_idx; i++) {
+        for (int i = 0; i <= max_diff_idx; i++) {
             sum_z += road_neighbours[i].z;
         }
-        agent->z = sum_z / (max_diff_idx+1);
+        agent->z = sum_z / (max_diff_idx + 1);
     }
 
     if (env->dynamics_model == CLASSIC) {
@@ -2049,10 +2243,10 @@ void compute_observations(Drive *env) {
         float rel_goal_x = goal_x * cos_heading + goal_y * sin_heading;
         float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
 
-        float rel_goal_z = goal_z;  // No rotation needed for vertical component
-        obs[0] = rel_goal_x* 0.005f;
-        obs[1] = rel_goal_y* 0.005f;
-        obs[2] = rel_goal_z* 0.005f;
+        float rel_goal_z = goal_z; // No rotation needed for vertical component
+        obs[0] = rel_goal_x * 0.005f;
+        obs[1] = rel_goal_y * 0.005f;
+        obs[2] = rel_goal_z * 0.005f;
         obs[3] = signed_speed / MAX_SPEED;
         obs[4] = ego_entity->width / MAX_VEH_WIDTH;
         obs[5] = ego_entity->length / MAX_VEH_LEN;
@@ -2061,7 +2255,8 @@ void compute_observations(Drive *env) {
         if (env->dynamics_model == JERK) {
             obs[7] = ego_entity->steering_angle / M_PI;
             // Asymmetric normalization for a_long to match action space
-            obs[8] = (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
+            obs[8] =
+                (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
             obs[9] = ego_entity->a_lat / JERK_LAT[2];
             obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
         } else {
@@ -2093,12 +2288,13 @@ void compute_observations(Drive *env) {
             float dx = other_entity->x - ego_entity->x;
             float dy = other_entity->y - ego_entity->y;
             float dz = other_entity->z - ego_entity->z;
-            float dist = (dx*dx + dy*dy + dz*dz);
-            if(dist > 2500.0f) continue;
+            float dist = (dx * dx + dy * dy + dz * dz);
+            if (dist > 2500.0f)
+                continue;
             // Rotate to ego vehicle's frame
-            float rel_x = dx*cos_heading + dy*sin_heading;
-            float rel_y = -dx*sin_heading + dy*cos_heading;
-            float rel_z = dz;  // No rotation needed for vertical component
+            float rel_x = dx * cos_heading + dy * sin_heading;
+            float rel_y = -dx * sin_heading + dy * cos_heading;
+            float rel_z = dz; // No rotation needed for vertical component
             // Store observations with correct indexing
             obs[obs_idx] = rel_x * 0.02f;
             obs[obs_idx + 1] = rel_y * 0.02f;
@@ -2123,7 +2319,7 @@ void compute_observations(Drive *env) {
             float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
             obs[obs_idx + 7] = other_signed_speed / MAX_SPEED;
             cars_seen++;
-            obs_idx += 8;  // Move to next observation slot
+            obs_idx += 8; // Move to next observation slot
         }
         int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 8;
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
@@ -2155,17 +2351,17 @@ void compute_observations(Drive *env) {
             float start_x = entity->traj_x[geometry_idx];
             float start_y = entity->traj_y[geometry_idx];
             float start_z = entity->traj_z[geometry_idx];
-            float end_x = entity->traj_x[geometry_idx+1];
-            float end_y = entity->traj_y[geometry_idx+1];
-            float end_z = entity->traj_z[geometry_idx+1];
+            float end_x = entity->traj_x[geometry_idx + 1];
+            float end_y = entity->traj_y[geometry_idx + 1];
+            float end_z = entity->traj_z[geometry_idx + 1];
             float mid_x = (start_x + end_x) / 2.0f;
             float mid_y = (start_y + end_y) / 2.0f;
             float mid_z = (start_z + end_z) / 2.0f;
             float rel_x = mid_x - ego_entity->x;
             float rel_y = mid_y - ego_entity->y;
             float rel_z = mid_z - ego_entity->z;
-            float x_obs = rel_x*cos_heading + rel_y*sin_heading;
-            float y_obs = -rel_x*sin_heading + rel_y*cos_heading;
+            float x_obs = rel_x * cos_heading + rel_y * sin_heading;
+            float y_obs = -rel_x * sin_heading + rel_y * cos_heading;
             float z_obs = rel_z;
             float length = relative_distance_3d(mid_x, mid_y, mid_z, end_x, end_y, end_z);
             float width = 0.1;
@@ -2458,14 +2654,10 @@ void c_step(Drive *env) {
             }
         }
 
-        float distance_to_goal = relative_distance_3d(
-                env->entities[agent_idx].x,
-                env->entities[agent_idx].y,
-                env->entities[agent_idx].z,
-                env->entities[agent_idx].goal_position_x,
-                env->entities[agent_idx].goal_position_y,
-                env->entities[agent_idx].goal_position_z
-            );
+        float distance_to_goal =
+            relative_distance_3d(env->entities[agent_idx].x, env->entities[agent_idx].y, env->entities[agent_idx].z,
+                                 env->entities[agent_idx].goal_position_x, env->entities[agent_idx].goal_position_y,
+                                 env->entities[agent_idx].goal_position_z);
 
         // Reward agent if it is within X meters of goal
         if (distance_to_goal < env->goal_radius) {
@@ -2712,10 +2904,10 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
                      Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
-    int obs_idx = ego_dim;  // Start after ego obs
-    for(int j = 0; j < MAX_AGENTS - 1; j++) {
-        if(agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
-            obs_idx += 8;  // Move to next agent observation
+    int obs_idx = ego_dim; // Start after ego obs
+    for (int j = 0; j < MAX_AGENTS - 1; j++) {
+        if (agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
+            obs_idx += 8; // Move to next agent observation
             continue;
         }
         // Draw position of other agents
@@ -3001,7 +3193,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     car_color = GOLD; // expert replay
                 if (is_active_agent)
                     car_color = BLUE; // policy-controlled
-                if (is_active_agent && env->entities[i].aabb_collision_state > 0) car_color = LIGHTGREEN;
+                if (is_active_agent && env->entities[i].aabb_collision_state > 0)
+                    car_color = LIGHTGREEN;
                 if (is_active_agent && env->entities[i].collision_state > 0)
                     car_color = RED;
                 rlSetLineWidth(3.0f);
@@ -3077,7 +3270,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         wire_color = GOLD; // expert replay
                     if (is_active_agent)
                         wire_color = BLUE; // policy
-                    if (is_active_agent && env->entities[i].aabb_collision_state > 0) wire_color = LIGHTGREEN;
+                    if (is_active_agent && env->entities[i].aabb_collision_state > 0)
+                        wire_color = LIGHTGREEN;
                     if (is_active_agent && env->entities[i].collision_state > 0)
                         wire_color = RED;
                     rlSetLineWidth(2.0f);
