@@ -12,6 +12,7 @@ puffer train puffer_drive --wandb --wandb-project "pufferdrive"
 **Default configuration (Waymo maps)**
 
 The default settings in `drive.ini` are optimized for:
+
 - Training in thousands of Waymo maps
 - Short episodes (91 steps)
 
@@ -35,7 +36,6 @@ num_maps = 1
 
 **Note:** The default training hyperparameters work well for both configurations and typically don't need adjustment.
 
----
 
 ## Controlled experiments
 
