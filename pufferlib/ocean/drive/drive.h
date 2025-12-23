@@ -2501,7 +2501,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             for (int j = 0; j < env->grid_map->grid_rows; j++) {
                 float x = grid_start_x + i * GRID_CELL_SIZE;
                 float y = grid_start_y + j * GRID_CELL_SIZE;
-                DrawCubeWires((Vector3){x + GRID_CELL_SIZE / 2, y + GRID_CELL_SIZE / 2, 1}, GRID_CELL_SIZE,
+                DrawCubeWires((Vector3){x + GRID_CELL_SIZE / 2, y + GRID_CELL_SIZE / 2, 0.0f}, GRID_CELL_SIZE,
                               GRID_CELL_SIZE, 0.1f, PUFF_BACKGROUND2);
             }
         }
