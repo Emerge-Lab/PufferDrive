@@ -27,6 +27,7 @@ nav:
   - Get started: index.md
   - Docs:
       - Getting started: getting-started.md
+      - Training agents: train.md
       - Simulator: simulator.md
       - Interactive scenario editor: scene-editor.md
       - Visualizer: visualizer.md
