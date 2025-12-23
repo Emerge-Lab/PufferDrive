@@ -274,7 +274,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
             cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
             cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
 
-            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env_vars)
+            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1000, env=env_vars)
 
             vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
                 "resources/drive/output_agent.mp4"

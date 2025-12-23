@@ -73,6 +73,7 @@
 #define MAX_AGENTS 32
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
+#define RESPAWN_AGENT 3
 
 #define ROAD_FEATURES 7
 #define ROAD_FEATURES_ONEHOT 13
@@ -201,6 +202,7 @@ struct Entity {
     float goal_radius;
     int stopped;
     int removed;
+    int queued_for_respawn;
 
     // Jerk dynamics
     float a_long;
@@ -1101,8 +1103,8 @@ int collision_check(Drive *env, int agent_idx) {
 
     int car_collided_with_index = -1;
 
-    if (agent->respawn_timestep != -1)
-        return car_collided_with_index; // Skip respawning entities
+    // if (agent->respawn_timestep != -1)
+    //     return car_collided_with_index; // Skip respawning entities
 
     for (int i = 0; i < MAX_AGENTS; i++) {
         int index = -1;
@@ -1116,8 +1118,8 @@ int collision_check(Drive *env, int agent_idx) {
         if (index == agent_idx)
             continue;
         Entity *entity = &env->entities[index];
-        if (entity->respawn_timestep != -1)
-            continue; // Skip respawning entities
+        // if (entity->respawn_timestep != -1)
+        //     continue; // Skip respawning entities
         float x1 = entity->x;
         float y1 = entity->y;
         float dist = ((x1 - agent->x) * (x1 - agent->x) + (y1 - agent->y) * (y1 - agent->y));
@@ -1946,10 +1948,10 @@ void compute_observations(Drive *env) {
             if (index == env->active_agent_indices[i])
                 continue; // Skip self, but don't increment obs_idx
             Entity *other_entity = &env->entities[index];
-            if (ego_entity->respawn_timestep != -1)
-                continue;
-            if (other_entity->respawn_timestep != -1)
-                continue;
+            // if (ego_entity->respawn_timestep != -1)
+            // continue;
+            // if (other_entity->respawn_timestep != -1)
+            // continue;
             // Store original relative positions
             float dx = other_entity->x - ego_entity->x;
             float dy = other_entity->y - ego_entity->y;
@@ -2242,6 +2244,198 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].steering_angle = 0.0f;
 }
 
+int check_aabb_collision_t0(Entity *car1, Entity *car2) {
+
+    // Get car corners in world space
+    float cos1 = cosf(car1->traj_heading[0]);
+    float sin1 = sinf(car1->traj_heading[0]);
+    float cos2 = car2->heading_x;
+    float sin2 = car2->heading_y;
+
+    // Calculate half dimensions
+    float half_len1 = car1->length * 0.5f;
+    float half_width1 = car1->width * 0.5f;
+    float half_len2 = car2->length * 0.5f;
+    float half_width2 = car2->width * 0.5f;
+
+    // Calculate car1's corners in world space
+    float car1_corners[4][2] = {{car1->traj_x[0] + (half_len1 * cos1 - half_width1 * sin1),
+                                 car1->traj_y[0] + (half_len1 * sin1 + half_width1 * cos1)},
+                                {car1->traj_x[0] + (half_len1 * cos1 + half_width1 * sin1),
+                                 car1->traj_y[0] + (half_len1 * sin1 - half_width1 * cos1)},
+                                {car1->traj_x[0] + (-half_len1 * cos1 - half_width1 * sin1),
+                                 car1->traj_y[0] + (-half_len1 * sin1 + half_width1 * cos1)},
+                                {car1->traj_x[0] + (-half_len1 * cos1 + half_width1 * sin1),
+                                 car1->traj_y[0] + (-half_len1 * sin1 - half_width1 * cos1)}};
+
+    // Calculate car2's corners in world space
+    float car2_corners[4][2] = {
+        {car2->x + (half_len2 * cos2 - half_width2 * sin2), car2->y + (half_len2 * sin2 + half_width2 * cos2)},
+        {car2->x + (half_len2 * cos2 + half_width2 * sin2), car2->y + (half_len2 * sin2 - half_width2 * cos2)},
+        {car2->x + (-half_len2 * cos2 - half_width2 * sin2), car2->y + (-half_len2 * sin2 + half_width2 * cos2)},
+        {car2->x + (-half_len2 * cos2 + half_width2 * sin2), car2->y + (-half_len2 * sin2 - half_width2 * cos2)}};
+
+    // Get the axes to check (normalized vectors perpendicular to each edge)
+    float axes[4][2] = {
+        {cos1, sin1},  // Car1's length axis
+        {-sin1, cos1}, // Car1's width axis
+        {cos2, sin2},  // Car2's length axis
+        {-sin2, cos2}  // Car2's width axis
+    };
+
+    // Check each axis
+    for (int i = 0; i < 4; i++) {
+        float min1 = INFINITY, max1 = -INFINITY;
+        float min2 = INFINITY, max2 = -INFINITY;
+
+        // Project car1's corners onto the axis
+        for (int j = 0; j < 4; j++) {
+            float proj = car1_corners[j][0] * axes[i][0] + car1_corners[j][1] * axes[i][1];
+            min1 = fminf(min1, proj);
+            max1 = fmaxf(max1, proj);
+        }
+
+        // Project car2's corners onto the axis
+        for (int j = 0; j < 4; j++) {
+            float proj = car2_corners[j][0] * axes[i][0] + car2_corners[j][1] * axes[i][1];
+            min2 = fminf(min2, proj);
+            max2 = fmaxf(max2, proj);
+        }
+
+        // If there's a gap on this axis, the boxes don't intersect
+        if (max1 < min2 || min1 > max2) {
+            return 0; // No collision
+        }
+    }
+
+    // If we get here, there's no separating axis, so the boxes intersect
+    return 1; // Collision
+}
+
+int collision_check_ego_t0(Drive *env, int agent_idx) {
+
+    // check collisions of an agent at t0 starting conditions in relation to the current status of other agents
+    // used in the respawn sampling to check if a respawn is viable.
+
+    Entity *agent = &env->entities[agent_idx];
+
+    if (agent->x == INVALID_POSITION)
+        return -1;
+
+    int car_collided_with_index = -1;
+
+    // if (agent->respawn_timestep != -1)
+    //     return car_collided_with_index; // Skip respawning entities
+
+    for (int i = 0; i < MAX_AGENTS; i++) {
+        int index = -1;
+        if (i < env->active_agent_count) {
+            index = env->active_agent_indices[i];
+        } else if (i < env->num_actors) {
+            index = env->static_agent_indices[i - env->active_agent_count];
+        }
+        if (index == -1)
+            continue;
+        if (index == agent_idx)
+            continue;
+        Entity *entity = &env->entities[index];
+        // if (entity->respawn_timestep != -1)
+        //     continue; // Skip respawning entities
+        float x1 = entity->x;
+        float y1 = entity->y;
+        float dist =
+            ((x1 - agent->traj_x[0]) * (x1 - agent->traj_x[0]) + (y1 - agent->traj_y[0]) * (y1 - agent->traj_y[0]));
+        if (dist > 225.0f)
+            continue;
+        if (check_aabb_collision_t0(agent, entity)) {
+            car_collided_with_index = index;
+            break;
+        }
+    }
+
+    return car_collided_with_index;
+}
+
+void random_respawn_agent(Drive *env, int agent_idx) {
+
+    float potential_x;
+    float potential_y;
+    float potential_heading;
+    float potential_heading_x;
+    float potential_heading_y;
+    float potential_vx;
+    float potential_vy;
+
+    // Craete a randomly ordered array
+    int n = env->active_agent_count;
+    int indices[n];
+
+    for (int i = 0; i < n; i++) {
+        indices[i] = i;
+    }
+
+    for (int i = n - 1; i > 0; i--) {
+        int j = rand() % (i + 1);
+        int tmp = indices[i];
+        indices[i] = indices[j];
+        indices[j] = tmp;
+    }
+
+    // Cycle through goals via shuffled indexes
+    for (int k = 0; k < env->active_agent_count; k++) {
+
+        int i = indices[k];
+
+        // Fetch potential starting conditions
+        // potential_x = env->entities[i].traj_x[0];
+        // potential_y = env->entities[i].traj_y[0];
+        // potential_heading = env->entities[i].traj_heading[0];
+        // potential_heading_x = cosf(env->entities[i].heading);
+        // potential_heading_y = sinf(env->entities[i].heading);
+        // potential_vx = env->entities[i].traj_vx[0];
+        // potential_vy = env->entities[i].traj_vy[0];
+
+        // Check the validity of the potential coordinates
+        // no need to check the legality of the respawns because for now we sample from initial positions
+
+        // check the collision between the current environment and an hypotethical vehicle.
+        int collided_idx = collision_check_ego_t0(env, i);
+
+        if (collided_idx == -1) {
+            // set locations
+            env->entities[agent_idx].x = env->entities[i].traj_x[0];
+            env->entities[agent_idx].y = env->entities[i].traj_y[0];
+            env->entities[agent_idx].heading = env->entities[i].traj_heading[0];
+            env->entities[agent_idx].heading_x = cosf(env->entities[i].heading);
+            env->entities[agent_idx].heading_y = sinf(env->entities[i].heading);
+            env->entities[agent_idx].vx = env->entities[i].traj_vx[0];
+            env->entities[agent_idx].vy = env->entities[i].traj_vy[0];
+            env->entities[agent_idx].metrics_array[COLLISION_IDX] = 0.0f;
+            env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
+            env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
+            env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+            env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
+            env->entities[agent_idx].cumulative_displacement = 0.0f;
+            env->entities[agent_idx].displacement_sample_count = 0;
+            env->entities[agent_idx].respawn_timestep = env->timestep;
+            env->entities[agent_idx].stopped = 0;
+            env->entities[agent_idx].removed = 0;
+            env->entities[agent_idx].a_long = 0.0f;
+            env->entities[agent_idx].a_lat = 0.0f;
+            env->entities[agent_idx].jerk_long = 0.0f;
+            env->entities[agent_idx].jerk_lat = 0.0f;
+            env->entities[agent_idx].steering_angle = 0.0f;
+            env->entities[agent_idx].queued_for_respawn = 0;
+            return;
+        }
+    }
+
+    env->entities[agent_idx].queued_for_respawn = 1;
+    env->entities[agent_idx].removed = 1;
+    env->entities[agent_idx].x = env->entities[agent_idx].y = -10000.0f;
+    return;
+}
+
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
@@ -2252,17 +2446,23 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         // Keep flag true if there is at least one agent that has not been respawned yet
         if (env->entities[agent_idx].respawn_count == 0) {
-            originals_remaining = 1;
-            break;
+            originals_remaining += 1;
         }
     }
 
-    if (env->timestep == env->scenario_length || (!originals_remaining && env->termination_mode == 1)) {
+    if (env->timestep == env->scenario_length || (originals_remaining < 5 && env->termination_mode == 1)) {
         add_log(env);
         c_reset(env);
         return;
     }
 
+    // Check for agents waiting to be respawned and respawn them
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        if (env->entities[agent_idx].queued_for_respawn == 1) {
+            random_respawn_agent(env, agent_idx);
+        }
+    }
     // Move static experts
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         int expert_idx = env->expert_static_agent_indices[i];
@@ -2350,8 +2550,9 @@ void c_step(Drive *env) {
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
             if (reached_goal) {
-                respawn_agent(env, agent_idx);
-                env->entities[agent_idx].respawn_count++;
+                random_respawn_agent(env, agent_idx);
+                // respawn_agent(env, agent_idx);
+                // env->entities[agent_idx].respawn_count++;
             }
         }
     } else if (env->goal_behavior == GOAL_STOP) {
@@ -2361,6 +2562,28 @@ void c_step(Drive *env) {
             if (reached_goal) {
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+            }
+        }
+    }
+
+    // Respawn behavior for collisions events
+    if (env->collision_behavior == RESPAWN_AGENT) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            int collision_state = env->entities[agent_idx].collision_state;
+            if (collision_state == VEHICLE_COLLISION) {
+                random_respawn_agent(env, agent_idx);
+            }
+        }
+    }
+
+    // Respawn behavior for offroad events
+    if (env->offroad_behavior == RESPAWN_AGENT) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            int collision_state = env->entities[agent_idx].collision_state;
+            if (collision_state == OFFROAD) {
+                random_respawn_agent(env, agent_idx);
             }
         }
     }
@@ -2789,7 +3012,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 }
             }
             // HIDE CARS ON RESPAWN - IMPORTANT TO KNOW VISUAL SETTING
-            if ((!is_active_agent && !is_static_agent) || env->entities[i].respawn_timestep != -1) {
+            if ((!is_active_agent && !is_static_agent)) { //|| env->entities[i].respawn_timestep != -1) {
                 continue;
             }
             Vector3 position;
@@ -3005,9 +3228,9 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
         for (int i = 0; i < env->active_agent_count; i++) {
             // Ignore respawned agents
-            if (env->entities[i].respawn_timestep != -1) {
-                continue;
-            }
+            // if (env->entities[i].respawn_timestep != -1) {
+            //     continue;
+            // }
             int agent_idx = env->active_agent_indices[i];
             int womd_track_idx = env->tracks_to_predict_indices[i];
 
