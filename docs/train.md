@@ -9,12 +9,13 @@ puffer train puffer_drive --wandb --wandb-project "pufferdrive"
 
 ### Environment configurations
 
-#### Default configuration (Waymo maps)
+**Default configuration (Waymo maps)**
+
 The default settings in `drive.ini` are optimized for:
 - Training in thousands of Waymo maps
 - Short episodes (91 steps)
 
-#### Carla maps configuration
+**Carla maps configuration**
 For training agents to drive indefinitely in larger Carla maps, we recommend modifying `drive.ini` as follows:
 ```ini
 [env]
@@ -42,8 +43,6 @@ Run parameter sweeps for architecture search or multi-seed experiments:
 ```bash
 puffer controlled_exp puffer_drive --wandb --wandb-project "pufferdrive2.0_carla" --tag speed
 ```
-
-### Configuration
 
 Define parameter sweeps in `drive.ini`:
 ```ini
