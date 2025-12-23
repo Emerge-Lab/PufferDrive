@@ -342,17 +342,19 @@ void add_log(Drive *env) {
         float collisions_per_agent = env->logs[i].collisions_per_agent;
         env->log.collisions_per_agent += collisions_per_agent;
 
-        if ((e->goals_reached_this_episode / e->goals_sampled_this_episode) > 0.9 && !e->collided_before_goal) {
+        float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
+
+        // Update score, which measures whether the agent fully solved its task
+        float threshold = (e->goals_sampled_this_episode == 1.0f) ? 0.999f : 0.9f;
+        if (frac_goal_reached > threshold && !e->collided_before_goal) {
             env->log.score += 1.0f;
         }
-        if (!offroad && !collided && (e->goals_reached_this_episode / e->goals_sampled_this_episode < 1.0)) {
+        if (!offroad && !collided && frac_goal_reached < 1.0f) {
             env->log.dnf_rate += 1.0f;
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
         env->log.lane_alignment_rate += lane_aligned;
-
-        float goal_speed = env->logs[i].speed_at_goal;
-        env->log.speed_at_goal += goal_speed;
+        env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
