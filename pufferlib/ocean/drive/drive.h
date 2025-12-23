@@ -133,6 +133,7 @@ const Color PUFF_BACKGROUND = (Color){6, 24, 24, 255};
 const Color PUFF_BACKGROUND2 = (Color){18, 72, 72, 255};
 const Color LIGHTGREEN = (Color){152, 255, 152, 255};
 const Color LIGHTYELLOW = (Color){255, 255, 152, 255};
+const Color SOFT_YELLOW = (Color){245, 245, 220, 255};
 
 struct timespec ts;
 
@@ -2502,7 +2503,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 float x = grid_start_x + i * GRID_CELL_SIZE;
                 float y = grid_start_y + j * GRID_CELL_SIZE;
                 DrawCubeWires((Vector3){x + GRID_CELL_SIZE / 2, y + GRID_CELL_SIZE / 2, 0.0f}, GRID_CELL_SIZE,
-                              GRID_CELL_SIZE, 0.1f, PUFF_BACKGROUND2);
+                              GRID_CELL_SIZE, 0.1f, Fade(PUFF_BACKGROUND2, 0.3f));
             }
         }
     }
@@ -2535,7 +2536,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
             Vector3 position;
             float heading;
-            position = (Vector3){env->entities[i].x, env->entities[i].y, 1};
+            position = (Vector3){env->entities[i].x, env->entities[i].y, 1.1};
             heading = env->entities[i].heading;
             // Create size vector
             Vector3 size = {env->entities[i].length, env->entities[i].width, env->entities[i].height};
@@ -2703,7 +2704,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             Vector3 end = {env->entities[i].traj_x[j + 1], env->entities[i].traj_y[j + 1], 1};
             Color lineColor = GRAY;
             if (env->entities[i].type == ROAD_LANE)
-                lineColor = PUFF_CYAN;
+                lineColor = Fade(SOFT_YELLOW, 0.25f);
             else if (env->entities[i].type == ROAD_LINE)
                 lineColor = WHITE;
             else if (env->entities[i].type == ROAD_EDGE)
@@ -2755,7 +2756,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 }
 
 void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTexture2D target, int map_height, int obs,
-                      int lasers, int trajectories, int frame_count, float *path, int log_trajectories, int show_grid) {
+                      int lasers, int trajectories, int frame_count, float *path, int show_human_logs, int show_grid) {
     // Top-down orthographic camera
     Camera3D camera = {0};
     camera.position = (Vector3){0.0f, 0.0f, 500.0f}; // above the scene
@@ -2771,7 +2772,7 @@ void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTe
     rlEnableDepthTest();
 
     // Draw log trajectories FIRST (in background at lower Z-level)
-    if (log_trajectories) {
+    if (show_human_logs) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int idx = env->active_agent_indices[i];
             for (int j = 0; j < env->entities[idx].array_size; j++) {

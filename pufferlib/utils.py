@@ -216,7 +216,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         if config.get("show_lasers", False):
             base_cmd.append("--lasers")
         if config.get("show_human_logs", False):
-            base_cmd.append("--log-trajectories")
+            base_cmd.append("--show-human-logs")
         if config.get("zoom_in", False):
             base_cmd.append("--zoom-in")
 

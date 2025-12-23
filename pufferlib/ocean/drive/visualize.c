@@ -66,7 +66,7 @@ void CloseVideo(VideoRecorder *recorder) {
 }
 
 void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int lasers, int trajectories,
-                       int frame_count, float *path, int log_trajectories, int show_grid, int img_width, int img_height,
+                       int frame_count, float *path, int show_human_logs, int show_grid, int img_width, int img_height,
                        int zoom_in) {
     BeginDrawing();
 
@@ -95,7 +95,7 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
     rlEnableDepthTest();
 
     // Draw human replay trajectories if enabled
-    if (log_trajectories) {
+    if (show_human_logs) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int idx = env->active_agent_indices[i];
             Vector3 prev_point = {0};
@@ -190,7 +190,7 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
 }
 
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
-             int log_trajectories, int frame_skip, const char *view_mode, const char *output_topdown,
+             int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
              const char *output_agent, int num_maps, int zoom_in) {
 
     // Parse configuration from INI file
@@ -354,7 +354,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         printf("Recording topdown view...\n");
         for (int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
-                renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid,
+                renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, show_human_logs, show_grid,
                                   img_width, img_height, zoom_in);
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
@@ -409,9 +409,9 @@ int main(int argc, char *argv[]) {
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
-    int log_trajectories = 1;
+    int show_human_logs = 0;
     int frame_skip = 1;
-    int zoom_in = 1;
+    int zoom_in = 0;
     const char *view_mode = "both";
 
     // File paths and num_maps (not in [env] section)
@@ -430,7 +430,7 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--lasers") == 0) {
             lasers = 1;
         } else if (strcmp(argv[i], "--log-trajectories") == 0) {
-            log_trajectories = 1;
+            show_human_logs = 1;
         } else if (strcmp(argv[i], "--frame-skip") == 0) {
             if (i + 1 < argc) {
                 frame_skip = atoi(argv[i + 1]);
@@ -488,7 +488,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, view_mode,
-             output_topdown, output_agent, num_maps, zoom_in);
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
+             output_agent, num_maps, zoom_in);
     return 0;
 }
