@@ -345,7 +345,7 @@ void add_log(Drive *env) {
         if ((e->goals_reached_this_episode / e->goals_sampled_this_episode) > 0.9 && !e->collided_before_goal) {
             env->log.score += 1.0f;
         }
-        if (!offroad && !collided && !(e->goals_reached_this_episode < 1.0f)) {
+        if (!offroad && !collided && (e->goals_reached_this_episode / e->goals_sampled_this_episode < 1.0)) {
             env->log.dnf_rate += 1.0f;
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
