@@ -33,6 +33,7 @@ void test_drivenet() {
 }
 
 void demo() {
+
     // Read configuration from INI file
     env_init_config conf = {0};
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
@@ -46,20 +47,27 @@ void demo() {
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
+        .goal_speed = conf.goal_speed,
         .dt = conf.dt,
         .map_name = "resources/drive/binaries/map_000.bin",
         .init_steps = conf.init_steps,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
+        .goal_behavior = conf.goal_behavior,
+        .goal_target_distance = conf.goal_target_distance,
+        .action_type = conf.action_type,
+        .episode_length = conf.episode_length,
+        .termination_mode = conf.termination_mode,
+        .control_mode = 0, // Vehicles
+        .init_mode = 0,    // Init all valid
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
     Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
-    // Client* client = make_client(&env);
+
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {
@@ -126,7 +134,6 @@ void performance_test() {
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
         .map_name = "resources/drive/binaries/map_000.bin",

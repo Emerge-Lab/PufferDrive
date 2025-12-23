@@ -21,13 +21,14 @@ class Drive(pufferlib.PufferEnv):
         reward_offroad_collision=-0.1,
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
-        reward_ade=0.0,
         goal_behavior=0,
+        goal_target_distance=10.0,
         goal_radius=2.0,
+        goal_speed=20.0,
         collision_behavior=0,
         offroad_behavior=0,
         dt=0.1,
-        scenario_length=None,
+        episode_length=None,
         termination_mode=None,
         resample_frequency=91,
         num_maps=100,
@@ -53,12 +54,13 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
+        self.goal_speed = goal_speed
         self.goal_behavior = goal_behavior
+        self.goal_target_distance = goal_target_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
-        self.reward_ade = reward_ade
         self.human_agent_idx = human_agent_idx
-        self.scenario_length = scenario_length
+        self.episode_length = episode_length
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
@@ -151,6 +153,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            goal_target_distance=self.goal_target_distance,
             use_all_maps=use_all_maps,
         )
 
@@ -177,13 +180,14 @@ class Drive(pufferlib.PufferEnv):
                 reward_offroad_collision=reward_offroad_collision,
                 reward_goal=reward_goal,
                 reward_goal_post_respawn=reward_goal_post_respawn,
-                reward_ade=reward_ade,
                 goal_radius=goal_radius,
+                goal_speed=goal_speed,
                 goal_behavior=self.goal_behavior,
+                goal_target_distance=self.goal_target_distance,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
-                scenario_length=(int(scenario_length) if scenario_length is not None else None),
+                episode_length=(int(episode_length) if episode_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
@@ -314,11 +318,11 @@ class Drive(pufferlib.PufferEnv):
         num_agents = self.num_agents
 
         trajectories = {
-            "x": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "y": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "z": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "heading": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "valid": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.int32),
+            "x": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "y": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "z": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "heading": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "valid": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
             "scenario_id": np.zeros(num_agents, dtype=np.int32),
         }
@@ -377,7 +381,13 @@ def calculate_area(p1, p2, p3):
     return 0.5 * abs((p1["x"] - p3["x"]) * (p2["y"] - p1["y"]) - (p1["x"] - p2["x"]) * (p3["y"] - p1["y"]))
 
 
-def simplify_polyline(geometry, polyline_reduction_threshold):
+def dist(a, b):
+    dx = a["x"] - b["x"]
+    dy = a["y"] - b["y"]
+    return dx * dx + dy * dy
+
+
+def simplify_polyline(geometry, polyline_reduction_threshold, max_segment_length):
     """Simplify the given polyline using a method inspired by Visvalingham-Whyatt, optimized for Python."""
     num_points = len(geometry)
     if num_points < 3:
@@ -406,8 +416,7 @@ def simplify_polyline(geometry, polyline_reduction_threshold):
             point2 = geometry[k_1]
             point3 = geometry[k_2]
             area = calculate_area(point1, point2, point3)
-
-            if area < polyline_reduction_threshold:
+            if area < polyline_reduction_threshold and dist(point1, point3) <= max_segment_length:
                 skip[k_1] = True
                 skip_changed = True
                 k = k_2
@@ -517,7 +526,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
                 road_type = 15
             # breakpoint()
             if len(geometry) > 10 and road_type <= 16:
-                geometry = simplify_polyline(geometry, 0.1)
+                geometry = simplify_polyline(geometry, 0.1, 250)
             size = len(geometry)
             # breakpoint()
             if road_type >= 0 and road_type <= 3:
@@ -635,7 +644,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         control_mode="control_vehicles",
         init_mode="create_all_valid",
         init_steps=0,
-        scenario_length=91,
+        episode_length=91,
     )
 
     env.reset()
