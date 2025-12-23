@@ -11,7 +11,7 @@
       
       
       
-        <link rel="prev" href="../getting-started/">
+        <link rel="prev" href="../train/">
       
       
         <link rel="next" href="../scene-editor/">
@@ -445,6 +445,34 @@
     
   
     Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../train/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training agents
   
 
     
@@ -1033,7 +1061,7 @@
 <h2 id="runtime-inputs-and-lifecycle">Runtime inputs and lifecycle<a class="headerlink" href="#runtime-inputs-and-lifecycle" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Map binaries</strong>: The environment scans <code>resources/drive/binaries</code> for <code>map_*.bin</code> files and requires at least one to load. Keep <code>num_maps</code> no larger than what is present on disk. During vectorized setup, <code>binding.shared</code> samples maps until it accumulates at least <code>num_agents</code> controllable entities, skipping maps with no valid agents (<code>set_active_agents</code> in <code>drive.h</code>).</li>
-<li><strong>Episode length</strong>: Default <code>scenario_length = 91</code> to match the Waymo logs (trajectory data is 91 steps), but you can set <code>env.scenario_length</code> (CLI or <code>.ini</code>) to any positive value. Metrics are logged and <code>c_reset</code> is called when <code>timestep == scenario_length</code>.</li>
+<li><strong>Episode length</strong>: Default <code>episode_length = 91</code> to match the Waymo logs (trajectory data is 91 steps), but you can set <code>env.episode_length</code> (CLI or <code>.ini</code>) to any positive value. Metrics are logged and <code>c_reset</code> is called when <code>timestep = episode_length</code>.</li>
 <li><strong>Resampling maps</strong>: Python-side <code>Drive.step</code> reinitializes the vectorized environments every <code>resample_frequency</code> steps (default <code>910</code>, ~10 episodes) with fresh map IDs and seeds.</li>
 <li><strong>Initialization controls</strong>:</li>
 <li><code>init_steps</code> starts agents from a later timestep in the logged trajectory.</li>
@@ -1066,7 +1094,7 @@
 <li>Longitudinal acceleration normalized to <code>[-15, 4]</code></li>
 <li>Lateral acceleration normalized to <code>[-4, 4]</code></li>
 <li>Respawn flag (index 9)</li>
-<li><strong>Partner blocks</strong>: Up to 63 other agents (active first, then static experts) within 50 m. Each uses 7 values: relative (x, y) in ego frame scaled by <code>0.02</code>, width/length normalized as above, relative heading encoded as <code>(cos Δθ, sin Δθ)</code>, and speed / <code>MAX_SPEED</code>. Zero-padded when fewer neighbors are present or when agents are in respawn.</li>
+<li><strong>Partner blocks</strong>: Up to <code>MAX_AGENTS-1</code> other agents (active first, then static experts) within 50 m. Each uses 7 values: relative (x, y) in ego frame scaled by  <code>0.02</code>, width/length normalized as above, relative heading encoded as <code>(cos Δθ, sin Δθ)</code>, and speed / <code>MAX_SPEED</code>. Zero-padded when fewer neighbors are present or when agents are in respawn.</li>
 <li><strong>Road blocks</strong>: Up to 200 nearby road segments pulled from a precomputed grid (<code>vision_range = 21</code>). Each entry stores relative midpoint (x, y) scaled by <code>0.02</code>, segment length / <code>MAX_ROAD_SEGMENT_LENGTH</code> (100 m), width / <code>MAX_ROAD_SCALE</code> (100), <code>(cos, sin)</code> of the segment direction in ego frame, and a type ID (<code>ROAD_LANE</code>..<code>DRIVEWAY</code> stored as <code>0..6</code>). Remaining slots are zero-padded.</li>
 </ul>
 <h2 id="rewards-termination-and-metrics">Rewards, termination, and metrics<a class="headerlink" href="#rewards-termination-and-metrics" title="Permanent link">&para;</a></h2>
@@ -1074,9 +1102,12 @@
 <li><strong>Per-step rewards</strong> (<code>c_step</code>):</li>
 <li>Collision with another actor: <code>reward_vehicle_collision</code> (default <code>-0.5</code>)</li>
 <li>Off-road (road-edge intersection): <code>reward_offroad_collision</code> (default <code>-0.2</code>)</li>
-<li>Goal reached: <code>reward_goal</code> (default <code>1.0</code>) or <code>reward_goal_post_respawn</code> after a respawn</li>
-<li>Optional ADE shaping: <code>reward_ade * avg_displacement_error</code>, where ADE is accumulated in <code>compute_agent_metrics</code></li>
-<li><strong>Termination</strong>: No early truncation; episodes roll to <code>scenario_length</code> steps. If <code>goal_behavior</code> is respawn, <code>respawn_agent</code> resets the pose and marks <code>respawn_timestep</code> so the respawn flag shows up in observations.</li>
+<li>
+<p>Goal reached: <code>reward_goal</code> (default <code>1.0</code>) or <code>reward_goal_post_respawn</code> after a respawn</p>
+</li>
+<li>
+<p><strong>Termination</strong>: No early truncation; episodes roll to episode_length steps. If <code>goal_behavior</code> is respawn, <code>respawn_agent</code> resets the pose and marks <code>respawn_timestep</code> so the respawn flag shows up in observations.</p>
+</li>
 <li><strong>Logged metrics</strong> (<code>add_log</code> aggregates over all active agents across envs):</li>
 <li><code>score</code>: reached goal without collision/off-road</li>
 <li><code>collision_rate</code> / <code>offroad_rate</code>: fraction of agents with ≥1 event in the episode</li>
@@ -1087,18 +1118,22 @@
 <p><code>collision_behavior</code>, <code>offroad_behavior</code>, <code>reward_vehicle_collision_post_respawn</code>, and <code>spawn_immunity_timer</code> are parsed from the INI but currently unused in the stepping logic.</p>
 <h2 id="configuration-files-ini">Configuration files (<code>.ini</code>)<a class="headerlink" href="#configuration-files-ini" title="Permanent link">&para;</a></h2>
 <p><code>pufferlib/config/default.ini</code> supplies global defaults. Environment-specific overrides live in <code>pufferlib/config/ocean/drive.ini</code> and are loaded first when you run <code>puffer train puffer_drive</code>; CLI flags (e.g., <code>--env.num-maps 128</code>) override both.</p>
-<p>Key sections in <code>pufferlib/config/ocean/drive.ini</code>:
-- <strong>[env]</strong>: Simulator knobs: <code>num_agents</code> (policy slots, C core cap 64), <code>num_maps</code>, <code>scenario_length</code>, <code>resample_frequency</code>, <code>action_type</code>, <code>dynamics_model</code>, rewards, <code>goal_radius</code>, <code>goal_behavior</code>, <code>init_steps</code>, <code>init_mode</code>, <code>control_mode</code>; rendering toggles <code>render</code>, <code>render_interval</code>, <code>obs_only</code>, <code>show_grid</code>, <code>show_lasers</code>, <code>show_human_logs</code>, <code>render_map</code>.
-- <strong>[vec]</strong>: Vectorization sizing (<code>num_envs</code>, <code>num_workers</code>, <code>batch_size</code>; backend defaults to multiprocessing).
-- <strong>[policy]/[rnn]</strong>: Model widths for the Torch policy (<code>input_size</code>, <code>hidden_size</code>) and optional LSTM wrapper.
-- <strong>[train]</strong>: PPO-style hyperparameters (timesteps, learning rate, clipping, batch/minibatch, BPTT horizon, optimizer choice) merged with any unspecified defaults from <code>pufferlib/config/default.ini</code>.
-- <strong>[eval]</strong>: WOSAC/human-replay switches and sizing (<code>eval.wosac_*</code>, <code>eval.human_replay_*</code>) mapped directly to the <code>Drive</code> kwargs in evaluation subprocesses.</p>
+<p>Key sections in <code>pufferlib/config/ocean/drive.ini</code>:</p>
+<ul>
+<li><strong>[env]</strong>: Simulator knobs: <code>num_agents</code> (policy slots, C core cap 64), <code>num_maps</code>, episode_length, <code>resample_frequency</code>, <code>action_type</code>, <code>dynamics_model</code>, rewards, <code>goal_radius</code>, <code>goal_behavior</code>, <code>init_steps</code>, <code>init_mode</code>, <code>control_mode</code>; rendering toggles <code>render</code>, <code>render_interval</code>, <code>obs_only</code>, <code>show_grid</code>, <code>show_lasers</code>, <code>show_human_logs</code>, <code>render_map</code>.</li>
+<li><strong>[vec]</strong>: Vectorization sizing (<code>num_envs</code>, <code>num_workers</code>, <code>batch_size</code>; backend defaults to multiprocessing).</li>
+<li><strong>[policy]/[rnn]</strong>: Model widths for the Torch policy (<code>input_size</code>, <code>hidden_size</code>) and optional LSTM wrapper.</li>
+<li><strong>[train]</strong>: PPO-style hyperparameters (timesteps, learning rate, clipping, batch/minibatch, BPTT horizon, optimizer choice) merged with any unspecified defaults from <code>pufferlib/config/default.ini</code>.</li>
+<li><strong>[eval]</strong>: WOSAC/human-replay switches and sizing (<code>eval.wosac_*</code>, <code>eval.human_replay_*</code>) mapped directly to the <code>Drive</code> kwargs in evaluation subprocesses.</li>
+</ul>
 <h2 id="model-overview">Model overview<a class="headerlink" href="#model-overview" title="Permanent link">&para;</a></h2>
-<p>Defined in <code>pufferlib/ocean/torch.py:Drive</code>:
-- Three MLP encoders (ego, partners, roads) with LayerNorm. Partner and road encodings are max-pooled across instances.
-- Concatenated embedding → GELU → linear to <code>hidden_size</code>, then split into actor/value heads.
-- Discrete actions are emitted as logits per dimension (<code>MultiDiscrete</code>), continuous actions as Gaussian parameters (<code>softplus</code> std). Value head is a single linear output.
-- <code>Recurrent = pufferlib.models.LSTMWrapper</code> can wrap the policy using the <code>rnn</code> config entries; otherwise the policy is feed-forward.</p>
+<p>Defined in <code>pufferlib/ocean/torch.py:Drive</code>:</p>
+<ul>
+<li>Three MLP encoders (ego, partners, roads) with LayerNorm. Partner and road encodings are max-pooled across instances.</li>
+<li>Concatenated embedding → GELU → linear to <code>hidden_size</code>, then split into actor/value heads.</li>
+<li>Discrete actions are emitted as logits per dimension (<code>MultiDiscrete</code>), continuous actions as Gaussian parameters (<code>softplus</code> std). Value head is a single linear output.</li>
+<li><code>Recurrent = pufferlib.models.LSTMWrapper</code> can wrap the policy using the <code>rnn</code> config entries; otherwise the policy is feed-forward.</li>
+</ul>
 <h2 id="drive-source-files-what-lives-where">Drive source files (what lives where)<a class="headerlink" href="#drive-source-files-what-lives-where" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>pufferlib/ocean/drive/drive.py</code>: Python Gymnasium-style wrapper that sets up buffers, validates map availability, seeds the C core via <code>binding.env_init</code>, and handles map resampling.</li>
@@ -1142,20 +1177,24 @@
 <tbody>
 <tr>
 <td><code>control_vehicles</code> (default)</td>
-<td>Control only valid <strong>vehicles</strong> (not experts, beyond <code>MIN_DISTANCE_TO_GOAL</code>, under <code>MAX_AGENTS</code>).</td>
+<td>Control only valid<strong>vehicles</strong> (not experts, beyond <code>MIN_DISTANCE_TO_GOAL</code>, under <code>MAX_AGENTS</code>).</td>
 </tr>
 <tr>
 <td><code>control_agents</code></td>
-<td>Control all valid <strong>agent types</strong> (vehicles, cyclists, pedestrians).</td>
+<td>Control all valid<strong>agent types</strong> (vehicles, cyclists, pedestrians).</td>
 </tr>
 <tr>
 <td><code>control_tracks_to_predict</code> <em>(WOMD only)</em></td>
 <td>Control agents listed in the <code>tracks_to_predict</code> metadata.</td>
 </tr>
+<tr>
+<td><code>control_sdc_only</code> <em>(WOMD only)</em></td>
+<td>Control just the self-driving car (SDC).</td>
+</tr>
 </tbody>
 </table>
 <h3 id="termination-conditions-done">Termination conditions (<code>done</code>)<a class="headerlink" href="#termination-conditions-done" title="Permanent link">&para;</a></h3>
-<p>Episodes are never truncated before reaching <code>episode_len</code>. The <code>goal_behavior</code> argument controls agent behavior after reaching a goal early:</p>
+<p>The <code>goal_behavior</code> argument controls agent behavior after reaching a goal early:</p>
 <ul>
 <li><strong><code>goal_behavior=0</code> (default):</strong> Agents respawn at their initial position after reaching their goal (last valid log position).</li>
 <li><strong><code>goal_behavior=1</code>:</strong> Agents receive new goals indefinitely after reaching each goal.</li>
