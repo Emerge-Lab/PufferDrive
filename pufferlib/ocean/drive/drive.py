@@ -220,7 +220,6 @@ class Drive(pufferlib.PufferEnv):
                 # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
-
             binding.vec_close(self.c_envs)
             agent_offsets, map_ids, num_envs = binding.shared(
                 num_agents=self.num_agents,
@@ -260,7 +259,7 @@ class Drive(pufferlib.PufferEnv):
                     collision_behavior=self.collision_behavior,
                     offroad_behavior=self.offroad_behavior,
                     dt=self.dt,
-                    scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
+                    episode_length=(int(self.episode_length) if self.episode_length is not None else None),
                     max_controlled_agents=self.max_controlled_agents,
                     map_id=map_ids[i],
                     max_agents=nxt - cur,
