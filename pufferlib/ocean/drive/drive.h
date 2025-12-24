@@ -2849,6 +2849,7 @@ void c_render(Drive *env) {
     BeginMode3D(client->camera);
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
+    
     // Draw debug info
     DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,
                         client->camera.position.z),
@@ -2857,23 +2858,47 @@ void c_render(Drive *env) {
                         client->camera.target.z),
              10, 30, 20, PUFF_WHITE);
     DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
-    // acceleration & steering
+    
     int human_idx = env->active_agent_indices[env->human_agent_idx];
     DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
     DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
-    // Controls help
-    DrawText("Controls: W/S - Accelerate/Brake, A/D - Steer, 1-4 - Switch Agent", 10, client->height - 30, 20,
-             PUFF_WHITE);
-    // acceleration & steering
-    if (env->action_type == 1) { // continuous (float)
+    
+    // Display current action values - yellow when controlling, white otherwise
+    Color action_color = IsKeyDown(KEY_LEFT_SHIFT) ? YELLOW : PUFF_WHITE;
+    
+    if (env->action_type == 0) { // discrete
+        int *action_array = (int *)env->actions;
+        int action_val = action_array[env->human_agent_idx];
+        
+        if (env->dynamics_model == CLASSIC) {
+            int num_steer = 13;
+            int accel_idx = action_val / num_steer;
+            int steer_idx = action_val % num_steer;
+            float accel_value = ACCELERATION_VALUES[accel_idx];
+            float steer_value = STEERING_VALUES[steer_idx];
+            
+            DrawText(TextFormat("Acceleration: %.2f m/s^2", accel_value), 10, 110, 20, action_color);
+            DrawText(TextFormat("Steering: %.3f", steer_value), 10, 130, 20, action_color);
+        } else if (env->dynamics_model == JERK) {
+            int num_lat = 3;
+            int jerk_long_idx = action_val / num_lat;
+            int jerk_lat_idx = action_val % num_lat;
+            float jerk_long_value = JERK_LONG[jerk_long_idx];
+            float jerk_lat_value = JERK_LAT[jerk_lat_idx];
+            
+            DrawText(TextFormat("Longitudinal Jerk: %.2f m/s^3", jerk_long_value), 10, 110, 20, action_color);
+            DrawText(TextFormat("Lateral Jerk: %.2f m/s^3", jerk_lat_value), 10, 130, 20, action_color);
+        }
+    } else { // continuous
         float (*action_array_f)[2] = (float (*)[2])env->actions;
-        DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20, PUFF_WHITE);
-        DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
-    } else { // discrete (int)
-        int (*action_array)[2] = (int (*)[2])env->actions;
-        DrawText(TextFormat("Acceleration: %d", action_array[env->human_agent_idx][0]), 10, 110, 20, PUFF_WHITE);
-        DrawText(TextFormat("Steering: %d", action_array[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
+        DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20, action_color);
+        DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, action_color);
     }
+    
+    // Controls help
+    DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10, client->height - 30, 20,
+             PUFF_WHITE);
+    
     DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, 150, 20, PUFF_WHITE);
     DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, 170, 20, PUFF_WHITE);
     EndDrawing();
