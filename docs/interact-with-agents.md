@@ -16,7 +16,7 @@ then launch:
 
 This will run `demo()` with an existing model checkpoint.
 
-### Controls 
+### Controls
 
 **General:**
 - **LEFT SHIFT + Arrow Keys/WASD** - Take manual control
