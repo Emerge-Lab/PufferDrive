@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../evaluation/">
+        <link rel="prev" href="../train/">
       
       
-        <link rel="next" href="../pufferdrive-2.0/">
+        <link rel="next" href="../simulator/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>WOSAC - PufferDrive</title>
+        <title>Interact with agents - PufferDrive</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#waymo-open-sim-agent-challenge-wosac-benchmark" class="md-skip">
+        <a href="#drive-with-trained-agents" class="md-skip">
           Skip to content
         </a>
       
@@ -111,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              WOSAC
+              Interact with agents
             
           </span>
         </div>
@@ -225,10 +225,12 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
+      <li class="md-tabs__item md-tabs__item--active">
         <a href="../getting-started/" class="md-tabs__link">
           
   
@@ -264,12 +266,10 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../evaluation/" class="md-tabs__link">
           
   
@@ -379,26 +379,29 @@
       
   
   
+    
   
   
+  
     
     
     
     
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
       
         
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
-        
-          
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   
@@ -416,7 +419,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -487,10 +490,35 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../interact-with-agents/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interact with agents
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -506,6 +534,63 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#drive-with-trained-agents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Drive with trained agents
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Drive with trained agents">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-rendering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Local rendering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -633,29 +718,26 @@
       
   
   
-    
   
   
-  
     
     
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -673,7 +755,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -716,37 +798,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    WOSAC
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../wosac/" class="md-nav__link">
         
   
   
@@ -762,87 +817,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#running-a-single-evaluation-from-a-checkpoint" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Running a single evaluation from a checkpoint
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#log-evals-to-wb-during-training" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Log evals to W&amp;B during training
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#baselines" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Baselines
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#useful-links" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Useful links
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -962,105 +936,42 @@
   
 
 
-<h1 id="waymo-open-sim-agent-challenge-wosac-benchmark">Waymo Open Sim Agent Challenge (WOSAC) Benchmark<a class="headerlink" href="#waymo-open-sim-agent-challenge-wosac-benchmark" title="Permanent link">&para;</a></h1>
-<p>We provide a re-implementation of the <a href="https://waymo.com/research/the-waymo-open-sim-agents-challenge/">Waymo Open Sim Agent Challenge (WOSAC)</a>, which measures <em>distributional realism</em> of simulated trajectories compared to logged human trajectories. Our version preserves the original logic and metric weighting but uses PyTorch on GPU for the metrics computation, unlike the original TensorFlow CPU implementation. The code is also simplified for clarity, making it easier to understand, adapt, and extend.</p>
-<p><strong>Note:</strong> In PufferDrive, agents are conditioned on a "goal" represented as a single (x, y) position, reflecting that drivers typically have a high-level destination in mind. Evaluating whether an agent matches human distributional properties can be decomposed into: (1) inferring a person's intended direction from context (1 second in WOSAC) and (2) navigating toward that goal in a human-like manner. We focus on the second component, though the evaluation could be adapted to include behavior prediction as in the original WOSAC.</p>
-<p>[TODO: ADD bar graphs]</p>
-<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
-<h3 id="running-a-single-evaluation-from-a-checkpoint">Running a single evaluation from a checkpoint<a class="headerlink" href="#running-a-single-evaluation-from-a-checkpoint" title="Permanent link">&para;</a></h3>
-<p>The <code>[eval]</code> section in <code>drive.ini</code> contains all relevant configurations. To run the WOSAC eval once:</p>
-<div class="highlight"><pre><span></span><code>puffer<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>puffer_drive<span class="w"> </span>--eval.wosac-realism-eval<span class="w"> </span>True<span class="w"> </span>--load-model-path<span class="w"> </span>&lt;your-trained-policy&gt;.pt
-</code></pre></div>
-<p>The default configs aim to emulate the WOSAC settings as closely as possible, but you can adjust them:</p>
-<div class="highlight"><pre><span></span><code><span class="k">[eval]</span>
-<span class="na">map_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;resources/drive/binaries/validation&quot;</span><span class="w"> </span><span class="c1"># Dataset to use</span>
-<span class="na">num_maps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">100</span><span class="w">  </span><span class="c1"># Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)</span>
-<span class="na">wosac_num_rollouts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">32</span><span class="w">      </span><span class="c1"># Number of policy rollouts per scene</span>
-<span class="na">wosac_init_steps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">10</span><span class="w">        </span><span class="c1"># When to start the simulation</span>
-<span class="na">wosac_control_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;control_wosac&quot;</span><span class="w">  </span><span class="c1"># Control the tracks to predict</span>
-<span class="na">wosac_init_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;create_all_valid&quot;</span><span class="w">  </span><span class="c1"># Initialize from the tracks to predict</span>
-<span class="na">wosac_goal_behavior</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">2</span><span class="w">      </span><span class="c1"># Stop when reaching the goal</span>
-<span class="na">wosac_goal_radius</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">2.0</span><span class="w">      </span><span class="c1"># Can shrink goal radius for WOSAC evaluation</span>
-</code></pre></div>
-<h3 id="log-evals-to-wb-during-training">Log evals to W&amp;B during training<a class="headerlink" href="#log-evals-to-wb-during-training" title="Permanent link">&para;</a></h3>
-<p>During experimentation, logging key metrics directly to W&amp;B avoids a post-training step. Evaluations can be enabled during training, with results logged under a separate <code>eval/</code> section. The main configuration options:</p>
-<div class="highlight"><pre><span></span><code><span class="k">[train]</span>
-<span class="na">checkpoint_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">500</span><span class="w">    </span><span class="c1"># Set equal to eval_interval to use the latest checkpoint</span>
+  <h1>Interact with agents</h1>
 
-<span class="k">[eval]</span>
-<span class="na">eval_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">500</span><span class="w">          </span><span class="c1"># Run eval every N epochs</span>
-<span class="na">map_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;resources/drive/binaries/training&quot;</span><span class="w">  </span><span class="c1"># Dataset to use</span>
-<span class="na">num_maps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">20</span><span class="w"> </span><span class="c1"># Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)</span>
-</code></pre></div>
-<h2 id="baselines">Baselines<a class="headerlink" href="#baselines" title="Permanent link">&para;</a></h2>
-<p>We provide baselines on a small curated dataset from the WOMD validation set with perfect ground-truth (no collisions or off-road events from labeling mistakes).</p>
-<table>
-<thead>
-<tr>
-<th>Method</th>
-<th>Realism meta-score</th>
-<th>Kinematic metrics</th>
-<th>Interactive metrics</th>
-<th>Map-based metrics</th>
-<th>minADE</th>
-<th>ADE</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Ground-truth (UB)</td>
-<td>0.832</td>
-<td>0.606</td>
-<td>0.846</td>
-<td>0.961</td>
-<td>0</td>
-<td>0</td>
-</tr>
-<tr>
-<td>π_Base self-play RL</td>
-<td>0.737</td>
-<td>0.319</td>
-<td>0.789</td>
-<td>0.938</td>
-<td>10.834</td>
-<td>11.317</td>
-</tr>
-<tr>
-<td><a href="https://arxiv.org/abs/2412.05334">SMART-tiny-CLSFT</a></td>
-<td>0.805</td>
-<td>0.534</td>
-<td>0.830</td>
-<td>0.949</td>
-<td>1.124</td>
-<td>3.123</td>
-</tr>
-<tr>
-<td>π_Random</td>
-<td>0.485</td>
-<td>0.214</td>
-<td>0.657</td>
-<td>0.408</td>
-<td>6.477</td>
-<td>18.286</td>
-</tr>
-</tbody>
-</table>
-<p><em>Table: WOSAC baselines in PufferDrive on 229 selected clean held-out validation scenarios.</em></p>
-<hr />
-<blockquote>
-<p>✏️ Download the dataset from <a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean">Hugging Face</a> to reproduce these results or benchmark your policy.</p>
-</blockquote>
-<hr />
-<h2 id="useful-links">Useful links<a class="headerlink" href="#useful-links" title="Permanent link">&para;</a></h2>
+<h2 id="drive-with-trained-agents">Drive with trained agents<a class="headerlink" href="#drive-with-trained-agents" title="Permanent link">&para;</a></h2>
+<p>You can take manual control of an agent in the simulator by holding <strong>LEFT SHIFT</strong> and using the keyboard controls. When you're in control, the action values displayed on screen will turn <strong>yellow</strong>.</p>
+<h3 id="local-rendering">Local rendering<a class="headerlink" href="#local-rendering" title="Permanent link">&para;</a></h3>
+<p>To launch an interactive renderer, first build:
+<div class="highlight"><pre><span></span><code>bash<span class="w"> </span>scripts/build_ocean.sh<span class="w"> </span>drive<span class="w"> </span><span class="nb">local</span>
+</code></pre></div></p>
+<p>then launch:
+<div class="highlight"><pre><span></span><code>./drive
+</code></pre></div></p>
+<p>This will run <code>demo()</code> with an existing model checkpoint.</p>
+<p>[TODO: Add demo video/gif here]</p>
+<h3 id="controls">Controls<a class="headerlink" href="#controls" title="Permanent link">&para;</a></h3>
+<p><strong>General:</strong>
+- <strong>LEFT SHIFT + Arrow Keys/WASD</strong> - Take manual control
+- <strong>TAB</strong> - Switch between agents
+- <strong>SPACE</strong> - First-person camera view
+- <strong>Mouse Drag</strong> - Pan camera
+- <strong>Mouse Wheel</strong> - Zoom</p>
+<p><strong>Classic dynamics model</strong></p>
 <ul>
-<li><a href="https://waymo.com/open/challenges/2025/sim-agents/">WOSAC challenge and leaderboard</a></li>
-<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/tutorial/tutorial_sim_agents.ipynb">Sim agent challenge tutorial</a></li>
-<li><a href="https://arxiv.org/pdf/2305.12032">Reference paper introducing WOSAC</a></li>
-<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/metrics.py">Metrics entry point</a></li>
-<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/estimators.py">Log-likelihood estimators</a></li>
-<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/99a4cb3ff07e2fe06c2ce73da001f850f628e45a/src/waymo_open_dataset/protos/sim_agents_metrics.proto#L51">Configurations proto file</a></li>
-<li><a href="https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/wdl_limited/sim_agents_metrics/challenge_2025_sim_agents_config.textproto">Default sim agent challenge configs</a></li>
+<li><strong>SHIFT + UP/W</strong> - Increase acceleration</li>
+<li><strong>SHIFT + DOWN/S</strong> - Decrease acceleration (brake)</li>
+<li><strong>SHIFT + LEFT/A</strong> - Steer left</li>
+<li><strong>SHIFT + RIGHT/D</strong> - Steer right</li>
 </ul>
+<p>Each key press increments or decrements the action level. For example, tapping W multiple times increases acceleration from neutral (index 3) → 5 → 6 (maximum acceleration). We assume <strong>no friction</strong>, so releasing all keys maintains constant speed and heading.</p>
+<p><strong>Jerk dynamics model</strong></p>
+<ul>
+<li><strong>SHIFT + UP/W</strong> - Accelerate (+4.0 m/s³ jerk)</li>
+<li><strong>SHIFT + DOWN/S</strong> - Brake (-15.0 m/s³ jerk)</li>
+<li><strong>SHIFT + LEFT/A</strong> - Turn left (+4.0 m/s³ lateral jerk)</li>
+<li><strong>SHIFT + RIGHT/D</strong> - Turn right (-4.0 m/s³ lateral jerk)</li>
+</ul>
+<p>Actions are applied directly when keys are pressed. Pressing W always applies +4.0 m/s³ longitudinal jerk, regardless of how long the key is held.</p>
 
 
 
