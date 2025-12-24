@@ -102,8 +102,8 @@
 #define GOAL_STOP 2
 
 // Jerk action space (for JERK dynamics model)
-static const float JERK_LONG[5] = {-15.0f, -4.0f, 0.0f, 2.0f, 4.0f};  
-static const float JERK_LAT[5] = {-4.0f, -1.0f, 0.0f, 1.0f, 4.0f};
+static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
+static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 
 // Classic action space (for CLASSIC dynamics model)
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
@@ -1573,10 +1573,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             a_long_new = clip(a_long_new, -5.0f, 2.5f);
         }
 
-        // Add damping for lateral acceleration to reduce momentum
-        float damping_factor = 0.85f;  // Decay lateral accel by 15% per timestep
-        a_lat_new *= damping_factor;
-
         if (agent->a_lat * a_lat_new < 0) {
             a_lat_new = 0.0f;
         } else {
@@ -2024,8 +2020,22 @@ void c_step(Drive *env) {
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
+        float prev_vx = env->entities[agent_idx].vx;
+        float prev_vy = env->entities[agent_idx].vy;
+
         move_dynamics(env, i, agent_idx);
+
+        // Tiny jerk penalty for smoothness
+        if (env->dynamics_model == CLASSIC) {
+            float delta_vx = env->entities[agent_idx].vx - prev_vx;
+            float delta_vy = env->entities[agent_idx].vy - prev_vy;
+            float jerk_penalty = -0.0001f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
+            env->rewards[i] += jerk_penalty;
+            env->logs[i].episode_return += jerk_penalty;
+        }
     }
+
+    // Compute rewards
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
@@ -2853,7 +2863,7 @@ void c_render(Drive *env) {
     BeginMode3D(client->camera);
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
-    
+
     // Draw debug info
     DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,
                         client->camera.position.z),
@@ -2862,34 +2872,34 @@ void c_render(Drive *env) {
                         client->camera.target.z),
              10, 30, 20, PUFF_WHITE);
     DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
-    
+
     int human_idx = env->active_agent_indices[env->human_agent_idx];
     DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
     DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
-    
+
     // Display current action values - yellow when controlling, white otherwise
     Color action_color = IsKeyDown(KEY_LEFT_SHIFT) ? YELLOW : PUFF_WHITE;
-    
+
     if (env->action_type == 0) { // discrete
         int *action_array = (int *)env->actions;
         int action_val = action_array[env->human_agent_idx];
-        
+
         if (env->dynamics_model == CLASSIC) {
             int num_steer = 13;
             int accel_idx = action_val / num_steer;
             int steer_idx = action_val % num_steer;
             float accel_value = ACCELERATION_VALUES[accel_idx];
             float steer_value = STEERING_VALUES[steer_idx];
-            
+
             DrawText(TextFormat("Acceleration: %.2f m/s^2", accel_value), 10, 110, 20, action_color);
             DrawText(TextFormat("Steering: %.3f", steer_value), 10, 130, 20, action_color);
         } else if (env->dynamics_model == JERK) {
-            int num_lat = 5;
+            int num_lat = 3;
             int jerk_long_idx = action_val / num_lat;
             int jerk_lat_idx = action_val % num_lat;
             float jerk_long_value = JERK_LONG[jerk_long_idx];
             float jerk_lat_value = JERK_LAT[jerk_lat_idx];
-            
+
             DrawText(TextFormat("Longitudinal Jerk: %.2f m/s^3", jerk_long_value), 10, 110, 20, action_color);
             DrawText(TextFormat("Lateral Jerk: %.2f m/s^3", jerk_lat_value), 10, 130, 20, action_color);
         }
@@ -2898,7 +2908,7 @@ void c_render(Drive *env) {
         DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20, action_color);
         DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, action_color);
     }
-    
+
     // Show key press status
     int status_y = 150;
     if (IsKeyDown(KEY_LEFT_SHIFT)) {
@@ -2913,11 +2923,11 @@ void c_render(Drive *env) {
         DrawText("[ctrl pressed]", 10, status_y, 20, YELLOW);
         status_y += 20;
     }
-    
+
     // Controls help
-    DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10, client->height - 30, 20,
-             PUFF_WHITE);
-    
+    DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10,
+             client->height - 30, 20, PUFF_WHITE);
+
     DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, status_y, 20, PUFF_WHITE);
     DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, status_y + 20, 20, PUFF_WHITE);
     EndDrawing();
