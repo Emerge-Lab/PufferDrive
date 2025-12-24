@@ -103,26 +103,26 @@ void demo() {
                 
             } else if (env.dynamics_model == JERK) {
                 // Jerk dynamics: longitudinal and lateral jerk
-                // JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f}
-                // JERK_LAT[3] = {-4.0f, 0.0f, 4.0f}
+                // JERK_LONG[5] = {-15.0f, -4.0f, 0.0f, 2.0f, 4.0f}
+                // JERK_LAT[5] = {-4.0f, -1.5f, 0.0f, 1.5f, 4.0f}
                 int jerk_long_idx = 2;  // neutral (0.0)
-                int jerk_lat_idx = 1;   // neutral (0.0)
+                int jerk_lat_idx = 2;   // neutral (0.0)
                 
                 if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
-                    jerk_long_idx = 3;  // positive acceleration (4.0)
+                    jerk_long_idx = 4;  // strong acceleration (4.0)
                 }
                 if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
-                    jerk_long_idx = 0;  // negative acceleration/braking (-15.0)
+                    jerk_long_idx = 0;  // hard braking (-15.0)
                 }
                 if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
-                    jerk_lat_idx = 2;  // positive lateral jerk (4.0) - left turn
+                    jerk_lat_idx = -1;  // hard left turn (1.5)
                 }
                 if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
-                    jerk_lat_idx = 0;  // negative lateral jerk (-4.0) - right turn
+                    jerk_lat_idx = 0;  // hard right turn (-1.5)
                 }
                 
-                // Encode into single integer: action = jerk_long_idx * 3 + jerk_lat_idx
-                actions[env.human_agent_idx] = jerk_long_idx * 3 + jerk_lat_idx;
+                // Encode into single integer: action = jerk_long_idx * 5 + jerk_lat_idx
+                actions[env.human_agent_idx] = jerk_long_idx * 5 + jerk_lat_idx;
             }
             
             if (IsKeyPressed(KEY_TAB)) {

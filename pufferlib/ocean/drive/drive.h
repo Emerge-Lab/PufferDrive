@@ -102,8 +102,8 @@
 #define GOAL_STOP 2
 
 // Jerk action space (for JERK dynamics model)
-static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
-static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
+static const float JERK_LONG[5] = {-15.0f, -4.0f, 0.0f, 2.0f, 4.0f};  
+static const float JERK_LAT[5] = {-4.0f, -1.0f, 0.0f, 1.0f, 4.0f};
 
 // Classic action space (for CLASSIC dynamics model)
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
@@ -1573,6 +1573,10 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             a_long_new = clip(a_long_new, -5.0f, 2.5f);
         }
 
+        // Add damping for lateral acceleration to reduce momentum
+        float damping_factor = 0.85f;  // Decay lateral accel by 15% per timestep
+        a_lat_new *= damping_factor;
+
         if (agent->a_lat * a_lat_new < 0) {
             a_lat_new = 0.0f;
         } else {
@@ -2880,7 +2884,7 @@ void c_render(Drive *env) {
             DrawText(TextFormat("Acceleration: %.2f m/s^2", accel_value), 10, 110, 20, action_color);
             DrawText(TextFormat("Steering: %.3f", steer_value), 10, 130, 20, action_color);
         } else if (env->dynamics_model == JERK) {
-            int num_lat = 3;
+            int num_lat = 5;
             int jerk_long_idx = action_val / num_lat;
             int jerk_lat_idx = action_val % num_lat;
             float jerk_long_value = JERK_LONG[jerk_long_idx];
@@ -2895,12 +2899,27 @@ void c_render(Drive *env) {
         DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, action_color);
     }
     
+    // Show key press status
+    int status_y = 150;
+    if (IsKeyDown(KEY_LEFT_SHIFT)) {
+        DrawText("[shift pressed]", 10, status_y, 20, YELLOW);
+        status_y += 20;
+    }
+    if (IsKeyDown(KEY_SPACE)) {
+        DrawText("[space pressed]", 10, status_y, 20, YELLOW);
+        status_y += 20;
+    }
+    if (IsKeyDown(KEY_LEFT_CONTROL)) {
+        DrawText("[ctrl pressed]", 10, status_y, 20, YELLOW);
+        status_y += 20;
+    }
+    
     // Controls help
     DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10, client->height - 30, 20,
              PUFF_WHITE);
     
-    DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, 150, 20, PUFF_WHITE);
-    DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, 170, 20, PUFF_WHITE);
+    DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, status_y, 20, PUFF_WHITE);
+    DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, status_y + 20, 20, PUFF_WHITE);
     EndDrawing();
 }
 
