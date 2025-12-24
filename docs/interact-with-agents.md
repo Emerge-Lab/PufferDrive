@@ -1,6 +1,6 @@
 ## Drive with trained agents
 
-You can take manual control of an agent in the demo by holding **LEFT SHIFT** and using the keyboard controls.
+You can take manual control of an agent in the simulator by holding **LEFT SHIFT** and using the keyboard controls. When you're in control, the action values displayed on screen will turn **yellow**.
 
 ### Local rendering
 
@@ -16,6 +16,8 @@ then launch:
 
 This will run `demo()` with an existing model checkpoint.
 
+[TODO: Add demo video/gif here]
+
 ### Controls
 
 **General:**
@@ -27,18 +29,18 @@ This will run `demo()` with an existing model checkpoint.
 
 ### Classic dynamics model
 
-- **UP/W** - Increase acceleration
-- **DOWN/S** - Decrease acceleration (brake)
-- **LEFT/A** - Steer left
-- **RIGHT/D** - Steer right
+- **SHIFT + UP/W** - Increase acceleration
+- **SHIFT + DOWN/S** - Decrease acceleration (brake)
+- **SHIFT + LEFT/A** - Steer left
+- **SHIFT + RIGHT/D** - Steer right
 
-With the `classic` dynamics model, the controls use accel_delta and steer_delta which increment/decrement the action indices each frame you press the key. So if you tap W multiple times, you go from neutral acceleration (index 3) → 5 → 6 (max acceleration). The action index changes gradually with key presses.
+Each key press increments or decrements the action level. For example, tapping W multiple times increases acceleration from neutral (index 3) → 5 → 6 (maximum acceleration). We assume **no friction**, so releasing all keys maintains constant speed and heading.
 
 ### Jerk dynamics model
 
-- **UP/W** - Accelerate (+4.0 jerk)
-- **DOWN/S** - Brake (-15.0 jerk)
-- **LEFT/A** - Turn left (+4.0 lateral jerk)
-- **RIGHT/D** - Turn right (-4.0 lateral jerk)
+- **SHIFT + UP/W** - Accelerate (+4.0 m/s³ jerk)
+- **SHIFT + DOWN/S** - Brake (-15.0 m/s³ jerk)
+- **SHIFT + LEFT/A** - Turn left (+4.0 m/s³ lateral jerk)
+- **SHIFT + RIGHT/D** - Turn right (-4.0 m/s³ lateral jerk)
 
-With the `jerk` dynamics model, pressing a key directly sets the jerk value; there's no gradual increment. Pressing W always sets jerk to +4.0, regardless of how long you hold it.
+Actions are applied directly when keys are pressed. Pressing W always applies +4.0 m/s³ longitudinal jerk, regardless of how long the key is held.

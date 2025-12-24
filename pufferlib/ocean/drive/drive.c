@@ -112,17 +112,16 @@ void demo() {
                 int jerk_long_idx = 2; // neutral (0.0)
                 int jerk_lat_idx = 1;  // neutral (0.0)
 
-                // Longitudinal control
                 if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
                     jerk_long_idx = 3; // acceleration (4.0)
-                } else if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
+                }
+                if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
                     jerk_long_idx = 0; // hard braking (-15.0)
                 }
-
-                // Lateral control
                 if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
                     jerk_lat_idx = 2; // left turn (4.0)
-                } else if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
+                }
+                if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
                     jerk_lat_idx = 0; // right turn (-4.0)
                 }
 
