@@ -237,7 +237,7 @@ void demo() {
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
-        .map_name = "resources/drive/binaries/map_000.bin",
+        .map_name = "resources/drive/binaries/map_town_01_carla.bin",
         .init_steps = conf.init_steps,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
