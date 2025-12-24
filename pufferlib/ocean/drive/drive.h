@@ -2029,7 +2029,7 @@ void c_step(Drive *env) {
         if (env->dynamics_model == CLASSIC) {
             float delta_vx = env->entities[agent_idx].vx - prev_vx;
             float delta_vy = env->entities[agent_idx].vy - prev_vy;
-            float jerk_penalty = -0.0001f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
+            float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
         }

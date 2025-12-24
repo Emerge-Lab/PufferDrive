@@ -27,7 +27,7 @@ This will run `demo()` with an existing model checkpoint.
 - **Mouse Drag** - Pan camera
 - **Mouse Wheel** - Zoom
 
-### Classic dynamics model
+**Classic dynamics model**
 
 - **SHIFT + UP/W** - Increase acceleration
 - **SHIFT + DOWN/S** - Decrease acceleration (brake)
@@ -36,7 +36,7 @@ This will run `demo()` with an existing model checkpoint.
 
 Each key press increments or decrements the action level. For example, tapping W multiple times increases acceleration from neutral (index 3) → 5 → 6 (maximum acceleration). We assume **no friction**, so releasing all keys maintains constant speed and heading.
 
-### Jerk dynamics model
+**Jerk dynamics model**
 
 - **SHIFT + UP/W** - Accelerate (+4.0 m/s³ jerk)
 - **SHIFT + DOWN/S** - Brake (-15.0 m/s³ jerk)
