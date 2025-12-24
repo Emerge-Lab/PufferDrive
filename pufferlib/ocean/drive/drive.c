@@ -71,43 +71,37 @@ void demo() {
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {
-        // Handle camera controls
-        int (*actions)[2] = (int (*)[2])env.actions;
+        int *actions = (int *)env.actions;  // Joint action space (one integer per agent)
+        
         forward(net, env.observations, env.actions);
+        
+        // Control an agent 
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
-            actions[env.human_agent_idx][0] = 3;
-            actions[env.human_agent_idx][1] = 6;
+            int accel_idx = 3;  // neutral (0 m/s²)
+            int steer_idx = 6;  // neutral (0.0 steering)
+            
             if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
-                actions[env.human_agent_idx][0] += accel_delta;
-                // Cap acceleration to maximum of 6
-                if (actions[env.human_agent_idx][0] > 6) {
-                    actions[env.human_agent_idx][0] = 6;
-                }
+                accel_idx += accel_delta;
+                if (accel_idx > 6) accel_idx = 6;
             }
             if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
-                actions[env.human_agent_idx][0] -= accel_delta;
-                // Cap acceleration to minimum of 0
-                if (actions[env.human_agent_idx][0] < 0) {
-                    actions[env.human_agent_idx][0] = 0;
-                }
+                accel_idx -= accel_delta;
+                if (accel_idx < 0) accel_idx = 0;
             }
             if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
-                actions[env.human_agent_idx][1] += steer_delta;
-                // Cap steering to minimum of 0
-                if (actions[env.human_agent_idx][1] < 0) {
-                    actions[env.human_agent_idx][1] = 0;
-                }
+                steer_idx += steer_delta;
+                if (steer_idx < 0) steer_idx = 0;
             }
             if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
-                actions[env.human_agent_idx][1] -= steer_delta;
-                // Cap steering to maximum of 12
-                if (actions[env.human_agent_idx][1] > 12) {
-                    actions[env.human_agent_idx][1] = 12;
-                }
+                steer_idx -= steer_delta;
+                if (steer_idx > 12) steer_idx = 12;
             }
             if (IsKeyPressed(KEY_TAB)) {
                 env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
             }
+            
+            // Encode into single integer: action = accel_idx * 13 + steer_idx
+            actions[env.human_agent_idx] = accel_idx * 13 + steer_idx;
         }
         c_step(&env);
         c_render(&env);
