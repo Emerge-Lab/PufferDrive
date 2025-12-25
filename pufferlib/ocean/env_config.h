@@ -15,14 +15,15 @@ typedef struct {
     float reward_goal;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
-    float reward_ade;
     float goal_radius;
+    float goal_speed;
     int collision_behavior;
     int offroad_behavior;
     int spawn_immunity_timer;
     float dt;
     int goal_behavior;
-    int scenario_length;
+    float goal_target_distance;
+    int episode_length;
     int termination_mode;
     int init_steps;
     int init_mode;
@@ -55,6 +56,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         }
     } else if (MATCH("env", "goal_behavior")) {
         env_config->goal_behavior = atoi(value);
+    } else if (MATCH("env", "goal_target_distance")) {
+        env_config->goal_target_distance = atof(value);
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {
@@ -65,10 +68,10 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_goal_post_respawn = atof(value);
     } else if (MATCH("env", "reward_vehicle_collision_post_respawn")) {
         env_config->reward_vehicle_collision_post_respawn = atof(value);
-    } else if (MATCH("env", "reward_ade")) {
-        env_config->reward_ade = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
+    } else if (MATCH("env", "goal_speed")) {
+        env_config->goal_speed = atof(value);
     } else if (MATCH("env", "collision_behavior")) {
         env_config->collision_behavior = atoi(value);
     } else if (MATCH("env", "offroad_behavior")) {
@@ -77,8 +80,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "dt")) {
         env_config->dt = atof(value);
-    } else if (MATCH("env", "scenario_length")) {
-        env_config->scenario_length = atoi(value);
+    } else if (MATCH("env", "episode_length")) {
+        env_config->episode_length = atoi(value);
     } else if (MATCH("env", "termination_mode")) {
         env_config->termination_mode = atoi(value);
     } else if (MATCH("env", "init_steps")) {

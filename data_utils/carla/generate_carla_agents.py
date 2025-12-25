@@ -119,7 +119,6 @@ def is_forward_dir(lane):
 
 def create_lane_link_elements(road_network, roads, road_link_map):
     roads_json_cnt = [[], [], []]
-    print(f"Network has {len(roads)} roads.")
     for road_obj in roads:
         lane_sections = road_obj.lane_sections
 
@@ -301,8 +300,6 @@ def create_lane_link_elements(road_network, roads, road_link_map):
             roads_json_cnt[1].append(len(road_lines))
             roads_json_cnt[2].append(len(lanes))
 
-    print(f"Total roads JSON count: {sum(roads_json_cnt[0]) + sum(roads_json_cnt[1]) + sum(roads_json_cnt[2])}")
-    print(f"Lanes count: {sum(roads_json_cnt[2])}")
     total_lane_links = sum(len(obj.lane_links_map) for obj in road_link_map.values())
     assert sum(roads_json_cnt[2]) == total_lane_links
 
@@ -356,9 +353,6 @@ def create_successor_predecessor_elements(road_network, roads, road_link_map):
                         connected_lanes = junction.get_lane_junction_lanes(str(lane.id), road_id=road_obj.id)
                         if len(connected_lanes) == 0 and lane_link_obj.forward_dir:
                             stopping_points += 1
-                            print(
-                                f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is an ending lane"
-                            )
                         for conn_lane in connected_lanes:
                             succ_road_obj = get_road(road_network, conn_lane["road_id"])
                             succ_road = road_link_map[conn_lane["road_id"]]
@@ -373,9 +367,6 @@ def create_successor_predecessor_elements(road_network, roads, road_link_map):
                         if lane_link_obj.forward_dir:
                             # Stopping point
                             stopping_points += 1
-                            print(
-                                f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is an ending lane"
-                            )
 
             predecessor_is_junction = True
             if link_xml is not None and link_xml.findall("predecessor") != []:
@@ -710,15 +701,16 @@ def generate_traj_data(
             change_lane = True
 
         # Velocity and heading calculation
-        v_x = (waypoint[0] - waypoints_list[t - 1]["position"][0]) / time_step_dur
-        v_y = (waypoint[1] - waypoints_list[t - 1]["position"][1]) / time_step_dur
+        v_x = (waypoint[0] - waypoints_list[t]["position"][0]) / time_step_dur
+        v_y = (waypoint[1] - waypoints_list[t]["position"][1]) / time_step_dur
         heading = np.arctan2(v_y, v_x)
+        # print(f'Time step {t}: waypoints_list_size={len(waypoints_list)} position={waypoint}, next_posn={waypoints_list[t-1]["position"]}, velocity=({v_x}, {v_y}), heading={heading}')
 
         waypoints_list.append(
             {
                 "position": waypoint.tolist() if hasattr(waypoint, "tolist") else list(waypoint),
                 "velocity": {"x": v_x, "y": v_y},
-                "heading": heading,
+                "heading": heading if t > 0 else 0.0,
                 "lane_id": current_lane_link.lane_id,
                 "lane_section_index": current_lane_link.lane_section_index,
                 "road_id": current_lane_link.road_id,
@@ -728,7 +720,11 @@ def generate_traj_data(
     # Change first waypoint with velocity and heading from pos t=0 to pos t=1 keeping everything else same
     pos0 = np.array(waypoints_list[0]["position"])
     pos1 = np.array(waypoints_list[1]["position"])
-    heading = float(np.arctan2(pos1[1] - pos0[1], pos1[0] - pos0[0]))
+
+    goal_heading = float(
+        np.arctan2(waypoints_list[-1]["position"][1] - pos0[1], waypoints_list[-1]["position"][0] - pos0[0])
+    )
+    heading = goal_heading
 
     if initial_velocity is None:
         # Use average velocity from rest of trajectory
@@ -869,7 +865,7 @@ def generate_data_each_map(
                 geometry = [[pt["x"], pt["y"], pt["z"]] for pt in road["geometry"]]
                 all_geometries.extend(geometry)
 
-            print(f"Total number of geometry points: {len(all_geometries)}")
+            # print(f"Total number of geometry points: {len(all_geometries)}")
 
             xodr_json["objects"] = []
 
@@ -916,7 +912,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--town_names",
         nargs="+",
-        default=["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"],
+        default=["Town01", "Town02", "Town10HD"],
         help="List of CARLA town names",
     )
     parser.add_argument(
@@ -935,7 +931,7 @@ if __name__ == "__main__":
         "--carla_map_dir", type=str, default="data/CarlaXODRs", help="Directory containing CARLA XODR files"
     )
     parser.add_argument("--resolution", type=float, default=0.1, help="Resolution for road network processing")
-    parser.add_argument("--num_data_per_map", type=int, default=8, help="Number of data samples per map")
+    parser.add_argument("--num_data_per_map", type=int, default=1, help="Number of data samples per map")
     parser.add_argument("--num_objects", type=int, default=32, help="Number of objects per data sample")
     parser.add_argument(
         "--make_only_first_agent_controllable", action="store_true", help="If set, only the first agent is controllable"
@@ -947,8 +943,8 @@ if __name__ == "__main__":
         help="Initial velocity for objects (set to None for mean velocity)",
     )
     parser.add_argument("--init_resample", action="store_true", help="Enable resampling of initial lane")
-    parser.add_argument("--lane_change_resample", action="store_true", help="Enable resampling of lane change lane")
-    parser.add_argument("--avg_speed", type=float, default=2.0, help="Average speed of the objects in m/s")
+    parser.add_argument("--lane_change_resample", action="store_false", help="Enable resampling of lane change lane")
+    parser.add_argument("--avg_speed", type=float, default=1.0, help="Average speed of the objects in m/s")
 
     args = parser.parse_args()
 
