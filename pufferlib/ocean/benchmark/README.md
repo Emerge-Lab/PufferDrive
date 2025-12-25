@@ -65,3 +65,56 @@ Steps [for every scene]:
     These scores go to 1.0 if we use the time-dependent estimator, execpt for the smoothing factor that is used to avoid bins with 0 probability.
 
     Using the time-dependent estimator means generating n_steps histograms per agent, using num_rollouts samples per histogram, while time-independence means generating one histogram per agent using n_rollouts * n_steps samples. With the speed of PufferDrive,  we might be able to increase n_rollouts to have more samples per histogram.
+
+# Planning Benchmark
+
+To evaluate a planning policy against log-replay agent, you can use our planning evaluation suite:
+
+```bash
+puffer eval puffer_drive --eval.planning-eval True --load-model-path <your-trained-policy>.pt
+```
+
+For now it will compute only offroad and collision rates, defined as the ratio of scenarios in which a collision/offroad event occured over the total number of evaluated scenarios.
+
+The ambition is to include more metrics soon, such as comfort and adherence to traffic rules.
+
+## Notes
+
+- If your policy stops when reaching the goal (`planning_goal_behavior=2`), your collision rates will go up because of log-replay agents colliding with your stopped vehicle.
+- This could be improved if we train policies that keep driving after reaching their goal.
+- For fair comparisons, one should use `#define MAX_AGENTS 256` in `drive.h`, and comment these lines in the same file
+```
+entity->width *= 0.7f;
+entity->length *= 0.7f;
+```
+
+The results look like this:
+
+```
+Running Planning evaluation with training dataset.
+
+Collecting rollout 1/1...
+RESULTS FROM THE SIMULATOR
+collision_rate:  0.12999999523162842
+offroad_rate:  0.029999999329447746
+
+PLANNING_METRICS_START
+{
+    "collision_indication": 0.19,
+    "offroad_indication": 0.03,
+    "accuracy": 0.78,
+    "num_scenarios": 100
+}
+PLANNING_METRICS_END
+
+PLANNING_GT_METRICS_START
+{
+    "collision_indication": 0.02,
+    "offroad_indication": 0.0,
+    "accuracy": 0.98,
+    "num_scenarios": 100
+}
+PLANNING_GT_METRICS_END
+```
+
+It first shows the results extracted from the simulator's code for comparison. Notably the offroad rates should match, and the discrepancy in collision rates is due to the `planning_goal_behavior=2`. We also report the results from the ground truth for comparison, it serves as an upper bound which has not a 100% score due to noise in the data.
