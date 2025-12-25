@@ -2359,7 +2359,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float arrow_x_world;
         float arrow_y_world;
         if (mode == 0) {
-            DrawLine3D((Vector3){x, y, 1}, (Vector3){arrow_x, arrow_y, 1}, PUFF_WHITE);
+            DrawLine3D((Vector3){x, y, 0.0}, (Vector3){arrow_x, arrow_y, 0.0}, PUFF_WHITE);
         }
         if (mode == 1) {
             arrow_x_world = px + (arrow_x * heading_self_x - arrow_y * heading_self_y);
@@ -2387,8 +2387,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
             // Draw the two lines forming the arrow head
             if (mode == 0) {
-                DrawLine3D((Vector3){arrow_x, arrow_y, 1}, (Vector3){arrow_x_end1, arrow_y_end1, 1}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x, arrow_y, 1}, (Vector3){arrow_x_end2, arrow_y_end2, 1}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, 0.0}, (Vector3){arrow_x_end1, arrow_y_end1, 0.0}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, 0.0}, (Vector3){arrow_x_end2, arrow_y_end2, 0.0}, PUFF_WHITE);
             }
 
             if (mode == 1) {
@@ -2396,10 +2396,10 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
                 float arrow_y_end1_world = py + (arrow_x_end1 * heading_self_y + arrow_y_end1 * heading_self_x);
                 float arrow_x_end2_world = px + (arrow_x_end2 * heading_self_x - arrow_y_end2 * heading_self_y);
                 float arrow_y_end2_world = py + (arrow_x_end2 * heading_self_y + arrow_y_end2 * heading_self_x);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 1},
-                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, 1}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 1},
-                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, 1}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 0.0},
+                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, 0.0}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 0.0},
+                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, 0.0}, PUFF_WHITE);
             }
         }
 
