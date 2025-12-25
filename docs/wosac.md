@@ -1,6 +1,6 @@
 # Waymo Open Sim Agent Challenge (WOSAC) benchmark
 
-We provide a re-implementation of the [Waymo Open Sim Agent Challenge (WOSAC)](https://waymo.com/research/the-waymo-open-sim-agents-challenge/), which measures _distributional realism_ of simulated trajectories compared to logged human trajectories. Our version preserves the original logic and metric weighting but uses PyTorch on GPU for the metrics computation, unlike the original TensorFlow CPU implementation. The exact speedup depends on the setup and hardware, but in practice this leads to a substantial speedup (around 30–100×). Evaluating 100 scenarios (32 rollouts + metrics computation)currently completes in under a minute.
+We provide a re-implementation of the [Waymo Open Sim Agent Challenge (WOSAC)](https://waymo.com/research/the-waymo-open-sim-agents-challenge/), which measures _distributional realism_ of simulated trajectories compared to logged human trajectories. Our version preserves the original logic and metric weighting but uses PyTorch on GPU for the metrics computation, unlike the original TensorFlow CPU implementation. The exact speedup depends on the setup and hardware, but in practice this leads to a substantial speedup (around 30–100×). Evaluating 100 scenarios (32 rollouts + metrics computation) currently completes in under a minute.
 
 Besides speed benefits, the code is also simplified to make it easier to understand and extend.
 
