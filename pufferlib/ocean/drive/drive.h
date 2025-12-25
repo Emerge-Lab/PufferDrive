@@ -279,6 +279,7 @@ struct Drive {
     float *actions;
     float *rewards;
     unsigned char *terminals;
+    unsigned char *truncations;
     Log log;
     Log *logs;
     int num_agents;
@@ -1989,6 +1990,9 @@ void respawn_agent(Drive *env, int agent_idx) {
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
+    if (env->truncations != NULL) {
+        memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
+    }
     env->timestep++;
 
     int originals_remaining = 0;
@@ -2001,7 +2005,21 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->timestep == env->episode_length || (!originals_remaining && env->termination_mode == 1)) {
+    int reached_time_limit = env->timestep == env->episode_length;
+    int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
+    if (reached_time_limit || reached_early_termination) {
+        // Surface episode boundaries to RL.
+        // - Time-limit resets should be treated as truncations.
+        // - Early termination (e.g., all originals have respawned) should be treated as terminals.
+        for (int i = 0; i < env->active_agent_count; i++) {
+            if (reached_time_limit) {
+                if (env->truncations != NULL) {
+                    env->truncations[i] = 1;
+                }
+            } else {
+                env->terminals[i] = 1;
+            }
+        }
         add_log(env);
         c_reset(env);
         return;
