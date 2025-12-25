@@ -1,10 +1,15 @@
-# Waymo Open Sim Agent Challenge (WOSAC) Benchmark
+# Waymo Open Sim Agent Challenge (WOSAC) benchmark
 
-We provide a re-implementation of the [Waymo Open Sim Agent Challenge (WOSAC)](https://waymo.com/research/the-waymo-open-sim-agents-challenge/), which measures _distributional realism_ of simulated trajectories compared to logged human trajectories. Our version preserves the original logic and metric weighting but uses PyTorch on GPU for the metrics computation, unlike the original TensorFlow CPU implementation. The code is also simplified for clarity, making it easier to understand, adapt, and extend.
+We provide a re-implementation of the [Waymo Open Sim Agent Challenge (WOSAC)](https://waymo.com/research/the-waymo-open-sim-agents-challenge/), which measures _distributional realism_ of simulated trajectories compared to logged human trajectories. Our version preserves the original logic and metric weighting but uses PyTorch on GPU for the metrics computation, unlike the original TensorFlow CPU implementation. The exact speedup depends on the setup and hardware, but in practice this leads to a substantial speedup (around 30–100×). Evaluating 100 scenarios (32 rollouts + metrics computation)currently completes in under a minute.
 
-**Note:** In PufferDrive, agents are conditioned on a "goal" represented as a single (x, y) position, reflecting that drivers typically have a high-level destination in mind. Evaluating whether an agent matches human distributional properties can be decomposed into: (1) inferring a person's intended direction from context (1 second in WOSAC) and (2) navigating toward that goal in a human-like manner. We focus on the second component, though the evaluation could be adapted to include behavior prediction as in the original WOSAC.
+Besides speed benefits, the code is also simplified to make it easier to understand and extend.
 
-[TODO: ADD bar graphs]
+> **Note:** In PufferDrive, agents are conditioned on a "goal" represented as a single (x, y) position, reflecting that drivers typically have a high-level destination in mind. Evaluating whether an agent matches human distributional properties can be decomposed into: (1) inferring a person's intended direction from context (1 second in WOSAC) and (2) navigating toward that goal in a human-like manner. We focus on the second component, though the evaluation could be adapted to include behavior prediction as in the original WOSAC.
+
+![WOSAC implementation in PufferDrive](images/wosac_implementation_pufferdrive.png)
+
+_Illustration of WOSAC implementation in PufferDrive (RHS) vs. the original challenge (LHS)._
+
 
 ## Usage
 
@@ -66,9 +71,9 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 | Method | Realism meta-score | Kinematic metrics | Interactive metrics | Map-based metrics | minADE | ADE |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | Ground-truth (UB) | 0.833 | 0.574 | 0.864 | 0.958 | 0 | 0 |
-| $\pi_{\text{Base self-play RL}}$ | 0.737 | 0.323 | 0.792 | 0.930 | 8.530 | 9.088 |
+| π_Base self-play RL | 0.737 | 0.323 | 0.792 | 0.930 | 8.530 | 9.088 |
 | [SMART-tiny-CLSFT](https://arxiv.org/abs/2412.05334) | 0.795 | 0.504 | 0.832 | 0.932 | 1.182 | 2.857 |
-| $\pi_{\text{Random}}$ | 0.497 | 0.238 | 0.656 | 0.430 | 6.395 | 18.617 |
+| π_Random | 0.497 | 0.238 | 0.656 | 0.430 | 6.395 | 18.617 |
 
 *Table: WOSAC baselines in PufferDrive on validation 10k dataset.*
 
@@ -78,28 +83,38 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 
 ---
 
-## Evaluating WOSAC agents using Puffer
 
-In this section, we describe how we evaluated SMART-tiny-CLSFT, and how anyone can use this repo to evaluate their Sim Agents model.
+## Evaluating trajectories
 
-**High-level idea**: Our code to evaluate WOSAC takes as input sim_trajectories and ground_truth trajectories, compute some statistics and output scores based on these statistics. If one wants to provide directly its own sim_trajectories as pkl file, if they were generated using the same dataset, we can use them to produce WOSAC scores.
+In this section, we describe how we evaluated [SMART-tiny-CLSFT](https://arxiv.org/abs/2412.05334) in PufferDrive and how you can use this to evaluate your own agent trajectories.
 
-**Command**: `python pufferlib/ocean/benchmark/evaluate_imported_trajectories.py --simulated-file my_rollouts.pkl `
+**High-level idea**
 
-**Instructions**:
-- The rollouts should be generated using the same dataset than the one given in the config file `[eval] map_dir`, you can find the original scenario ids in the `.json` files (`scenario_id` field)
-- If you produce a list of the scenario_ids you want to rollout your model on, you can feed them to your dataloader to run inference only on these scenarios.
-- Then you should save the output of your inferences in a dict containing the following fields:
+The WOSAC evaluation pipeline takes as input simulated trajectories (`sim_trajectories`) and ground-truth trajectories, computes summary statistics, and outputs scores based on these statistics ([entry point to code here](https://github.com/Emerge-Lab/PufferDrive/blob/b6ed82f80df3d58c98e72999c4ebe99b2d7515b6/pufferlib/pufferl.py#L1049-L1073)). If you already have simulated trajectories saved as a `.pkl` file—generated from the same dataset—you can directly use them to compute WOSAC scores.
+
+**Command**
+
+```bash
+python pufferlib/ocean/benchmark/evaluate_imported_trajectories.py --simulated-file my_rollouts.pkl
 ```
-x  :  (num_agents, num_rollouts, 81)
-y  :  (num_agents, num_rollouts, 81)
-z  :  (num_agents, num_rollouts, 81)
-heading  :  (num_agents, num_rollouts, 81)
-id  :  (num_agents, num_rollouts, 81)
-```
-- Then you can recompile the code, putting `MAX_AGENTS=256` in `drive.h``
-- Then run: `python pufferlib/ocean/benchmark/evaluate_imported_trajectories.py --simulated-file my_rollouts.pkl`
 
+**Instructions**
+
+* Rollouts must be generated using the same dataset specified in the config file under `[eval] map_dir`. The corresponding scenario IDs can be found in the `.json` files (the `scenario_id` field).
+* If you have a predefined list of `scenario_id`s, you can pass them to your dataloader to run inference only on those scenarios.
+* Save the inference outputs in a dictionary with the following fields:
+
+```bash
+x        : (num_agents, num_rollouts, 81)
+y        : (num_agents, num_rollouts, 81)
+z        : (num_agents, num_rollouts, 81)
+heading  : (num_agents, num_rollouts, 81)
+id       : (num_agents, num_rollouts, 81)
+```
+
+* Recompile the code with `MAX_AGENTS=256` set in `drive.h`.
+* Finally, run:
+  `python pufferlib/ocean/benchmark/evaluate_imported_trajectories.py --simulated-file my_rollouts.pkl`
 
 
 ## Useful links
