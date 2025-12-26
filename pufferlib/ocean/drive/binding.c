@@ -190,7 +190,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
-    env->reward_ade = conf.reward_ade;
     env->episode_length = conf.episode_length;
     env->termination_mode = conf.termination_mode;
     env->collision_behavior = conf.collision_behavior;
@@ -202,6 +201,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
+    env->goal_speed = (float)unpack(kwargs, "goal_speed");
     char *map_dir = unpack_str(kwargs, "map_dir");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
@@ -230,6 +230,7 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "collisions_per_agent", log->collisions_per_agent);
     assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
     assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
+    assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }

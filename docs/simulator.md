@@ -49,7 +49,11 @@ Shape is `ego_features + 63 * 7 + 200 * 7` = `1848` for classic dynamics (`ego_f
   - Collision with another actor: `reward_vehicle_collision` (default `-0.5`)
   - Off-road (road-edge intersection): `reward_offroad_collision` (default `-0.2`)
   - Goal reached: `reward_goal` (default `1.0`) or `reward_goal_post_respawn` after a respawn
+<<<<<<< HEAD
   - Optional ADE shaping: `reward_ade * avg_displacement_error`, where ADE is accumulated in `compute_agent_metrics`
+=======
+
+>>>>>>> d4dabdb6ece965ea0bffe144252275e36fdab34a
 - **Termination**: No early truncation; episodes roll to episode_length steps. If `goal_behavior` is respawn, `respawn_agent` resets the pose and marks `respawn_timestep` so the respawn flag shows up in observations.
 - **Logged metrics** (`add_log` aggregates over all active agents across envs):
   - `score`: reached goal without collision/off-road
@@ -112,10 +116,14 @@ Determines which created agents are **controlled** by the policy.
 | `control_vehicles` (default)                | Control only valid**vehicles** (not experts, beyond `MIN_DISTANCE_TO_GOAL`, under `MAX_AGENTS`). |
 | `control_agents`                            | Control all valid**agent types** (vehicles, cyclists, pedestrians).                                  |
 | `control_tracks_to_predict` *(WOMD only)* | Control agents listed in the `tracks_to_predict` metadata.                                               |
+<<<<<<< HEAD
+=======
+| `control_sdc_only` *(WOMD only)* | Control just the self-driving car (SDC).                                             |
+>>>>>>> d4dabdb6ece965ea0bffe144252275e36fdab34a
 
 ### Termination conditions (`done`)
 
-Episodes are never truncated before reaching `episode_len`. The `goal_behavior` argument controls agent behavior after reaching a goal early:
+The `goal_behavior` argument controls agent behavior after reaching a goal early:
 
 - **`goal_behavior=0` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
 - **`goal_behavior=1`:** Agents receive new goals indefinitely after reaching each goal.

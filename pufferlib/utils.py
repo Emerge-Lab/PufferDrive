@@ -206,7 +206,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
 
         # Base command with only visualization flags (env config comes from INI)
-        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./drive"]
+        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
         # Visualization config flags only
         if config.get("show_grid", False):
@@ -216,7 +216,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         if config.get("show_lasers", False):
             base_cmd.append("--lasers")
         if config.get("show_human_logs", False):
-            base_cmd.append("--log-trajectories")
+            base_cmd.append("--show-human-logs")
         if config.get("zoom_in", False):
             base_cmd.append("--zoom-in")
 

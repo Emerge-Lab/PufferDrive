@@ -60,7 +60,6 @@
 #define OFFROAD_IDX 1
 #define REACHED_GOAL_IDX 2
 #define LANE_ALIGNED_IDX 3
-#define AVG_DISPLACEMENT_ERROR_IDX 4
 
 // Grid cell size
 #define GRID_CELL_SIZE 5.0f
@@ -134,6 +133,7 @@ const Color PUFF_BACKGROUND = (Color){6, 24, 24, 255};
 const Color PUFF_BACKGROUND2 = (Color){18, 72, 72, 255};
 const Color LIGHTGREEN = (Color){152, 255, 152, 255};
 const Color LIGHTYELLOW = (Color){255, 255, 152, 255};
+const Color SOFT_YELLOW = (Color){245, 245, 220, 255};
 
 struct timespec ts;
 
@@ -155,7 +155,7 @@ struct Log {
     float dnf_rate;
     float n;
     float lane_alignment_rate;
-    float avg_displacement_error;
+    float speed_at_goal;
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
@@ -185,7 +185,7 @@ struct Entity {
     float init_goal_y;
     int mark_as_expert;
     int collision_state;
-    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, avg_displacement_error]
+    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned
     float x;
     float y;
     float z;
@@ -204,9 +204,6 @@ struct Entity {
     float goals_sampled_this_episode;
     int current_goal_reached;
     int active_agent;
-    float cumulative_displacement;
-    int displacement_sample_count;
-    float goal_radius;
     int stopped;
     int removed;
 
@@ -250,33 +247,6 @@ float clip(float value, float min, float max) {
     if (value > max)
         return max;
     return value;
-}
-
-float compute_displacement_error(Entity *agent, int timestep) {
-    // Check if timestep is within valid range
-    if (timestep < 0 || timestep >= agent->array_size) {
-        return 0.0f;
-    }
-
-    // Check if reference trajectory is valid at this timestep
-    if (!agent->traj_valid[timestep]) {
-        return 0.0f;
-    }
-
-    // Get reference position at current timestep, skip invalid ones
-    float ref_x = agent->traj_x[timestep];
-    float ref_y = agent->traj_y[timestep];
-
-    if (ref_x == INVALID_POSITION || ref_y == INVALID_POSITION) {
-        return 0.0f;
-    }
-
-    // Compute deltas: Euclidean distance between actual and reference position
-    float dx = agent->x - ref_x;
-    float dy = agent->y - ref_y;
-    float displacement = sqrtf(dx * dx + dy * dy);
-
-    return displacement;
 }
 
 typedef struct GridMapEntity GridMapEntity;
@@ -334,7 +304,6 @@ struct Drive {
     int termination_mode;
     float reward_vehicle_collision;
     float reward_offroad_collision;
-    float reward_ade;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -342,6 +311,7 @@ struct Drive {
     float reward_goal;
     float reward_goal_post_respawn;
     float goal_radius;
+    float goal_speed;
     int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
@@ -373,16 +343,19 @@ void add_log(Drive *env) {
         float collisions_per_agent = env->logs[i].collisions_per_agent;
         env->log.collisions_per_agent += collisions_per_agent;
 
-        if ((e->goals_reached_this_episode / e->goals_sampled_this_episode) > 0.9 && !e->collided_before_goal) {
+        float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
+
+        // Update score, which measures whether the agent fully solved its task
+        float threshold = (e->goals_sampled_this_episode == 1.0f) ? 0.999f : 0.9f;
+        if (frac_goal_reached > threshold && !e->collided_before_goal) {
             env->log.score += 1.0f;
         }
-        if (!offroad && !collided && !(e->goals_reached_this_episode < 1.0f)) {
+        if (!offroad && !collided && frac_goal_reached < 1.0f) {
             env->log.dnf_rate += 1.0f;
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
         env->log.lane_alignment_rate += lane_aligned;
-        float displacement_error = env->logs[i].avg_displacement_error;
-        env->log.avg_displacement_error += displacement_error;
+        env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
@@ -509,13 +482,10 @@ void set_start_position(Drive *env) {
         e->heading_y = sinf(e->heading);
         e->valid = e->traj_valid[env->init_steps];
         e->collision_state = 0;
-        e->metrics_array[COLLISION_IDX] = 0.0f;              // vehicle collision
-        e->metrics_array[OFFROAD_IDX] = 0.0f;                // offroad
-        e->metrics_array[REACHED_GOAL_IDX] = 0.0f;           // reached goal
-        e->metrics_array[LANE_ALIGNED_IDX] = 0.0f;           // lane aligned
-        e->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f; // avg displacement error
-        e->cumulative_displacement = 0.0f;
-        e->displacement_sample_count = 0;
+        e->metrics_array[COLLISION_IDX] = 0.0f;    // vehicle collision
+        e->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
+        e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
+        e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
         e->respawn_timestep = -1;
         e->stopped = 0;
         e->removed = 0;
@@ -1061,7 +1031,6 @@ void reset_agent_metrics(Drive *env, int agent_idx) {
     agent->metrics_array[COLLISION_IDX] = 0.0f;    // vehicle collision
     agent->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
-    agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
     agent->collision_state = 0;
 }
 
@@ -1098,18 +1067,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     if (agent->x == INVALID_POSITION)
         return; // invalid agent position
-
-    // Compute displacement error
-    float displacement_error = compute_displacement_error(agent, env->timestep);
-
-    if (displacement_error > 0.0f) { // Only count valid displacements
-        agent->cumulative_displacement += displacement_error;
-        agent->displacement_sample_count++;
-
-        // Compute running average
-        agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX] =
-            agent->cumulative_displacement / agent->displacement_sample_count;
-    }
 
     int collided = 0;
     float half_length = agent->length / 2.0f;
@@ -1202,6 +1159,29 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         collided = VEHICLE_COLLISION;
 
     agent->collision_state = collided;
+
+    if (collided == VEHICLE_COLLISION) {
+        if (env->collision_behavior == STOP_AGENT && !agent->stopped) {
+            agent->stopped = 1;
+            agent->vx = agent->vy = 0.0f;
+        } else if (env->collision_behavior == REMOVE_AGENT && !agent->removed) {
+            Entity *agent_collided = &env->entities[car_collided_with_index];
+            agent->removed = 1;
+            agent_collided->removed = 1;
+            agent->x = agent->y = -10000.0f;
+            agent_collided->x = agent_collided->y = -10000.0f;
+        }
+    }
+    if (collided == OFFROAD) {
+        agent->metrics_array[OFFROAD_IDX] = 1.0f;
+        if (env->offroad_behavior == STOP_AGENT && !agent->stopped) {
+            agent->stopped = 1;
+            agent->vx = agent->vy = 0.0f;
+        } else if (env->offroad_behavior == REMOVE_AGENT && !agent->removed) {
+            agent->removed = 1;
+            agent->x = agent->y = -10000.0f;
+        }
+    }
 
     return;
 }
@@ -1970,9 +1950,6 @@ void c_reset(Drive *env) {
         env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
         env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-        env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
-        env->entities[agent_idx].cumulative_displacement = 0.0f;
-        env->entities[agent_idx].displacement_sample_count = 0;
         env->entities[agent_idx].stopped = 0;
         env->entities[agent_idx].removed = 0;
 
@@ -1998,9 +1975,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-    env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX] = 0.0f;
-    env->entities[agent_idx].cumulative_displacement = 0.0f;
-    env->entities[agent_idx].displacement_sample_count = 0;
+
     env->entities[agent_idx].respawn_timestep = env->timestep;
     env->entities[agent_idx].stopped = 0;
     env->entities[agent_idx].removed = 0;
@@ -2045,8 +2020,22 @@ void c_step(Drive *env) {
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
+        float prev_vx = env->entities[agent_idx].vx;
+        float prev_vy = env->entities[agent_idx].vy;
+
         move_dynamics(env, i, agent_idx);
+
+        // Tiny jerk penalty for smoothness
+        if (env->dynamics_model == CLASSIC) {
+            float delta_vx = env->entities[agent_idx].vx - prev_vx;
+            float delta_vy = env->entities[agent_idx].vy - prev_vy;
+            float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
+            env->rewards[i] += jerk_penalty;
+            env->logs[i].episode_return += jerk_penalty;
+        }
     }
+
+    // Compute rewards
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
@@ -2078,8 +2067,14 @@ void c_step(Drive *env) {
             relative_distance_2d(env->entities[agent_idx].x, env->entities[agent_idx].y,
                                  env->entities[agent_idx].goal_position_x, env->entities[agent_idx].goal_position_y);
 
-        // Reward agent if it is within X meters of goal
-        if (distance_to_goal < env->goal_radius && !env->entities[agent_idx].current_goal_reached) {
+        float current_speed = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
+                                    env->entities[agent_idx].vy * env->entities[agent_idx].vy);
+
+        // Reward agent if it is within X meters of goal and speed is below threshold
+        bool within_distance = distance_to_goal < env->goal_radius;
+        bool within_speed = current_speed <= env->goal_speed;
+
+        if (within_distance && within_speed && !env->entities[agent_idx].current_goal_reached) {
             if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
@@ -2098,18 +2093,11 @@ void c_step(Drive *env) {
                 env->entities[agent_idx].goals_reached_this_episode += 1.0f;
             }
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
+            env->logs[i].speed_at_goal = current_speed;
         }
+
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
-
-        // Apply ADE reward
-        float current_ade = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
-        if (current_ade > 0.0f && env->reward_ade != 0.0f) {
-            float ade_reward = env->reward_ade * current_ade;
-            env->rewards[i] += ade_reward;
-            env->logs[i].episode_return += ade_reward;
-        }
-        env->logs[i].avg_displacement_error = current_ade;
     }
 
     if (env->goal_behavior == GOAL_RESPAWN) {
@@ -2530,8 +2518,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             for (int j = 0; j < env->grid_map->grid_rows; j++) {
                 float x = grid_start_x + i * GRID_CELL_SIZE;
                 float y = grid_start_y + j * GRID_CELL_SIZE;
-                DrawCubeWires((Vector3){x + GRID_CELL_SIZE / 2, y + GRID_CELL_SIZE / 2, 1}, GRID_CELL_SIZE,
-                              GRID_CELL_SIZE, 0.1f, PUFF_BACKGROUND2);
+                DrawCubeWires((Vector3){x + GRID_CELL_SIZE / 2, y + GRID_CELL_SIZE / 2, 0.0f}, GRID_CELL_SIZE,
+                              GRID_CELL_SIZE, 0.1f, Fade(PUFF_BACKGROUND2, 0.3f));
             }
         }
     }
@@ -2564,7 +2552,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
             Vector3 position;
             float heading;
-            position = (Vector3){env->entities[i].x, env->entities[i].y, 1};
+            position = (Vector3){env->entities[i].x, env->entities[i].y, 1.1};
             heading = env->entities[i].heading;
             // Create size vector
             Vector3 size = {env->entities[i].length, env->entities[i].width, env->entities[i].height};
@@ -2732,7 +2720,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             Vector3 end = {env->entities[i].traj_x[j + 1], env->entities[i].traj_y[j + 1], 1};
             Color lineColor = GRAY;
             if (env->entities[i].type == ROAD_LANE)
-                lineColor = PUFF_CYAN;
+                lineColor = Fade(SOFT_YELLOW, 0.25f);
             else if (env->entities[i].type == ROAD_LINE)
                 lineColor = WHITE;
             else if (env->entities[i].type == ROAD_EDGE)
@@ -2784,7 +2772,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 }
 
 void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTexture2D target, int map_height, int obs,
-                      int lasers, int trajectories, int frame_count, float *path, int log_trajectories, int show_grid) {
+                      int lasers, int trajectories, int frame_count, float *path, int show_human_logs, int show_grid) {
     // Top-down orthographic camera
     Camera3D camera = {0};
     camera.position = (Vector3){0.0f, 0.0f, 500.0f}; // above the scene
@@ -2800,7 +2788,7 @@ void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTe
     rlEnableDepthTest();
 
     // Draw log trajectories FIRST (in background at lower Z-level)
-    if (log_trajectories) {
+    if (show_human_logs) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int idx = env->active_agent_indices[i];
             for (int j = 0; j < env->entities[idx].array_size; j++) {
@@ -2877,6 +2865,7 @@ void c_render(Drive *env) {
     BeginMode3D(client->camera);
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
+
     // Draw debug info
     DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,
                         client->camera.position.z),
@@ -2885,25 +2874,64 @@ void c_render(Drive *env) {
                         client->camera.target.z),
              10, 30, 20, PUFF_WHITE);
     DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
-    // acceleration & steering
+
     int human_idx = env->active_agent_indices[env->human_agent_idx];
     DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
     DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
-    // Controls help
-    DrawText("Controls: W/S - Accelerate/Brake, A/D - Steer, 1-4 - Switch Agent", 10, client->height - 30, 20,
-             PUFF_WHITE);
-    // acceleration & steering
-    if (env->action_type == 1) { // continuous (float)
+
+    // Display current action values - yellow when controlling, white otherwise
+    Color action_color = IsKeyDown(KEY_LEFT_SHIFT) ? YELLOW : PUFF_WHITE;
+
+    if (env->action_type == 0) { // discrete
+        int *action_array = (int *)env->actions;
+        int action_val = action_array[env->human_agent_idx];
+
+        if (env->dynamics_model == CLASSIC) {
+            int num_steer = 13;
+            int accel_idx = action_val / num_steer;
+            int steer_idx = action_val % num_steer;
+            float accel_value = ACCELERATION_VALUES[accel_idx];
+            float steer_value = STEERING_VALUES[steer_idx];
+
+            DrawText(TextFormat("Acceleration: %.2f m/s^2", accel_value), 10, 110, 20, action_color);
+            DrawText(TextFormat("Steering: %.3f", steer_value), 10, 130, 20, action_color);
+        } else if (env->dynamics_model == JERK) {
+            int num_lat = 3;
+            int jerk_long_idx = action_val / num_lat;
+            int jerk_lat_idx = action_val % num_lat;
+            float jerk_long_value = JERK_LONG[jerk_long_idx];
+            float jerk_lat_value = JERK_LAT[jerk_lat_idx];
+
+            DrawText(TextFormat("Longitudinal Jerk: %.2f m/s^3", jerk_long_value), 10, 110, 20, action_color);
+            DrawText(TextFormat("Lateral Jerk: %.2f m/s^3", jerk_lat_value), 10, 130, 20, action_color);
+        }
+    } else { // continuous
         float (*action_array_f)[2] = (float (*)[2])env->actions;
-        DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20, PUFF_WHITE);
-        DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
-    } else { // discrete (int)
-        int (*action_array)[2] = (int (*)[2])env->actions;
-        DrawText(TextFormat("Acceleration: %d", action_array[env->human_agent_idx][0]), 10, 110, 20, PUFF_WHITE);
-        DrawText(TextFormat("Steering: %d", action_array[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
+        DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20, action_color);
+        DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, action_color);
     }
-    DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, 150, 20, PUFF_WHITE);
-    DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, 170, 20, PUFF_WHITE);
+
+    // Show key press status
+    int status_y = 150;
+    if (IsKeyDown(KEY_LEFT_SHIFT)) {
+        DrawText("[shift pressed]", 10, status_y, 20, YELLOW);
+        status_y += 20;
+    }
+    if (IsKeyDown(KEY_SPACE)) {
+        DrawText("[space pressed]", 10, status_y, 20, YELLOW);
+        status_y += 20;
+    }
+    if (IsKeyDown(KEY_LEFT_CONTROL)) {
+        DrawText("[ctrl pressed]", 10, status_y, 20, YELLOW);
+        status_y += 20;
+    }
+
+    // Controls help
+    DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10,
+             client->height - 30, 20, PUFF_WHITE);
+
+    DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, status_y, 20, PUFF_WHITE);
+    DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, status_y + 20, 20, PUFF_WHITE);
     EndDrawing();
 }
 

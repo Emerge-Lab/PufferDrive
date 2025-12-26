@@ -156,15 +156,12 @@ The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color 
 
 ### Distributional realism
 
-We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/tree/main/pufferlib/ocean/benchmark).
+We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See documentation [here](https://emerge-lab.github.io/PufferDrive/wosac/).
 
 WOSAC evaluation with random policy:
 ```bash
 puffer eval puffer_drive --eval.wosac-realism-eval True
 ```
-
-- **Small clean eval dataset**. A clean validation set with 229 scenarios can be downloaded [here](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean).
-- **Large eval dataset**. [TODO]
 
 WOSAC evaluation with your checkpoint (must be .pt file):
 ```bash
