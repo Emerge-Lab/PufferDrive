@@ -302,6 +302,12 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
+                # Truncation bootstrap approximation for auto-reset envs: add gamma*V(s_t) to the
+                # reward at truncation steps. Our buffer is 1-step shifted, so we use the previous
+                # frame's value estimate.
+                if l > 0:
+                    trunc_mask = (t > 0) & (d == 0)
+                    r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = done_mask.float()
                 self.truncations[batch_rows, l] = t.float()

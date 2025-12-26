@@ -2008,16 +2008,10 @@ void c_step(Drive *env) {
     int reached_time_limit = env->timestep == env->episode_length;
     int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
     if (reached_time_limit || reached_early_termination) {
-        // Surface episode boundaries to RL.
-        // - Time-limit resets should be treated as truncations.
-        // - Early termination (e.g., all originals have respawned) should be treated as terminals.
+        // Treat early termination like a time-limit boundary (truncation).
         for (int i = 0; i < env->active_agent_count; i++) {
-            if (reached_time_limit) {
-                if (env->truncations != NULL) {
-                    env->truncations[i] = 1;
-                }
-            } else {
-                env->terminals[i] = 1;
+            if (env->truncations != NULL) {
+                env->truncations[i] = 1;
             }
         }
         add_log(env);
@@ -2121,6 +2115,7 @@ void c_step(Drive *env) {
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
             if (reached_goal) {
+                env->terminals[i] = 1;
                 respawn_agent(env, agent_idx);
                 env->entities[agent_idx].respawn_count++;
             }
