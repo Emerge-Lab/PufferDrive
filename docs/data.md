@@ -6,8 +6,9 @@ PufferDrive consumes map binaries generated from multiple data sources, includin
 
 - [`pufferdrive_womd_train`](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_train): **10k scenarios** from the Waymo Open Motion _training_ dataset.
 - [`pufferdrive_womd_val`](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val): **10k scenarios** from the Waymo Open Motion _validation_ dataset.
+- [`pufferdrive_mixed`](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_train_carla_mixed): **10,200** scenarios. The 10K from the WOMD train set above + Towns 1 and 2 duplicated 100x each.
 - Additional compatible sources: [ScenarioMax](https://github.com/valeoai/ScenarioMax) exports JSON in the same format.
-- Included [CARLA](https://carla.org/) maps: Readily available CARLA maps live in `data_utils/carla/carla_py123d`.
+- Included [CARLA](https://carla.org/) maps: Readily available CARLA maps live in `data_utils/carla/carla_data`.
 
 ### Download via Hugging Face
 
