@@ -302,9 +302,10 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
-                # Truncation bootstrap approximation for auto-reset envs: add gamma*V(s_t) to the
-                # reward at truncation steps. Our buffer is 1-step shifted, so we use the previous
-                # frame's value estimate.
+                # Truncation bootstrap hack for auto-reset envs.
+                # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
+                # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
+                # proxy for the pre-reset terminal value (bootstrap term is not clipped).
                 if l > 0:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
