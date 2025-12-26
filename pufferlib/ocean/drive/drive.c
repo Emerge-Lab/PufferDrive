@@ -41,16 +41,16 @@ void demo() {
         .human_agent_idx = 0,
         .action_type = 0,          // Discrete
         .dynamics_model = CLASSIC, // Classic dynamics
-        .reward_vehicle_collision = -1.0f,
-        .reward_offroad_collision = -1.0f,
+        .reward_vehicle_collision = -2.0f,
+        .reward_offroad_collision = -2.0f,
         .reward_goal = 1.0f,
         .reward_goal_post_respawn = 0.25f,
         .goal_radius = 2.0f,
         .goal_behavior = 1,
-        .goal_target_distance = 0.0f,
-        .goal_speed = 0.0f,
+        .goal_target_distance = 30.0f,
+        .goal_speed = 20.0f,
         .dt = 0.1f,
-        .episode_length = 1000,
+        .episode_length = 200,
         .termination_mode = 0,
         .collision_behavior = 0,
         .offroad_behavior = 0,
@@ -62,7 +62,7 @@ void demo() {
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_gljhhrl6.bin");
+    Weights *weights = load_weights("resources/drive/puffer_drive_csrz3f8j.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
     int accel_delta = 2;
