@@ -258,7 +258,6 @@ class PuffeRL:
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
 
-            done_mask = d + t  # TODO: Handle truncations separately
             self.global_step += int(mask.sum())
 
             profile("eval_copy", epoch)
@@ -266,12 +265,14 @@ class PuffeRL:
             o_device = o.to(device)  # , non_blocking=True)
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
+            t = torch.as_tensor(t).to(device)  # , non_blocking=True)
+            done_mask = (d + t).clamp(max=1)
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
                 state = dict(
                     reward=r,
-                    done=d,
+                    done=done_mask,
                     env_id=env_id,
                     mask=mask,
                 )
@@ -301,8 +302,16 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
+                # Truncation bootstrap hack for auto-reset envs.
+                # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
+                # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
+                # proxy for the pre-reset terminal value (bootstrap term is not clipped).
+                if l > 0:
+                    trunc_mask = (t > 0) & (d == 0)
+                    r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
-                self.terminals[batch_rows, l] = d.float()
+                self.terminals[batch_rows, l] = done_mask.float()
+                self.truncations[batch_rows, l] = t.float()
                 self.values[batch_rows, l] = value.flatten()
 
                 # Note: We are not yet handling masks in this version
