@@ -69,7 +69,7 @@
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
-#define MAX_AGENTS 32
+#define MAX_AGENTS 10
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 

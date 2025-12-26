@@ -42,30 +42,34 @@ void demo() {
         exit(1);
     }
 
+    // TODO: Harcode env settings for browser demo? 
+
     Drive env = {
         .human_agent_idx = 0,
+        .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_goal = conf.reward_goal,
+        .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .goal_radius = conf.goal_radius,
-        .goal_speed = conf.goal_speed,
-        .dt = conf.dt,
-        .map_name = "resources/drive/binaries/map_000.bin",
-        .init_steps = conf.init_steps,
-        .collision_behavior = conf.collision_behavior,
-        .offroad_behavior = conf.offroad_behavior,
         .goal_behavior = conf.goal_behavior,
         .goal_target_distance = conf.goal_target_distance,
-        .action_type = conf.action_type,
+        .goal_speed = conf.goal_speed,
+        .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
-        .control_mode = 0, // Vehicles
-        .init_mode = 0,    // Init all valid
+        .collision_behavior = conf.collision_behavior,
+        .offroad_behavior = conf.offroad_behavior,
+        .init_steps = conf.init_steps,
+        .init_mode = 0,
+        .control_mode = 0,
+        .map_name = "pufferlib/resources/drive/binaries/map_000.bin",
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
+    Weights *weights = load_weights("pufferlib/resources/drive/puffer_drive_gljhhrl6.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
     int accel_delta = 2;
