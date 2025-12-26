@@ -65,17 +65,19 @@ PufferDrive 2.0 builds on this foundation and [TODO]:
 To our knowledge, PufferDrive 2.0 is among the fastest open-source driving simulators available today, while remaining accessible to new users.
 
 ## Highlights
+
 TODO
 
 ## Roadmap
-TODO
 
+TODO
 
 ## Citation
 
 If you use PufferDrive in your research, please cite:
+
 ```bibtex
-@software{pufferdrive2024github,
+@software{pufferdrive2025github,
   author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Eugene Vinitsky},
   title = {{PufferDrive}: A Fast and Friendly Driving Simulator for Training and Evaluating {RL} Agents},
   url = {https://github.com/Emerge-Lab/PufferDrive},
@@ -83,4 +85,7 @@ If you use PufferDrive in your research, please cite:
   year = {2025},
 }
 ```
+
 *\*Equal contribution*
+
+[^1]: A useful parallel comes from the early days of computing. In the 1970s and 1980s, advances in semiconductor manufacturing and microprocessor design—such as Intel’s 8080 and 80286 chips—dramatically reduced computation costs and increased speed. This made iterative software development accessible and enabled entirely new ecosystems of applications, ultimately giving rise to the personal computer. Multi-agent RL faces a similar bottleneck today: progress is limited by the cost and speed of experience collection. Fast, affordable simulation with integrated RL algorithms may play a similar catalytic role, enabling solutions that were previously out of reach.
