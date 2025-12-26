@@ -70,7 +70,7 @@ if [ "$MODE" = "web" ]; then
         -DGRAPHICS_API_OPENGL_ES3 \
         $EXTRA_FLAGS \
         --preload-file pufferlib/resources/$1@resources/$1 \
-        --preload-file pufferlib/resources/shared@resources/shared
+        #--preload-file pufferlib/resources/shared@resources/shared
     echo "Web build completed: $WEB_OUTPUT_DIR/game.html"
     echo "Preloaded files:"
     echo "  pufferlib/resources/$1@resources$1"
