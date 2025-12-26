@@ -56,7 +56,7 @@ Later work explored what becomes possible once reaching scale is no longer a bot
 
 * [**Gigaflow**](https://arxiv.org/abs/2501.00678) demonstrated that large-scale self-play alone can produce robust, naturalistic driving. With a batched simulator, it trained on the equivalent of decades of driving per hour and achieved strong performance across multiple benchmarks without human driving demonstrations.
 * [**GPUDrive**](https://arxiv.org/abs/2408.01584), built on [Madrona](https://madrona-engine.github.io/), achieved similar controllability in about one day on a single consumer GPU using a simpler reward function and standard PPO.
-  
+
 These results suggested that once simulation becomes cheap, self-play RL can produce robust autonomous driving policies without relying on human demonstrations.
 
 ![SPS comparison between sims](images/sim-comparison.png)

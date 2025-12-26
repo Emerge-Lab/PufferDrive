@@ -69,7 +69,11 @@
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
+
+// Maximum number of agents per scene
+#ifndef MAX_AGENTS
 #define MAX_AGENTS 32
+#endif
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 

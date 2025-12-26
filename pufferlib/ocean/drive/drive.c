@@ -39,7 +39,7 @@ void demo() {
     // weird behavior.
     Drive env = {
         .human_agent_idx = 0,
-        .action_type = 0, // Discrete
+        .action_type = 0,          // Discrete
         .dynamics_model = CLASSIC, // Classic dynamics
         .reward_vehicle_collision = -1.0f,
         .reward_offroad_collision = -1.0f,

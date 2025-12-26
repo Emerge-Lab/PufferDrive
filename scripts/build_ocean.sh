@@ -33,14 +33,14 @@ mkdir -p "$WEB_OUTPUT_DIR"
 
 if [ "$MODE" = "web" ]; then
     echo "Building $ENV for web deployment..."
-    
+
     # Add MAX_AGENTS override for drive environment
     EXTRA_FLAGS=""
     if [ "$ENV" = "drive" ]; then
         EXTRA_FLAGS="-DMAX_AGENTS=10"
         echo "Setting MAX_AGENTS=10 for drive web build"
     fi
-    
+
     emcc \
         -o "$WEB_OUTPUT_DIR/game.html" \
         "$SRC_DIR/$ENV.c" \
