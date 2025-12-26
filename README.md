@@ -177,14 +177,25 @@ puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-t
 
 ## Development
 
-<details><summary>Editing the docs</summary>
+<details><summary>Documentation and browser demo</summary>
+
+**Docs**
 
 A browsable documentation site now lives under `docs/` and is configured with MkDocs Material. To preview locally:
 ```
 uv pip install -r docs/requirements.txt  # or pip install -r docs/requirements.txt
 mkdocs serve
 ```
-Open the served URL to explore install steps, data preparation, visualization, and evaluation commands.
+Open the served URL to see a local version of the docs.
+
+**Interactive demo**
+
+To edit the browser demo, follow these steps:
+- Download [emscripten](https://github.com/emscripten-core/emscripten)
+- emscripten install latest
+- Run `bash scripts/build_ocean.sh drive web`
+- This generates a number of `game*` files, move them to `assets/` to include them on the webpage
+
 </details>
 
 
