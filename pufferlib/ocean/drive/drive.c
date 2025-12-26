@@ -64,7 +64,7 @@ void demo() {
         .init_steps = conf.init_steps,
         .init_mode = 0,
         .control_mode = 0,
-        .map_name = "pufferlib/resources/drive/binaries/map_000.bin",
+        .map_name = "pufferlib/resources/drive/binaries/map_town_02_carla.bin",
     };
     allocate(&env);
     c_reset(&env);
