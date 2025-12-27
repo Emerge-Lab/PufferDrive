@@ -6,6 +6,110 @@
   --teal-light: rgba(13, 148, 136, 0.08);
 }
 
+/* Override mdbook theme to match mkdocs Material (white/teal) */
+.light, .rust {
+  --bg: #fafafa;
+  --fg: #1a1a1a;
+  --sidebar-bg: #ffffff;
+  --sidebar-fg: #4a4a4a;
+  --sidebar-non-existant: #aaaaaa;
+  --sidebar-active: #0d9488;
+  --sidebar-spacer: #f0f0f0;
+  --scrollbar: #cccccc;
+  --icons: #666666;
+  --icons-hover: #0d9488;
+  --links: #0d9488;
+  --inline-code-color: #1a1a1a;
+  --code-bg: #f8f8f8;
+  --theme-popup-bg: #ffffff;
+  --theme-popup-border: #e5e5e5;
+  --theme-hover: rgba(13, 148, 136, 0.08);
+  --quote-bg: rgba(13, 148, 136, 0.08);
+  --quote-border: #0d9488;
+  --search-mark-bg: rgba(13, 148, 136, 0.3);
+}
+
+/* Sidebar styling */
+.sidebar {
+  background: #ffffff;
+  border-right: 1px solid #f0f0f0;
+}
+
+.sidebar .sidebar-scrollbox {
+  padding: 1rem;
+}
+
+.sidebar a {
+  color: #4a4a4a;
+}
+
+.sidebar a:hover {
+  color: #0d9488;
+}
+
+.sidebar a.active {
+  color: #0d9488;
+  font-weight: 600;
+}
+
+/* Chapter list styling */
+.chapter li.chapter-item {
+  margin: 0.5rem 0;
+}
+
+.chapter li.chapter-item a {
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  display: block;
+}
+
+.chapter li.chapter-item a:hover {
+  background: rgba(13, 148, 136, 0.08);
+}
+
+.chapter li.chapter-item a.active {
+  background: rgba(13, 148, 136, 0.08);
+  color: #0d9488;
+}
+
+/* Part titles in sidebar */
+.chapter li.part-title {
+  color: #1a1a1a;
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Menu bar / header */
+.menu-bar {
+  background: #ffffff;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.menu-bar i {
+  color: #666666;
+}
+
+.menu-bar i:hover {
+  color: #0d9488;
+}
+
+/* Content area */
+.content {
+  background: #fafafa;
+}
+
+.content main {
+  background: #ffffff;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  margin: 1rem;
+}
+
 /* General typography */
 body {
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
