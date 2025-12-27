@@ -156,15 +156,12 @@ The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color 
 
 ### Distributional realism
 
-We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/tree/main/pufferlib/ocean/benchmark).
+We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See documentation [here](https://emerge-lab.github.io/PufferDrive/wosac/).
 
 WOSAC evaluation with random policy:
 ```bash
 puffer eval puffer_drive --eval.wosac-realism-eval True
 ```
-
-- **Small clean eval dataset**. A clean validation set with 229 scenarios can be downloaded [here](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean).
-- **Large eval dataset**. [TODO]
 
 WOSAC evaluation with your checkpoint (must be .pt file):
 ```bash
@@ -180,14 +177,25 @@ puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-t
 
 ## Development
 
-<details><summary>Editing the docs</summary>
+<details><summary>Documentation and browser demo</summary>
+
+**Docs**
 
 A browsable documentation site now lives under `docs/` and is configured with MkDocs Material. To preview locally:
 ```
 uv pip install -r docs/requirements.txt  # or pip install -r docs/requirements.txt
 mkdocs serve
 ```
-Open the served URL to explore install steps, data preparation, visualization, and evaluation commands.
+Open the served URL to see a local version of the docs.
+
+**Interactive demo**
+
+To edit the browser demo, follow these steps:
+- Download [emscripten](https://github.com/emscripten-core/emscripten)
+- emscripten install latest
+- Run `bash scripts/build_ocean.sh drive web`
+- This generates a number of `game*` files, move them to `assets/` to include them on the webpage
+
 </details>
 
 

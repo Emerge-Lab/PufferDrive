@@ -203,10 +203,10 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         env_vars = os.environ.copy()
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
 
-        # Base command (without map/output paths)
+        # Base command with only visualization flags (env config comes from INI)
         base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
-        # Render config flags
+        # Visualization config flags only
         if config.get("show_grid", False):
             base_cmd.append("--show-grid")
         if config.get("obs_only", False):
@@ -214,40 +214,23 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         if config.get("show_lasers", False):
             base_cmd.append("--lasers")
         if config.get("show_human_logs", False):
-            base_cmd.append("--log-trajectories")
+            base_cmd.append("--show-human-logs")
         if config.get("zoom_in", False):
             base_cmd.append("--zoom-in")
 
+        # Frame skip for rendering performance
+        frame_skip = config.get("frame_skip", 1)
+        if frame_skip > 1:
+            base_cmd.extend(["--frame-skip", str(frame_skip)])
+
+        # View mode
+        view_mode = config.get("view_mode", "both")
+        base_cmd.extend(["--view", view_mode])
+
+        # Get num_maps if available
         env_cfg = getattr(vecenv, "driver_env", None)
-        if env_cfg is not None:
-            if getattr(env_cfg, "control_non_vehicles", False):
-                base_cmd.append("--control-non-vehicles")
-            if getattr(env_cfg, "goal_radius", None) is not None:
-                base_cmd.extend(["--goal-radius", str(env_cfg.goal_radius)])
-            if getattr(env_cfg, "init_steps", 0) > 0:
-                base_cmd.extend(["--init-steps", str(env_cfg.init_steps)])
-            if getattr(env_cfg, "init_mode", None) is not None:
-                base_cmd.extend(["--init-mode", str(env_cfg.init_mode)])
-            if getattr(env_cfg, "control_mode", None) is not None:
-                base_cmd.extend(["--control-mode", str(env_cfg.control_mode)])
-            if getattr(env_cfg, "control_all_agents", False):
-                base_cmd.append("--pure-self-play")
-            if getattr(env_cfg, "deterministic_agent_selection", False):
-                base_cmd.append("--deterministic-selection")
-
-            # Policy-controlled agents (prefer num_policy_controlled_agents, fallback to max_controlled_agents)
-            n_policy = getattr(env_cfg, "num_policy_controlled_agents", getattr(env_cfg, "max_controlled_agents", -1))
-            try:
-                n_policy = int(n_policy)
-            except (TypeError, ValueError):
-                n_policy = -1
-            if n_policy > 0:
-                base_cmd += ["--num-policy-controlled-agents", str(n_policy)]
-
-            if getattr(env_cfg, "num_maps", False):
-                base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
-            if getattr(env_cfg, "scenario_length", None):
-                base_cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
+        if env_cfg is not None and getattr(env_cfg, "num_maps", None):
+            base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
 
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
@@ -272,7 +255,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
             cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
             cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
 
-            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env_vars)
+            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
 
             vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
                 "resources/drive/output_agent.mp4"

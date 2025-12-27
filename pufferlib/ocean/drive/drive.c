@@ -33,74 +33,100 @@ void test_drivenet() {
 }
 
 void demo() {
-    // Read configuration from INI file
-    env_init_config conf = {0};
-    const char *ini_file = "pufferlib/config/ocean/drive.ini";
-    if (ini_parse(ini_file, handler, &conf) < 0) {
-        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
-        exit(1);
-    }
 
+    // The settings below are hardcoded for demo purposes. Since the policy was
+    // trained with these exact settings, note that changing them may lead to
+    // weird behavior.
     Drive env = {
         .human_agent_idx = 0,
-        .dynamics_model = conf.dynamics_model,
-        .reward_vehicle_collision = conf.reward_vehicle_collision,
-        .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_ade = conf.reward_ade,
-        .goal_radius = conf.goal_radius,
-        .dt = conf.dt,
-        .map_name = "resources/drive/binaries/map_000.bin",
-        .init_steps = conf.init_steps,
-        .collision_behavior = conf.collision_behavior,
-        .offroad_behavior = conf.offroad_behavior,
+        .action_type = 0,          // Discrete
+        .dynamics_model = CLASSIC, // Classic dynamics
+        .reward_vehicle_collision = -2.0f,
+        .reward_offroad_collision = -2.0f,
+        .reward_goal = 1.0f,
+        .reward_goal_post_respawn = 0.25f,
+        .goal_radius = 2.0f,
+        .goal_behavior = 1,
+        .goal_target_distance = 30.0f,
+        .goal_speed = 20.0f,
+        .dt = 0.1f,
+        .episode_length = 100,
+        .termination_mode = 0,
+        .collision_behavior = 0,
+        .offroad_behavior = 0,
+        .init_steps = 0,
+        .init_mode = 0,
+        .control_mode = 0,
+        .map_name = "resources/drive/map_town_02_carla.bin",
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
+    Weights *weights = load_weights("resources/drive/puffer_drive_csrz3f8j.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
-    // Client* client = make_client(&env);
+
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {
-        // Handle camera controls
-        int (*actions)[2] = (int (*)[2])env.actions;
-        forward(net, env.observations, env.actions);
+        int *actions = (int *)env.actions; // Single integer per agent
+
+        forward(net, env.observations, actions);
+
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
-            actions[env.human_agent_idx][0] = 3;
-            actions[env.human_agent_idx][1] = 6;
-            if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
-                actions[env.human_agent_idx][0] += accel_delta;
-                // Cap acceleration to maximum of 6
-                if (actions[env.human_agent_idx][0] > 6) {
-                    actions[env.human_agent_idx][0] = 6;
+            if (env.dynamics_model == CLASSIC) {
+                // Classic dynamics: acceleration and steering
+                int accel_idx = 3; // neutral (0 m/s²)
+                int steer_idx = 6; // neutral (0.0 steering)
+
+                if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
+                    accel_idx += accel_delta;
+                    if (accel_idx > 6)
+                        accel_idx = 6;
                 }
-            }
-            if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
-                actions[env.human_agent_idx][0] -= accel_delta;
-                // Cap acceleration to minimum of 0
-                if (actions[env.human_agent_idx][0] < 0) {
-                    actions[env.human_agent_idx][0] = 0;
+                if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
+                    accel_idx -= accel_delta;
+                    if (accel_idx < 0)
+                        accel_idx = 0;
                 }
-            }
-            if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
-                actions[env.human_agent_idx][1] += steer_delta;
-                // Cap steering to minimum of 0
-                if (actions[env.human_agent_idx][1] < 0) {
-                    actions[env.human_agent_idx][1] = 0;
+                if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
+                    steer_idx += steer_delta; // Increase steering index for left turn
+                    if (steer_idx > 12)
+                        steer_idx = 12;
                 }
-            }
-            if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
-                actions[env.human_agent_idx][1] -= steer_delta;
-                // Cap steering to maximum of 12
-                if (actions[env.human_agent_idx][1] > 12) {
-                    actions[env.human_agent_idx][1] = 12;
+                if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
+                    steer_idx -= steer_delta; // Decrease steering index for right turn
+                    if (steer_idx < 0)
+                        steer_idx = 0;
                 }
-            }
-            if (IsKeyPressed(KEY_TAB)) {
-                env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
+
+                // Encode into single integer: action = accel_idx * 13 + steer_idx
+                actions[env.human_agent_idx] = accel_idx * 13 + steer_idx;
+
+            } else if (env.dynamics_model == JERK) {
+                // Jerk dynamics: longitudinal and lateral jerk
+                // JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f}
+                // JERK_LAT[3] = {-4.0f, 0.0f, 4.0f}
+                int jerk_long_idx = 2; // neutral (0.0)
+                int jerk_lat_idx = 1;  // neutral (0.0)
+
+                if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
+                    jerk_long_idx = 3; // acceleration (4.0)
+                }
+                if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
+                    jerk_long_idx = 0; // hard braking (-15.0)
+                }
+                if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
+                    jerk_lat_idx = 2; // left turn (4.0)
+                }
+                if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
+                    jerk_lat_idx = 0; // right turn (-4.0)
+                }
+
+                // Encode into single integer: action = jerk_long_idx * 3 + jerk_lat_idx
+                actions[env.human_agent_idx] = jerk_long_idx * 3 + jerk_lat_idx;
             }
         }
+
         c_step(&env);
         c_render(&env);
     }
@@ -126,7 +152,6 @@ void performance_test() {
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
         .map_name = "resources/drive/binaries/map_000.bin",

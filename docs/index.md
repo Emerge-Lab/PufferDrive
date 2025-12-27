@@ -11,6 +11,14 @@
   </div>
 </div>
 
+## Try it in your browser
+
+<iframe src="assets/game.html" title="PufferDrive Demo" width="1280" height="720" style="border: none; display: block; margin: 2rem auto;"></iframe>
+
+<p style="text-align: center; color: #888; margin-top: 1rem;">
+  Hold <strong>Left Shift</strong> and use arrow keys or <strong>WASD</strong> to control the vehicle. Hold <strong>space</strong> for first-person view and <strong>ctrl</strong> to see what your agent is seeing :)
+</p>
+
 ## Highlights
 
 - Multi-agent drive environment that trains agents at 300K steps per second.
