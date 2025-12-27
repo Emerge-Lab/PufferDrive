@@ -7,13 +7,13 @@
 }
 
 /* Override mdbook theme to match mkdocs Material (white/teal) */
-.light, .rust {
+.light, .rust, .navy, .coal, .ayu {
   --bg: #fafafa;
   --fg: #1a1a1a;
   --sidebar-bg: #ffffff;
   --sidebar-fg: #4a4a4a;
   --sidebar-non-existant: #aaaaaa;
-  --sidebar-active: #0d9488;
+  --sidebar-active: #1a1a1a;
   --sidebar-spacer: #f0f0f0;
   --scrollbar: #cccccc;
   --icons: #666666;
@@ -27,6 +27,9 @@
   --quote-bg: rgba(13, 148, 136, 0.08);
   --quote-border: #0d9488;
   --search-mark-bg: rgba(13, 148, 136, 0.3);
+  --sidebar-active-indicator: #1a1a1a;
+  --blockquote-important-color: #1a1a1a;
+  --sidebar-header-border-color: #999999;
 }
 
 /* Sidebar styling */
@@ -70,6 +73,73 @@
 .chapter li.chapter-item a.active {
   background: rgba(13, 148, 136, 0.08);
   color: #0d9488;
+}
+
+/* Override the active chapter indicator bar color to grey/black */
+.chapter li.chapter-item.expanded > a::before,
+.chapter li.chapter-item a.active::before,
+.sidebar .active {
+  border-color: #1a1a1a !important;
+}
+
+.chapter .section li.chapter-item a.active {
+  border-left-color: #1a1a1a !important;
+}
+
+/* Force the left border indicator to grey */
+.sidebar-scrollbox a.active {
+  border-left: 2px solid #1a1a1a !important;
+}
+
+ol.chapter li a.active {
+  border-left-color: #1a1a1a !important;
+}
+
+/* Target any purple/hsl colors */
+.sidebar a::before,
+.chapter a::before {
+  background-color: #1a1a1a !important;
+  border-color: #1a1a1a !important;
+}
+
+/* Force all active indicators */
+* {
+  --sidebar-active: #1a1a1a;
+}
+
+/* Right-side TOC (table of contents) active indicator */
+.pagetoc a.active,
+.pagetoc .active {
+  color: #1a1a1a !important;
+  border-left-color: #1a1a1a !important;
+}
+
+.pagetoc a:hover {
+  color: #0d9488;
+}
+
+.pagetoc a {
+  border-left: 2px solid transparent;
+  color: #666666;
+}
+
+/* Override any purple/accent colors in the page TOC */
+.pagetoc .active,
+.pagetoc a.active {
+  border-left: 2px solid #1a1a1a !important;
+}
+
+#pagetoc a.active {
+  border-color: #1a1a1a !important;
+  color: #1a1a1a !important;
+}
+
+/* Catch-all for any toc elements */
+.toc .active,
+#toc .active,
+nav.pagetoc .active {
+  border-left-color: #1a1a1a !important;
+  border-color: #1a1a1a !important;
 }
 
 /* Part titles in sidebar */
