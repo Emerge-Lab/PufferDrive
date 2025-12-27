@@ -181,10 +181,10 @@ puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-t
 
 **Docs**
 
-A browsable documentation site now lives under `docs/` and is configured with MkDocs Material. To preview locally:
+A browsable documentation site now lives under `docs/` and is configured with mkbooks. To preview locally:
 ```
-uv pip install -r docs/requirements.txt  # or pip install -r docs/requirements.txt
-mkdocs serve
+brew install mdbook
+mdbook serve --open docs
 ```
 Open the served URL to see a local version of the docs.
 

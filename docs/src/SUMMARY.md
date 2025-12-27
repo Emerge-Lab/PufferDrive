@@ -1,6 +1,6 @@
 # Summary
 
-[Introduction](README.md)
+[Getting started](README.md)
 
 # Documentation
 
@@ -13,7 +13,7 @@
 
 # Data
 
-- [Data Sources & Preparation](data.md)
+- [Data Sources &amp; Preparation](data.md)
 
 # Benchmarks
 
