@@ -1,8 +1,8 @@
 # PufferDrive 2.0: A fast and friendly driving simulator for training and evaluating RL agents
 
-**Daphne Cornelisse**¹·$*$, **Spencer Cheng**²·$*$, Pragnay Mandavilli¹, Julian Hunt¹, Kevin Joseph¹, Waël Doulazmi³, Eugene Vinitsky¹
+**Daphne Cornelisse**¹·$*$, **Spencer Cheng**²·$*$, Pragnay Mandavilli¹, Julian Hunt¹, Kevin Joseph¹, Waël Doulazmi³, Valentin Charraut³, Eugene Vinitsky¹
 
-¹ Emerge Lab at NYU | ² [Puffer.ai](https://puffer.ai/) | ³ Valeo | $*$ Shared first contributor
+¹ Emerge Lab at NYU Tandon School of Engineering| ² [Puffer.ai](https://puffer.ai/) | ³ Valeo | $*$ Shared first contributor
 
 *December 26, 2025*
 
@@ -16,9 +16,9 @@ This post highlights the main features and traces the sequence of projects that 
 
 ## Highlights
 
-- **Super-fast self-play RL**: Train agents on 10,000 multi-agent Waymo scenarios and reach a near-perfect score in under an hour. [Earlier results](https://arxiv.org/abs/2502.14706) took 24 hours. PufferDrive achieves similar performance in about **15 minutes on a single GPU**.
+- **Super-fast self-play RL**: Train agents on 10,000 multi-agent Waymo scenarios and reach a near-perfect score in under in about **15 minutes on a single GPU** where [Earlier results](https://arxiv.org/abs/2502.14706) took 24 hours.
 - **Long-horizon driving:** Train agents to reach goals indefinitely on large CARLA maps. Demo agents are trained this way. Drive alongside them in the browser below.
-- **Built-in evaluation:** Integrated eval support for the [Waymo Open Sim Agent Challenge (WOSAC)](https://emerge-lab.github.io/PufferDrive/wosac/) and a [human compatibility benchmark](https://emerge-lab.github.io/PufferDrive/evaluation/#human-compatibility-benchmark).
+- **Built-in evaluation:** Integrated, accelerated eval support for the [Waymo Open Sim Agent Challenge (WOSAC)](https://emerge-lab.github.io/PufferDrive/wosac/) and a [human compatibility benchmark](https://emerge-lab.github.io/PufferDrive/evaluation/#human-compatibility-benchmark).
 - **Easy scenario creation:** Edit or design custom scenarios in minutes, including long-tail and stress-test cases, using the [interactive scenario editor](https://emerge-lab.github.io/PufferDrive/scene-editor/).
 - **And more:** Browse the docs for details.
 
@@ -48,19 +48,17 @@ Over the past few years, we built several data-driven, multi-agent simulators to
 
 The main limitation was the _cost_ of simulated experience. Nocturne ran at roughly 2,000 steps per second, so reaching this level of performance required about two days of training on a single GPU. It hinted that self-play RL could work, but generating the required experience was still expensive.
 
-This suggested that the primary bottleneck was simulation throughput, not the learning algorithm.
-
 ## Scaling up
 
 Later work explored what becomes possible once reaching scale is no longer a bottleneck.
 
 * [**Gigaflow**](https://arxiv.org/abs/2501.00678) demonstrated that large-scale self-play alone can produce robust, naturalistic driving. With a batched simulator, it trained on the equivalent of decades of driving per hour and achieved strong performance across multiple benchmarks without human driving demonstrations.
-* [**GPUDrive**](https://arxiv.org/abs/2408.01584), built on [Madrona](https://madrona-engine.github.io/), achieved similar controllability in about one day on a single consumer GPU using a simpler reward function and standard PPO.
+* [**GPUDrive**](https://arxiv.org/abs/2408.01584), built on [Madrona](https://madrona-engine.github.io/), open-sourced a similar GPU-driven simulation approach. It explored a more minimal self-play setup with a simpler reward structure and narrower task scope. It demonstrated that effective collision avoidance and goal-reaching can be learned in roughly a day on a single consumer GPU.
 
-These results suggested that once simulation becomes cheap, self-play RL can produce robust autonomous driving policies without relying on human demonstrations.
+These results suggested that once simulation becomes cheap, self-play RL can produce robust autonomous driving policies.
 
 ![SPS comparison between sims](images/sim-comparison.png)
-**Figure 1:** _Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching. This captures both simulation speed and algorithmic efficiency._
+**Figure 1:** _Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching[^2]. This captures both simulation speed and algorithmic efficiency._
 
 | Simulator | End-to-end training SPS | Time to 80% success rate |
 |-----------|--------------|------------------------|
@@ -68,14 +66,16 @@ These results suggested that once simulation becomes cheap, self-play RL can pro
 | GPUDrive | 50,000 | ~1.7 hours |
 | PufferDrive | 320,000 | ~4 minutes |
 
+[^2] We benchmark here against 80\% goal-reaching to make the results comparable to those in Nocturne. Similar accelerations are achieved against GPUDrive at the 99% success rate.
+
 
 ## From GPUDrive to PufferDrive
 
-GPUDrive delivered high raw simulation speed, but end-to-end training throughput (~50K steps/sec) still limited experiments, especially on large maps like [CARLA](https://carla.org/). Memory layout and batching overheads prevented further speedups.
+GPUDrive delivered high raw simulation speed, but end-to-end training throughput (~30K steps/sec) still limited experiments, especially on large maps like [CARLA](https://carla.org/). Memory layout and batching overheads prevented further speedups.
 
 We were motivated to get faster end-to-end training because waiting a full day for experimental results slows down everything, debugging, testing, and scientific progress. This led to the development of PufferDrive.
 
-Partnering with Spencer Cheng from [Puffer.ai](https://puffer.ai/), we rebuilt GPUDrive around [**PufferLib**](https://arxiv.org/abs/2406.12905). The result, **PufferDrive 1.0**, reached ~200,000 steps per second on a single GPU and scaled linearly across multiple GPUs. Training agents on 10,000 Waymo maps took roughly 24 hours with GPUDrive—[with PufferDrive, we now reproduce the same results in ~2 hours](https://x.com/spenccheng/status/1959665036483350994).
+Partnering with Spencer Cheng from [Puffer.ai](https://puffer.ai/), we rebuilt GPUDrive around [**PufferLib**](https://arxiv.org/abs/2406.12905). The result, **PufferDrive 1.0**, reached ~200,000 steps per second on a single GPU and scaled linearly across multiple GPUs. Training agents on 10,000 Waymo maps took roughly 24 hours with GPUDrive—[with PufferDrive, we now reproduce the same results in ~15 minutes](https://x.com/spenccheng/status/1959665036483350994).
 
 ## Roadmap: PufferDrive 3.0
 
@@ -87,11 +87,11 @@ What is next? PufferDrive 3.0 will improve agent diversity, realism, and expand 
 
 **Agent and interaction**
 
-- Collision checking via grid map
-- Enable initialization of variable agent numbers
-- Fix `active_agent_count` edge cases
-- Support for reward conditioning
-- Lane-based rewards
+- More efficient collision checking
+- Support for traffic lights
+- Variable agent numbers in CARLA maps
+- Support for reward conditioning across a wide range of rewards
+- A wide set of new rewards representing law-abiding driving
 
 **Benchmarks**
 
@@ -103,7 +103,7 @@ What is next? PufferDrive 3.0 will improve agent diversity, realism, and expand 
 If you use PufferDrive, please cite:
 ```bibtex
 @software{pufferdrive2025github,
-  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Eugene Vinitsky},
+  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Valentin Charraut and Eugene Vinitsky},
   title = {{PufferDrive}: A Fast and Friendly Driving Simulator for Training and Evaluating {RL} Agents},
   url = {https://github.com/Emerge-Lab/PufferDrive},
   version = {2.0.0},

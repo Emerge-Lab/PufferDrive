@@ -1,11 +1,17 @@
 # PufferDrive
 
+<p align="center">
+  <a href="https://github.com/Emerge-Lab/PufferDrive/stargazers"><img src="https://img.shields.io/github/stars/Emerge-Lab/PufferDrive?style=social" alt="GitHub stars"></a>
+  <a href="https://github.com/Emerge-Lab/PufferDrive/network/members"><img src="https://img.shields.io/github/forks/Emerge-Lab/PufferDrive?style=social" alt="GitHub forks"></a>
+  <a href="https://github.com/Emerge-Lab/PufferDrive"><img src="https://img.shields.io/github/watchers/Emerge-Lab/PufferDrive?style=social" alt="GitHub watchers"></a>
+</p>
+
 <div class="hero">
   <img src="images/pufferdrive.gif" alt="PufferDrive logo">
   <div>
     <p>PufferDrive is a high-throughput autonomous driving simulator built on <a href="https://puffer.ai">PufferLib</a>. Train and evaluate multi-agent driving policies with fast vectorized stepping, streamlined data conversion, and ready-made benchmarks.</p>
     <div class="cta">
-      <a class="primary" href="getting-started/">Start here: install & build</a>
+      <a class="primary" href="getting-started.html">Start here: install & build</a>
       <a href="#workflow">See the workflow</a>
     </div>
   </div>
@@ -13,7 +19,9 @@
 
 ## Try it in your browser
 
-<iframe src="assets/game.html" title="PufferDrive Demo" width="1280" height="720" style="border: none; display: block; margin: 2rem auto;"></iframe>
+<div class="video-embed">
+<iframe src="assets/game.html" title="PufferDrive Demo" style="border: none;"></iframe>
+</div>
 
 <p style="text-align: center; color: #888; margin-top: 1rem;">
   Hold <strong>Left Shift</strong> and use arrow keys or <strong>WASD</strong> to control the vehicle. Hold <strong>space</strong> for first-person view and <strong>ctrl</strong> to see what your agent is seeing :)
@@ -40,19 +48,19 @@
     <div class="badge">Step 1</div>
     <h3>Install & Build</h3>
     <p>Set up the environment, install dependencies, and compile the native extensions.</p>
-    <a href="getting-started/">Open guide</a>
+    <a href="getting-started.html">Open guide</a>
   </div>
   <div class="step-card">
     <div class="badge">Step 2</div>
     <h3>Prepare Data</h3>
     <p>Download WOMD/GPUDrive datasets from Hugging Face and convert to map binaries.</p>
-    <a href="data/">Open guide</a>
+    <a href="data.html">Open guide</a>
   </div>
   <div class="step-card">
     <div class="badge">Step 3</div>
     <h3>Train & Evaluate</h3>
     <p>Train agents and evaluate them with WOSAC and human-replay benchmarks.</p>
-    <a href="evaluation/">Open guide</a>
+    <a href="evaluation.html">Open guide</a>
   </div>
 </div>
 
