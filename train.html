@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Getting started - PufferDrive</title>
+        <title>Training Agents - PufferDrive</title>
 
 
         <!-- Custom HTML head -->
@@ -180,113 +180,61 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="pufferdrive"><a class="header" href="#pufferdrive">PufferDrive</a></h1>
-<p align="center">
-  <a href="https://github.com/Emerge-Lab/PufferDrive/stargazers"><img src="https://img.shields.io/github/stars/Emerge-Lab/PufferDrive?style=social" alt="GitHub stars"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive/network/members"><img src="https://img.shields.io/github/forks/Emerge-Lab/PufferDrive?style=social" alt="GitHub forks"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive"><img src="https://img.shields.io/github/watchers/Emerge-Lab/PufferDrive?style=social" alt="GitHub watchers"></a>
-</p>
-
-<div class="hero">
-  <img src="images/pufferdrive.gif" alt="PufferDrive logo">
-  
-<div>
-    
-<p>PufferDrive is a high-throughput autonomous driving simulator built on <a href="https://puffer.ai">PufferLib</a>. Train and evaluate multi-agent driving policies with fast vectorized stepping, streamlined data conversion, and ready-made benchmarks.</p>
-
-    
-<div class="cta">
-      <a class="primary" href="getting-started.html">Start here: install &amp; build</a>
-      <a href="#workflow">See the workflow</a>
-    </div>
-
-  </div>
-
-</div>
-
-<h2 id="try-it-in-your-browser"><a class="header" href="#try-it-in-your-browser">Try it in your browser</a></h2>
-<div class="video-embed">
-<iframe src="assets/game.html" title="PufferDrive Demo" style="border: none;"></iframe>
-</div>
-
-<p style="text-align: center; color: #888; margin-top: 1rem;">
-  Hold <strong>Left Shift</strong> and use arrow keys or <strong>WASD</strong> to control the vehicle. Hold <strong>space</strong> for first-person view and <strong>ctrl</strong> to see what your agent is seeing :)
-</p>
-
-<h2 id="highlights"><a class="header" href="#highlights">Highlights</a></h2>
+                        <h2 id="training"><a class="header" href="#training">Training</a></h2>
+<h3 id="basic-training"><a class="header" href="#basic-training">Basic training</a></h3>
+<p>Launch a training run with Weights &amp; Biases logging:</p>
+<pre><code class="language-bash">puffer train puffer_drive --wandb --wandb-project "pufferdrive"
+</code></pre>
+<h3 id="environment-configurations"><a class="header" href="#environment-configurations">Environment configurations</a></h3>
+<p><strong>Default configuration (Waymo maps)</strong></p>
+<p>The default settings in <code>drive.ini</code> are optimized for:</p>
 <ul>
-<li>Multi-agent drive environment that trains agents at 300K steps per second.</li>
-<li>Scripts to convert Waymo Open Motion Dataset JSON into lightweight binaries (CARLA sample map included).</li>
-<li>Benchmarks for distributional realism and human compatibility.</li>
-<li>Raylib-based visualizer for local or headless render/export.</li>
+<li>Training in thousands of Waymo maps</li>
+<li>Short episodes (91 steps)</li>
 </ul>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<p><strong>Carla maps configuration</strong>
+For training agents to drive indefinitely in larger Carla maps, we recommend modifying <code>drive.ini</code> as follows:</p>
+<pre><code class="language-ini">[env]
+goal_speed = 30.0  # Target speed in m/s at the goal. Lower values discourage excessive speeding
+goal_behavior = 1  # 0: respawn, 1: generate_new_goals, 2: stop
+goal_target_distance = 25.0  # Distance to new goal when using generate_new_goals
+
+# Episode settings
+episode_length = 200 # Increase for longer episode horizon
+resample_frequency = 100000 # No resampling needed (there are only a few Carla maps)
+termination_mode = 0  # 0: terminate at episode_length, 1: terminate after all agents reset
+
+# Map settings
+map_dir = "resources/drive/binaries/carla"
+num_maps = 1
+</code></pre>
+<p><strong>Note:</strong> The default training hyperparameters work well for both configurations and typically don’t need adjustment.</p>
+<h2 id="controlled-experiments"><a class="header" href="#controlled-experiments">Controlled experiments</a></h2>
+<p>Run parameter sweeps for architecture search or multi-seed experiments:</p>
+<pre><code class="language-bash">puffer controlled_exp puffer_drive --wandb --wandb-project "pufferdrive2.0_carla" --tag speed
+</code></pre>
+<p>Define parameter sweeps in <code>drive.ini</code>:</p>
+<pre><code class="language-ini">[controlled_exp.env.goal_speed]
+values = [10, 20, 30]
+</code></pre>
+<p>This will launch separate training runs for each value in the list, useful for:</p>
 <ul>
-<li>Follow <a href="getting-started.html">Getting Started</a> to install, build the C extensions, and run <code>puffer train puffer_drive</code>.</li>
-<li>Consult <a href="simulator.html">Simulator</a> for how actions/observations, rewards, and <code>.ini</code> settings map to the underlying C environment and Torch policy.</li>
-<li>Prepare drive map binaries with the steps in <a href="data.html">Data</a>.</li>
-<li>Evaluate a policy with the commands in <a href="evaluation.html">Evaluation</a> and preview runs with the <a href="visualizer.html">Visualizer</a>.</li>
+<li>Hyperparameter tuning</li>
+<li>Architecture search</li>
+<li>Running multiple random seeds</li>
+<li>Ablation studies</li>
 </ul>
-<h2 id="workflow"><a class="header" href="#workflow">Workflow</a></h2>
-<div class="workflow">
-  
-<div class="step-card">
-    
-<div class="badge">Step 1</div>
-
-    
-<h3>Install &amp; Build</h3>
-
-    
-<p>Set up the environment, install dependencies, and compile the native extensions.</p>
-
-    <a href="getting-started.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 2</div>
-
-    
-<h3>Prepare Data</h3>
-
-    
-<p>Download WOMD/GPUDrive datasets from Hugging Face and convert to map binaries.</p>
-
-    <a href="data.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 3</div>
-
-    
-<h3>Train &amp; Evaluate</h3>
-
-    
-<p>Train agents and evaluate them with WOSAC and human-replay benchmarks.</p>
-
-    <a href="evaluation.html">Open guide</a>
-  </div>
-
-</div>
-
-<h2 id="repository-layout"><a class="header" href="#repository-layout">Repository layout</a></h2>
-<ul>
-<li><code>pufferlib/ocean/drive</code>: Drive environment implementation and map processing utilities.</li>
-<li><code>resources/drive/binaries</code>: Expected location for compiled map binaries (outputs of the data conversion step).</li>
-<li><code>scripts/build_ocean.sh</code>: Helper for building the Raylib visualizer and related binaries.</li>
-<li><code>examples</code>, <code>tests</code>, <code>experiments</code>: Reference usage, checks, and research scripts that pair with the docs pages.</li>
-</ul>
+<p>You can specify multiple controlled experiment parameters, and the system will iterate through all combinations.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="getting-started.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
-                            <a rel="next prefetch" href="getting-started.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="interact-with-agents.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -296,8 +244,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="getting-started.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
-                    <a rel="next prefetch" href="getting-started.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="interact-with-agents.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

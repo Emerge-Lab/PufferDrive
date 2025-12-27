@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Getting started - PufferDrive</title>
+        <title>Data Sources &amp; Preparation - PufferDrive</title>
 
 
         <!-- Custom HTML head -->
@@ -180,113 +180,86 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="pufferdrive"><a class="header" href="#pufferdrive">PufferDrive</a></h1>
-<p align="center">
-  <a href="https://github.com/Emerge-Lab/PufferDrive/stargazers"><img src="https://img.shields.io/github/stars/Emerge-Lab/PufferDrive?style=social" alt="GitHub stars"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive/network/members"><img src="https://img.shields.io/github/forks/Emerge-Lab/PufferDrive?style=social" alt="GitHub forks"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive"><img src="https://img.shields.io/github/watchers/Emerge-Lab/PufferDrive?style=social" alt="GitHub watchers"></a>
-</p>
-
-<div class="hero">
-  <img src="images/pufferdrive.gif" alt="PufferDrive logo">
-  
-<div>
-    
-<p>PufferDrive is a high-throughput autonomous driving simulator built on <a href="https://puffer.ai">PufferLib</a>. Train and evaluate multi-agent driving policies with fast vectorized stepping, streamlined data conversion, and ready-made benchmarks.</p>
-
-    
-<div class="cta">
-      <a class="primary" href="getting-started.html">Start here: install &amp; build</a>
-      <a href="#workflow">See the workflow</a>
-    </div>
-
-  </div>
-
-</div>
-
-<h2 id="try-it-in-your-browser"><a class="header" href="#try-it-in-your-browser">Try it in your browser</a></h2>
-<div class="video-embed">
-<iframe src="assets/game.html" title="PufferDrive Demo" style="border: none;"></iframe>
-</div>
-
-<p style="text-align: center; color: #888; margin-top: 1rem;">
-  Hold <strong>Left Shift</strong> and use arrow keys or <strong>WASD</strong> to control the vehicle. Hold <strong>space</strong> for first-person view and <strong>ctrl</strong> to see what your agent is seeing :)
-</p>
-
-<h2 id="highlights"><a class="header" href="#highlights">Highlights</a></h2>
+                        <h1 id="data"><a class="header" href="#data">Data</a></h1>
+<p>PufferDrive consumes map binaries generated from multiple data sources, including the <a href="https://github.com/waymo-research/waymo-open-dataset">Waymo Open Motion Dataset (WOMD)</a> JSON files, <a href="https://github.com/valeoai/V-Max">ScenarioMax</a>, and <a href="https://carla.org/">CARLA</a>. This page covers how to obtain data and convert it into the binary format expected by the simulator.</p>
+<h2 id="download-options"><a class="header" href="#download-options">Download options</a></h2>
 <ul>
-<li>Multi-agent drive environment that trains agents at 300K steps per second.</li>
-<li>Scripts to convert Waymo Open Motion Dataset JSON into lightweight binaries (CARLA sample map included).</li>
-<li>Benchmarks for distributional realism and human compatibility.</li>
-<li>Raylib-based visualizer for local or headless render/export.</li>
+<li><a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_train"><code>pufferdrive_womd_train</code></a>: <strong>10k scenarios</strong> from the Waymo Open Motion <em>training</em> dataset.</li>
+<li><a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val"><code>pufferdrive_womd_val</code></a>: <strong>10k scenarios</strong> from the Waymo Open Motion <em>validation</em> dataset.</li>
+<li>Additional compatible sources: <a href="https://github.com/valeoai/ScenarioMax">ScenarioMax</a> exports JSON in the same format.</li>
+<li>Included <a href="https://carla.org/">CARLA</a> maps: Readily available CARLA maps live in <code>data_utils/carla/carla_py123d</code>.</li>
 </ul>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<h3 id="download-via-hugging-face"><a class="header" href="#download-via-hugging-face">Download via Hugging Face</a></h3>
+<p>Install the CLI once:</p>
+<pre><code class="language-bash">uv pip install -U "huggingface_hub[cli]"
+</code></pre>
+<p>Download:</p>
+<pre><code class="language-bash">huggingface-cli download daphne-cornelisse/pufferdrive_womd_train \
+  --repo-type dataset \
+  --local-dir data/processed/training
+</code></pre>
+<p>Place raw JSON files under <code>data/processed/training</code> (default location read by the conversion script).</p>
+<h2 id="convert-json-to-map-binaries"><a class="header" href="#convert-json-to-map-binaries">Convert JSON to map binaries</a></h2>
+<p>The conversion script writes compact <code>.bin</code> maps to <code>resources/drive/binaries</code>:</p>
+<pre><code class="language-bash">python pufferlib/ocean/drive/drive.py
+</code></pre>
+<p>Notes:</p>
 <ul>
-<li>Follow <a href="getting-started.html">Getting Started</a> to install, build the C extensions, and run <code>puffer train puffer_drive</code>.</li>
-<li>Consult <a href="simulator.html">Simulator</a> for how actions/observations, rewards, and <code>.ini</code> settings map to the underlying C environment and Torch policy.</li>
-<li>Prepare drive map binaries with the steps in <a href="data.html">Data</a>.</li>
-<li>Evaluate a policy with the commands in <a href="evaluation.html">Evaluation</a> and preview runs with the <a href="visualizer.html">Visualizer</a>.</li>
+<li>The script iterates every JSON file in <code>data/processed/training</code> and emits <code>map_XXX.bin</code> files.</li>
+<li><code>resources/drive/binaries/map_000.bin</code> ships with the repo for quick smoke tests; generate additional bins for training/eval.</li>
+<li>If you want to point at a different dataset location or limit the number of maps, adjust <code>process_all_maps</code> in <code>pufferlib/ocean/drive/drive.py</code> before running.</li>
 </ul>
-<h2 id="workflow"><a class="header" href="#workflow">Workflow</a></h2>
-<div class="workflow">
-  
-<div class="step-card">
-    
-<div class="badge">Step 1</div>
-
-    
-<h3>Install &amp; Build</h3>
-
-    
-<p>Set up the environment, install dependencies, and compile the native extensions.</p>
-
-    <a href="getting-started.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 2</div>
-
-    
-<h3>Prepare Data</h3>
-
-    
-<p>Download WOMD/GPUDrive datasets from Hugging Face and convert to map binaries.</p>
-
-    <a href="data.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 3</div>
-
-    
-<h3>Train &amp; Evaluate</h3>
-
-    
-<p>Train agents and evaluate them with WOSAC and human-replay benchmarks.</p>
-
-    <a href="evaluation.html">Open guide</a>
-  </div>
-
-</div>
-
-<h2 id="repository-layout"><a class="header" href="#repository-layout">Repository layout</a></h2>
+<h2 id="map-binary-format-reference"><a class="header" href="#map-binary-format-reference">Map binary format reference</a></h2>
+<p>The simulator reads the compact binary layout produced by <code>save_map_binary</code> in <code>pufferlib/ocean/drive/drive.py</code> and parsed by <code>load_map_binary</code> in <code>pufferlib/ocean/drive/drive.h</code>:</p>
 <ul>
-<li><code>pufferlib/ocean/drive</code>: Drive environment implementation and map processing utilities.</li>
-<li><code>resources/drive/binaries</code>: Expected location for compiled map binaries (outputs of the data conversion step).</li>
-<li><code>scripts/build_ocean.sh</code>: Helper for building the Raylib visualizer and related binaries.</li>
-<li><code>examples</code>, <code>tests</code>, <code>experiments</code>: Reference usage, checks, and research scripts that pair with the docs pages.</li>
+<li><strong>Header</strong>: <code>sdc_track_index</code> (int), <code>num_tracks_to_predict</code> (int) followed by that many <code>track_index</code> ints, <code>num_objects</code> (int), <code>num_roads</code> (int).</li>
+<li><strong>Objects (vehicles/pedestrians/cyclists)</strong>: For each object, the writer stores <code>scenario_id</code> (<code>unique_map_id</code> passed to <code>load_map</code>), <code>type</code> (<code>1</code> vehicle, <code>2</code> pedestrian, <code>3</code> cyclist), <code>id</code>, <code>array_size</code> (<code>TRAJECTORY_LENGTH = 91</code>), positions <code>x/y/z[91]</code>, velocities <code>vx/vy/vz[91]</code>, <code>heading[91]</code>, <code>valid[91]</code>, and scalars <code>width/length/height</code>, <code>goalPosition (x, y, z)</code>, <code>mark_as_expert</code> (int). Missing trajectory entries are zero-padded by the converter.</li>
+<li><strong>Road elements</strong>: Each road entry stores <code>scenario_id</code>, a remapped <code>type</code> (<code>4</code> lane, <code>5</code> road line, <code>6</code> road edge, <code>7</code> stop sign, <code>8</code> crosswalk, <code>9</code> speed bump, <code>10</code> driveway), <code>id</code>, <code>array_size</code> (#points), then <code>x/y/z</code> arrays of that length and scalars <code>width/length/height</code>, <code>goalPosition</code>, <code>mark_as_expert</code>. <code>save_map_binary</code> also simplifies long polylines (<code>len(geometry) &gt; 10</code> and <code>type &lt;= 16</code>) with a 0.1 area threshold to keep files small.</li>
+<li><strong>Control hints</strong>: <code>tracks_to_predict</code> and <code>mark_as_expert</code> influence which agents are controllable (<code>control_mode</code> in the simulator) versus replayed as experts or static actors (<code>set_active_agents</code> in <code>drive.h</code>).</li>
+</ul>
+<p>Refer to <a href="simulator.html">Simulator</a> for how the binaries are consumed during resets, observation construction, and reward logging.</p>
+<h2 id="verifying-data-availability"><a class="header" href="#verifying-data-availability">Verifying data availability</a></h2>
+<ul>
+<li>After conversion, <code>ls resources/drive/binaries | head</code> should show numbered <code>.bin</code> files.</li>
+<li>If you see <code>Required directory resources/drive/binaries/map_000.bin not found</code> during training, rerun the conversion or check paths.</li>
+<li>With binaries in place, run <code>puffer train puffer_drive</code> from <a href="getting-started.html">Getting Started</a> as a smoke test that the build, data, and bindings are wired together.</li>
+<li>To inspect the binary output, convert a single JSON file with <code>load_map(&lt;json&gt;, &lt;id&gt;, &lt;output_path&gt;)</code> inside <code>drive.py</code>.</li>
+</ul>
+<h2 id="interactive-scenario-editor"><a class="header" href="#interactive-scenario-editor">Interactive scenario editor</a></h2>
+<p>See <a href="scene-editor.html">Interactive scenario editor</a> for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the <code>.bin</code> format consumed by the simulator.</p>
+<h2 id="generate-carla-agent-trajectories"><a class="header" href="#generate-carla-agent-trajectories">Generate CARLA agent trajectories</a></h2>
+<p>The agent trajectories in the provided CARLA maps are procedurally generated assuming a general velocity range without a valid initial state(no collision/offroad). The repository uses an external submodule for CARLA XODR processing (<code>pyxodr</code>).</p>
+<p>To generate your own CARLA agent trajectories, install the submodules and developer requirements (editable install) before running the generator:</p>
+<pre><code class="language-bash">git submodule update --init --recursive
+
+python -m pip install -e . -r requirements-dev.txt
+</code></pre>
+<p>Run the generator script. Important optional args:</p>
+<ul>
+<li><code>--num_objects</code>: how many agents to initialize in a map (default: map-dependent)</li>
+<li><code>--num_data_per_map</code>: number of data files to generate per map</li>
+<li><code>--avg_speed</code>: controls the gap between subsequent points in the trajectory</li>
+</ul>
+<pre><code class="language-bash">python data_utils/carla/generate_carla_agents.py --num_objects 32 --num_data_per_map 8 --avg_speed 2
+</code></pre>
+<p>There is also a visualizer for inspecting initial agent positions on the map:</p>
+<pre><code class="language-bash">python data_utils/carla/plot.py
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li>Base Carla maps that agents are spawned live under <code>data_utils/carla/carla_py123d</code> and the Carla XODRs are at <code>data/CarlaXODRs</code> to interact with the <code>pyxodr</code> submodule for XODR parsing and agent traj generation.</li>
+<li>If you encounter missing binary or map errors, ensure the submodule was initialized and the required packages from <code>requirements-dev.txt</code> are installed.</li>
 </ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="visualizer.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
-                            <a rel="next prefetch" href="getting-started.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="evaluation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -296,8 +269,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="visualizer.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
-                    <a rel="next prefetch" href="getting-started.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="evaluation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

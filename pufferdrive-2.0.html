@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Getting started - PufferDrive</title>
+        <title>PufferDrive 2.0 - PufferDrive</title>
 
 
         <!-- Custom HTML head -->
@@ -180,115 +180,105 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="pufferdrive"><a class="header" href="#pufferdrive">PufferDrive</a></h1>
-<p align="center">
-  <a href="https://github.com/Emerge-Lab/PufferDrive/stargazers"><img src="https://img.shields.io/github/stars/Emerge-Lab/PufferDrive?style=social" alt="GitHub stars"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive/network/members"><img src="https://img.shields.io/github/forks/Emerge-Lab/PufferDrive?style=social" alt="GitHub forks"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive"><img src="https://img.shields.io/github/watchers/Emerge-Lab/PufferDrive?style=social" alt="GitHub watchers"></a>
-</p>
-
-<div class="hero">
-  <img src="images/pufferdrive.gif" alt="PufferDrive logo">
-  
-<div>
-    
-<p>PufferDrive is a high-throughput autonomous driving simulator built on <a href="https://puffer.ai">PufferLib</a>. Train and evaluate multi-agent driving policies with fast vectorized stepping, streamlined data conversion, and ready-made benchmarks.</p>
-
-    
-<div class="cta">
-      <a class="primary" href="getting-started.html">Start here: install &amp; build</a>
-      <a href="#workflow">See the workflow</a>
-    </div>
-
-  </div>
-
-</div>
-
-<h2 id="try-it-in-your-browser"><a class="header" href="#try-it-in-your-browser">Try it in your browser</a></h2>
-<div class="video-embed">
-<iframe src="assets/game.html" title="PufferDrive Demo" style="border: none;"></iframe>
-</div>
-
-<p style="text-align: center; color: #888; margin-top: 1rem;">
-  Hold <strong>Left Shift</strong> and use arrow keys or <strong>WASD</strong> to control the vehicle. Hold <strong>space</strong> for first-person view and <strong>ctrl</strong> to see what your agent is seeing :)
-</p>
-
+                        <h1 id="pufferdrive-20-a-fast-and-friendly-driving-simulator-for-training-and-evaluating-rl-agents"><a class="header" href="#pufferdrive-20-a-fast-and-friendly-driving-simulator-for-training-and-evaluating-rl-agents">PufferDrive 2.0: A fast and friendly driving simulator for training and evaluating RL agents</a></h1>
+<p><strong>Daphne Cornelisse</strong>¹·$<em>$, <strong>Spencer Cheng</strong>²·$</em>$, Pragnay Mandavilli¹, Julian Hunt¹, Kevin Joseph¹, Waël Doulazmi³, Valentin Charraut³, Eugene Vinitsky¹</p>
+<p>¹ Emerge Lab at NYU Tandon School of Engineering| ² <a href="https://puffer.ai/">Puffer.ai</a> | ³ Valeo | $*$ Shared first contributor</p>
+<p><em>December 26, 2025</em></p>
+<hr>
+<p>We introduce <strong>PufferDrive 2.0</strong>, a fast, easy-to-use driving simulator for reinforcement learning (RL). Built on <a href="https://puffer.ai/">PufferLib</a>, it allows you to train agents at <strong>300,000 steps per second</strong> on a single GPU. You can solve thousands of multi-agent scenarios in just 15 minutes. Evaluation and visualization run directly in the browser.</p>
+<p>This post highlights the main features and traces the sequence of projects that led to PufferDrive 2.0.</p>
+<hr>
 <h2 id="highlights"><a class="header" href="#highlights">Highlights</a></h2>
 <ul>
-<li>Multi-agent drive environment that trains agents at 300K steps per second.</li>
-<li>Scripts to convert Waymo Open Motion Dataset JSON into lightweight binaries (CARLA sample map included).</li>
-<li>Benchmarks for distributional realism and human compatibility.</li>
-<li>Raylib-based visualizer for local or headless render/export.</li>
+<li><strong>Super-fast self-play RL</strong>: Train agents on 10,000 multi-agent Waymo scenarios and reach a near-perfect score in under in about <strong>15 minutes on a single GPU</strong> where <a href="https://arxiv.org/abs/2502.14706">Earlier results</a> took 24 hours.</li>
+<li><strong>Long-horizon driving:</strong> Train agents to reach goals indefinitely on large CARLA maps. Demo agents are trained this way. Drive alongside them in the browser below.</li>
+<li><strong>Built-in evaluation:</strong> Integrated, accelerated eval support for the <a href="https://emerge-lab.github.io/PufferDrive/wosac/">Waymo Open Sim Agent Challenge (WOSAC)</a> and a <a href="https://emerge-lab.github.io/PufferDrive/evaluation/#human-compatibility-benchmark">human compatibility benchmark</a>.</li>
+<li><strong>Easy scenario creation:</strong> Edit or design custom scenarios in minutes, including long-tail and stress-test cases, using the <a href="https://emerge-lab.github.io/PufferDrive/scene-editor/">interactive scenario editor</a>.</li>
+<li><strong>And more:</strong> Browse the docs for details.</li>
 </ul>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<h2 id="drive-together-with-trained-agents"><a class="header" href="#drive-together-with-trained-agents">Drive together with trained agents</a></h2>
+<iframe src="/assets/game.html" title="PufferDrive Demo" width="1280" height="720" style="border: none; display: block; margin: 2rem auto;"></iframe>
+<p style="text-align: center; color: #888; margin-top: 1rem;">
+  Hold <strong>Left Shift</strong> and use arrow keys or <strong>WASD</strong> to control the vehicle. Hold <strong>space</strong> for first-person view and <strong>ctrl</strong> to see what your agent is seeing.
+</p>
+
+<h2 id="introduction-and-history"><a class="header" href="#introduction-and-history">Introduction and history</a></h2>
+<p>Deep reinforcement learning algorithms such as <a href="https://arxiv.org/abs/1707.06347">PPO</a> perform extremely well in the billion-sample regime. RL consistently optimizes precise objectives, even under sparse rewards, if occasional successes occur and the scale is sufficient.</p>
+<p>This shifts the primary bottleneck to simulation. The faster we can generate high-quality experience, the more reliably we can apply RL to hard real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup class="footnote-reference" id="fr-1-1"><a href="#footnote-1">1</a></sup></p>
+<p>Over the past few years, we built several data-driven, multi-agent simulators to study large-scale self-play for driving. We focus on this sequence of projects to show how we arrived at PufferDrive 2.0.</p>
+<h2 id="early-results-with-self-play-rl-in-autonomous-driving"><a class="header" href="#early-results-with-self-play-rl-in-autonomous-driving">Early results with self-play RL in autonomous driving</a></h2>
+<p><a href="https://arxiv.org/abs/2206.09889"><strong>Nocturne</strong></a> showed that self-play RL could be promising for driving if we have access to a data-driven (grounded) simulator. Using maps from the <a href="https://waymo.com/open/">Waymo Open Motion Dataset (WOMD)</a>, PPO agents trained from scratch in simulation achieved an 80% goal-reaching rate.</p>
+<p>The main limitation was the <em>cost</em> of simulated experience. Nocturne ran at roughly 2,000 steps per second, so reaching this level of performance required about two days of training on a single GPU. It hinted that self-play RL could work, but generating the required experience was still expensive.</p>
+<h2 id="scaling-up"><a class="header" href="#scaling-up">Scaling up</a></h2>
+<p>Later work explored what becomes possible once reaching scale is no longer a bottleneck.</p>
 <ul>
-<li>Follow <a href="getting-started.html">Getting Started</a> to install, build the C extensions, and run <code>puffer train puffer_drive</code>.</li>
-<li>Consult <a href="simulator.html">Simulator</a> for how actions/observations, rewards, and <code>.ini</code> settings map to the underlying C environment and Torch policy.</li>
-<li>Prepare drive map binaries with the steps in <a href="data.html">Data</a>.</li>
-<li>Evaluate a policy with the commands in <a href="evaluation.html">Evaluation</a> and preview runs with the <a href="visualizer.html">Visualizer</a>.</li>
+<li><a href="https://arxiv.org/abs/2501.00678"><strong>Gigaflow</strong></a> demonstrated that large-scale self-play alone can produce robust, naturalistic driving. With a batched simulator, it trained on the equivalent of decades of driving per hour and achieved strong performance across multiple benchmarks without human driving demonstrations.</li>
+<li><a href="https://arxiv.org/abs/2408.01584"><strong>GPUDrive</strong></a>, built on <a href="https://madrona-engine.github.io/">Madrona</a>, open-sourced a similar GPU-driven simulation approach. It explored a more minimal self-play setup with a simpler reward structure and narrower task scope. It demonstrated that effective collision avoidance and goal-reaching can be learned in roughly a day on a single consumer GPU.</li>
 </ul>
-<h2 id="workflow"><a class="header" href="#workflow">Workflow</a></h2>
-<div class="workflow">
-  
-<div class="step-card">
-    
-<div class="badge">Step 1</div>
-
-    
-<h3>Install &amp; Build</h3>
-
-    
-<p>Set up the environment, install dependencies, and compile the native extensions.</p>
-
-    <a href="getting-started.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 2</div>
-
-    
-<h3>Prepare Data</h3>
-
-    
-<p>Download WOMD/GPUDrive datasets from Hugging Face and convert to map binaries.</p>
-
-    <a href="data.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 3</div>
-
-    
-<h3>Train &amp; Evaluate</h3>
-
-    
-<p>Train agents and evaluate them with WOSAC and human-replay benchmarks.</p>
-
-    <a href="evaluation.html">Open guide</a>
-  </div>
-
+<p>These results suggested that once simulation becomes cheap, self-play RL can produce robust autonomous driving policies.</p>
+<p><img src="images/sim-comparison.png" alt="SPS comparison between sims">
+<strong>Figure 1:</strong> <em>Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching[^2]. This captures both simulation speed and algorithmic efficiency.</em></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Simulator</th><th>End-to-end training SPS</th><th>Time to 80% success rate</th></tr>
+</thead>
+<tbody>
+<tr><td>Nocturne</td><td>2,000</td><td>~48 hours</td></tr>
+<tr><td>GPUDrive</td><td>50,000</td><td>~1.7 hours</td></tr>
+<tr><td>PufferDrive</td><td>320,000</td><td>~4 minutes</td></tr>
+</tbody>
+</table>
 </div>
-
-<h2 id="repository-layout"><a class="header" href="#repository-layout">Repository layout</a></h2>
+<p>[^2] We benchmark here against 80% goal-reaching to make the results comparable to those in Nocturne. Similar accelerations are achieved against GPUDrive at the 99% success rate.</p>
+<h2 id="from-gpudrive-to-pufferdrive"><a class="header" href="#from-gpudrive-to-pufferdrive">From GPUDrive to PufferDrive</a></h2>
+<p>GPUDrive delivered high raw simulation speed, but end-to-end training throughput (~30K steps/sec) still limited experiments, especially on large maps like <a href="https://carla.org/">CARLA</a>. Memory layout and batching overheads prevented further speedups.</p>
+<p>We were motivated to get faster end-to-end training because waiting a full day for experimental results slows down everything, debugging, testing, and scientific progress. This led to the development of PufferDrive.</p>
+<p>Partnering with Spencer Cheng from <a href="https://puffer.ai/">Puffer.ai</a>, we rebuilt GPUDrive around <a href="https://arxiv.org/abs/2406.12905"><strong>PufferLib</strong></a>. The result, <strong>PufferDrive 1.0</strong>, reached ~200,000 steps per second on a single GPU and scaled linearly across multiple GPUs. Training agents on 10,000 Waymo maps took roughly 24 hours with GPUDrive—<a href="https://x.com/spenccheng/status/1959665036483350994">with PufferDrive, we now reproduce the same results in ~15 minutes</a>.</p>
+<h2 id="roadmap-pufferdrive-30"><a class="header" href="#roadmap-pufferdrive-30">Roadmap: PufferDrive 3.0</a></h2>
+<p>What is next? PufferDrive 3.0 will improve agent diversity, realism, and expand simulation capabilities. Priorities may shift as we test features and gather feedback. You can find an overview of our planned features on the <a href="https://github.com/orgs/Emerge-Lab/projects/7">project board</a> or open an issue with something you would like to see!</p>
+<p><strong>Simulation and environment</strong></p>
 <ul>
-<li><code>pufferlib/ocean/drive</code>: Drive environment implementation and map processing utilities.</li>
-<li><code>resources/drive/binaries</code>: Expected location for compiled map binaries (outputs of the data conversion step).</li>
-<li><code>scripts/build_ocean.sh</code>: Helper for building the Raylib visualizer and related binaries.</li>
-<li><code>examples</code>, <code>tests</code>, <code>experiments</code>: Reference usage, checks, and research scripts that pair with the docs pages.</li>
+<li>2.5D simulation (allow for maps with overpasses)</li>
 </ul>
+<p><strong>Agent and interaction</strong></p>
+<ul>
+<li>More efficient collision checking</li>
+<li>Support for traffic lights</li>
+<li>Variable agent numbers in CARLA maps</li>
+<li>Support for reward conditioning across a wide range of rewards</li>
+<li>A wide set of new rewards representing law-abiding driving</li>
+</ul>
+<p><strong>Benchmarks</strong></p>
+<ul>
+<li>More extensive planning benchmark with human replays (more metrics)</li>
+</ul>
+<h2 id="citation"><a class="header" href="#citation">Citation</a></h2>
+<p>If you use PufferDrive, please cite:</p>
+<pre><code class="language-bibtex">@software{pufferdrive2025github,
+  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Valentin Charraut and Eugene Vinitsky},
+  title = {{PufferDrive}: A Fast and Friendly Driving Simulator for Training and Evaluating {RL} Agents},
+  url = {https://github.com/Emerge-Lab/PufferDrive},
+  version = {2.0.0},
+  year = {2025},
+}
+</code></pre>
+<p><em>*Equal contribution</em></p>
+<hr>
+<ol class="footnote-definition">
+<li id="footnote-1">
+<p>A useful parallel comes from the early days of computing. In the 1970s and 1980s, advances in semiconductor manufacturing and microprocessor design—such as Intel’s 8080 and 80286 chips—dramatically reduced computation costs and increased speed. This made iterative software development accessible and enabled entirely new ecosystems of applications, ultimately giving rise to the personal computer. Multi-agent RL faces a similar bottleneck today: progress is limited by the cost and speed of experience collection. Fast, affordable simulation with integrated RL algorithms may play a similar role, enabling solutions that were previously out of reach. <a href="#fr-1-1">↩</a></p>
+</li>
+</ol>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-
-                            <a rel="next prefetch" href="getting-started.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            <a rel="prev" href="wosac.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
+
 
                         <div style="clear: both"></div>
                     </nav>
@@ -296,10 +286,10 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-
-                    <a rel="next prefetch" href="getting-started.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    <a rel="prev" href="wosac.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
+
             </nav>
 
         </div>

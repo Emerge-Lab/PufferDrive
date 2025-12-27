@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Getting started - PufferDrive</title>
+        <title>Evaluation Overview - PufferDrive</title>
 
 
         <!-- Custom HTML head -->
@@ -180,113 +180,53 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="pufferdrive"><a class="header" href="#pufferdrive">PufferDrive</a></h1>
-<p align="center">
-  <a href="https://github.com/Emerge-Lab/PufferDrive/stargazers"><img src="https://img.shields.io/github/stars/Emerge-Lab/PufferDrive?style=social" alt="GitHub stars"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive/network/members"><img src="https://img.shields.io/github/forks/Emerge-Lab/PufferDrive?style=social" alt="GitHub forks"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive"><img src="https://img.shields.io/github/watchers/Emerge-Lab/PufferDrive?style=social" alt="GitHub watchers"></a>
-</p>
-
-<div class="hero">
-  <img src="images/pufferdrive.gif" alt="PufferDrive logo">
-  
-<div>
-    
-<p>PufferDrive is a high-throughput autonomous driving simulator built on <a href="https://puffer.ai">PufferLib</a>. Train and evaluate multi-agent driving policies with fast vectorized stepping, streamlined data conversion, and ready-made benchmarks.</p>
-
-    
-<div class="cta">
-      <a class="primary" href="getting-started.html">Start here: install &amp; build</a>
-      <a href="#workflow">See the workflow</a>
-    </div>
-
-  </div>
-
-</div>
-
-<h2 id="try-it-in-your-browser"><a class="header" href="#try-it-in-your-browser">Try it in your browser</a></h2>
-<div class="video-embed">
-<iframe src="assets/game.html" title="PufferDrive Demo" style="border: none;"></iframe>
-</div>
-
-<p style="text-align: center; color: #888; margin-top: 1rem;">
-  Hold <strong>Left Shift</strong> and use arrow keys or <strong>WASD</strong> to control the vehicle. Hold <strong>space</strong> for first-person view and <strong>ctrl</strong> to see what your agent is seeing :)
-</p>
-
-<h2 id="highlights"><a class="header" href="#highlights">Highlights</a></h2>
+                        <h1 id="evaluations-and-benchmarks"><a class="header" href="#evaluations-and-benchmarks">Evaluations and benchmarks</a></h1>
+<p>Driving is a safety-critical multi-agent application, making careful evaluation and risk assessment essential. Mistakes in the real world are costly, so simulations are used to catch errors before deployment. To support rapid iteration, evaluations should ideally run efficiently. This is why we also paid attention to optimizing the speed of the evaluations. This page contains an overview of the available benchmarks and evals.</p>
+<h2 id="sanity-maps-"><a class="header" href="#sanity-maps-">Sanity maps 🐛</a></h2>
+<p>Quickly test the training on curated, lightweight scenarios without downloading the full dataset. Each sanity map tests a specific behavior.</p>
+<pre><code class="language-bash">puffer sanity puffer_drive --wandb --wandb-name sanity-demo --sanity-maps forward_goal_in_front s_curve
+</code></pre>
+<p>Or run them all at once:</p>
+<pre><code class="language-bash">puffer sanity puffer_drive --wandb --wandb-name sanity-all
+</code></pre>
 <ul>
-<li>Multi-agent drive environment that trains agents at 300K steps per second.</li>
-<li>Scripts to convert Waymo Open Motion Dataset JSON into lightweight binaries (CARLA sample map included).</li>
-<li>Benchmarks for distributional realism and human compatibility.</li>
-<li>Raylib-based visualizer for local or headless render/export.</li>
+<li>Tip: turn learning-rate annealing off for these short runs (<code>--train.anneal_lr False</code>) to keep the sanity checks from decaying the optimizer mid-run.</li>
 </ul>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<p>Available maps:</p>
 <ul>
-<li>Follow <a href="getting-started.html">Getting Started</a> to install, build the C extensions, and run <code>puffer train puffer_drive</code>.</li>
-<li>Consult <a href="simulator.html">Simulator</a> for how actions/observations, rewards, and <code>.ini</code> settings map to the underlying C environment and Torch policy.</li>
-<li>Prepare drive map binaries with the steps in <a href="data.html">Data</a>.</li>
-<li>Evaluate a policy with the commands in <a href="evaluation.html">Evaluation</a> and preview runs with the <a href="visualizer.html">Visualizer</a>.</li>
+<li><code>forward_goal_in_front</code>: Straight approach to a goal in view.</li>
+<li><code>reverse_goal_behind</code>: Backward start with a behind-the-ego goal.</li>
+<li><code>two_agent_forward_goal_in_front</code>: Two agents advancing to forward goals.</li>
+<li><code>two_agent_reverse_goal_behind</code>: Two agents reversing to rear goals.</li>
+<li><code>simple_turn</code>: Single, gentle turn to a nearby goal.</li>
+<li><code>s_curve</code>: S-shaped path with alternating curvature.</li>
+<li><code>u_turn</code>: U-shaped turn to a goal behind the start.</li>
+<li><code>one_or_two_point_turn</code>: Tight turn requiring a small reversal.</li>
+<li><code>three_or_four_point_turn</code>: Even tighter turn needing multiple reversals.</li>
+<li><code>goal_out_of_sight</code>: Goal starts without direct path; needs some planning.</li>
 </ul>
-<h2 id="workflow"><a class="header" href="#workflow">Workflow</a></h2>
-<div class="workflow">
-  
-<div class="step-card">
-    
-<div class="badge">Step 1</div>
-
-    
-<h3>Install &amp; Build</h3>
-
-    
-<p>Set up the environment, install dependencies, and compile the native extensions.</p>
-
-    <a href="getting-started.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 2</div>
-
-    
-<h3>Prepare Data</h3>
-
-    
-<p>Download WOMD/GPUDrive datasets from Hugging Face and convert to map binaries.</p>
-
-    <a href="data.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 3</div>
-
-    
-<h3>Train &amp; Evaluate</h3>
-
-    
-<p>Train agents and evaluate them with WOSAC and human-replay benchmarks.</p>
-
-    <a href="evaluation.html">Open guide</a>
-  </div>
-
-</div>
-
-<h2 id="repository-layout"><a class="header" href="#repository-layout">Repository layout</a></h2>
-<ul>
-<li><code>pufferlib/ocean/drive</code>: Drive environment implementation and map processing utilities.</li>
-<li><code>resources/drive/binaries</code>: Expected location for compiled map binaries (outputs of the data conversion step).</li>
-<li><code>scripts/build_ocean.sh</code>: Helper for building the Raylib visualizer and related binaries.</li>
-<li><code>examples</code>, <code>tests</code>, <code>experiments</code>: Reference usage, checks, and research scripts that pair with the docs pages.</li>
-</ul>
+<p><img src="images/maps_screenshot.png" alt="Sanity map gallery placeholder"></p>
+<h2 id="distributional-realism-benchmark-"><a class="header" href="#distributional-realism-benchmark-">Distributional realism benchmark 📊</a></h2>
+<p>We provide a PufferDrive implementation of the Waymo Open Sim Agents Challenge (WOSAC) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior.</p>
+<pre><code class="language-bash">puffer eval puffer_drive --eval.wosac-realism-eval True
+</code></pre>
+<p>Add <code>--load-model-path &lt;path_to_checkpoint&gt;.pt</code> to score a trained policy, instead of a random baseline.</p>
+<p>See <a href="wosac.html">the WOSAC benchmark page</a> for the metric pipeline and all the details.</p>
+<h2 id="human-compatibility-benchmark-"><a class="header" href="#human-compatibility-benchmark-">Human-compatibility benchmark 🤝</a></h2>
+<p>You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how closely aligned your agent’s behavior is to how people drive. You can run it like this:</p>
+<pre><code class="language-bash">puffer eval puffer_drive --eval.human-replay-eval True --load-model-path &lt;path_to_checkpoint&gt;.pt
+</code></pre>
+<p>During this evaluation the self-driving car (SDC) is controlled by your policy while other agents replay log trajectories.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="data.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
-                            <a rel="next prefetch" href="getting-started.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="wosac.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -296,8 +236,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="data.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
-                    <a rel="next prefetch" href="getting-started.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="wosac.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

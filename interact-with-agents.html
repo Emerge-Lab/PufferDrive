@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Getting started - PufferDrive</title>
+        <title>Interact with Agents - PufferDrive</title>
 
 
         <!-- Custom HTML head -->
@@ -180,113 +180,52 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="pufferdrive"><a class="header" href="#pufferdrive">PufferDrive</a></h1>
-<p align="center">
-  <a href="https://github.com/Emerge-Lab/PufferDrive/stargazers"><img src="https://img.shields.io/github/stars/Emerge-Lab/PufferDrive?style=social" alt="GitHub stars"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive/network/members"><img src="https://img.shields.io/github/forks/Emerge-Lab/PufferDrive?style=social" alt="GitHub forks"></a>
-  <a href="https://github.com/Emerge-Lab/PufferDrive"><img src="https://img.shields.io/github/watchers/Emerge-Lab/PufferDrive?style=social" alt="GitHub watchers"></a>
-</p>
-
-<div class="hero">
-  <img src="images/pufferdrive.gif" alt="PufferDrive logo">
-  
-<div>
-    
-<p>PufferDrive is a high-throughput autonomous driving simulator built on <a href="https://puffer.ai">PufferLib</a>. Train and evaluate multi-agent driving policies with fast vectorized stepping, streamlined data conversion, and ready-made benchmarks.</p>
-
-    
-<div class="cta">
-      <a class="primary" href="getting-started.html">Start here: install &amp; build</a>
-      <a href="#workflow">See the workflow</a>
-    </div>
-
-  </div>
-
-</div>
-
-<h2 id="try-it-in-your-browser"><a class="header" href="#try-it-in-your-browser">Try it in your browser</a></h2>
-<div class="video-embed">
-<iframe src="assets/game.html" title="PufferDrive Demo" style="border: none;"></iframe>
-</div>
-
-<p style="text-align: center; color: #888; margin-top: 1rem;">
-  Hold <strong>Left Shift</strong> and use arrow keys or <strong>WASD</strong> to control the vehicle. Hold <strong>space</strong> for first-person view and <strong>ctrl</strong> to see what your agent is seeing :)
-</p>
-
-<h2 id="highlights"><a class="header" href="#highlights">Highlights</a></h2>
+                        <h2 id="drive-with-trained-agents"><a class="header" href="#drive-with-trained-agents">Drive with trained agents</a></h2>
+<p>You can take manual control of an agent in the simulator by holding <strong>LEFT SHIFT</strong> and using the keyboard controls. When you’re in control, the action values displayed on screen will turn <strong>yellow</strong>.</p>
+<h3 id="local-rendering"><a class="header" href="#local-rendering">Local rendering</a></h3>
+<p>To launch an interactive renderer, first build:</p>
+<pre><code class="language-bash">bash scripts/build_ocean.sh drive local
+</code></pre>
+<p>then launch:</p>
+<pre><code class="language-bash">./drive
+</code></pre>
+<p>This will run <code>demo()</code> with an existing model checkpoint.</p>
+<p>[TODO: Add demo video/gif here]</p>
+<h3 id="controls"><a class="header" href="#controls">Controls</a></h3>
+<p><strong>General:</strong></p>
 <ul>
-<li>Multi-agent drive environment that trains agents at 300K steps per second.</li>
-<li>Scripts to convert Waymo Open Motion Dataset JSON into lightweight binaries (CARLA sample map included).</li>
-<li>Benchmarks for distributional realism and human compatibility.</li>
-<li>Raylib-based visualizer for local or headless render/export.</li>
+<li><strong>LEFT SHIFT + Arrow Keys/WASD</strong> - Take manual control</li>
+<li><strong>TAB</strong> - Switch between agents</li>
+<li><strong>SPACE</strong> - First-person camera view</li>
+<li><strong>Mouse Drag</strong> - Pan camera</li>
+<li><strong>Mouse Wheel</strong> - Zoom</li>
 </ul>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<p><strong>Classic dynamics model</strong></p>
 <ul>
-<li>Follow <a href="getting-started.html">Getting Started</a> to install, build the C extensions, and run <code>puffer train puffer_drive</code>.</li>
-<li>Consult <a href="simulator.html">Simulator</a> for how actions/observations, rewards, and <code>.ini</code> settings map to the underlying C environment and Torch policy.</li>
-<li>Prepare drive map binaries with the steps in <a href="data.html">Data</a>.</li>
-<li>Evaluate a policy with the commands in <a href="evaluation.html">Evaluation</a> and preview runs with the <a href="visualizer.html">Visualizer</a>.</li>
+<li><strong>SHIFT + UP/W</strong> - Increase acceleration</li>
+<li><strong>SHIFT + DOWN/S</strong> - Decrease acceleration (brake)</li>
+<li><strong>SHIFT + LEFT/A</strong> - Steer left</li>
+<li><strong>SHIFT + RIGHT/D</strong> - Steer right</li>
 </ul>
-<h2 id="workflow"><a class="header" href="#workflow">Workflow</a></h2>
-<div class="workflow">
-  
-<div class="step-card">
-    
-<div class="badge">Step 1</div>
-
-    
-<h3>Install &amp; Build</h3>
-
-    
-<p>Set up the environment, install dependencies, and compile the native extensions.</p>
-
-    <a href="getting-started.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 2</div>
-
-    
-<h3>Prepare Data</h3>
-
-    
-<p>Download WOMD/GPUDrive datasets from Hugging Face and convert to map binaries.</p>
-
-    <a href="data.html">Open guide</a>
-  </div>
-
-  
-<div class="step-card">
-    
-<div class="badge">Step 3</div>
-
-    
-<h3>Train &amp; Evaluate</h3>
-
-    
-<p>Train agents and evaluate them with WOSAC and human-replay benchmarks.</p>
-
-    <a href="evaluation.html">Open guide</a>
-  </div>
-
-</div>
-
-<h2 id="repository-layout"><a class="header" href="#repository-layout">Repository layout</a></h2>
+<p>Each key press increments or decrements the action level. For example, tapping W multiple times increases acceleration from neutral (index 3) → 5 → 6 (maximum acceleration). We assume <strong>no friction</strong>, so releasing all keys maintains constant speed and heading.</p>
+<p><strong>Jerk dynamics model</strong></p>
 <ul>
-<li><code>pufferlib/ocean/drive</code>: Drive environment implementation and map processing utilities.</li>
-<li><code>resources/drive/binaries</code>: Expected location for compiled map binaries (outputs of the data conversion step).</li>
-<li><code>scripts/build_ocean.sh</code>: Helper for building the Raylib visualizer and related binaries.</li>
-<li><code>examples</code>, <code>tests</code>, <code>experiments</code>: Reference usage, checks, and research scripts that pair with the docs pages.</li>
+<li><strong>SHIFT + UP/W</strong> - Accelerate (+4.0 m/s³ jerk)</li>
+<li><strong>SHIFT + DOWN/S</strong> - Brake (-15.0 m/s³ jerk)</li>
+<li><strong>SHIFT + LEFT/A</strong> - Turn left (+4.0 m/s³ lateral jerk)</li>
+<li><strong>SHIFT + RIGHT/D</strong> - Turn right (-4.0 m/s³ lateral jerk)</li>
 </ul>
+<p>Actions are applied directly when keys are pressed. Pressing W always applies +4.0 m/s³ longitudinal jerk, regardless of how long the key is held.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="train.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
-                            <a rel="next prefetch" href="getting-started.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="simulator.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -296,8 +235,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="train.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
-                    <a rel="next prefetch" href="getting-started.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="simulator.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
