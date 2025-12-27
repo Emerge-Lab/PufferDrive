@@ -1,0 +1,264 @@
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&display=swap');
+
+:root {
+  --teal-subtle: #0d9488;
+  --teal-hover: #14b8a6;
+  --teal-light: rgba(13, 148, 136, 0.08);
+}
+
+/* General typography */
+body {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Headings use Crimson Pro (Times-like serif) */
+h1, h2, h3, h4, h5, h6 {
+  font-family: "Crimson Pro", "Times New Roman", Times, serif;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Link styling */
+a {
+  color: var(--teal-subtle);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--teal-hover);
+  text-decoration: underline;
+}
+
+/* Hero section */
+.hero {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  padding: 2rem;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  margin-bottom: 2rem;
+}
+
+.hero img {
+  width: 180px;
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.hero h1 {
+  font-family: "Crimson Pro", "Times New Roman", Times, serif;
+  margin: 0 0 0.5rem 0;
+  color: #1a1a1a;
+}
+
+.hero .cta {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.hero .cta a {
+  padding: 0.65rem 1.1rem;
+  border-radius: 8px;
+  font-weight: 500;
+  text-decoration: none;
+  color: #1a1a1a;
+  background: #ffffff;
+  border: 1.5px solid #e5e5e5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  min-width: 140px;
+  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  transition: all 0.2s ease;
+}
+
+.hero .cta a:hover {
+  border-color: var(--teal-subtle);
+  color: var(--teal-subtle);
+  box-shadow: 0 2px 6px rgba(13, 148, 136, 0.12);
+}
+
+.hero .cta a.primary {
+  color: #ffffff;
+  background: var(--teal-subtle);
+  border: none;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.2);
+}
+
+.hero .cta a.primary:hover {
+  background: var(--teal-hover);
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.25);
+}
+
+/* Workflow cards */
+.workflow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.step-card {
+  padding: 1.2rem;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  transition: all 0.2s ease;
+}
+
+.step-card:hover {
+  border-color: rgba(13, 148, 136, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.step-card .badge {
+  align-self: flex-start;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: var(--teal-light);
+  color: var(--teal-subtle);
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.step-card h3 {
+  font-family: "Crimson Pro", "Times New Roman", Times, serif;
+  margin: 0;
+  font-size: 1.1rem;
+  color: #1a1a1a;
+}
+
+.step-card p {
+  margin: 0;
+  color: #4a4a4a;
+}
+
+.step-card a {
+  color: var(--teal-subtle);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.step-card a:hover {
+  color: var(--teal-hover);
+  text-decoration: underline;
+}
+
+/* Feature grid */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.feature-card {
+  padding: 1.2rem;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease;
+}
+
+.feature-card:hover {
+  border-color: rgba(13, 148, 136, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.feature-card h3 {
+  font-family: "Crimson Pro", "Times New Roman", Times, serif;
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  color: #1a1a1a;
+}
+
+.feature-card p {
+  margin: 0;
+  color: #4a4a4a;
+  line-height: 1.6;
+}
+
+/* Video embed */
+.video-embed {
+  position: relative;
+  padding-top: 56.25%;
+  background: #000;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+  margin: 1rem 0 1.5rem;
+}
+
+.video-embed iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Reduce left margin and widen content */
+.content {
+  max-width: 1200px;
+  padding: 0 1rem;
+}
+
+main {
+  margin-left: 0;
+  padding-left: 1rem;
+}
+
+.sidebar {
+  width: 250px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .hero {
+    flex-direction: column;
+    text-align: center;
+    padding: 1.5rem;
+  }
+
+  .hero img {
+    width: 130px;
+    margin: 0 auto;
+  }
+
+  .hero .cta {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero .cta a {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+}
+
+/* Admonition/callout styling for mdbook */
+blockquote {
+  border-left: 4px solid var(--teal-subtle);
+  background: var(--teal-light);
+  padding: 1rem;
+  margin: 1rem 0;
+  border-radius: 0 8px 8px 0;
+}

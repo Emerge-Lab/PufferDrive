@@ -188,3 +188,4 @@ artifacts/
 # Local drive renders
 pufferlib/resources/drive/output*.gif
 emsdk/
+docs/book/
