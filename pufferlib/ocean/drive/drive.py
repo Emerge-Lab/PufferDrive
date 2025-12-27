@@ -587,7 +587,7 @@ def _process_single_map(args):
 
 def process_all_maps(
     data_folder="data/processed/training",
-    max_maps=10_000,
+    max_maps=50_000,
     num_workers=None,
 ):
     """Process all maps and save them as binaries using multiprocessing
