@@ -50,7 +50,7 @@ void demo() {
         .goal_target_distance = 30.0f,
         .goal_speed = 20.0f,
         .dt = 0.1f,
-        .episode_length = 200,
+        .episode_length = 100,
         .termination_mode = 0,
         .collision_behavior = 0,
         .offroad_behavior = 0,
