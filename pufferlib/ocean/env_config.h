@@ -15,10 +15,10 @@ typedef struct {
     float reward_goal;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
-    int use_guided_autonomy;          // Boolean: whether to calculate and add guided autonomy reward
-    float guidance_speed_weight;      // Weight for speed deviation penalty
-    float guidance_heading_weight;    // Weight for heading deviation penalty
-    float waypoint_reach_threshold;   // Distance threshold for hitting waypoints
+    int use_guided_autonomy;        // Boolean: whether to calculate and add guided autonomy reward
+    float guidance_speed_weight;    // Weight for speed deviation penalty
+    float guidance_heading_weight;  // Weight for heading deviation penalty
+    float waypoint_reach_threshold; // Distance threshold for hitting waypoints
     float goal_radius;
     float goal_speed;
     int collision_behavior;
