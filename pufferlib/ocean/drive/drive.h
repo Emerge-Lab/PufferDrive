@@ -1874,6 +1874,73 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
     }
 }
 
+void c_collect_expert_data(Drive* env, float* expert_actions_discrete_out, float* expert_actions_continuous_out, float* expert_obs_out) {
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+
+    int original_timestep = env->timestep;
+
+    c_reset(env);
+
+    for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
+        // Set expert actions for this timestep
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            Entity* agent = &env->entities[agent_idx];
+
+            // Check bounds
+            if (t < agent->array_size && agent->expert_accel && agent->expert_steering) {
+                float continuous_accel = agent->expert_accel[t];
+                float continuous_steer = agent->expert_steering[t];
+
+                // Store continuous actions
+                int continuous_offset = t * env->active_agent_count * 2 + i * 2;
+                expert_actions_continuous_out[continuous_offset] = continuous_accel;
+                expert_actions_continuous_out[continuous_offset + 1] = continuous_steer;
+
+                // Discretize and store discrete actions
+                int best_accel_idx = 0;
+                float min_accel_diff = fabsf(continuous_accel - ACCELERATION_VALUES[0]);
+                for (int j = 1; j < 7; j++) {
+                    float diff = fabsf(continuous_accel - ACCELERATION_VALUES[j]);
+                    if (diff < min_accel_diff) {
+                        min_accel_diff = diff;
+                        best_accel_idx = j;
+                    }
+                }
+
+                // Discretize steering - find closest value in STEERING_VALUES
+                int best_steer_idx = 0;
+                float min_steer_diff = fabsf(continuous_steer - STEERING_VALUES[0]);
+                for (int j = 1; j < 13; j++) {
+                    float diff = fabsf(continuous_steer - STEERING_VALUES[j]);
+                    if (diff < min_steer_diff) {
+                        min_steer_diff = diff;
+                        best_steer_idx = j;
+                    }
+                }
+
+                int discrete_offset = t * env->active_agent_count * 2 + i * 2;
+                expert_actions_discrete_out[discrete_offset] = (float)best_accel_idx;
+                expert_actions_discrete_out[discrete_offset + 1] = (float)best_steer_idx;
+            }
+        }
+
+        int obs_offset = t * env->active_agent_count * max_obs;
+        memcpy(&expert_obs_out[obs_offset], env->observations,
+               env->active_agent_count * max_obs * sizeof(float));
+
+        // Step environment to get next observations
+        if (t < TRAJECTORY_LENGTH - 1) {
+            c_step(env);
+        }
+    }
+
+    // Restore original state
+    env->timestep = original_timestep;
+    c_reset(env);
+}
+
 void compute_observations(Drive *env) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
