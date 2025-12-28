@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/extra-d884356a.css">
+        <link rel="stylesheet" href="theme/extra-1e76a9d8.css">
 
         <!-- MathJax -->
         <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
@@ -38,7 +38,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-da507344.js";
+            window.path_to_searchindex_js = "searchindex-3d8ae7b6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-d6a866dd.js"></script>
@@ -208,7 +208,7 @@ uv pip install -e .
 <p>Once map binaries are available (see <a href="data.html">Data</a>), launch a quick training run to confirm the environment, data, and bindings are wired up correctly:</p>
 <pre><code class="language-bash">puffer train puffer_drive
 </code></pre>
-<p>For multi-node training(Only uses Data Parallelism with torch ddp)</p>
+<p>For multi-node training (only uses Data Parallelism with torch ddp)</p>
 <pre><code class="language-bash">torchrun --standalone --nnodes=1 --nproc-per-node=6 -m puffer train puffer_drive
 </code></pre>
 <p>If map binaries are missing, follow the steps in <a href="data.html">Data</a> to generate them before training. See <a href="visualizer.html">Visualizer</a> for rendering runs and <a href="evaluation.html">Evaluation</a> for benchmark commands.</p>

@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/extra-d884356a.css">
+        <link rel="stylesheet" href="theme/extra-1e76a9d8.css">
 
         <!-- MathJax -->
         <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
@@ -38,7 +38,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-da507344.js";
+            window.path_to_searchindex_js = "searchindex-3d8ae7b6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-d6a866dd.js"></script>
@@ -181,8 +181,8 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="pufferdrive-20-a-fast-and-friendly-driving-simulator-for-training-and-evaluating-rl-agents"><a class="header" href="#pufferdrive-20-a-fast-and-friendly-driving-simulator-for-training-and-evaluating-rl-agents">PufferDrive 2.0: A fast and friendly driving simulator for training and evaluating RL agents</a></h1>
-<p><strong>Daphne Cornelisse</strong>⁕¹, <strong>Spencer Cheng</strong>⁕², Pragnay Mandavilli¹, Julian Hunt¹, Kevin Joseph¹, Waël Doulazmi³, Valentin Charraut³, Eugene Vinitsky¹</p>
-<p>¹ Emerge Lab at NYU Tandon School of Engineering | ² <a href="https://puffer.ai/">Puffer.ai</a> | ³ Valeo | ⁕ Shared first contributor</p>
+<p><strong>Daphne Cornelisse</strong><sup>1*</sup>, <strong>Spencer Cheng</strong><sup>2*</sup>, Pragnay Mandavilli<sup>1</sup>, Julian Hunt<sup>1</sup>, Kevin Joseph<sup>1</sup>, Waël Doulazmi<sup>3</sup>, Valentin Charraut<sup>3</sup>, Eugene Vinitsky<sup>1</sup></p>
+<p><sup>1</sup> Emerge Lab at NYU Tandon School of Engineering | <sup>2</sup> <a href="https://puffer.ai/">Puffer.ai</a> | <sup>3</sup> Valeo | <sup>*</sup> Shared first contributor</p>
 <p><em>December 26, 2025</em></p>
 <hr>
 <p>We introduce <strong>PufferDrive 2.0</strong>, a fast, easy-to-use driving simulator for reinforcement learning (RL). Built on <a href="https://puffer.ai/">PufferLib</a>, it allows you to train agents at <strong>300,000 steps per second</strong> on a single GPU. You can solve thousands of multi-agent scenarios in just 15 minutes. Evaluation and visualization run directly in the browser.</p>
@@ -208,7 +208,7 @@
 </blockquote>
 <h2 id="introduction-and-history"><a class="header" href="#introduction-and-history">Introduction and history</a></h2>
 <p>Deep reinforcement learning algorithms such as <a href="https://arxiv.org/abs/1707.06347">PPO</a> perform extremely well in the billion-sample regime. RL consistently optimizes precise objectives, even under sparse rewards, if occasional successes occur and the scale is sufficient.</p>
-<p>This shifts the primary bottleneck to simulation. The faster we can generate high-quality experience, the more reliably we can apply RL to hard real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup class="footnote-reference" id="fr-1-1"><a href="#footnote-1">1</a></sup></p>
+<p>This shifts the primary bottleneck to simulation. The faster we can generate high-quality experience, the more reliably we can apply RL to hard real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup><a href="#notes">1</a></sup></p>
 <p>Over the past few years, we built several data-driven, multi-agent simulators to study large-scale self-play for driving. We focus on this sequence of projects to show how we arrived at PufferDrive 2.0.</p>
 <h2 id="early-results-with-self-play-rl-in-autonomous-driving"><a class="header" href="#early-results-with-self-play-rl-in-autonomous-driving">Early results with self-play RL in autonomous driving</a></h2>
 <p><a href="https://arxiv.org/abs/2206.09889"><strong>Nocturne</strong></a> showed that self-play RL could be promising for driving if we have access to a data-driven (grounded) simulator. Using maps from the <a href="https://waymo.com/open/">Waymo Open Motion Dataset (WOMD)</a>, PPO agents trained from scratch in simulation achieved an 80% goal-reaching rate.</p>
@@ -221,7 +221,7 @@
 </ul>
 <p>These results suggested that once simulation becomes cheap, self-play RL can produce robust autonomous driving policies.</p>
 <p><img src="images/sim-comparison.png" alt="SPS comparison between sims">
-<strong>Figure 1:</strong> <em>Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching<sup class="footnote-reference" id="fr-2-1"><a href="#footnote-2">2</a></sup>. This captures both simulation speed and algorithmic efficiency.</em></p>
+<strong>Figure 1:</strong> <em>Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching<sup><a href="#notes">2</a></sup>. This captures both simulation speed and algorithmic efficiency.</em></p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -268,12 +268,13 @@
 </code></pre>
 <p><em>*Equal contribution</em></p>
 <hr>
-<ol class="footnote-definition">
-<li id="footnote-1">
-<p>A useful parallel comes from the early days of computing. In the 1970s and 1980s, advances in semiconductor manufacturing and microprocessor design—such as Intel’s 8080 and 80286 chips—dramatically reduced computation costs and increased speed. This made iterative software development accessible and enabled entirely new ecosystems of applications, ultimately giving rise to the personal computer. Multi-agent RL faces a similar bottleneck today: progress is limited by the cost and speed of experience collection. Fast, affordable simulation with integrated RL algorithms may play a similar role, enabling solutions that were previously out of reach. <a href="#fr-1-1">↩</a></p>
+<h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
+<ol>
+<li>
+<p>A useful parallel comes from the early days of computing. In the 1970s and 1980s, advances in semiconductor manufacturing and microprocessor design—such as Intel’s 8080 and 80286 chips—dramatically reduced computation costs and increased speed. This made iterative software development accessible and enabled entirely new ecosystems of applications, ultimately giving rise to the personal computer. Multi-agent RL faces a similar bottleneck today: progress is limited by the cost and speed of experience collection. Fast, affordable simulation with integrated RL algorithms may play a similar role, enabling solutions that were previously out of reach.</p>
 </li>
-<li id="footnote-2">
-<p>We benchmark here against 80% goal-reaching to make the results comparable to those in Nocturne. Similar accelerations are achieved against GPUDrive at the 99% success rate. <a href="#fr-2-1">↩</a></p>
+<li>
+<p>We benchmark here against 80% goal-reaching to make the results comparable to those in Nocturne. Similar accelerations are achieved against GPUDrive at the 99% success rate.</p>
 </li>
 </ol>
 

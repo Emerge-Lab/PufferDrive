@@ -29,7 +29,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/extra-d884356a.css">
+        <link rel="stylesheet" href="theme/extra-1e76a9d8.css">
 
         <!-- MathJax -->
         <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
@@ -39,7 +39,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-da507344.js";
+            window.path_to_searchindex_js = "searchindex-3d8ae7b6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-d6a866dd.js"></script>
@@ -313,7 +313,7 @@ uv pip install -e .
 <p>Once map binaries are available (see <a href="#data">Data</a>), launch a quick training run to confirm the environment, data, and bindings are wired up correctly:</p>
 <pre><code class="language-bash">puffer train puffer_drive
 </code></pre>
-<p>For multi-node training(Only uses Data Parallelism with torch ddp)</p>
+<p>For multi-node training (only uses Data Parallelism with torch ddp)</p>
 <pre><code class="language-bash">torchrun --standalone --nnodes=1 --nproc-per-node=6 -m puffer train puffer_drive
 </code></pre>
 <p>If map binaries are missing, follow the steps in <a href="#data">Data</a> to generate them before training. See <a href="#visualizer">Visualizer</a> for rendering runs and <a href="#evaluations-and-benchmarks">Evaluation</a> for benchmark commands.</p>
@@ -540,8 +540,8 @@ values = [10, 20, 30]
 <tr><th>Option</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>control_vehicles</code> (default)</td><td>Control only valid<strong>vehicles</strong> (not experts, beyond <code>MIN_DISTANCE_TO_GOAL</code>, under <code>MAX_AGENTS</code>).</td></tr>
-<tr><td><code>control_agents</code></td><td>Control all valid<strong>agent types</strong> (vehicles, cyclists, pedestrians).</td></tr>
+<tr><td><code>control_vehicles</code> (default)</td><td>Control only valid <strong>vehicles</strong> (not experts, beyond <code>MIN_DISTANCE_TO_GOAL</code>, under <code>MAX_AGENTS</code>).</td></tr>
+<tr><td><code>control_agents</code></td><td>Control all valid <strong>agent types</strong> (vehicles, cyclists, pedestrians).</td></tr>
 <tr><td><code>control_tracks_to_predict</code> <em>(WOMD only)</em></td><td>Control agents listed in the <code>tracks_to_predict</code> metadata.</td></tr>
 <tr><td><code>control_sdc_only</code> <em>(WOMD only)</em></td><td>Control just the self-driving car (SDC).</td></tr>
 </tbody>
@@ -712,7 +712,7 @@ sudo apt install ffmpeg xvfb
 <h2 id="interactive-scenario-editor-1"><a class="header" href="#interactive-scenario-editor-1">Interactive scenario editor</a></h2>
 <p>See <a href="#interactive-scenario-editor">Interactive scenario editor</a> for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the <code>.bin</code> format consumed by the simulator.</p>
 <h2 id="generate-carla-agent-trajectories"><a class="header" href="#generate-carla-agent-trajectories">Generate CARLA agent trajectories</a></h2>
-<p>The agent trajectories in the provided CARLA maps are procedurally generated assuming a general velocity range without a valid initial state(no collision/offroad). The repository uses an external submodule for CARLA XODR processing (<code>pyxodr</code>).</p>
+<p>The agent trajectories in the provided CARLA maps are procedurally generated assuming a general velocity range without a valid initial state (no collision/offroad). The repository uses an external submodule for CARLA XODR processing (<code>pyxodr</code>).</p>
 <p>To generate your own CARLA agent trajectories, install the submodules and developer requirements (editable install) before running the generator:</p>
 <pre><code class="language-bash">git submodule update --init --recursive
 
@@ -789,7 +789,7 @@ python -m pip install -e . -r requirements-dev.txt
 <p>The default configs aim to emulate the WOSAC settings as closely as possible, but you can adjust them:</p>
 <pre><code class="language-ini">[eval]
 map_dir = "resources/drive/binaries/validation" # Dataset to use
-num_maps = 100  # Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)
+num_maps = 100  # Number of maps to run evaluation on. (It will always be the first num_maps maps of the map_dir)
 wosac_num_rollouts = 32      # Number of policy rollouts per scene
 wosac_init_steps = 10        # When to start the simulation
 wosac_control_mode = "control_wosac"  # Control the tracks to predict
@@ -805,7 +805,7 @@ checkpoint_interval = 500    # Set equal to eval_interval to use the latest chec
 [eval]
 eval_interval = 500          # Run eval every N epochs
 map_dir = "resources/drive/binaries/training"  # Dataset to use
-num_maps = 20 # Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)
+num_maps = 20 # Number of maps to run evaluation on. (It will always be the first num_maps maps of the map_dir)
 </code></pre>
 <h2 id="baselines"><a class="header" href="#baselines">Baselines</a></h2>
 <p>We provide baselines on a small curated dataset from the WOMD validation set with perfect ground-truth (no collisions or off-road events from labeling mistakes).</p>
@@ -883,8 +883,8 @@ id       : (num_agents, num_rollouts, 81)
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="pufferdrive-20-a-fast-and-friendly-driving-simulator-for-training-and-evaluating-rl-agents"><a class="header" href="#pufferdrive-20-a-fast-and-friendly-driving-simulator-for-training-and-evaluating-rl-agents">PufferDrive 2.0: A fast and friendly driving simulator for training and evaluating RL agents</a></h1>
-<p><strong>Daphne Cornelisse</strong>⁕¹, <strong>Spencer Cheng</strong>⁕², Pragnay Mandavilli¹, Julian Hunt¹, Kevin Joseph¹, Waël Doulazmi³, Valentin Charraut³, Eugene Vinitsky¹</p>
-<p>¹ Emerge Lab at NYU Tandon School of Engineering | ² <a href="https://puffer.ai/">Puffer.ai</a> | ³ Valeo | ⁕ Shared first contributor</p>
+<p><strong>Daphne Cornelisse</strong><sup>1*</sup>, <strong>Spencer Cheng</strong><sup>2*</sup>, Pragnay Mandavilli<sup>1</sup>, Julian Hunt<sup>1</sup>, Kevin Joseph<sup>1</sup>, Waël Doulazmi<sup>3</sup>, Valentin Charraut<sup>3</sup>, Eugene Vinitsky<sup>1</sup></p>
+<p><sup>1</sup> Emerge Lab at NYU Tandon School of Engineering | <sup>2</sup> <a href="https://puffer.ai/">Puffer.ai</a> | <sup>3</sup> Valeo | <sup>*</sup> Shared first contributor</p>
 <p><em>December 26, 2025</em></p>
 <hr>
 <p>We introduce <strong>PufferDrive 2.0</strong>, a fast, easy-to-use driving simulator for reinforcement learning (RL). Built on <a href="https://puffer.ai/">PufferLib</a>, it allows you to train agents at <strong>300,000 steps per second</strong> on a single GPU. You can solve thousands of multi-agent scenarios in just 15 minutes. Evaluation and visualization run directly in the browser.</p>
@@ -910,7 +910,7 @@ id       : (num_agents, num_rollouts, 81)
 </blockquote>
 <h2 id="introduction-and-history"><a class="header" href="#introduction-and-history">Introduction and history</a></h2>
 <p>Deep reinforcement learning algorithms such as <a href="https://arxiv.org/abs/1707.06347">PPO</a> perform extremely well in the billion-sample regime. RL consistently optimizes precise objectives, even under sparse rewards, if occasional successes occur and the scale is sufficient.</p>
-<p>This shifts the primary bottleneck to simulation. The faster we can generate high-quality experience, the more reliably we can apply RL to hard real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup class="footnote-reference" id="fr-1-1"><a href="#footnote-1">1</a></sup></p>
+<p>This shifts the primary bottleneck to simulation. The faster we can generate high-quality experience, the more reliably we can apply RL to hard real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup><a href="#notes-1">1</a></sup></p>
 <p>Over the past few years, we built several data-driven, multi-agent simulators to study large-scale self-play for driving. We focus on this sequence of projects to show how we arrived at PufferDrive 2.0.</p>
 <h2 id="early-results-with-self-play-rl-in-autonomous-driving"><a class="header" href="#early-results-with-self-play-rl-in-autonomous-driving">Early results with self-play RL in autonomous driving</a></h2>
 <p><a href="https://arxiv.org/abs/2206.09889"><strong>Nocturne</strong></a> showed that self-play RL could be promising for driving if we have access to a data-driven (grounded) simulator. Using maps from the <a href="https://waymo.com/open/">Waymo Open Motion Dataset (WOMD)</a>, PPO agents trained from scratch in simulation achieved an 80% goal-reaching rate.</p>
@@ -923,7 +923,7 @@ id       : (num_agents, num_rollouts, 81)
 </ul>
 <p>These results suggested that once simulation becomes cheap, self-play RL can produce robust autonomous driving policies.</p>
 <p><img src="images/sim-comparison.png" alt="SPS comparison between sims">
-<strong>Figure 1:</strong> <em>Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching<sup class="footnote-reference" id="fr-2-1"><a href="#footnote-2">2</a></sup>. This captures both simulation speed and algorithmic efficiency.</em></p>
+<strong>Figure 1:</strong> <em>Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching<sup><a href="#notes-1">2</a></sup>. This captures both simulation speed and algorithmic efficiency.</em></p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -970,12 +970,13 @@ id       : (num_agents, num_rollouts, 81)
 </code></pre>
 <p><em>*Equal contribution</em></p>
 <hr>
-<ol class="footnote-definition">
-<li id="footnote-1">
-<p>A useful parallel comes from the early days of computing. In the 1970s and 1980s, advances in semiconductor manufacturing and microprocessor design—such as Intel’s 8080 and 80286 chips—dramatically reduced computation costs and increased speed. This made iterative software development accessible and enabled entirely new ecosystems of applications, ultimately giving rise to the personal computer. Multi-agent RL faces a similar bottleneck today: progress is limited by the cost and speed of experience collection. Fast, affordable simulation with integrated RL algorithms may play a similar role, enabling solutions that were previously out of reach. <a href="#fr-1-1">↩</a></p>
+<h2 id="notes-1"><a class="header" href="#notes-1">Notes</a></h2>
+<ol>
+<li>
+<p>A useful parallel comes from the early days of computing. In the 1970s and 1980s, advances in semiconductor manufacturing and microprocessor design—such as Intel’s 8080 and 80286 chips—dramatically reduced computation costs and increased speed. This made iterative software development accessible and enabled entirely new ecosystems of applications, ultimately giving rise to the personal computer. Multi-agent RL faces a similar bottleneck today: progress is limited by the cost and speed of experience collection. Fast, affordable simulation with integrated RL algorithms may play a similar role, enabling solutions that were previously out of reach.</p>
 </li>
-<li id="footnote-2">
-<p>We benchmark here against 80% goal-reaching to make the results comparable to those in Nocturne. Similar accelerations are achieved against GPUDrive at the 99% success rate. <a href="#fr-2-1">↩</a></p>
+<li>
+<p>We benchmark here against 80% goal-reaching to make the results comparable to those in Nocturne. Similar accelerations are achieved against GPUDrive at the 99% success rate.</p>
 </li>
 </ol>
 

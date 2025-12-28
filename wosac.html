@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/extra-d884356a.css">
+        <link rel="stylesheet" href="theme/extra-1e76a9d8.css">
 
         <!-- MathJax -->
         <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
@@ -38,7 +38,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-da507344.js";
+            window.path_to_searchindex_js = "searchindex-3d8ae7b6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-d6a866dd.js"></script>
@@ -196,7 +196,7 @@
 <p>The default configs aim to emulate the WOSAC settings as closely as possible, but you can adjust them:</p>
 <pre><code class="language-ini">[eval]
 map_dir = "resources/drive/binaries/validation" # Dataset to use
-num_maps = 100  # Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)
+num_maps = 100  # Number of maps to run evaluation on. (It will always be the first num_maps maps of the map_dir)
 wosac_num_rollouts = 32      # Number of policy rollouts per scene
 wosac_init_steps = 10        # When to start the simulation
 wosac_control_mode = "control_wosac"  # Control the tracks to predict
@@ -212,7 +212,7 @@ checkpoint_interval = 500    # Set equal to eval_interval to use the latest chec
 [eval]
 eval_interval = 500          # Run eval every N epochs
 map_dir = "resources/drive/binaries/training"  # Dataset to use
-num_maps = 20 # Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)
+num_maps = 20 # Number of maps to run evaluation on. (It will always be the first num_maps maps of the map_dir)
 </code></pre>
 <h2 id="baselines"><a class="header" href="#baselines">Baselines</a></h2>
 <p>We provide baselines on a small curated dataset from the WOMD validation set with perfect ground-truth (no collisions or off-road events from labeling mistakes).</p>
