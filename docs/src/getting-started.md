@@ -35,7 +35,7 @@ Once map binaries are available (see [Data](data.md)), launch a quick training r
 puffer train puffer_drive
 ```
 
-For multi-node training(Only uses Data Parallelism with torch ddp)
+For multi-node training (only uses Data Parallelism with torch ddp)
 ```bash
 torchrun --standalone --nnodes=1 --nproc-per-node=6 -m puffer train puffer_drive
 ```

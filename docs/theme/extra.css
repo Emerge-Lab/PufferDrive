@@ -7,7 +7,7 @@
 }
 
 /* Override mdbook theme to match mkdocs Material (white/teal) */
-.light, .rust, .navy, .coal, .ayu {
+.light, .rust {
   --bg: #fafafa;
   --fg: #1a1a1a;
   --sidebar-bg: #ffffff;
@@ -19,7 +19,32 @@
   --icons: #666666;
   --icons-hover: #0d9488;
   --links: #0d9488;
-  --inline-code-color: #1a1a1a;
+  --inline-code-color: black;
+  --code-bg: #f8f8f8;
+  --theme-popup-bg: #ffffff;
+  --theme-popup-border: #e5e5e5;
+  --theme-hover: rgba(13, 148, 136, 0.08);
+  --quote-bg: rgba(13, 148, 136, 0.08);
+  --quote-border: #0d9488;
+  --search-mark-bg: rgba(13, 148, 136, 0.3);
+  --sidebar-active-indicator: #1a1a1a;
+  --blockquote-important-color: #1a1a1a;
+  --sidebar-header-border-color: #999999;
+}
+
+.navy, .coal, .ayu {
+  --bg: #fafafa;
+  --fg: #1a1a1a;
+  --sidebar-bg: #ffffff;
+  --sidebar-fg: #4a4a4a;
+  --sidebar-non-existant: #aaaaaa;
+  --sidebar-active: #1a1a1a;
+  --sidebar-spacer: #f0f0f0;
+  --scrollbar: #cccccc;
+  --icons: #666666;
+  --icons-hover: #0d9488;
+  --links: #0d9488;
+  --inline-code-color: #c5c8c6;
   --code-bg: #f8f8f8;
   --theme-popup-bg: #ffffff;
   --theme-popup-border: #e5e5e5;

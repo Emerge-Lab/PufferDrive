@@ -26,7 +26,7 @@ The default configs aim to emulate the WOSAC settings as closely as possible, bu
 ```ini
 [eval]
 map_dir = "resources/drive/binaries/validation" # Dataset to use
-num_maps = 100  # Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)
+num_maps = 100  # Number of maps to run evaluation on. (It will always be the first num_maps maps of the map_dir)
 wosac_num_rollouts = 32      # Number of policy rollouts per scene
 wosac_init_steps = 10        # When to start the simulation
 wosac_control_mode = "control_wosac"  # Control the tracks to predict
@@ -46,7 +46,7 @@ checkpoint_interval = 500    # Set equal to eval_interval to use the latest chec
 [eval]
 eval_interval = 500          # Run eval every N epochs
 map_dir = "resources/drive/binaries/training"  # Dataset to use
-num_maps = 20 # Number of maps to run evaluation on. (It will alwasys be the first num_maps maps of the map_dir)
+num_maps = 20 # Number of maps to run evaluation on. (It will always be the first num_maps maps of the map_dir)
 ```
 
 ## Baselines

@@ -109,8 +109,8 @@ Determines which created agents are **controlled** by the policy.
 
 | Option                                        | Description                                                                                                |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `control_vehicles` (default)                | Control only valid**vehicles** (not experts, beyond `MIN_DISTANCE_TO_GOAL`, under `MAX_AGENTS`). |
-| `control_agents`                            | Control all valid**agent types** (vehicles, cyclists, pedestrians).                                  |
+| `control_vehicles` (default)                | Control only valid **vehicles** (not experts, beyond `MIN_DISTANCE_TO_GOAL`, under `MAX_AGENTS`). |
+| `control_agents`                            | Control all valid **agent types** (vehicles, cyclists, pedestrians).                                  |
 | `control_tracks_to_predict` *(WOMD only)* | Control agents listed in the `tracks_to_predict` metadata.                                               |
 | `control_sdc_only` *(WOMD only)* | Control just the self-driving car (SDC).                                             |
 
