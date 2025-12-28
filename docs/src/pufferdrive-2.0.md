@@ -16,7 +16,7 @@ This post highlights the main features and traces the sequence of projects that 
 
 ## Highlights
 
-- **Super-fast self-play RL**: Train agents on 10,000 multi-agent Waymo scenarios and reach a near-perfect score in about **15 minutes on a single GPU** where [Earlier results](https://arxiv.org/abs/2502.14706) took 24 hours.
+- **Super-fast self-play RL**: Train agents on 10,000 multi-agent Waymo scenarios and reach a near-perfect score in under in about **15 minutes on a single GPU** where [earlier results](https://arxiv.org/abs/2502.14706) took 24 hours.
 - **Long-horizon driving:** Train agents to reach goals indefinitely on large CARLA maps. Demo agents are trained this way. Drive alongside them in the browser below.
 - **Built-in evaluation:** Integrated, accelerated eval support for the [Waymo Open Sim Agent Challenge (WOSAC)](https://emerge-lab.github.io/PufferDrive/wosac/) and a [human compatibility benchmark](https://emerge-lab.github.io/PufferDrive/evaluation/#human-compatibility-benchmark).
 - **Easy scenario creation:** Edit or design custom scenarios in minutes, including long-tail and stress-test cases, using the [interactive scenario editor](https://emerge-lab.github.io/PufferDrive/scene-editor/).
@@ -25,11 +25,14 @@ This post highlights the main features and traces the sequence of projects that 
 
 ## Drive together with trained agents
 
-<iframe src="/assets/game.html" title="PufferDrive Demo" width="1280" height="720" style="border: none; display: block; margin: 2rem auto;"></iframe>
+<iframe src="assets/game.html" title="PufferDrive Demo" width="1280" height="720" style="border: none; display: block; margin: 2rem auto;"></iframe>
 
 <p style="text-align: center; color: #888; margin-top: 1rem;">
   Hold <strong>Left Shift</strong> and use arrow keys or <strong>WASD</strong> to control the vehicle. Hold <strong>space</strong> for first-person view and <strong>ctrl</strong> to see what your agent is seeing.
 </p>
+
+> [!TIP]
+> Make sure to click on the demo window first.
 
 
 ## Introduction and history
@@ -99,9 +102,10 @@ What is next? PufferDrive 3.0 will improve agent diversity, realism, and expand 
 ## Citation
 
 If you use PufferDrive, please cite:
+
 ```bibtex
 @software{pufferdrive2025github,
-  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Valentin Charraut and Eugene Vinitsky},
+  author = {Daphne Cornelisse⁕ and Spencer Cheng⁕ and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Valentin Charraut and Eugene Vinitsky},
   title = {{PufferDrive}: A Fast and Friendly Driving Simulator for Training and Evaluating {RL} Agents},
   url = {https://github.com/Emerge-Lab/PufferDrive},
   version = {2.0.0},

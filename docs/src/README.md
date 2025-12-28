@@ -17,6 +17,9 @@
   </div>
 </div>
 
+> [!Note]
+> We just released PufferDrive 2.0! Check out the [release post](pufferdrive-2.0.html).
+
 ## Try it in your browser
 
 <div class="video-embed">
@@ -29,8 +32,7 @@
 
 ## Highlights
 
-- Multi-agent drive environment that trains agents at 300K steps per second.
-- Scripts to convert Waymo Open Motion Dataset JSON into lightweight binaries (CARLA sample map included).
+- Data-driven, multi-agent drive environment that trains agents at 300K steps per second.
 - Benchmarks for distributional realism and human compatibility.
 - Raylib-based visualizer for local or headless render/export.
 

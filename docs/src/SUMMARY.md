@@ -4,22 +4,22 @@
 
 # Documentation
 
-- [Getting Started](getting-started.md)
-- [Training Agents](train.md)
-- [Interact with Agents](interact-with-agents.md)
+- [Getting started](getting-started.md)
+- [Training agents](train.md)
+- [Interact with agents](interact-with-agents.md)
 - [Simulator](simulator.md)
-- [Interactive Scenario Editor](scene-editor.md)
+- [Interactive scenario editor](scene-editor.md)
 - [Visualizer](visualizer.md)
 
 # Data
 
-- [Data Sources &amp; Preparation](data.md)
+- [Data sources &amp; preparation](data.md)
 
 # Benchmarks
 
-- [Evaluation Overview](evaluation.md)
+- [Evaluation overview](evaluation.md)
 - [WOSAC](wosac.md)
 
 # Blog
 
-- [PufferDrive 2.0](pufferdrive-2.0.md)
+- [PufferDrive 2.0 release](pufferdrive-2.0.md)
