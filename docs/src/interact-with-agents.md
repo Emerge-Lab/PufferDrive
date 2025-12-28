@@ -5,24 +5,24 @@ You can take manual control of an agent in the simulator by holding **LEFT SHIFT
 ### Local rendering
 
 To launch an interactive renderer, first build:
+
 ```bash
 bash scripts/build_ocean.sh drive local
 ```
 
 then launch:
+
 ```bash
 ./drive
 ```
 
 This will run `demo()` with an existing model checkpoint.
 
-[TODO: Add demo video/gif here]
-
 ### Controls
 
 **General:**
+
 - **LEFT SHIFT + Arrow Keys/WASD** - Take manual control
-- **TAB** - Switch between agents
 - **SPACE** - First-person camera view
 - **Mouse Drag** - Pan camera
 - **Mouse Wheel** - Zoom
