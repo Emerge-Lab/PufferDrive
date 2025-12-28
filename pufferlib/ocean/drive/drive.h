@@ -69,7 +69,11 @@
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
+
+// Maximum number of agents per scene
+#ifndef MAX_AGENTS
 #define MAX_AGENTS 32
+#endif
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
@@ -2648,7 +2652,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
                 // Draw cube for cars static and active
                 // Calculate scale factors based on desired size and model dimensions
-
                 BoundingBox bounds = GetModelBoundingBox(car_model);
                 Vector3 model_size = {bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y,
                                       bounds.max.z - bounds.min.z};
@@ -2692,9 +2695,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
             // FPV Camera Control
             if (IsKeyDown(KEY_SPACE) && env->human_agent_idx == agent_index) {
-                if (env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
-                    env->human_agent_idx = rand() % env->active_agent_count;
-                }
                 Vector3 camera_position = (Vector3){position.x - (25.0f * cosf(heading)),
                                                     position.y - (25.0f * sinf(heading)), position.z + 15};
 
@@ -2779,89 +2779,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
         }
     }
-}
-
-void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTexture2D target, int map_height, int obs,
-                      int lasers, int trajectories, int frame_count, float *path, int show_human_logs, int show_grid) {
-    // Top-down orthographic camera
-    Camera3D camera = {0};
-    camera.position = (Vector3){0.0f, 0.0f, 500.0f}; // above the scene
-    camera.target = (Vector3){0.0f, 0.0f, 0.0f};     // look at origin
-    camera.up = (Vector3){0.0f, -1.0f, 0.0f};
-    camera.fovy = map_height;
-    camera.projection = CAMERA_ORTHOGRAPHIC;
-    Color road = (Color){35, 35, 37, 255};
-
-    BeginTextureMode(target);
-    ClearBackground(road);
-    BeginMode3D(camera);
-    rlEnableDepthTest();
-
-    // Draw log trajectories FIRST (in background at lower Z-level)
-    if (show_human_logs) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            int idx = env->active_agent_indices[i];
-            for (int j = 0; j < env->entities[idx].array_size; j++) {
-                float x = env->entities[idx].traj_x[j];
-                float y = env->entities[idx].traj_y[j];
-                float valid = env->entities[idx].traj_valid[j];
-                if (!valid)
-                    continue;
-                DrawSphere((Vector3){x, y, 0.5f}, 0.3f, Fade(LIGHTGREEN, 0.6f));
-            }
-        }
-    }
-
-    // Draw current path trajectories SECOND (slightly higher than log trajectories)
-    if (trajectories) {
-        for (int i = 0; i < frame_count; i++) {
-            DrawSphere((Vector3){path[i * 2], path[i * 2 + 1], 0.8f}, 0.5f, YELLOW);
-        }
-    }
-
-    draw_scene(env, client, 1, obs, lasers, show_grid);
-
-    EndMode3D();
-    EndTextureMode();
-
-    // save to file
-    Image img = LoadImageFromTexture(target.texture);
-    ImageFlipVertical(&img);
-    ExportImage(img, filename);
-    UnloadImage(img);
-}
-
-// TODO: This function seems no longer used. Can probably be removed.
-void saveAgentViewImage(Drive *env, Client *client, const char *filename, RenderTexture2D target, int map_height,
-                        int obs_only, int lasers, int show_grid) {
-    // Agent perspective camera following the human agent
-    int agent_idx = env->active_agent_indices[env->human_agent_idx];
-    Entity *agent = &env->entities[agent_idx];
-
-    Camera3D camera = {0};
-    // Position camera behind and above the agent
-    camera.position =
-        (Vector3){agent->x - (25.0f * cosf(agent->heading)), agent->y - (25.0f * sinf(agent->heading)), 15.0f};
-    camera.target = (Vector3){agent->x + 40.0f * cosf(agent->heading), agent->y + 40.0f * sinf(agent->heading), 1.0f};
-    camera.up = (Vector3){0.0f, 0.0f, 1.0f};
-    camera.fovy = 45.0f;
-    camera.projection = CAMERA_PERSPECTIVE;
-
-    Color road = (Color){35, 35, 37, 255};
-
-    BeginTextureMode(target);
-    ClearBackground(road);
-    BeginMode3D(camera);
-    rlEnableDepthTest();
-    draw_scene(env, client, 0, obs_only, lasers, show_grid); // mode=0 for agent view
-    EndMode3D();
-    EndTextureMode();
-
-    // Save to file
-    Image img = LoadImageFromTexture(target.texture);
-    ImageFlipVertical(&img);
-    ExportImage(img, filename);
-    UnloadImage(img);
 }
 
 void c_render(Drive *env) {
