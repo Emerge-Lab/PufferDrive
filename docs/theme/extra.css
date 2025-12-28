@@ -6,8 +6,8 @@
   --teal-light: rgba(13, 148, 136, 0.08);
 }
 
-/* Override mdbook theme to match mkdocs Material (white/teal) */
-.light, .rust, .navy, .coal, .ayu {
+/* Override mdbook light themes */
+.light, .rust {
   --bg: #fafafa;
   --fg: #1a1a1a;
   --sidebar-bg: #ffffff;
@@ -21,6 +21,7 @@
   --links: #0d9488;
   --inline-code-color: #666666;
   --code-bg: #f8f8f8;
+  --code-fg: #1a1a1a;
   --theme-popup-bg: #ffffff;
   --theme-popup-border: #e5e5e5;
   --theme-hover: rgba(13, 148, 136, 0.08);
@@ -30,6 +31,18 @@
   --sidebar-active-indicator: #1a1a1a;
   --blockquote-important-color: #1a1a1a;
   --sidebar-header-border-color: #999999;
+}
+
+/* Override mdbook dark themes */
+.navy, .coal, .ayu {
+  --links: #14b8a6;
+  --icons-hover: #14b8a6;
+  --search-mark-bg: rgba(20, 184, 166, 0.3);
+  --sidebar-active-indicator: #cccccc;
+  --blockquote-important-color: #cccccc;
+  --sidebar-header-border-color: #666666;
+  --code-bg: #2a2a2a;
+  --code-fg: #e0e0e0;
 }
 
 /* Sidebar styling */
@@ -438,3 +451,4 @@ blockquote {
   margin: 1rem 0;
   border-radius: 0 8px 8px 0;
 }
+
