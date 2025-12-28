@@ -1,0 +1,465 @@
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&display=swap');
+
+:root {
+  --teal-subtle: #0d9488;
+  --teal-hover: #14b8a6;
+  --teal-light: rgba(13, 148, 136, 0.08);
+}
+
+/* Override mdbook theme to match mkdocs Material (white/teal) */
+.light, .rust {
+  --bg: #fafafa;
+  --fg: #1a1a1a;
+  --sidebar-bg: #ffffff;
+  --sidebar-fg: #4a4a4a;
+  --sidebar-non-existant: #aaaaaa;
+  --sidebar-active: #1a1a1a;
+  --sidebar-spacer: #f0f0f0;
+  --scrollbar: #cccccc;
+  --icons: #666666;
+  --icons-hover: #0d9488;
+  --links: #0d9488;
+  --inline-code-color: black;
+  --code-bg: #f8f8f8;
+  --theme-popup-bg: #ffffff;
+  --theme-popup-border: #e5e5e5;
+  --theme-hover: rgba(13, 148, 136, 0.08);
+  --quote-bg: rgba(13, 148, 136, 0.08);
+  --quote-border: #0d9488;
+  --search-mark-bg: rgba(13, 148, 136, 0.3);
+  --sidebar-active-indicator: #1a1a1a;
+  --blockquote-important-color: #1a1a1a;
+  --sidebar-header-border-color: #999999;
+}
+
+.navy, .coal, .ayu {
+  --bg: #fafafa;
+  --fg: #1a1a1a;
+  --sidebar-bg: #ffffff;
+  --sidebar-fg: #4a4a4a;
+  --sidebar-non-existant: #aaaaaa;
+  --sidebar-active: #1a1a1a;
+  --sidebar-spacer: #f0f0f0;
+  --scrollbar: #cccccc;
+  --icons: #666666;
+  --icons-hover: #0d9488;
+  --links: #0d9488;
+  --inline-code-color: #c5c8c6;
+  --code-bg: #f8f8f8;
+  --theme-popup-bg: #ffffff;
+  --theme-popup-border: #e5e5e5;
+  --theme-hover: rgba(13, 148, 136, 0.08);
+  --quote-bg: rgba(13, 148, 136, 0.08);
+  --quote-border: #0d9488;
+  --search-mark-bg: rgba(13, 148, 136, 0.3);
+  --sidebar-active-indicator: #1a1a1a;
+  --blockquote-important-color: #1a1a1a;
+  --sidebar-header-border-color: #999999;
+}
+
+/* Sidebar styling */
+.sidebar {
+  background: #ffffff;
+  border-right: 1px solid #f0f0f0;
+}
+
+.sidebar .sidebar-scrollbox {
+  padding: 1rem;
+}
+
+.sidebar a {
+  color: #4a4a4a;
+}
+
+.sidebar a:hover {
+  color: #0d9488;
+}
+
+.sidebar a.active {
+  color: #0d9488;
+  font-weight: 600;
+}
+
+/* Chapter list styling */
+.chapter li.chapter-item {
+  margin: 0.5rem 0;
+}
+
+.chapter li.chapter-item a {
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  display: block;
+}
+
+.chapter li.chapter-item a:hover {
+  background: rgba(13, 148, 136, 0.08);
+}
+
+.chapter li.chapter-item a.active {
+  background: rgba(13, 148, 136, 0.08);
+  color: #0d9488;
+}
+
+/* Override the active chapter indicator bar color to grey/black */
+.chapter li.chapter-item.expanded > a::before,
+.chapter li.chapter-item a.active::before,
+.sidebar .active {
+  border-color: #1a1a1a !important;
+}
+
+.chapter .section li.chapter-item a.active {
+  border-left-color: #1a1a1a !important;
+}
+
+/* Force the left border indicator to grey */
+.sidebar-scrollbox a.active {
+  border-left: 2px solid #1a1a1a !important;
+}
+
+ol.chapter li a.active {
+  border-left-color: #1a1a1a !important;
+}
+
+/* Target any purple/hsl colors */
+.sidebar a::before,
+.chapter a::before {
+  background-color: #1a1a1a !important;
+  border-color: #1a1a1a !important;
+}
+
+/* Force all active indicators */
+* {
+  --sidebar-active: #1a1a1a;
+}
+
+/* Right-side TOC (table of contents) active indicator */
+.pagetoc a.active,
+.pagetoc .active {
+  color: #1a1a1a !important;
+  border-left-color: #1a1a1a !important;
+}
+
+.pagetoc a:hover {
+  color: #0d9488;
+}
+
+.pagetoc a {
+  border-left: 2px solid transparent;
+  color: #666666;
+}
+
+/* Override any purple/accent colors in the page TOC */
+.pagetoc .active,
+.pagetoc a.active {
+  border-left: 2px solid #1a1a1a !important;
+}
+
+#pagetoc a.active {
+  border-color: #1a1a1a !important;
+  color: #1a1a1a !important;
+}
+
+/* Catch-all for any toc elements */
+.toc .active,
+#toc .active,
+nav.pagetoc .active {
+  border-left-color: #1a1a1a !important;
+  border-color: #1a1a1a !important;
+}
+
+/* Part titles in sidebar */
+.chapter li.part-title {
+  color: #1a1a1a;
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Menu bar / header */
+.menu-bar {
+  background: #ffffff;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.menu-bar i {
+  color: #666666;
+}
+
+.menu-bar i:hover {
+  color: #0d9488;
+}
+
+/* Content area - expand to fill available space */
+.content {
+  background: #fafafa;
+  max-width: none;
+}
+
+.content main {
+  background: #ffffff;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  margin: 1rem;
+  max-width: none;
+}
+
+/* Remove default max-width constraints */
+#content {
+  max-width: none;
+}
+
+.page-wrapper {
+  max-width: none;
+}
+
+/* General typography */
+body {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Headings use Crimson Pro (Times-like serif) */
+h1, h2, h3, h4, h5, h6 {
+  font-family: "Crimson Pro", "Times New Roman", Times, serif;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Link styling */
+a {
+  color: var(--teal-subtle);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--teal-hover);
+  text-decoration: underline;
+}
+
+/* Hero section */
+.hero {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  padding: 2rem;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  margin-bottom: 2rem;
+}
+
+.hero img {
+  width: 180px;
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.hero h1 {
+  font-family: "Crimson Pro", "Times New Roman", Times, serif;
+  margin: 0 0 0.5rem 0;
+  color: #1a1a1a;
+}
+
+.hero .cta {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.hero .cta a {
+  padding: 0.65rem 1.1rem;
+  border-radius: 8px;
+  font-weight: 500;
+  text-decoration: none;
+  color: #1a1a1a;
+  background: #ffffff;
+  border: 1.5px solid #e5e5e5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  min-width: 140px;
+  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  transition: all 0.2s ease;
+}
+
+.hero .cta a:hover {
+  border-color: var(--teal-subtle);
+  color: var(--teal-subtle);
+  box-shadow: 0 2px 6px rgba(13, 148, 136, 0.12);
+}
+
+.hero .cta a.primary {
+  color: #ffffff;
+  background: var(--teal-subtle);
+  border: none;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.2);
+}
+
+.hero .cta a.primary:hover {
+  background: var(--teal-hover);
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.25);
+}
+
+/* Workflow cards */
+.workflow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.step-card {
+  padding: 1.2rem;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  transition: all 0.2s ease;
+}
+
+.step-card:hover {
+  border-color: rgba(13, 148, 136, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.step-card .badge {
+  align-self: flex-start;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: var(--teal-light);
+  color: var(--teal-subtle);
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.step-card h3 {
+  font-family: "Crimson Pro", "Times New Roman", Times, serif;
+  margin: 0;
+  font-size: 1.1rem;
+  color: #1a1a1a;
+}
+
+.step-card p {
+  margin: 0;
+  color: #4a4a4a;
+}
+
+.step-card a {
+  color: var(--teal-subtle);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.step-card a:hover {
+  color: var(--teal-hover);
+  text-decoration: underline;
+}
+
+/* Feature grid */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.feature-card {
+  padding: 1.2rem;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease;
+}
+
+.feature-card:hover {
+  border-color: rgba(13, 148, 136, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.feature-card h3 {
+  font-family: "Crimson Pro", "Times New Roman", Times, serif;
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  color: #1a1a1a;
+}
+
+.feature-card p {
+  margin: 0;
+  color: #4a4a4a;
+  line-height: 1.6;
+}
+
+/* Video embed */
+.video-embed {
+  position: relative;
+  padding-top: 56.25%;
+  background: #000;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+  margin: 1rem 0 1.5rem;
+}
+
+.video-embed iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Reduce left margin and widen content */
+main {
+  margin-left: 0;
+  padding-left: 1rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .hero {
+    flex-direction: column;
+    text-align: center;
+    padding: 1.5rem;
+  }
+
+  .hero img {
+    width: 130px;
+    margin: 0 auto;
+  }
+
+  .hero .cta {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero .cta a {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+}
+
+/* Admonition/callout styling for mdbook */
+blockquote {
+  border-left: 4px solid var(--teal-subtle);
+  background: var(--teal-light);
+  padding: 1rem;
+  margin: 1rem 0;
+  border-radius: 0 8px 8px 0;
+}
