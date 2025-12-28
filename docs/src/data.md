@@ -64,7 +64,7 @@ See [Interactive scenario editor](scene-editor.md) for a browser-based workflow 
 
 ## Generate CARLA agent trajectories
 
-The agent trajectories in the provided CARLA maps are procedurally generated assuming a general velocity range without a valid initial state(no collision/offroad). The repository uses an external submodule for CARLA XODR processing (`pyxodr`).
+The agent trajectories in the provided CARLA maps are procedurally generated assuming a general velocity range without a valid initial state (no collision/offroad). The repository uses an external submodule for CARLA XODR processing (`pyxodr`).
 
 To generate your own CARLA agent trajectories, install the submodules and developer requirements (editable install) before running the generator:
 

@@ -1,8 +1,8 @@
 # PufferDrive 2.0: A fast and friendly driving simulator for training and evaluating RL agents
 
-**Daphne Cornelisse**¹·$*$, **Spencer Cheng**²·$*$, Pragnay Mandavilli¹, Julian Hunt¹, Kevin Joseph¹, Waël Doulazmi³, Valentin Charraut³, Eugene Vinitsky¹
+**Daphne Cornelisse**<sup>1\*</sup>, **Spencer Cheng**<sup>2\*</sup>, Pragnay Mandavilli<sup>1</sup>, Julian Hunt<sup>1</sup>, Kevin Joseph<sup>1</sup>, Waël Doulazmi<sup>3</sup>, Valentin Charraut<sup>3</sup>, Eugene Vinitsky<sup>1</sup>
 
-¹ Emerge Lab at NYU Tandon School of Engineering| ² [Puffer.ai](https://puffer.ai/) | ³ Valeo | $*$ Shared first contributor
+<sup>1</sup> Emerge Lab at NYU Tandon School of Engineering | <sup>2</sup> [Puffer.ai](https://puffer.ai/) | <sup>3</sup> Valeo | <sup>\*</sup> Shared first contributor
 
 *December 26, 2025*
 
@@ -16,7 +16,7 @@ This post highlights the main features and traces the sequence of projects that 
 
 ## Highlights
 
-- **Super-fast self-play RL**: Train agents on 10,000 multi-agent Waymo scenarios and reach a near-perfect score in under in about **15 minutes on a single GPU** where [Earlier results](https://arxiv.org/abs/2502.14706) took 24 hours.
+- **Super-fast self-play RL**: Train agents on 10,000 multi-agent Waymo scenarios and reach a near-perfect score in about **15 minutes on a single GPU** where [Earlier results](https://arxiv.org/abs/2502.14706) took 24 hours.
 - **Long-horizon driving:** Train agents to reach goals indefinitely on large CARLA maps. Demo agents are trained this way. Drive alongside them in the browser below.
 - **Built-in evaluation:** Integrated, accelerated eval support for the [Waymo Open Sim Agent Challenge (WOSAC)](https://emerge-lab.github.io/PufferDrive/wosac/) and a [human compatibility benchmark](https://emerge-lab.github.io/PufferDrive/evaluation/#human-compatibility-benchmark).
 - **Easy scenario creation:** Edit or design custom scenarios in minutes, including long-tail and stress-test cases, using the [interactive scenario editor](https://emerge-lab.github.io/PufferDrive/scene-editor/).
@@ -36,11 +36,10 @@ This post highlights the main features and traces the sequence of projects that 
 
 Deep reinforcement learning algorithms such as [PPO](https://arxiv.org/abs/1707.06347) perform extremely well in the billion-sample regime. RL consistently optimizes precise objectives, even under sparse rewards, if occasional successes occur and the scale is sufficient.
 
-This shifts the primary bottleneck to simulation. The faster we can generate high-quality experience, the more reliably we can apply RL to hard real-world problems, such as autonomous navigation in dynamic, multi-agent environments.[^1]
+This shifts the primary bottleneck to simulation. The faster we can generate high-quality experience, the more reliably we can apply RL to hard real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup>[1](#notes)</sup>
 
 Over the past few years, we built several data-driven, multi-agent simulators to study large-scale self-play for driving. We focus on this sequence of projects to show how we arrived at PufferDrive 2.0.
 
-[^1]: A useful parallel comes from the early days of computing. In the 1970s and 1980s, advances in semiconductor manufacturing and microprocessor design—such as Intel’s 8080 and 80286 chips—dramatically reduced computation costs and increased speed. This made iterative software development accessible and enabled entirely new ecosystems of applications, ultimately giving rise to the personal computer. Multi-agent RL faces a similar bottleneck today: progress is limited by the cost and speed of experience collection. Fast, affordable simulation with integrated RL algorithms may play a similar role, enabling solutions that were previously out of reach.
 
 ## Early results with self-play RL in autonomous driving
 
@@ -58,7 +57,7 @@ Later work explored what becomes possible once reaching scale is no longer a bot
 These results suggested that once simulation becomes cheap, self-play RL can produce robust autonomous driving policies.
 
 ![SPS comparison between sims](images/sim-comparison.png)
-**Figure 1:** _Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching[^2]. This captures both simulation speed and algorithmic efficiency._
+**Figure 1:** _Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching<sup>[2](#notes)</sup>. This captures both simulation speed and algorithmic efficiency._
 
 | Simulator | End-to-end training SPS | Time to 80% success rate |
 |-----------|--------------|------------------------|
@@ -66,7 +65,6 @@ These results suggested that once simulation becomes cheap, self-play RL can pro
 | GPUDrive | 50,000 | ~1.7 hours |
 | PufferDrive | 320,000 | ~4 minutes |
 
-[^2] We benchmark here against 80\% goal-reaching to make the results comparable to those in Nocturne. Similar accelerations are achieved against GPUDrive at the 99% success rate.
 
 
 ## From GPUDrive to PufferDrive
@@ -112,3 +110,11 @@ If you use PufferDrive, please cite:
 ```
 
 *\*Equal contribution*
+
+---
+
+## Notes
+
+1. A useful parallel comes from the early days of computing. In the 1970s and 1980s, advances in semiconductor manufacturing and microprocessor design—such as Intel's 8080 and 80286 chips—dramatically reduced computation costs and increased speed. This made iterative software development accessible and enabled entirely new ecosystems of applications, ultimately giving rise to the personal computer. Multi-agent RL faces a similar bottleneck today: progress is limited by the cost and speed of experience collection. Fast, affordable simulation with integrated RL algorithms may play a similar role, enabling solutions that were previously out of reach.
+
+2. We benchmark here against 80% goal-reaching to make the results comparable to those in Nocturne. Similar accelerations are achieved against GPUDrive at the 99% success rate.
