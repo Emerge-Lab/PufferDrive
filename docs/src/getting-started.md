@@ -1,4 +1,4 @@
-# Getting Started
+# Getting started
 
 This page walks through installing PufferDrive from source, building the native extensions, and running a first training job.
 
@@ -44,6 +44,7 @@ If map binaries are missing, follow the steps in [Data](data.md) to generate the
 
 
 ## Logging with Weights & Biases
+
 Enable W&B logging with the built-in CLI flags (the package is already a dependency in `setup.py`):
 
 ```bash

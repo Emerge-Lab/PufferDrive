@@ -1,6 +1,6 @@
 # Summary
 
-[Getting started](README.md)
+[Home](README.md)
 
 # Documentation
 
