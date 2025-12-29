@@ -62,11 +62,9 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 
 *Table: WOSAC baselines in PufferDrive on 229 selected clean held-out validation scenarios.*
 
----
 
 > ✏️ Download the dataset from [Hugging Face](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean) to reproduce these results or benchmark your policy.
 
----
 
 | Method | Realism meta-score | Kinematic metrics | Interactive metrics | Map-based metrics | minADE | ADE |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -77,11 +75,9 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 
 *Table: WOSAC baselines in PufferDrive on validation 10k dataset.*
 
----
 
 > ✏️ Download the dataset from [Hugging Face](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val) to reproduce these results or benchmark your policy.
 
----
 
 
 ## Evaluating trajectories
