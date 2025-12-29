@@ -1,6 +1,6 @@
-# Interactive scenario editor
+# Scenario Editor
 
-A browser-based playground for inspecting and editing Waymo Open Motion Dataset (WOMD) scenes. The tool runs fully client-side at <https://womd-editor.vercel.app/> and works directly with the JSON format produced by Waymo/ScenarioMax exports and PufferDrive conversions.
+A browser-based playground for inspecting and editing driving scenarios. The Scenario Editor runs fully client-side at [the hosted app](https://womd-editor.vercel.app/) and works directly with the JSON format produced by Waymo, ScenarioMax, and PufferDrive conversions.
 
 ## Video walkthrough
 
@@ -9,8 +9,8 @@ A browser-based playground for inspecting and editing Waymo Open Motion Dataset 
 </div>
 
 ## Quick start
-- Open <https://womd-editor.vercel.app/> in a modern Chromium/Firefox browser.
-- Click **Import JSON…** in the left sidebar and drop one or more scenario files (Waymo/ScenarioMax JSON or editor exports).
+- Open the [Scenario Editor](https://womd-editor.vercel.app/) in a modern Chromium/Firefox browser.
+- Click **Import JSON…** in the left sidebar and drop one or more scenario files (Waymo, ScenarioMax, or editor exports).
 - The app stores everything in-memory only; nothing is uploaded to a server.
 
 ## What you can do
@@ -18,7 +18,7 @@ A browser-based playground for inspecting and editing Waymo Open Motion Dataset 
 - **Edit trajectories**: Select an agent and tweak paths via drag handles, draw a polyline with the Line tool, freehand record a path, or drive the agent with keyboard controls (WASD/arrow keys, Space to brake, Enter to save, Esc to cancel).
 - **Edit roads**: Switch to Road mode to draw or refine lane/edge/crosswalk geometry, recolor vertices by elevation, and view the lane connectivity overlay when ROAD_LANE/ROAD_LINE data exists.
 - **Configure metadata**: Rename the scenario, toggle label mode (ID vs. array index), mark agents as experts, and choose which agents belong to `tracks_to_predict`.
-- **Export**: Preview changes versus the import baseline, then download either Waymo-style JSON or a compact `.bin` suitable for PufferDrive’s loader.
+- **Export**: Preview changes versus the import baseline, then download either Waymo/ScenarioMax-style JSON or a compact `.bin` suitable for PufferDrive’s loader.
 
 ## Editing workflow
 1. **Load a scene**: Import one or multiple JSONs; each appears as a row in the Scenarios list with a quick delete button.
@@ -35,11 +35,11 @@ A browser-based playground for inspecting and editing Waymo Open Motion Dataset 
 5. **Export & diff**: Hit **Export** to open a preview modal that summarizes changes (metadata, agents, roads, tracks_to_predict, bounds, frames). Download JSON for round-tripping or `.bin` for simulator ingestion.
 
 ## Using exports with PufferDrive
-- JSON exports retain the Waymo layout (`objects`, `roads`, `tracks_to_predict`, `tl_states`, `metadata`) and can be converted or re-imported.
+- JSON exports retain the Waymo/ScenarioMax layout (`objects`, `roads`, `tracks_to_predict`, `tl_states`, `metadata`) and can be converted or re-imported.
 - `.bin` exports match the compact format read by `pufferlib/ocean/drive/drive.py`; drop them into `resources/drive/binaries` (e.g., `map_000.bin`) to test inside the simulator.
 - The editor auto-fills missing headings/speeds and clamps degenerate lanes to keep bounds reasonable; always spot-check via the Export preview before committing.
 
 ## Notes
 - The app is currently work-in-progress; there is no persistent storage or backend sync.
 - Large scenes may render slowly on low-power GPUs—hide trajectories or road overlays to keep the canvas responsive.
-- Source lives in the `WOMD-Editor/web` directory of this repo if you want to run it locally with `npm install && npm run dev`.
+- Source lives in the Scenario Editor web app directory of this repo if you want to run it locally with `npm install && npm run dev`.

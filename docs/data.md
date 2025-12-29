@@ -58,9 +58,9 @@ Refer to [Simulator](simulator.md) for how the binaries are consumed during rese
 - With binaries in place, run `puffer train puffer_drive` from [Getting Started](getting-started.md) as a smoke test that the build, data, and bindings are wired together.
 - To inspect the binary output, convert a single JSON file with `load_map(<json>, <id>, <output_path>)` inside `drive.py`.
 
-## Interactive scenario editor
+## Scenario Editor
 
-See [Interactive scenario editor](scene-editor.md) for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the `.bin` format consumed by the simulator.
+See [Scenario Editor](scene-editor.md) for a browser-based workflow to inspect, edit, and export Waymo/ScenarioMax JSON into the `.bin` format consumed by the simulator.
 
 ## Generate CARLA agent trajectories
 
