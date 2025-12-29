@@ -1,11 +1,10 @@
 # PufferDrive 2.0: A fast and friendly driving simulator for training and evaluating RL agents
 
-**Daphne Cornelisse**<sup>1\*</sup>, **Spencer Cheng**<sup>2\*</sup>, Pragnay Mandavilli<sup>1</sup>, Julian Hunt<sup>1</sup>, Kevin Joseph<sup>1</sup>, Waël Doulazmi<sup>3</sup>, Valentin Charraut<sup>3</sup>, Aditya Gupta<sup>1</sup>, Eugene Vinitsky<sup>1</sup>
+**Daphne Cornelisse**<sup>1\*</sup>, **Spencer Cheng**<sup>2\*</sup>, Pragnay Mandavilli<sup>1</sup>, Julian Hunt<sup>1</sup>, Kevin Joseph<sup>1</sup>, Waël Doulazmi<sup>3, 4</sup>, Valentin Charraut<sup>4</sup>, Aditya Gupta<sup>1</sup>, Eugene Vinitsky<sup>1</sup>
 
-<sup>1</sup> Emerge Lab at NYU Tandon School of Engineering | <sup>2</sup> [Puffer.ai](https://puffer.ai/) | <sup>3</sup> Valeo | <sup>\*</sup> Shared first contributor
+<sup>1</sup> Emerge Lab at NYU Tandon School of Engineering | <sup>2</sup> [Puffer.ai](https://puffer.ai/) | <sup>3</sup> Centre for Robotics, Mines Paris - PSL | <sup>4</sup> Valeo | <sup>\*</sup> Shared first contributor
 
 *December 30, 2025*
-
 
 > We introduce **PufferDrive 2.0**, a fast, easy-to-use driving simulator for reinforcement learning (RL). Built on [PufferLib](https://puffer.ai/), it allows you to train agents at **300,000 steps per second** on a single GPU. You can solve thousands of multi-agent scenarios in just 15 minutes. Evaluation and visualization run directly in the browser. This post highlights the main features and traces the sequence of projects that led to PufferDrive 2.0.
 
