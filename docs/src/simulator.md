@@ -145,12 +145,13 @@ mid_x, mid_y, length, width, dir_cos, dir_sin, type
 > [!NOTE]
 > Road observations use a spatial grid with 5m cells. The 21×21 vision range gives ~105m visibility in all directions.
 
+
 ## Rewards & metrics
 
 ### Per-step rewards
-- Vehicle collision: -0.5
-- Off-road: -0.2
-- Goal reached: +1.0
+- Vehicle collision: -1.0
+- Off-road: -1.0
+- Goal reached: +1.0 (or +0.25 after respawn in mode 0)
 - Jerk penalty (classic only): -0.0002 × Δv/dt
 
 > [!TIP]
@@ -161,8 +162,10 @@ mid_x, mid_y, length, width, dir_cos, dir_sin, type
 **Core metrics**
 
 - **`score`** - Aggregate success metric (threshold-based):
-  - **Single-goal setting (modes 0, 2):** Binary 1.0 if goal reached cleanly (no collision/off-road before completion)
-  - **Multi-goal setting (mode 1):** Fractional based on completion rate:
+  - **Single-goal setting (modes 0, 2):** Binary 1.0 if goal reached cleanly
+    - **Mode 0 (respawn):** No collision/off-road before first goal (post-respawn collisions ignored)
+    - **Mode 2 (stop):** No collision/off-road throughout entire episode
+  - **Multi-goal setting (mode 1):** Fractional based on completion rate with no collisions throughout episode:
     - 1 goal: ≥99% required
     - 2 goals: ≥50% required
     - 3-4 goals: ≥80% required
@@ -191,12 +194,15 @@ mid_x, mid_y, length, width, dir_cos, dir_sin, type
 
 #### Metrics interpretation by goal behavior
 
-| Metric | Single Goal (0, 2) | Multi-Goal (1) |
-|--------|-------------------|----------------|
-| `score` | Did agent reach THE goal cleanly? | Did agent reach X% of goals cleanly? |
-| `completion_rate` | Reached the goal? | Fraction of sampled goals reached |
-| `goals_reached` | Always ≤1 | Can be >1 |
-| `collision_rate` | Any collision before goal? | Any collision before first goal? |
+| Metric | Respawn (0) | Multi-Goal (1) | Stop (2) |
+|--------|-------------|----------------|----------|
+| `score` | Reached goal before any collision/off-road? | Reached X% of goals with no collisions? | Reached goal with no collisions? |
+| `completion_rate` | Reached the goal? | Fraction of sampled goals reached | Reached the goal? |
+| `goals_reached` | Always ≤1 | Can be >1 | Always ≤1 |
+| `collision_rate` | Any collision before first goal? | Any collision in episode? | Any collision in episode? |
+
+> [!WARNING]
+> **Respawn mode (0) scoring:** Score only considers collisions/off-road events that occurred before reaching the first goal. Post-respawn collisions do not disqualify the agent from receiving a score of 1.0.
 
 > [!WARNING]
 > **Respawn mode (0) side effect:** After respawn, all other agents are removed from the environment. This means vehicle collisions become impossible post-respawn, but off-road collisions can still occur.

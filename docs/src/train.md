@@ -17,12 +17,14 @@ The default settings in `drive.ini` are optimized for:
 - Short episodes (91 steps)
 
 **Carla maps configuration**
+
 For training agents to drive indefinitely in larger Carla maps, we recommend modifying `drive.ini` as follows:
+
 ```ini
 [env]
-goal_speed = 30.0  # Target speed in m/s at the goal. Lower values discourage excessive speeding
+goal_speed = 15.0  # Target speed in m/s at the goal. Lower values discourage excessive speeding
 goal_behavior = 1  # 0: respawn, 1: generate_new_goals, 2: stop
-goal_target_distance = 25.0  # Distance to new goal when using generate_new_goals
+goal_target_distance = 30.0  # Distance to new goal when using generate_new_goals
 
 # Episode settings
 episode_length = 200 # Increase for longer episode horizon
@@ -31,10 +33,13 @@ termination_mode = 0  # 0: terminate at episode_length, 1: terminate after all a
 
 # Map settings
 map_dir = "resources/drive/binaries/carla"
-num_maps = 1
+num_maps = 2
 ```
 
-**Note:** The default training hyperparameters work well for both configurations and typically don't need adjustment.
+this should give a good starting point.
+
+> [!Note]
+> The default training hyperparameters work well for both configurations and typically don't need adjustment.
 
 
 ## Controlled experiments
