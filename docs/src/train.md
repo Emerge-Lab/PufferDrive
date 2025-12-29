@@ -22,12 +22,12 @@ For training agents to drive indefinitely in larger Carla maps, we recommend mod
 
 ```ini
 [env]
-goal_speed = 15.0  # Target speed in m/s at the goal. Lower values discourage excessive speeding
+goal_speed = 10.0  # Target speed in m/s at the goal. Lower values discourage excessive speeding
 goal_behavior = 1  # 0: respawn, 1: generate_new_goals, 2: stop
 goal_target_distance = 30.0  # Distance to new goal when using generate_new_goals
 
 # Episode settings
-episode_length = 200 # Increase for longer episode horizon
+episode_length = 300 # Increase for longer episode horizon
 resample_frequency = 100000 # No resampling needed (there are only a few Carla maps)
 termination_mode = 0  # 0: terminate at episode_length, 1: terminate after all agents reset
 
@@ -36,7 +36,7 @@ map_dir = "resources/drive/binaries/carla"
 num_maps = 2
 ```
 
-this should give a good starting point.
+this should give a good starting point. With these settings, you'll need about 2-3 billion steps to get an agent that reaches most of it's goals (> 95%) and has a combined collsion / off-road rate of 3 %.
 
 > [!Note]
 > The default training hyperparameters work well for both configurations and typically don't need adjustment.
@@ -44,7 +44,7 @@ this should give a good starting point.
 
 ## Controlled experiments
 
-Run parameter sweeps for architecture search or multi-seed experiments:
+Aside from `train` and `sweep`, we support a third mode for running controlled experiments over lists of values:
 ```bash
 puffer controlled_exp puffer_drive --wandb --wandb-project "pufferdrive2.0_carla" --tag speed
 ```
@@ -55,10 +55,8 @@ Define parameter sweeps in `drive.ini`:
 values = [10, 20, 30]
 ```
 
-This will launch separate training runs for each value in the list, useful for:
+This will launch separate training runs for each value in the list, which cab be useful for:
 - Hyperparameter tuning
 - Architecture search
 - Running multiple random seeds
 - Ablation studies
-
-You can specify multiple controlled experiment parameters, and the system will iterate through all combinations.
