@@ -4,15 +4,11 @@
 
 <sup>1</sup> Emerge Lab at NYU Tandon School of Engineering | <sup>2</sup> [Puffer.ai](https://puffer.ai/) | <sup>3</sup> Valeo | <sup>\*</sup> Shared first contributor
 
-*December 26, 2025*
+*December 30, 2025*
 
----
 
-We introduce **PufferDrive 2.0**, a fast, easy-to-use driving simulator for reinforcement learning (RL). Built on [PufferLib](https://puffer.ai/), it allows you to train agents at **300,000 steps per second** on a single GPU. You can solve thousands of multi-agent scenarios in just 15 minutes. Evaluation and visualization run directly in the browser.
+> We introduce **PufferDrive 2.0**, a fast, easy-to-use driving simulator for reinforcement learning (RL). Built on [PufferLib](https://puffer.ai/), it allows you to train agents at **300,000 steps per second** on a single GPU. You can solve thousands of multi-agent scenarios in just 15 minutes. Evaluation and visualization run directly in the browser. This post highlights the main features and traces the sequence of projects that led to PufferDrive 2.0.
 
-This post highlights the main features and traces the sequence of projects that led to PufferDrive 2.0.
-
----
 
 ## Highlights
 
@@ -37,12 +33,11 @@ This post highlights the main features and traces the sequence of projects that 
 
 ## Introduction and history
 
-Deep reinforcement learning algorithms such as [PPO](https://arxiv.org/abs/1707.06347) perform extremely well in the billion-sample regime. RL consistently optimizes precise objectives, even under sparse rewards, if occasional successes occur and the scale is sufficient.
+Deep reinforcement learning algorithms such as [PPO](https://arxiv.org/abs/1707.06347), work effectively in the billion-sample regime. With sufficient scale and occasional successes, RL can optimize well-defined objectives even under sparse reward signals.
 
-This shifts the primary bottleneck to simulation. The faster we can generate high-quality experience, the more reliably we can apply RL to hard real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup>[1](#notes)</sup>
+This shifts the primary bottleneck to simulation. The rate at which high-quality experience can be generated _directly determines_ how reliably RL can be applied to challenging real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup>[1](#notes)</sup>
 
-Over the past few years, we built several data-driven, multi-agent simulators to study large-scale self-play for driving. We focus on this sequence of projects to show how we arrived at PufferDrive 2.0.
-
+Over the past few years, we developed a sequence of data-driven, multi-agent simulators to study large-scale self-play for autonomous driving. Agents are trained from scratch. They generate their own experience by interacting with other agents in the environment and learn from it over time. In this post, we briefly summarize this progression and show how we arrived at PufferDrive 2.0.
 
 ## Early results with self-play RL in autonomous driving
 
@@ -68,8 +63,6 @@ These results suggested that once simulation becomes cheap, self-play RL can pro
 | GPUDrive | 50,000 | ~1.7 hours |
 | PufferDrive | 320,000 | ~4 minutes |
 
-
-
 ## From GPUDrive to PufferDrive
 
 GPUDrive delivered high raw simulation speed, but end-to-end training throughput (~30K steps/sec) still limited experiments, especially on large maps like [CARLA](https://carla.org/). Memory layout and batching overheads prevented further speedups.
@@ -80,11 +73,11 @@ Partnering with Spencer Cheng from [Puffer.ai](https://puffer.ai/), we rebuilt G
 
 ## Roadmap: PufferDrive 3.0
 
-What is next? PufferDrive 3.0 will improve agent diversity, realism, and expand simulation capabilities. Priorities may shift as we test features and gather feedback. You can find an overview of our planned features on the [project board](https://github.com/orgs/Emerge-Lab/projects/7) or open an issue with something you would like to see!
+What is next? PufferDrive 3.0 will improve agent diversity, realism, and expand simulation capabilities. Priorities may shift as we test features and gather feedback. You can find an overview of our planned features on the [project board](https://github.com/orgs/Emerge-Lab/projects/7) or **open an issue** with something you would like to see!
 
 **Simulation and environment**
 
-- 2.5D simulation (allow for maps with overpasses)
+- 2.5D simulation (allow for maps with overpasses, currently not supported)
 
 **Agent and interaction**
 
