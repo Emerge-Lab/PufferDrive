@@ -113,7 +113,7 @@ Three modes determine what happens when an agent reaches its goal:
 - **Classic**: 1848 floats = 7 (ego) + 217 (partners) + 1624 (roads)
 - **Jerk**: 1851 floats = 10 (ego) + 217 (partners) + 1624 (roads)
 
-Where partners = 31 agents × 7 features, roads = 232 segments × 7 features
+Where partners = `MAX_AGENTS - 1` agents × 7 features, roads = 232 segments × 7 features
 
 > [!IMPORTANT]
 > All observations are in the **ego vehicle's reference frame** (agent-centric) and are normalized. Positions rotate with the agent's heading.
@@ -158,43 +158,43 @@ mid_x, mid_y, length, width, dir_cos, dir_sin, type
 
 ### Episode metrics
 
-#### Core metrics
+**Core metrics**
 
-**`score`** - Aggregate success metric (threshold-based):
-- **Single-goal setting (modes 0, 2):** Binary 1.0 if goal reached cleanly (no collision/off-road before completion)
-- **Multi-goal setting (mode 1):** Fractional based on completion rate:
-  - 1 goal: ≥99% required
-  - 2 goals: ≥50% required
-  - 3-4 goals: ≥80% required
-  - 5+ goals: ≥90% required
+- **`score`** - Aggregate success metric (threshold-based):
+  - **Single-goal setting (modes 0, 2):** Binary 1.0 if goal reached cleanly (no collision/off-road before completion)
+  - **Multi-goal setting (mode 1):** Fractional based on completion rate:
+    - 1 goal: ≥99% required
+    - 2 goals: ≥50% required
+    - 3-4 goals: ≥80% required
+    - 5+ goals: ≥90% required
 
-**`collision_rate`** - Fraction of agents with ≥1 vehicle collision this episode
+- **`collision_rate`** - Fraction of agents with ≥1 vehicle collision this episode
 
-**`offroad_rate`** - Fraction of agents with ≥1 off-road event this episode
+- **`offroad_rate`** - Fraction of agents with ≥1 off-road event this episode
 
-**`completion_rate`** - Fraction of agents that reached their goal (even if they crashed)
+- **`completion_rate`** - Fraction of goals reached this episode
 
-**`lane_alignment_rate`** - Fraction of time agents spent aligned with lane headings
+- **`lane_alignment_rate`** - Fraction of time agents spent aligned with lane headings
 
-#### Detailed metrics
+**In-depth metrics**
 
-**`avg_collisions_per_agent`** - Mean collision count per agent (captures repeated collisions)
+- **`avg_collisions_per_agent`** - Mean collision count per agent (captures repeated collisions)
 
-**`avg_offroad_per_agent`** - Mean off-road count per agent (captures repeated off-road events)
+- **`avg_offroad_per_agent`** - Mean off-road count per agent (captures repeated off-road events)
 
 > [!NOTE]
 > The "rate" metrics are binary flags (did it happen?), while "avg_per_agent" metrics count total occurrences. An agent can have `collision_rate=1` but `avg_collisions_per_agent=3` if they collided three times.
 
-**`goals_reached_this_episode`** - Total goals completed across all agents
+- **`goals_reached_this_episode`** - Total goals completed across all agents
 
-**`goals_sampled_this_episode`** - Total goals assigned (>1 in multi-goal mode)
+- **`goals_sampled_this_episode`** - Total goals assigned (>1 in multi-goal mode)
 
 #### Metrics interpretation by goal behavior
 
 | Metric | Single Goal (0, 2) | Multi-Goal (1) |
 |--------|-------------------|----------------|
 | `score` | Did agent reach THE goal cleanly? | Did agent reach X% of goals cleanly? |
-| `completion_rate` | Reached the goal? | Reached final goal? |
+| `completion_rate` | Reached the goal? | Fraction of sampled goals reached |
 | `goals_reached` | Always ≤1 | Can be >1 |
 | `collision_rate` | Any collision before goal? | Any collision before first goal? |
 
@@ -225,7 +225,6 @@ Three MLP encoders (ego, partners, roads) → concatenate → actor/critic heads
 
 > [!TIP]
 > The architecture is modular - you can easily swap out encoders or add new observation types without changing the policy head.
-
 
 ## Constants reference
 
