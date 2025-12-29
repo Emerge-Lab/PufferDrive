@@ -1,6 +1,6 @@
 # PufferDrive 2.0: A fast and friendly driving simulator for training and evaluating RL agents
 
-**Daphne Cornelisse**<sup>1\*</sup>, **Spencer Cheng**<sup>2\*</sup>, Pragnay Mandavilli<sup>1</sup>, Julian Hunt<sup>1</sup>, Kevin Joseph<sup>1</sup>, Waël Doulazmi<sup>3</sup>, Valentin Charraut<sup>3</sup>, Eugene Vinitsky<sup>1</sup>
+**Daphne Cornelisse**<sup>1\*</sup>, **Spencer Cheng**<sup>2\*</sup>, Pragnay Mandavilli<sup>1</sup>, Julian Hunt<sup>1</sup>, Kevin Joseph<sup>1</sup>, Waël Doulazmi<sup>3</sup>, Valentin Charraut<sup>3</sup>, Aditya Gupta<sup>1</sup>, Eugene Vinitsky<sup>1</sup>
 
 <sup>1</sup> Emerge Lab at NYU Tandon School of Engineering | <sup>2</sup> [Puffer.ai](https://puffer.ai/) | <sup>3</sup> Valeo | <sup>\*</sup> Shared first contributor
 
