@@ -37,7 +37,7 @@ map_dir = "resources/drive/binaries/carla"
 num_maps = 2
 ```
 
-this should give a good starting point. With these settings, you'll need about 2-3 billion steps to get an agent that reaches most of it's goals (> 95%) and has a combined collsion / off-road rate of 3 %.
+this should give a good starting point. With these settings, you'll need about 2-3 billion steps to get an agent that reaches most of it's goals (> 95%) and has a combined collsion / off-road rate of 3 % per episode of 300 steps.
 
 > [!Note]
 > The default training hyperparameters work well for both configurations and typically don't need adjustment.
