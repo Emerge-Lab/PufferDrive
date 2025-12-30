@@ -1,174 +1,269 @@
-# Simulator Guide
+# PufferDrive simulator guide
 
-Deep dive into how the Drive environment is wired, what it expects as inputs, and how observations/actions/configs are shaped. The environment entrypoint is `pufferlib/ocean/drive/drive.py`, which wraps the C core in `pufferlib/ocean/drive/drive.h` via `binding.c`.
+A high-performance autonomous driving simulator in C with Python bindings.
 
-## Runtime inputs and lifecycle
+**Entry point:** `pufferlib/ocean/drive/drive.py` wraps `pufferlib/ocean/drive/drive.h`
 
-- **Map binaries**: The environment scans `resources/drive/binaries` for `map_*.bin` files and requires at least one to load. Keep `num_maps` no larger than what is present on disk. During vectorized setup, `binding.shared` samples maps until it accumulates at least `num_agents` controllable entities, skipping maps with no valid agents (`set_active_agents` in `drive.h`).
-- **Episode length**: Default `episode_length = 91` to match the Waymo logs (trajectory data is 91 steps), but you can set `env.episode_length` (CLI or `.ini`) to any positive value. Metrics are logged and `c_reset` is called when `timestep = episode_length`.
-- **Resampling maps**: Python-side `Drive.step` reinitializes the vectorized environments every `resample_frequency` steps (default `910`, ~10 episodes) with fresh map IDs and seeds.
-- **Initialization controls**:
-  - `init_steps` starts agents from a later timestep in the logged trajectory.
-  - `init_mode` (`create_all_valid` vs `create_only_controlled`) decides which logged actors are instantiated at reset.
-  - `control_mode` (`control_vehicles`, `control_agents`, `control_tracks_to_predict`, `control_sdc_only`) selects which instantiated actors are policy-controlled. Non-controlled actors can still appear as static or expert replay agents.
-  - `goal_behavior` chooses what happens on goal reach (`0` respawn at start pose, `1` sample new lane-following goals via the lane topology graph, `2` stop in place). `goal_radius` sets the completion threshold in meters.
+## Configuration
 
-See [Data](data.md) for how to produce the `.bin` inputs, including the binary layout.
+### Basic settings
 
-## Actions and dynamics
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `num_maps` | - | Map binaries to load |
+| `num_agents` | 32 | Policy-controlled agents (max 64) |
+| `episode_length` | 91 | Steps per episode |
+| `resample_frequency` | 910 | Steps between map resampling |
 
-- **Action types** (`env.action_type`):
-  - `discrete` (default): classic dynamics use a single `MultiDiscrete([7*13])` index decoded into acceleration (`ACCELERATION_VALUES`) and steering (`STEERING_VALUES`); jerk dynamics use `MultiDiscrete([4, 3])` over `JERK_LONG`/`JERK_LAT`.
-  - `continuous`: a 2-D Box in `[-1, 1]`. Classic scales to the max accel/steer magnitudes used in the discrete table. Jerk scales asymmetrically: negative values reach up to `-15 m/s^3` braking, positives up to `4 m/s^3` acceleration, lateral jerk up to `±4 m/s^3`.
-- **Dynamics models** (`env.dynamics_model`):
-  - `classic`: bicycle model integrating accel/steer with `dt` (default `0.1`).
-  - `jerk`: integrates longitudinal/lateral jerk into accel, then into velocity/pose with steering limited to `±0.55 rad`. Speeds are clipped to `[0, 20] m/s`.
+> [!TIP]
+> Set `episode_length = 91` to match Waymo log length for single-goal tasks. Use longer episodes (e.g., 200+) with `goal_behavior=1` for multi-goal driving.
 
-## Observation space
+### Control modes
 
-Shape is `ego_features + 63 * 7 + 200 * 7` = `1848` for classic dynamics (`ego_features = 7`) or `1851` for jerk dynamics (`ego_features = 10`). Computed in `compute_observations` (`drive.h`):
+- `control_vehicles`: Only vehicles
+- `control_agents`: All agent types (vehicles, cyclists, pedestrians)
+- `control_tracks_to_predict`: WOMD evaluation mode
+- `control_sdc_only`: Self-driving car only
 
-- **Ego block** (classic):
-  1. Goal position in ego frame (x, y) scaled by `0.005` (~200 m range to 1.0)
-  2. Ego speed / `MAX_SPEED` (100 m/s)
-  3. Width / `MAX_VEH_WIDTH` (15 m)
-  4. Length / `MAX_VEH_LEN` (30 m)
-  5. Collision flag (1 if the agent collided this step)
-  6. Respawn flag (1 if the agent was respawned this episode)
-- **Ego block additions (jerk dynamics model only)**:
-  - Steering angle / π
-  - Longitudinal acceleration normalized to `[-15, 4]`
-  - Lateral acceleration normalized to `[-4, 4]`
-  - Respawn flag (index 9)
-- **Partner blocks**: Up to `MAX_AGENTS-1` other agents (active first, then static experts) within 50 m. Each uses 7 values: relative (x, y) in ego frame scaled by  `0.02 `, width/length normalized as above, relative heading encoded as `(cos Δθ, sin Δθ)`, and speed / `MAX_SPEED`. Zero-padded when fewer neighbors are present or when agents are in respawn.
-- **Road blocks**: Up to 200 nearby road segments pulled from a precomputed grid (`vision_range = 21`). Each entry stores relative midpoint (x, y) scaled by `0.02`, segment length / `MAX_ROAD_SEGMENT_LENGTH` (100 m), width / `MAX_ROAD_SCALE` (100), `(cos, sin)` of the segment direction in ego frame, and a type ID (`ROAD_LANE`..`DRIVEWAY` stored as `0..6`). Remaining slots are zero-padded.
+> [!NOTE]
+> `control_vehicles` filters out agents marked as "expert" and those too close to their goal (<2m). For full WOMD evaluation, use `control_tracks_to_predict`.
 
-## Rewards, termination, and metrics
+### Goal behaviors
 
-- **Per-step rewards** (`c_step`):
-  - Collision with another actor: `reward_vehicle_collision` (default `-0.5`)
-  - Off-road (road-edge intersection): `reward_offroad_collision` (default `-0.2`)
-  - Goal reached: `reward_goal` (default `1.0`) or `reward_goal_post_respawn` after a respawn
+Three modes determine what happens when an agent reaches its goal:
 
-- **Termination**: No early truncation; episodes roll to episode_length steps. If `goal_behavior` is respawn, `respawn_agent` resets the pose and marks `respawn_timestep` so the respawn flag shows up in observations.
-- **Logged metrics** (`add_log` aggregates over all active agents across envs):
-  - `score`: reached goal without collision/off-road
-  - `collision_rate` / `offroad_rate`: fraction of agents with ≥1 event in the episode
-  - `avg_collisions_per_agent` / `avg_offroad_per_agent`: counts per agent, capturing repeated events
-  - `completion_rate`: reached goal (even if collided/off-road); `dnf_rate`: clean but never reached goal
-  - `lane_alignment_rate`, `avg_displacement_error`, `num_goals_reached`, plus counts of active/static/expert agents
+**Mode 0 (Respawn) - Default:**
+- Agent teleports back to starting position
+- Other agents removed from environment (prevents post-respawn collisions)
+- Useful for maximizing environment interaction per episode
 
-`collision_behavior`, `offroad_behavior`, `reward_vehicle_collision_post_respawn`, and `spawn_immunity_timer` are parsed from the INI but currently unused in the stepping logic.
+**Mode 1 (Generate new) - Multi-goal:**
+- Agent receives a new goal sampled from the road network
+- Can complete multiple goals per episode
+- Tests long-horizon driving competence
 
-## Configuration files (`.ini`)
+**Mode 2 (Stop):**
+- Agent stops in place after reaching goal
+- Episode continues until `episode_length`
+- Simplest setting for evaluation
 
-`pufferlib/config/default.ini` supplies global defaults. Environment-specific overrides live in `pufferlib/config/ocean/drive.ini` and are loaded first when you run `puffer train puffer_drive`; CLI flags (e.g., `--env.num-maps 128`) override both.
+> [!IMPORTANT]
+> Goal behavior fundamentally changes what "success" means:
+> - **Mode 0/2 (single goal):** Success = reaching the one goal without collision/off-road
+> - **Mode 1 (multi-goal):** Success = completing ≥X% of sampled goals cleanly
 
-Key sections in `pufferlib/config/ocean/drive.ini`:
+**Config files:** `pufferlib/config/ocean/drive.ini` (loaded first), then `pufferlib/config/default.ini`
 
-- **[env]**: Simulator knobs: `num_agents` (policy slots, C core cap 64), `num_maps`, episode_length, `resample_frequency`, `action_type`, `dynamics_model`, rewards, `goal_radius`, `goal_behavior`, `init_steps`, `init_mode`, `control_mode`; rendering toggles `render`, `render_interval`, `obs_only`, `show_grid`, `show_lasers`, `show_human_logs`, `render_map`.
-- **[vec]**: Vectorization sizing (`num_envs`, `num_workers`, `batch_size`; backend defaults to multiprocessing).
-- **[policy]/[rnn]**: Model widths for the Torch policy (`input_size`, `hidden_size`) and optional LSTM wrapper.
-- **[train]**: PPO-style hyperparameters (timesteps, learning rate, clipping, batch/minibatch, BPTT horizon, optimizer choice) merged with any unspecified defaults from `pufferlib/config/default.ini`.
-- **[eval]**: WOSAC/human-replay switches and sizing (`eval.wosac_*`, `eval.human_replay_*`) mapped directly to the `Drive` kwargs in evaluation subprocesses.
+## Episode flow
 
-## Model overview
+1. **Initialize**: Load maps, select agents, set start positions
+2. **Step loop** (until `episode_length`):
+   - Move expert replay agents (if they exist)
+   - Apply policy actions to controlled agents
+   - Update simulator
+   - Check collisions
+   - Assign rewards
+   - Handle goal completion/respawns
+   - Compute observations
+3. **End**: Log metrics, reset
 
-Defined in `pufferlib/ocean/torch.py:Drive`:
+> [!NOTE]
+> Maps are resampled every `resample_frequency` steps (~10 episodes with default settings) to increase map diversity.
 
-- Three MLP encoders (ego, partners, roads) with LayerNorm. Partner and road encodings are max-pooled across instances.
-- Concatenated embedding → GELU → linear to `hidden_size`, then split into actor/value heads.
-- Discrete actions are emitted as logits per dimension (`MultiDiscrete`), continuous actions as Gaussian parameters (`softplus` std). Value head is a single linear output.
-- `Recurrent = pufferlib.models.LSTMWrapper` can wrap the policy using the `rnn` config entries; otherwise the policy is feed-forward.
+> [!CAUTION]
+> No early termination - episodes always run to `episode_length` regardless of goal completion or collisions with the default settings.
 
-## Drive source files (what lives where)
+## Actions
 
-- `pufferlib/ocean/drive/drive.py`: Python Gymnasium-style wrapper that sets up buffers, validates map availability, seeds the C core via `binding.env_init`, and handles map resampling.
-- `pufferlib/ocean/drive/drive.h`: Main C implementation of stepping, observations, rewards/metrics, grid map, lane graph, and collision checking.
-- `pufferlib/ocean/drive/binding.c`: Python C-extension glue that exposes `Drive` to Python, handles shared buffer setup, logging, and reading the `.ini` config.
-- `pufferlib/ocean/drive/visualize.c`: Raylib-based renderer used by the `visualize` binary and training video exports.
-- `pufferlib/ocean/drive/drive.c`: Small C demo/perf harness and network parity test runner for the C policy head.
-- `pufferlib/ocean/drive/drivenet.h`: Lightweight C inference network used by the visualizer/demo to mirror the Torch policy outputs.
+### Discrete actions
+- **Classic**: 91 options (7 accel × 13 steer)
+  - Accel: `[-4.0, -2.67, -1.33, 0.0, 1.33, 2.67, 4.0]` m/s²
+  - Steer: 13 values from -1.0 to 1.0
+- **Jerk**: 12 options (4 long × 3 lat)
+  - Long jerk: `[-15, -4, 0, 4]` m/s³
+  - Lat jerk: `[-4, 0, 4]` m/s³
 
-## Drive README (C core notes)
+> [!NOTE]
+> Discrete actions are decoded as: `action_idx → (accel_idx, steer_idx)` using division and modulo.
 
-### Agent initialization and control
+### Continuous actions
+- 2D Box `[-1, 1]`
+- **Classic**: Scaled to ±4 m/s² accel, ±1 steer
+- **Jerk**: Asymmetric long (brake -15, accel +4), symmetric lat (±4)
 
-#### `init_mode`
+### Dynamics models
 
-Determines which agents are **created** in the environment.
+**Classic (bicycle model):**
+- Integrates accel/steer with dt=0.1s
+- Wheelbase = 60% of vehicle length
+- Standard kinematic bicycle model
 
-| Option                     | Description                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------ |
-| `create_all_valid`       | Create all entities valid at initialization (`traj_valid[init_steps] == 1`). |
-| `create_only_controlled` | Create only those agents that are controlled by the policy.                    |
+**Jerk (physics-based):**
+- Integrates jerk → accel → velocity → pose
+- Steering limited to ±0.55 rad
+- Speed clipped to [0, 20] m/s
+- More realistic comfort and control constraints
 
-#### `control_mode`
+> [!IMPORTANT]
+> Jerk dynamics adds 3 extra observation features (steering angle, long accel, lat accel) compared to classic.
 
-Determines which created agents are **controlled** by the policy.
+## Observations
 
-| Option                                        | Description                                                                                                |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `control_vehicles` (default)                | Control only valid **vehicles** (not experts, beyond `MIN_DISTANCE_TO_GOAL`, under `MAX_AGENTS`). |
-| `control_agents`                            | Control all valid **agent types** (vehicles, cyclists, pedestrians).                                  |
-| `control_tracks_to_predict` *(WOMD only)* | Control agents listed in the `tracks_to_predict` metadata.                                               |
-| `control_sdc_only` *(WOMD only)* | Control just the self-driving car (SDC).                                             |
+### Size
+- **Classic**: 1848 floats = 7 (ego) + 217 (partners) + 1624 (roads)
+- **Jerk**: 1851 floats = 10 (ego) + 217 (partners) + 1624 (roads)
 
-### Termination conditions (`done`)
+Where partners = `MAX_AGENTS - 1` agents × 7 features, roads = 232 segments × 7 features
 
-The `goal_behavior` argument controls agent behavior after reaching a goal early:
+> [!IMPORTANT]
+> All observations are in the **ego vehicle's reference frame** (agent-centric) and are normalized. Positions rotate with the agent's heading.
 
-- **`goal_behavior=0` (default):** Agents respawn at their initial position after reaching their goal (last valid log position).
-- **`goal_behavior=1`:** Agents receive new goals indefinitely after reaching each goal.
-- **`goal_behavior=2`:** Agents stop after reaching their goal.
+### Ego features (ego frame)
 
-### Logged performance metrics
+**Classic (7):** goal_x, goal_y, speed, width, length, collision_flag, respawn_flag
 
-We record multiple performance metrics during training, aggregated over all *active agents* (alive and controlled). Key metrics include:
+**Jerk adds (3):** steering_angle, long_accel, lat_accel
 
-- `score`: Goals reached cleanly (goal was achieved without collision or going off-road)
-- `collision_rate`: Binary flag (0 or 1) if agent hit another vehicle.
-- `offroad_rate`: Binary flag (0 or 1) if agent left road bounds.
-- `completion_rate`: Whether the agent reached its goal in this episode (even if it collided or went off-road).
 
-#### Metric aggregation
+### Partner features (up to `MAX_AGENTS - 1` agents, 7 each)
+rel_x, rel_y, width, length, heading_cos, heading_sin, speed
 
-The `num_agents` parameter in `drive.ini` defines the total number of agents used to collect experience. At runtime, Puffer uses `num_maps` to create enough environments to populate the buffer with `num_agents`, distributing them evenly across `num_envs`.
+- Within 50m of ego
+- Active agents first, then static experts
+- Zero-padded if fewer agents
 
-Because agents are respawned immediately after reaching their goal, they remain active throughout the episode.
+> [!TIP]
+> Partner heading is encoded as `(cos, sin)` of relative angle to avoid discontinuities at ±π.
 
-At the end of each episode (i.e., when `timestep == TRAJECTORY_LENGTH`), metrics are logged once via:
+### Road features (up to 232 segments, 7 each)
+mid_x, mid_y, length, width, dir_cos, dir_sin, type
 
-```c
-if (env->timestep == TRAJECTORY_LENGTH) {
-    add_log(env);
-    c_reset(env);
-    return;
-}
-```
+- Retrieved from 21×21 grid (5m cells, ~105m × 105m area)
+- Types: ROAD_LANE=0, ROAD_LINE=1, ROAD_EDGE=2
+- Pre-cached for efficiency
 
-Metrics are normalized and aggregated in `vec_log` (`pufferlib/ocean/env_binding.h`). They are averaged over all active agents across all environments. For example, the aggregated collision rate is computed as:
+> [!NOTE]
+> Road observations use a spatial grid with 5m cells. The 21×21 vision range gives ~105m visibility in all directions.
 
-$$
-r^{agg}_{\text{collision}} = \frac{\mathbb{I}[\text{collided in episode}]}{N}
-$$
 
-where $N$ is the number of controlled agents.
+## Rewards & metrics
 
-Since these metrics do not capture *multiple* events per agent, we additionally log the **average number of collision and off-road events per episode**. This is computed as:
+### Per-step rewards
+- Vehicle collision: -1.0
+- Off-road: -1.0
+- Goal reached: +1.0 (or +0.25 after respawn in mode 0)
+- Jerk penalty (classic only): -0.0002 × Δv/dt
 
-$$
-c^{avg}_{\text{collision}} = \frac{\text{total number of collision events across all agents and environments}}{N}
-$$
+> [!TIP]
+> Goal completion requires both distance < `goal_radius` (default 2m) AND speed ≤ `goal_speed`.
 
-where $N$ is the total number of controlled agents. For example, an `avg_collisions_per_agent` value of 4 indicates that, on average, each agent collides four times per episode.
+### Episode metrics
 
-![Collision/off-road aggregation examples](images/examples_a_b.png)
+**Core metrics**
 
-#### Effect of respawning on metrics
+- **`score`** - Aggregate success metric (threshold-based):
+  - **Single-goal setting (modes 0, 2):** Binary 1.0 if goal reached cleanly
+    - **Mode 0 (respawn):** No collision/off-road before first goal (post-respawn collisions ignored)
+    - **Mode 2 (stop):** No collision/off-road throughout entire episode
+  - **Multi-goal setting (mode 1):** Fractional based on completion rate with no collisions throughout episode:
+    - 1 goal: ≥99% required
+    - 2 goals: ≥50% required
+    - 3-4 goals: ≥80% required
+    - 5+ goals: ≥90% required
 
-By default, agents are reset to their initial position when they reach their goal before the episode ends. Upon respawn, `respawn_timestep` is updated from `-1` to the current step index. After an agent respawns, all other agents are removed from the environment, so collisions with other agents cannot occur post-respawn.
+- **`collision_rate`** - Fraction of agents with ≥1 vehicle collision this episode
 
-![Pre- and post-respawn environment](images/pre_and_post_respawn.png)
+- **`offroad_rate`** - Fraction of agents with ≥1 off-road event this episode
 
-![Example respawn collision case](images/realistic_collision_event_post_respawn.png)
+- **`completion_rate`** - Fraction of goals reached this episode
+
+- **`lane_alignment_rate`** - Fraction of time agents spent aligned with lane headings
+
+**In-depth metrics**
+
+- **`avg_collisions_per_agent`** - Mean collision count per agent (captures repeated collisions)
+
+- **`avg_offroad_per_agent`** - Mean off-road count per agent (captures repeated off-road events)
+
+> [!NOTE]
+> The "rate" metrics are binary flags (did it happen?), while "avg_per_agent" metrics count total occurrences. An agent can have `collision_rate=1` but `avg_collisions_per_agent=3` if they collided three times.
+
+- **`goals_reached_this_episode`** - Total goals completed across all agents
+
+- **`goals_sampled_this_episode`** - Total goals assigned (>1 in multi-goal mode)
+
+#### Metrics interpretation by goal behavior
+
+| Metric | Respawn (0) | Multi-Goal (1) | Stop (2) |
+|--------|-------------|----------------|----------|
+| `score` | Reached goal before any collision/off-road? | Reached X% of goals with no collisions? | Reached goal with no collisions? |
+| `completion_rate` | Reached the goal? | Fraction of sampled goals reached | Reached the goal? |
+| `goals_reached` | Always ≤1 | Can be >1 | Always ≤1 |
+| `collision_rate` | Any collision before first goal? | Any collision in episode? | Any collision in episode? |
+
+> [!WARNING]
+> **Respawn mode (0) scoring:** Score only considers collisions/off-road events that occurred before reaching the first goal. Post-respawn collisions do not disqualify the agent from receiving a score of 1.0.
+
+> [!WARNING]
+> **Respawn mode (0) side effect:** After respawn, all other agents are removed from the environment. This means vehicle collisions become impossible post-respawn, but off-road collisions can still occur.
+
+## Source files
+
+### C core
+- `drive.h`: Main simulator (stepping, observations, collisions)
+- `drive.c`: Demo and testing
+- `binding.c`: Python interface
+- `visualize.c`: Raylib renderer
+- `drivenet.h`: C inference network
+
+### Python
+- `drive.py`: Gymnasium wrapper
+- `torch.py`: Neural network (ego/partner/road encoders → actor/critic)
+
+## Neural network
+
+Three MLP encoders (ego, partners, roads) → concatenate → actor/critic heads
+
+- Partner and road outputs are max-pooled (permutation invariant)
+- Discrete actions: logits per dimension
+- Continuous actions: Gaussian (mean + std)
+- Optional LSTM wrapper for recurrence
+
+> [!TIP]
+> The architecture is modular - you can easily swap out encoders or add new observation types without changing the policy head.
+
+## Constants reference
+
+> [!WARNING]
+> These constants are hardcoded in the C implementation. Changing them requires recompiling.
+
+### Limits
+- `MAX_AGENTS = 32` (compile-time, can be overridden with `-DMAX_AGENTS=64`)
+- `MAX_ROAD_OBSERVATIONS = 232`
+- `TRAJECTORY_LENGTH = 91`
+- `MIN_DISTANCE_TO_GOAL = 2.0` m (agents closer than this won't be controlled)
+
+### Spatial
+- `GRID_CELL_SIZE = 5.0` m
+- `VISION_RANGE = 21` cells (~105m × 105m)
+- Partner observation range: 50m
+
+### Physics
+- `DEFAULT_DT = 0.1` s
+- Jerk long clip: `[-15, 4]` m/s³
+- Jerk lat clip: `[-4, 4]` m/s³
+- Steering limit: `[-0.55, 0.55]` rad (~31.5°)
+- Speed clip (jerk): `[0, 20]` m/s
+
+### Normalization
+- `MAX_SPEED = 100` m/s
+- `MAX_VEH_LEN = 30` m
+- `MAX_VEH_WIDTH = 15` m
+- `MAX_ROAD_SEGMENT_LENGTH = 100` m
+
+> [!NOTE]
+> Normalization scales are chosen to map reasonable driving scenarios to ~[-1, 1] range for neural network stability.
+
+---
+
+**Version:** PufferDrive v2.0

@@ -349,9 +349,20 @@ void add_log(Drive *env) {
 
         float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
 
-        // Update score, which measures whether the agent fully solved its task
-        float threshold = (e->goals_sampled_this_episode == 1.0f) ? 0.999f : 0.9f;
-        if (frac_goal_reached > threshold && !e->collided_before_goal) {
+        // Update score, which is an aggregate measure whether the agent fully solved its task
+        // Note: When resampling goals, performance is relative to the number of goals sampled
+        float threshold = 0.99f; // Default threshold for 1 goal
+        if (e->goals_sampled_this_episode == 2.0f) {
+            threshold = 0.5f; // Require ≥50% completion for 2 goals
+        } else if (e->goals_sampled_this_episode < 5.0f) {
+            threshold = 0.8f; // Require ≥80% completion for 3-4 goals
+        } else {
+            threshold = 0.9f; // Require ≥90% completion for 5+ goals
+        }
+
+        int collision_occurred =
+            (env->goal_behavior == GOAL_RESPAWN) ? e->collided_before_goal : env->logs[i].collision_rate;
+        if (frac_goal_reached > threshold && !collision_occurred) {
             env->log.score += 1.0f;
         }
         if (!offroad && !collided && frac_goal_reached < 1.0f) {
@@ -1981,6 +1992,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
 
     env->entities[agent_idx].respawn_timestep = env->timestep;
+    env->entities[agent_idx].collided_before_goal = 0;
     env->entities[agent_idx].stopped = 0;
     env->entities[agent_idx].removed = 0;
     env->entities[agent_idx].a_long = 0.0f;
@@ -2060,9 +2072,7 @@ void c_step(Drive *env) {
                 env->logs[i].offroad_per_agent += 1.0f;
             }
 
-            if (env->entities[agent_idx].goals_reached_this_episode < 1.0) {
-                env->entities[agent_idx].collided_before_goal = 1;
-            }
+            env->entities[agent_idx].collided_before_goal = 1;
         }
 
         float distance_to_goal =
@@ -2363,7 +2373,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float arrow_x_world;
         float arrow_y_world;
         if (mode == 0) {
-            DrawLine3D((Vector3){x, y, 1}, (Vector3){arrow_x, arrow_y, 1}, PUFF_WHITE);
+            DrawLine3D((Vector3){x, y, 0.0}, (Vector3){arrow_x, arrow_y, 0.0}, PUFF_WHITE);
         }
         if (mode == 1) {
             arrow_x_world = px + (arrow_x * heading_self_x - arrow_y * heading_self_y);
@@ -2391,8 +2401,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
             // Draw the two lines forming the arrow head
             if (mode == 0) {
-                DrawLine3D((Vector3){arrow_x, arrow_y, 1}, (Vector3){arrow_x_end1, arrow_y_end1, 1}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x, arrow_y, 1}, (Vector3){arrow_x_end2, arrow_y_end2, 1}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, 0.0}, (Vector3){arrow_x_end1, arrow_y_end1, 0.0}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, 0.0}, (Vector3){arrow_x_end2, arrow_y_end2, 0.0}, PUFF_WHITE);
             }
 
             if (mode == 1) {
@@ -2400,10 +2410,10 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
                 float arrow_y_end1_world = py + (arrow_x_end1 * heading_self_y + arrow_y_end1 * heading_self_x);
                 float arrow_x_end2_world = px + (arrow_x_end2 * heading_self_x - arrow_y_end2 * heading_self_y);
                 float arrow_y_end2_world = py + (arrow_x_end2 * heading_self_y + arrow_y_end2 * heading_self_x);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 1},
-                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, 1}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 1},
-                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, 1}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 0.0},
+                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, 0.0}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 0.0},
+                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, 0.0}, PUFF_WHITE);
             }
         }
 
@@ -2780,6 +2790,10 @@ void c_render(Drive *env) {
     BeginMode3D(client->camera);
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
+
+    if (IsKeyPressed(KEY_TAB)) {
+        env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
+    }
 
     // Draw debug info
     DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,

@@ -32,13 +32,13 @@
 
 ## Highlights
 
-- Data-driven, multi-agent drive environment that trains agents at 300K steps per second.
-- Benchmarks for distributional realism and human compatibility.
-- Raylib-based visualizer for local or headless render/export.
+- Data-driven, multi-agent drive environment that trains agents at **300K steps per second**.
+- Integrated [benchmarks](evaluation.md) for distributional realism and human compatibility.
+- [Raylib-based](https://www.raylib.com/) rendering for local or headless render/export.
 
 ## Quick start
 
-- Follow [Getting Started](getting-started.md) to install, build the C extensions, and run `puffer train puffer_drive`.
+- Follow [Getting started](getting-started.md) to install, build the C extensions, and run `puffer train puffer_drive`.
 - Consult [Simulator](simulator.md) for how actions/observations, rewards, and `.ini` settings map to the underlying C environment and Torch policy.
 - Prepare drive map binaries with the steps in [Data](data.md).
 - Evaluate a policy with the commands in [Evaluation](evaluation.md) and preview runs with the [Visualizer](visualizer.md).
@@ -55,18 +55,19 @@
   <div class="step-card">
     <div class="badge">Step 2</div>
     <h3>Prepare Data</h3>
-    <p>Download WOMD/GPUDrive datasets from Hugging Face and convert to map binaries.</p>
+    <p>Download WOMD/Carla data from Hugging Face and convert to map binaries.</p>
     <a href="data.html">Open guide</a>
   </div>
   <div class="step-card">
     <div class="badge">Step 3</div>
     <h3>Train & Evaluate</h3>
     <p>Train agents and evaluate them with WOSAC and human-replay benchmarks.</p>
-    <a href="evaluation.html">Open guide</a>
+    <a href="train.html">Open guide</a>
   </div>
 </div>
 
 ## Repository layout
+
 - `pufferlib/ocean/drive`: Drive environment implementation and map processing utilities.
 - `resources/drive/binaries`: Expected location for compiled map binaries (outputs of the data conversion step).
 - `scripts/build_ocean.sh`: Helper for building the Raylib visualizer and related binaries.
