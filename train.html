@@ -38,10 +38,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3d8ae7b6.js";
+            window.path_to_searchindex_js = "searchindex-f0d43f57.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-d6a866dd.js"></script>
+        <script src="toc-8d227c1c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -192,39 +192,46 @@
 <li>Training in thousands of Waymo maps</li>
 <li>Short episodes (91 steps)</li>
 </ul>
-<p><strong>Carla maps configuration</strong>
-For training agents to drive indefinitely in larger Carla maps, we recommend modifying <code>drive.ini</code> as follows:</p>
+<p><strong>Carla maps configuration</strong></p>
+<p>For training agents to drive indefinitely in larger Carla maps, we recommend modifying <code>drive.ini</code> as follows:</p>
 <pre><code class="language-ini">[env]
-goal_speed = 30.0  # Target speed in m/s at the goal. Lower values discourage excessive speeding
+goal_speed = 10.0  # Target speed in m/s at the goal. Lower values discourage excessive speeding
 goal_behavior = 1  # 0: respawn, 1: generate_new_goals, 2: stop
-goal_target_distance = 25.0  # Distance to new goal when using generate_new_goals
+goal_target_distance = 30.0  # Distance to new goal when using generate_new_goals
 
 # Episode settings
-episode_length = 200 # Increase for longer episode horizon
+episode_length = 300 # Increase for longer episode horizon
 resample_frequency = 100000 # No resampling needed (there are only a few Carla maps)
 termination_mode = 0  # 0: terminate at episode_length, 1: terminate after all agents reset
 
 # Map settings
 map_dir = "resources/drive/binaries/carla"
-num_maps = 1
+num_maps = 2
 </code></pre>
-<p><strong>Note:</strong> The default training hyperparameters work well for both configurations and typically don’t need adjustment.</p>
+<p>this should give a good starting point. With these settings, you’ll need about 2-3 billion steps to get an agent that reaches most of it’s goals (&gt; 95%) and has a combined collsion / off-road rate of 3 % per episode of 300 steps.</p>
+<blockquote class="blockquote-tag blockquote-tag-note">
+<p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
+<p>The default training hyperparameters work well for both configurations and typically don’t need adjustment.</p>
+</blockquote>
+<blockquote class="blockquote-tag blockquote-tag-note">
+<p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
+<p>The checkpoint at <code>resources/drive/puffer_drive_weights_carla_town12.bin</code> is an agent trained on Carla town 01 and 02 with these settings. This is the one used in the interactive demo.</p>
+</blockquote>
 <h2 id="controlled-experiments"><a class="header" href="#controlled-experiments">Controlled experiments</a></h2>
-<p>Run parameter sweeps for architecture search or multi-seed experiments:</p>
+<p>Aside from <code>train</code> and <code>sweep</code>, we support a third mode for running controlled experiments over lists of values:</p>
 <pre><code class="language-bash">puffer controlled_exp puffer_drive --wandb --wandb-project "pufferdrive2.0_carla" --tag speed
 </code></pre>
 <p>Define parameter sweeps in <code>drive.ini</code>:</p>
 <pre><code class="language-ini">[controlled_exp.env.goal_speed]
 values = [10, 20, 30]
 </code></pre>
-<p>This will launch separate training runs for each value in the list, useful for:</p>
+<p>This will launch separate training runs for each value in the list, which cab be useful for:</p>
 <ul>
 <li>Hyperparameter tuning</li>
 <li>Architecture search</li>
 <li>Running multiple random seeds</li>
 <li>Ablation studies</li>
 </ul>
-<p>You can specify multiple controlled experiment parameters, and the system will iterate through all combinations.</p>
 
                     </main>
 
