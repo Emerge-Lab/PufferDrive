@@ -39,7 +39,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f0d43f57.js";
+            window.path_to_searchindex_js = "searchindex-6c58eb4b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8d227c1c.js"></script>
@@ -1030,8 +1030,8 @@ id       : (num_agents, num_rollouts, 81)
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="pufferdrive-20-a-fast-and-friendly-driving-simulator-for-training-and-evaluating-rl-agents"><a class="header" href="#pufferdrive-20-a-fast-and-friendly-driving-simulator-for-training-and-evaluating-rl-agents">PufferDrive 2.0: A fast and friendly driving simulator for training and evaluating RL agents</a></h1>
-<p><strong>Daphne Cornelisse</strong><code>&lt;sup&gt;</code>1*<code>&lt;/sup&gt;</code>, <strong>Spencer Cheng</strong><code>&lt;sup&gt;</code>2*<code>&lt;/sup&gt;</code>, Pragnay Mandavilli<code>&lt;sup&gt;</code>1<code>&lt;/sup&gt;</code>, Julian Hunt<code>&lt;sup&gt;</code>1<code>&lt;/sup&gt;</code>, Kevin Joseph<code>&lt;sup&gt;</code>1<code>&lt;/sup&gt;</code>, Waël Doulazmi<code>&lt;sup&gt;</code>3, 4<code>&lt;/sup&gt;</code>, Valentin Charraut<code>&lt;sup&gt;</code>4<code>&lt;/sup&gt;</code>, Aditya Gupta<code>&lt;sup&gt;</code>1<code>&lt;/sup&gt;</code>, Eugene Vinitsky<code>&lt;sup&gt;</code>1<code>&lt;/sup&gt;</code></p>
-<p><code>&lt;sup&gt;</code>1<code>&lt;/sup&gt;</code> Emerge Lab at NYU Tandon School of Engineering | <code>&lt;sup&gt;</code>2<code>&lt;/sup&gt;</code> <a href="https://puffer.ai/">Puffer.ai</a> | <code>&lt;sup&gt;</code>3<code>&lt;/sup&gt;</code> Centre for Robotics, Mines Paris - PSL | <code>&lt;sup&gt;</code>4<code>&lt;/sup&gt;</code> Valeo | <code>&lt;sup&gt;</code>*<code>&lt;/sup&gt;</code> Shared first contributor</p>
+<p><strong>Daphne Cornelisse</strong><sup>1*</sup>, <strong>Spencer Cheng</strong><sup>2*</sup>, Pragnay Mandavilli<sup>1</sup>, Julian Hunt<sup>1</sup>, Kevin Joseph<sup>1</sup>, Waël Doulazmi<sup>3, 4</sup>, Valentin Charraut<sup>4</sup>, Aditya Gupta<sup>1</sup>, Eugene Vinitsky<sup>1</sup></p>
+<p><sup>1</sup> Emerge Lab at NYU Tandon School of Engineering | <sup>2</sup> <a href="https://puffer.ai/">Puffer.ai</a> | <sup>3</sup> Centre for Robotics, Mines Paris - PSL | <sup>4</sup> Valeo | <sup>*</sup> Shared first contributor</p>
 <p><em>December 30, 2025</em></p>
 <blockquote>
 <p>We introduce <strong>PufferDrive 2.0</strong>, a fast, easy-to-use driving simulator for reinforcement learning (RL). Built on <a href="https://puffer.ai/">PufferLib</a>, it allows you to train agents at <strong>300,000 steps per second</strong> on a single GPU. You can solve thousands of multi-agent scenarios in just 15 minutes. Evaluation and visualization run directly in the browser. This post highlights the main features and traces the sequence of projects that led to PufferDrive 2.0.</p>
@@ -1063,7 +1063,7 @@ id       : (num_agents, num_rollouts, 81)
 </blockquote>
 <h2 id="introduction-and-history"><a class="header" href="#introduction-and-history">Introduction and history</a></h2>
 <p>Deep reinforcement learning algorithms such as <a href="https://arxiv.org/abs/1707.06347">PPO</a>, work effectively in the billion-sample regime. With sufficient scale and occasional successes, RL can optimize well-defined objectives even under sparse reward signals.</p>
-<p>This shifts the primary bottleneck to simulation. The rate at which high-quality experience can be generated <em>directly determines</em> how reliably RL can be applied to challenging real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<code>&lt;sup&gt;</code><a href="#notes-1">1</a><code>&lt;/sup&gt;</code></p>
+<p>This shifts the primary bottleneck to simulation. The rate at which high-quality experience can be generated <em>directly determines</em> how reliably RL can be applied to challenging real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup><a href="#notes-1">1</a></sup></p>
 <p>Over the past few years, we developed a sequence of data-driven, multi-agent simulators to study large-scale self-play for autonomous driving. Agents are trained from scratch. They generate their own experience by interacting with other agents in the environment and learn from it over time. In this post, we briefly summarize this progression and show how we arrived at PufferDrive 2.0.</p>
 <h2 id="early-results-with-self-play-rl-in-autonomous-driving"><a class="header" href="#early-results-with-self-play-rl-in-autonomous-driving">Early results with self-play RL in autonomous driving</a></h2>
 <p><a href="https://arxiv.org/abs/2206.09889"><strong>Nocturne</strong></a> showed that self-play RL could be promising for driving if we have access to a data-driven (grounded) simulator. Using maps from the <a href="https://waymo.com/open/">Waymo Open Motion Dataset (WOMD)</a>, PPO agents trained from scratch in simulation achieved an 80% goal-reaching rate.</p>
@@ -1076,7 +1076,7 @@ id       : (num_agents, num_rollouts, 81)
 </ul>
 <p>These results suggested that once simulation becomes cheap, self-play RL can produce robust autonomous driving policies.</p>
 <p><img src="images/sim-comparison.png" alt="SPS comparison between sims">
-<strong>Figure 1:</strong> <em>Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching<code>&lt;sup&gt;</code><a href="#notes-1">2</a><code>&lt;/sup&gt;</code>. This captures both simulation speed and algorithmic efficiency.</em></p>
+<strong>Figure 1:</strong> <em>Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching<sup><a href="#notes-1">2</a></sup>. This captures both simulation speed and algorithmic efficiency.</em></p>
 <div class="table-wrapper">
 <table>
 <thead>
