@@ -21,6 +21,11 @@
 
 ---
 
+### See our 2.0 release video
+
+<a href="https://www.youtube.com/watch?v=LfQ324R-cbE">
+  <img src="https://img.youtube.com/vi/LfQ324R-cbE/0.jpg" alt="PufferDrive 2.0" width="300">
+</a>
 
 ## Installation
 
