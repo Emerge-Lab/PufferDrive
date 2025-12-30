@@ -8,11 +8,14 @@
 
 > We introduce **PufferDrive 2.0**, a fast, easy-to-use driving simulator for reinforcement learning (RL). Built on [PufferLib](https://puffer.ai/), it allows you to train agents at **300,000 steps per second** on a single GPU. You can solve thousands of multi-agent scenarios in just 15 minutes. Evaluation and visualization run directly in the browser. This post highlights the main features and traces the sequence of projects that led to PufferDrive 2.0.
 
----
+<br>
+<br>
 
 <div style="text-align: center;">
   <iframe width="500" height="300" src="https://www.youtube.com/embed/LfQ324R-cbE" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
 </div>
+
+<br>
 
 ## Highlights
 
