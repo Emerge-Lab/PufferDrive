@@ -190,6 +190,7 @@ Open the served URL to see a local version of the docs.
 To edit the browser demo, follow these steps:
 - Download [emscripten](https://github.com/emscripten-core/emscripten)
 - emscripten install latest
+- Activate: `source emsdk/emsdk_env.sh`
 - Run `bash scripts/build_ocean.sh drive web`
 - This generates a number of `game*` files, move them to `assets/` to include them on the webpage
 
