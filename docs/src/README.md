@@ -55,7 +55,7 @@
   <div class="step-card">
     <div class="badge">Step 2</div>
     <h3>Prepare Data</h3>
-    <p>Download WOMD/GPUDrive datasets from Hugging Face and convert to map binaries.</p>
+    <p>Download WOMD/Carla data from Hugging Face and convert to map binaries.</p>
     <a href="data.html">Open guide</a>
   </div>
   <div class="step-card">
