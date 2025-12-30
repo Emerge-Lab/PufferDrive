@@ -283,6 +283,7 @@ struct Drive {
     float *actions;
     float *rewards;
     unsigned char *terminals;
+    unsigned char *truncations;
     Log log;
     Log *logs;
     int num_agents;
@@ -2005,23 +2006,10 @@ void respawn_agent(Drive *env, int agent_idx) {
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
+    if (env->truncations != NULL) {
+        memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
+    }
     env->timestep++;
-
-    int originals_remaining = 0;
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        // Keep flag true if there is at least one agent that has not been respawned yet
-        if (env->entities[agent_idx].respawn_count == 0) {
-            originals_remaining = 1;
-            break;
-        }
-    }
-
-    if (env->timestep == env->episode_length || (!originals_remaining && env->termination_mode == 1)) {
-        add_log(env);
-        c_reset(env);
-        return;
-    }
 
     // Move static experts
     for (int i = 0; i < env->expert_static_agent_count; i++) {
@@ -2117,6 +2105,7 @@ void c_step(Drive *env) {
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
             if (reached_goal) {
+                env->terminals[i] = 1;
                 respawn_agent(env, agent_idx);
                 env->entities[agent_idx].respawn_count++;
             }
@@ -2130,6 +2119,29 @@ void c_step(Drive *env) {
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
             }
         }
+    }
+
+    // Episode boundary after this step: treat time-limit and early-termination as truncation.
+    // `timestep` is incremented at step start, so truncate when `(timestep + 1) >= episode_length`.
+    int originals_remaining = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        if (env->entities[agent_idx].respawn_count == 0) {
+            originals_remaining = 1;
+            break;
+        }
+    }
+    int reached_time_limit = (env->timestep + 1) >= env->episode_length;
+    int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
+    if (reached_time_limit || reached_early_termination) {
+        if (env->truncations != NULL) {
+            for (int i = 0; i < env->active_agent_count; i++) {
+                env->truncations[i] = 1;
+            }
+        }
+        add_log(env);
+        c_reset(env);
+        return;
     }
 
     compute_observations(env);
