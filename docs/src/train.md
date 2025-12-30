@@ -3,6 +3,7 @@
 ### Basic training
 
 Launch a training run with Weights & Biases logging:
+
 ```bash
 puffer train puffer_drive --wandb --wandb-project "pufferdrive"
 ```
@@ -41,21 +42,26 @@ this should give a good starting point. With these settings, you'll need about 2
 > [!Note]
 > The default training hyperparameters work well for both configurations and typically don't need adjustment.
 
+> [!Note]
+> The checkpoint at `resources/drive/puffer_drive_weights_carla_town12.bin` is an agent trained on Carla town 01 and 02 with these settings. This is the one used in the interactive demo.
 
 ## Controlled experiments
 
 Aside from `train` and `sweep`, we support a third mode for running controlled experiments over lists of values:
+
 ```bash
 puffer controlled_exp puffer_drive --wandb --wandb-project "pufferdrive2.0_carla" --tag speed
 ```
 
 Define parameter sweeps in `drive.ini`:
+
 ```ini
 [controlled_exp.env.goal_speed]
 values = [10, 20, 30]
 ```
 
 This will launch separate training runs for each value in the list, which cab be useful for:
+
 - Hyperparameter tuning
 - Architecture search
 - Running multiple random seeds
