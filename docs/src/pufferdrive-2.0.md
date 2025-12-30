@@ -1,8 +1,8 @@
 # PufferDrive 2.0: A fast and friendly driving simulator for training and evaluating RL agents
 
-**Daphne Cornelisse**`<sup>`1\*`</sup>`, **Spencer Cheng**`<sup>`2\*`</sup>`, Pragnay Mandavilli`<sup>`1`</sup>`, Julian Hunt`<sup>`1`</sup>`, Kevin Joseph`<sup>`1`</sup>`, Waël Doulazmi`<sup>`3, 4`</sup>`, Valentin Charraut`<sup>`4`</sup>`, Aditya Gupta`<sup>`1`</sup>`, Eugene Vinitsky`<sup>`1`</sup>`
+**Daphne Cornelisse**<sup>1*</sup>, **Spencer Cheng**<sup>2*</sup>, Pragnay Mandavilli<sup>1</sup>, Julian Hunt<sup>1</sup>, Kevin Joseph<sup>1</sup>, Waël Doulazmi<sup>3, 4</sup>, Valentin Charraut<sup>4</sup>, Aditya Gupta<sup>1</sup>, Eugene Vinitsky<sup>1</sup>
 
-`<sup>`1`</sup>` Emerge Lab at NYU Tandon School of Engineering | `<sup>`2`</sup>` [Puffer.ai](https://puffer.ai/) | `<sup>`3`</sup>` Centre for Robotics, Mines Paris - PSL | `<sup>`4`</sup>` Valeo | `<sup>`\*`</sup>` Shared first contributor
+<sup>1</sup> Emerge Lab at NYU Tandon School of Engineering | <sup>2</sup> [Puffer.ai](https://puffer.ai/) | <sup>3</sup> Centre for Robotics, Mines Paris - PSL | <sup>4</sup> Valeo | <sup>*</sup> Shared first contributor
 
 *December 30, 2025*
 
@@ -40,7 +40,7 @@
 
 Deep reinforcement learning algorithms such as [PPO](https://arxiv.org/abs/1707.06347), work effectively in the billion-sample regime. With sufficient scale and occasional successes, RL can optimize well-defined objectives even under sparse reward signals.
 
-This shifts the primary bottleneck to simulation. The rate at which high-quality experience can be generated _directly determines_ how reliably RL can be applied to challenging real-world problems, such as autonomous navigation in dynamic, multi-agent environments.`<sup>`[1](#notes)`</sup>`
+This shifts the primary bottleneck to simulation. The rate at which high-quality experience can be generated _directly determines_ how reliably RL can be applied to challenging real-world problems, such as autonomous navigation in dynamic, multi-agent environments.<sup>[1](#notes)</sup>
 
 Over the past few years, we developed a sequence of data-driven, multi-agent simulators to study large-scale self-play for autonomous driving. Agents are trained from scratch. They generate their own experience by interacting with other agents in the environment and learn from it over time. In this post, we briefly summarize this progression and show how we arrived at PufferDrive 2.0.
 
@@ -60,7 +60,7 @@ Later work explored what becomes possible once reaching scale is no longer a bot
 These results suggested that once simulation becomes cheap, self-play RL can produce robust autonomous driving policies.
 
 ![SPS comparison between sims](images/sim-comparison.png)
-**Figure 1:** _Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching`<sup>`[2](#notes)`</sup>`. This captures both simulation speed and algorithmic efficiency._
+**Figure 1:** _Progression of RL-based driving simulators. Left: end-to-end training throughput on an NVIDIA RTX 4080, counting only transitions collected by learning policy agents. Right: wall-clock time to reach 80 percent goal-reaching<sup>[2](#notes)</sup>. This captures both simulation speed and algorithmic efficiency._
 
 | Simulator   | End-to-end training SPS | Time to 80% success rate |
 | ----------- | ----------------------- | ------------------------ |
