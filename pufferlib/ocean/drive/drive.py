@@ -3,10 +3,85 @@ import gymnasium
 import json
 import struct
 import os
+import tempfile
+import random
 import pufferlib
 from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
+
+
+def create_mixed_map_directory(map_sources_str, num_maps, seed=None):
+    """
+    Parse map_sources string and create a temp directory with symlinks.
+
+    Args:
+        map_sources_str: Format "path1:weight1,path2:weight2,..."
+        num_maps: Total number of maps to create
+        seed: Random seed for reproducibility
+
+    Returns:
+        Path to temp directory containing symlinked maps
+    """
+    if seed is not None:
+        random.seed(seed)
+
+    # Parse the map_sources string
+    sources = []
+    for source in map_sources_str.split(","):
+        source = source.strip()
+        if ":" not in source:
+            raise ValueError(f"Invalid map_sources format: '{source}'. Expected 'path:weight'")
+        path, weight = source.rsplit(":", 1)
+        sources.append((path.strip(), float(weight.strip())))
+
+    # Normalize weights
+    total_weight = sum(w for _, w in sources)
+    sources = [(p, w / total_weight) for p, w in sources]
+
+    # Calculate how many maps from each source
+    map_counts = []
+    remaining = num_maps
+    for i, (path, weight) in enumerate(sources):
+        if i == len(sources) - 1:
+            count = remaining  # Last source gets remainder
+        else:
+            count = int(round(num_maps * weight))
+            remaining -= count
+        map_counts.append(count)
+
+    # Create temp directory
+    temp_dir = tempfile.mkdtemp(prefix="pufferdrive_maps_")
+
+    # Collect maps from each source
+    selected_maps = []
+    for (path, _), count in zip(sources, map_counts):
+        available = sorted([f for f in os.listdir(path) if f.endswith(".bin")])
+        if len(available) == 0:
+            raise ValueError(f"No .bin files found in {path}")
+
+        # Sample with replacement if needed
+        sampled = random.choices(available, k=count)
+        for map_file in sampled:
+            selected_maps.append(os.path.join(path, map_file))
+
+    # Shuffle to mix sources
+    random.shuffle(selected_maps)
+
+    # Create symlinks
+    for i, src_path in enumerate(selected_maps):
+        link_name = os.path.join(temp_dir, f"map_{i:03d}.bin")
+        os.symlink(os.path.abspath(src_path), link_name)
+
+    # Print summary
+    print("\n" + "=" * 80)
+    print("MIXED MAP SOURCES")
+    for (path, weight), count in zip(sources, map_counts):
+        print(f"  {path}: {count} maps ({weight*100:.1f}%)")
+    print(f"Total: {len(selected_maps)} maps in {temp_dir}")
+    print("=" * 80 + "\n")
+
+    return temp_dir
 
 
 class Drive(pufferlib.PufferEnv):
@@ -42,6 +117,7 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
+        map_sources=None,
         use_all_maps=False,
         allow_map_resampling=True,
     ):
@@ -128,6 +204,12 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")
 
         self._action_type_flag = 0 if action_type == "discrete" else 1
+
+        # Handle map_sources if provided (overrides map_dir)
+        if map_sources is not None and map_sources != "":
+            map_dir = create_mixed_map_directory(map_sources, num_maps, seed=seed)
+            # With mixed sources, we've already created exactly num_maps symlinks
+            # so skip the availability check below
 
         # Check if resources directory exists
         binary_path = f"{map_dir}/map_000.bin"
