@@ -1,5 +1,7 @@
 # PufferDrive
 
+[![Unit Tests](https://github.com/Emerge-Lab/PufferDrive/actions/workflows/utest.yml/badge.svg)](https://github.com/Emerge-Lab/PufferDrive/actions/workflows/utest.yml)
+
 <img align="left" style="width:260px" src="https://github.com/Emerge-Lab/PufferDrive/blob/main/pufferlib/resources/drive/pufferdrive_20fps_long.gif" width="288px">
 
 **PufferDrive is a fast and friendly driving simulator to train and test RL-based models.**
