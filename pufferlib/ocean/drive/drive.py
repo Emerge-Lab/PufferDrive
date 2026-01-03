@@ -208,6 +208,7 @@ class Drive(pufferlib.PufferEnv):
         # Handle map_sources if provided (overrides map_dir)
         if map_sources is not None and map_sources != "":
             map_dir = create_mixed_map_directory(map_sources, num_maps, seed=seed)
+            self.map_dir = map_dir  # Update instance variable to point to temp directory
             # With mixed sources, we've already created exactly num_maps symlinks
             # so skip the availability check below
 
