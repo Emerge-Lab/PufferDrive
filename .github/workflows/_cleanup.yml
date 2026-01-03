@@ -1,0 +1,24 @@
+name: cleanup
+
+on:
+  workflow_call:
+    inputs:
+      when:
+        description: "When to clean up (before/after)"
+        required: false
+        default: "before"
+        type: string
+
+jobs:
+  free-disk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free up disk space (${{ inputs.when }})
+        run: |
+          echo "Before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo apt clean
+          sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
+          echo "After cleanup:"
+          df -h

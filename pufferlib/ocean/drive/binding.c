@@ -70,11 +70,16 @@ static int my_put(Env* env, PyObject* args, PyObject* kwargs) {
 static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
+    int init_mode = unpack(kwargs, "init_mode");
+    int control_mode = unpack(kwargs, "control_mode");
+    int init_steps = unpack(kwargs, "init_steps");
+    int goal_behavior = unpack(kwargs, "goal_behavior");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
     int env_count = 0;
     int max_envs = num_agents;
+    int maps_checked = 0;
     PyObject* agent_offsets = PyList_New(max_envs+1);
     PyObject* map_ids = PyList_New(max_envs);
     // getting env count
@@ -82,9 +87,96 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         char map_file[100];
         int map_id = rand() % num_maps;
         Drive* env = calloc(1, sizeof(Drive));
+        env->init_mode = init_mode;
+        env->control_mode = control_mode;
+        env->init_steps = init_steps;
+        env->goal_behavior = goal_behavior;
         sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
         load_map_binary(map_file, env);
+
+        // Skip map if it contains traffic lights
+        bool has_traffic_light = false;
+        for(int j=0; j<env->num_traffic_elements; j++) {
+            if(env->traffic_elements[j].type == TRAFFIC_LIGHT) {
+                has_traffic_light = true;
+                break;
+            }
+        }
+        if(has_traffic_light) {
+            maps_checked++;
+
+            // Safeguard: if we've checked all available maps and all have traffic lights, raise an error
+            if(maps_checked >= num_maps) {
+                for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+                for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+                for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+                free(env->agents);
+                free(env->road_elements);
+                free(env->traffic_elements);
+                free(env->active_agent_indices);
+                free(env->static_agent_indices);
+                free(env->expert_static_agent_indices);
+                free(env);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                sprintf(error_msg, "All %d available maps contain traffic lights which are not supported", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
+            }
+
+            for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+            for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+            for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+            free(env->agents);
+            free(env->road_elements);
+            free(env->traffic_elements);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env);
+            continue;
+        }
+
         set_active_agents(env);
+
+        // Skip map if it doesn't contain any controllable agents
+        if(env->active_agent_count == 0) {
+            maps_checked++;
+
+            // Safeguard: if we've checked all available maps and found no active agents, raise an error
+            if(maps_checked >= num_maps) {
+                for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+                for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+                for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+                free(env->agents);
+                free(env->road_elements);
+                free(env->traffic_elements);
+                free(env->active_agent_indices);
+                free(env->static_agent_indices);
+                free(env->expert_static_agent_indices);
+                free(env);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
+            }
+
+            for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+            for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+            for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+            free(env->agents);
+            free(env->road_elements);
+            free(env->traffic_elements);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env);
+            continue;
+        }
+
         // Store map_id
         PyObject* map_id_obj = PyLong_FromLong(map_id);
         PyList_SetItem(map_ids, env_count, map_id_obj);
@@ -93,19 +185,18 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
         PyList_SetItem(agent_offsets, env_count, offset);
         total_agent_count += env->active_agent_count;
         env_count++;
-        for(int i = 0; i < env->num_objects; i++){
-            free_entity(&env->entities[i]);
-        }
-        free(env->entities);
-        for(int i = 0; i < env->num_roads; i++){
-            free_map_entity(&env->map_entities[i]);
-        }
-        free(env->map_entities);
+        for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
+        for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
+        for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
+        free(env->agents);
+        free(env->road_elements);
+        free(env->traffic_elements);
         free(env->active_agent_indices);
-        free(env->static_car_indices);
-        free(env->expert_static_car_indices);
+        free(env->static_agent_indices);
+        free(env->expert_static_agent_indices);
         free(env);
     }
+    //printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count, num_agents);
     if(total_agent_count >= num_agents){
         total_agent_count = num_agents;
     }
@@ -115,59 +206,68 @@ static PyObject* my_shared(PyObject* self, PyObject* args, PyObject* kwargs) {
     // resize lists
     PyObject* resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject* resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-    //
-    //Py_DECREF(agent_offsets);
-    //Py_DECREF(map_ids);
-    // create a tuple
     PyObject* tuple = PyTuple_New(3);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
     return tuple;
-
-    //Py_DECREF(num);
-    /*
-    for(int i = 0;i<num_envs; i++) {
-        for(int j=0;j<temp_envs[i].num_entities;j++) {
-            free_entity(&temp_envs[i].entities[j]);
-        }
-        free(temp_envs[i].entities);
-        free(temp_envs[i].active_agent_indices);
-        free(temp_envs[i].static_car_indices);
-    }
-    free(temp_envs);
-    */
-    // return agent_offsets;
 }
 
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
-    env->reward_vehicle_collision = unpack(kwargs, "reward_vehicle_collision");
-    env->reward_offroad_collision = unpack(kwargs, "reward_offroad_collision");
-    env->reward_goal_post_respawn = unpack(kwargs, "reward_goal_post_respawn");
-    env->reward_vehicle_collision_post_respawn = unpack(kwargs, "reward_vehicle_collision_post_respawn");
-    env->spawn_immunity_timer = unpack(kwargs, "spawn_immunity_timer");
+    env->ini_file = unpack_str(kwargs, "ini_file");
+    env_init_config conf = {0};
+    if(ini_parse(env->ini_file, handler, &conf) < 0) {
+        printf("Error while loading %s", env->ini_file);
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) {
+        conf.scenario_length = (int)unpack(kwargs, "scenario_length");
+    }
+    if (conf.scenario_length <= 0) {
+        PyErr_SetString(PyExc_ValueError, "scenario_length must be > 0 (set in INI or kwargs)");
+        return -1;
+    }
+    env->action_type = conf.action_type;
+    env->dynamics_model = conf.dynamics_model;
+    env->reward_vehicle_collision = conf.reward_vehicle_collision;
+    env->reward_offroad_collision = conf.reward_offroad_collision;
+    env->reward_goal = conf.reward_goal;
+    env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
+    env->reward_ade = conf.reward_ade;
+    env->scenario_length = conf.scenario_length;
+    env->collision_behavior = conf.collision_behavior;
+    env->offroad_behavior = conf.offroad_behavior;
+    env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
+    env->dt = conf.dt;
+    env->init_mode = (int)unpack(kwargs, "init_mode");
+    env->control_mode = (int)unpack(kwargs, "control_mode");
+    env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
+    env->goal_radius = (float)unpack(kwargs, "goal_radius");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
-
+    int init_steps = unpack(kwargs, "init_steps");
     char map_file[100];
     sprintf(map_file, "resources/drive/binaries/map_%03d.bin", map_id);
-    env->num_agents = max_agents;
+    env->num_max_agents = max_agents;
     env->map_name = strdup(map_file);
+    env->init_steps = init_steps;
+    env->timestep = init_steps;
     init(env);
     return 0;
 }
 
 static int my_log(PyObject* dict, Log* log) {
-    assign_to_dict(dict, "perf", log->perf);
-    assign_to_dict(dict, "score", log->score);
-    assign_to_dict(dict, "episode_return", log->episode_return);
-    assign_to_dict(dict, "episode_length", log->episode_length);
-    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
-    assign_to_dict(dict, "collision_rate", log->collision_rate);
-    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "n", log->n);
+    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
+    assign_to_dict(dict, "episode_length", log->episode_length);
+    assign_to_dict(dict, "collision_rate", log->collision_rate);
+    assign_to_dict(dict, "episode_return", log->episode_return);
+    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
+    assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
-    assign_to_dict(dict, "clean_collision_rate", log->clean_collision_rate);
+    assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
+    assign_to_dict(dict, "score", log->score);
+    assign_to_dict(dict, "avg_offroad_per_agent", log->avg_offroad_per_agent);
+    assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
     return 0;
 }

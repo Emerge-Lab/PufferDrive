@@ -1,0 +1,9 @@
+line-length = 120
+target-version = "py310"
+
+[lint.isort]
+lines-after-imports = 2
+split-on-trailing-comma = false
+
+[lint.mccabe]
+max-complexity = 12
