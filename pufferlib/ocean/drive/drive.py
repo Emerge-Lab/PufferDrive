@@ -43,6 +43,7 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
         use_all_maps=False,
+        allow_map_resampling=True,
     ):
         # env
         self.dt = dt
@@ -138,9 +139,18 @@ class Drive(pufferlib.PufferEnv):
         # Check maps availability
         available_maps = len([name for name in os.listdir(map_dir) if name.endswith(".bin")])
         if num_maps > available_maps:
-            raise ValueError(
-                f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
-            )
+            if allow_map_resampling:
+                print("\n" + "=" * 80)
+                print("WARNING: FEWER MAPS THAN REQUESTED")
+                print(f"Requested {num_maps} maps but only {available_maps} available in {map_dir}")
+                print(f"Maps will be randomly sampled from the {available_maps} available maps.")
+                print("=" * 80 + "\n")
+                num_maps = available_maps
+            else:
+                raise ValueError(
+                    f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). "
+                    f"Please reduce num_maps, add more maps to {map_dir}, or set allow_map_resampling=True."
+                )
         self.max_controlled_agents = int(max_controlled_agents)
 
         # Iterate through all maps to count total agents that can be initialized for each map
