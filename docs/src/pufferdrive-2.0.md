@@ -100,6 +100,7 @@ What is next? PufferDrive 3.0 will improve agent diversity, realism, and expand 
 
 If you use PufferDrive, please cite:
 
+{% raw %}
 ```bibtex
 @software{pufferdrive2025github,
   author = {Daphne Cornelisse⁕ and Spencer Cheng⁕ and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Valentin Charraut and Aditya Gupta and Joseph Suarez and Eugene Vinitsky},
@@ -109,6 +110,7 @@ If you use PufferDrive, please cite:
   year = {2025},
 }
 ```
+{% endraw %}
 
 *\*Equal contribution*
 
