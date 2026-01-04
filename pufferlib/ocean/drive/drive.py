@@ -129,15 +129,19 @@ class Drive(pufferlib.PufferEnv):
 
         self._action_type_flag = 0 if action_type == "discrete" else 1
 
-        # Check if resources directory exists
-        binary_path = f"{map_dir}/map_000.bin"
-        if not os.path.exists(binary_path):
+        # Check if map directory contains any bin files
+        if not os.path.isdir(map_dir):
             raise FileNotFoundError(
-                f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
+                f"Map directory {map_dir} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
+            )
+        bin_files = [name for name in os.listdir(map_dir) if name.endswith(".bin")]
+        if not bin_files:
+            raise FileNotFoundError(
+                f"No .bin map files found in {map_dir}. Please ensure the Drive maps are downloaded and installed correctly per docs."
             )
 
         # Check maps availability
-        available_maps = len([name for name in os.listdir(map_dir) if name.endswith(".bin")])
+        available_maps = len(bin_files)
         if num_maps > available_maps:
             if allow_map_resampling:
                 print("\n" + "=" * 80)
