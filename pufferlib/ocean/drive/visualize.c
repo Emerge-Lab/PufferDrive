@@ -232,6 +232,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     FILE *policy_file = fopen(policy_name, "rb");
     if (policy_file == NULL) {
+        if (allocated_map_name)
+            free(allocated_map_name);
         RAISE_FILE_ERROR(policy_name);
     }
     fclose(policy_file);
@@ -349,6 +351,12 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     if (render_topdown) {
         if (!OpenVideo(&topdown_recorder, filename_topdown, img_width, img_height)) {
             CloseWindow();
+            free(client);
+            free_allocated(&env);
+            free_drivenet(net);
+            free(weights);
+            if (allocated_map_name)
+                free(allocated_map_name);
             return -1;
         }
     }
@@ -358,6 +366,12 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             if (render_topdown)
                 CloseVideo(&topdown_recorder);
             CloseWindow();
+            free(client);
+            free_allocated(&env);
+            free_drivenet(net);
+            free(weights);
+            if (allocated_map_name)
+                free(allocated_map_name);
             return -1;
         }
     }
