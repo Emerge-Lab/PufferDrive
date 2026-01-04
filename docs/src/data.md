@@ -55,7 +55,7 @@ Refer to [Simulator](simulator.md) for how the binaries are consumed during rese
 ## Verifying data availability
 
 - After conversion, `ls resources/drive/binaries | head` should show numbered `.bin` files.
-- If you see `Required directory resources/drive/binaries/map_000.bin not found` during training, rerun the conversion or check paths.
+- If you see `No .bin map files found` during training, rerun the conversion or check paths.
 - With binaries in place, run `puffer train puffer_drive` from [Getting Started](getting-started.md) as a smoke test that the build, data, and bindings are wired together.
 - To inspect the binary output, convert a single JSON file with `load_map(<json>, <id>, <output_path>)` inside `drive.py`.
 
