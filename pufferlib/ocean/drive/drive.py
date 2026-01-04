@@ -11,21 +11,17 @@ from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
 
-def create_mixed_map_directory(map_sources_str, num_maps, seed=None):
+def create_mixed_map_directory(map_sources_str, num_maps):
     """
     Parse map_sources string and create a temp directory with symlinks.
 
     Args:
         map_sources_str: Format "path1:weight1,path2:weight2,..."
         num_maps: Total number of maps to create
-        seed: Random seed for reproducibility
 
     Returns:
         Path to temp directory containing symlinked maps
     """
-    if seed is not None:
-        random.seed(seed)
-
     # Parse the map_sources string
     sources = []
     for source in map_sources_str.split(","):
@@ -207,7 +203,7 @@ class Drive(pufferlib.PufferEnv):
 
         # Handle map_sources if provided (overrides map_dir)
         if map_sources is not None and map_sources != "":
-            map_dir = create_mixed_map_directory(map_sources, num_maps, seed=seed)
+            map_dir = create_mixed_map_directory(map_sources, num_maps)
             self.map_dir = map_dir  # Update instance variable to point to temp directory
             # With mixed sources, we've already created exactly num_maps symlinks
             # so skip the availability check below
