@@ -12,9 +12,7 @@ typedef struct {
 } MapFileList;
 
 // Compare function for qsort to sort filenames alphabetically
-static int compare_map_strings(const void *a, const void *b) {
-    return strcmp(*(const char **)a, *(const char **)b);
-}
+static int compare_map_strings(const void *a, const void *b) { return strcmp(*(const char **)a, *(const char **)b); }
 
 // Scan directory for .bin files and return sorted list
 static MapFileList scan_map_files(const char *map_dir) {
