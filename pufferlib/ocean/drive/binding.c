@@ -220,7 +220,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
 
     env->num_agents = max_agents;
-    env->map_name = map_path; // Already strdup'd by unpack_str
+    env->map_name = map_path;
     env->init_steps = init_steps;
     env->timestep = init_steps;
     init(env);
