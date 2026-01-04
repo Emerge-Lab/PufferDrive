@@ -87,10 +87,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_FileNotFoundError, error_msg);
         return NULL;
     }
-    // Use actual file count if fewer than requested
-    if (num_maps > map_files.count) {
-        num_maps = map_files.count;
-    }
 
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
