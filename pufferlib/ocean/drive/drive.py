@@ -5,6 +5,8 @@ import struct
 import os
 import tempfile
 import random
+import atexit
+import shutil
 import pufferlib
 from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
@@ -46,8 +48,9 @@ def create_mixed_map_directory(map_sources_str, num_maps):
             remaining -= count
         map_counts.append(count)
 
-    # Create temp directory
+    # Create temp directory and register cleanup
     temp_dir = tempfile.mkdtemp(prefix="pufferdrive_maps_")
+    atexit.register(shutil.rmtree, temp_dir, ignore_errors=True)
 
     # Collect maps from each source
     selected_maps = []
