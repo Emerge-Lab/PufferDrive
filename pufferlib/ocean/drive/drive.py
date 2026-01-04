@@ -209,15 +209,12 @@ class Drive(pufferlib.PufferEnv):
             map_dir = create_mixed_map_directory(map_sources, num_maps)
             self.map_dir = map_dir  # Update instance variable to point to temp directory
         else:
-            # Check if resources directory exists
-            binary_path = f"{map_dir}/map_000.bin"
-            if not os.path.exists(binary_path):
-                raise FileNotFoundError(
-                    f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
-                )
-
             # Check maps availability
+            if not os.path.exists(map_dir):
+                raise FileNotFoundError(f"Map directory {map_dir} not found.")
             available_maps = len([name for name in os.listdir(map_dir) if name.endswith(".bin")])
+            if available_maps == 0:
+                raise FileNotFoundError(f"No .bin map files found in {map_dir}.")
             if num_maps > available_maps:
                 if allow_map_resampling:
                     print("\n" + "=" * 80)
