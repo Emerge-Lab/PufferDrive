@@ -59,8 +59,11 @@ def create_mixed_map_directory(map_sources_str, num_maps):
         if len(available) == 0:
             raise ValueError(f"No .bin files found in {path}")
 
-        # Sample with replacement if needed
-        sampled = random.choices(available, k=count)
+        # Sample without replacement if possible, with replacement if we need more than available
+        if count <= len(available):
+            sampled = random.sample(available, k=count)
+        else:
+            sampled = random.choices(available, k=count)
         for map_file in sampled:
             selected_maps.append(os.path.join(path, map_file))
 
