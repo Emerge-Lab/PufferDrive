@@ -77,7 +77,7 @@ def create_mixed_map_directory(map_sources_str, num_maps, seed=None):
     print("\n" + "=" * 80)
     print("MIXED MAP SOURCES")
     for (path, weight), count in zip(sources, map_counts):
-        print(f"  {path}: {count} maps ({weight*100:.1f}%)")
+        print(f"  {path}: {count} maps ({weight * 100:.1f}%)")
     print(f"Total: {len(selected_maps)} maps in {temp_dir}")
     print("=" * 80 + "\n")
 
