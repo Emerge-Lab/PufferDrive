@@ -1,4 +1,5 @@
 #include "drive.h"
+#include "map_utils.h"
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
@@ -77,6 +78,20 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int goal_behavior = unpack(kwargs, "goal_behavior");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
     int use_all_maps = unpack(kwargs, "use_all_maps");
+
+    // Scan directory for .bin files
+    MapFileList map_files = scan_map_files(map_dir);
+    if (map_files.count == 0) {
+        char error_msg[512];
+        snprintf(error_msg, sizeof(error_msg), "No .bin map files found in %s", map_dir);
+        PyErr_SetString(PyExc_FileNotFoundError, error_msg);
+        return NULL;
+    }
+    // Use actual file count if fewer than requested
+    if (num_maps > map_files.count) {
+        num_maps = map_files.count;
+    }
+
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
@@ -88,7 +103,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *map_ids = PyList_New(max_envs);
     // getting env count
     while (use_all_maps ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
-        char map_file[512];
         int map_id = use_all_maps ? map_idx++ : rand() % num_maps;
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
@@ -96,8 +110,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
         env->goal_target_distance = goal_target_distance;
-        snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
-        env->entities = load_map_binary(map_file, env);
+        env->entities = load_map_binary(map_files.filenames[map_id], env);
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
@@ -117,6 +130,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                     free(env);
                     Py_DECREF(agent_offsets);
                     Py_DECREF(map_ids);
+                    free_map_file_list(&map_files);
                     char error_msg[256];
                     sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
                     PyErr_SetString(PyExc_ValueError, error_msg);
@@ -167,6 +181,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
+    free_map_file_list(&map_files);
     return tuple;
 }
 
@@ -206,10 +221,27 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
-    char map_file[512];
-    snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
+
+    // Scan directory for .bin files
+    MapFileList map_files = scan_map_files(map_dir);
+    if (map_files.count == 0) {
+        char error_msg[512];
+        snprintf(error_msg, sizeof(error_msg), "No .bin map files found in %s", map_dir);
+        PyErr_SetString(PyExc_FileNotFoundError, error_msg);
+        return -1;
+    }
+    if (map_id >= map_files.count) {
+        char error_msg[512];
+        snprintf(error_msg, sizeof(error_msg), "map_id %d out of range (only %d maps available)", map_id,
+                 map_files.count);
+        free_map_file_list(&map_files);
+        PyErr_SetString(PyExc_ValueError, error_msg);
+        return -1;
+    }
+
     env->num_agents = max_agents;
-    env->map_name = strdup(map_file);
+    env->map_name = strdup(map_files.filenames[map_id]);
+    free_map_file_list(&map_files);
     env->init_steps = init_steps;
     env->timestep = init_steps;
     init(env);

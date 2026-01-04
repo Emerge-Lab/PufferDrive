@@ -12,6 +12,7 @@
 #include "error.h"
 #include "drivenet.h"
 #include "libgen.h"
+#include "map_utils.h"
 #include "../env_config.h"
 #define TRAJECTORY_LENGTH_DEFAULT 91
 
@@ -201,12 +202,19 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         return -1;
     }
 
-    char map_buffer[100];
+    char *allocated_map_name = NULL;
     if (map_name == NULL) {
+        // Scan directory for .bin files and pick randomly
+        MapFileList map_files = scan_map_files(conf.map_dir);
+        if (map_files.count == 0) {
+            fprintf(stderr, "Error: No .bin map files found in %s\n", conf.map_dir);
+            return -1;
+        }
         srand(time(NULL));
-        int random_map = rand() % num_maps;
-        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map);
-        map_name = map_buffer;
+        int random_map = rand() % map_files.count;
+        allocated_map_name = strdup(map_files.filenames[random_map]);
+        map_name = allocated_map_name;
+        free_map_file_list(&map_files);
     }
 
     if (frame_skip <= 0) {
@@ -216,6 +224,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     // Check if map file exists
     FILE *map_file = fopen(map_name, "rb");
     if (map_file == NULL) {
+        if (allocated_map_name)
+            free(allocated_map_name);
         RAISE_FILE_ERROR(map_name);
     }
     fclose(map_file);
@@ -255,6 +265,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     if (env.active_agent_count == 0) {
         fprintf(stderr, "Error: Map %s has no controllable agents\n", map_name);
         free_allocated(&env);
+        if (allocated_map_name)
+            free(allocated_map_name);
         return -1;
     }
 
@@ -401,6 +413,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     free_allocated(&env);
     free_drivenet(net);
     free(weights);
+    if (allocated_map_name)
+        free(allocated_map_name);
     return 0;
 }
 
