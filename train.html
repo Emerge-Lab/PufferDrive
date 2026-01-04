@@ -38,7 +38,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c1681e47.js";
+            window.path_to_searchindex_js = "searchindex-b836374d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8d227c1c.js"></script>
@@ -180,12 +180,12 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h2 id="training"><a class="header" href="#training">Training</a></h2>
-<h3 id="basic-training"><a class="header" href="#basic-training">Basic training</a></h3>
+                        <h1 id="training"><a class="header" href="#training">Training</a></h1>
+<h2 id="basic-training"><a class="header" href="#basic-training">Basic training</a></h2>
 <p>Launch a training run with Weights &amp; Biases logging:</p>
 <pre><code class="language-bash">puffer train puffer_drive --wandb --wandb-project "pufferdrive"
 </code></pre>
-<h3 id="environment-configurations"><a class="header" href="#environment-configurations">Environment configurations</a></h3>
+<h2 id="environment-configurations"><a class="header" href="#environment-configurations">Environment configurations</a></h2>
 <p><strong>Default configuration (Waymo maps)</strong></p>
 <p>The default settings in <code>drive.ini</code> are optimized for:</p>
 <ul>
@@ -205,10 +205,10 @@ resample_frequency = 100000 # No resampling needed (there are only a few Carla m
 termination_mode = 0  # 0: terminate at episode_length, 1: terminate after all agents reset
 
 # Map settings
-map_dir = "resources/drive/binaries/carla"
-num_maps = 2
+map_dir = "resources/drive/binaries"
+num_maps = 2 # Number of Carla maps you're training in
 </code></pre>
-<p>this should give a good starting point. With these settings, you’ll need about 2-3 billion steps to get an agent that reaches most of it’s goals (&gt; 95%) and has a combined collsion / off-road rate of 3 % per episode of 300 steps.</p>
+<p>this should give a good starting point. With these settings, you’ll need about 2-3 billion steps to get an agent that reaches most of it’s goals (&gt; 95%) and has a combined collsion / off-road rate of 3 % per episode of 300 steps in town 1 and 2, which can be found <a href="https://github.com/Emerge-Lab/PufferDrive/tree/2.0/data_utils/carla/carla_data">here</a>. Before launching your experiment, run <code>drive.py</code> with the folder to the Carla towns to process them to binaries, then ensure the <code>map_dir</code> above is pointed to these binaries.</p>
 <blockquote class="blockquote-tag blockquote-tag-note">
 <p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
 <p>The default training hyperparameters work well for both configurations and typically don’t need adjustment.</p>
