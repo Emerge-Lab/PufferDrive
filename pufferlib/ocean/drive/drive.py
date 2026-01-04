@@ -208,31 +208,29 @@ class Drive(pufferlib.PufferEnv):
         if map_sources is not None and map_sources != "":
             map_dir = create_mixed_map_directory(map_sources, num_maps)
             self.map_dir = map_dir  # Update instance variable to point to temp directory
-            # With mixed sources, we've already created exactly num_maps symlinks
-            # so skip the availability check below
-
-        # Check if resources directory exists
-        binary_path = f"{map_dir}/map_000.bin"
-        if not os.path.exists(binary_path):
-            raise FileNotFoundError(
-                f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
-            )
-
-        # Check maps availability
-        available_maps = len([name for name in os.listdir(map_dir) if name.endswith(".bin")])
-        if num_maps > available_maps:
-            if allow_map_resampling:
-                print("\n" + "=" * 80)
-                print("WARNING: FEWER MAPS THAN REQUESTED")
-                print(f"Requested {num_maps} maps but only {available_maps} available in {map_dir}")
-                print(f"Maps will be randomly sampled from the {available_maps} available maps.")
-                print("=" * 80 + "\n")
-                num_maps = available_maps
-            else:
-                raise ValueError(
-                    f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). "
-                    f"Please reduce num_maps, add more maps to {map_dir}, or set allow_map_resampling=True."
+        else:
+            # Check if resources directory exists
+            binary_path = f"{map_dir}/map_000.bin"
+            if not os.path.exists(binary_path):
+                raise FileNotFoundError(
+                    f"Required directory {binary_path} not found. Please ensure the Drive maps are downloaded and installed correctly per docs."
                 )
+
+            # Check maps availability
+            available_maps = len([name for name in os.listdir(map_dir) if name.endswith(".bin")])
+            if num_maps > available_maps:
+                if allow_map_resampling:
+                    print("\n" + "=" * 80)
+                    print("WARNING: FEWER MAPS THAN REQUESTED")
+                    print(f"Requested {num_maps} maps but only {available_maps} available in {map_dir}")
+                    print(f"Maps will be randomly sampled from the {available_maps} available maps.")
+                    print("=" * 80 + "\n")
+                    num_maps = available_maps
+                else:
+                    raise ValueError(
+                        f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). "
+                        f"Please reduce num_maps, add more maps to {map_dir}, or set allow_map_resampling=True."
+                    )
         self.max_controlled_agents = int(max_controlled_agents)
 
         # Iterate through all maps to count total agents that can be initialized for each map
