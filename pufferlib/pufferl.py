@@ -1290,19 +1290,19 @@ def sanity(env_name, args=None):
     binary_dir.mkdir(parents=True, exist_ok=True)
     binaries = []
     for idx, (name, json_path) in enumerate(chosen):
-        # Create a subdirectory per map so each can be tested in isolation
-        map_subdir = binary_dir / name
-        map_subdir.mkdir(parents=True, exist_ok=True)
-        output_path = map_subdir / f"{name}.bin"
+        output_path = binary_dir / f"{name}.bin"
         load_map(str(json_path), idx, str(output_path))
-        binaries.append((name, output_path, map_subdir))
+        binaries.append((name, output_path))
 
     runs = []
-    for name, binary, map_subdir in binaries:
+    for name, binary in binaries:
+        map_zero = binary_dir / "map_000.bin"
+        shutil.copy2(binary, map_zero)
+
         run_args = {
             **args,
-            "env": {**args["env"], "num_maps": 1, "map_dir": str(map_subdir)},
-            "train": {**args["train"], "render_map": str(binary)},
+            "env": {**args["env"], "num_maps": 1, "map_dir": str(binary_dir)},
+            "train": {**args["train"], "render_map": str(map_zero)},
         }
         if run_args.get("wandb"):
             run_args["wandb_name"] = name

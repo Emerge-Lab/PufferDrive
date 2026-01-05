@@ -237,7 +237,22 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
         if render_maps is None:
-            render_maps = [None]
+            # Pick a random map from the training map_dir
+            map_dir = None
+            if env_cfg is not None and hasattr(env_cfg, "map_dir"):
+                map_dir = env_cfg.map_dir
+            if map_dir and os.path.isdir(map_dir):
+                import random
+
+                bin_files = [f for f in os.listdir(map_dir) if f.endswith(".bin")]
+                if bin_files:
+                    render_maps = [os.path.join(map_dir, random.choice(bin_files))]
+                else:
+                    print(f"Warning: No .bin files found in {map_dir}, skipping render")
+                    return
+            else:
+                print(f"Warning: map_dir not found or invalid ({map_dir}), skipping render")
+                return
         elif isinstance(render_maps, (str, os.PathLike)):
             render_maps = [render_maps]
         else:

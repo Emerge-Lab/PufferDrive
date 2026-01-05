@@ -2,7 +2,6 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
-#include <dirent.h>
 #include <math.h>
 #include <raylib.h>
 #include "rlgl.h"
@@ -15,98 +14,6 @@
 #include "libgen.h"
 #include "../env_config.h"
 #define TRAJECTORY_LENGTH_DEFAULT 91
-
-// Structure to hold discovered map files
-typedef struct {
-    char **filenames;
-    int count;
-} MapFileList;
-
-// Compare function for qsort to sort filenames alphabetically
-static int compare_map_strings(const void *a, const void *b) { return strcmp(*(const char **)a, *(const char **)b); }
-
-// Scan directory for .bin files and return sorted list
-static MapFileList scan_map_files(const char *map_dir) {
-    MapFileList result = {NULL, 0};
-    DIR *dir = opendir(map_dir);
-    if (!dir) {
-        return result;
-    }
-
-    // First pass: count .bin files
-    struct dirent *entry;
-    int count = 0;
-    while ((entry = readdir(dir)) != NULL) {
-        const char *name = entry->d_name;
-        size_t len = strlen(name);
-        if (len > 4 && strcmp(name + len - 4, ".bin") == 0) {
-            count++;
-        }
-    }
-
-    if (count == 0) {
-        closedir(dir);
-        return result;
-    }
-
-    // Allocate array
-    result.filenames = malloc(count * sizeof(char *));
-    if (!result.filenames) {
-        closedir(dir);
-        return result;
-    }
-
-    // Second pass: collect filenames
-    rewinddir(dir);
-    int idx = 0;
-    while ((entry = readdir(dir)) != NULL && idx < count) {
-        const char *name = entry->d_name;
-        size_t len = strlen(name);
-        if (len > 4 && strcmp(name + len - 4, ".bin") == 0) {
-            // Allocate full path
-            size_t path_len = strlen(map_dir) + 1 + len + 1;
-            result.filenames[idx] = malloc(path_len);
-            if (!result.filenames[idx]) {
-                // Clean up already allocated strings
-                for (int j = 0; j < idx; j++) {
-                    free(result.filenames[j]);
-                }
-                free(result.filenames);
-                result.filenames = NULL;
-                closedir(dir);
-                return result;
-            }
-            snprintf(result.filenames[idx], path_len, "%s/%s", map_dir, name);
-            idx++;
-        }
-    }
-    closedir(dir);
-
-    // Update count to actual number found (handles race condition if files were deleted)
-    result.count = idx;
-
-    if (idx == 0) {
-        free(result.filenames);
-        result.filenames = NULL;
-        return result;
-    }
-
-    // Sort for deterministic ordering
-    qsort(result.filenames, result.count, sizeof(char *), compare_map_strings);
-
-    return result;
-}
-
-static void free_map_file_list(MapFileList *list) {
-    if (list->filenames) {
-        for (int i = 0; i < list->count; i++) {
-            free(list->filenames[i]);
-        }
-        free(list->filenames);
-        list->filenames = NULL;
-        list->count = 0;
-    }
-}
 
 typedef struct {
     int pipefd[2];
@@ -294,19 +201,12 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         return -1;
     }
 
-    char *allocated_map_name = NULL;
+    char map_buffer[100];
     if (map_name == NULL) {
-        // Scan directory for .bin files and pick randomly
-        MapFileList map_files = scan_map_files(conf.map_dir);
-        if (map_files.count == 0) {
-            fprintf(stderr, "Error: No .bin map files found in %s\n", conf.map_dir);
-            return -1;
-        }
         srand(time(NULL));
-        int random_map = rand() % map_files.count;
-        allocated_map_name = strdup(map_files.filenames[random_map]);
-        map_name = allocated_map_name;
-        free_map_file_list(&map_files);
+        int random_map = rand() % num_maps;
+        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map);
+        map_name = map_buffer;
     }
 
     if (frame_skip <= 0) {
@@ -316,16 +216,12 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     // Check if map file exists
     FILE *map_file = fopen(map_name, "rb");
     if (map_file == NULL) {
-        if (allocated_map_name)
-            free(allocated_map_name);
         RAISE_FILE_ERROR(map_name);
     }
     fclose(map_file);
 
     FILE *policy_file = fopen(policy_name, "rb");
     if (policy_file == NULL) {
-        if (allocated_map_name)
-            free(allocated_map_name);
         RAISE_FILE_ERROR(policy_name);
     }
     fclose(policy_file);
@@ -359,8 +255,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     if (env.active_agent_count == 0) {
         fprintf(stderr, "Error: Map %s has no controllable agents\n", map_name);
         free_allocated(&env);
-        if (allocated_map_name)
-            free(allocated_map_name);
         return -1;
     }
 
@@ -443,12 +337,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     if (render_topdown) {
         if (!OpenVideo(&topdown_recorder, filename_topdown, img_width, img_height)) {
             CloseWindow();
-            free(client);
-            free_allocated(&env);
-            free_drivenet(net);
-            free(weights);
-            if (allocated_map_name)
-                free(allocated_map_name);
             return -1;
         }
     }
@@ -458,12 +346,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             if (render_topdown)
                 CloseVideo(&topdown_recorder);
             CloseWindow();
-            free(client);
-            free_allocated(&env);
-            free_drivenet(net);
-            free(weights);
-            if (allocated_map_name)
-                free(allocated_map_name);
             return -1;
         }
     }
@@ -519,8 +401,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     free_allocated(&env);
     free_drivenet(net);
     free(weights);
-    if (allocated_map_name)
-        free(allocated_map_name);
     return 0;
 }
 
