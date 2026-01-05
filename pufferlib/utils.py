@@ -236,7 +236,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
-        if render_maps is None or render_maps == "none"::
+        if render_maps is None or render_maps == "none":
             # Pick a random map from the training map_dir
             map_dir = None
             if env_cfg is not None and hasattr(env_cfg, "map_dir"):
