@@ -172,7 +172,8 @@ def _write_visualizer_config(env_cfg, output_path, base_ini="pufferlib/config/oc
     import configparser
 
     cfg = configparser.ConfigParser()
-    cfg.read(base_ini)
+    if not cfg.read(base_ini):
+        raise FileNotFoundError(f"Base config file not found: {base_ini}")
 
     if env_cfg is not None and "env" in cfg:
         # Special attribute mappings for Drive class (attr stored differently than INI key)
