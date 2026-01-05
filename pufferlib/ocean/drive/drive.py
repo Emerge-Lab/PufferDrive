@@ -43,7 +43,7 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
         use_all_maps=False,
-        allow_map_resampling=True,
+        allow_fewer_maps=True,
     ):
         # env
         self.dt = dt
@@ -140,10 +140,13 @@ class Drive(pufferlib.PufferEnv):
                 f"No .bin map files found in {map_dir}. Please ensure the Drive maps are downloaded and installed correctly per docs."
             )
 
+        # Build sorted list of full map file paths - this is the single source of truth
+        self.map_files = sorted([os.path.join(map_dir, f) for f in bin_files])
+
         # Check maps availability
-        available_maps = len(bin_files)
+        available_maps = len(self.map_files)
         if num_maps > available_maps:
-            if allow_map_resampling:
+            if allow_fewer_maps:
                 print("\n" + "=" * 80)
                 print("WARNING: FEWER MAPS THAN REQUESTED")
                 print(f"Requested {num_maps} maps but only {available_maps} available in {map_dir}")
@@ -153,13 +156,13 @@ class Drive(pufferlib.PufferEnv):
             else:
                 raise ValueError(
                     f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). "
-                    f"Please reduce num_maps, add more maps to {map_dir}, or set allow_map_resampling=True."
+                    f"Please reduce num_maps, add more maps to {map_dir}, or set allow_fewer_maps=True."
                 )
         self.max_controlled_agents = int(max_controlled_agents)
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
-            map_dir=map_dir,
+            map_files=self.map_files,
             num_agents=num_agents,
             num_maps=num_maps,
             init_mode=self.init_mode,
@@ -204,13 +207,12 @@ class Drive(pufferlib.PufferEnv):
                 episode_length=(int(episode_length) if episode_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
-                map_id=map_ids[i],
+                map_path=self.map_files[map_ids[i]],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
-                map_dir=map_dir,
             )
             env_ids.append(env_id)
 
@@ -236,6 +238,7 @@ class Drive(pufferlib.PufferEnv):
             self.tick = 0
             binding.vec_close(self.c_envs)
             agent_offsets, map_ids, num_envs = binding.shared(
+                map_files=self.map_files,
                 num_agents=self.num_agents,
                 num_maps=self.num_maps,
                 init_mode=self.init_mode,
@@ -244,8 +247,6 @@ class Drive(pufferlib.PufferEnv):
                 max_controlled_agents=self.max_controlled_agents,
                 goal_behavior=self.goal_behavior,
                 goal_target_distance=self.goal_target_distance,
-                goal_speed=self.goal_speed,
-                map_dir=self.map_dir,
                 use_all_maps=False,
             )
             self.agent_offsets = agent_offsets
@@ -278,13 +279,12 @@ class Drive(pufferlib.PufferEnv):
                     dt=self.dt,
                     episode_length=(int(self.episode_length) if self.episode_length is not None else None),
                     max_controlled_agents=self.max_controlled_agents,
-                    map_id=map_ids[i],
+                    map_path=self.map_files[map_ids[i]],
                     max_agents=nxt - cur,
                     ini_file="pufferlib/config/ocean/drive.ini",
                     init_steps=self.init_steps,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
-                    map_dir=self.map_dir,
                 )
                 env_ids.append(env_id)
             self.c_envs = binding.vectorize(*env_ids)
