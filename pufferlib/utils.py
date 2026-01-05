@@ -275,7 +275,9 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         render_maps = config.get("render_map", None)
         if render_maps is None or render_maps == "none":
             # Pick a random map from the training map_dir
-            map_dir = getattr(env_cfg, "map_dir", None) if env_cfg else None
+            map_dir = None
+            if env_cfg is not None and hasattr(env_cfg, "map_dir"):
+                map_dir = env_cfg.map_dir
             if map_dir and os.path.isdir(map_dir):
                 import random
 
