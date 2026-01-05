@@ -1,3 +1,4 @@
+import configparser
 import os
 import sys
 import glob
@@ -169,8 +170,6 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
 
 def _write_visualizer_config(env_cfg, output_path, base_ini="pufferlib/config/ocean/drive.ini"):
     """Write a config file for the visualizer, inheriting from base INI but overriding with env_cfg."""
-    import configparser
-
     cfg = configparser.ConfigParser()
     if not cfg.read(base_ini):
         raise FileNotFoundError(f"Base config file not found: {base_ini}")
