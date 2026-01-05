@@ -65,7 +65,7 @@ def parse_args():
     parser.add_argument("--max_pjob", type=int, default=None, help="Max parallel jobs")
 
     # Program settings
-    parser.add_argument("--main", type=str, default="-m puffer train puffer_drive", help="Main command to run")
+    parser.add_argument("--main", type=str, default="-m pufferlib.pufferl train puffer_drive", help="Main command to run")
     parser.add_argument("--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)")
 
     args = parser.parse_args()
@@ -118,9 +118,22 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
         if args.program_config is not None:
             name_entries.append(args.program_config.split("/")[-1].rsplit(".", 1)[0])
 
+        # Boolean flags that don't take values (store_true)
+        boolean_flags = {"wandb", "neptune"}
+
         for key, val in main_args.items():
-            cmd.append(f"--{key}")
-            cmd.append(str(val))
+            # Convert underscores to dashes for CLI compatibility
+            cli_key = key.replace("_", "-")
+
+            # Handle boolean flags that don't take values
+            if key in boolean_flags:
+                if val in (True, "True", "true", "1"):
+                    cmd.append(f"--{cli_key}")
+                # Skip if False - don't add the flag at all
+            else:
+                cmd.append(f"--{cli_key}")
+                cmd.append(str(val))
+
             if key in overrides and key not in ["config", "config_path"]:
                 display_key = key.split(".")[-1] if "." in key else key
                 name_entries.append(f"{display_key}{val}")
@@ -195,11 +208,16 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         slurm_additional_parameters=additional_parameters,
     )
 
-    def launch_training(args, from_config, cmd, save_dir):
+    def launch_training(args, from_config, cmd, save_dir, project_root):
         """Runs inside the SLURM allocation."""
         import os
         import subprocess
+        import sys
         import submitit
+
+        # Change to project directory and set up environment
+        os.chdir(project_root)
+        os.environ["PYTHONPATH"] = project_root + ":" + os.environ.get("PYTHONPATH", "")
 
         nodes = from_config.get("nodes", 1)
         gpus = from_config.get("gpus", 1)
@@ -229,14 +247,18 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             ] + main_parts
 
         # Add save_dir to command
-        full_cmd = base_cmd + cmd + ["--data-dir", save_dir]
+        full_cmd = base_cmd + cmd + ["--train.data-dir", save_dir]
 
         print(f">>> Job: {job_name}")
+        print(f">>> Working directory: {project_root}")
         print(f">>> Command: {' '.join(full_cmd)}")
         subprocess.run(full_cmd, check=True)
 
+    # Get project root (directory containing this script's parent)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
     if not dry:
-        job = executor.submit(launch_training, args, from_config, command, save_dir)
+        job = executor.submit(launch_training, args, from_config, command, save_dir, project_root)
         print(f"Submitted job {job.job_id}: {job_name}")
         return job
     else:

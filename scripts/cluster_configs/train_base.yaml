@@ -12,17 +12,10 @@ env.num_maps: 10000
 
 # Training
 train.total_timesteps: 2_000_000_000
-train.learning_rate: 0.003
-train.batch_size: 524288
-train.minibatch_size: 32768
-train.bptt_horizon: 32
-train.gamma: 0.98
-train.gae_lambda: 0.95
-train.ent_coef: 0.005
 train.checkpoint_interval: 1000
 
 # Rendering (disable for headless cluster)
-train.render: False
+train.render: True
 
 # W&B logging
 wandb: True
