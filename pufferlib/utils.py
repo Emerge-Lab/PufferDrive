@@ -167,6 +167,38 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {type(e).__name__}: {e}")
 
 
+def _write_visualizer_config(env_cfg, output_path, base_ini="pufferlib/config/ocean/drive.ini"):
+    """Write a config file for the visualizer, inheriting from base INI but overriding with env_cfg."""
+    import configparser
+
+    cfg = configparser.ConfigParser()
+    cfg.read(base_ini)
+
+    if env_cfg is not None and "env" in cfg:
+        # Special attribute mappings for Drive class (attr stored differently than INI key)
+        special_mappings = {
+            "action_type": ("_action_type_flag", lambda v: "discrete" if v == 0 else "continuous"),
+        }
+
+        # Override [env] values with attributes from env_cfg
+        for key in cfg["env"]:
+            attr_name = key.replace("-", "_")
+
+            if attr_name in special_mappings:
+                # Handle special cases where attribute name/format differs
+                real_attr, transform = special_mappings[attr_name]
+                if hasattr(env_cfg, real_attr):
+                    cfg["env"][key] = transform(getattr(env_cfg, real_attr))
+            elif hasattr(env_cfg, attr_name):
+                cfg["env"][key] = str(getattr(env_cfg, attr_name))
+            elif hasattr(env_cfg, f"{attr_name}_str"):
+                # For attributes like control_mode that have a _str variant
+                cfg["env"][key] = str(getattr(env_cfg, f"{attr_name}_str"))
+
+    with open(output_path, "w") as f:
+        cfg.write(f)
+
+
 def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
     """
     Generate and log training videos using C-based rendering.
@@ -205,8 +237,13 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         env_vars = os.environ.copy()
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
 
-        # Base command with only visualization flags (env config comes from INI)
-        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+        # Write temp config inheriting base INI but with training env overrides
+        env_cfg = getattr(vecenv, "driver_env", None)
+        temp_config_path = os.path.join(model_dir, "visualizer_config.ini")
+        _write_visualizer_config(env_cfg, temp_config_path)
+
+        # Base command with config file
+        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize", "--config", temp_config_path]
 
         # Visualization config flags only
         if config.get("show_grid", False):
@@ -230,14 +267,26 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         base_cmd.extend(["--view", view_mode])
 
         # Get num_maps if available
-        env_cfg = getattr(vecenv, "driver_env", None)
         if env_cfg is not None and getattr(env_cfg, "num_maps", None):
             base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
 
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
-        if render_maps is None:
-            render_maps = [None]
+        if render_maps is None or render_maps == "none":
+            # Pick a random map from the training map_dir
+            map_dir = getattr(env_cfg, "map_dir", None) if env_cfg else None
+            if map_dir and os.path.isdir(map_dir):
+                import random
+
+                bin_files = [f for f in os.listdir(map_dir) if f.endswith(".bin")]
+                if bin_files:
+                    render_maps = [os.path.join(map_dir, random.choice(bin_files))]
+                else:
+                    print(f"Warning: No .bin files found in {map_dir}, skipping render")
+                    return
+            else:
+                print(f"Warning: map_dir not found or invalid ({map_dir}), skipping render")
+                return
         elif isinstance(render_maps, (str, os.PathLike)):
             render_maps = [render_maps]
         else:

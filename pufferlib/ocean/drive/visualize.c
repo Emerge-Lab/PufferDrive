@@ -189,13 +189,13 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
     return 0;
 }
 
-int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
-             int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
+int eval_gif(const char *map_name, const char *policy_name, const char *config_file, int show_grid, int obs_only,
+             int lasers, int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
              const char *output_agent, int num_maps, int zoom_in) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};
-    const char *ini_file = "pufferlib/config/ocean/drive.ini";
+    const char *ini_file = config_file ? config_file : "pufferlib/config/ocean/drive.ini";
     if (ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         return -1;
@@ -417,6 +417,7 @@ int main(int argc, char *argv[]) {
     // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
+    const char *config_file = NULL;
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
     int num_maps = 1;
@@ -485,10 +486,18 @@ int main(int argc, char *argv[]) {
                 num_maps = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--config") == 0) {
+            if (i + 1 < argc) {
+                config_file = argv[i + 1];
+                i++;
+            } else {
+                fprintf(stderr, "Error: --config option requires a config file path\n");
+                return 1;
+            }
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
-             output_agent, num_maps, zoom_in);
+    eval_gif(map_name, policy_name, config_file, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode,
+             output_topdown, output_agent, num_maps, zoom_in);
     return 0;
 }
