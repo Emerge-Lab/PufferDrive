@@ -15,7 +15,7 @@ train.total_timesteps: 2_000_000_000
 train.checkpoint_interval: 1000
 
 # Rendering (disable for headless cluster)
-train.render: True
+train.render: False
 
 # W&B logging
 wandb: True
