@@ -49,7 +49,7 @@ void demo() {
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
-        .map_name = "resources/drive/binaries/map_000.bin",
+        .map_name = "resources/drive/binaries/carla_3D/map_001.bin",
         .init_steps = conf.init_steps,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
@@ -62,11 +62,14 @@ void demo() {
     // Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;
+    int step = 0;
     while (!WindowShouldClose()) {
         // Handle camera controls
         int (*actions)[2] = (int (*)[2])env.actions;
         forward(net, env.observations, env.actions);
+        printf("Forward for step : %d\n", step);
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
+            printf("Running internal loop");
             actions[env.human_agent_idx][0] = 3;
             actions[env.human_agent_idx][1] = 6;
             if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
@@ -101,8 +104,14 @@ void demo() {
                 env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
             }
         }
+        printf("Entering c_step for step : %d\n", step);
+        printf("About to call c_step\n");
+        fflush(stdout); // Force it to write NOW
         c_step(&env);
+        printf("c_step for step : %d\n", step);
         c_render(&env);
+        printf("c_render for step : %d\n", step);
+        step++;
     }
 
     close_client(env.client);
@@ -129,7 +138,7 @@ void performance_test() {
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
-        .map_name = "resources/drive/binaries/map_000.bin",
+        .map_name = "resources/drive/binaries/carla_3D/map_002.bin",
         .init_steps = conf.init_steps,
     };
     clock_t start_time, end_time;

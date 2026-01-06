@@ -21,7 +21,7 @@ class Drive(nn.Module):
         self.partner_features = env.partner_features
         self.max_road_objects = env.max_road_objects
         self.road_features = env.road_features
-        self.road_features_after_onehot = env.road_features + 7  # 7 is the number of one-hot encoded categories
+        self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
 
         # Determine ego dimension from environment's dynamics model
         self.ego_dim = 11 if env.dynamics_model == "jerk" else 8
@@ -80,7 +80,7 @@ class Drive(nn.Module):
         road_objects = road_obs.view(-1, self.max_road_objects, self.road_features)
         road_continuous = road_objects[:, :, : self.road_features - 1]
         road_categorical = road_objects[:, :, self.road_features - 1]
-        road_onehot = F.one_hot(road_categorical.long(), num_classes=8)  # Shape: [batch, ROAD_MAX_OBJECTS, 7]
+        road_onehot = F.one_hot(road_categorical.long(), num_classes=7)  # Shape: [batch, ROAD_MAX_OBJECTS, 7]
         road_objects = torch.cat([road_continuous, road_onehot], dim=2)
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)

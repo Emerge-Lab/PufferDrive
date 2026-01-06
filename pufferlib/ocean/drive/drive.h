@@ -75,7 +75,7 @@
 #define REMOVE_AGENT 2
 
 #define ROAD_FEATURES 8
-#define ROAD_FEATURES_ONEHOT 15
+#define ROAD_FEATURES_ONEHOT 14
 #define PARTNER_FEATURES 8
 
 // Ego features depend on dynamics model
@@ -2594,6 +2594,7 @@ void respawn_agent(Drive *env, int agent_idx) {
 }
 
 void c_step(Drive *env) {
+    printf("Reached c_step");
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
@@ -2609,8 +2610,10 @@ void c_step(Drive *env) {
     }
 
     if (env->timestep == env->scenario_length || (!originals_remaining && env->termination_mode == 1)) {
+        printf(" In c_reset loop");
         add_log(env);
         c_reset(env);
+
         return;
     }
 
@@ -2621,6 +2624,7 @@ void c_step(Drive *env) {
             continue;
         move_expert(env, env->actions, expert_idx);
     }
+    printf("Move expert");
     // Process actions for all active agents
     for (int i = 0; i < env->active_agent_count; i++) {
         env->logs[i].score = 0.0f;
@@ -2630,6 +2634,7 @@ void c_step(Drive *env) {
         env->entities[agent_idx].aabb_collision_state = 0;
         move_dynamics(env, i, agent_idx);
     }
+    printf("move_dynamics");
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
@@ -2697,6 +2702,7 @@ void c_step(Drive *env) {
         }
         env->logs[i].avg_displacement_error = current_ade;
     }
+    printf("Main loop");
 
     if (env->goal_behavior == GOAL_RESPAWN) {
         for (int i = 0; i < env->active_agent_count; i++) {
@@ -2719,6 +2725,7 @@ void c_step(Drive *env) {
     }
 
     compute_observations(env);
+    printf("Compute observations");
 }
 
 const Color STONE_GRAY = (Color){80, 80, 80, 255};
