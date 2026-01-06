@@ -6,22 +6,25 @@ Example usage:
     python scripts/submit_cluster.py \
         --save_dir /path/to/experiments \
         --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --program_config scripts/cluster_configs/train_base.yaml \
-        --dry 0
+        --program_config scripts/cluster_configs/train_base.yaml
 
     # Sweep over learning rates
     python scripts/submit_cluster.py \
         --save_dir /path/to/experiments \
         --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --args learning_rate=1e-4:3e-4:1e-3 \
-        --dry 0
+        --args learning_rate=1e-4:3e-4:1e-3
 
     # Override compute settings
     python scripts/submit_cluster.py \
         --save_dir /path/to/experiments \
         --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --gpus 4 --time 120 \
-        --dry 0
+        --gpus 4 --time 120
+
+    # Dry run (preview commands without submitting)
+    python scripts/submit_cluster.py \
+        --save_dir /path/to/experiments \
+        --compute_config scripts/cluster_configs/nyu_greene.yaml \
+        --dry
 """
 
 import argparse
@@ -42,7 +45,7 @@ def parse_args():
     # Job management
     parser.add_argument("--save_dir", type=str, required=True, help="Base directory for experiment outputs")
     parser.add_argument("--prefix", type=str, default=None, help="Prefix for job names")
-    parser.add_argument("--dry", type=int, default=1, help="Dry run (1) or submit (0)")
+    parser.add_argument("--dry", action="store_true", help="Dry run (don't submit, just print commands)")
 
     # Config files
     parser.add_argument("--compute_config", type=str, default=None, help="YAML file with SLURM settings")

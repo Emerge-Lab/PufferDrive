@@ -14,8 +14,8 @@ env.num_maps: 10000
 train.total_timesteps: 2_000_000_000
 train.checkpoint_interval: 1000
 
-# Rendering (disable for headless cluster)
-train.render: False
+# Rendering
+train.render: True
 
 # W&B logging
 wandb: True

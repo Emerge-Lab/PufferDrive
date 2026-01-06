@@ -22,11 +22,10 @@ pip install submitit pyyaml
 python scripts/submit_cluster.py \
     --save_dir /path/to/experiments \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
-    --program_config scripts/cluster_configs/train_base.yaml \
-    --dry 0
+    --program_config scripts/cluster_configs/train_base.yaml
 ```
 
-Set `--dry 1` (default) to preview commands without submitting.
+Add `--dry` to preview commands without submitting.
 
 ## Configuration Files
 
@@ -104,7 +103,6 @@ python scripts/submit_cluster.py \
     --save_dir /path/to/experiments \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
     --args env.num_agents=2048 train.learning_rate=3e-4 \
-    --dry 0
 ```
 
 Arguments use dot notation matching the training CLI:
@@ -122,7 +120,6 @@ CLI args override config file values:
 python scripts/submit_cluster.py \
     --program_config scripts/cluster_configs/train_base.yaml \
     --args train.total_timesteps=100_000_000 \
-    --dry 0
 ```
 
 This uses all settings from `train_base.yaml` but overrides `total_timesteps`.
@@ -149,7 +146,6 @@ python scripts/submit_cluster.py \
     --save_dir /path/to/experiments \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
     --args train.learning_rate=1e-4:3e-4:1e-3 \
-    --dry 0
 ```
 
 This launches 3 separate jobs, one for each learning rate.
@@ -161,7 +157,6 @@ python scripts/submit_cluster.py \
     --save_dir /path/to/experiments \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
     --args train.learning_rate=1e-4:3e-4 env.num_agents=512:1024 \
-    --dry 0
 ```
 
 This launches 4 jobs (2 learning rates × 2 agent counts).
@@ -174,7 +169,7 @@ This launches 4 jobs (2 learning rates × 2 agent counts).
 |--------|-------------|
 | `--save_dir` | Base directory for experiment outputs (required) |
 | `--prefix` | Prefix for job names |
-| `--dry` | Dry run (1) or submit (0), default: 1 |
+| `--dry` | Dry run (preview commands without submitting) |
 | `--max_pjob` | Max parallel jobs (waits if exceeded) |
 
 ### Compute Overrides
@@ -256,7 +251,6 @@ python scripts/submit_cluster.py \
     --save_dir /scratch/$USER/experiments \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
     --program_config scripts/cluster_configs/train_base.yaml \
-    --dry 0
 ```
 
 ### Quick test run
@@ -268,7 +262,6 @@ python scripts/submit_cluster.py \
     --program_config scripts/cluster_configs/train_base.yaml \
     --time 30 \
     --args train.total_timesteps=10_000_000 \
-    --dry 0
 ```
 
 ### Hyperparameter sweep
@@ -280,7 +273,6 @@ python scripts/submit_cluster.py \
     --program_config scripts/cluster_configs/train_base.yaml \
     --args train.learning_rate=1e-4:3e-4:1e-3 train.gamma=0.99:0.995 \
     --max_pjob 4 \
-    --dry 0
 ```
 
 ### Custom compute allocation
@@ -291,5 +283,4 @@ python scripts/submit_cluster.py \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
     --program_config scripts/cluster_configs/train_base.yaml \
     --gpus 2 --cpus 32 --mem 64gb --time 720 \
-    --dry 0
 ```
