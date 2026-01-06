@@ -37,9 +37,7 @@ import submitit
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Submit PufferDrive training jobs to SLURM cluster"
-    )
+    parser = argparse.ArgumentParser(description="Submit PufferDrive training jobs to SLURM cluster")
 
     # Job management
     parser.add_argument("--save_dir", type=str, required=True, help="Base directory for experiment outputs")
@@ -65,8 +63,12 @@ def parse_args():
     parser.add_argument("--max_pjob", type=int, default=None, help="Max parallel jobs")
 
     # Program settings
-    parser.add_argument("--main", type=str, default="-m pufferlib.pufferl train puffer_drive", help="Main command to run")
-    parser.add_argument("--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)")
+    parser.add_argument(
+        "--main", type=str, default="-m pufferlib.pufferl train puffer_drive", help="Main command to run"
+    )
+    parser.add_argument(
+        "--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)"
+    )
 
     args = parser.parse_args()
     return args
@@ -87,7 +89,9 @@ def process_main_args(main_args: Optional[List[str]], program_config: Optional[s
     override_keys = []
     for arg in main_args:
         new_full_args = []
-        key, vals = arg.split("=")
+        if "=" not in arg:
+            raise ValueError(f"Invalid argument format: '{arg}'. Expected 'key=value' or 'key=val1:val2'")
+        key, vals = arg.split("=", 1)
         override_keys.append(key)
         vals = vals.split(":")
         for val in vals:
@@ -229,7 +233,8 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             base_cmd = [
                 "torchrun",
                 "--standalone",
-                "--nproc_per_node", str(gpus),
+                "--nproc_per_node",
+                str(gpus),
             ] + main_parts
         else:
             env = submitit.JobEnvironment()
@@ -239,11 +244,16 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
             base_cmd = [
                 "torchrun",
-                "--nnodes", str(nodes),
-                "--nproc_per_node", str(gpus),
-                "--rdzv-backend", "c10d",
-                "--rdzv-id", str(env.job_id),
-                "--rdzv-endpoint", f"{master_addr}:29500",
+                "--nnodes",
+                str(nodes),
+                "--nproc_per_node",
+                str(gpus),
+                "--rdzv-backend",
+                "c10d",
+                "--rdzv-id",
+                str(env.job_id),
+                "--rdzv-endpoint",
+                f"{master_addr}:29500",
             ] + main_parts
 
         # Add save_dir to command
@@ -268,6 +278,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
 def wait_if_full(jobs: List, max_pjob: Optional[int]):
     """Wait if we've hit the max parallel job limit."""
+
     def remove_done_jobs(jobs):
         for i in range(len(jobs) - 1, -1, -1):
             if jobs[i].done():

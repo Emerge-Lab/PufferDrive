@@ -19,5 +19,5 @@ train.render: False
 
 # W&B logging
 wandb: True
-wandb-project: pufferdrive
-wandb-group: cluster
+wandb_project: pufferdrive
+wandb_group: cluster

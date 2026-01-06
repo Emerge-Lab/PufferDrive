@@ -558,12 +558,8 @@ class PuffeRL:
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
 
-        if torch.distributed.is_initialized():
-            if torch.distributed.get_rank() != 0:
-                self.logger.log(logs, agent_steps)
-                return logs
-            else:
-                return None
+        if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
+            return None
 
         self.logger.log(logs, agent_steps)
         return logs

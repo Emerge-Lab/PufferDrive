@@ -69,8 +69,8 @@ train.render: False
 
 # W&B logging
 wandb: True
-wandb-project: pufferdrive
-wandb-group: cluster
+wandb_project: pufferdrive
+wandb_group: cluster
 ```
 
 ## Passing Training Arguments
@@ -226,8 +226,8 @@ To use Weights & Biases logging on cluster nodes:
 2. Enable in your program config:
    ```yaml
    wandb: True
-   wandb-project: your-project
-   wandb-group: your-group
+   wandb_project: your-project
+   wandb_group: your-group
    ```
 
 Credentials are stored in `~/.netrc` and shared with compute nodes.
