@@ -988,10 +988,15 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         model.forward_eval = policy.forward_eval
         policy = model.to(local_rank)
 
-    if args["neptune"]:
-        logger = NeptuneLogger(args)
-    elif args["wandb"]:
-        logger = WandbLogger(args)
+    # Only rank 0 should create the logger to avoid duplicate runs
+    is_main_process = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+    if is_main_process:
+        if args["neptune"]:
+            logger = NeptuneLogger(args)
+        elif args["wandb"]:
+            logger = WandbLogger(args)
+    else:
+        logger = None
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
