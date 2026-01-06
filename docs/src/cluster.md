@@ -284,3 +284,63 @@ python scripts/submit_cluster.py \
     --program_config scripts/cluster_configs/train_base.yaml \
     --gpus 2 --cpus 32 --mem 64gb --time 720 \
 ```
+
+## Container Mode
+
+Some clusters have older glibc versions on compute nodes that are incompatible with the compiled C extensions. Container mode wraps training jobs in a Singularity container with a compatible environment.
+
+### One-time Setup
+
+1. **Create the overlay filesystem** (on login node):
+   ```bash
+   ./scripts/setup_container.sh create-overlay
+   ```
+
+2. **Install dependencies** (submit as GPU job):
+   ```bash
+   sbatch --account=YOUR_ACCOUNT --gres=gpu:1 --cpus-per-task=8 --mem=32gb --time=60 \
+       --wrap "./scripts/setup_container.sh install"
+   ```
+
+This creates an overlay at `/scratch/$USER/containers/pufferdrive/overlay.ext3` with PyTorch, PufferDrive, and the compiled C extensions.
+
+### Running with Container
+
+Add `--container` to use the container environment:
+
+```bash
+python scripts/submit_cluster.py \
+    --save_dir /scratch/$USER/experiments \
+    --compute_config scripts/cluster_configs/nyu_greene.yaml \
+    --program_config scripts/cluster_configs/train_base.yaml \
+    --container
+```
+
+### Custom Container Paths
+
+Override the default container image or overlay:
+
+```bash
+python scripts/submit_cluster.py \
+    --container \
+    --container_image /path/to/custom.sif \
+    --container_overlay /path/to/custom-overlay.ext3 \
+    ...
+```
+
+### Rebuilding C Extensions
+
+After modifying C code, rebuild the extensions inside the container:
+
+```bash
+sbatch --account=YOUR_ACCOUNT --gres=gpu:1 --time=15 \
+    --wrap "./scripts/setup_container.sh rebuild"
+```
+
+### Container Options
+
+| Option | Description |
+|--------|-------------|
+| `--container` | Enable container mode |
+| `--container_image` | Singularity image path (default: cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif) |
+| `--container_overlay` | Overlay filesystem path (default: /scratch/$USER/containers/pufferdrive/overlay.ext3) |

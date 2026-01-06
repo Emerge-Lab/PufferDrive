@@ -25,6 +25,13 @@ Example usage:
         --save_dir /path/to/experiments \
         --compute_config scripts/cluster_configs/nyu_greene.yaml \
         --dry
+
+    # Run inside Singularity container (for glibc compatibility)
+    python scripts/submit_cluster.py \
+        --save_dir /path/to/experiments \
+        --compute_config scripts/cluster_configs/nyu_greene.yaml \
+        --program_config scripts/cluster_configs/train_base.yaml \
+        --container
 """
 
 import argparse
@@ -71,6 +78,21 @@ def parse_args():
     )
     parser.add_argument(
         "--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)"
+    )
+
+    # Container settings
+    parser.add_argument("--container", action="store_true", help="Run inside Singularity container")
+    parser.add_argument(
+        "--container_image",
+        type=str,
+        default="/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif",
+        help="Singularity image path",
+    )
+    parser.add_argument(
+        "--container_overlay",
+        type=str,
+        default="/scratch/ev2237/containers/pufferdrive/overlay.ext3",
+        help="Singularity overlay path",
     )
 
     args = parser.parse_args()
@@ -215,7 +237,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         slurm_additional_parameters=additional_parameters,
     )
 
-    def launch_training(args, from_config, cmd, save_dir, project_root):
+    def launch_training(args, from_config, cmd, save_dir, project_root, container_config=None):
         """Runs inside the SLURM allocation."""
         import os
         import subprocess
@@ -262,16 +284,49 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         # Add save_dir to command
         full_cmd = base_cmd + cmd + ["--train.data-dir", save_dir]
 
+        # Wrap with singularity if container mode is enabled
+        if container_config is not None:
+            inner_cmd = f"cd {project_root} && " + " ".join(full_cmd)
+            full_cmd = [
+                "singularity",
+                "exec",
+                "--nv",
+                "--overlay",
+                container_config["overlay"] + ":ro",  # Read-only overlay for running
+            ]
+            # Bind mount SSL certificates for TLS verification (wandb, etc.)
+            for cert_path in ["/etc/ssl/certs", "/etc/pki"]:
+                if os.path.exists(cert_path):
+                    full_cmd.extend(["--bind", f"{cert_path}:{cert_path}:ro"])
+            full_cmd.extend(
+                [
+                    container_config["image"],
+                    "bash",
+                    "-c",
+                    inner_cmd,
+                ]
+            )
+
         print(f">>> Job: {job_name}")
         print(f">>> Working directory: {project_root}")
+        print(f">>> Container: {container_config is not None}")
         print(f">>> Command: {' '.join(full_cmd)}")
         subprocess.run(full_cmd, check=True)
 
     # Get project root (directory containing this script's parent)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+    # Build container config if enabled
+    container_config = None
+    if args.container:
+        container_config = {
+            "image": args.container_image,
+            "overlay": args.container_overlay,
+        }
+        print(f">>> Container mode enabled: {container_config['image']}")
+
     if not dry:
-        job = executor.submit(launch_training, args, from_config, command, save_dir, project_root)
+        job = executor.submit(launch_training, args, from_config, command, save_dir, project_root, container_config)
         print(f"Submitted job {job.job_id}: {job_name}")
         return job
     else:
