@@ -1327,19 +1327,6 @@ int check_z_collision(Entity *car1, Entity *car2) {
     return 1; // Collision
 }
 
-int check_z_collision(Entity *car1, Entity *car2) {
-    float car1_bottom = car1->z;
-    float car1_top = car1->z + car1->height;
-    float car2_bottom = car2->z;
-    float car2_top = car2->z + car2->height;
-
-    // Check for overlap in the z-axis
-    if (car1_top < car2_bottom || car2_top < car1_bottom) {
-        return 0; // No collision
-    }
-    return 1; // Collision
-}
-
 int check_aabb_collision(Entity *car1, Entity *car2) {
     // Get car corners in world space
     float cos1 = car1->heading_x;
@@ -1569,7 +1556,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     // Offroad and lane alignment check
     int list_size = 0;
-    GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, collision_offsets, 25, &list_size);
+    GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, collision_offsets, 225, &list_size);
     for (int i = 0; i < list_size; i++) {
         if (entity_list[i].entity_idx == -1)
             continue;
@@ -1991,9 +1978,8 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     }
 
     // To update agent's z-coordinate based on road elevation of 10 nearest elements
-    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 200]; // Array big enough for all neighboring cells
-    int list_size =
-        checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL * 200, collision_offsets, 200);
+    int list_size = 0;
+    GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, collision_offsets, 225, &list_size);
     DepthPoint road_neighbours[list_size];
     int max_check = (list_size < 20) ? list_size : 20;
     int diffarray[max_check - 1];
