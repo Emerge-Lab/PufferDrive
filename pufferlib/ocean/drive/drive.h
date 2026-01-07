@@ -2002,6 +2002,26 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].steering_angle = 0.0f;
 }
 
+double sigmoid(float x) { return 1.0 / (1.0 + exp(-x)); }
+
+float compute_collision_reward(Drive *env, int agent_idx) {
+
+    // get speed of the vehicle relative to the environment (not the car it collided with)
+    float current_speed = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
+                                env->entities[agent_idx].vy * env->entities[agent_idx].vy);
+
+    // get env reward
+    float collision_reward = env->reward_vehicle_collision;
+
+    // normalize speed such that 0 m/s gets a 50% of the reward and it gets 95% of the reward at 10 m/s
+    float rescaled_speed = current_speed / (10 / 3); // rescale so that 10 becomes 3
+
+    // compute the sigmoid form
+    float collision_reward_rescaled = collision_reward * sigmoid(rescaled_speed);
+
+    return collision_reward_rescaled;
+}
+
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
@@ -2061,8 +2081,9 @@ void c_step(Drive *env) {
 
         if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION) {
-                env->rewards[i] += env->reward_vehicle_collision;
-                env->logs[i].episode_return += env->reward_vehicle_collision;
+                float collision_reward = compute_collision_reward(env, agent_idx);
+                env->rewards[i] += collision_reward;
+                env->logs[i].episode_return += collision_reward;
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].collisions_per_agent += 1.0f;
             } else if (collision_state == OFFROAD) {
