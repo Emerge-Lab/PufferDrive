@@ -8,6 +8,8 @@ from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
+_PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_INI_FILE = os.path.join(_PACKAGE_DIR, "config", "ocean", "drive.ini")
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
@@ -83,7 +85,7 @@ class Drive(pufferlib.PufferEnv):
             + self.max_partner_objects * self.partner_features
             + self.max_road_objects * self.road_features
         )
-        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=2, shape=(self.num_obs,), dtype=np.float32)
 
         self.init_steps = init_steps
         self.init_mode_str = init_mode
@@ -209,7 +211,7 @@ class Drive(pufferlib.PufferEnv):
                 max_controlled_agents=self.max_controlled_agents,
                 map_path=self.map_files[map_ids[i]],
                 max_agents=nxt - cur,
-                ini_file="pufferlib/config/ocean/drive.ini",
+                ini_file=_INI_FILE,
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
@@ -281,7 +283,7 @@ class Drive(pufferlib.PufferEnv):
                     max_controlled_agents=self.max_controlled_agents,
                     map_path=self.map_files[map_ids[i]],
                     max_agents=nxt - cur,
-                    ini_file="pufferlib/config/ocean/drive.ini",
+                    ini_file=_INI_FILE,
                     init_steps=self.init_steps,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,

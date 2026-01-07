@@ -307,10 +307,10 @@ for key, value in cfg_vars.items():
 
 install_requires = [
     "setuptools",
-    "numpy<2.0",
+    "numpy",
     "shimmy[gym-v21]",
     "gym==0.23",
-    "gymnasium==0.29.1",
+    "gymnasium==1.2.2",
     "pettingzoo==1.24.1",
 ]
 

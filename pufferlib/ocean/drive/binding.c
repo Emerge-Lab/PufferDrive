@@ -187,8 +187,26 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
     env->ini_file = unpack_str(kwargs, "ini_file");
     env_init_config conf = {0};
+
+    // Check if INI file exists before parsing
+    FILE *ini_check = fopen(env->ini_file, "r");
+    if (ini_check == NULL) {
+        char error_msg[1024];
+        snprintf(error_msg, sizeof(error_msg),
+            "INI config file not found: '%s'. "
+            "Please ensure the file exists at this path.",
+            env->ini_file);
+        PyErr_SetString(PyExc_FileNotFoundError, error_msg);
+        return -1;
+    }
+    fclose(ini_check);
+
     if (ini_parse(env->ini_file, handler, &conf) < 0) {
-        printf("Error while loading %s", env->ini_file);
+        char error_msg[1024];
+        snprintf(error_msg, sizeof(error_msg),
+            "Failed to parse INI config file: '%s'", env->ini_file);
+        PyErr_SetString(PyExc_ValueError, error_msg);
+        return -1;
     }
     if (kwargs && PyDict_GetItemString(kwargs, "episode_length")) {
         conf.episode_length = (int)unpack(kwargs, "episode_length");
