@@ -75,6 +75,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
+    float goal_target_distance = unpack(kwargs, "goal_target_distance");
     int use_all_maps = unpack(kwargs, "use_all_maps");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
@@ -94,6 +95,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->control_mode = control_mode;
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
+        env->goal_target_distance = goal_target_distance;
         snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
         env->entities = load_map_binary(map_file, env);
         set_active_agents(env);
@@ -175,11 +177,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     if (ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
     }
-    if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) {
-        conf.scenario_length = (int)unpack(kwargs, "scenario_length");
+    if (kwargs && PyDict_GetItemString(kwargs, "episode_length")) {
+        conf.episode_length = (int)unpack(kwargs, "episode_length");
     }
-    if (conf.scenario_length <= 0) {
-        PyErr_SetString(PyExc_ValueError, "scenario_length must be > 0 (set in INI or kwargs)");
+    if (conf.episode_length <= 0) {
+        PyErr_SetString(PyExc_ValueError, "episode_length must be > 0 (set in INI or kwargs)");
         return -1;
     }
     env->action_type = conf.action_type;
@@ -188,8 +190,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
-    env->reward_ade = conf.reward_ade;
-    env->scenario_length = conf.scenario_length;
+    env->episode_length = conf.episode_length;
     env->termination_mode = conf.termination_mode;
     env->collision_behavior = conf.collision_behavior;
     env->offroad_behavior = conf.offroad_behavior;
@@ -198,7 +199,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
+    env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
+    env->goal_speed = (float)unpack(kwargs, "goal_speed");
     char *map_dir = unpack_str(kwargs, "map_dir");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");
@@ -223,8 +226,11 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
     assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
-    assign_to_dict(dict, "avg_offroad_per_agent", log->avg_offroad_per_agent);
-    assign_to_dict(dict, "avg_collisions_per_agent", log->avg_collisions_per_agent);
+    assign_to_dict(dict, "offroad_per_agent", log->offroad_per_agent);
+    assign_to_dict(dict, "collisions_per_agent", log->collisions_per_agent);
+    assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
+    assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
+    assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }

@@ -59,17 +59,13 @@ void demo() {
     c_render(&env);
     Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
-    // Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;
-    int step = 0;
     while (!WindowShouldClose()) {
         // Handle camera controls
         int (*actions)[2] = (int (*)[2])env.actions;
         forward(net, env.observations, env.actions);
-        printf("Forward for step : %d\n", step);
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
-            printf("Running internal loop");
             actions[env.human_agent_idx][0] = 3;
             actions[env.human_agent_idx][1] = 6;
             if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
@@ -104,14 +100,9 @@ void demo() {
                 env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
             }
         }
-        printf("Entering c_step for step : %d\n", step);
-        printf("About to call c_step\n");
         fflush(stdout); // Force it to write NOW
         c_step(&env);
-        printf("c_step for step : %d\n", step);
         c_render(&env);
-        printf("c_render for step : %d\n", step);
-        step++;
     }
 
     close_client(env.client);
