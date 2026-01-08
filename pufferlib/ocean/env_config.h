@@ -99,12 +99,11 @@ static int handler(void *config, const char *section, const char *name, const ch
         // printf("Parsed map_dir: '%s'\n", env_config->map_dir);
     } else if (MATCH("env", "num_maps")) {
         env_config->num_maps = atoi(value);
-        else {
-            return 0; // Unknown section/name, indicate failure to handle
-        }
+    } else {
+        return 0; // Unknown section/name, indicate failure to handle
+    }
 
 #undef MATCH
-        return 1;
-    }
+    return 1;
 
 #endif // ENV_CONFIG_H
