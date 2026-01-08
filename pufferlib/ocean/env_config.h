@@ -105,5 +105,5 @@ static int handler(void *config, const char *section, const char *name, const ch
 
 #undef MATCH
     return 1;
-
+}
 #endif // ENV_CONFIG_H
