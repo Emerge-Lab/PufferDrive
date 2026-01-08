@@ -68,7 +68,17 @@ static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
 }
 
 static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
-    char *map_dir = unpack_str(kwargs, "map_dir");
+    // Get map_files list from Python (already sorted, full paths)
+    PyObject *map_files_list = PyDict_GetItemString(kwargs, "map_files");
+    if (map_files_list == NULL || !PyList_Check(map_files_list)) {
+        PyErr_SetString(PyExc_TypeError, "map_files must be a list of strings");
+        return NULL;
+    }
+    int map_file_count = PyList_Size(map_files_list);
+    if (map_file_count == 0) {
+        PyErr_SetString(PyExc_ValueError, "map_files list is empty");
+        return NULL;
+    }
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
     int init_mode = unpack(kwargs, "init_mode");
@@ -88,7 +98,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *map_ids = PyList_New(max_envs);
     // getting env count
     while (use_all_maps ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
-        char map_file[512];
         int map_id = use_all_maps ? map_idx++ : rand() % num_maps;
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
@@ -96,8 +105,10 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
         env->goal_target_distance = goal_target_distance;
-        snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
-        env->entities = load_map_binary(map_file, env);
+        // Get map file path from Python list
+        PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
+        const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
+        env->entities = load_map_binary(map_file_path, env);
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
@@ -202,14 +213,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->goal_speed = (float)unpack(kwargs, "goal_speed");
-    char *map_dir = unpack_str(kwargs, "map_dir");
-    int map_id = unpack(kwargs, "map_id");
+    char *map_path = unpack_str(kwargs, "map_path");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
-    char map_file[512];
-    snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
     env->num_agents = max_agents;
-    env->map_name = strdup(map_file);
+    env->map_name = map_path;
     env->init_steps = init_steps;
     env->timestep = init_steps;
     init(env);
