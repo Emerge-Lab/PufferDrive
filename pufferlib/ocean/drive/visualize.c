@@ -408,6 +408,13 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 }
 
 int main(int argc, char *argv[]) {
+    // Parse configuration from INI file
+    env_init_config conf = {0}; // Initialize to zero
+    const char *ini_file = "pufferlib/config/ocean/drive.ini";
+    if (ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        return -1;
+    }
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
@@ -419,7 +426,7 @@ int main(int argc, char *argv[]) {
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
-    int num_maps = 1;
+    int num_maps = conf.num_maps;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {

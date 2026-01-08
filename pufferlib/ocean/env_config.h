@@ -28,6 +28,7 @@ typedef struct {
     int init_steps;
     int init_mode;
     int control_mode;
+    int num_maps;
     char map_dir[256];
 } env_init_config;
 
@@ -96,12 +97,14 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->map_dir[sizeof(env_config->map_dir) - 1] = '\0';
         }
         // printf("Parsed map_dir: '%s'\n", env_config->map_dir);
-    } else {
-        return 0; // Unknown section/name, indicate failure to handle
-    }
+    } else if (MATCH("env", "num_maps")) {
+        env_config->num_maps = atoi(value);
+        else {
+            return 0; // Unknown section/name, indicate failure to handle
+        }
 
 #undef MATCH
-    return 1;
-}
+        return 1;
+    }
 
 #endif // ENV_CONFIG_H
