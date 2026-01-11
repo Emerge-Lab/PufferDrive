@@ -6,6 +6,7 @@
 
 - [Getting started](getting-started.md)
 - [Training agents](train.md)
+- [Cluster training](cluster.md)
 - [Interact with agents](interact-with-agents.md)
 - [Simulator](simulator.md)
 - [Interactive scenario editor](scene-editor.md)
