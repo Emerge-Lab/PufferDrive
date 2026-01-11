@@ -205,6 +205,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->episode_length = conf.episode_length;
     env->termination_mode = conf.termination_mode;
+    env->speed_based_collisions_reward = conf.speed_based_collisions_reward;
     env->collision_behavior = conf.collision_behavior;
     env->offroad_behavior = conf.offroad_behavior;
     env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");

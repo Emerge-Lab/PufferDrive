@@ -241,6 +241,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
+        .speed_based_collisions_reward = conf.speed_based_collisions_reward,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .init_steps = conf.init_steps,

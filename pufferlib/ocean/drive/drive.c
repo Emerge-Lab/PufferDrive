@@ -51,6 +51,7 @@ void demo() {
         .dt = 0.1f,
         .episode_length = 300,
         .termination_mode = 0,
+        .speed_based_collisions_reward = 0,
         .collision_behavior = 0,
         .offroad_behavior = 0,
         .init_steps = 0,

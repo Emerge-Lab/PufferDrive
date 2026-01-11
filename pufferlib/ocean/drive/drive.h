@@ -319,6 +319,7 @@ struct Drive {
     int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
+    int speed_based_collisions_reward;
     float goal_target_distance;
     char *ini_file;
     char *scenario_id;
@@ -2081,9 +2082,14 @@ void c_step(Drive *env) {
 
         if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION) {
-                float collision_reward = compute_collision_reward(env, agent_idx);
-                env->rewards[i] += collision_reward;
-                env->logs[i].episode_return += collision_reward;
+                if (env->speed_based_collisions_reward == 1) {
+                    float collision_reward = compute_collision_reward(env, agent_idx);
+                    env->rewards[i] += collision_reward;
+                    env->logs[i].episode_return += collision_reward;
+                } else {
+                    env->rewards[i] += env->reward_vehicle_collision;
+                    env->logs[i].episode_return += env->reward_vehicle_collision;
+                }
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].collisions_per_agent += 1.0f;
             } else if (collision_state == OFFROAD) {

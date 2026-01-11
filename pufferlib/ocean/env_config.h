@@ -25,6 +25,7 @@ typedef struct {
     float goal_target_distance;
     int episode_length;
     int termination_mode;
+    int speed_based_collisions_reward;
     int init_steps;
     int init_mode;
     int control_mode;
@@ -84,6 +85,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->episode_length = atoi(value);
     } else if (MATCH("env", "termination_mode")) {
         env_config->termination_mode = atoi(value);
+    } else if (MATCH("env", "speed_based_collisions_reward")) {
+        env_config->speed_based_collisions_reward = atoi(value);
     } else if (MATCH("env", "init_steps")) {
         env_config->init_steps = atoi(value);
     } else if (MATCH("env", "init_mode")) {

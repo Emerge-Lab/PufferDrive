@@ -30,6 +30,7 @@ class Drive(pufferlib.PufferEnv):
         dt=0.1,
         episode_length=None,
         termination_mode=None,
+        speed_based_collisions_reward=0,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
@@ -63,6 +64,7 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.episode_length = episode_length
         self.termination_mode = termination_mode
+        self.speed_based_collisions_reward = speed_based_collisions_reward
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
 
@@ -206,6 +208,7 @@ class Drive(pufferlib.PufferEnv):
                 dt=dt,
                 episode_length=(int(episode_length) if episode_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
+                speed_based_collisions_reward=int(self.speed_based_collisions_reward),
                 max_controlled_agents=self.max_controlled_agents,
                 map_path=self.map_files[map_ids[i]],
                 max_agents=nxt - cur,
