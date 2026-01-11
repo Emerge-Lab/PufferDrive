@@ -33,3 +33,7 @@ xvfb-run -s "-screen 0 1280x720x24" ./visualize
 ```
 
 Adjust the screen size and color depth as needed. The `xvfb-run` wrapper allows Raylib to render without an attached display, which is convenient for servers and CI jobs.
+
+## Additional Note
+
+- The file `drive.ini` provides a `zoom_in` parameter. Its value is set as `True` by default but can be modified to `False` in case the displayed map over visualizer looks off scale/position.
