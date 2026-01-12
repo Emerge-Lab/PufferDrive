@@ -2177,6 +2177,8 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->steering_angle = new_steering_angle;
     }
 
+    // Free allocated memory
+    free(entity_list);
     return;
 }
 
