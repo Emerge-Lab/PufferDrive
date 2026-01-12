@@ -2003,7 +2003,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].steering_angle = 0.0f;
 }
 
-double sigmoid(float x) { return 1.0 / (1.0 + exp(-x)); }
+float sigmoid(float x) { return 1.0 / (1.0 + exp(-x)); }
 
 float compute_collision_reward(Drive *env, int agent_idx) {
 
@@ -2014,8 +2014,8 @@ float compute_collision_reward(Drive *env, int agent_idx) {
     // get env reward
     float collision_reward = env->reward_vehicle_collision;
 
-    // normalize speed such that 0 m/s gets a 50% of the reward and it gets 95% of the reward at 10 m/s
-    float rescaled_speed = current_speed / (10 / 3); // rescale so that 10 becomes 3
+    // normalize speed such that 0 m/s gets a 50% of the reward and 10 m/s gets 95% of the reward
+    float rescaled_speed = current_speed * 3.0f / 10.0f; // rescale so that 10 becomes 3
 
     // compute the sigmoid form
     float collision_reward_rescaled = collision_reward * sigmoid(rescaled_speed);
