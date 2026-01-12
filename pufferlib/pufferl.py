@@ -282,7 +282,7 @@ class PuffeRL:
                     env_counter += 1
 
             adv_r = torch.zeros_like(r)
-            indices = torch.arange(len(adv_r))
+            indices = torch.arange(len(adv_r), device=device)
             indices *= target_mask
             indices = torch.cummax(indices, dim=0)[0]
             adv_r = torch.where(target_mask, r[indices], -r[indices])
