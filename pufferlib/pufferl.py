@@ -475,7 +475,7 @@ class PuffeRL:
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
             v_loss = (v_loss * loss_mask).sum() / loss_mask.sum()
 
-            entropy_loss = entropy.view(v_loss.shape)  # Can this be wrong ?
+            entropy_loss = entropy.view(mb_target_masks.shape)  # Can this be wrong ?
             entropy_loss = (entropy_loss * loss_mask).sum() / loss_mask.sum()
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
