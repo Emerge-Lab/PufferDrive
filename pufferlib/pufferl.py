@@ -111,6 +111,9 @@ class PuffeRL:
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
         )
         self.values = torch.zeros(segments, horizon, device=device)
+
+        self.target_masks = torch.zeros(segments, horizon, device=device)
+
         self.logprobs = torch.zeros(segments, horizon, device=device)
         self.rewards = torch.zeros(segments, horizon, device=device)
         self.terminals = torch.zeros(segments, horizon, device=device)
@@ -277,7 +280,7 @@ class PuffeRL:
                 agent_offsets = information.get("agent_offsets", None)
 
                 if agent_offsets:
-                    agent_offsets = torch.tensor(agent_offsets, dtype=int, device=device)
+                    agent_offsets = torch.tensor(agent_offsets, dtype=torch.int, device=device)
                     target_mask[agent_offsets[:-1] + env_counter * num_agents_per_worker] = 1
                     env_counter += 1
 
@@ -326,6 +329,7 @@ class PuffeRL:
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = d.float()
                 self.values[batch_rows, l] = value.flatten()
+                self.target_masks[batch_rows, l] = target_mask
 
                 # Note: We are not yet handling masks in this version
                 self.ep_lengths[env_id] += 1
@@ -408,6 +412,7 @@ class PuffeRL:
             mb_truncations = self.truncations[idx]
             mb_ratio = self.ratio[idx]
             mb_values = self.values[idx]
+            mb_target_masks = self.target_masks[idx].to(torch.bool)
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
 
@@ -448,20 +453,30 @@ class PuffeRL:
                 config["vtrace_c_clip"],
             )
             adv = mb_advantages
-            adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
+            # I wasn't rescaling the advantages properly, this might make things better
+            filtered_adv = adv[~mb_target_masks]
+            f_mean = filtered_adv.mean()
+            f_std = filtered_adv.std()
+
+            adv = mb_prio * (adv - f_mean) / (f_std + 1e-8)
+
+            loss_mask = (~mb_target_masks).float()
             # Losses
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+            pg_loss = torch.max(pg_loss1, pg_loss2)
+            pg_loss = (pg_loss * loss_mask).sum() / loss_mask.sum()
 
             newvalue = newvalue.view(mb_returns.shape)
             v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
-            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
+            v_loss = (v_loss * loss_mask).sum() / loss_mask.sum()
 
-            entropy_loss = entropy.mean()
+            entropy_loss = entropy.view(v_loss.shape)  # Can this be wrong ?
+            entropy_loss = (entropy_loss * loss_mask).sum() / loss_mask.sum()
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
