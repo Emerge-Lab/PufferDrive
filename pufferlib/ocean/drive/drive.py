@@ -205,7 +205,7 @@ class Drive(pufferlib.PufferEnv):
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
-        return self.observations, []
+        return self.observations, [{"agent_offsets": self.agent_offsets}]
 
     def step(self, actions):
         self.terminals[:] = 0
@@ -277,6 +277,8 @@ class Drive(pufferlib.PufferEnv):
 
             binding.vec_reset(self.c_envs, seed)
             self.terminals[:] = 1
+
+        info.append({"agent_offsets": self.agent_offsets})
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):

@@ -267,6 +267,28 @@ class PuffeRL:
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
 
+            num_agents_per_worker = self.vecenv.driver_env.num_agents
+            num_agents_per_batch = self.vecenv.agents_per_batch
+
+            target_mask = torch.zeros(num_agents_per_batch, dtype=torch.bool, device=device)
+
+            env_counter = 0
+            for information in info:
+                agent_offsets = information.get("agent_offsets", None)
+
+                if agent_offsets:
+                    agent_offsets = torch.tensor(agent_offsets, dtype=int, device=device)
+                    target_mask[agent_offsets[:-1] + env_counter * num_agents_per_worker] = 1
+                    env_counter += 1
+
+            adv_r = torch.zeros_like(r)
+            indices = torch.arange(len(adv_r))
+            indices *= target_mask
+            indices = torch.cummax(indices, dim=0)[0]
+            adv_r = torch.where(target_mask, r[indices], -r[indices])
+
+            r = adv_r
+
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
                 state = dict(
