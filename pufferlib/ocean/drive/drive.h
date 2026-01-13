@@ -2858,7 +2858,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float y_end = y_middle + segment_length * sinf(rel_angle);
 
         if (lasers && mode == 0) {
-            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x_middle, y_middle, 1}, lineColor);
+            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x_middle, y_middle, z_middle}, lineColor);
         }
 
         if (mode == 1) {
@@ -2868,14 +2868,14 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             float y_start_world = py + (x_start * heading_self_y + y_start * heading_self_x);
             float x_end_world = px + (x_end * heading_self_x - y_end * heading_self_y);
             float y_end_world = py + (x_end * heading_self_y + y_end * heading_self_x);
-            DrawCube((Vector3){x_middle_world, y_middle_world, 1}, 0.5f, 0.5f, 0.5f, lineColor);
-            DrawLine3D((Vector3){x_start_world, y_start_world, 1}, (Vector3){x_end_world, y_end_world, 1}, BLUE);
+            DrawCube((Vector3){x_middle_world, y_middle_world, pz}, 0.5f, 0.5f, 0.5f, lineColor);
+            DrawLine3D((Vector3){x_start_world, y_start_world, pz}, (Vector3){x_end_world, y_end_world, pz}, BLUE);
             if (lasers)
-                DrawLine3D((Vector3){px, py, 1}, (Vector3){x_middle_world, y_middle_world, 1}, lineColor);
+                DrawLine3D((Vector3){px, py, pz}, (Vector3){x_middle_world, y_middle_world, pz}, lineColor);
         }
         if (mode == 0) {
-            DrawCube((Vector3){x_middle, y_middle, 1}, 0.5f, 0.5f, 0.5f, lineColor);
-            DrawLine3D((Vector3){x_start, y_start, 1}, (Vector3){x_end, y_end, 1}, BLUE);
+            DrawCube((Vector3){x_middle, y_middle, z_middle}, 0.5f, 0.5f, 0.5f, lineColor);
+            DrawLine3D((Vector3){x_start, y_start, pz}, (Vector3){x_end, y_end, pz}, BLUE);
         }
     }
 }
