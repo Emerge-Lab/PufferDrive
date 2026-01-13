@@ -8,14 +8,6 @@
 #include <string.h>
 #include <assert.h>
 
-#define MAX_ROAD_OBJECTS 128
-#define MAX_PARTNER_OBJECTS 31
-#define ROAD_FEATURES 7
-#define ROAD_FEATURES_AFTER_ONEHOT 13
-#define PARTNER_FEATURES 7
-#define INPUT_SIZE 64
-#define HIDDEN_SIZE 256
-
 #define NN_INPUT_SIZE 64
 #define NN_HIDDEN_SIZE 256
 
@@ -93,14 +85,12 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model) {
 
     net->ego_encoder = make_linear(weights, num_agents, ego_dim, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
-    net->ego_relu = make_relu(num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->road_encoder = make_linear(weights, num_agents, road_feat_onehot, input_size);
     net->road_layernorm = make_layernorm(weights, num_agents, input_size);
     net->road_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->partner_encoder = make_linear(weights, num_agents, partner_features, input_size);
     net->partner_layernorm = make_layernorm(weights, num_agents, input_size);
-    net->partner_relu = make_relu(num_agents, input_size);
     net->partner_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->partner_max = make_max_dim1(num_agents, max_partners, input_size);
     net->road_max = make_max_dim1(num_agents, max_road_obs, input_size);
@@ -109,7 +99,6 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model) {
     net->gelu = make_gelu(num_agents, 3 * input_size);
     net->shared_embedding = make_linear(weights, num_agents, input_size * 3, hidden_size);
     net->relu = make_relu(num_agents, hidden_size);
-
     net->actor = make_linear(weights, num_agents, hidden_size, action_size);
     net->value_fn = make_linear(weights, num_agents, hidden_size, 1);
     net->lstm = make_lstm(weights, num_agents, hidden_size, NN_HIDDEN_SIZE);
@@ -123,33 +112,25 @@ void free_drivenet(DriveNet *net) {
     free(net->obs_self);
     free(net->obs_partner);
     free(net->obs_road);
-    free(net->obs_full);
-    free(net->ego_relu_output);
     free(net->partner_linear_output);
     free(net->road_linear_output);
     free(net->partner_linear_output_two);
     free(net->road_linear_output_two);
     free(net->partner_layernorm_output);
     free(net->road_layernorm_output);
-    free(net->partner_relu_output);
     free(net->ego_encoder);
     free(net->road_encoder);
     free(net->partner_encoder);
     free(net->ego_layernorm);
     free(net->road_layernorm);
     free(net->partner_layernorm);
-    free(net->ego_relu);
-    free(net->partner_relu);
     free(net->ego_encoder_two);
     free(net->road_encoder_two);
     free(net->partner_encoder_two);
-    free(net->full_scene_encoder);
-    free(net->full_scene_layernorm);
     free(net->partner_max);
     free(net->road_max);
     free(net->cat1);
     free(net->cat2);
-    free(net->cat3);
     free(net->gelu);
     free(net->shared_embedding);
     free(net->relu);
@@ -181,7 +162,6 @@ void forward(DriveNet *net, float *observations, int *actions) {
         // Process self observation
         for (int i = 0; i < ego_dim; i++) {
             net->obs_self[b * ego_dim + i] = observations[b_offset + i];
-            net->obs_full[b * net->obs_size + i] = observations[b_offset + i];
         }
 
         // Process partner observation
@@ -207,22 +187,13 @@ void forward(DriveNet *net, float *observations, int *actions) {
                                   6 + j] = 0.0f;
                 }
             }
-
-            // Store original features in obs_full (not one-hot)
-            for (int j = 0; j < ROAD_FEATURES; j++) {
-                net->obs_full[b * net->obs_size + ego_dim + MAX_PARTNER_OBJECTS * PARTNER_FEATURES + i * ROAD_FEATURES +
-                              j] = observations[road_offset + i * ROAD_FEATURES + j];
-            }
         }
     }
 
-    // Ego encoder: Linear -> LayerNorm -> ReLU -> Linear
+    // Forward pass through the network
     linear(net->ego_encoder, net->obs_self);
     layernorm(net->ego_layernorm, net->ego_encoder->output);
-    relu(net->ego_relu, net->ego_layernorm->output);
-    linear(net->ego_encoder_two, net->ego_relu->output);
-
-    // Partner encoder: Linear -> LayerNorm -> ReLU -> Linear (per object)
+    linear(net->ego_encoder_two, net->ego_layernorm->output);
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_partners; obj++) {
             // Get the 7 features for this object
@@ -242,7 +213,6 @@ void forward(DriveNet *net, float *observations, int *actions) {
                        NN_INPUT_SIZE);
         }
     }
-
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_partners; obj++) {
             // Get the 7 features for this object
@@ -255,7 +225,7 @@ void forward(DriveNet *net, float *observations, int *actions) {
         }
     }
 
-    // Road encoder: Linear -> LayerNorm -> Linear (per object, NO ReLU)
+    // Process road objects: apply linear to each object individually
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_road_obs; obj++) {
             // Get the 13 features for this object
@@ -267,6 +237,7 @@ void forward(DriveNet *net, float *observations, int *actions) {
         }
     }
 
+    // Apply layer norm and second linear to each road object
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_road_obs; obj++) {
             float *after_first = &net->road_linear_output[b * max_road_obs * NN_INPUT_SIZE + obj * NN_INPUT_SIZE];
@@ -275,7 +246,6 @@ void forward(DriveNet *net, float *observations, int *actions) {
                        NN_INPUT_SIZE);
         }
     }
-
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < max_road_obs; obj++) {
             float *after_first = &net->road_layernorm_output[b * max_road_obs * NN_INPUT_SIZE + obj * NN_INPUT_SIZE];
@@ -285,29 +255,17 @@ void forward(DriveNet *net, float *observations, int *actions) {
         }
     }
 
-    // Full scene encoder: Linear -> LayerNorm
-    linear(net->full_scene_encoder, net->obs_full);
-    layernorm(net->full_scene_layernorm, net->full_scene_encoder->output);
-
-    // Max pooling over objects
     max_dim1(net->partner_max, net->partner_linear_output_two);
     max_dim1(net->road_max, net->road_linear_output_two);
-
-    // Concatenate: ego + road + partner + full_scene
     cat_dim1(net->cat1, net->ego_encoder_two->output, net->road_max->output);
     cat_dim1(net->cat2, net->cat1->output, net->partner_max->output);
-    cat_dim1(net->cat3, net->cat2->output, net->full_scene_layernorm->output);
-
-    // Shared embedding: GELU -> Linear
-    gelu(net->gelu, net->cat3->output);
+    gelu(net->gelu, net->cat2->output);
     linear(net->shared_embedding, net->gelu->output);
     relu(net->relu, net->shared_embedding->output);
-
-    // LSTM and output
     lstm(net->lstm, net->relu->output);
     linear(net->actor, net->lstm->state_h);
     linear(net->value_fn, net->lstm->state_h);
 
-    // Get action
+    // Get action by taking argmax of actor output
     softmax_multidiscrete(net->multidiscrete, net->actor->output, actions);
 }

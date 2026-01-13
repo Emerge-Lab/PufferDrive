@@ -272,33 +272,6 @@ float normalize_heading(float heading) {
     return heading;
 }
 
-float compute_displacement_error(Entity *agent, int timestep) {
-    // Check if timestep is within valid range
-    if (timestep < 0 || timestep >= agent->array_size) {
-        return 0.0f;
-    }
-
-    // Check if reference trajectory is valid at this timestep
-    if (!agent->traj_valid[timestep]) {
-        return 0.0f;
-    }
-
-    // Get reference position at current timestep, skip invalid ones
-    float ref_x = agent->traj_x[timestep];
-    float ref_y = agent->traj_y[timestep];
-
-    if (ref_x == INVALID_POSITION || ref_y == INVALID_POSITION) {
-        return 0.0f;
-    }
-
-    // Compute deltas: Euclidean distance between actual and reference position
-    float dx = agent->x - ref_x;
-    float dy = agent->y - ref_y;
-    float displacement = sqrtf(dx * dx + dy * dy);
-
-    return displacement;
-}
-
 typedef struct GridMapEntity GridMapEntity;
 struct GridMapEntity {
     int entity_idx;
@@ -1728,14 +1701,6 @@ float clipSpeed(float speed) {
     return speed;
 }
 
-float normalize_heading(float heading) {
-    if (heading > M_PI)
-        heading -= 2 * M_PI;
-    if (heading < -M_PI)
-        heading += 2 * M_PI;
-    return heading;
-}
-
 float normalize_value(float value, float min, float max) { return (value - min) / (max - min); }
 
 void move_dynamics(Drive *env, int action_idx, int agent_idx) {
@@ -2372,15 +2337,6 @@ void c_step(Drive *env) {
 
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
-
-        // Apply ADE reward
-        float current_ade = env->entities[agent_idx].metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
-        if (current_ade > 0.0f && env->reward_ade != 0.0f) {
-            float ade_reward = env->reward_ade * current_ade;
-            env->rewards[i] += ade_reward;
-            env->logs[i].episode_return += ade_reward;
-        }
-        env->logs[i].avg_displacement_error = current_ade;
 
         // Apply guided autonomy reward
         if (env->use_guided_autonomy) {
