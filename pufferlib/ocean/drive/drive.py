@@ -7,6 +7,8 @@ import math
 import torch
 import pufferlib
 from pufferlib.ocean.drive import binding
+from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
 
 
 class Drive(pufferlib.PufferEnv):
@@ -21,17 +23,19 @@ class Drive(pufferlib.PufferEnv):
         reward_offroad_collision=-0.1,
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
-        reward_ade=0.0,
         use_guided_autonomy=0,
         guidance_speed_weight=0.0,
         guidance_heading_weight=0.0,
         waypoint_reach_threshold=2.0,
         goal_behavior=0,
+        goal_target_distance=10.0,
         goal_radius=2.0,
+        goal_speed=20.0,
         collision_behavior=0,
         offroad_behavior=0,
         dt=0.1,
-        scenario_length=None,
+        episode_length=None,
+        termination_mode=None,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
@@ -50,6 +54,7 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
+        use_all_maps=False,
     ):
         # env
         self.dt = dt
@@ -61,33 +66,40 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
+        self.goal_speed = goal_speed
         self.goal_behavior = goal_behavior
+        self.goal_target_distance = goal_target_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
-        self.reward_ade = reward_ade
         self.use_guided_autonomy = use_guided_autonomy
         self.guidance_speed_weight = guidance_speed_weight
         self.guidance_heading_weight = guidance_heading_weight
         self.waypoint_reach_threshold = waypoint_reach_threshold
         self.human_agent_idx = human_agent_idx
-        self.scenario_length = scenario_length
+        self.episode_length = episode_length
+        self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
 
         # Observation space calculation
-        if dynamics_model == "classic":
-            ego_features = 7
-        elif dynamics_model == "jerk":
-            ego_features = 10
-        else:
-            raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+        self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
+            dynamics_model
+        )
 
-        self.ego_features = ego_features
-        partner_features = 7
-        road_features = 7
-        self.num_obs = ego_features + other_objects * partner_features + road_points * road_features
+        # Extract observation shapes from constants
+        # These need to be defined in C, since they determine the shape of the arrays
+        self.max_road_objects = binding.MAX_ROAD_SEGMENT_OBSERVATIONS
+        self.max_partner_objects = binding.MAX_AGENTS - 1
+        self.partner_features = binding.PARTNER_FEATURES
+        self.road_features = binding.ROAD_FEATURES
 
+        self.num_obs = (
+            self.ego_features
+            + self.max_partner_objects * self.partner_features
+            + self.max_road_objects * self.road_features
+        )
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+
         self.init_steps = init_steps
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
@@ -123,7 +135,8 @@ class Drive(pufferlib.PufferEnv):
                 # Multi discrete (assume independence)
                 # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
             elif dynamics_model == "jerk":
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([4, 3])
+                # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
             else:
                 raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
@@ -158,9 +171,12 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            goal_target_distance=self.goal_target_distance,
+            use_all_maps=use_all_maps,
         )
 
-        self.num_agents = num_agents
+        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if use_all_maps
+        self.num_agents = num_agents if not use_all_maps else agent_offsets[-1]
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -182,17 +198,19 @@ class Drive(pufferlib.PufferEnv):
                 reward_offroad_collision=reward_offroad_collision,
                 reward_goal=reward_goal,
                 reward_goal_post_respawn=reward_goal_post_respawn,
-                reward_ade=reward_ade,
                 use_guided_autonomy=use_guided_autonomy,
                 guidance_speed_weight=guidance_speed_weight,
                 guidance_heading_weight=guidance_heading_weight,
                 waypoint_reach_threshold=waypoint_reach_threshold,
                 goal_radius=goal_radius,
+                goal_speed=goal_speed,
                 goal_behavior=self.goal_behavior,
+                goal_target_distance=self.goal_target_distance,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
-                scenario_length=(int(scenario_length) if scenario_length is not None else None),
+                episode_length=(int(episode_length) if episode_length is not None else None),
+                termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
@@ -225,68 +243,73 @@ class Drive(pufferlib.PufferEnv):
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs)
+            log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
                 info.append(log)
                 # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
-            will_resample = 1
-            if will_resample:
-                binding.vec_close(self.c_envs)
-                agent_offsets, map_ids, num_envs = binding.shared(
-                    num_agents=self.num_agents,
-                    num_maps=self.num_maps,
+            binding.vec_close(self.c_envs)
+            agent_offsets, map_ids, num_envs = binding.shared(
+                num_agents=self.num_agents,
+                num_maps=self.num_maps,
+                init_mode=self.init_mode,
+                control_mode=self.control_mode,
+                init_steps=self.init_steps,
+                max_controlled_agents=self.max_controlled_agents,
+                goal_behavior=self.goal_behavior,
+                goal_target_distance=self.goal_target_distance,
+                goal_speed=self.goal_speed,
+                map_dir=self.map_dir,
+                use_all_maps=False,
+            )
+            self.agent_offsets = agent_offsets
+            self.map_ids = map_ids
+            self.num_envs = num_envs
+            env_ids = []
+            seed = np.random.randint(0, 2**32 - 1)
+            for i in range(num_envs):
+                cur = agent_offsets[i]
+                nxt = agent_offsets[i + 1]
+                env_id = binding.env_init(
+                    self.observations[cur:nxt],
+                    self.actions[cur:nxt],
+                    self.rewards[cur:nxt],
+                    self.terminals[cur:nxt],
+                    self.truncations[cur:nxt],
+                    seed,
+                    action_type=self._action_type_flag,
+                    human_agent_idx=self.human_agent_idx,
+                    reward_vehicle_collision=self.reward_vehicle_collision,
+                    reward_offroad_collision=self.reward_offroad_collision,
+                    reward_goal=self.reward_goal,
+                    reward_goal_post_respawn=self.reward_goal_post_respawn,
+                    use_guided_autonomy=self.use_guided_autonomy,
+                    guidance_speed_weight=self.guidance_speed_weight,
+                    guidance_heading_weight=self.guidance_heading_weight,
+                    waypoint_reach_threshold=self.waypoint_reach_threshold,
+                    goal_radius=self.goal_radius,
+                    goal_behavior=self.goal_behavior,
+                    goal_target_distance=self.goal_target_distance,
+                    goal_speed=self.goal_speed,
+                    collision_behavior=self.collision_behavior,
+                    offroad_behavior=self.offroad_behavior,
+                    dt=self.dt,
+                    episode_length=(int(self.episode_length) if self.episode_length is not None else None),
+                    max_controlled_agents=self.max_controlled_agents,
+                    map_id=map_ids[i],
+                    max_agents=nxt - cur,
+                    ini_file="pufferlib/config/ocean/drive.ini",
+                    init_steps=self.init_steps,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
-                    init_steps=self.init_steps,
-                    max_controlled_agents=self.max_controlled_agents,
-                    goal_behavior=self.goal_behavior,
                     map_dir=self.map_dir,
                 )
-                env_ids = []
-                seed = np.random.randint(0, 2**32 - 1)
-                for i in range(num_envs):
-                    cur = agent_offsets[i]
-                    nxt = agent_offsets[i + 1]
-                    env_id = binding.env_init(
-                        self.observations[cur:nxt],
-                        self.actions[cur:nxt],
-                        self.rewards[cur:nxt],
-                        self.terminals[cur:nxt],
-                        self.truncations[cur:nxt],
-                        seed,
-                        action_type=self._action_type_flag,
-                        human_agent_idx=self.human_agent_idx,
-                        reward_vehicle_collision=self.reward_vehicle_collision,
-                        reward_offroad_collision=self.reward_offroad_collision,
-                        reward_goal=self.reward_goal,
-                        reward_goal_post_respawn=self.reward_goal_post_respawn,
-                        reward_ade=self.reward_ade,
-                        use_guided_autonomy=self.use_guided_autonomy,
-                        guidance_speed_weight=self.guidance_speed_weight,
-                        guidance_heading_weight=self.guidance_heading_weight,
-                        waypoint_reach_threshold=self.waypoint_reach_threshold,
-                        goal_radius=self.goal_radius,
-                        goal_behavior=self.goal_behavior,
-                        collision_behavior=self.collision_behavior,
-                        offroad_behavior=self.offroad_behavior,
-                        dt=self.dt,
-                        scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
-                        max_controlled_agents=self.max_controlled_agents,
-                        map_id=map_ids[i],
-                        max_agents=nxt - cur,
-                        ini_file="pufferlib/config/ocean/drive.ini",
-                        init_steps=self.init_steps,
-                        init_mode=self.init_mode,
-                        control_mode=self.control_mode,
-                        map_dir=self.map_dir,
-                    )
-                    env_ids.append(env_id)
-                self.c_envs = binding.vectorize(*env_ids)
+                env_ids.append(env_id)
+            self.c_envs = binding.vectorize(*env_ids)
 
-                binding.vec_reset(self.c_envs, seed)
-                self.terminals[:] = 1
+            binding.vec_reset(self.c_envs, seed)
+            self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):
@@ -330,11 +353,11 @@ class Drive(pufferlib.PufferEnv):
         num_agents = self.num_agents
 
         trajectories = {
-            "x": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "y": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "z": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "heading": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "valid": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.int32),
+            "x": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "y": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "z": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "heading": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
+            "valid": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
             "scenario_id": np.zeros(num_agents, dtype=np.int32),
         }
@@ -580,7 +603,13 @@ def calculate_area(p1, p2, p3):
     return 0.5 * abs((p1["x"] - p3["x"]) * (p2["y"] - p1["y"]) - (p1["x"] - p2["x"]) * (p3["y"] - p1["y"]))
 
 
-def simplify_polyline(geometry, polyline_reduction_threshold):
+def dist(a, b):
+    dx = a["x"] - b["x"]
+    dy = a["y"] - b["y"]
+    return dx * dx + dy * dy
+
+
+def simplify_polyline(geometry, polyline_reduction_threshold, max_segment_length):
     """Simplify the given polyline using a method inspired by Visvalingham-Whyatt, optimized for Python."""
     num_points = len(geometry)
     if num_points < 3:
@@ -609,8 +638,7 @@ def simplify_polyline(geometry, polyline_reduction_threshold):
             point2 = geometry[k_1]
             point3 = geometry[k_2]
             area = calculate_area(point1, point2, point3)
-
-            if area < polyline_reduction_threshold:
+            if area < polyline_reduction_threshold and dist(point1, point3) <= max_segment_length:
                 skip[k_1] = True
                 skip_changed = True
                 k = k_2
@@ -639,8 +667,6 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(struct.pack("i", track_index))
 
         # Count total entities
-        print(len(map_data.get("objects", [])))
-        print(len(map_data.get("roads", [])))
         num_objects = len(map_data.get("objects", []))
         num_roads = len(map_data.get("roads", []))
         # num_entities = num_objects + num_roads
@@ -736,7 +762,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
                 road_type = 15
             # breakpoint()
             if len(geometry) > 10 and road_type <= 16:
-                geometry = simplify_polyline(geometry, 0.1)
+                geometry = simplify_polyline(geometry, 0.1, 250)
             size = len(geometry)
             # breakpoint()
             if road_type >= 0 and road_type <= 3:
@@ -783,12 +809,32 @@ def load_map(map_name, unique_map_id, binary_output=None):
         save_map_binary(map_data, binary_output, unique_map_id)
 
 
+def _process_single_map(args):
+    """Worker function to process a single map file"""
+    i, map_path, binary_path = args
+    try:
+        load_map(str(map_path), i, str(binary_path))
+        return (i, map_path.name, True, None)
+    except Exception as e:
+        return (i, map_path.name, False, str(e))
+
+
 def process_all_maps(
     data_folder="data/processed/training",
-    max_maps=10_000,
+    max_maps=50_000,
+    num_workers=None,
 ):
-    """Process all maps and save them as binaries"""
+    """Process all maps and save them as binaries using multiprocessing
+
+    Args:
+        data_folder: Path to the folder containing JSON map files
+        max_maps: Maximum number of maps to process
+        num_workers: Number of parallel workers (defaults to cpu_count())
+    """
     from pathlib import Path
+
+    if num_workers is None:
+        num_workers = cpu_count()
 
     # Path to the training data
     data_dir = Path(data_folder)
@@ -801,18 +847,28 @@ def process_all_maps(
     # Get all JSON files in the training directory
     json_files = sorted(data_dir.glob("*.json"))
 
-    print(f"Found {len(json_files)} JSON files in {data_folder}. Processing up to {max_maps} maps -> binaries.")
-
-    # Process each JSON file
+    # Prepare arguments for parallel processing
+    tasks = []
     for i, map_path in enumerate(json_files[:max_maps]):
-        binary_file = f"map_{i:03d}.bin"  # Use zero-padded numbers for consistent sorting
+        binary_file = f"map_{i:03d}.bin"
         binary_path = binary_dir / binary_file
+        tasks.append((i, map_path, binary_path))
 
-        print(f"Processing {map_path.name} -> {binary_file}")
-        # try:
-        load_map(str(map_path), i, str(binary_path))
-        # except Exception as e:
-        #     print(f"Error processing {map_path.name}: {e}")
+    # Process maps in parallel with progress bar
+    with Pool(num_workers) as pool:
+        results = list(
+            tqdm(pool.imap(_process_single_map, tasks), total=len(tasks), desc="Processing maps", unit="map")
+        )
+
+    # Collect statistics
+    successful = sum(1 for _, _, success, _ in results if success)
+    failed = sum(1 for _, _, success, _ in results if not success)
+
+    if failed > 0:
+        print(f"\nFailed {failed}/{len(results)} files:")
+        for i, name, success, error in results:
+            if not success:
+                print(f"  {name}: {error}")
 
 
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
@@ -824,7 +880,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         control_mode="control_vehicles",
         init_mode="create_all_valid",
         init_steps=0,
-        scenario_length=91,
+        episode_length=91,
     )
 
     env.reset()
@@ -851,3 +907,5 @@ if __name__ == "__main__":
     process_all_maps(data_folder="data/processed/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
+    # # Process the validation_interactive dataset
+    # process_all_maps(data_folder="data/processed/validation_interactive")

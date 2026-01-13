@@ -10,7 +10,7 @@
 
 typedef struct s_drive_config {
     int num_agents;
-    const char* action_type;
+    const char *action_type;
     int num_maps;
     int input_size;
     int hidden_size;
@@ -18,20 +18,15 @@ typedef struct s_drive_config {
     float key2;
     int key3;
     float key31;
-    char* key4;
-    char* key5;
+    char *key4;
+    char *key5;
     int key6;
-    char* key7;
+    char *key7;
 } drive_config;
 
 // Generic handler
-static int handler(
-    void* config,
-    const char* section,
-    const char* name,
-    const char* value
-) {
-    drive_config* env_config = (drive_config*)config;
+static int handler(void *config, const char *section, const char *name, const char *value) {
+    drive_config *env_config = (drive_config *)config;
     if (MATCH("env", "num_agents")) {
         env_config->num_agents = atoi(value);
     } else if (MATCH("env", "action_type")) {
@@ -65,15 +60,20 @@ static int handler(
 }
 
 void free_configurator(drive_config *config) {
-    if(config->action_type) free((void*)config->action_type);
-    if(config->key4) free((void*)config->key4);
-    if(config->key5) free((void*)config->key5);
-    if(config->key7) free((void*)config->key7);
+    if (config->action_type)
+        free((void *)config->action_type);
+    if (config->key4)
+        free((void *)config->key4);
+    if (config->key5)
+        free((void *)config->key5);
+    if (config->key7)
+        free((void *)config->key7);
 }
 
 int test_values() {
     drive_config config;
-    if (ini_parse("test_drive.ini", handler, &config) < 0) return 1;
+    if (ini_parse("test_drive.ini", handler, &config) < 0)
+        return 1;
     assert(config.num_agents == 512);
     assert(strcmp(config.action_type, "discrete") == 0);
     assert(config.num_maps == 1);
@@ -85,7 +85,8 @@ int test_values() {
 
 int test_full_line_comment() {
     drive_config config;
-    if (ini_parse("test_drive.ini", handler, &config) < 0) return 1;
+    if (ini_parse("test_drive.ini", handler, &config) < 0)
+        return 1;
     assert(config.key1 == 1);
     assert(config.key2 == 2.5);
     assert(config.key3 != 3);
@@ -96,7 +97,8 @@ int test_full_line_comment() {
 
 int test_inline_comment() {
     drive_config config;
-    if (ini_parse("test_drive.ini", handler, &config) < 0) return 1;
+    if (ini_parse("test_drive.ini", handler, &config) < 0)
+        return 1;
     assert(strcmp(config.key5, "five") == 0);
     assert(config.key6 == 6);
     free_configurator(&config);
@@ -105,7 +107,8 @@ int test_inline_comment() {
 
 int test_problematic_inline_comment() {
     drive_config config;
-    if (ini_parse("test_drive.ini", handler, &config) < 0) return 1;
+    if (ini_parse("test_drive.ini", handler, &config) < 0)
+        return 1;
     // assert(strcmp(config.key4, "four") == 0); // should pass if comments where eluded
     assert(strcmp(config.key4, "four # and more") == 0); // # comments are interpreted as content
     // assert(strcmp(config.key7, "seven ; seven") == 0); // was expected to pass, actually fails
@@ -114,7 +117,7 @@ int test_problematic_inline_comment() {
     return 0;
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <test_name>\n", argv[0]);
         return 1;

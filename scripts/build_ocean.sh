@@ -33,6 +33,14 @@ mkdir -p "$WEB_OUTPUT_DIR"
 
 if [ "$MODE" = "web" ]; then
     echo "Building $ENV for web deployment..."
+
+    # Add MAX_AGENTS override for drive environment
+    EXTRA_FLAGS=""
+    if [ "$ENV" = "drive" ]; then
+        EXTRA_FLAGS="-DMAX_AGENTS=10"
+        echo "Setting MAX_AGENTS=10 for drive web build"
+    fi
+
     emcc \
         -o "$WEB_OUTPUT_DIR/game.html" \
         "$SRC_DIR/$ENV.c" \
@@ -60,8 +68,9 @@ if [ "$MODE" = "web" ]; then
         -DNDEBUG \
         -DPLATFORM_WEB \
         -DGRAPHICS_API_OPENGL_ES3 \
+        $EXTRA_FLAGS \
         --preload-file pufferlib/resources/$1@resources/$1 \
-        --preload-file pufferlib/resources/shared@resources/shared
+        #--preload-file pufferlib/resources/shared@resources/shared
     echo "Web build completed: $WEB_OUTPUT_DIR/game.html"
     echo "Preloaded files:"
     echo "  pufferlib/resources/$1@resources$1"

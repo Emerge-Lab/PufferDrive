@@ -170,6 +170,7 @@ pufferlib/resources/drive/binaries/validation/
 # But keep map_000.bin for the training test
 !pufferlib/resources/drive/binaries/map_000.bin
 !pufferlib/resources/drive/binaries/training/map_000.bin
+pufferlib/resources/drive/sanity/sanity_binaries/
 
 # Ignore human demonstration data
 pufferlib/resources/drive/human_demonstrations/*
@@ -189,3 +190,6 @@ pufferlib/resources/drive/output_agent.gif pufferlib/resources/drive/output.gif 
 artifacts/
 # Local drive renders
 pufferlib/resources/drive/output*.gif
+emsdk/
+docs/book/*
+!docs/book/assets/
