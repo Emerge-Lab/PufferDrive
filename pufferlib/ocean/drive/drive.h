@@ -2875,7 +2875,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         }
         if (mode == 0) {
             DrawCube((Vector3){x_middle, y_middle, z_middle}, 0.5f, 0.5f, 0.5f, lineColor);
-            DrawLine3D((Vector3){x_start, y_start, pz}, (Vector3){x_end, y_end, pz}, BLUE);
+            DrawLine3D((Vector3){x_start, y_start, z_middle}, (Vector3){x_end, y_end, z_middle}, BLUE);
         }
     }
 }
