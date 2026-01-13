@@ -43,30 +43,6 @@ class OriginalLinearMax(torch.nn.Module):
         return x
 
 
-class LinearMaxKernels(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, weight, bias):
-        out = torch.ops.pufferlib.linear_max_fused(x, weight, bias)
-        ctx.save_for_backward(x, weight)
-        return out
-
-    @staticmethod
-    def backward(ctx, grad_out):
-        x, weight = ctx.saved_tensors
-        grad_x, grad_weight, grad_bias = torch.ops.pufferlib.linear_max_fused_backward(grad_out.contiguous(), x, weight)
-        return grad_x, grad_weight, grad_bias
-
-
-class LinearMax(torch.nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super().__init__()
-        self.weight = torch.nn.Parameter(torch.empty(hidden_size, input_size).normal_(mean=0.0, std=input_size**-0.5))
-        self.bias = torch.nn.Parameter(torch.zeros(hidden_size))
-
-    def forward(self, x):
-        return LinearMaxKernels.apply(x, self.weight, self.bias)
-
-
 class LinearReluMaxKernel(torch.autograd.Function):
     """Custom kernel: Linear -> ReLU -> Max"""
 

@@ -523,69 +523,6 @@ float compute_guided_autonomy_reward(Drive *env, int agent_idx, int active_idx) 
     return total_reward;
 }
 
-struct AdjListNode {
-    int dest;
-    struct AdjListNode *next;
-};
-
-struct Graph {
-    int V;
-    struct AdjListNode **array;
-};
-
-// Function to create a new adjacency list node
-struct AdjListNode *newAdjListNode(int dest) {
-    struct AdjListNode *newNode = malloc(sizeof(struct AdjListNode));
-    newNode->dest = dest;
-    newNode->next = NULL;
-    return newNode;
-}
-
-// Function to create a graph of V vertices
-struct Graph *createGraph(int V) {
-    struct Graph *graph = malloc(sizeof(struct Graph));
-    graph->V = V;
-    graph->array = calloc(V, sizeof(struct AdjListNode *));
-    return graph;
-}
-
-// Function to get next lanes from a given lane entity index
-// Returns the number of next lanes found, fills next_lanes array with entity indices
-int getNextLanes(struct Graph *graph, int entity_idx, int *next_lanes, int max_lanes) {
-    if (!graph || entity_idx < 0 || entity_idx >= graph->V) {
-        return 0;
-    }
-
-    int count = 0;
-    struct AdjListNode *node = graph->array[entity_idx];
-
-    while (node && count < max_lanes) {
-        next_lanes[count] = node->dest;
-        count++;
-        node = node->next;
-    }
-
-    return count;
-}
-
-// Function to free the topology graph
-void freeTopologyGraph(struct Graph *graph) {
-    if (!graph)
-        return;
-
-    for (int i = 0; i < graph->V; i++) {
-        struct AdjListNode *node = graph->array[i];
-        while (node) {
-            struct AdjListNode *temp = node;
-            node = node->next;
-            free(temp);
-        }
-    }
-
-    free(graph->array);
-    free(graph);
-}
-
 Entity *load_map_binary(const char *filename, Drive *env) {
     FILE *file = fopen(filename, "rb");
     if (!file)
