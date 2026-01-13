@@ -1778,10 +1778,10 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 200]; // Array big enough for all neighboring cells
     int list_size =
         checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL * 200, collision_offsets, 200);
-    DepthPoint road_neighbours[list_size];
-    int max_check = (list_size < 20) ? list_size : 20;
-    int diffarray[max_check - 1];
     if (list_size > 0) {
+        DepthPoint road_neighbours[list_size];
+        int max_check = (list_size < 20) ? list_size : 20;
+        int diffarray[max_check - 1];
         // store an array masuring the distance of the agent with each road segment nearby
         for (int i = 0; i < list_size; i++) {
             if (entity_list[i].entity_idx == -1)
