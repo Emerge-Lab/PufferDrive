@@ -2,9 +2,9 @@ name: render-ci
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ 2.0 ]
   push:
-    branches: [ main ]
+    branches: [ 2.0 ]
 
 jobs:
   test-render:
