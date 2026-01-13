@@ -1792,10 +1792,10 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     // To update agent's z-coordinate based on road elevation of 20 nearest elements
     int list_size = 0;
     GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, collision_offsets, 225, &list_size);
-    DepthPoint road_neighbours[list_size];
-    int max_check = (list_size < 20) ? list_size : 20;
-    int diffarray[max_check - 1];
     if (list_size > 0) {
+        DepthPoint road_neighbours[list_size];
+        int max_check = (list_size < 20) ? list_size : 20;
+        int diffarray[max_check - 1];
         // store an array masuring the distance of the agent with each road segment nearby
         for (int i = 0; i < list_size; i++) {
             if (entity_list[i].entity_idx == -1)
