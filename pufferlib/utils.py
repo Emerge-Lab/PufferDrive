@@ -91,12 +91,6 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
         model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
 
-        if not model_files:
-            print("No model files found for WOSAC evaluation")
-            return
-
-        latest_cpt = max(model_files, key=os.path.getctime)
-
         # Prepare evaluation command
         eval_config = config.get("eval", {})
         cmd = [
@@ -105,12 +99,10 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             "pufferlib.pufferl",
             "eval",
             config["env"],
-            "--load-model-path",
-            latest_cpt,
             "--eval.wosac-realism-eval",
             "True",
-            "--eval.wosac-num-agents",
-            str(eval_config.get("wosac_num_agents", 256)),
+            "--eval.wosac-num-maps",
+            str(eval_config.get("wosac_num_maps", 256)),
             "--eval.wosac-init-mode",
             str(eval_config.get("wosac_init_mode", "create_all_valid")),
             "--eval.wosac-control-mode",
@@ -126,6 +118,12 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             "--eval.wosac-aggregate-results",
             str(eval_config.get("wosac_aggregate_results", True)),
         ]
+
+        if not model_files:
+            print("No model files found for WOSAC evaluation. Running WOSAC with random policy.")
+        elif len(model_files) > 0:
+            latest_cpt = max(model_files, key=os.path.getctime)
+            cmd.extend(["--load-model-path", latest_cpt])
 
         # Run WOSAC evaluation in subprocess
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
