@@ -121,7 +121,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
 
         if not model_files:
             print("No model files found for WOSAC evaluation. Running WOSAC with random policy.")
-        elif len(model_files) > 1:
+        elif len(model_files) > 0:
             latest_cpt = max(model_files, key=os.path.getctime)
             cmd.extend(["--load-model-path", latest_cpt])
 
