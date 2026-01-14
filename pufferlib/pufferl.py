@@ -522,12 +522,12 @@ class PuffeRL:
                         print(f"Failed to export model weights: {e}")
 
         if self.config["eval"]["wosac_realism_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
         if self.config["eval"]["human_replay_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
@@ -1040,7 +1040,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
     args["env"]["map_dir"] = args["eval"]["map_dir"]
-    args["env"]["num_maps"] = args["eval"]["num_maps"]
+    args["env"]["num_maps"] = args["eval"]["wosac_num_maps"]
     args["env"]["use_all_maps"] = True
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
