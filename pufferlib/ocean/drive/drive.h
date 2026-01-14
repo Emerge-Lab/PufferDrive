@@ -1271,9 +1271,19 @@ void set_active_agents(Drive *env) {
         env->num_agents = MAX_AGENTS;
     }
 
+    // I am tired of having no SDC, so let's make sure it always come first
+    int sdc_index = env->sdc_track_index;
+    active_agent_indices[0] = sdc_index;
+    env->active_agent_count++;
+    env->entities[sdc_index].active_agent = 1;
+
     // Iterate through entities to find agents to create and/or control
     for (int i = 0; i < env->num_objects && env->num_actors < MAX_AGENTS; i++) {
 
+        // Skip if its the SDC
+        if (i == sdc_index) {
+            continue;
+        }
         Entity *entity = &env->entities[i];
 
         // Skip if not valid at initialization
