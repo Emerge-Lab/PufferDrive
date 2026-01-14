@@ -1441,7 +1441,7 @@ def load_policy(args, vecenv, env_name=""):
         load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
 
     if load_path is not None:
-        state_dict = torch.load(load_path, map_location=device, weights_only=True)
+        state_dict = torch.load(load_path, map_location=device)
         state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
         policy.load_state_dict(state_dict)
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
