@@ -1261,7 +1261,7 @@ void set_active_agents(Drive *env) {
     env->active_agent_count = 0;        // Policy-controlled agents
     env->static_agent_count = 0;        // Non-moving background agents
     env->expert_static_agent_count = 0; // Expert replay agents (non-controlled)
-    env->num_actors = 0;                // Total agents created
+    env->num_actors = 1;                // Total agents created (there is always the SDC)
 
     int active_agent_indices[MAX_AGENTS];
     int static_agent_indices[MAX_AGENTS];
@@ -1271,8 +1271,20 @@ void set_active_agents(Drive *env) {
         env->num_agents = MAX_AGENTS;
     }
 
+    // Create and initialize the SDC first to ensure we always have at least
+    // one controllable agent.
+    int sdc_index = env->sdc_track_index;
+    active_agent_indices[0] = sdc_index;
+    env->active_agent_count++;
+    env->entities[sdc_index].active_agent = 1;
+
     // Iterate through entities to find agents to create and/or control
     for (int i = 0; i < env->num_objects && env->num_actors < MAX_AGENTS; i++) {
+
+        // Skip if its the SDC
+        if (i == sdc_index) {
+            continue;
+        }
 
         Entity *entity = &env->entities[i];
 

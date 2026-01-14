@@ -1,6 +1,6 @@
-## Training
+# Training
 
-### Basic training
+## Basic training
 
 Launch a training run with Weights & Biases logging:
 
@@ -8,7 +8,7 @@ Launch a training run with Weights & Biases logging:
 puffer train puffer_drive --wandb --wandb-project "pufferdrive"
 ```
 
-### Environment configurations
+## Environment configurations
 
 **Default configuration (Waymo maps)**
 
@@ -33,11 +33,11 @@ resample_frequency = 100000 # No resampling needed (there are only a few Carla m
 termination_mode = 0  # 0: terminate at episode_length, 1: terminate after all agents reset
 
 # Map settings
-map_dir = "resources/drive/binaries/carla"
-num_maps = 2
+map_dir = "resources/drive/binaries"
+num_maps = 2 # Number of Carla maps you're training in
 ```
 
-this should give a good starting point. With these settings, you'll need about 2-3 billion steps to get an agent that reaches most of it's goals (> 95%) and has a combined collsion / off-road rate of 3 % per episode of 300 steps.
+this should give a good starting point. With these settings, you'll need about 2-3 billion steps to get an agent that reaches most of it's goals (> 95%) and has a combined collsion / off-road rate of 3 % per episode of 300 steps in town 1 and 2, which can be found [here](https://github.com/Emerge-Lab/PufferDrive/tree/2.0/data_utils/carla/carla_data). Before launching your experiment, run `drive.py` with the folder to the Carla towns to process them to binaries, then ensure the `map_dir` above is pointed to these binaries.
 
 > [!Note]
 > The default training hyperparameters work well for both configurations and typically don't need adjustment.
