@@ -2120,6 +2120,18 @@ void c_step(Drive *env) {
 
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
+
+        // Here, after all rewards for the agents are computed, I give them minus the reward of agent 0
+        if (i > 0) {
+            float sdc_reward = env->rewards[0];
+
+            // Reset the return of the episode by removing all the reward that were added:
+            env->logs[i].episode_return -= env->rewards[i];
+
+            // Assign adversarial reward
+            env->rewards[i] = -sdc_reward;
+            env->logs[i].episode_return += -sdc_reward;
+        }
     }
 
     if (env->goal_behavior == GOAL_RESPAWN) {
