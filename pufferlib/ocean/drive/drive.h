@@ -1258,7 +1258,7 @@ bool should_control_agent(Drive *env, int agent_idx) {
 void set_active_agents(Drive *env) {
 
     // Initialize
-    env->active_agent_count = 0;        // Policy-controlled agents
+    env->active_agent_count = 1;        // Policy-controlled agents
     env->static_agent_count = 0;        // Non-moving background agents
     env->expert_static_agent_count = 0; // Expert replay agents (non-controlled)
     env->num_actors = 1;                // Total agents created (there is always the SDC)
@@ -1272,11 +1272,12 @@ void set_active_agents(Drive *env) {
     }
 
     // Create and initialize the SDC first to ensure we always have at least
-    // one controllable agent. Take the SDC index (WOMD files) or the last
-    // entity (CARLA files don't have a designated SDC).
-    int sdc_index = env->sdc_track_index;
+    // one controllable agent.
+    int sdc_index = env->sdc_track_index; // For WOMD, we have the exact index
+    if (sdc_index == -1) {                // For other data sources, take the last entity
+        sdc_index = env->num_objects - 1;
+    }
     active_agent_indices[0] = sdc_index;
-    env->active_agent_count++;
     env->entities[sdc_index].active_agent = 1;
 
     // Iterate through entities to find agents to create and/or control
