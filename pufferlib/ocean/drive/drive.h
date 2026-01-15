@@ -79,11 +79,11 @@
 
 #define ROAD_FEATURES 7
 #define ROAD_FEATURES_ONEHOT 13
-#define PARTNER_FEATURES 7
+#define PARTNER_FEATURES 8
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 7
-#define EGO_FEATURES_JERK 10
+#define EGO_FEATURES_CLASSIC 8
+#define EGO_FEATURES_JERK 11
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -1778,8 +1778,10 @@ void compute_observations(Drive *env) {
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
             obs[8] = ego_entity->a_lat / JERK_LAT[2];
             obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[10] = (i == 0) ? 1 : 0;
         } else {
             obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[7] = (i == 0) ? 1 : 0;
         }
 
         // Relative Pos of other cars
@@ -1835,10 +1837,11 @@ void compute_observations(Drive *env) {
                 other_entity->vx * other_entity->heading_x + other_entity->vy * other_entity->heading_y;
             float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
             obs[obs_idx + 6] = other_signed_speed / MAX_SPEED;
+            obs[obs_idx + 7] = (j == 0) ? 1 : 0;
             cars_seen++;
-            obs_idx += 7; // Move to next observation slot
+            obs_idx += 8; // Move to next observation slot
         }
-        int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 7;
+        int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 8;
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
         // map observations
