@@ -284,14 +284,6 @@ class PuffeRL:
                     target_mask[agent_offsets[:-1] + env_counter * num_agents_per_worker] = 1
                     env_counter += 1
 
-            # adv_r = torch.zeros_like(r)
-            # indices = torch.arange(len(adv_r), device=device)
-            # indices *= target_mask
-            # indices = torch.cummax(indices, dim=0)[0]
-            # adv_r = torch.where(target_mask, r[indices], -r[indices])
-
-            # r = adv_r
-
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
                 state = dict(
@@ -456,6 +448,9 @@ class PuffeRL:
                 config["vtrace_c_clip"],
             )
             adv = mb_advantages
+
+            # One-liner to cancel my loss-masking:
+            mb_target_masks = torch.zeros_like(mb_target_masks)
 
             # I wasn't rescaling the advantages properly, this might make things better
             filtered_adv = adv[~mb_target_masks]
