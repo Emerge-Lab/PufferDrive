@@ -1275,6 +1275,7 @@ void set_active_agents(Drive *env) {
     int sdc_index = env->sdc_track_index;
     active_agent_indices[0] = sdc_index;
     env->active_agent_count++;
+    env->num_actors++;
     env->entities[sdc_index].active_agent = 1;
 
     // Iterate through entities to find agents to create and/or control
