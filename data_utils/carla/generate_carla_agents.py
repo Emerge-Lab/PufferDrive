@@ -582,8 +582,6 @@ def AABB_unit_test():
     assert np.allclose(aabb.corners[7], [4.0, 4.0, 6.0])
     print("AABB unit test passed.")
 
-def check_range(range_check_prob=0.7):
-    return random.random() < range_check_prob
 
 def generate_traj_data(
     start_object_aabbs,  # To prevent init collisions
@@ -606,11 +604,6 @@ def generate_traj_data(
     time_step_dur = episode_length / num_timestamps
     sampling_length = int((avg_speed * time_step_dur) / avg_cons_pts_dist)
 
-    x_range = (-125, 140) 
-    y_range = (-150, 100)
-
-    range_check_prob = 0.9999
-
     num_samples = 0
     # Pick a random start_lane_key
     while True:
@@ -629,13 +622,6 @@ def generate_traj_data(
                 for attempt in range(num_attempts):
                     idx = random.randint(0, len(lane_link_obj.lane_centerpoints) - 1)
 
-                    if check_range(range_check_prob):
-                        # Ensure in given range
-                        if not (x_range[0] <= lane_link_obj.lane_centerpoints[idx][0] <= x_range[1]):
-                            continue
-                        if not (y_range[0] <= lane_link_obj.lane_centerpoints[idx][1] <= y_range[1]):
-                            continue
-
                     check_AABB = AABB(lane_link_obj.lane_centerpoints[idx], obj_length, obj_width, obj_height)
                     if not any(check_AABB.intersects(aabb) for aabb in start_object_aabbs):
                         found_free_spot = True
@@ -650,13 +636,6 @@ def generate_traj_data(
                     found_free_spot = False
                     for attempt in range(num_attempts):
                         idx = random.randint(0, len(lane_link_obj.lane_centerpoints) - 1)
-
-                        if check_range(range_check_prob):
-                            # Ensure in given range
-                            if not (x_range[0] <= lane_link_obj.lane_centerpoints[idx][0] <= x_range[1]):
-                                continue
-                            if not (y_range[0] <= lane_link_obj.lane_centerpoints[idx][1] <= y_range[1]):
-                                continue
 
                         check_AABB = AABB(lane_link_obj.lane_centerpoints[idx], obj_length, obj_width, obj_height)
                         if not any(check_AABB.intersects(aabb) for aabb in start_object_aabbs):
@@ -939,13 +918,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--town_names",
         nargs="+",
-        default=["Town04"],
+        default=["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"],
         help="List of CARLA town names",
     )
     parser.add_argument(
         "--input_json_base_path",
         type=str,
-        default="data_utils/carla/carla_3D",
+        default="data_utils/carla/carla_py123d",
         help="Base path for input JSON files",
     )
     parser.add_argument(
