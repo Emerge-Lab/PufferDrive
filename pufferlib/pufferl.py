@@ -346,6 +346,9 @@ class PuffeRL:
 
             profile("eval_misc", epoch)
             for i in info:
+                if i.keys() == {"agent_offsets"}:
+                    continue
+
                 for k, v in pufferlib.unroll_nested_dict(i):
                     if isinstance(v, np.ndarray):
                         v = v.tolist()
