@@ -90,7 +90,7 @@ def main():
     config["eval"]["enabled"] = True
     config["eval"]["wosac_num_rollouts"] = 32
     config["env"]["map_dir"] = config["eval"]["map_dir"]
-    config["env"]["num_maps"] = config["eval"]["num_maps"]
+    config["env"]["num_maps"] = config["eval"]["wosac_num_maps"]
     config["env"]["sequential_map_sampling"] = True
 
     config["env"]["init_mode"] = config["eval"]["wosac_init_mode"]
