@@ -105,7 +105,7 @@ def main():
 
     config["env"]["map_dir"] = config["eval"]["map_dir"]
     config["env"]["num_maps"] = config["eval"]["num_maps"]
-    config["env"]["use_all_maps"] = True
+    config["env"]["sequential_map_sampling"] = True
 
     vecenv = load_env(args.env, config)
     policy = load_policy(config, vecenv, args.env)

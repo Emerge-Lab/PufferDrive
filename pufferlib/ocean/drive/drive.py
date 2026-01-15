@@ -42,7 +42,7 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
-        use_all_maps=False,
+        sequential_map_sampling=False,
     ):
         # env
         self.dt = dt
@@ -154,11 +154,11 @@ class Drive(pufferlib.PufferEnv):
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
-            use_all_maps=use_all_maps,
+            sequential_map_sampling=sequential_map_sampling,
         )
 
-        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if use_all_maps
-        self.num_agents = num_agents if not use_all_maps else agent_offsets[-1]
+        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if sequential_map_sampling is True
+        self.num_agents = num_agents if not sequential_map_sampling else agent_offsets[-1]
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -232,7 +232,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_target_distance=self.goal_target_distance,
                 goal_speed=self.goal_speed,
                 map_dir=self.map_dir,
-                use_all_maps=False,
+                sequential_map_sampling=False,  # Always use random sampling with replacement
             )
             self.agent_offsets = agent_offsets
             self.map_ids = map_ids

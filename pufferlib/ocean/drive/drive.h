@@ -72,7 +72,7 @@
 
 // Maximum number of agents per scene
 #ifndef MAX_AGENTS
-#define MAX_AGENTS 32
+#define MAX_AGENTS 64
 #endif
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
@@ -1272,7 +1272,8 @@ void set_active_agents(Drive *env) {
     }
 
     // Create and initialize the SDC first to ensure we always have at least
-    // one controllable agent.
+    // one controllable agent. Take the SDC index (WOMD files) or the last
+    // entity (CARLA files don't have a designated SDC).
     int sdc_index = env->sdc_track_index;
     active_agent_indices[0] = sdc_index;
     env->active_agent_count++;

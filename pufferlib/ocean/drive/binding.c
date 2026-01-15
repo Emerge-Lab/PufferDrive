@@ -76,20 +76,21 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
-    int use_all_maps = unpack(kwargs, "use_all_maps");
+    int sequential_map_sampling = unpack(kwargs, "sequential_map_sampling");
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
     int env_count = 0;
-    int max_envs = use_all_maps ? num_maps : num_agents;
+    int max_envs = sequential_map_sampling ? num_maps : num_agents;
     int map_idx = 0;
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
     // getting env count
-    while (use_all_maps ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
+    while (sequential_map_sampling ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
         char map_file[512];
-        int map_id = use_all_maps ? map_idx++ : rand() % num_maps;
+        // Take the next map in sequence or a random map
+        int map_id = sequential_map_sampling ? map_idx++ : rand() % num_maps;
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
@@ -102,7 +103,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            if (!use_all_maps) {
+            if (!sequential_map_sampling) {
                 maps_checked++;
 
                 // Safeguard: if we've checked all available maps and found no active agents, raise an error
@@ -154,7 +155,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     // printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count,
     // num_agents);
-    if (!use_all_maps && total_agent_count >= num_agents) {
+    if (!sequential_map_sampling && total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
     PyObject *final_total_agent_count = PyLong_FromLong(total_agent_count);
