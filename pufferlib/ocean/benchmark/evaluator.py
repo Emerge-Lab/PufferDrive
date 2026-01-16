@@ -48,7 +48,8 @@ class WOSACEvaluator:
             weight = self.metrics_config.getfloat(field_name, "metametric_weight")
             metric_score = metrics[likelihood_field_name]
             metametric += weight * metric_score
-        return metametric
+        weight_sum = sum(self.metrics_config.getfloat(fn, "metametric_weight") for fn in _METRIC_FIELD_NAMES)
+        return metametric / weight_sum
 
     def _get_histogram_params(self, metric_name: str):
         return (
