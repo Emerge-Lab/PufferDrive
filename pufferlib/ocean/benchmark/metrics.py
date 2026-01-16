@@ -249,7 +249,7 @@ def compute_interaction_features(
         scenario_mask = torch.as_tensor(scenario_mask_np, dtype=torch.bool, device=x_t.device)
         scenario_x = x_t[scenario_mask]
         scenario_y = y_t[scenario_mask]
-        scenario_length = length_broadcast[scenario_mask]
+        episode_length = length_broadcast[scenario_mask]
         scenario_width = width_broadcast[scenario_mask]
         scenario_heading = heading_t[scenario_mask]
         scenario_valid = valid_t[scenario_mask]
@@ -260,7 +260,7 @@ def compute_interaction_features(
         distances_to_objects = interaction_features.compute_distance_to_nearest_object(
             center_x=scenario_x,
             center_y=scenario_y,
-            length=scenario_length,
+            length=episode_length,
             width=scenario_width,
             heading=scenario_heading,
             valid=scenario_valid,
@@ -273,7 +273,7 @@ def compute_interaction_features(
         times_to_collision = interaction_features.compute_time_to_collision(
             center_x=scenario_x,
             center_y=scenario_y,
-            length=scenario_length,
+            length=episode_length,
             width=scenario_width,
             heading=scenario_heading,
             valid=scenario_valid,
