@@ -174,17 +174,17 @@ void forward(DriveNet *net, float *observations, int *actions) {
 
         // Process road observation
         for (int i = 0; i < MAX_ROAD_SEGMENT_OBSERVATIONS; i++) {
-            for (int j = 0; j < 7; j++) {
+            for (int j = 0; j < 8; j++) {
                 net->obs_road[b * MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES_ONEHOT + i * ROAD_FEATURES_ONEHOT + j] =
-                    observations[road_offset + i * 7 + j];
+                    observations[road_offset + i * 8 + j];
             }
             for (int j = 0; j < 7; j++) {
-                if (j == observations[road_offset + i * 7 + 6]) {
+                if (j == observations[road_offset + i * 8 + 7]) {
                     net->obs_road[b * MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES_ONEHOT + i * ROAD_FEATURES_ONEHOT +
-                                  6 + j] = 1.0f;
+                                  7 + j] = 1.0f;
                 } else {
                     net->obs_road[b * MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES_ONEHOT + i * ROAD_FEATURES_ONEHOT +
-                                  6 + j] = 0.0f;
+                                  7 + j] = 0.0f;
                 }
             }
         }

@@ -145,9 +145,10 @@ void renderAgentView(Drive *env, Client *client, int map_height, int obs_only, i
 
     Camera3D camera = {0};
     // Position camera behind and above the agent
-    camera.position =
-        (Vector3){agent->x - (25.0f * cosf(agent->heading)), agent->y - (25.0f * sinf(agent->heading)), 15.0f};
-    camera.target = (Vector3){agent->x + 40.0f * cosf(agent->heading), agent->y + 40.0f * sinf(agent->heading), 1.0f};
+    camera.position = (Vector3){agent->x - (25.0f * cosf(agent->heading)), agent->y - (25.0f * sinf(agent->heading)),
+                                agent->z + 15.0f};
+    camera.target =
+        (Vector3){agent->x + 40.0f * cosf(agent->heading), agent->y + 40.0f * sinf(agent->heading), agent->z + 1.0f};
     camera.up = (Vector3){0.0f, 0.0f, 1.0f};
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
@@ -194,7 +195,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
              const char *output_agent, int num_maps, int zoom_in) {
 
     // Parse configuration from INI file
-    env_init_config conf = {0};
+    env_init_config conf = {0}; // Initialize to zero
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
     if (ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
@@ -205,12 +206,12 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     if (map_name == NULL) {
         srand(time(NULL));
         int random_map = rand() % num_maps;
-        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map);
+        sprintf(map_buffer, "%s/map_%03d.bin", conf.map_dir, random_map); // random map file
         map_name = map_buffer;
     }
 
     if (frame_skip <= 0) {
-        frame_skip = 1;
+        frame_skip = 1; // Default: render every frame
     }
 
     // Check if map file exists
@@ -226,7 +227,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
     fclose(policy_file);
 
-    // Initialize environment with all config values from INI [env] section
     Drive env = {
         .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
@@ -248,7 +248,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .control_mode = conf.control_mode,
         .map_name = (char *)map_name,
     };
-
     allocate(&env);
 
     // Check if map has any active agents
@@ -272,11 +271,13 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     SetTargetFPS(6000);
 
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
+
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 6.0f;
+    float scale = 6.0f; // Can be used to increase the video quality
 
+    // Calculate video width and height; round to nearest even number
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
     int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
 
@@ -314,6 +315,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         strcpy(map, basename((char *)map_name));
         *strrchr(map, '.') = '\0';
 
+        // Create video directory if it doesn't exist
         char video_dir[256];
         sprintf(video_dir, "%s/video", policy_base);
         char mkdir_cmd[512];
@@ -326,7 +328,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
     bool render_agent = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "agent") == 0);
-
     printf("Rendering: %s\n", view_mode);
 
     int rendered_frames = 0;
@@ -368,6 +369,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         c_reset(&env);
         printf("Recording agent view...\n");
         for (int i = 0; i < frame_count; i++) {
+            // Check if selected agent has reached the first goal and stop recording
             int human_idx = env.active_agent_indices[env.human_agent_idx];
             if (env.entities[human_idx].respawn_count > 0) {
                 break;
@@ -386,7 +388,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     double elapsedTime = endTime - startTime;
     double writeFPS = (elapsedTime > 0) ? rendered_frames / elapsedTime : 0;
 
-    printf("Wrote %d frames in %.2f seconds (%.2f FPS) to %s\n", rendered_frames, elapsedTime, writeFPS,
+    printf("Wrote %d frames in %.2f seconds (%.2f FPS) to %s \n", rendered_frames, elapsedTime, writeFPS,
            filename_topdown);
 
     if (render_topdown) {
@@ -397,6 +399,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
     CloseWindow();
 
+    // Clean up resources
     free(client);
     free_allocated(&env);
     free_drivenet(net);
@@ -405,7 +408,13 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 }
 
 int main(int argc, char *argv[]) {
-    // Visualization-only parameters (not in [env] section)
+    // Parse configuration from INI file
+    env_init_config conf = {0}; // Initialize to zero
+    const char *ini_file = "pufferlib/config/ocean/drive.ini";
+    if (ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        return -1;
+    }
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
@@ -413,13 +422,11 @@ int main(int argc, char *argv[]) {
     int frame_skip = 1;
     int zoom_in = 0;
     const char *view_mode = "both";
-
-    // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
-    int num_maps = 1;
+    int num_maps = conf.num_maps;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -434,9 +441,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--frame-skip") == 0) {
             if (i + 1 < argc) {
                 frame_skip = atoi(argv[i + 1]);
-                i++;
+                i++; // Skip the next argument since we consumed it
                 if (frame_skip <= 0) {
-                    frame_skip = 1;
+                    frame_skip = 1; // Ensure valid value
                 }
             }
         } else if (strcmp(argv[i], "--zoom-in") == 0) {
@@ -455,9 +462,10 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
         } else if (strcmp(argv[i], "--map-name") == 0) {
+            // Check if there's a next argument for the map path
             if (i + 1 < argc) {
                 map_name = argv[i + 1];
-                i++;
+                i++; // Skip the next argument since we used it as map path
             } else {
                 fprintf(stderr, "Error: --map-name option requires a map file path\n");
                 return 1;

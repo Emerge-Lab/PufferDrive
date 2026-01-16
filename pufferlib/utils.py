@@ -233,7 +233,6 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         env_cfg = getattr(vecenv, "driver_env", None)
         if env_cfg is not None and getattr(env_cfg, "num_maps", None):
             base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
-
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
         if render_maps is None or render_maps == "none":
