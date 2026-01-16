@@ -205,6 +205,7 @@ class WOSACEvaluator:
         ref_valid = ground_truth_trajectories["valid"]
         agent_length = agent_state["length"]
         agent_width = agent_state["width"]
+        is_vehicle = ground_truth_trajectories["is_vehicle"]
         scenario_ids = ground_truth_trajectories["scenario_id"]
 
         # We evaluate the metrics only for the Tracks to Predict.
@@ -218,6 +219,7 @@ class WOSACEvaluator:
         eval_agent_length = agent_length[eval_mask]
         eval_agent_width = agent_width[eval_mask]
         eval_scenario_ids = scenario_ids[eval_mask]
+        eval_is_vehicle = is_vehicle[eval_mask]
 
         # Compute features
         # Kinematics-related features
@@ -413,9 +415,11 @@ class WOSACEvaluator:
             axis=1,
         )
 
+        # TTC is computed only for vehicles
+        ttc_valid = eval_ref_valid & eval_is_vehicle[..., None]
         time_to_collision_log_likelihood = metrics._reduce_average_with_validity(
             time_to_collision_log_likelihood,
-            eval_ref_valid[:, 0, :],
+            ttc_valid[:, 0, :],
             axis=1,
         )
 
