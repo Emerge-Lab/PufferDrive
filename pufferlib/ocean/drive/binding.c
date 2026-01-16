@@ -79,7 +79,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "map_files list is empty");
         return NULL;
     }
-
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
     int init_mode = unpack(kwargs, "init_mode");
@@ -88,7 +87,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int goal_behavior = unpack(kwargs, "goal_behavior");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
     int use_all_maps = unpack(kwargs, "use_all_maps");
-
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
@@ -218,7 +216,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     char *map_path = unpack_str(kwargs, "map_path");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
-
     env->num_agents = max_agents;
     env->map_name = map_path;
     env->init_steps = init_steps;

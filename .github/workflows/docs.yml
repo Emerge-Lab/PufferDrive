@@ -1,30 +1,28 @@
-name: Deploy Docs
-
+name: Deploy MkDocs
 on:
   push:
-    branches: [2.0]
-    paths: [docs/**]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write  # allow pushing to gh-pages
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup mdBook
-        uses: peaceiris/actions-mdbook@v2
-        with:
-          mdbook-version: 'latest'
-
-      - name: Build book
-        run: mdbook build docs
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.x" }
+      - name: Install MkDocs deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r docs/requirements.txt
+      - name: Build site
+        run: mkdocs build --strict
+      - name: Publish to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs/book
+          publish_dir: ./site
+          publish_branch: gh-pages

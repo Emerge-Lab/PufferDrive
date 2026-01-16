@@ -14,7 +14,7 @@ def test_simulator_raw():
     num_agents = 32
 
     # ---- Run simulation ----
-    env = Drive(num_agents=num_agents, num_maps=1, episode_length=91, map_dir="resources/drive/binaries")
+    env = Drive(num_agents=num_agents, num_maps=1, scenario_length=91, map_dir="resources/drive/binaries")
     obs, _ = env.reset()
     tick = 0
 
