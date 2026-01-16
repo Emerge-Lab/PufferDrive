@@ -1984,8 +1984,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, z_offsets, 225, &list_size);
     if (list_size > 0) {
         DepthPoint road_neighbours[list_size];
-        int max_check = (list_size < 20) ? list_size : 20;
-        int diffarray[max_check - 1];
+        int valid_count = 0;
         // store an array masuring the distance of the agent with each road segment nearby
         for (int i = 0; i < list_size; i++) {
             if (entity_list[i].entity_idx == -1)
@@ -1993,27 +1992,33 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             Entity *entity = &env->entities[entity_list[i].entity_idx];
             if (entity->type == ROAD_EDGE || entity->type == ROAD_LANE || entity->type == ROAD_LINE) {
                 DepthPoint val = compute_z_distance_to_road_segment(agent, entity);
-                road_neighbours[i] = val;
+                road_neighbours[valid_count++] = val;
             }
         }
 
-        qsort(road_neighbours, list_size, sizeof(DepthPoint), compare_depthpoint);
-        int max_diff_idx = 0;
-        float max_diff = -1e9;
-        for (int i = 0; i < max_check - 1; i++) {
-            diffarray[i] = road_neighbours[i + 1].dis - road_neighbours[i].dis;
-            if (diffarray[i] > max_diff) {
-                max_diff = diffarray[i];
-                max_diff_idx = i;
+        if (valid_count > 0) {
+            qsort(road_neighbours, valid_count, sizeof(DepthPoint), compare_depthpoint);
+            int check_count = (valid_count < 20) ? valid_count : 20;
+            int max_diff_idx = 0;
+            float max_diff = -1e9;
+            if (check_count > 1) {
+                int diffarray[check_count - 1];
+                for (int i = 0; i < check_count - 1; i++) {
+                    diffarray[i] = road_neighbours[i + 1].dis - road_neighbours[i].dis;
+                    if (diffarray[i] > max_diff) {
+                        max_diff = diffarray[i];
+                        max_diff_idx = i;
+                    }
+                }
             }
-        }
-        // max_diff_idx now holds the index of the maximum value in diffarray
+            // max_diff_idx now holds the index of the maximum value in diffarray
 
-        float sum_z = 0.0f;
-        for (int i = 0; i <= max_diff_idx; i++) {
-            sum_z += road_neighbours[i].z;
+            float sum_z = 0.0f;
+            for (int i = 0; i <= max_diff_idx; i++) {
+                sum_z += road_neighbours[i].z;
+            }
+            agent->z = sum_z / (max_diff_idx + 1);
         }
-        agent->z = sum_z / (max_diff_idx + 1);
     }
     // Free allocated memory
     free(entity_list);
