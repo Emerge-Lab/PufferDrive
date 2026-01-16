@@ -62,6 +62,7 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 
 *Table: WOSAC baselines in PufferDrive on 229 selected clean held-out validation scenarios.*
 
+- **Random agent:** Following the [WOSAC 2023 paper](https://arxiv.org/abs/2305.12032), the random agent samples future trajectories by independently sampling $(x, y,\theta)$ at each timestep from a Gaussian distribution in the AV coordinate frame $(\mu=1.0, \sigma=0.1)$, producing uncorrelated random motion over the horizon of 80 steps.
 
 > ✏️ Download the dataset from [Hugging Face](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean) to reproduce these results or benchmark your policy.
 
