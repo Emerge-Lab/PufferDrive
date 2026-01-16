@@ -1081,13 +1081,9 @@ void set_means(Drive *env) {
 }
 
 DepthPoint compute_z_distance_to_road_segment(Entity *agent, Entity *lane) {
-    float agent_position_x = agent->x;
-    float agent_position_y = agent->y;
     float agent_position_z = agent->z;
-    float road_x = lane->x;
-    float road_y = lane->y;
     float road_z = lane->z;
-    float dis = abs(road_z - agent_position_z); // Start with vertical distance
+    float dis = fabsf(road_z - agent_position_z); // Start with vertical distance
     DepthPoint point;
     point.dis = dis;
     point.z = road_z;
@@ -2303,7 +2299,6 @@ void sample_new_goal(Drive *env, int agent_idx) {
             // Calculate vector from agent to point
             float to_point_x = point_x - agent->x;
             float to_point_y = point_y - agent->y;
-            float to_point_z = point_z - agent->z;
 
             // Check if point is ahead of agent
             float dot = to_point_x * agent->heading_x + to_point_y * agent->heading_y;
@@ -2475,7 +2470,6 @@ void c_step(Drive *env) {
         // Reward agent if it is within X meters of goal and speed is below threshold
         bool within_distance = distance_to_goal < env->goal_radius;
         bool within_speed = current_speed <= env->goal_speed;
-
         if (within_distance && within_speed && !env->entities[agent_idx].current_goal_reached) {
             if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
@@ -2887,7 +2881,6 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
     // Calculate curb dimensions
     float curb_height = 0.5f; // Height of the curb
     float curb_width = 0.3f;  // Width/thickness of the curb
-    float road_z = 0.2f;      // Ensure z-level for roads is below agents
 
     Vector3 direction = {
         end_x - start_x,
@@ -3015,7 +3008,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     continue;
                 }
 
-                Vector3 carPos = {position.x, position.y, position.z};
                 Color car_color = GRAY; // default for static
                 if (is_expert)
                     car_color = GOLD; // expert replay
