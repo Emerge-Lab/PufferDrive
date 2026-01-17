@@ -40,7 +40,6 @@ void demo() {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         exit(1);
     }
-
     Drive env = {
         .human_agent_idx = 0,
         .dynamics_model = conf.dynamics_model,
@@ -48,6 +47,9 @@ void demo() {
         .reward_offroad_collision = conf.reward_offroad_collision,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
+        .goal_behavior = conf.goal_behavior,
+        .goal_speed = conf.goal_speed,
+        .goal_target_distance = conf.goal_target_distance,
         .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
         .init_steps = conf.init_steps,
         .collision_behavior = conf.collision_behavior,
@@ -127,7 +129,7 @@ void performance_test() {
         .reward_offroad_collision = conf.reward_offroad_collision,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
-        .map_name = "resources/drive/binaries/map_012.bin",
+        .map_name = "resources/drive/binaries/map_000.bin",
         .init_steps = conf.init_steps,
     };
     clock_t start_time, end_time;

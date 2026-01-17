@@ -226,6 +226,11 @@ cleanrl = [
     'tyro==0.8.6',
 ]
 
+cluster = [
+    'submitit>=1.5.0',
+    'pyyaml>=6.0',
+]
+
 [project.scripts]
 puffer = "pufferlib.pufferl:main"
 

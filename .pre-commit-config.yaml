@@ -26,3 +26,4 @@ repos:
   rev: 'v21.1.5'
   hooks:
   -   id: clang-format
+      exclude: '\.(js|html)$|^build_web/|^docs/assets/'

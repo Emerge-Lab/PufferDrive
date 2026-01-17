@@ -1103,13 +1103,9 @@ void set_means(Drive *env) {
 }
 
 DepthPoint compute_z_distance_to_road_segment(Entity *agent, Entity *lane) {
-    float agent_position_x = agent->x;
-    float agent_position_y = agent->y;
     float agent_position_z = agent->z;
-    float road_x = lane->x;
-    float road_y = lane->y;
     float road_z = lane->z;
-    float dis = abs(road_z - agent_position_z); // Start with vertical distance
+    float dis = fabsf(road_z - agent_position_z); // Start with vertical distance
     DepthPoint point;
     point.dis = dis;
     point.z = road_z;
@@ -1515,7 +1511,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         agent->current_lane_idx = -1;
     } else {
         agent->current_lane_idx = closest_lane_entity_idx;
-
         int lane_aligned =
             check_lane_aligned(agent, &env->entities[closest_lane_entity_idx], closest_lane_geometry_idx);
         agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned;
@@ -1568,7 +1563,7 @@ bool should_control_agent(Drive *env, int agent_idx) {
     entity->length *= 0.7f;
 
     if (env->control_mode == CONTROL_SDC_ONLY) {
-        return (agent_idx == env->sdc_track_index);
+        return agent_idx == env->sdc_track_index;
     }
 
     bool is_vehicle = (entity->type == VEHICLE);
@@ -1593,6 +1588,7 @@ bool should_control_agent(Drive *env, int agent_idx) {
     if (!type_is_valid || entity->mark_as_expert) {
         return false;
     }
+
     // Check distance to goal in agent's local frame
     float cos_heading = cosf(entity->traj_heading[0]);
     float sin_heading = sinf(entity->traj_heading[0]);
@@ -1632,6 +1628,7 @@ void set_active_agents(Drive *env) {
         if (entity->traj_valid[env->init_steps] != 1) {
             continue;
         }
+
         // Determine if entity should be created
         bool should_create = false;
         if (env->init_mode == INIT_ALL_VALID) {
@@ -1649,6 +1646,7 @@ void set_active_agents(Drive *env) {
 
         // Determine if this agent should be policy-controlled
         bool is_controlled = false;
+
         is_controlled = should_control_agent(env, i);
 
         if (is_controlled) {
@@ -1666,6 +1664,7 @@ void set_active_agents(Drive *env) {
             }
         }
     }
+
     // Set up initial active agents
     env->active_agent_indices = (int *)malloc(env->active_agent_count * sizeof(int));
     env->static_agent_indices = (int *)malloc(env->static_agent_count * sizeof(int));
@@ -2012,8 +2011,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, z_offsets, 225, &list_size);
     if (list_size > 0) {
         DepthPoint road_neighbours[list_size];
-        int max_check = (list_size < 20) ? list_size : 20;
-        int diffarray[max_check - 1];
+        int valid_count = 0;
         // store an array masuring the distance of the agent with each road segment nearby
         for (int i = 0; i < list_size; i++) {
             if (entity_list[i].entity_idx == -1)
@@ -2021,27 +2019,33 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             Entity *entity = &env->entities[entity_list[i].entity_idx];
             if (entity->type == ROAD_EDGE || entity->type == ROAD_LANE || entity->type == ROAD_LINE) {
                 DepthPoint val = compute_z_distance_to_road_segment(agent, entity);
-                road_neighbours[i] = val;
+                road_neighbours[valid_count++] = val;
             }
         }
 
-        qsort(road_neighbours, list_size, sizeof(DepthPoint), compare_depthpoint);
-        int max_diff_idx = 0;
-        float max_diff = -1e9;
-        for (int i = 0; i < max_check - 1; i++) {
-            diffarray[i] = road_neighbours[i + 1].dis - road_neighbours[i].dis;
-            if (diffarray[i] > max_diff) {
-                max_diff = diffarray[i];
-                max_diff_idx = i;
+        if (valid_count > 0) {
+            qsort(road_neighbours, valid_count, sizeof(DepthPoint), compare_depthpoint);
+            int check_count = (valid_count < 20) ? valid_count : 20;
+            int max_diff_idx = 0;
+            float max_diff = -1e9;
+            if (check_count > 1) {
+                int diffarray[check_count - 1];
+                for (int i = 0; i < check_count - 1; i++) {
+                    diffarray[i] = road_neighbours[i + 1].dis - road_neighbours[i].dis;
+                    if (diffarray[i] > max_diff) {
+                        max_diff = diffarray[i];
+                        max_diff_idx = i;
+                    }
+                }
             }
-        }
-        // max_diff_idx now holds the index of the maximum value in diffarray
+            // max_diff_idx now holds the index of the maximum value in diffarray
 
-        float sum_z = 0.0f;
-        for (int i = 0; i <= max_diff_idx; i++) {
-            sum_z += road_neighbours[i].z;
+            float sum_z = 0.0f;
+            for (int i = 0; i <= max_diff_idx; i++) {
+                sum_z += road_neighbours[i].z;
+            }
+            agent->z = sum_z / (max_diff_idx + 1);
         }
-        agent->z = sum_z / (max_diff_idx + 1);
     }
     // Free allocated memory
     free(entity_list);
@@ -2327,7 +2331,6 @@ void sample_new_goal(Drive *env, int agent_idx) {
             // Calculate vector from agent to point
             float to_point_x = point_x - agent->x;
             float to_point_y = point_y - agent->y;
-            float to_point_z = point_z - agent->z;
 
             // Check if point is ahead of agent
             float dot = to_point_x * agent->heading_x + to_point_y * agent->heading_y;
@@ -2406,6 +2409,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].metrics_array[OFFROAD_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 0.0f;
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+
     env->entities[agent_idx].respawn_timestep = env->timestep;
     env->entities[agent_idx].collided_before_goal = 0;
     env->entities[agent_idx].stopped = 0;
@@ -2435,7 +2439,6 @@ void c_step(Drive *env) {
     if (env->timestep == env->episode_length || (!originals_remaining && env->termination_mode == 1)) {
         add_log(env);
         c_reset(env);
-
         return;
     }
 
@@ -2455,6 +2458,7 @@ void c_step(Drive *env) {
         env->entities[agent_idx].aabb_collision_state = 0;
         float prev_vx = env->entities[agent_idx].vx;
         float prev_vy = env->entities[agent_idx].vy;
+
         move_dynamics(env, i, agent_idx);
 
         // Tiny jerk penalty for smoothness
@@ -2466,6 +2470,8 @@ void c_step(Drive *env) {
             env->logs[i].episode_return += jerk_penalty;
         }
     }
+
+    // Compute rewards
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
@@ -2485,6 +2491,7 @@ void c_step(Drive *env) {
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].offroad_per_agent += 1.0f;
             }
+
             env->entities[agent_idx].collided_before_goal = 1;
         }
 
@@ -2679,7 +2686,6 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
     // Draw the diamond faces
     // Top pyramid
-
     if (mode == 0) {
         DrawTriangle3D(top_point, front_point, right_point, PUFF_CYAN); // Front-right face
         DrawTriangle3D(top_point, right_point, back_point, PUFF_CYAN);  // Back-right face
@@ -2700,8 +2706,6 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     float *agent_obs = &observations[agent_index][0];
-    // self
-
     // self
     int active_idx = env->active_agent_indices[agent_index];
     float heading_self_x = env->entities[active_idx].heading_x;
@@ -2819,7 +2823,6 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             dy /= length;
 
             // Calculate perpendicular vector
-
             float perp_x = -dy * arrow_size;
             float perp_y = dx * arrow_size;
 
@@ -2911,7 +2914,6 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
     // Calculate curb dimensions
     float curb_height = 0.5f; // Height of the curb
     float curb_width = 0.3f;  // Width/thickness of the curb
-    float road_z = 0.2f;      // Ensure z-level for roads is below agents
 
     Vector3 direction = {
         end_x - start_x,
@@ -2961,7 +2963,7 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
 }
 
 void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, int show_grid) {
-    // Draw a grid to help with orientation
+
     if (show_grid) {
         float grid_start_x = env->grid_map->top_left_x;
         float grid_start_y = env->grid_map->bottom_right_y;
@@ -2974,6 +2976,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
         }
     }
+
+    // Draw a grid to help with orientation
     for (int i = 0; i < env->num_entities; i++) {
         // Draw objects
         if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN ||
@@ -3021,7 +3025,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 Vector3 corners[4] = {
                     (Vector3){position.x + (half_len * cos_heading - half_width * sin_heading),
                               position.y + (half_len * sin_heading + half_width * cos_heading), position.z},
-
                     (Vector3){position.x + (half_len * cos_heading + half_width * sin_heading),
                               position.y + (half_len * sin_heading - half_width * cos_heading), position.z},
                     (Vector3){position.x + (-half_len * cos_heading + half_width * sin_heading),
@@ -3035,11 +3038,12 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     !env->entities[agent_index].metrics_array[REACHED_GOAL_IDX]) {
                     draw_agent_obs(env, agent_index, mode, obs_only, lasers);
                 }
+
                 if ((obs_only || IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx) {
                     continue;
                 }
 
-                Vector3 carPos = {position.x, position.y, position.z};
+                // --- Draw the car  ---
                 Color car_color = GRAY; // default for static
                 if (is_expert)
                     car_color = GOLD; // expert replay
@@ -3061,8 +3065,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 DrawLine3D(arrowStart, arrowEnd, car_color);
                 DrawSphere(arrowEnd, 0.2f, car_color); // arrow tip
 
-            } else {
-
+            } else { // Agent view
                 rlPushMatrix();
                 // Translate to position, rotate around Y axis, then draw
                 rlTranslatef(position.x, position.y, position.z);
@@ -3082,14 +3085,15 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         car_model = client->cars[0]; // Collided agents use red
                     }
                 }
+                // Draw obs for selected agent index
                 if (agent_index == env->human_agent_idx &&
                     (!env->entities[agent_index].metrics_array[REACHED_GOAL_IDX] ||
                      env->goal_behavior == GOAL_GENERATE_NEW || env->goal_behavior == GOAL_STOP)) {
                     draw_agent_obs(env, agent_index, mode, obs_only, lasers);
                 }
+
                 // Draw cube for cars static and active
                 // Calculate scale factors based on desired size and model dimensions
-
                 BoundingBox bounds = GetModelBoundingBox(car_model);
                 Vector3 model_size = {bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y,
                                       bounds.max.z - bounds.min.z};
@@ -3150,7 +3154,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 client->camera.up = (Vector3){0, 0, 1};
             }
             // Draw goal position for active agents
-
             if (!is_active_agent || env->entities[i].valid == 0) {
                 continue;
             }
@@ -3189,6 +3192,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 lineColor = WHITE;
             else if (env->entities[i].type == DRIVEWAY)
                 lineColor = RED;
+
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
                 if (env->entities[i].type == ROAD_EDGE) {
                     draw_road_edge(env, start.x, start.y, end.x, end.y, start.z, end.z);
@@ -3205,7 +3209,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
     // Draw track indices for the tracks to predict
     if (mode == 1 && env->control_mode == CONTROL_WOSAC) {
-
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;
 
