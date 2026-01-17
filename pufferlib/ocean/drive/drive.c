@@ -129,7 +129,7 @@ void performance_test() {
         .reward_offroad_collision = conf.reward_offroad_collision,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
-        .map_name = "resources/drive/binaries/map_012.bin",
+        .map_name = "resources/drive/binaries/map_000.bin",
         .init_steps = conf.init_steps,
     };
     clock_t start_time, end_time;
