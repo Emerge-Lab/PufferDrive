@@ -130,7 +130,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     srand(ts.tv_nsec);
     int total_agent_count = 0;
     int env_count = 0;
-    int max_envs = use_all_maps ? num_maps : num_agents;
+    int max_envs = sequential_map_sampling ? num_maps : num_agents;
     int map_idx = 0;
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
@@ -181,7 +181,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            if (!use_all_maps) {
+            if (!sequential_map_sampling) {
                 maps_checked++;
 
                 // Safeguard: if we've checked all available maps and found no active agents, raise an error
@@ -248,7 +248,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     // printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count,
     // num_agents);
-    if (!use_all_maps && total_agent_count >= num_agents) {
+    if (!sequential_map_sampling && total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
     PyObject *final_total_agent_count = PyLong_FromLong(total_agent_count);

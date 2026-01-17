@@ -72,8 +72,8 @@ def evaluate_trajectories(simulated_trajectory_file, args):
     """
     env_name = "puffer_drive"
     args["env"]["map_dir"] = args["eval"]["map_dir"]
-    args["env"]["num_maps"] = args["eval"]["num_maps"]
-    args["env"]["use_all_maps"] = True
+    args["env"]["num_maps"] = args["eval"]["wosac_num_maps"]
+    args["env"]["sequential_map_sampling"] = True
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")

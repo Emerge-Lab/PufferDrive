@@ -55,30 +55,18 @@ We provide baselines on a small curated dataset from the WOMD validation set wit
 
 | Method | Realism meta-score | Kinematic metrics | Interactive metrics | Map-based metrics | minADE | ADE |
 |--------|-------------------|-------------------|---------------------|-------------------|--------|------|
-| Ground-truth (UB) | 0.832 | 0.606 | 0.846 | 0.961 | 0 | 0 |
-| π_Base self-play RL | 0.737 | 0.319 | 0.789 | 0.938 | 10.834 | 11.317 |
-| [SMART-tiny-CLSFT](https://arxiv.org/abs/2412.05334) | 0.805 | 0.534 | 0.830 | 0.949 | 1.124 | 3.123 |
-| π_Random | 0.485 | 0.214 | 0.657 | 0.408 | 6.477 | 18.286 |
+| Ground-truth (UB) | 0.8179 | 0.6070 | 0.9590 | 0.8722 | 0 | 0 |
+| Self-play RL agent | 0.6750 | 0.2798 | 0.7966 | 0.7811 | 10.8057 | 11.4108 |
+| [SMART-tiny-CLSFT](https://arxiv.org/abs/2412.05334) | 0.7818 | 0.5200 | 0.8914 | 0.8378 | 1.1236 | 3.1231 |
+| Random | 0.4459 | 0.0506 | 0.7843 | 0.4704 | 23.5936 | 25.0097 |
 
 *Table: WOSAC baselines in PufferDrive on 229 selected clean held-out validation scenarios.*
 
+- **Random agent:** Following the [WOSAC 2023 paper](https://arxiv.org/abs/2305.12032), the random agent samples future trajectories by independently sampling (x, y, θ) at each timestep from a Gaussian distribution in the AV coordinate frame `(mu=1.0, sigma=0.1)`, producing uncorrelated random motion over the horizon of 80 steps.
+- **Goal-conditioned self-play RL agent**: An agent trained through self-play RL to reach the end point points ("goals") without colliding or going off-road. Baseline can be reproduced using the default settings in the `drive.ini` file with the Waymo dataset. We also open-source the weights of this policy, see `pufferlib/resources/drive/puffer_drive_weights` `.bin` and `.pt`.
+
 
 > ✏️ Download the dataset from [Hugging Face](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean) to reproduce these results or benchmark your policy.
-
-
-| Method | Realism meta-score | Kinematic metrics | Interactive metrics | Map-based metrics | minADE | ADE |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Ground-truth (UB) | 0.833 | 0.574 | 0.864 | 0.958 | 0 | 0 |
-| π_Base self-play RL | 0.737 | 0.323 | 0.792 | 0.930 | 8.530 | 9.088 |
-| [SMART-tiny-CLSFT](https://arxiv.org/abs/2412.05334) | 0.795 | 0.504 | 0.832 | 0.932 | 1.182 | 2.857 |
-| π_Random | 0.497 | 0.238 | 0.656 | 0.430 | 6.395 | 18.617 |
-
-*Table: WOSAC baselines in PufferDrive on validation 10k dataset.*
-
-
-> ✏️ Download the dataset from [Hugging Face](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val) to reproduce these results or benchmark your policy.
-
-
 
 ## Evaluating trajectories
 

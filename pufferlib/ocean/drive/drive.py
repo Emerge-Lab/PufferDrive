@@ -290,8 +290,8 @@ class Drive(pufferlib.PufferEnv):
             use_all_maps=use_all_maps,
         )
 
-        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if use_all_maps
-        self.num_agents = num_agents if not use_all_maps else agent_offsets[-1]
+        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if sequential_map_sampling is True
+        self.num_agents = num_agents if not sequential_map_sampling else agent_offsets[-1]
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -567,6 +567,7 @@ class Drive(pufferlib.PufferEnv):
             "heading": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
             "valid": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
+            "is_vehicle": np.zeros(num_agents, dtype=np.int32),
             "scenario_id": np.zeros(num_agents, dtype=np.int32),
         }
 
@@ -578,6 +579,7 @@ class Drive(pufferlib.PufferEnv):
             trajectories["heading"],
             trajectories["valid"],
             trajectories["id"],
+            trajectories["is_vehicle"],
             trajectories["scenario_id"],
         )
 
