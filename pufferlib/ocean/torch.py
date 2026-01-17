@@ -32,12 +32,14 @@ class Drive(nn.Module):
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
+
         self.road_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.road_features_after_onehot, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
+
         self.partner_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.partner_features, input_size)),
             nn.LayerNorm(input_size),
