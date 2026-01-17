@@ -72,7 +72,7 @@
 
 // Maximum number of agents per scene
 #ifndef MAX_AGENTS
-#define MAX_AGENTS 64
+#define MAX_AGENTS 32
 #endif
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
