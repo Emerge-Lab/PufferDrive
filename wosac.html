@@ -38,7 +38,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b836374d.js";
+            window.path_to_searchindex_js = "searchindex-f4073e00.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8d227c1c.js"></script>
@@ -222,33 +222,20 @@ num_maps = 20 # Number of maps to run evaluation on. (It will always be the firs
 <tr><th>Method</th><th>Realism meta-score</th><th>Kinematic metrics</th><th>Interactive metrics</th><th>Map-based metrics</th><th>minADE</th><th>ADE</th></tr>
 </thead>
 <tbody>
-<tr><td>Ground-truth (UB)</td><td>0.832</td><td>0.606</td><td>0.846</td><td>0.961</td><td>0</td><td>0</td></tr>
-<tr><td>π_Base self-play RL</td><td>0.737</td><td>0.319</td><td>0.789</td><td>0.938</td><td>10.834</td><td>11.317</td></tr>
-<tr><td><a href="https://arxiv.org/abs/2412.05334">SMART-tiny-CLSFT</a></td><td>0.805</td><td>0.534</td><td>0.830</td><td>0.949</td><td>1.124</td><td>3.123</td></tr>
-<tr><td>π_Random</td><td>0.485</td><td>0.214</td><td>0.657</td><td>0.408</td><td>6.477</td><td>18.286</td></tr>
+<tr><td>Ground-truth (UB)</td><td>0.8179</td><td>0.6070</td><td>0.9590</td><td>0.8722</td><td>0</td><td>0</td></tr>
+<tr><td>Self-play RL agent</td><td>0.6750</td><td>0.2798</td><td>0.7966</td><td>0.7811</td><td>10.8057</td><td>11.4108</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2412.05334">SMART-tiny-CLSFT</a></td><td>0.7818</td><td>0.5200</td><td>0.8914</td><td>0.8378</td><td>1.1236</td><td>3.1231</td></tr>
+<tr><td>Random</td><td>0.4459</td><td>0.0506</td><td>0.7843</td><td>0.4704</td><td>23.5936</td><td>25.0097</td></tr>
 </tbody>
 </table>
 </div>
 <p><em>Table: WOSAC baselines in PufferDrive on 229 selected clean held-out validation scenarios.</em></p>
+<ul>
+<li><strong>Random agent:</strong> Following the <a href="https://arxiv.org/abs/2305.12032">WOSAC 2023 paper</a>, the random agent samples future trajectories by independently sampling (x, y, θ) at each timestep from a Gaussian distribution in the AV coordinate frame <code>(mu=1.0, sigma=0.1)</code>, producing uncorrelated random motion over the horizon of 80 steps.</li>
+<li><strong>Goal-conditioned self-play RL agent</strong>: An agent trained through self-play RL to reach the end point points (“goals”) without colliding or going off-road. Baseline can be reproduced using the default settings in the <code>drive.ini</code> file with the Waymo dataset. We also open-source the weights of this policy, see <code>pufferlib/resources/drive/puffer_drive_weights</code> <code>.bin</code> and <code>.pt</code>.</li>
+</ul>
 <blockquote>
 <p>✏️ Download the dataset from <a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean">Hugging Face</a> to reproduce these results or benchmark your policy.</p>
-</blockquote>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th style="text-align: left">Method</th><th style="text-align: left">Realism meta-score</th><th style="text-align: left">Kinematic metrics</th><th style="text-align: left">Interactive metrics</th><th style="text-align: left">Map-based metrics</th><th style="text-align: left">minADE</th><th style="text-align: left">ADE</th></tr>
-</thead>
-<tbody>
-<tr><td style="text-align: left">Ground-truth (UB)</td><td style="text-align: left">0.833</td><td style="text-align: left">0.574</td><td style="text-align: left">0.864</td><td style="text-align: left">0.958</td><td style="text-align: left">0</td><td style="text-align: left">0</td></tr>
-<tr><td style="text-align: left">π_Base self-play RL</td><td style="text-align: left">0.737</td><td style="text-align: left">0.323</td><td style="text-align: left">0.792</td><td style="text-align: left">0.930</td><td style="text-align: left">8.530</td><td style="text-align: left">9.088</td></tr>
-<tr><td style="text-align: left"><a href="https://arxiv.org/abs/2412.05334">SMART-tiny-CLSFT</a></td><td style="text-align: left">0.795</td><td style="text-align: left">0.504</td><td style="text-align: left">0.832</td><td style="text-align: left">0.932</td><td style="text-align: left">1.182</td><td style="text-align: left">2.857</td></tr>
-<tr><td style="text-align: left">π_Random</td><td style="text-align: left">0.497</td><td style="text-align: left">0.238</td><td style="text-align: left">0.656</td><td style="text-align: left">0.430</td><td style="text-align: left">6.395</td><td style="text-align: left">18.617</td></tr>
-</tbody>
-</table>
-</div>
-<p><em>Table: WOSAC baselines in PufferDrive on validation 10k dataset.</em></p>
-<blockquote>
-<p>✏️ Download the dataset from <a href="https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_womd_val">Hugging Face</a> to reproduce these results or benchmark your policy.</p>
 </blockquote>
 <h2 id="evaluating-trajectories"><a class="header" href="#evaluating-trajectories">Evaluating trajectories</a></h2>
 <p>In this section, we describe how we evaluated <a href="https://arxiv.org/abs/2412.05334">SMART-tiny-CLSFT</a> in PufferDrive and how you can use this to evaluate your own agent trajectories.</p>
