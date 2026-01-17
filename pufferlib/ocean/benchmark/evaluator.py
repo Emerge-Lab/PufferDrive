@@ -48,9 +48,7 @@ class WOSACEvaluator:
             weight = self.metrics_config.getfloat(field_name, "metametric_weight")
             metric_score = metrics[likelihood_field_name]
             metametric += weight * metric_score
-
-        weight_sum = sum(self.metrics_config.getfloat(fn, "metametric_weight") for fn in _METRIC_FIELD_NAMES)
-        return metametric / weight_sum
+        return metametric
 
     def _get_histogram_params(self, metric_name: str):
         return (
@@ -121,6 +119,53 @@ class WOSACEvaluator:
 
         return trajectories
 
+    def collect_wosac_random_baseline(self, puffer_env):
+        """
+        Random Baseline from Wosac 2023 paper
+        """
+        driver = puffer_env.driver_env
+        num_agents = puffer_env.observation_space.shape[0]
+
+        trajectories = {
+            "x": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "y": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "heading": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
+        }
+
+        for rollout_idx in range(self.num_rollouts):
+            obs, info = puffer_env.reset()
+
+            # Do Initialization
+            agent_state = driver.get_global_agent_state()
+            trajectories["x"][:, rollout_idx, 0] = agent_state["x"]
+            trajectories["y"][:, rollout_idx, 0] = agent_state["y"]
+            trajectories["heading"][:, rollout_idx, 0] = agent_state["heading"]
+            trajectories["id"][:, rollout_idx, 0] = agent_state["id"]
+
+            # Update using Gaussian:
+            samples = np.random.normal(loc=1, scale=0.1, size=(num_agents, self.sim_steps, 3))
+            for time_idx in range(1, self.sim_steps):
+                dx, dy, d_heading = samples[:, time_idx, 0], samples[:, time_idx, 1], samples[:, time_idx, 2]
+                x, y, heading = (
+                    trajectories["x"][:, rollout_idx, time_idx - 1],
+                    trajectories["y"][:, rollout_idx, time_idx - 1],
+                    trajectories["heading"][:, rollout_idx, time_idx - 1],
+                )
+
+                cos_h = np.cos(heading)
+                sin_h = np.sin(heading)
+
+                x += dx * cos_h - dy * sin_h
+                y += dx * sin_h + dy * cos_h
+                heading += d_heading
+
+                trajectories["x"][:, rollout_idx, time_idx] = x
+                trajectories["y"][:, rollout_idx, time_idx] = y
+                trajectories["heading"][:, rollout_idx, time_idx] = heading
+
+        return trajectories
+
     def compute_metrics(
         self,
         ground_truth_trajectories: Dict,
@@ -159,6 +204,7 @@ class WOSACEvaluator:
         ref_valid = ground_truth_trajectories["valid"]
         agent_length = agent_state["length"]
         agent_width = agent_state["width"]
+        is_vehicle = ground_truth_trajectories["is_vehicle"]
         scenario_ids = ground_truth_trajectories["scenario_id"]
 
         # We evaluate the metrics only for the Tracks to Predict.
@@ -172,6 +218,7 @@ class WOSACEvaluator:
         eval_agent_length = agent_length[eval_mask]
         eval_agent_width = agent_width[eval_mask]
         eval_scenario_ids = scenario_ids[eval_mask]
+        eval_is_vehicle = is_vehicle[eval_mask]
 
         # Compute features
         # Kinematics-related features
@@ -337,60 +384,48 @@ class WOSACEvaluator:
             sanity_check=False,
         )
 
-        speed_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                linear_speed_log_likelihood,
-                speed_validity[:, 0, :],
-                axis=1,
-            )
+        speed_log_likelihood = metrics._reduce_average_with_validity(
+            linear_speed_log_likelihood,
+            speed_validity[:, 0, :],
+            axis=1,
         )
 
-        accel_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                linear_accel_log_likelihood,
-                acceleration_validity[:, 0, :],
-                axis=1,
-            )
+        accel_log_likelihood = metrics._reduce_average_with_validity(
+            linear_accel_log_likelihood,
+            acceleration_validity[:, 0, :],
+            axis=1,
         )
 
-        angular_speed_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                angular_speed_log_likelihood,
-                speed_validity[:, 0, :],
-                axis=1,
-            )
+        angular_speed_log_likelihood = metrics._reduce_average_with_validity(
+            angular_speed_log_likelihood,
+            speed_validity[:, 0, :],
+            axis=1,
         )
 
-        angular_accel_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                angular_accel_log_likelihood,
-                acceleration_validity[:, 0, :],
-                axis=1,
-            )
+        angular_accel_log_likelihood = metrics._reduce_average_with_validity(
+            angular_accel_log_likelihood,
+            acceleration_validity[:, 0, :],
+            axis=1,
         )
 
-        distance_to_nearest_object_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                distance_to_nearest_object_log_likelihood,
-                eval_ref_valid[:, 0, :],
-                axis=1,
-            )
+        distance_to_nearest_object_log_likelihood = metrics._reduce_average_with_validity(
+            distance_to_nearest_object_log_likelihood,
+            eval_ref_valid[:, 0, :],
+            axis=1,
         )
 
-        time_to_collision_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                time_to_collision_log_likelihood,
-                eval_ref_valid[:, 0, :],
-                axis=1,
-            )
+        # TTC is computed only for vehicles
+        ttc_valid = eval_ref_valid & eval_is_vehicle[..., None]
+        time_to_collision_log_likelihood = metrics._reduce_average_with_validity(
+            time_to_collision_log_likelihood,
+            ttc_valid[:, 0, :],
+            axis=1,
         )
 
-        distance_to_road_edge_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                distance_to_road_edge_log_likelihood,
-                eval_ref_valid[:, 0, :],
-                axis=1,
-            )
+        distance_to_road_edge_log_likelihood = metrics._reduce_average_with_validity(
+            distance_to_road_edge_log_likelihood,
+            eval_ref_valid[:, 0, :],
+            axis=1,
         )
 
         # Collision likelihood is computed by aggregating in time. For invalid objects
@@ -411,7 +446,6 @@ class WOSACEvaluator:
             num_bins=2,
             use_bernoulli=True,
         )
-        collision_likelihood = np.exp(collision_log_likelihood)
 
         # Offroad likelihood (same pattern as collision)
         sim_offroad_indication = np.any(np.where(eval_ref_valid, sim_offroad_per_step, False), axis=2)
@@ -428,7 +462,6 @@ class WOSACEvaluator:
             num_bins=2,
             use_bernoulli=True,
         )
-        offroad_likelihood = np.exp(offroad_log_likelihood)
 
         # Get agent IDs
         eval_agent_ids = ground_truth_trajectories["id"][eval_mask]
@@ -443,15 +476,15 @@ class WOSACEvaluator:
                 "num_offroad_ref": ref_num_offroad.flatten(),
                 "ade": ade,
                 "min_ade": min_ade,
-                "likelihood_linear_speed": speed_likelihood,
-                "likelihood_linear_acceleration": accel_likelihood,
-                "likelihood_angular_speed": angular_speed_likelihood,
-                "likelihood_angular_acceleration": angular_accel_likelihood,
-                "likelihood_distance_to_nearest_object": distance_to_nearest_object_likelihood,
-                "likelihood_time_to_collision": time_to_collision_likelihood,
-                "likelihood_collision_indication": collision_likelihood,
-                "likelihood_distance_to_road_edge": distance_to_road_edge_likelihood,
-                "likelihood_offroad_indication": offroad_likelihood,
+                "likelihood_linear_speed": speed_log_likelihood,
+                "likelihood_linear_acceleration": accel_log_likelihood,
+                "likelihood_angular_speed": angular_speed_log_likelihood,
+                "likelihood_angular_acceleration": angular_accel_log_likelihood,
+                "likelihood_distance_to_nearest_object": distance_to_nearest_object_log_likelihood,
+                "likelihood_time_to_collision": time_to_collision_log_likelihood,
+                "likelihood_collision_indication": collision_log_likelihood,
+                "likelihood_distance_to_road_edge": distance_to_road_edge_log_likelihood,
+                "likelihood_offroad_indication": offroad_log_likelihood,
             }
         )
 
@@ -474,6 +507,10 @@ class WOSACEvaluator:
                 "likelihood_offroad_indication",
             ]
         ].mean()
+
+        # Transform log-likelihoods to positive scores:
+        likelihood_cols = [c for c in scene_level_results.columns if "likelihood" in c]
+        scene_level_results[likelihood_cols] = np.exp(scene_level_results[likelihood_cols])
 
         scene_level_results["realism_meta_score"] = scene_level_results.apply(self._compute_metametric, axis=1)
         scene_level_results["num_agents"] = df.groupby("scenario_id").size()

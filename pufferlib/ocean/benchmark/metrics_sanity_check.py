@@ -18,20 +18,28 @@ import torch
 
 from pufferlib.pufferl import load_env, load_policy
 from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
-import pufferlib.pytorch
 
 
-def evaluate_wosac(config, vecenv, policy, policy_name="policy"):
-    """Run WOSAC evaluation for a given policy."""
-    print(f"Running WOSAC evaluation for {policy_name}...")
+def replace_rollouts_with_gt(simulated_traj, gt_traj, num_replacements):
+    """Replace first N rollouts with ground truth."""
+    modified = {}
+    for key in simulated_traj:
+        if key in ["x", "y", "z", "heading"]:
+            modified[key] = simulated_traj[key].copy()
+            modified[key][:, :num_replacements, :] = np.broadcast_to(
+                gt_traj[key], (gt_traj[key].shape[0], num_replacements, gt_traj[key].shape[2])
+            )
+        else:
+            modified[key] = simulated_traj[key].copy()
+    return modified
 
+
+def run_validation_experiment(config, vecenv):
     evaluator = WOSACEvaluator(config)
 
     # Collect ground truth trajectories
     gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
-
-    # Collect simulated trajectories
-    simulated_trajectories = evaluator.collect_simulated_trajectories(config, vecenv, policy)
+    simulated_trajectories = evaluator.collect_wosac_random_baseline(vecenv)
     agent_state = vecenv.driver_env.get_global_agent_state()
     road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
 
@@ -106,19 +114,17 @@ def main():
     config["eval"]["enabled"] = True
     config["eval"]["wosac_num_rollouts"] = 32
     config["env"]["map_dir"] = config["eval"]["map_dir"]
-    config["env"]["num_maps"] = config["eval"]["num_maps"]
-    config["env"]["use_all_maps"] = True
+    config["env"]["num_maps"] = config["eval"]["wosac_num_maps"]
+    config["env"]["sequential_map_sampling"] = True
 
-    config["env"]["num_agents"] = config["eval"]["wosac_num_agents"]
     config["env"]["init_mode"] = config["eval"]["wosac_init_mode"]
     config["env"]["control_mode"] = config["eval"]["wosac_control_mode"]
     config["env"]["init_steps"] = config["eval"]["wosac_init_steps"]
     config["env"]["goal_behavior"] = config["eval"]["wosac_goal_behavior"]
 
     vecenv = load_env(args.env, config)
-    policy = load_policy(config, vecenv, args.env)
 
-    results = run_validation_experiment(config, vecenv, policy)
+    results = run_validation_experiment(config, vecenv)
     print("\n" + format_results_table(results))
 
 
