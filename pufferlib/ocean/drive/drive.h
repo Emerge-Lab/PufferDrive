@@ -120,7 +120,7 @@ static const float offsets[4][2] = {
     {-1, -1} // bottom-left
 };
 
-void generate_offsets(int offsets[][2], int offset_range) {
+static inline void generate_offsets(int offsets[][2], int offset_range) {
     int half_grid = offset_range / 2;
     int left_most = -half_grid;
     int right_most = offset_range + left_most - 1;
@@ -135,8 +135,8 @@ void generate_offsets(int offsets[][2], int offset_range) {
 }
 
 // Offset arrays
-int collision_offsets[25][2] = {0};
-int z_offsets[225][2] = {0};
+int collision_offsets[COLLISION_RANGE * COLLISION_RANGE][2] = {0};
+int z_offsets[Z_RANGE * Z_RANGE][2] = {0};
 
 const Color STONE_GRAY = (Color){80, 80, 80, 255};
 const Color PUFF_RED = (Color){187, 0, 0, 255};
