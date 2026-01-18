@@ -102,7 +102,7 @@
 
 // Offsets
 #define COLLISION_RANGE 5
-#define Z_RANGE 15
+#define Z_RANGE 5
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
@@ -1733,7 +1733,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
     // To update agent's z-coordinate based on road elevation of 20 nearest elements
     int list_size = 0;
-    GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, z_offsets, 225, &list_size);
+    GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, z_offsets, 25, &list_size);
     if (list_size > 0) {
         DepthPoint road_neighbours[list_size];
         int valid_count = 0;
@@ -1749,27 +1749,14 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         }
 
         if (valid_count > 0) {
-            qsort(road_neighbours, valid_count, sizeof(DepthPoint), compare_depthpoint);
-            int check_count = (valid_count < 20) ? valid_count : 20;
-            int max_diff_idx = 0;
-            float max_diff = -1e9;
-            if (check_count > 1) {
-                int diffarray[check_count - 1];
-                for (int i = 0; i < check_count - 1; i++) {
-                    diffarray[i] = road_neighbours[i + 1].dis - road_neighbours[i].dis;
-                    if (diffarray[i] > max_diff) {
-                        max_diff = diffarray[i];
-                        max_diff_idx = i;
-                    }
-                }
-            }
-            // max_diff_idx now holds the index of the maximum value in diffarray
 
+            qsort(road_neighbours, valid_count, sizeof(DepthPoint), compare_depthpoint);
+            int check_count = (valid_count < 30) ? valid_count : 30;
             float sum_z = 0.0f;
-            for (int i = 0; i <= max_diff_idx; i++) {
+            for (int i = 0; i < check_count; i++) {
                 sum_z += road_neighbours[i].z;
             }
-            agent->z = sum_z / (max_diff_idx + 1);
+            agent->z = sum_z / (check_count);
         }
     }
     // Free allocated memory
