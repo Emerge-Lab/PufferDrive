@@ -66,7 +66,7 @@ void demo() {
     //     .control_mode = 0,
     //     .map_name = "resources/drive/map_town_02_carla.bin",
     // };
-    
+
     Drive env = {
         .human_agent_idx = 0,
         .action_type = conf.action_type,
@@ -102,8 +102,7 @@ void demo() {
 
         if (!IsKeyDown(KEY_LEFT_SHIFT)) {
             forward(net, env.observations, actions);
-        }
-        else {
+        } else {
             if (env.dynamics_model == CLASSIC) {
                 // Classic dynamics: acceleration and steering
                 int accel_idx = 3; // neutral (0 m/s²)
