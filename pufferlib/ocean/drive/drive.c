@@ -69,7 +69,7 @@ void demo() {
 
     Drive env = {
         .human_agent_idx = 0,
-        .action_type = conf.action_type,
+        .action_type = 0, // Demo doesn't support continuous action space
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
