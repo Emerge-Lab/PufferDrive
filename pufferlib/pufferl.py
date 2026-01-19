@@ -60,7 +60,7 @@ ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None):
+    def __init__(self, config, vecenv, policy, target_policy, logger=None):
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
@@ -136,6 +136,9 @@ class PuffeRL:
             self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
             self.lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
 
+            self.target_lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+            self.target_lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+
         # Minibatching & gradient accumulation
         minibatch_size = config["minibatch_size"]
         max_minibatch_size = config["max_minibatch_size"]
@@ -159,12 +162,19 @@ class PuffeRL:
         # Torch compile
         self.uncompiled_policy = policy
         self.policy = policy
+
+        self.uncompiled_target_policy = target_policy
+        self.target_policy = target_policy
+
         if config["compile"]:
             self.policy = torch.compile(policy, mode=config["compile_mode"])
             self.policy.forward_eval = torch.compile(policy, mode=config["compile_mode"])
             pufferlib.pytorch.sample_logits = torch.compile(
                 pufferlib.pytorch.sample_logits, mode=config["compile_mode"]
             )
+
+            self.target_policy = torch.compile(target_policy, mode=config["compile_mode"])
+            self.target_policy.forward_eval = torch.compile(target_policy, mode=config["compile_mode"])
 
         # Optimizer
         if config["optimizer"] == "adam":
@@ -252,6 +262,8 @@ class PuffeRL:
             for k in self.lstm_h:
                 self.lstm_h[k] = torch.zeros(self.lstm_h[k].shape, device=device)
                 self.lstm_c[k] = torch.zeros(self.lstm_c[k].shape, device=device)
+                self.target_lstm_h[k] = torch.zeros(self.target_lstm_h[k].shape, device=device)
+                self.target_lstm_c[k] = torch.zeros(self.target_lstm_c[k].shape, device=device)
 
         self.full_rows = 0
         while self.full_rows < self.segments:
@@ -296,9 +308,15 @@ class PuffeRL:
                 if config["use_rnn"]:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
+                    state["target_lstm_h"] = self.target_lstm_h[env_id.start]
+                    state["target_lstm_c"] = self.target_lstm_c[env_id.start]
 
                 logits, value = self.policy.forward_eval(o_device, state)
+                target_logits, target_value = self.target_policy.forward_eval(o_device, state)
+
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+
+                target_action, target_logprob, _ = pufferlib.pytorch.sample_logits(target_logits)
                 r = torch.clamp(r, -1, 1)
 
             profile("eval_copy", epoch)
@@ -306,6 +324,8 @@ class PuffeRL:
                 if config["use_rnn"]:
                     self.lstm_h[env_id.start] = state["lstm_h"]
                     self.lstm_c[env_id.start] = state["lstm_c"]
+                    self.target_lstm_h[env_id.start] = state["target_lstm_h"]
+                    self.target_lstm_c[env_id.start] = state["target_lstm_c"]
 
                 # Fast path for fully vectorized envs
                 l = self.ep_lengths[env_id.start].item()
@@ -332,6 +352,7 @@ class PuffeRL:
                     self.free_idx += num_full
                     self.full_rows += num_full
 
+                action = torch.where(target_mask[:, None], target_action, action)
                 action = action.cpu().numpy()
                 if isinstance(logits, torch.distributions.Normal):
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
@@ -449,8 +470,8 @@ class PuffeRL:
             )
             adv = mb_advantages
 
-            # One-liner to cancel my loss-masking:
-            mb_target_masks = torch.zeros_like(mb_target_masks)
+            # # One-liner to cancel my loss-masking:
+            # mb_target_masks = torch.zeros_like(mb_target_masks)
 
             # I wasn't rescaling the advantages properly, this might make things better
             filtered_adv = adv[~mb_target_masks]
@@ -1015,6 +1036,13 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
 
+    # Add the second policy here
+    target_args = args.copy()
+    target_args["load_model_path"] = target_args["train"]["target_policy"]
+    target_args["policy_name"] = "TargetDrive"
+
+    target_policy = load_policy(target_args, vecenv, env_name)
+
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = torch.cuda.current_device()
         torch.distributed.init_process_group(backend="nccl", world_size=world_size)
@@ -1033,7 +1061,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         logger = WandbLogger(args)
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    pufferl = PuffeRL(train_config, vecenv, policy, target_policy, logger)
 
     all_logs = []
     while pufferl.global_step < train_config["total_timesteps"]:
