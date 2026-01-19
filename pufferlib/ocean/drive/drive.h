@@ -103,6 +103,7 @@
 // Offsets
 #define COLLISION_RANGE 5
 #define Z_RANGE 3
+#define Z_BUFFER 4.0f // 4.0m buffer for different z level checking
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
@@ -1171,7 +1172,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         corners[i][1] =
             agent->y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
     }
-    float buffer = 4.0f; // 4.0m buffer for offroad checking
     int list_size = 0;
     GridMapEntity *entity_list =
         checkNeighbors(env, agent->x, agent->y, collision_offsets, COLLISION_RANGE * COLLISION_RANGE, &list_size);
@@ -1186,7 +1186,8 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         // Check for offroad collision with road edges
         if (entity->type == ROAD_EDGE) {
             int geometry_idx = entity_list[i].geometry_idx;
-            if (entity->traj_z[geometry_idx] > agent->z + buffer || entity->traj_z[geometry_idx] < agent->z - buffer)
+            if (entity->traj_z[geometry_idx] > agent->z + Z_BUFFER ||
+                entity->traj_z[geometry_idx] < agent->z - Z_BUFFER)
                 continue; // Edge is at a different z level
             float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
             float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
@@ -1745,14 +1746,16 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             if (entity->type == ROAD_EDGE || entity->type == ROAD_LINE || entity->type == ROAD_LANE) {
                 int geometry_idx = entity_list[i].geometry_idx;
                 DepthPoint val = compute_z_distance_to_road_segment(agent, entity, geometry_idx);
-                road_neighbours[valid_count++] = val;
+                if (val.dis < Z_BUFFER) {
+                    road_neighbours[valid_count++] = val;
+                }
             }
         }
 
         if (valid_count > 0) {
 
             qsort(road_neighbours, valid_count, sizeof(DepthPoint), compare_depthpoint);
-            int check_count = (valid_count < 25) ? valid_count : 25;
+            int check_count = (valid_count < 30) ? valid_count : 30;
             float sum_z = 0.0f;
             for (int i = 0; i < check_count; i++) {
                 sum_z += road_neighbours[i].z;
