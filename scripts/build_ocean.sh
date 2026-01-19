@@ -99,6 +99,7 @@ FLAGS=(
     "$SRC_DIR/$ENV.c" -o "$ENV"
     ./inih-r62/ini.c
     $LINK_ARCHIVES
+    -ldl
     -lm
     -lpthread
     $ERROR_LIMIT_FLAG

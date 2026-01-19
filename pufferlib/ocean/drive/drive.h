@@ -1210,10 +1210,6 @@ bool should_control_agent(Drive *env, int agent_idx) {
 
     Entity *entity = &env->entities[agent_idx];
 
-    // TODO: Move this elsewhere or remove
-    entity->width *= 0.7f;
-    entity->length *= 0.7f;
-
     if (env->control_mode == CONTROL_SDC_ONLY) {
         return agent_idx == env->sdc_track_index;
     }
