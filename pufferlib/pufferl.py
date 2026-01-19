@@ -1043,6 +1043,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
     target_policy = load_policy(target_args, vecenv, env_name)
 
+    # Freeze it maybe ?
+    for param in target_policy.parameters():
+        param.requires_grad = False
+
+    target_policy.eval()
+
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = torch.cuda.current_device()
         torch.distributed.init_process_group(backend="nccl", world_size=world_size)
