@@ -47,12 +47,13 @@ class Drive(pufferlib.PufferEnv):
         bptt_horizon=32,
         human_data_dir="pufferlib/resources/drive/human_demonstrations",
         max_expert_sequences=128,
-        save_expert_data=True,
+        prep_human_data=True,
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
         sequential_map_sampling=False,
+        ini_file_path="pufferlib/config/ocean/drive.ini",
     ):
         # env
         self.dt = dt
@@ -78,6 +79,7 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.ini_file_path = ini_file_path
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -101,7 +103,7 @@ class Drive(pufferlib.PufferEnv):
         self.init_steps = init_steps
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
-        self.save_expert_data = save_expert_data
+        self.prep_human_data = prep_human_data
         self.max_expert_sequences = int(max_expert_sequences)
         self.map_dir = map_dir
 
@@ -212,7 +214,7 @@ class Drive(pufferlib.PufferEnv):
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
-                ini_file="pufferlib/config/ocean/drive.ini",
+                ini_file=self.ini_file_path,
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
@@ -222,12 +224,15 @@ class Drive(pufferlib.PufferEnv):
 
         self.c_envs = binding.vectorize(*env_ids)
 
-        # Human data storage
+        # Human data preparation
         self.bptt_horizon = bptt_horizon
         self.human_data_dir = human_data_dir
         os.makedirs(self.human_data_dir, exist_ok=True)
-        if self.save_expert_data:
-            self._save_expert_data(bptt_horizon, self.max_expert_sequences)
+        if self.prep_human_data:
+            self._prep_human_data(
+                bptt_horizon,
+                self.max_expert_sequences,
+            )
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -297,7 +302,7 @@ class Drive(pufferlib.PufferEnv):
                     max_controlled_agents=self.max_controlled_agents,
                     map_id=map_ids[i],
                     max_agents=nxt - cur,
-                    ini_file="pufferlib/config/ocean/drive.ini",
+                    ini_file=self.ini_file_path,
                     init_steps=self.init_steps,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
@@ -378,7 +383,7 @@ class Drive(pufferlib.PufferEnv):
 
         return trajectories
 
-    def _save_expert_data(self, bptt_horizon=32, max_expert_sequences=10000):
+    def _prep_human_data(self, bptt_horizon=32, max_expert_sequences=91, save_data=True):
         """Collect and save expert trajectories with bptt_horizon length sequences."""
         trajectory_length = 91
 
@@ -389,20 +394,29 @@ class Drive(pufferlib.PufferEnv):
                 "Only classic dynamics model is currently supported."
             )
 
-        # Collect full expert trajectories - discrete is now (T, N) for joint actions
-        # Joint discrete action space: single integer per agent
-        expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 1), dtype=np.float32)
+        # Collect human trajectories. Discrete is (T, N, 1) given the joint action space
+        self.expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 1), dtype=np.float32)
 
-        # Continuous actions are always (T, N, 2)
-        expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
-        expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
-
+        # Continuous actions are of shape (T, N, 2)
+        self.expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
+        self.expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
         binding.vec_collect_expert_data(
-            self.c_envs, expert_actions_discrete, expert_actions_continuous, expert_observations_full
+            self.c_envs, self.expert_actions_discrete, self.expert_actions_continuous, self.expert_observations_full
         )
 
+        # Check if first N timesteps are all valid (not -1) for each agent
+        # Shape: (bptt_horizon, 1024, 1) -> (1024,) after checking all are valid
+        first_n_valid = np.all(self.expert_actions_discrete[:bptt_horizon, :, 0] != -1.0, axis=0)
+
+        # Get indices of agents with valid first N timesteps
+        valid_agent_indices = np.where(first_n_valid)[0]
+
+        valid_expert_actions_discrete = self.expert_actions_discrete[:, valid_agent_indices, :]
+        valid_expert_actions_continuous = self.expert_actions_continuous[:, valid_agent_indices, :]
+        valid_expert_observations = self.expert_observations_full[:, valid_agent_indices, :]
+
         # Determine how many sequences we can actually store
-        num_sequences = min(self.num_agents, max_expert_sequences)
+        num_sequences = min(len(valid_agent_indices), max_expert_sequences)
 
         # Preallocate sequences
         discrete_sequences = np.zeros((num_sequences, bptt_horizon, 1), dtype=np.float32)
@@ -412,24 +426,25 @@ class Drive(pufferlib.PufferEnv):
         # Take one sequence per agent (starting from timestep 0)
         for agent_idx in range(num_sequences):
             # For joint discrete, reshape to (bptt_horizon, 1)
-            discrete_sequences[agent_idx] = expert_actions_discrete[:bptt_horizon, agent_idx, :]
-            continuous_sequences[agent_idx] = expert_actions_continuous[:bptt_horizon, agent_idx, :]
-            obs_sequences[agent_idx] = expert_observations_full[:bptt_horizon, agent_idx, :]
+            discrete_sequences[agent_idx] = valid_expert_actions_discrete[:bptt_horizon, agent_idx, :]
+            continuous_sequences[agent_idx] = valid_expert_actions_continuous[:bptt_horizon, agent_idx, :]
+            obs_sequences[agent_idx] = valid_expert_observations[:bptt_horizon, agent_idx, :]
 
         self._cache_size = num_sequences
 
-        torch.save(
-            torch.from_numpy(discrete_sequences),
-            os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt"),
-        )
-        torch.save(
-            torch.from_numpy(continuous_sequences),
-            os.path.join(self.human_data_dir, f"expert_actions_continuous_h{bptt_horizon}.pt"),
-        )
-        torch.save(
-            torch.from_numpy(obs_sequences),
-            os.path.join(self.human_data_dir, f"expert_observations_h{bptt_horizon}.pt"),
-        )
+        if save_data:
+            torch.save(
+                torch.from_numpy(discrete_sequences),
+                os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt"),
+            )
+            torch.save(
+                torch.from_numpy(continuous_sequences),
+                os.path.join(self.human_data_dir, f"expert_actions_continuous_h{bptt_horizon}.pt"),
+            )
+            torch.save(
+                torch.from_numpy(obs_sequences),
+                os.path.join(self.human_data_dir, f"expert_observations_h{bptt_horizon}.pt"),
+            )
 
     def sample_expert_data(self, n_samples=512, return_both=False):
         """Sample a random batch of human (expert) sequences from disk.
@@ -520,25 +535,27 @@ def infer_human_actions(obj):
     valids = obj.get("valid", [])
 
     if len(positions) < 2 or len(velocities) < 2 or len(headings) < 2:
-        return [0.0] * trajectory_length, [0.0] * trajectory_length
+        return [-1.0] * trajectory_length, [-1.0] * trajectory_length
 
     dt = 0.1  # Discretization
     vehicle_length = obj.get("length", 4.5)  # Default vehicle length
 
-    for t in range(trajectory_length - 1):
+    for t in range(trajectory_length):
+        # Check if we have enough data and both current and next timesteps are valid
         if (
             t >= len(positions)
             or t >= len(velocities)
             or t >= len(headings)
             or t >= len(valids)
             or not valids[t]
-            or not valids[t + 1]
             or t + 1 >= len(positions)
             or t + 1 >= len(velocities)
             or t + 1 >= len(headings)
+            or t + 1 >= len(valids)
+            or not valids[t + 1]
         ):
-            expert_acceleration.append(0.0)
-            expert_steering.append(0.0)
+            expert_acceleration.append(-1.0)
+            expert_steering.append(-1.0)
             continue
 
         # Current state
@@ -575,25 +592,17 @@ def infer_human_actions(obj):
             steering = math.atan(tan_steering)
 
         # Clamp values to reasonable ranges
-        acceleration = max(-4.0, min(4.0, acceleration))
-        steering = max(-1.0, min(1.0, steering))
+        acceleration = max(-10.0, min(10.0, acceleration))
+        steering = max(-2.0, min(2.0, steering))
 
         expert_acceleration.append(acceleration)
         expert_steering.append(steering)
 
-    # Handle last timestep
-    expert_acceleration.append(0.0)
-    expert_steering.append(0.0)
-
-    # Ensure arrays are exactly trajectory_length
-    expert_acceleration = expert_acceleration[:trajectory_length]
-    expert_steering = expert_steering[:trajectory_length]
-
-    # Pad if necessary
-    while len(expert_acceleration) < trajectory_length:
-        expert_acceleration.append(0.0)
-    while len(expert_steering) < trajectory_length:
-        expert_steering.append(0.0)
+    # Ensure arrays are exactly trajectory_length (should already be, but just in case)
+    assert len(expert_acceleration) == trajectory_length, (
+        f"Expected {trajectory_length}, got {len(expert_acceleration)}"
+    )
+    assert len(expert_steering) == trajectory_length, f"Expected {trajectory_length}, got {len(expert_steering)}"
 
     return expert_acceleration, expert_steering
 
@@ -726,7 +735,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
             )
 
             # Infer and write human actions
-            if obj_type == 1:  # Only for vehicles
+            if obj_type in [1, 2, 3]:  # For vehicles, pedestrians, cyclists
                 human_accel, human_steering = infer_human_actions(obj)
 
                 # print(f"Human Acceleration: {human_accel}")
@@ -899,6 +908,60 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
 
     env.close()
+
+
+def test_human_demonstrations():
+    import matplotlib.pyplot as plt
+    from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
+    from pufferlib.pufferl import load_config, load_env
+
+    args = load_config("puffer_drive")
+    backend = args["eval"]["backend"]
+
+    args["env"]["map_dir"] = args["eval"]["map_dir"]
+    args["env"]["num_maps"] = args["eval"]["wosac_num_maps"]
+    args["env"]["sequential_map_sampling"] = True
+    dataset_name = args["env"]["map_dir"].split("/")[-1]
+
+    args["vec"] = dict(backend=backend, num_envs=1)
+    args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
+    args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
+    args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
+    args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
+    args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
+    # args["env"]["num_agents"] = args["eval"]["wosac_num_agents"]
+
+    vecenv = load_env("puffer_drive", args)
+
+    exp_actions = np.zeros((91, vecenv.num_agents, 1), dtype=np.float32)
+    exp_actions_cont = np.zeros((91, vecenv.num_agents, 2), dtype=np.float32)
+    exp_observations_full = np.zeros((91, vecenv.num_agents, vecenv.num_obs), dtype=np.float32)
+    binding.vec_collect_expert_data(vecenv.c_envs, exp_actions, exp_actions_cont, exp_observations_full)
+
+    evaluator = WOSACEvaluator(args)
+
+    gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+
+    # Step with inferred human actions
+    simulated_trajectories = evaluator.collect_simulated_trajectories(
+        args=args,
+        puffer_env=vecenv,
+        policy=None,
+        actions=exp_actions,
+    )
+
+    evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
+
+    # Analyze and compute metrics
+    agent_state = vecenv.get_global_agent_state()
+    road_edge_polylines = vecenv.get_road_edge_polylines()
+    results = evaluator.compute_metrics(
+        gt_trajectories,
+        simulated_trajectories,
+        agent_state,
+        road_edge_polylines,
+        True,
+    )
 
 
 if __name__ == "__main__":

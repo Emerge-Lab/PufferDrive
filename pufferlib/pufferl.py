@@ -997,15 +997,16 @@ class WandbLogger:
     def __init__(self, args, load_id=None, resume="allow"):
         import wandb
 
+        run_name = args.get("wandb_run_name", None)
         wandb.init(
             id=load_id or wandb.util.generate_id(),
+            name=run_name,
             project=args["wandb_project"],
             group=args["wandb_group"],
             allow_val_change=True,
             save_code=False,
             resume=resume,
             config=args,
-            name=args.get("wandb_name"),
             tags=[args["tag"]] if args["tag"] is not None else [],
         )
         self.wandb = wandb
@@ -1100,7 +1101,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     """Evaluate a policy."""
 
     args = args or load_config(env_name)
-    args["env"]["save_expert_data"] = False
+    args["env"]["prep_human_data"] = False
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
@@ -1320,8 +1321,10 @@ def controlled_exp(env_name, args=None):
             section, param = key.split(".")
             exp_args[section][param] = value
 
-        # Create descriptive tag
-        # exp_args["tag"] = "_".join([f"{param.split('.')[-1]}={v}" for param, v in zip(keys, combo)])
+        # Create descriptive name
+        run_name_parts = [f"{key.split('.')[-1]}={value}" for key, value in zip(keys, combo)]
+        exp_name = "_".join(run_name_parts)
+        exp_args["wandb_run_name"] = f"{exp_name}"
 
         print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
 
