@@ -1010,7 +1010,7 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
         int num_agents = env->active_agent_count;
 
         // Allocate temporary buffers for this environment
-        float *env_actions_discrete = (float *)malloc(trajectory_length * num_agents * 2 * sizeof(float));
+        float *env_actions_discrete = (float *)malloc(trajectory_length * num_agents * 1 * sizeof(float));
         float *env_actions_continuous = (float *)malloc(trajectory_length * num_agents * 2 * sizeof(float));
         float *env_obs = (float *)malloc(trajectory_length * num_agents * max_obs * sizeof(float));
 
@@ -1029,10 +1029,9 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
         for (int t = 0; t < trajectory_length; t++) {
             for (int a = 0; a < num_agents; a++) {
                 // Copy discrete actions
-                float *discrete_action_src = &env_actions_discrete[t * num_agents * 2 + a * 2];
+                float *discrete_action_src = &env_actions_discrete[t * num_agents + a];
                 float *discrete_action_dst = (float *)PyArray_GETPTR3(expert_actions_discrete, t, agent_offset + a, 0);
                 discrete_action_dst[0] = discrete_action_src[0];
-                discrete_action_dst[1] = discrete_action_src[1];
 
                 // Copy continuous actions
                 float *continuous_action_src = &env_actions_continuous[t * num_agents * 2 + a * 2];

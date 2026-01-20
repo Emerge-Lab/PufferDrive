@@ -2338,8 +2338,11 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
             int agent_idx = env->active_agent_indices[i];
             Entity *agent = &env->entities[agent_idx];
 
-            // Check bounds
-            if (t < agent->array_size && agent->expert_accel && agent->expert_steering) {
+            // Check bounds and validity
+            bool is_valid = (t < agent->array_size && agent->expert_accel && agent->expert_steering &&
+                             agent->expert_accel[t] != -1.0f && agent->expert_steering[t] != -1.0f);
+
+            if (is_valid) {
                 float continuous_accel = agent->expert_accel[t];
                 float continuous_steer = agent->expert_steering[t];
 
@@ -2378,8 +2381,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 int discrete_offset = t * env->active_agent_count + i;
                 expert_actions_discrete_out[discrete_offset] = (float)joint_action;
 
-                // Apply the expert actions to env->actions
-                // so that c_step will use them
+                // Apply the expert actions to env->actions so that c_step will use them
                 if (env->action_type == 1) { // continuous
                     float (*action_array_f)[2] = (float (*)[2])env->actions;
                     action_array_f[i][0] = continuous_accel / ACCELERATION_VALUES[6]; // Normalize
@@ -2387,6 +2389,32 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 } else {                                                              // discrete
                     int *action_array = (int *)env->actions;
                     action_array[i] = joint_action;
+
+                    printf("Timestep %d, Agent %d: VALID - Accel: %.3f, Steer: %.3f, Discrete: %d\n", t, i,
+                           continuous_accel, continuous_steer, joint_action);
+                }
+            } else {
+                // Invalid action: store -1.0 as placeholder
+                int continuous_offset = t * env->active_agent_count * 2 + i * 2;
+                expert_actions_continuous_out[continuous_offset] = -1.0f;
+                expert_actions_continuous_out[continuous_offset + 1] = -1.0f;
+
+                int discrete_offset = t * env->active_agent_count + i;
+                expert_actions_discrete_out[discrete_offset] = -1.0f;
+
+                printf("DEBUG: Set discrete_offset=%d to -1.0, value is now: %.1f\n", discrete_offset,
+                       expert_actions_discrete_out[discrete_offset]);
+
+                // Apply "do nothing" action (zero acceleration and steering)
+                if (env->action_type == 1) { // continuous
+                    float (*action_array_f)[2] = (float (*)[2])env->actions;
+                    action_array_f[i][0] = 0.0f; // No acceleration
+                    action_array_f[i][1] = 0.0f; // No steering
+                } else {                         // discrete
+                    int *action_array = (int *)env->actions;
+                    // "Do nothing" action: accel_idx=3 (0.0 m/s²), steer_idx=6 (0.0)
+                    // ACCELERATION_VALUES[3] = 0.0, STEERING_VALUES[6] = 0.0
+                    action_array[i] = 3 * 13 + 6; // = 45
                 }
             }
         }
