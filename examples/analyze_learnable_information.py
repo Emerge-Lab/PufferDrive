@@ -5,6 +5,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions.categorical import Categorical
 import numpy as np
+import matplotlib.pyplot as plt
 from pufferlib.pufferl import load_config, load_env
 
 
@@ -76,7 +77,7 @@ def train_bc_policy(obs, actions, config):
     # Initialize wandb
     wandb.init(project="gsp_epiplexity", config=config)
 
-    wandb.log({"dataset_size": human_obs.shape[0]})
+    wandb.log({"dataset_size": obs.shape[0]})
 
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -137,38 +138,72 @@ def train_bc_policy(obs, actions, config):
             global_step += 1
 
         avg_epoch_loss = np.mean(epoch_losses)
-        print(f"Epoch {epoch + 1}/{config['epochs']}: Loss = {avg_epoch_loss:.4f}")
+
+        if avg_epoch_loss < 0.001:
+            print(f"Early stopping at epoch {epoch + 1} with loss {avg_epoch_loss:.6f}")
+            break
+        else:
+            print(f"Epoch {epoch + 1}/{config['epochs']}: Loss = {avg_epoch_loss:.4f}")
 
     return losses, policy
 
 
-def compute_epiplexity(losses):
-    """Step 3: Compute area under loss curve (epiplexity)"""
+def compute_epiplexity(losses, dataset_size):
+    """Step 3: Compute area under loss curve above final loss (epiplexity)"""
     print("Computing epiplexity...")
 
-    # Area under the curve using trapezoidal rule
-    epiplexity = np.trapz(losses)
+    # Convert to numpy array
+    losses_array = np.array(losses)
 
-    print(f"Epiplexity (AUC): {epiplexity:.4f}")
+    # Take final loss as the last value (asymptotic loss)
+    final_loss = losses_array[-1]
+
+    # Epiplexity: area under the curve above the final loss
+    # This represents the structural information extracted during training
+    losses_above_final = losses_array - final_loss
+    epiplexity = np.trapz(losses_above_final)
+
+    print(f"Final Loss: {final_loss:.4f}")
+    print(f"Epiplexity (AUC above final loss): {epiplexity:.4f}")
 
     # Log to wandb
-    wandb.log({"epiplexity": epiplexity})
+    wandb.log({"epiplexity": epiplexity, "final_loss": final_loss})
+
+    # Create visualization
+    fig, ax = plt.subplots(figsize=(10, 7))
 
     # Plot loss curve
-    import matplotlib.pyplot as plt
+    steps = np.arange(len(losses_array))
+    ax.plot(steps, losses_array, linewidth=1.5, label="Training loss", zorder=3)
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(losses)
-    plt.xlabel("Training Step")
-    plt.ylabel("Loss")
-    plt.title("BC Training Loss Curve")
-    plt.grid(True)
+    # Draw horizontal line at final loss
+    ax.axhline(y=final_loss, color="red", linestyle="--", linewidth=2, label=f"Final Loss = {final_loss:.4f}", zorder=2)
+
+    # Fill the area between loss curve and final loss (epiplexity area)
+    ax.fill_between(
+        steps,
+        losses_array,
+        final_loss,
+        where=(losses_array >= final_loss),
+        color="red",
+        alpha=0.3,
+        label=f"Epiplexity = {epiplexity:.4f}",
+        zorder=1,
+    )
+
+    ax.set_xlabel("Training step", fontsize=12)
+    ax.set_ylabel("Loss", fontsize=12)
+    ax.set_title(f"BC training loss curve (N={dataset_size} samples)", fontsize=14)
+    ax.legend(loc="upper right", fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
 
     # Log plot to wandb
-    wandb.log({"loss_curve_plot": wandb.Image(plt)})
+    wandb.log({"loss_curve_with_epiplexity": wandb.Image(fig)})
     plt.close()
 
-    return epiplexity
+    return epiplexity, final_loss
 
 
 if __name__ == "__main__":
@@ -176,7 +211,7 @@ if __name__ == "__main__":
     args = load_config("puffer_drive")
     args["vec"]["backend"] = "Serial"
 
-    for max_expert_sequences in [12, 64, 256, 512]:
+    for max_expert_sequences in [16, 32, 64, 256, 512]:
         args["env"]["num_agents"] = max_expert_sequences
 
         config = {
@@ -185,7 +220,7 @@ if __name__ == "__main__":
             "num_actions": 91,  # 7*13 for classic discrete action space
             "learning_rate": 1e-4,
             "epochs": 10_000,
-            "minibatches": 5,
+            "minibatches": 4,
             "max_expert_sequences": max_expert_sequences,
         }
 
@@ -199,9 +234,15 @@ if __name__ == "__main__":
         # Step 2: Train BC policy
         losses, policy = train_bc_policy(human_obs, human_actions, config)
 
-        # Step 3: Compute epiplexity
-        epiplexity = compute_epiplexity(losses)
+        # Step 3: Compute epiplexity with visualization
+        epiplexity, final_loss = compute_epiplexity(losses, human_obs.shape[0])
+
+        print("\n" + "=" * 60)
+        print(f"RESULTS (N={max_expert_sequences}):")
+        print(f"  Final Loss: {final_loss:.4f}")
+        print(f"  Epiplexity: {epiplexity:.4f}")
+        print("=" * 60 + "\n")
 
         env.close()
 
-    wandb.finish()
+        wandb.finish()
