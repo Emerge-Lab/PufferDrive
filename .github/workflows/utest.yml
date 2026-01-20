@@ -1,0 +1,55 @@
+name: Unit tests
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Free up disk space
+        run: |
+          echo "Before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
+          echo "After cleanup:"
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y build-essential cmake
+
+      - name: Upgrade pip
+        run: python -m pip install -U pip
+
+      - name: Install pufferlib
+        run: |
+          pip install -e .[cpu] --no-cache-dir
+        env:
+          TMPDIR: ${{ runner.temp }}/build
+          PIP_NO_CACHE_DIR: 1
+
+      - name: Compile C extensions
+        run: python setup.py build_ext --inplace --force
+
+      - name: Run C ini parsing tests
+        run: |
+          chmod +x tests/ini_parser/build_n_test.sh
+          ./tests/ini_parser/build_n_test.sh
+
+      - name: Run python ini parsing tests
+        run: python tests/test_drive_config.py
