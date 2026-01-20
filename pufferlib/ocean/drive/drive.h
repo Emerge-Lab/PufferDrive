@@ -2320,6 +2320,7 @@ void c_step(Drive *env) {
 
 void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_actions_continuous_out,
                            float *expert_obs_out) {
+
     int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
     int max_obs = ego_dim + 7 * (MAX_AGENTS - 1) + 7 * MAX_ROAD_SEGMENT_OBSERVATIONS;
 
@@ -2328,7 +2329,11 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
     c_reset(env);
 
     for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
-        // Set expert actions for this timestep
+        // Get the current observations
+        int obs_offset = t * env->active_agent_count * max_obs;
+        memcpy(&expert_obs_out[obs_offset], env->observations, env->active_agent_count * max_obs * sizeof(float));
+
+        // Now set expert actions for this timestep
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             Entity *agent = &env->entities[agent_idx];
@@ -2369,14 +2374,22 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 int num_steer = 13;
                 int joint_action = best_accel_idx * num_steer + best_steer_idx;
 
-                // Store joint discrete action as single element (matching MultiDiscrete([91]))
+                // Store joint discrete action
                 int discrete_offset = t * env->active_agent_count + i;
                 expert_actions_discrete_out[discrete_offset] = (float)joint_action;
+
+                // Apply the expert actions to env->actions
+                // so that c_step will use them
+                if (env->action_type == 1) { // continuous
+                    float (*action_array_f)[2] = (float (*)[2])env->actions;
+                    action_array_f[i][0] = continuous_accel / ACCELERATION_VALUES[6]; // Normalize
+                    action_array_f[i][1] = continuous_steer / STEERING_VALUES[12];    // Normalize
+                } else {                                                              // discrete
+                    int *action_array = (int *)env->actions;
+                    action_array[i] = joint_action;
+                }
             }
         }
-
-        int obs_offset = t * env->active_agent_count * max_obs;
-        memcpy(&expert_obs_out[obs_offset], env->observations, env->active_agent_count * max_obs * sizeof(float));
 
         // Step environment to get next observations
         if (t < TRAJECTORY_LENGTH - 1) {
