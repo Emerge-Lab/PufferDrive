@@ -67,8 +67,15 @@ class WOSACEvaluator:
         """
         return puffer_env.get_ground_truth_trajectories()
 
-    def collect_simulated_trajectories(self, args, puffer_env, policy):
+    def collect_simulated_trajectories(self, args, puffer_env, policy=None, actions=None):
         """Roll out policy in env and collect trajectories.
+        Args:
+            args: configuration dictionary
+            puffer_env: PufferDrive environment
+            policy: policy to evaluate (if None, actions must be provided)
+            actions: actions to step the agent (if policy is None). Currently only works with discrete actions and the
+                classic dynamics model. Shape: [time, num_agents, 1]
+
         Returns:
             trajectories: dict with keys 'x', 'y', 'z', 'heading' each of shape
                 (num_agents, num_rollouts, num_steps)
@@ -88,9 +95,11 @@ class WOSACEvaluator:
 
         for rollout_idx in range(self.num_rollouts):
             print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
+
             obs, info = puffer_env.reset()
             state = {}
-            if args["train"]["use_rnn"]:
+
+            if args["train"]["use_rnn"] and policy is not None:
                 state = dict(
                     lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
                     lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
@@ -106,14 +115,28 @@ class WOSACEvaluator:
                 trajectories["id"][:, rollout_idx, time_idx] = agent_state["id"]
 
                 # Step policy
-                with torch.no_grad():
-                    ob_tensor = torch.as_tensor(obs).to(device)
-                    logits, value = policy.forward_eval(ob_tensor, state)
-                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                    action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                if policy is None and actions is not None:
+                    human_act_time_index = self.init_steps + time_idx
+                    action_np = actions[human_act_time_index, :].copy()
 
-                if isinstance(logits, torch.distributions.Normal):
-                    action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
+                    # Replace invalid actions (-1) with "do nothing" action
+                    # For discrete actions: use action 45 (accel=0, steer=0)
+                    # For continuous actions: use [0.0, 0.0]
+                    invalid_mask = action_np == -1.0
+
+                    if puffer_env.action_space.__class__.__name__ == "MultiDiscrete":
+                        # Discrete action space
+                        action_np[invalid_mask] = 45  # Do nothing action
+
+                elif policy is not None:
+                    with torch.no_grad():
+                        ob_tensor = torch.as_tensor(obs).to(device)
+                        logits, value = policy.forward_eval(ob_tensor, state)
+                        action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                        action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+
+                    if isinstance(logits, torch.distributions.Normal):
+                        action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
                 obs, _, _, _, _ = puffer_env.step(action_np)
 
