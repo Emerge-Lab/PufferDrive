@@ -101,6 +101,7 @@ FLAGS=(
     $LINK_ARCHIVES
     -lm
     -lpthread
+    -ldl
     $ERROR_LIMIT_FLAG
     -DPLATFORM_DESKTOP
 )
