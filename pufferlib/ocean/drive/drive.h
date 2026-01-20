@@ -163,6 +163,7 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
+    float target_episode_return;
 };
 
 typedef struct Entity Entity;
@@ -373,6 +374,7 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        env->log.target_episode_return += env->logs[i].target_episode_return;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
@@ -2122,6 +2124,8 @@ void c_step(Drive *env) {
         env->logs[i].lane_alignment_rate = lane_aligned;
 
         // Here, after all rewards for the agents are computed, I give them minus the reward of agent 0
+        // Also log the target episode return
+        env->logs[i].target_episode_return = env->logs[0].episode_return;
         if (i > 0) {
             float sdc_reward = env->rewards[0];
 
