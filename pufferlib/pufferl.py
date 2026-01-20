@@ -305,14 +305,21 @@ class PuffeRL:
                     mask=mask,
                 )
 
+                target_state = dict(
+                    reward=r,
+                    done=d,
+                    env_id=env_id,
+                    mask=mask,
+                )
+
                 if config["use_rnn"]:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
-                    state["target_lstm_h"] = self.target_lstm_h[env_id.start]
-                    state["target_lstm_c"] = self.target_lstm_c[env_id.start]
+                    target_state["lstm_h"] = self.target_lstm_h[env_id.start]
+                    target_state["lstm_c"] = self.target_lstm_c[env_id.start]
 
                 logits, value = self.policy.forward_eval(o_device, state)
-                target_logits, target_value = self.target_policy.forward_eval(o_device, state)
+                target_logits, target_value = self.target_policy.forward_eval(o_device, target_state)
 
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
 
@@ -324,8 +331,8 @@ class PuffeRL:
                 if config["use_rnn"]:
                     self.lstm_h[env_id.start] = state["lstm_h"]
                     self.lstm_c[env_id.start] = state["lstm_c"]
-                    self.target_lstm_h[env_id.start] = state["target_lstm_h"]
-                    self.target_lstm_c[env_id.start] = state["target_lstm_c"]
+                    self.target_lstm_h[env_id.start] = target_state["lstm_h"]
+                    self.target_lstm_c[env_id.start] = target_state["lstm_c"]
 
                 # Fast path for fully vectorized envs
                 l = self.ep_lengths[env_id.start].item()
@@ -1101,7 +1108,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     return all_logs
 
 
-def render_adversarial(env_name, args=None, vecenv=None, policy=None):
+def render_adversarial(env_name, args=None, vecenv=None, policy=None, target_policy=None):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon
     from matplotlib.animation import FuncAnimation
@@ -1119,6 +1126,12 @@ def render_adversarial(env_name, args=None, vecenv=None, policy=None):
     args["vec"] = dict(backend=backend, num_envs=1)
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
+
+    target_args = args.copy()
+    target_args["load_model_path"] = target_args["train"]["target_policy"]
+    target_args["policy_name"] = "TargetDrive"
+
+    target_policy = load_policy(target_args, vecenv, env_name)
 
     driver = vecenv.driver_env
 
@@ -1156,6 +1169,11 @@ def render_adversarial(env_name, args=None, vecenv=None, policy=None):
             lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
         )
 
+        target_state = dict(
+            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        )
+
         for time_idx in range(sim_steps):
             # Get global state
             agent_state = driver.get_global_agent_state()
@@ -1174,6 +1192,17 @@ def render_adversarial(env_name, args=None, vecenv=None, policy=None):
 
                 logits, value = policy.forward_eval(ob_tensor, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+
+                target_logits, target_value = target_policy.forward_eval(ob_tensor, target_state)
+                target_action, target_logprob, _ = pufferlib.pytorch.sample_logits(target_logits)
+
+                target_mask = torch.zeros_like(action[:, 0], dtype=bool)
+                agent_offsets = info[0].get("agent_offsets")
+
+                target_mask[agent_offsets[:-1]] = 1
+
+                action = torch.where(target_mask[:, None], target_action, action)
+
                 action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
             if isinstance(logits, torch.distributions.Normal):
