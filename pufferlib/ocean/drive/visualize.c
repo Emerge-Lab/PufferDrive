@@ -429,7 +429,7 @@ int main(int argc, char *argv[]) {
             obs_only = 1;
         } else if (strcmp(argv[i], "--lasers") == 0) {
             lasers = 1;
-        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
+        } else if (strcmp(argv[i], "--show-human-logs") == 0) {
             show_human_logs = 1;
         } else if (strcmp(argv[i], "--frame-skip") == 0) {
             if (i + 1 < argc) {
