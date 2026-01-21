@@ -54,6 +54,7 @@ class Drive(pufferlib.PufferEnv):
         map_dir="resources/drive/binaries/training",
         sequential_map_sampling=False,
         ini_file_path="pufferlib/config/ocean/drive.ini",
+        save_data_to_disk=True,
     ):
         # env
         self.dt = dt
@@ -80,6 +81,7 @@ class Drive(pufferlib.PufferEnv):
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
         self.ini_file_path = ini_file_path
+        self.save_data_to_disk = save_data_to_disk
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -227,7 +229,10 @@ class Drive(pufferlib.PufferEnv):
         # Human data preparation
         self.bptt_horizon = bptt_horizon
         self.human_data_dir = human_data_dir
+        self.save_data_to_disk = save_data_to_disk
+
         os.makedirs(self.human_data_dir, exist_ok=True)
+
         if self.prep_human_data:
             self._prep_human_data(
                 bptt_horizon,
@@ -383,11 +388,10 @@ class Drive(pufferlib.PufferEnv):
 
         return trajectories
 
-    def _prep_human_data(self, bptt_horizon=32, max_expert_sequences=91, save_data=True):
+    def _prep_human_data(self, bptt_horizon=32, max_expert_sequences=256):
         """Collect and save expert trajectories with bptt_horizon length sequences."""
         trajectory_length = 91
 
-        # Check for unsupported dynamics models
         if self.dynamics_model == "jerk":
             raise NotImplementedError(
                 "Expert data collection is not yet implemented for jerk dynamics model. "
@@ -396,10 +400,10 @@ class Drive(pufferlib.PufferEnv):
 
         # Collect human trajectories. Discrete is (T, N, 1) given the joint action space
         self.expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 1), dtype=np.float32)
-
         # Continuous actions are of shape (T, N, 2)
         self.expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
         self.expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
+
         binding.vec_collect_expert_data(
             self.c_envs, self.expert_actions_discrete, self.expert_actions_continuous, self.expert_observations_full
         )
@@ -432,7 +436,7 @@ class Drive(pufferlib.PufferEnv):
 
         self._cache_size = num_sequences
 
-        if save_data:
+        if self.save_data_to_disk:
             torch.save(
                 torch.from_numpy(discrete_sequences),
                 os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt"),
@@ -465,6 +469,8 @@ class Drive(pufferlib.PufferEnv):
             For continuous actions, the shape is always (n_samples, bptt_horizon, 2).
             Jerk dynamics model is not currently supported for expert data.
         """
+        if not self.save_data_to_disk:
+            raise ValueError("Expert data was not saved to disk. Cannot sample expert data.")
 
         discrete_path = os.path.join(self.human_data_dir, f"expert_actions_discrete_h{self.bptt_horizon}.pt")
         continuous_path = os.path.join(self.human_data_dir, f"expert_actions_continuous_h{self.bptt_horizon}.pt")
@@ -473,7 +479,8 @@ class Drive(pufferlib.PufferEnv):
         observations_full = torch.load(observations_path, map_location="cpu", weights_only=False)
 
         # Sample indices
-        indices = torch.randint(0, self._cache_size, (n_samples,))
+        samples = min(n_samples, self._cache_size)
+        indices = torch.randint(0, self._cache_size, (samples,))
         sampled_obs = observations_full[indices]
 
         if return_both:

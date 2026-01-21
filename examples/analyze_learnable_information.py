@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions.categorical import Categorical
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+
 from pufferlib.pufferl import load_config, load_env
 
 
@@ -68,6 +70,120 @@ def prepare_human_data(env, max_expert_sequences=512):
     observations = observations[valid_mask]
 
     return observations, action_labels
+
+
+def compute_observation_coverage(obs, max_expert_sequences, subsample_for_viz=5000):
+    """
+    Compute observation space coverage metrics.
+
+    Metrics:
+    1. Statistical Dispersion: variance, std, range per dimension
+    2. Effective Rank: PCA components needed to explain 95% variance
+    3. Visualizations: PCA projections and distributions
+    """
+    print("\nAnalyzing observation coverage...")
+
+    obs_np = obs.numpy() if isinstance(obs, torch.Tensor) else obs
+    n_samples, obs_dim = obs_np.shape
+
+    # === 1. Statistical Dispersion Metrics ===
+    obs_std = np.std(obs_np, axis=0)
+    obs_var = np.var(obs_np, axis=0)
+    obs_min = np.min(obs_np, axis=0)
+    obs_max = np.max(obs_np, axis=0)
+    obs_range = obs_max - obs_min
+
+    # Average metrics across dimensions
+    avg_std = np.mean(obs_std)
+    avg_var = np.mean(obs_var)
+    avg_range = np.mean(obs_range)
+
+    print(f"  Avg Std: {avg_std:.4f}")
+    print(f"  Avg Variance: {avg_var:.4f}")
+    print(f"  Avg Range: {avg_range:.4f}")
+
+    # === 2. Effective Rank (PCA) ===
+    pca = PCA()
+    pca.fit(obs_np)
+    explained_var_ratio = pca.explained_variance_ratio_
+    cumulative_var = np.cumsum(explained_var_ratio)
+
+    # Effective rank (number of dimensions to explain 95% variance)
+    effective_rank = np.argmax(cumulative_var >= 0.95) + 1
+
+    print(f"  Effective Rank (95% var): {effective_rank}/{obs_dim}")
+
+    # === 3. Visualizations ===
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+
+    # Plot 1: Variance per dimension
+    axes[0, 0].bar(range(min(50, obs_dim)), obs_var[:50], color="steelblue", edgecolor="black")
+    axes[0, 0].set_xlabel("Dimension", fontsize=11)
+    axes[0, 0].set_ylabel("Variance", fontsize=11)
+    axes[0, 0].set_title("Variance per Dimension (first 50)", fontsize=12, fontweight="bold")
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Plot 2: Range per dimension
+    axes[0, 1].bar(range(min(50, obs_dim)), obs_range[:50], color="coral", edgecolor="black")
+    axes[0, 1].set_xlabel("Dimension", fontsize=11)
+    axes[0, 1].set_ylabel("Range", fontsize=11)
+    axes[0, 1].set_title("Range per Dimension (first 50)", fontsize=12, fontweight="bold")
+    axes[0, 1].grid(True, alpha=0.3)
+
+    # Plot 3: PCA explained variance
+    axes[1, 0].plot(cumulative_var[: min(100, len(cumulative_var))], "b-", linewidth=2, label="Cumulative Variance")
+    axes[1, 0].axhline(y=0.95, color="r", linestyle="--", linewidth=2, label="95% threshold")
+    axes[1, 0].axvline(
+        x=effective_rank - 1, color="g", linestyle="--", linewidth=2, label=f"Effective rank = {effective_rank}"
+    )
+    axes[1, 0].set_xlabel("Number of Components", fontsize=11)
+    axes[1, 0].set_ylabel("Cumulative Explained Variance", fontsize=11)
+    axes[1, 0].set_title("PCA Cumulative Variance", fontsize=12, fontweight="bold")
+    axes[1, 0].legend(fontsize=10)
+    axes[1, 0].grid(True, alpha=0.3)
+
+    # Plot 4: 2D PCA projection
+    if n_samples > subsample_for_viz:
+        viz_indices = np.random.choice(n_samples, subsample_for_viz, replace=False)
+        obs_viz = obs_np[viz_indices]
+    else:
+        obs_viz = obs_np
+
+    pca_2d = PCA(n_components=2)
+    obs_2d = pca_2d.fit_transform(obs_viz)
+
+    axes[1, 1].scatter(obs_2d[:, 0], obs_2d[:, 1], alpha=0.4, s=10, c="purple", edgecolors="none")
+    axes[1, 1].set_xlabel(f"PC1 ({pca_2d.explained_variance_ratio_[0]:.2%} var)", fontsize=11)
+    axes[1, 1].set_ylabel(f"PC2 ({pca_2d.explained_variance_ratio_[1]:.2%} var)", fontsize=11)
+    axes[1, 1].set_title(f"2D PCA Projection (N={n_samples} samples)", fontsize=12, fontweight="bold")
+    axes[1, 1].grid(True, alpha=0.3)
+
+    plt.suptitle(
+        f"Observation Coverage Analysis (N={max_expert_sequences} sequences)", fontsize=14, fontweight="bold", y=1.00
+    )
+    plt.tight_layout()
+
+    # Save and log
+    plt.savefig(f"coverage_analysis_N{max_expert_sequences}.png", dpi=150, bbox_inches="tight")
+    wandb.log({f"coverage_analysis": wandb.Image(fig)})
+    plt.close()
+
+    # Log metrics to wandb
+    coverage_metrics = {
+        "coverage/dataset_size": n_samples,
+        "coverage/obs_dim": obs_dim,
+        "coverage/avg_std": avg_std,
+        "coverage/avg_variance": avg_var,
+        "coverage/avg_range": avg_range,
+        "coverage/effective_rank": effective_rank,
+        "coverage/effective_rank_ratio": effective_rank / obs_dim,
+        "coverage/pca_var_pc1": explained_var_ratio[0],
+        "coverage/pca_var_pc2": explained_var_ratio[1] if len(explained_var_ratio) > 1 else 0,
+    }
+
+    wandb.log(coverage_metrics)
+
+    return coverage_metrics
 
 
 def train_bc_policy(obs, actions, config):
@@ -159,9 +275,8 @@ def compute_epiplexity(losses, dataset_size):
     final_loss = losses_array[-1]
 
     # Epiplexity: area under the curve above the final loss
-    # This represents the structural information extracted during training
     losses_above_final = losses_array - final_loss
-    epiplexity = np.trapz(losses_above_final)
+    epiplexity = np.trapezoid(losses_above_final)
 
     print(f"Final Loss: {final_loss:.4f}")
     print(f"Epiplexity (AUC above final loss): {epiplexity:.4f}")
@@ -211,7 +326,7 @@ if __name__ == "__main__":
     args = load_config("puffer_drive")
     args["vec"]["backend"] = "Serial"
 
-    for max_expert_sequences in [16, 32, 64, 256, 512]:
+    for max_expert_sequences in [256, 512, 1024, 2048, 4096]:
         args["env"]["num_agents"] = max_expert_sequences
 
         config = {
@@ -233,6 +348,9 @@ if __name__ == "__main__":
 
         # Step 2: Train BC policy
         losses, policy = train_bc_policy(human_obs, human_actions, config)
+
+        # Analyze observation coverage
+        # coverage_metrics = compute_observation_coverage(human_obs, max_expert_sequences)
 
         # Step 3: Compute epiplexity with visualization
         epiplexity, final_loss = compute_epiplexity(losses, human_obs.shape[0])

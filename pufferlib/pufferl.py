@@ -429,6 +429,8 @@ class PuffeRL:
             # Select appropriate action type for training
             use_continuous = self.vecenv.driver_env._action_type_flag == 1
             human_actions = continuous_human_actions if use_continuous else discrete_human_actions
+            human_actions = human_actions.to(device)
+            human_observations = human_observations.to(device)
 
             # 2: Compute the log-likelihood of human actions under the current policy,
             # given the corresponding human observations. A higher likelihood indicates
@@ -439,10 +441,10 @@ class PuffeRL:
                 lstm_c=None,
             )
 
-            human_logits, _ = self.policy(human_observations.to(device), human_state)
+            human_logits, _ = self.policy(human_observations, human_state)
 
             _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
-                logits=human_logits, action=human_actions.to(device)
+                logits=human_logits, action=human_actions
             )
 
             adv = advantages[idx]
