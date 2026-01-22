@@ -327,7 +327,7 @@ class Drive(pufferlib.PufferEnv):
             "valid": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
             "is_vehicle": np.zeros(num_agents, dtype=np.int32),
-            "scenario_id": np.zeros(num_agents, dtype=np.int32),
+            "scenario_id": np.zeros(num_agents, dtype="S16"),
         }
 
         binding.vec_get_global_ground_truth_trajectories(
@@ -345,6 +345,8 @@ class Drive(pufferlib.PufferEnv):
         for key in trajectories:
             trajectories[key] = trajectories[key][:, None]
 
+        trajectories["scenario_id"] = trajectories["scenario_id"].astype(str)
+
         return trajectories
 
     def get_road_edge_polylines(self):
@@ -360,7 +362,7 @@ class Drive(pufferlib.PufferEnv):
             "x": np.zeros(total_points, dtype=np.float32),
             "y": np.zeros(total_points, dtype=np.float32),
             "lengths": np.zeros(num_polylines, dtype=np.int32),
-            "scenario_id": np.zeros(num_polylines, dtype=np.int32),
+            "scenario_id": np.zeros(num_polylines, dtype="S16"),
         }
 
         binding.vec_get_road_edge_polylines(
@@ -370,6 +372,8 @@ class Drive(pufferlib.PufferEnv):
             polylines["lengths"],
             polylines["scenario_id"],
         )
+
+        polylines["scenario_id"] = polylines["scenario_id"].astype(str)
 
         return polylines
 
@@ -438,6 +442,11 @@ def save_map_binary(map_data, output_file, unique_map_id):
         metadata = map_data.get("metadata", {})
         sdc_track_index = metadata.get("sdc_track_index", -1)  # -1 as default if not found
         tracks_to_predict = metadata.get("tracks_to_predict", [])
+
+        # Write original scenario_id
+        # NOTE: Think about how it might break CARLA ? (can add a default value)
+        scenario_id = map_data["scenario_id"]
+        f.write(struct.pack("16s", scenario_id.encode("utf-8")))
 
         # Write sdc_track_index
         f.write(struct.pack("i", sdc_track_index))

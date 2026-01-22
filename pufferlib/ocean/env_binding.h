@@ -763,7 +763,7 @@ static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
     int *valid_data = (int *)PyArray_DATA((PyArrayObject *)valid_arr);
     int *id_data = (int *)PyArray_DATA((PyArrayObject *)id_arr);
     int *is_vehicle_data = (int *)PyArray_DATA((PyArrayObject *)is_vehicle_arr);
-    int *scenario_id_data = (int *)PyArray_DATA((PyArrayObject *)scenario_id_arr);
+    char *scenario_id_data = (char *)PyArray_DATA((PyArrayObject *)scenario_id_arr);
 
     c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data,
                                            is_vehicle_data, scenario_id_data);
@@ -816,7 +816,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     int *valid_base = (int *)PyArray_DATA(valid_array);
     int *id_base = (int *)PyArray_DATA(id_array);
     int *is_vehicle_base = (int *)PyArray_DATA(is_vehicle_array);
-    int *scenario_id_base = (int *)PyArray_DATA(scenario_id_array);
+    char *scenario_id_base = (char *)PyArray_DATA(scenario_id_array);
 
     // Get number of timesteps from array shape
     npy_intp *x_shape = PyArray_DIMS(x_array);
@@ -832,7 +832,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
         c_get_global_ground_truth_trajectories(drive, &x_base[traj_offset], &y_base[traj_offset], &z_base[traj_offset],
                                                &heading_base[traj_offset], &valid_base[traj_offset],
                                                &id_base[agent_offset], &is_vehicle_base[agent_offset],
-                                               &scenario_id_base[agent_offset]);
+                                               &scenario_id_base[agent_offset * 16]);
 
         // Move offsets forward
         agent_offset += drive->active_agent_count;
@@ -882,7 +882,7 @@ static PyObject *vec_get_road_edge_polylines(PyObject *self, PyObject *args) {
     float *x_base = (float *)PyArray_DATA((PyArrayObject *)x_arr);
     float *y_base = (float *)PyArray_DATA((PyArrayObject *)y_arr);
     int *lengths_base = (int *)PyArray_DATA((PyArrayObject *)lengths_arr);
-    int *scenario_ids_base = (int *)PyArray_DATA((PyArrayObject *)scenario_ids_arr);
+    char *scenario_ids_base = (char *)PyArray_DATA((PyArrayObject *)scenario_ids_arr);
 
     int poly_offset = 0, pt_offset = 0;
     for (int i = 0; i < vec->num_envs; i++) {
@@ -890,7 +890,7 @@ static PyObject *vec_get_road_edge_polylines(PyObject *self, PyObject *args) {
         int np, tp;
         c_get_road_edge_counts(drive, &np, &tp);
         c_get_road_edge_polylines(drive, &x_base[pt_offset], &y_base[pt_offset], &lengths_base[poly_offset],
-                                  &scenario_ids_base[poly_offset]);
+                                  &scenario_ids_base[poly_offset * 16]);
         poly_offset += np;
         pt_offset += tp;
     }
