@@ -85,7 +85,7 @@ void compute_puff_advantage_cpu(torch::Tensor values, torch::Tensor rewards,
 }
 
 TORCH_LIBRARY(pufferlib, m) {
-   m.def("compute_puff_advantage(Tensor(a!) values, Tensor(b!) rewards, Tensor(c!) dones, Tensor(d!) importance, Tensor(e!) advantages, float gamma, float lambda, float rho_clip, float c_clip) -> ()");
+    m.def("compute_puff_advantage(Tensor(a!) values, Tensor(b!) rewards, Tensor(c!) dones, Tensor(d!) importance, Tensor(e!) advantages, float gamma, float lambda, float rho_clip, float c_clip) -> ()");
  }
 
 TORCH_LIBRARY_IMPL(pufferlib, CPU, m) {
