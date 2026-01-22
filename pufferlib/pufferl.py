@@ -1067,7 +1067,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
         print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
-        print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
+        print(f"Number of evaluated agents: {gt_trajectories['is_track_to_predict'].sum()}")
 
         # Roll out trained policy in the simulator
         simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)

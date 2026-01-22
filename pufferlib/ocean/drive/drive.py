@@ -326,7 +326,8 @@ class Drive(pufferlib.PufferEnv):
             "heading": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
             "valid": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
-            "is_vehicle": np.zeros(num_agents, dtype=np.int32),
+            "is_vehicle": np.zeros(num_agents, dtype=bool),
+            "is_track_to_predict": np.zeros(num_agents, dtype=bool),
             "scenario_id": np.zeros(num_agents, dtype="S16"),
         }
 
@@ -339,6 +340,7 @@ class Drive(pufferlib.PufferEnv):
             trajectories["valid"],
             trajectories["id"],
             trajectories["is_vehicle"],
+            trajectories["is_track_to_predict"],
             trajectories["scenario_id"],
         )
 
