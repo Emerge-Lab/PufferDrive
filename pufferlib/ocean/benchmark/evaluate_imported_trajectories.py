@@ -84,6 +84,15 @@ def evaluate_trajectories(simulated_trajectory_file, args):
     with open(simulated_trajectory_file, "rb") as f:
         sim_trajectories = pickle.load(f)
 
+    num_agents_sim = sim_trajectories["x"].shape[0]
+    assert num_agents_sim >= num_agents_gt, (
+        "There is less agents in your simulation than in the GT, so the computation won't be valid"
+    )
+
+    if num_agents_sim > num_agents_gt:
+        print("If you are evaluating on a subset of your trajectories it is fine.")
+        print("\n Else, you should consider changing the value of MAX_AGENTS in drive.h and compile")
+
     sim_trajectories = align_trajectories(sim_trajectories, gt_trajectories)
 
     assert check_alignment(sim_trajectories, gt_trajectories), (
