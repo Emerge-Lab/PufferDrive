@@ -133,7 +133,8 @@ class Drive(pufferlib.PufferEnv):
         if action_type == "discrete":
             if dynamics_model == "classic":
                 # Joint action space (assume dependence)
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 13])
+                self.joint_action_space_size = binding.NUM_ACCEL_BINS * binding.NUM_STEER_BINS
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([self.joint_action_space_size])
                 # Multi discrete (assume independence)
                 # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
             elif dynamics_model == "jerk":
@@ -398,9 +399,8 @@ class Drive(pufferlib.PufferEnv):
                 "Only classic dynamics model is currently supported."
             )
 
-        # Collect human trajectories. Discrete is (T, N, 1) given the joint action space
+        # Collect human trajectories.
         self.expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 1), dtype=np.float32)
-        # Continuous actions are of shape (T, N, 2)
         self.expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
         self.expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
 
@@ -970,8 +970,15 @@ def test_human_demonstrations():
         True,
     )
 
+    print("\n", results["realism_meta_score"])
+
+    from pprint import pprint
+
+    pprint(results)
+
 
 if __name__ == "__main__":
+    # test_human_demonstrations()
     # test_performance()
     # Process the train dataset
     process_all_maps(data_folder="data/processed/training")
