@@ -415,22 +415,23 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
-            # Compute log likelihood loss of human actions under current policy.
-            # 1: Sample a batch of human actions and observations from dataset
-            # Shape: [n_sequences, bptt_horizon, feature_dim]
-            discrete_human_actions, continuous_human_actions, human_observations = (
-                self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
-            )
+            # Compute log likelihood loss of human actions under current policy (if enabled)
+            if config["human_sequences"] > 0:
+                # 1: Sample a batch of human actions and observations from dataset
+                # Shape: [n_sequences, bptt_horizon, feature_dim]
+                discrete_human_actions, continuous_human_actions, human_observations = (
+                    self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
+                )
 
-            # Use helper function to compute realism metrics
-            # self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
-            # self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
+                # Use helper function to compute realism metrics
+                # self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
+                # self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
 
-            # Select appropriate action type for training
-            use_continuous = self.vecenv.driver_env._action_type_flag == 1
-            human_actions = continuous_human_actions if use_continuous else discrete_human_actions
-            human_actions = human_actions.to(device)
-            human_observations = human_observations.to(device)
+                # Select appropriate action type for training
+                use_continuous = self.vecenv.driver_env._action_type_flag == 1
+                human_actions = continuous_human_actions if use_continuous else discrete_human_actions
+                human_actions = human_actions.to(device)
+                human_observations = human_observations.to(device)
 
                 # 2: Compute the log-likelihood of human actions under the current policy,
                 # given the corresponding human observations. A higher likelihood indicates
@@ -502,7 +503,8 @@ class PuffeRL:
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
             losses["human_loss"] += human_loss / self.total_minibatches
-            self.realism["human_log_prob"] = human_log_prob.mean().item()
+            if config["human_sequences"] > 0:
+                self.realism["human_log_prob"] = human_log_prob.mean().item()
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
