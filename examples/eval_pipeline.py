@@ -244,14 +244,22 @@ def evaluate_bc_policy(config, vecenv, evaluator, policy_path):
 
 
 def evaluate_rl_policy(config, vecenv, evaluator, policy_path):
-    """TODO: Evaluate a RL policy."""
+    """Evaluate an RL policy using WOSAC metrics."""
 
     config["load_model_path"] = policy_path
 
-    policy = load_policy("puffer_drive", config, vecenv)
+    # Load policy
+    policy = load_policy(config, vecenv, "puffer_drive")
+    policy.eval()
 
     gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
-    simulated_trajectories = evaluator.collect_wosac_random_baseline(vecenv)
+
+    # Roll out trained policy in the simulator
+    simulated_trajectories = evaluator.collect_simulated_trajectories(
+        args=config,
+        puffer_env=vecenv,
+        policy=policy,
+    )
 
     # Compute metrics
     agent_state = vecenv.driver_env.get_global_agent_state()
@@ -300,13 +308,13 @@ def pipeline(env_name="puffer_drive"):
     df_results_bc = evaluate_bc_policy(config, vecenv, evaluator, POLICY_DIR + "/bc_policy.pt")
     df_results_bc["policy"] = "bc_policy"
 
-    # TODO: Baseline: Self-play RL policy
-    # df_results_self_play = evaluate_rl_policy(config, vecenv, evaluator, POLICY_DIR + "/self_play_policy.pt)
+    # Baseline: Self-play RL policy
+    df_results_self_play = evaluate_rl_policy(config, vecenv, evaluator, POLICY_DIR + "/self_play_policy.pt")
+    df_results_self_play["policy"] = "self_play_rl"
 
-    # ...
-
-    # TODO: Guided self-play policy
-    # ...
+    # Guided self-play policy
+    df_results_guided_self_play = evaluate_rl_policy(config, vecenv, evaluator, POLICY_DIR + "/guided_self_play_policy.pt")
+    df_results_guided_self_play["policy"] = "guided_self_play_rl"
 
     # Baseline: Random policy
     df_results_random = evaluate_random_policy(config, vecenv, evaluator)
@@ -319,7 +327,8 @@ def pipeline(env_name="puffer_drive"):
             df_results_inferred_human,
             df_results_random,
             df_results_bc,
-            # df_results_self_play,
+            df_results_self_play,
+            df_results_guided_self_play,
         ],
         ignore_index=True,
     )
