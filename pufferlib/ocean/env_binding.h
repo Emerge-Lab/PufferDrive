@@ -1099,6 +1099,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
     }
 
     // Make constants accessible from Python
+    PyModule_AddIntConstant(m, "NUM_ACCEL_BINS", NUM_ACCEL_BINS);
+    PyModule_AddIntConstant(m, "NUM_STEER_BINS", NUM_STEER_BINS);
     PyModule_AddIntConstant(m, "MAX_ROAD_SEGMENT_OBSERVATIONS", MAX_ROAD_SEGMENT_OBSERVATIONS);
     PyModule_AddIntConstant(m, "MAX_AGENTS", MAX_AGENTS);
     PyModule_AddIntConstant(m, "TRAJECTORY_LENGTH", TRAJECTORY_LENGTH);

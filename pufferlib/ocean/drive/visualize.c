@@ -224,15 +224,21 @@ static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
 
             // Check bounds
             if (timestep < agent->array_size && agent->expert_accel && agent->expert_steering) {
+
+                // Check if expert actions are invalid (-1 means no action available)
+                if (agent->expert_accel[timestep] == -1.0f && agent->expert_steering[timestep] == -1.0f) {
+                    // Do nothing - apply zero action
+                    continue;
+                }
                 if (env->action_type == 1) { // continuous
                     float (*action_array_f)[2] = (float (*)[2])env->actions;
-                    action_array_f[j][0] = agent->expert_accel[timestep] / ACCELERATION_VALUES[6];
-                    action_array_f[j][1] = agent->expert_steering[timestep] / STEERING_VALUES[12];
+                    action_array_f[j][0] = agent->expert_accel[timestep] / ACCEL_MAX;
+                    action_array_f[j][1] = agent->expert_steering[timestep] / STEER_MAX;
                 } else { // discrete
                     // Discretize to nearest action
                     int best_accel_idx = 0;
                     float min_accel_diff = fabsf(agent->expert_accel[timestep] - ACCELERATION_VALUES[0]);
-                    for (int k = 1; k < 7; k++) {
+                    for (int k = 1; k < NUM_ACCEL_BINS; k++) {
                         float diff = fabsf(agent->expert_accel[timestep] - ACCELERATION_VALUES[k]);
                         if (diff < min_accel_diff) {
                             min_accel_diff = diff;
@@ -242,7 +248,7 @@ static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
 
                     int best_steer_idx = 0;
                     float min_steer_diff = fabsf(agent->expert_steering[timestep] - STEERING_VALUES[0]);
-                    for (int k = 1; k < 13; k++) {
+                    for (int k = 1; k < NUM_STEER_BINS; k++) {
                         float diff = fabsf(agent->expert_steering[timestep] - STEERING_VALUES[k]);
                         if (diff < min_steer_diff) {
                             min_steer_diff = diff;
@@ -251,7 +257,7 @@ static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
                     }
 
                     int *action_array = (int *)env->actions;
-                    action_array[j] = best_accel_idx * 13 + best_steer_idx;
+                    action_array[j] = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
                 }
             }
         }
@@ -265,8 +271,8 @@ static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
                 action_array_f[j][1] = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
             } else { // discrete
                 int *action_array = (int *)env->actions;
-                // Random action index (7 accel values * 13 steer values = 91 total)
-                action_array[j] = rand() % (7 * 13);
+                // Random action index
+                action_array[j] = rand() % (NUM_ACCEL_BINS * NUM_STEER_BINS);
             }
         }
     } else {
@@ -380,9 +386,14 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     client->cyclist = LoadModel("resources/drive/cyclist.glb");
     client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
 
-    Weights *weights = load_weights(policy_name);
-    printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    Weights *weights = NULL;
+    DriveNet *net = NULL;
+
+    if (control == ACTIONS_FROM_POLICY) {
+        weights = load_weights(policy_name);
+        printf("Active agents in map: %d\n", env.active_agent_count);
+        net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    }
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
     char filename_topdown[256];
@@ -485,8 +496,14 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     free(client);
     free_allocated(&env);
-    free_drivenet(net);
-    free(weights);
+
+    if (net != NULL) {
+        free_drivenet(net);
+    }
+    if (weights != NULL) {
+        free(weights);
+    }
+
     return 0;
 }
 
@@ -495,18 +512,18 @@ int main(int argc, char *argv[]) {
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
-    int show_human_logs = 0;
+    int show_human_logs = 1;
     int frame_skip = 1;
     int zoom_in = 1;
-    const char *view_mode = "both";
+    const char *view_mode = "topdown";
 
     // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
-    int num_maps = 1;
-    int control = ACTIONS_FROM_POLICY;
+    int num_maps = 100;
+    int control = ACTIONS_INFERRED_FROM_HUMAN; // ACTIONS_INFERRED_FROM_HUMAN;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {

@@ -7,6 +7,7 @@ from typing import Dict
 import matplotlib.pyplot as plt
 import configparser
 import os
+from tqdm import tqdm
 
 import pufferlib
 from pufferlib.ocean.benchmark import metrics
@@ -40,6 +41,7 @@ class WOSACEvaluator:
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
         self.metrics_config.read(wosac_metrics_path)
+        self.mode = "rl"
 
     def _compute_metametric(self, metrics: pd.Series) -> float:
         metametric = 0.0
@@ -93,7 +95,7 @@ class WOSACEvaluator:
             "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
         }
 
-        for rollout_idx in range(self.num_rollouts):
+        for rollout_idx in tqdm(range(self.num_rollouts), desc="Collecting rollouts", colour="blue"):
             print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
 
             obs, info = puffer_env.reset()
@@ -128,7 +130,7 @@ class WOSACEvaluator:
                         # Discrete action space
                         action_np[invalid_mask] = 45  # Do nothing action
 
-                elif policy is not None:
+                elif policy is not None and self.mode == "rl":
                     with torch.no_grad():
                         ob_tensor = torch.as_tensor(obs).to(device)
                         logits, value = policy.forward_eval(ob_tensor, state)
@@ -137,6 +139,12 @@ class WOSACEvaluator:
 
                     if isinstance(logits, torch.distributions.Normal):
                         action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
+
+                elif policy is not None and self.mode == "bc_policy":
+                    with torch.no_grad():
+                        ob_tensor = torch.as_tensor(obs).to(device)
+                        pred_action = policy(ob_tensor, deterministic=True)
+                        action_np = pred_action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
                 obs, _, _, _, _ = puffer_env.step(action_np)
 
@@ -214,6 +222,8 @@ class WOSACEvaluator:
         assert np.array_equal(simulated_trajectories["id"][:, 0:1, 0], ground_truth_trajectories["id"]), (
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
+
+        print("Computing metrics...")
 
         eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
 
@@ -511,52 +521,53 @@ class WOSACEvaluator:
             }
         )
 
-        scene_level_results = df.groupby("scenario_id")[
+        # Aggregate along agent dimenision: Obtain one score per scenario
+        df_scene_level = df.groupby("scenario_id").mean().drop(columns=["agent_id"]).dropna()
+
+        # Exponentiate the averaged log-likelihoods to get final likelihoods
+        likelihood_columns = [col for col in df_scene_level.columns if col.startswith("likelihood_")]
+        df_scene_level[likelihood_columns] = np.exp(df_scene_level[likelihood_columns])
+
+        df_scene_level["realism_meta_score"] = df_scene_level.apply(self._compute_metametric, axis=1)
+        df_scene_level["num_agents_per_scene"] = df.groupby("scenario_id").size()
+        df_scene_level = df_scene_level.round(3)
+
+        # Get group summary metrics
+        kinematic_metrics = np.mean(
             [
-                "ade",
-                "min_ade",
-                "num_collisions_sim",
-                "num_collisions_ref",
-                "num_offroad_sim",
-                "num_offroad_ref",
-                "likelihood_linear_speed",
-                "likelihood_linear_acceleration",
-                "likelihood_angular_speed",
-                "likelihood_angular_acceleration",
-                "likelihood_distance_to_nearest_object",
-                "likelihood_time_to_collision",
-                "likelihood_collision_indication",
-                "likelihood_distance_to_road_edge",
-                "likelihood_offroad_indication",
+                df_scene_level["likelihood_linear_speed"],
+                df_scene_level["likelihood_linear_acceleration"],
+                df_scene_level["likelihood_angular_speed"],
+                df_scene_level["likelihood_angular_acceleration"],
             ]
-        ].mean()
+        )
 
-        # Transform log-likelihoods to positive scores:
-        likelihood_cols = [c for c in scene_level_results.columns if "likelihood" in c]
-        scene_level_results[likelihood_cols] = np.exp(scene_level_results[likelihood_cols])
+        interactive_metrics = np.mean(
+            [
+                df_scene_level["likelihood_collision_indication"],
+                df_scene_level["likelihood_distance_to_nearest_object"],
+                df_scene_level["likelihood_time_to_collision"],
+            ]
+        )
 
-        scene_level_results["realism_meta_score"] = scene_level_results.apply(self._compute_metametric, axis=1)
-        scene_level_results["num_agents"] = df.groupby("scenario_id").size()
-        scene_level_results = scene_level_results[
-            ["num_agents"] + [col for col in scene_level_results.columns if col != "num_agents"]
-        ]
+        map_metrics = np.mean(
+            [
+                df_scene_level["likelihood_distance_to_road_edge"],
+                df_scene_level["likelihood_offroad_indication"],
+            ]
+        )
+
+        df_scene_level["kinematic_metrics"] = kinematic_metrics
+        df_scene_level["interactive_metrics"] = interactive_metrics
+        df_scene_level["map_based_metrics"] = map_metrics
 
         if aggregate_results:
-            aggregate_metrics = scene_level_results.mean().to_dict()
-            aggregate_metrics["total_num_agents"] = scene_level_results["num_agents"].sum()
-            # Convert numpy types to Python native types
-            return {k: v.item() if hasattr(v, "item") else v for k, v in aggregate_metrics.items()}
+            # Aggregate over scenarios
+            aggregate_metrics = df_scene_level.mean().to_dict()
+            aggregate_metrics["total_num_agents"] = df_scene_level["num_agents_per_scene"].sum()
+            return aggregate_metrics
         else:
-            print("\n Scene-level results:\n")
-            print(scene_level_results)
-
-            print(f"\n Overall realism meta score: {scene_level_results['realism_meta_score'].mean():.4f}")
-            print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
-            print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
-
-            # print(f"\n Full agent-level results:\n")
-            # print(df)
-            return scene_level_results
+            return df_scene_level
 
     def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None, max_agents_to_plot=10):
         if agent_idx is None:

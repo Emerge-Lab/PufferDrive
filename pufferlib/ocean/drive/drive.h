@@ -110,9 +110,16 @@ static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 
 // Classic action space (for CLASSIC dynamics model)
-static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
-static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f,
-                                          0.167f,  0.333f,  0.500f,  0.667f,  0.833f,  1.000f};
+#define NUM_ACCEL_BINS 21
+#define ACCEL_MIN -4.0f
+#define ACCEL_MAX 4.0f
+
+#define NUM_STEER_BINS 31
+#define STEER_MIN -1.0f // radians
+#define STEER_MAX 1.0f
+
+static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
+static float STEERING_VALUES[NUM_STEER_BINS];
 
 static const float offsets[4][2] = {
     {-1, 1}, // top-left
@@ -402,6 +409,29 @@ void add_log(Drive *env) {
         env->log.static_agent_count += env->static_agent_count;
         env->log.n += 1;
     }
+}
+
+void init_action_space() {
+
+    float accel_step = (ACCEL_MAX - ACCEL_MIN) / (NUM_ACCEL_BINS - 1);
+    for (int i = 0; i < NUM_ACCEL_BINS; i++) {
+        ACCELERATION_VALUES[i] = ACCEL_MIN + i * accel_step;
+    }
+
+    float steer_step = (STEER_MAX - STEER_MIN) / (NUM_STEER_BINS - 1);
+    for (int i = 0; i < NUM_STEER_BINS; i++) {
+        STEERING_VALUES[i] = STEER_MIN + i * steer_step;
+    }
+
+    // printf("Acceleration values: ");
+    // for (int i = 0; i < NUM_ACCEL_BINS; i++) {
+    //     printf("%.3f ", ACCELERATION_VALUES[i]);
+    // }
+    // printf("\nSteering values: ");
+    // for (int i = 0; i < NUM_STEER_BINS; i++) {
+    //     printf("%.3f ", STEERING_VALUES[i]);
+    // }
+    // printf("\n");
 }
 
 // Guided autonomy helper functions
@@ -1579,6 +1609,7 @@ void init_goal_positions(Drive *env) {
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
+    init_action_space();
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
@@ -1669,12 +1700,12 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             acceleration = action_array_f[action_idx][0];
             steering = action_array_f[action_idx][1];
 
-            acceleration *= ACCELERATION_VALUES[6];
-            steering *= STEERING_VALUES[12];
+            acceleration *= ACCEL_MAX;
+            steering *= STEER_MAX;
         } else { // discrete
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
             int *action_array = (int *)env->actions;
-            int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+            int num_steer = NUM_STEER_BINS;
             int action_val = action_array[action_idx];
             int acceleration_index = action_val / num_steer;
             int steering_index = action_val % num_steer;
@@ -2214,14 +2245,14 @@ void c_step(Drive *env) {
 
         move_dynamics(env, i, agent_idx);
 
-        // Tiny jerk penalty for smoothness
-        if (env->dynamics_model == CLASSIC) {
-            float delta_vx = env->entities[agent_idx].vx - prev_vx;
-            float delta_vy = env->entities[agent_idx].vy - prev_vy;
-            float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
-            env->rewards[i] += jerk_penalty;
-            env->logs[i].episode_return += jerk_penalty;
-        }
+        // // Tiny jerk penalty for smoothness
+        // if (env->dynamics_model == CLASSIC) {
+        //     float delta_vx = env->entities[agent_idx].vx - prev_vx;
+        //     float delta_vy = env->entities[agent_idx].vy - prev_vy;
+        //     float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
+        //     env->rewards[i] += jerk_penalty;
+        //     env->logs[i].episode_return += jerk_penalty;
+        // }
     }
 
     // Compute rewards
@@ -2350,7 +2381,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 // Discretize acceleration - find closest value in ACCELERATION_VALUES
                 int best_accel_idx = 0;
                 float min_accel_diff = fabsf(continuous_accel - ACCELERATION_VALUES[0]);
-                for (int j = 1; j < 7; j++) {
+                for (int j = 1; j < NUM_ACCEL_BINS; j++) {
                     float diff = fabsf(continuous_accel - ACCELERATION_VALUES[j]);
                     if (diff < min_accel_diff) {
                         min_accel_diff = diff;
@@ -2361,7 +2392,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 // Discretize steering - find closest value in STEERING_VALUES
                 int best_steer_idx = 0;
                 float min_steer_diff = fabsf(continuous_steer - STEERING_VALUES[0]);
-                for (int j = 1; j < 13; j++) {
+                for (int j = 1; j < NUM_STEER_BINS; j++) {
                     float diff = fabsf(continuous_steer - STEERING_VALUES[j]);
                     if (diff < min_steer_diff) {
                         min_steer_diff = diff;
@@ -2370,8 +2401,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 }
 
                 // Compute joint discrete action: action = accel_idx * num_steer + steer_idx
-                int num_steer = 13;
-                int joint_action = best_accel_idx * num_steer + best_steer_idx;
+                int joint_action = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
 
                 // Store joint discrete action
                 int discrete_offset = t * env->active_agent_count + i;
@@ -2380,9 +2410,9 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 // Apply the expert actions to env->actions so that c_step will use them
                 if (env->action_type == 1) { // continuous
                     float (*action_array_f)[2] = (float (*)[2])env->actions;
-                    action_array_f[i][0] = continuous_accel / ACCELERATION_VALUES[6]; // Normalize
-                    action_array_f[i][1] = continuous_steer / STEERING_VALUES[12];    // Normalize
-                } else {                                                              // discrete
+                    action_array_f[i][0] = continuous_accel / ACCEL_MAX;
+                    action_array_f[i][1] = continuous_steer / STEER_MAX; // Normalize
+                } else {
                     int *action_array = (int *)env->actions;
                     action_array[i] = joint_action;
 
@@ -2405,9 +2435,11 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                     action_array_f[i][1] = 0.0f; // No steering
                 } else {                         // discrete
                     int *action_array = (int *)env->actions;
-                    // "Do nothing" action: accel_idx=3 (0.0 m/s²), steer_idx=6 (0.0)
-                    // ACCELERATION_VALUES[3] = 0.0, STEERING_VALUES[6] = 0.0
-                    action_array[i] = 3 * 13 + 6; // = 45
+                    // Apply "do nothing" action - middle acceleration (index 10) and straight steering (index 15)
+                    int do_nothing_accel_idx = NUM_ACCEL_BINS / 2; // Middle of range (should be 0 accel)
+                    int do_nothing_steer_idx = NUM_STEER_BINS / 2; // Middle of range (should be 0 steer)
+                    int do_nothing_action = do_nothing_accel_idx * NUM_STEER_BINS + do_nothing_steer_idx;
+                    action_array[i] = do_nothing_action;
                 }
             }
         }
@@ -3104,9 +3136,8 @@ void c_render(Drive *env) {
         int action_val = action_array[env->human_agent_idx];
 
         if (env->dynamics_model == CLASSIC) {
-            int num_steer = 13;
-            int accel_idx = action_val / num_steer;
-            int steer_idx = action_val % num_steer;
+            int accel_idx = action_val / NUM_STEER_BINS;
+            int steer_idx = action_val % NUM_STEER_BINS;
             float accel_value = ACCELERATION_VALUES[accel_idx];
             float steer_value = STEERING_VALUES[steer_idx];
 
