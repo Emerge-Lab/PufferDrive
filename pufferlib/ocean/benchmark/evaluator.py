@@ -130,21 +130,21 @@ class WOSACEvaluator:
                         # Discrete action space
                         action_np[invalid_mask] = 45  # Do nothing action
 
-                elif policy is not None and self.mode == "rl":
-                    with torch.no_grad():
-                        ob_tensor = torch.as_tensor(obs).to(device)
-                        logits, value = policy.forward_eval(ob_tensor, state)
-                        action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                        action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                elif policy is not None:
+                    if self.mode == "bc_policy":
+                        with torch.no_grad():
+                            ob_tensor = torch.as_tensor(obs).to(device)
+                            pred_action = policy(ob_tensor, deterministic=True)
+                            action_np = pred_action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                    else:
+                        with torch.no_grad():
+                            ob_tensor = torch.as_tensor(obs).to(device)
+                            logits, value = policy.forward_eval(ob_tensor, state)
+                            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                            action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
-                    if isinstance(logits, torch.distributions.Normal):
-                        action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
-
-                elif policy is not None and self.mode == "bc_policy":
-                    with torch.no_grad():
-                        ob_tensor = torch.as_tensor(obs).to(device)
-                        pred_action = policy(ob_tensor, deterministic=True)
-                        action_np = pred_action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                        if isinstance(logits, torch.distributions.Normal):
+                            action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
                 obs, _, _, _, _ = puffer_env.step(action_np)
 

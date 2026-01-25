@@ -49,7 +49,7 @@ def plot_wosac_results(df):
     axes[0].set_title("Aggregate realism score")
     # axes[0].set_ylim(0, 1.0)
     axes[0].grid(axis="y", alpha=0.3, linestyle="--")
-    axes[0].tick_params(axis="x", rotation=15)
+    axes[0].tick_params(axis="x", rotation=30)
 
     # Middle: Metric Categories
     df_metrics = df.melt(
@@ -64,7 +64,7 @@ def plot_wosac_results(df):
     # axes[1].set_ylim(0, 1.0)
     axes[1].legend(title="Policy", loc="upper left")
     axes[1].grid(axis="y", alpha=0.3, linestyle="--")
-    axes[1].tick_params(axis="x", rotation=15)
+    axes[1].tick_params(axis="x", rotation=30)
 
     # Right: ADE and minADE
     df_ade = df.melt(id_vars=["policy"], value_vars=["ade", "min_ade"])
@@ -244,14 +244,13 @@ def evaluate_bc_policy(config, vecenv, evaluator, policy_path):
 
 
 def evaluate_rl_policy(config, vecenv, evaluator, policy_path):
-    """TODO: Evaluate a RL policy."""
+    config["train"]["use_rnn"] = True
+    evaluator.mode = "rl_policy"
 
-    config["load_model_path"] = policy_path
-
-    policy = load_policy("puffer_drive", config, vecenv)
+    policy = load_policy(config, vecenv, "puffer_drive")
 
     gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
-    simulated_trajectories = evaluator.collect_wosac_random_baseline(vecenv)
+    simulated_trajectories = evaluator.collect_simulated_trajectories(config, vecenv, policy)
 
     # Compute metrics
     agent_state = vecenv.driver_env.get_global_agent_state()
@@ -297,15 +296,20 @@ def pipeline(env_name="puffer_drive"):
     df_results_inferred_human["policy"] = "inferred_human_actions"
 
     # Baseline: Imitation learning policy
-    df_results_bc = evaluate_bc_policy(config, vecenv, evaluator, POLICY_DIR + "/bc_policy.pt")
-    df_results_bc["policy"] = "bc_policy"
+    # df_results_bc = evaluate_bc_policy(config, vecenv, evaluator, POLICY_DIR + "/bc_policy.pt")
+    # df_results_bc["policy"] = "bc_policy"
 
-    # TODO: Baseline: Self-play RL policy
-    # df_results_self_play = evaluate_rl_policy(config, vecenv, evaluator, POLICY_DIR + "/self_play_policy.pt)
+    # Baseline: Self-play RL policy
+    # run: https://wandb.ai/emerge_/gsp/runs/qld2z6tn?nw=nwuserdaphnecor
+    df_results_self_play = evaluate_rl_policy(
+        config, vecenv, evaluator, "pufferlib/resources/drive/pufferdrive_weights.pt"
+    )  # POLICY_DIR + "/puffer_drive_sp_qld2z6tn.pt")
+    df_results_self_play["policy"] = "self_play_rl_base"
 
+    # TODO: Guided self-play policy (guidance in rewards)
     # ...
 
-    # TODO: Guided self-play policy
+    # TODO: Guided self-play policy (regularization)
     # ...
 
     # Baseline: Random policy
@@ -318,8 +322,8 @@ def pipeline(env_name="puffer_drive"):
             df_results_gt,
             df_results_inferred_human,
             df_results_random,
-            df_results_bc,
-            # df_results_self_play,
+            # df_results_bc,
+            df_results_self_play,
         ],
         ignore_index=True,
     )

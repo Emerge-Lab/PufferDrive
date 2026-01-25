@@ -1153,6 +1153,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             road_edge_polylines,
             args["eval"]["wosac_aggregate_results"],
         )
+        results = {k: v.item() if hasattr(v, "item") else v for k, v in results.items()}
 
         if args["eval"]["wosac_aggregate_results"]:
             import json

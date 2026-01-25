@@ -110,12 +110,12 @@ static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 
 // Classic action space (for CLASSIC dynamics model)
-#define NUM_ACCEL_BINS 21
+#define NUM_ACCEL_BINS 7 // 21
 #define ACCEL_MIN -4.0f
 #define ACCEL_MAX 4.0f
 
-#define NUM_STEER_BINS 31
-#define STEER_MIN -1.0f // radians
+#define NUM_STEER_BINS 13 // 31
+#define STEER_MIN -1.0f   // radians
 #define STEER_MAX 1.0f
 
 static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
