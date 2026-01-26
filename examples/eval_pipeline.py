@@ -269,8 +269,10 @@ def pipeline(env_name="puffer_drive"):
 
     config = load_config(env_name)
 
-    config["env"]["num_maps"] = 229
-    config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/validation_interactive_small"
+    config["env"]["num_maps"] = 20  # 229
+    config["env"]["map_dir"] = (
+        "pufferlib/resources/drive/binaries/training"  # "pufferlib/resources/drive/binaries/validation_interactive_small"
+    )
     config["wosac"]["enabled"] = True
     config["vec"]["backend"] = "PufferEnv"
     config["vec"]["num_envs"] = 1
@@ -292,8 +294,8 @@ def pipeline(env_name="puffer_drive"):
     df_results_gt["policy"] = "ground_truth"
 
     # Baseline: Agent with inferred human actions (using classic bicycle dynamics model)
-    df_results_inferred_human = evaluate_human_inferred_actions(config, vecenv, evaluator)
-    df_results_inferred_human["policy"] = "inferred_human_actions"
+    # df_results_inferred_human = evaluate_human_inferred_actions(config, vecenv, evaluator)
+    # df_results_inferred_human["policy"] = "inferred_human_actions"
 
     # Baseline: Imitation learning policy
     # df_results_bc = evaluate_bc_policy(config, vecenv, evaluator, POLICY_DIR + "/bc_policy.pt")
@@ -320,7 +322,7 @@ def pipeline(env_name="puffer_drive"):
     df = pd.concat(
         [
             df_results_gt,
-            df_results_inferred_human,
+            # df_results_inferred_human,
             df_results_random,
             # df_results_bc,
             df_results_self_play,
