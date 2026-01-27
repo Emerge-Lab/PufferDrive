@@ -542,7 +542,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
                 road_type = 15
             # breakpoint()
             if len(geometry) > 10 and road_type <= 16:
-                geometry = simplify_polyline(geometry, 0.1, 250)
+                geometry = simplify_polyline(geometry, 0.1, 25)
             size = len(geometry)
             # breakpoint()
             if road_type >= 0 and road_type <= 3:

@@ -1,5 +1,6 @@
 #include "drivenet.h"
 #include <string.h>
+#include "../env_config.h"
 
 // Use this test if the network changes to ensure that the forward pass
 // matches the torch implementation to the 3rd or ideally 4th decimal place
@@ -10,7 +11,7 @@ void test_drivenet() {
 
     float *observations = calloc(num_agents * num_obs, sizeof(float));
     for (int i = 0; i < num_obs * num_agents; i++) {
-        observations[i] = i % 7;
+        observations[i] = i % 8;
     }
 
     int *actions = calloc(num_agents * num_actions, sizeof(int));
@@ -32,46 +33,76 @@ void test_drivenet() {
 }
 
 void demo() {
+    // Read configuration from INI file
+    env_init_config conf = {0};
+    const char *ini_file = "pufferlib/config/ocean/drive.ini";
+    if (ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        exit(1);
+    }
 
-    // Note: The settings below are hardcoded for demo purposes. Since the policy was
-    // trained with these exact settings, that changing them may lead to
+    // Note: Use below hardcoded settings for 2.0 demo purposes. Since the policy was
+    // trained with these exact settings, changing them may lead to
     // weird behavior.
+    // Drive env = {
+    //     .human_agent_idx = 0,
+    //     .action_type = 0,          // Discrete
+    //     .dynamics_model = CLASSIC, // Classic dynamics
+    //     .reward_vehicle_collision = -1.0f,
+    //     .reward_offroad_collision = -1.0f,
+    //     .reward_goal = 1.0f,
+    //     .reward_goal_post_respawn = 0.25f,
+    //     .goal_radius = 2.0f,
+    //     .goal_behavior = 1,
+    //     .goal_target_distance = 30.0f,
+    //     .goal_speed = 10.0f,
+    //     .dt = 0.1f,
+    //     .episode_length = 300,
+    //     .termination_mode = 0,
+    //     .collision_behavior = 0,
+    //     .offroad_behavior = 0,
+    //     .init_steps = 0,
+    //     .init_mode = 0,
+    //     .control_mode = 0,
+    //     .map_name = "resources/drive/map_town_02_carla.bin",
+    // };
+
     Drive env = {
         .human_agent_idx = 0,
-        .action_type = 0,          // Discrete
-        .dynamics_model = CLASSIC, // Classic dynamics
-        .reward_vehicle_collision = -1.0f,
-        .reward_offroad_collision = -1.0f,
-        .reward_goal = 1.0f,
-        .reward_goal_post_respawn = 0.25f,
-        .goal_radius = 2.0f,
-        .goal_behavior = 1,
-        .goal_target_distance = 30.0f,
-        .goal_speed = 10.0f,
-        .dt = 0.1f,
-        .episode_length = 300,
-        .termination_mode = 0,
-        .collision_behavior = 0,
-        .offroad_behavior = 0,
-        .init_steps = 0,
-        .init_mode = 0,
-        .control_mode = 0,
-        .map_name = "resources/drive/map_town_02_carla.bin",
+        .action_type = 0, // Demo doesn't support continuous action space
+        .dynamics_model = conf.dynamics_model,
+        .reward_vehicle_collision = conf.reward_vehicle_collision,
+        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_goal = conf.reward_goal,
+        .reward_goal_post_respawn = conf.reward_goal_post_respawn,
+        .goal_radius = conf.goal_radius,
+        .goal_behavior = conf.goal_behavior,
+        .goal_target_distance = conf.goal_target_distance,
+        .goal_speed = conf.goal_speed,
+        .dt = conf.dt,
+        .episode_length = conf.episode_length,
+        .termination_mode = conf.termination_mode,
+        .collision_behavior = conf.collision_behavior,
+        .offroad_behavior = conf.offroad_behavior,
+        .init_steps = conf.init_steps,
+        .init_mode = conf.init_mode,
+        .control_mode = conf.control_mode,
+        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights_carla_town12.bin");
+    Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
-    int accel_delta = 2;
-    int steer_delta = 4;
+    int accel_delta = 1;
+    int steer_delta = 2;
     while (!WindowShouldClose()) {
         int *actions = (int *)env.actions; // Single integer per agent
 
-        forward(net, env.observations, actions);
-
-        if (IsKeyDown(KEY_LEFT_SHIFT)) {
+        if (!IsKeyDown(KEY_LEFT_SHIFT)) {
+            forward(net, env.observations, actions);
+        } else {
             if (env.dynamics_model == CLASSIC) {
                 // Classic dynamics: acceleration and steering
                 int accel_idx = 3; // neutral (0 m/s²)

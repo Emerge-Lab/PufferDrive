@@ -63,27 +63,22 @@
 
 // Grid cell size
 #define GRID_CELL_SIZE 5.0f
-#define MAX_ENTITIES_PER_CELL                                                                                          \
-    30 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in
-       // gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
-
-// Maximum number of agents per scene
 #ifndef MAX_AGENTS
 #define MAX_AGENTS 32
 #endif
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
-#define ROAD_FEATURES 7
-#define ROAD_FEATURES_ONEHOT 13
-#define PARTNER_FEATURES 7
+#define ROAD_FEATURES 8
+#define ROAD_FEATURES_ONEHOT 14
+#define PARTNER_FEATURES 8
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 7
-#define EGO_FEATURES_JERK 10
+#define EGO_FEATURES_CLASSIC 8
+#define EGO_FEATURES_JERK 11
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -105,6 +100,11 @@
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
 
+// Offsets
+#define COLLISION_RANGE 5
+#define Z_RANGE 3
+#define Z_BUFFER 4.0f // 4.0m buffer for different z level checking
+
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
@@ -121,13 +121,23 @@ static const float offsets[4][2] = {
     {-1, -1} // bottom-left
 };
 
-static const int collision_offsets[25][2] = {
-    {-2, -2}, {-1, -2}, {0, -2}, {1, -2}, {2, -2}, // Top row
-    {-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {2, -1}, // Second row
-    {-2, 0},  {-1, 0},  {0, 0},  {1, 0},  {2, 0},  // Middle row (including center)
-    {-2, 1},  {-1, 1},  {0, 1},  {1, 1},  {2, 1},  // Fourth row
-    {-2, 2},  {-1, 2},  {0, 2},  {1, 2},  {2, 2}   // Bottom row
-};
+static inline void generate_offsets(int offsets[][2], int offset_range) {
+    int half_grid = offset_range / 2;
+    int left_most = -half_grid;
+    int right_most = offset_range + left_most - 1;
+    int index = 0;
+    for (int dy = left_most; dy <= right_most; dy++) {
+        for (int dx = left_most; dx <= right_most; dx++) {
+            offsets[index][0] = dx;
+            offsets[index][1] = dy;
+            index++;
+        }
+    }
+}
+
+// Offset arrays
+int collision_offsets[COLLISION_RANGE * COLLISION_RANGE][2] = {0};
+int z_offsets[Z_RANGE * Z_RANGE][2] = {0};
 
 const Color STONE_GRAY = (Color){80, 80, 80, 255};
 const Color PUFF_RED = (Color){187, 0, 0, 255};
@@ -187,9 +197,11 @@ struct Entity {
     float goal_position_z;
     float init_goal_x;
     float init_goal_y;
+    float init_goal_z;
     int mark_as_expert;
     int collision_state;
-    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned
+    int aabb_collision_state;
+    float metrics_array[5]; // metrics_array: [collision, offroad, reached_goal, lane_aligned, avg_displacement_error]
     float x;
     float y;
     float z;
@@ -238,10 +250,11 @@ float relative_distance(float a, float b) {
     return distance;
 }
 
-float relative_distance_2d(float x1, float y1, float x2, float y2) {
+float relative_distance_3d(float x1, float y1, float z1, float x2, float y2, float z2) {
     float dx = x2 - x1;
     float dy = y2 - y1;
-    float distance = sqrtf(dx * dx + dy * dy);
+    float dz = z2 - z1;
+    float distance = sqrtf(dx * dx + dy * dy + dz * dz);
     return distance;
 }
 
@@ -311,6 +324,7 @@ struct Drive {
     char *map_name;
     float world_mean_x;
     float world_mean_y;
+    float world_mean_z;
     float dt;
     float reward_goal;
     float reward_goal_post_respawn;
@@ -380,6 +394,11 @@ void add_log(Drive *env) {
         env->log.n += 1;
     }
 }
+
+typedef struct {
+    float dis;
+    float z;
+} DepthPoint;
 
 Entity *load_map_binary(const char *filename, Drive *env) {
     FILE *file = fopen(filename, "rb");
@@ -497,6 +516,7 @@ void set_start_position(Drive *env) {
         e->heading_y = sinf(e->heading);
         e->valid = e->traj_valid[env->init_steps];
         e->collision_state = 0;
+        e->aabb_collision_state = 0;
         e->metrics_array[COLLISION_IDX] = 0.0f;    // vehicle collision
         e->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
         e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
@@ -762,6 +782,7 @@ int get_neighbor_cache_entities(Drive *env, int cell_idx, GridMapEntity *entitie
 void set_means(Drive *env) {
     float mean_x = 0.0f;
     float mean_y = 0.0f;
+    float mean_z = 0.0f;
     int64_t point_count = 0;
 
     // Compute single mean for all entities (vehicles and roads)
@@ -774,6 +795,7 @@ void set_means(Drive *env) {
                     point_count++;
                     mean_x += (env->entities[i].traj_x[j] - mean_x) / point_count;
                     mean_y += (env->entities[i].traj_y[j] - mean_y) / point_count;
+                    mean_z += (env->entities[i].traj_z[j] - mean_z) / point_count;
                 }
             }
         } else if (env->entities[i].type >= 4) {
@@ -781,11 +803,13 @@ void set_means(Drive *env) {
                 point_count++;
                 mean_x += (env->entities[i].traj_x[j] - mean_x) / point_count;
                 mean_y += (env->entities[i].traj_y[j] - mean_y) / point_count;
+                mean_z += (env->entities[i].traj_z[j] - mean_z) / point_count;
             }
         }
     }
     env->world_mean_x = mean_x;
     env->world_mean_y = mean_y;
+    env->world_mean_z = mean_z;
     for (int i = 0; i < env->num_entities; i++) {
         if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN ||
             env->entities[i].type == CYCLIST || env->entities[i].type >= 4) {
@@ -794,11 +818,23 @@ void set_means(Drive *env) {
                     continue;
                 env->entities[i].traj_x[j] -= mean_x;
                 env->entities[i].traj_y[j] -= mean_y;
+                env->entities[i].traj_z[j] -= mean_z;
             }
             env->entities[i].goal_position_x -= mean_x;
             env->entities[i].goal_position_y -= mean_y;
+            env->entities[i].goal_position_z -= mean_z;
         }
     }
+}
+
+DepthPoint compute_z_distance_to_road_segment(Entity *agent, Entity *lane, int geomtery_idx) {
+    float agent_position_z = agent->z;
+    float road_z = lane->traj_z[geomtery_idx];
+    float dis = fabsf(road_z - agent_position_z); // Start with vertical distance
+    DepthPoint point;
+    point.dis = dis;
+    point.z = road_z;
+    return point;
 }
 
 void move_expert(Drive *env, float *actions, int agent_idx) {
@@ -860,36 +896,68 @@ bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2])
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
-int checkNeighbors(Drive *env, float x, float y, GridMapEntity *entity_list, int max_size,
-                   const int (*local_offsets)[2], int offset_size) {
-    // Get the grid index for the given position (x, y)
+GridMapEntity *checkNeighbors(Drive *env, float x, float y, const int (*local_offsets)[2], int offset_size,
+                              int *list_count) {
     int index = getGridIndex(env, x, y);
     if (index == -1)
-        return 0; // Return 0 size if position invalid
-    // Calculate 2D grid coordinates
+        return NULL;
+
     int cellsX = env->grid_map->grid_cols;
     int gridX = index % cellsX;
     int gridY = index / cellsX;
     int entity_list_count = 0;
-    // Fill the provided array
+
+    // Calculate entities count in neighboring cells
+    int min_neighbor_index = INT16_MAX;
     for (int i = 0; i < offset_size; i++) {
         int nx = gridX + local_offsets[i][0];
         int ny = gridY + local_offsets[i][1];
-        // Ensure the neighbor is within grid bounds
+        if (nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows)
+            continue;
+        int neighborIndex = ny * env->grid_map->grid_cols + nx;
+        min_neighbor_index = fmin(min_neighbor_index, neighborIndex);
+        int count = env->grid_map->cell_entities_count[neighborIndex];
+        entity_list_count += count;
+    }
+
+    int entered_entity_count = 0;
+
+    // Fill entity_list with neighboring entities
+    GridMapEntity *entity_list = (GridMapEntity *)calloc(entity_list_count, sizeof(GridMapEntity));
+    for (int i = 0; i < offset_size; i++) {
+        int nx = gridX + local_offsets[i][0];
+        int ny = gridY + local_offsets[i][1];
         if (nx < 0 || nx >= env->grid_map->grid_cols || ny < 0 || ny >= env->grid_map->grid_rows)
             continue;
         int neighborIndex = ny * env->grid_map->grid_cols + nx;
         int count = env->grid_map->cell_entities_count[neighborIndex];
-        // Add entities from this cell to the list
-        for (int j = 0; j < count && entity_list_count < max_size; j++) {
-            int entityId = env->grid_map->cells[neighborIndex][j].entity_idx;
-            int geometry_idx = env->grid_map->cells[neighborIndex][j].geometry_idx;
-            entity_list[entity_list_count].entity_idx = entityId;
-            entity_list[entity_list_count].geometry_idx = geometry_idx;
-            entity_list_count += 1;
+        if (count > 0) {
+            memcpy(&entity_list[entered_entity_count], env->grid_map->cells[neighborIndex],
+                   (size_t)count * sizeof(GridMapEntity));
         }
+        entered_entity_count += count;
     }
-    return entity_list_count;
+
+    if (entered_entity_count != entity_list_count) {
+        printf("Error: Mismatch in entered_entity_count (%d) and entity_list_count (%d)\n", entered_entity_count,
+               entity_list_count);
+    }
+
+    *(list_count) = entity_list_count;
+    return entity_list;
+}
+
+int check_z_collision(Entity *car1, Entity *car2) {
+    float car1_bottom = car1->z;
+    float car1_top = car1->z + car1->height;
+    float car2_bottom = car2->z;
+    float car2_top = car2->z + car2->height;
+
+    // Check for overlap in the z-axis
+    if (car1_top < car2_bottom || car2_top < car1_bottom) {
+        return 0; // No collision
+    }
+    return 1; // Collision
 }
 
 int check_aabb_collision(Entity *car1, Entity *car2) {
@@ -987,8 +1055,11 @@ int collision_check(Drive *env, int agent_idx) {
         if (dist > 225.0f)
             continue;
         if (check_aabb_collision(agent, entity)) {
-            car_collided_with_index = index;
-            break;
+            agent->aabb_collision_state = 1;
+            if (check_z_collision(agent, entity)) {
+                car_collided_with_index = index;
+                break;
+            }
         }
     }
 
@@ -1047,6 +1118,7 @@ void reset_agent_metrics(Drive *env, int agent_idx) {
     agent->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
     agent->collision_state = 0;
+    agent->aabb_collision_state = 0;
 }
 
 float point_to_segment_distance_2d(float px, float py, float x1, float y1, float x2, float y2) {
@@ -1100,10 +1172,9 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         corners[i][1] =
             agent->y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
     }
-
-    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25]; // Array big enough for all neighboring cells
-    int list_size =
-        checkNeighbors(env, agent->x, agent->y, entity_list, MAX_ENTITIES_PER_CELL * 25, collision_offsets, 25);
+    int list_size = 0;
+    GridMapEntity *entity_list =
+        checkNeighbors(env, agent->x, agent->y, collision_offsets, COLLISION_RANGE * COLLISION_RANGE, &list_size);
     for (int i = 0; i < list_size; i++) {
         if (entity_list[i].entity_idx == -1)
             continue;
@@ -1115,6 +1186,9 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         // Check for offroad collision with road edges
         if (entity->type == ROAD_EDGE) {
             int geometry_idx = entity_list[i].geometry_idx;
+            if (entity->traj_z[geometry_idx] > agent->z + Z_BUFFER ||
+                entity->traj_z[geometry_idx] < agent->z - Z_BUFFER)
+                continue; // Edge is at a different z level
             float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
             float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
             for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
@@ -1197,7 +1271,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             agent->x = agent->y = -10000.0f;
         }
     }
-
+    free(entity_list);
     return;
 }
 
@@ -1246,12 +1320,12 @@ bool should_control_agent(Drive *env, int agent_idx) {
     float sin_heading = sinf(entity->traj_heading[0]);
     float goal_dx = entity->goal_position_x - entity->traj_x[0];
     float goal_dy = entity->goal_position_y - entity->traj_y[0];
+    float goal_dz = entity->goal_position_z - entity->traj_z[0];
 
     // Transform to agent's local frame
     float local_goal_x = goal_dx * cos_heading + goal_dy * sin_heading;
     float local_goal_y = -goal_dx * sin_heading + goal_dy * cos_heading;
-    float distance_to_goal = relative_distance_2d(0, 0, local_goal_x, local_goal_y);
-
+    float distance_to_goal = relative_distance_3d(0, 0, 0, local_goal_x, local_goal_y, goal_dz);
     return distance_to_goal >= MIN_DISTANCE_TO_GOAL;
 }
 
@@ -1363,6 +1437,7 @@ void remove_bad_trajectories(Drive *env) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             env->entities[agent_idx].collision_state = 0;
+            env->entities[agent_idx].aabb_collision_state = 0;
             int collided_with_index = collision_check(env, agent_idx);
             if ((collided_with_index >= 0) && collided_agents[i] == 0) {
                 collided_agents[i] = 1;
@@ -1381,6 +1456,7 @@ void remove_bad_trajectories(Drive *env) {
                 continue;
             env->entities[static_agent_idx].traj_x[0] = INVALID_POSITION;
             env->entities[static_agent_idx].traj_y[0] = INVALID_POSITION;
+            env->entities[static_agent_idx].traj_z[0] = INVALID_POSITION;
         }
     }
     env->timestep = 0;
@@ -1391,7 +1467,13 @@ void init_goal_positions(Drive *env) {
         int agent_idx = env->active_agent_indices[x];
         env->entities[agent_idx].init_goal_x = env->entities[agent_idx].goal_position_x;
         env->entities[agent_idx].init_goal_y = env->entities[agent_idx].goal_position_y;
+        env->entities[agent_idx].init_goal_z = env->entities[agent_idx].goal_position_z;
     }
+}
+
+int compare_depthpoint(const void *a, const void *b) {
+    float diff = ((DepthPoint *)a)->dis - ((DepthPoint *)b)->dis;
+    return (diff > 0) - (diff < 0); // returns 1, 0, or -1
 }
 
 void init(Drive *env) {
@@ -1400,7 +1482,9 @@ void init(Drive *env) {
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
-    env->grid_map->vision_range = 21; // TODO: Why is this hardcoded?
+    generate_offsets(collision_offsets, COLLISION_RANGE);
+    generate_offsets(z_offsets, Z_RANGE);
+    env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     env->logs_capacity = 0;
@@ -1648,6 +1732,39 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->steering_angle = new_steering_angle;
     }
 
+    // To update agent's z-coordinate based on road elevation of 20 nearest elements
+    int list_size = 0;
+    GridMapEntity *entity_list = checkNeighbors(env, agent->x, agent->y, z_offsets, Z_RANGE * Z_RANGE, &list_size);
+    if (list_size > 0) {
+        DepthPoint road_neighbours[list_size];
+        int valid_count = 0;
+        // store an array masuring the distance of the agent with each road segment nearby
+        for (int i = 0; i < list_size; i++) {
+            if (entity_list[i].entity_idx == -1)
+                continue;
+            Entity *entity = &env->entities[entity_list[i].entity_idx];
+            if (entity->type == ROAD_EDGE || entity->type == ROAD_LINE || entity->type == ROAD_LANE) {
+                int geometry_idx = entity_list[i].geometry_idx;
+                DepthPoint val = compute_z_distance_to_road_segment(agent, entity, geometry_idx);
+                if (val.dis < Z_BUFFER) {
+                    road_neighbours[valid_count++] = val;
+                }
+            }
+        }
+
+        if (valid_count > 0) {
+
+            qsort(road_neighbours, valid_count, sizeof(DepthPoint), compare_depthpoint);
+            int check_count = (valid_count < 30) ? valid_count : 30;
+            float sum_z = 0.0f;
+            for (int i = 0; i < check_count; i++) {
+                sum_z += road_neighbours[i].z;
+            }
+            agent->z = sum_z / (check_count);
+        }
+    }
+    // Free allocated memory
+    free(entity_list);
     return;
 }
 
@@ -1672,7 +1789,7 @@ void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_o
         // For WOSAC, we need the original world coordinates, so we add the world means back
         x_out[i] = agent->x + env->world_mean_x;
         y_out[i] = agent->y + env->world_mean_y;
-        z_out[i] = agent->z;
+        z_out[i] = agent->z + env->world_mean_z;
         heading_out[i] = agent->heading;
         id_out[i] = get_track_id_or_placeholder(env, agent_idx);
         length_out[i] = agent->length;
@@ -1693,7 +1810,7 @@ void c_get_global_ground_truth_trajectories(Drive *env, float *x_out, float *y_o
             // Add world means back to get original world coordinates
             x_out[out_idx] = agent->traj_x[t] + env->world_mean_x;
             y_out[out_idx] = agent->traj_y[t] + env->world_mean_y;
-            z_out[out_idx] = agent->traj_z[t];
+            z_out[out_idx] = agent->traj_z[t] + env->world_mean_z;
             heading_out[out_idx] = agent->traj_heading[t];
             valid_out[out_idx] = agent->traj_valid[t];
         }
@@ -1749,27 +1866,30 @@ void compute_observations(Drive *env) {
         // Set goal distances
         float goal_x = ego_entity->goal_position_x - ego_entity->x;
         float goal_y = ego_entity->goal_position_y - ego_entity->y;
+        float goal_z = ego_entity->goal_position_z - ego_entity->z;
 
         // Rotate to ego vehicle's frame
         float rel_goal_x = goal_x * cos_heading + goal_y * sin_heading;
         float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
 
+        float rel_goal_z = goal_z; // No rotation needed for vertical component
         obs[0] = rel_goal_x * 0.005f;
         obs[1] = rel_goal_y * 0.005f;
-        obs[2] = signed_speed / MAX_SPEED;
-        obs[3] = ego_entity->width / MAX_VEH_WIDTH;
-        obs[4] = ego_entity->length / MAX_VEH_LEN;
-        obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
+        obs[2] = rel_goal_z * 0.005f;
+        obs[3] = signed_speed / MAX_SPEED;
+        obs[4] = ego_entity->width / MAX_VEH_WIDTH;
+        obs[5] = ego_entity->length / MAX_VEH_LEN;
+        obs[6] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
 
         if (env->dynamics_model == JERK) {
-            obs[6] = ego_entity->steering_angle / M_PI;
+            obs[7] = ego_entity->steering_angle / M_PI;
             // Asymmetric normalization for a_long to match action space
-            obs[7] =
+            obs[8] =
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
-            obs[8] = ego_entity->a_lat / JERK_LAT[2];
-            obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[9] = ego_entity->a_lat / JERK_LAT[2];
+            obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
         } else {
-            obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
         }
 
         // Relative Pos of other cars
@@ -1796,17 +1916,20 @@ void compute_observations(Drive *env) {
             // Store original relative positions
             float dx = other_entity->x - ego_entity->x;
             float dy = other_entity->y - ego_entity->y;
-            float dist = (dx * dx + dy * dy);
+            float dz = other_entity->z - ego_entity->z;
+            float dist = (dx * dx + dy * dy + dz * dz);
             if (dist > 2500.0f)
                 continue;
             // Rotate to ego vehicle's frame
             float rel_x = dx * cos_heading + dy * sin_heading;
             float rel_y = -dx * sin_heading + dy * cos_heading;
+            float rel_z = dz; // No rotation needed for vertical component
             // Store observations with correct indexing
             obs[obs_idx] = rel_x * 0.02f;
             obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH;
-            obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN;
+            obs[obs_idx + 2] = rel_z * 0.02f;
+            obs[obs_idx + 3] = other_entity->width / MAX_VEH_WIDTH;
+            obs[obs_idx + 4] = other_entity->length / MAX_VEH_LEN;
             // relative heading
             float rel_heading_x =
                 other_entity->heading_x * ego_entity->heading_x +
@@ -1815,24 +1938,23 @@ void compute_observations(Drive *env) {
                 other_entity->heading_y * ego_entity->heading_x -
                 other_entity->heading_x * ego_entity->heading_y; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
 
-            obs[obs_idx + 4] = rel_heading_x;
-            obs[obs_idx + 5] = rel_heading_y;
-
+            obs[obs_idx + 5] = rel_heading_x;
+            obs[obs_idx + 6] = rel_heading_y;
             // relative speed
             float other_speed_magnitude =
                 sqrtf(other_entity->vx * other_entity->vx + other_entity->vy * other_entity->vy);
             float other_v_dot_heading =
                 other_entity->vx * other_entity->heading_x + other_entity->vy * other_entity->heading_y;
             float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
-            obs[obs_idx + 6] = other_signed_speed / MAX_SPEED;
+            obs[obs_idx + 7] = other_signed_speed / MAX_SPEED;
             cars_seen++;
-            obs_idx += 7; // Move to next observation slot
+            obs_idx += 8; // Move to next observation slot
         }
-        int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 7;
+        int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 8;
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
         // map observations
-        GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25];
+        GridMapEntity entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS];
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
 
         int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
@@ -1857,15 +1979,20 @@ void compute_observations(Drive *env) {
             }
             float start_x = entity->traj_x[geometry_idx];
             float start_y = entity->traj_y[geometry_idx];
+            float start_z = entity->traj_z[geometry_idx];
             float end_x = entity->traj_x[geometry_idx + 1];
             float end_y = entity->traj_y[geometry_idx + 1];
+            float end_z = entity->traj_z[geometry_idx + 1];
             float mid_x = (start_x + end_x) / 2.0f;
             float mid_y = (start_y + end_y) / 2.0f;
+            float mid_z = (start_z + end_z) / 2.0f;
             float rel_x = mid_x - ego_entity->x;
             float rel_y = mid_y - ego_entity->y;
+            float rel_z = mid_z - ego_entity->z;
             float x_obs = rel_x * cos_heading + rel_y * sin_heading;
             float y_obs = -rel_x * sin_heading + rel_y * cos_heading;
-            float length = relative_distance_2d(mid_x, mid_y, end_x, end_y);
+            float z_obs = rel_z;
+            float length = relative_distance_3d(mid_x, mid_y, mid_z, end_x, end_y, end_z);
             float width = 0.1;
             // Calculate angle from ego to midpoint (vector from ego to midpoint)
             float dx = end_x - mid_x;
@@ -1882,14 +2009,15 @@ void compute_observations(Drive *env) {
             float sin_angle = -dx_norm * sin_heading + dy_norm * cos_heading;
             obs[obs_idx] = x_obs * 0.02f;
             obs[obs_idx + 1] = y_obs * 0.02f;
-            obs[obs_idx + 2] = length / MAX_ROAD_SEGMENT_LENGTH;
-            obs[obs_idx + 3] = width / MAX_ROAD_SCALE;
-            obs[obs_idx + 4] = cos_angle;
-            obs[obs_idx + 5] = sin_angle;
-            obs[obs_idx + 6] = entity->type - 4.0f;
-            obs_idx += 7;
+            obs[obs_idx + 2] = z_obs * 0.02f;
+            obs[obs_idx + 3] = length / MAX_ROAD_SEGMENT_LENGTH;
+            obs[obs_idx + 4] = width / MAX_ROAD_SCALE;
+            obs[obs_idx + 5] = cos_angle;
+            obs[obs_idx + 6] = sin_angle;
+            obs[obs_idx + 7] = entity->type - 4.0f;
+            obs_idx += 8;
         }
-        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 7;
+        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 8;
         // Set the entire block to 0 at once
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
     }
@@ -1900,6 +2028,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
     Entity *agent = &env->entities[agent_idx];
     float best_x = agent->x;
     float best_y = agent->y;
+    float best_z = agent->z;
     float best_distance_error = 1e30f;
 
     // Sample points from all road lanes
@@ -1913,6 +2042,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
         for (int j = 0; j < lane->array_size; j++) {
             float point_x = lane->traj_x[j];
             float point_y = lane->traj_y[j];
+            float point_z = lane->traj_z[j];
 
             // Calculate vector from agent to point
             float to_point_x = point_x - agent->x;
@@ -1932,6 +2062,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 best_distance_error = distance_error;
                 best_x = point_x;
                 best_y = point_y;
+                best_z = point_z;
             }
         }
     }
@@ -1941,10 +2072,12 @@ void sample_new_goal(Drive *env, int agent_idx) {
         int other_idx = env->active_agent_indices[(agent_idx + 1) % env->active_agent_count];
         best_x = env->entities[other_idx].init_goal_x;
         best_y = env->entities[other_idx].init_goal_y;
+        best_z = env->entities[other_idx].init_goal_z;
     }
 
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
+    agent->goal_position_z = best_z;
     agent->goals_sampled_this_episode += 1;
 }
 
@@ -1971,6 +2104,7 @@ void c_reset(Drive *env) {
         if (env->goal_behavior == GOAL_GENERATE_NEW) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
             env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
+            env->entities[agent_idx].goal_position_z = env->entities[agent_idx].init_goal_z;
         }
 
         compute_agent_metrics(env, agent_idx);
@@ -1981,6 +2115,7 @@ void c_reset(Drive *env) {
 void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].x = env->entities[agent_idx].traj_x[0];
     env->entities[agent_idx].y = env->entities[agent_idx].traj_y[0];
+    env->entities[agent_idx].z = env->entities[agent_idx].traj_z[0];
     env->entities[agent_idx].heading = env->entities[agent_idx].traj_heading[0];
     env->entities[agent_idx].heading_x = cosf(env->entities[agent_idx].heading);
     env->entities[agent_idx].heading_y = sinf(env->entities[agent_idx].heading);
@@ -2036,6 +2171,7 @@ void c_step(Drive *env) {
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
+        env->entities[agent_idx].aabb_collision_state = 0;
         float prev_vx = env->entities[agent_idx].vx;
         float prev_vy = env->entities[agent_idx].vy;
 
@@ -2055,7 +2191,7 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
-
+        env->entities[agent_idx].aabb_collision_state = 0;
         compute_agent_metrics(env, agent_idx);
         int collision_state = env->entities[agent_idx].collision_state;
 
@@ -2076,8 +2212,9 @@ void c_step(Drive *env) {
         }
 
         float distance_to_goal =
-            relative_distance_2d(env->entities[agent_idx].x, env->entities[agent_idx].y,
-                                 env->entities[agent_idx].goal_position_x, env->entities[agent_idx].goal_position_y);
+            relative_distance_3d(env->entities[agent_idx].x, env->entities[agent_idx].y, env->entities[agent_idx].z,
+                                 env->entities[agent_idx].goal_position_x, env->entities[agent_idx].goal_position_y,
+                                 env->entities[agent_idx].goal_position_z);
 
         float current_speed = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
                                     env->entities[agent_idx].vy * env->entities[agent_idx].vy);
@@ -2184,7 +2321,7 @@ Client *make_client(Drive *env) {
     client->default_camera_position = (Vector3){
         0,      // Same X as target
         120.0f, // 20 units above target
-        175.0f  // 20 units behind target
+        40.0f   // 20 units behind target
     };
     client->default_camera_target = target_pos;
     client->camera.position = client->default_camera_position;
@@ -2291,58 +2428,64 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float heading_self_y = env->entities[active_idx].heading_y;
     float px = env->entities[active_idx].x;
     float py = env->entities[active_idx].y;
+    float pz = env->entities[active_idx].z;
     // draw goal
     float goal_x = agent_obs[0] * 200;
     float goal_y = agent_obs[1] * 200;
+    float goal_z = agent_obs[2] * 200;
+
     if (mode == 0) {
-        DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
+        DrawSphere((Vector3){goal_x, goal_y, goal_z}, 0.5f, LIGHTGREEN);
+        DrawCircle3D((Vector3){goal_x, goal_y, goal_z}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
                      Fade(LIGHTGREEN, 0.3f));
     }
 
     if (mode == 1) {
         float goal_x_world = px + (goal_x * heading_self_x - goal_y * heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
-        DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
+        float goal_z_world = pz + goal_z;
+        DrawSphere((Vector3){goal_x_world, goal_y_world, goal_z_world}, 0.5f, LIGHTGREEN);
+        DrawCircle3D((Vector3){goal_x_world, goal_y_world, goal_z_world}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
                      Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
     int obs_idx = ego_dim; // Start after ego obs
     for (int j = 0; j < MAX_AGENTS - 1; j++) {
         if (agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
-            obs_idx += 7; // Move to next agent observation
+            obs_idx += 8; // Move to next agent observation
             continue;
         }
         // Draw position of other agents
         float x = agent_obs[obs_idx] * 50;
         float y = agent_obs[obs_idx + 1] * 50;
+        float z = agent_obs[obs_idx + 2] * 50;
         if (lasers && mode == 0) {
-            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x, y, 1}, ORANGE);
+            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x, y, z}, ORANGE);
         }
 
         float partner_x = px + (x * heading_self_x - y * heading_self_y);
         float partner_y = py + (x * heading_self_y + y * heading_self_x);
+        float partner_z = pz + z;
         if (lasers && mode == 1) {
-            DrawLine3D((Vector3){px, py, 1}, (Vector3){partner_x, partner_y, 1}, ORANGE);
+            DrawLine3D((Vector3){px, py, pz}, (Vector3){partner_x, partner_y, partner_z}, ORANGE);
         }
 
-        float half_width = 0.5 * agent_obs[obs_idx + 2] * MAX_VEH_WIDTH;
-        float half_len = 0.5 * agent_obs[obs_idx + 3] * MAX_VEH_LEN;
-        float theta_x = agent_obs[obs_idx + 4];
-        float theta_y = agent_obs[obs_idx + 5];
+        float half_width = 0.5 * agent_obs[obs_idx + 3] * MAX_VEH_WIDTH;
+        float half_len = 0.5 * agent_obs[obs_idx + 4] * MAX_VEH_LEN;
+        float theta_x = agent_obs[obs_idx + 5];
+        float theta_y = agent_obs[obs_idx + 6];
         float partner_angle = atan2f(theta_y, theta_x);
         float cos_heading = cosf(partner_angle);
         float sin_heading = sinf(partner_angle);
         Vector3 corners[4] = {
             (Vector3){x + (half_len * cos_heading - half_width * sin_heading),
-                      y + (half_len * sin_heading + half_width * cos_heading), 1},
+                      y + (half_len * sin_heading + half_width * cos_heading), z},
             (Vector3){x + (half_len * cos_heading + half_width * sin_heading),
-                      y + (half_len * sin_heading - half_width * cos_heading), 1},
+                      y + (half_len * sin_heading - half_width * cos_heading), z},
             (Vector3){x + (-half_len * cos_heading + half_width * sin_heading),
-                      y + (-half_len * sin_heading - half_width * cos_heading), 1},
+                      y + (-half_len * sin_heading - half_width * cos_heading), z},
             (Vector3){x + (-half_len * cos_heading - half_width * sin_heading),
-                      y + (-half_len * sin_heading + half_width * cos_heading), 1},
+                      y + (-half_len * sin_heading + half_width * cos_heading), z},
         };
 
         if (mode == 0) {
@@ -2356,10 +2499,11 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             for (int j = 0; j < 4; j++) {
                 float lx = corners[j].x;
                 float ly = corners[j].y;
+                float lz = corners[j].z;
 
                 world_corners[j].x = px + (lx * heading_self_x - ly * heading_self_y);
                 world_corners[j].y = py + (lx * heading_self_y + ly * heading_self_x);
-                world_corners[j].z = 1;
+                world_corners[j].z = pz + lz;
             }
             for (int j = 0; j < 4; j++) {
                 DrawLine3D(world_corners[j], world_corners[(j + 1) % 4], ORANGE);
@@ -2367,21 +2511,25 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         }
 
         // draw an arrow above the car pointing in the direction that the partner is going
-        float arrow_length = 2.5f;
+        float arrow_length = 4.5f;
         float arrow_x = x + arrow_length * cosf(partner_angle);
         float arrow_y = y + arrow_length * sinf(partner_angle);
+        float arrow_z = z;
         float arrow_x_world;
         float arrow_y_world;
+        float arrow_z_world;
         if (mode == 0) {
-            DrawLine3D((Vector3){x, y, 0.0}, (Vector3){arrow_x, arrow_y, 0.0}, PUFF_WHITE);
+            DrawLine3D((Vector3){x, y, z}, (Vector3){arrow_x, arrow_y, arrow_z}, PUFF_WHITE);
         }
         if (mode == 1) {
             arrow_x_world = px + (arrow_x * heading_self_x - arrow_y * heading_self_y);
             arrow_y_world = py + (arrow_x * heading_self_y + arrow_y * heading_self_x);
-            DrawLine3D((Vector3){partner_x, partner_y, 1}, (Vector3){arrow_x_world, arrow_y_world, 1}, PUFF_WHITE);
+            arrow_z_world = pz + arrow_z;
+            DrawLine3D((Vector3){partner_x, partner_y, partner_z},
+                       (Vector3){arrow_x_world, arrow_y_world, arrow_z_world}, PUFF_WHITE);
         }
         // Calculate perpendicular offsets for arrow head
-        float arrow_size = 0.3f; // Size of the arrow head
+        float arrow_size = 0.8f; // Size of the arrow head
         float dx = arrow_x - x;
         float dy = arrow_y - y;
         float length = sqrtf(dx * dx + dy * dy);
@@ -2398,11 +2546,14 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             float arrow_y_end1 = arrow_y - dy * arrow_size + perp_y;
             float arrow_x_end2 = arrow_x - dx * arrow_size - perp_x;
             float arrow_y_end2 = arrow_y - dy * arrow_size - perp_y;
+            float arrow_z_end = arrow_z;
 
             // Draw the two lines forming the arrow head
             if (mode == 0) {
-                DrawLine3D((Vector3){arrow_x, arrow_y, 0.0}, (Vector3){arrow_x_end1, arrow_y_end1, 0.0}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x, arrow_y, 0.0}, (Vector3){arrow_x_end2, arrow_y_end2, 0.0}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, arrow_z}, (Vector3){arrow_x_end1, arrow_y_end1, arrow_z_end},
+                           PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, arrow_z}, (Vector3){arrow_x_end2, arrow_y_end2, arrow_z_end},
+                           PUFF_WHITE);
             }
 
             if (mode == 1) {
@@ -2410,24 +2561,25 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
                 float arrow_y_end1_world = py + (arrow_x_end1 * heading_self_y + arrow_y_end1 * heading_self_x);
                 float arrow_x_end2_world = px + (arrow_x_end2 * heading_self_x - arrow_y_end2 * heading_self_y);
                 float arrow_y_end2_world = py + (arrow_x_end2 * heading_self_y + arrow_y_end2 * heading_self_x);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 0.0},
-                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, 0.0}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 0.0},
-                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, 0.0}, PUFF_WHITE);
+                float arrow_z_end_world = pz + arrow_z_end;
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, arrow_z_world},
+                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, arrow_z_end_world}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, arrow_z_world},
+                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, arrow_z_end_world}, PUFF_WHITE);
             }
         }
 
-        obs_idx += PARTNER_FEATURES; // Move to next agent observation (7 values per agent)
+        obs_idx += PARTNER_FEATURES; // Move to next agent observation (8 values per agent)
     }
     // Then draw map observations
     int map_start_idx = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1); // Start after agent observations
     for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {          // Loop through potential map entities
-        int entity_idx = map_start_idx + k * 7;
+        int entity_idx = map_start_idx + k * 8;
         if (agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0) {
             continue;
         }
         Color lineColor = BLUE; // Default color
-        int entity_type = (int)agent_obs[entity_idx + 6];
+        int entity_type = (int)agent_obs[entity_idx + 7];
         // Choose color based on entity type
         if (entity_type + 4 != ROAD_EDGE) {
             continue;
@@ -2436,10 +2588,11 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         // For road segments, draw line between start and end points
         float x_middle = agent_obs[entity_idx] * 50;
         float y_middle = agent_obs[entity_idx + 1] * 50;
-        float rel_angle_x = (agent_obs[entity_idx + 4]);
-        float rel_angle_y = (agent_obs[entity_idx + 5]);
+        float z_middle = agent_obs[entity_idx + 2] * 50;
+        float rel_angle_x = (agent_obs[entity_idx + 5]);
+        float rel_angle_y = (agent_obs[entity_idx + 6]);
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
-        float segment_length = agent_obs[entity_idx + 2] * MAX_ROAD_SEGMENT_LENGTH;
+        float segment_length = agent_obs[entity_idx + 3] * MAX_ROAD_SEGMENT_LENGTH;
         // Calculate endpoint using the relative angle directly
         // Calculate endpoint directly
         float x_start = x_middle - segment_length * cosf(rel_angle);
@@ -2448,7 +2601,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float y_end = y_middle + segment_length * sinf(rel_angle);
 
         if (lasers && mode == 0) {
-            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x_middle, y_middle, 1}, lineColor);
+            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x_middle, y_middle, z_middle}, lineColor);
         }
 
         if (mode == 1) {
@@ -2458,44 +2611,48 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             float y_start_world = py + (x_start * heading_self_y + y_start * heading_self_x);
             float x_end_world = px + (x_end * heading_self_x - y_end * heading_self_y);
             float y_end_world = py + (x_end * heading_self_y + y_end * heading_self_x);
-            DrawCube((Vector3){x_middle_world, y_middle_world, 1}, 0.5f, 0.5f, 0.5f, lineColor);
-            DrawLine3D((Vector3){x_start_world, y_start_world, 1}, (Vector3){x_end_world, y_end_world, 1}, BLUE);
+            DrawCube((Vector3){x_middle_world, y_middle_world, pz}, 0.5f, 0.5f, 0.5f, lineColor);
+            DrawLine3D((Vector3){x_start_world, y_start_world, pz}, (Vector3){x_end_world, y_end_world, pz}, BLUE);
             if (lasers)
-                DrawLine3D((Vector3){px, py, 1}, (Vector3){x_middle_world, y_middle_world, 1}, lineColor);
+                DrawLine3D((Vector3){px, py, pz}, (Vector3){x_middle_world, y_middle_world, pz}, lineColor);
         }
         if (mode == 0) {
-            DrawCube((Vector3){x_middle, y_middle, 1}, 0.5f, 0.5f, 0.5f, lineColor);
-            DrawLine3D((Vector3){x_start, y_start, 1}, (Vector3){x_end, y_end, 1}, BLUE);
+            DrawCube((Vector3){x_middle, y_middle, z_middle}, 0.5f, 0.5f, 0.5f, lineColor);
+            DrawLine3D((Vector3){x_start, y_start, z_middle}, (Vector3){x_end, y_end, z_middle}, BLUE);
         }
     }
 }
 
-void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float end_y) {
+void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float end_y, float start_z, float end_z) {
     Color CURB_TOP = (Color){220, 220, 220, 255};  // Top surface - lightest
     Color CURB_SIDE = (Color){180, 180, 180, 255}; // Side faces - medium
     Color CURB_BOTTOM = (Color){160, 160, 160, 255};
     // Calculate curb dimensions
     float curb_height = 0.5f; // Height of the curb
     float curb_width = 0.3f;  // Width/thickness of the curb
-    float road_z = 0.0f;      // Ensure z-level for roads is below agents
 
-    // Calculate direction vector between start and end
-    Vector3 direction = {end_x - start_x, end_y - start_y, 0.0f};
+    Vector3 direction = {
+        end_x - start_x,
+        end_y - start_y,
+    };
 
     // Calculate length of the segment
-    float length = sqrtf(direction.x * direction.x + direction.y * direction.y);
+    float length = sqrtf(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
 
     // Normalize direction vector
-    Vector3 normalized_dir = {direction.x / length, direction.y / length, 0.0f};
+    Vector3 normalized_dir = {
+        direction.x / length,
+        direction.y / length,
+    };
 
     // Calculate perpendicular vector for width
     Vector3 perpendicular = {-normalized_dir.y, normalized_dir.x, 0.0f};
 
     // Calculate the four bottom corners of the curb
-    Vector3 b1 = {start_x - perpendicular.x * curb_width / 2, start_y - perpendicular.y * curb_width / 2, road_z};
-    Vector3 b2 = {start_x + perpendicular.x * curb_width / 2, start_y + perpendicular.y * curb_width / 2, road_z};
-    Vector3 b3 = {end_x + perpendicular.x * curb_width / 2, end_y + perpendicular.y * curb_width / 2, road_z};
-    Vector3 b4 = {end_x - perpendicular.x * curb_width / 2, end_y - perpendicular.y * curb_width / 2, road_z};
+    Vector3 b1 = {start_x - perpendicular.x * curb_width / 2, start_y - perpendicular.y * curb_width / 2, start_z};
+    Vector3 b2 = {start_x + perpendicular.x * curb_width / 2, start_y + perpendicular.y * curb_width / 2, start_z};
+    Vector3 b3 = {end_x + perpendicular.x * curb_width / 2, end_y + perpendicular.y * curb_width / 2, end_z};
+    Vector3 b4 = {end_x - perpendicular.x * curb_width / 2, end_y - perpendicular.y * curb_width / 2, end_z};
 
     // Draw the curb faces
     // Bottom face
@@ -2564,7 +2721,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
             Vector3 position;
             float heading;
-            position = (Vector3){env->entities[i].x, env->entities[i].y, 1.1};
+            position = (Vector3){env->entities[i].x, env->entities[i].y, env->entities[i].z};
             heading = env->entities[i].heading;
             // Create size vector
             Vector3 size = {env->entities[i].length, env->entities[i].width, env->entities[i].height};
@@ -2608,6 +2765,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     car_color = GOLD; // expert replay
                 if (is_active_agent)
                     car_color = BLUE; // policy-controlled
+                if (is_active_agent && env->entities[i].aabb_collision_state > 0)
+                    car_color = LIGHTGREEN;
                 if (is_active_agent && env->entities[i].collision_state > 0)
                     car_color = RED;
                 rlSetLineWidth(3.0f);
@@ -2628,15 +2787,16 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 rlTranslatef(position.x, position.y, position.z);
                 rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f); // Convert radians to degrees
 
-                // Select car model (skip index 0)
-                Model car_model = client->cars[(i % 5) + 1]; // Cycles through indices 1-5
+                // Select car model
+                Model car_model = client->cars[i % 6]; // Default: cycle through all 6 car sprites
 
                 if (agent_index == env->human_agent_idx) {
-                    car_model = client->cars[0]; // Ego agent always uses red car
+                    car_model = client->cars[0]; // Ego agent always uses red car (cars[0])
                 } else if (is_active_agent) {
-
                     car_model = client->cars[(i % 5) + 1];
-
+                    if (env->entities[i].aabb_collision_state > 0) {
+                        car_model = client->cars[4]; // AABB Collided agents use green car
+                    }
                     if (env->entities[i].collision_state > 0) {
                         car_model = client->cars[0]; // Collided agents use red
                     }
@@ -2681,6 +2841,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         wire_color = GOLD; // expert replay
                     if (is_active_agent)
                         wire_color = BLUE; // policy
+                    if (is_active_agent && env->entities[i].aabb_collision_state > 0)
+                        wire_color = LIGHTGREEN;
                     if (is_active_agent && env->entities[i].collision_state > 0)
                         wire_color = RED;
                     rlSetLineWidth(2.0f);
@@ -2712,11 +2874,21 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 continue;
             }
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-                DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 1}, 0.5f,
-                           DARKGREEN);
+                DrawSphere(
+                    (Vector3){
+                        env->entities[i].goal_position_x,
+                        env->entities[i].goal_position_y,
+                        env->entities[i].goal_position_z,
+                    },
+                    0.5f, DARKGREEN);
 
-                DrawCircle3D((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 0.1f},
-                             env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.9f));
+                DrawCircle3D(
+                    (Vector3){
+                        env->entities[i].goal_position_x,
+                        env->entities[i].goal_position_y,
+                        env->entities[i].goal_position_z,
+                    },
+                    env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
             }
         }
         // Draw road elements
@@ -2724,8 +2896,9 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             continue;
         }
         for (int j = 0; j < env->entities[i].array_size - 1; j++) {
-            Vector3 start = {env->entities[i].traj_x[j], env->entities[i].traj_y[j], 1};
-            Vector3 end = {env->entities[i].traj_x[j + 1], env->entities[i].traj_y[j + 1], 1};
+            Vector3 start = {env->entities[i].traj_x[j], env->entities[i].traj_y[j], env->entities[i].traj_z[j]};
+            Vector3 end = {env->entities[i].traj_x[j + 1], env->entities[i].traj_y[j + 1],
+                           env->entities[i].traj_z[j + 1]};
             Color lineColor = GRAY;
             if (env->entities[i].type == ROAD_LANE)
                 lineColor = Fade(SOFT_YELLOW, 0.25f);
@@ -2738,7 +2911,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
                 if (env->entities[i].type == ROAD_EDGE) {
-                    draw_road_edge(env, start.x, start.y, end.x, end.y);
+                    draw_road_edge(env, start.x, start.y, end.x, end.y, start.z, end.z);
                 } else if (env->entities[i].type == ROAD_LANE || env->entities[i].type == ROAD_LINE) {
                     // Draw road lanes and lines as purple lines
                     rlSetLineWidth(2.0f);
