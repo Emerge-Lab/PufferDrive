@@ -1384,6 +1384,7 @@ void c_close(Drive *env) {
     free(env->grid_map);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
+    free(env->tracks_to_predict_indices);
     free(env->ini_file);
 }
 
