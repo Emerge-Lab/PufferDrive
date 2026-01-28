@@ -324,6 +324,16 @@ struct Drive {
 };
 
 // ========================================
+// Forward declaration placeholders
+// ========================================
+
+void move_expert(Drive *env, float *actions, int agent_idx);
+float point_to_segment_distance_2d(float px, float py, float x1, float y1, float x2, float y2);
+void init_goal_positions(Drive *env);
+float clipSpeed(float speed);
+void sample_new_goal(Drive *env, int agent_idx);
+
+// ========================================
 // Utility Functions
 // ========================================
 
