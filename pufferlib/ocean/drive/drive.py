@@ -148,6 +148,7 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")
 
         self._action_type_flag = 0 if action_type == "discrete" else 1
+        self._dynamics_model_flag = 0 if dynamics_model == "classic" else 1
 
         # Check if resources directory exists
         binary_path = f"{map_dir}/map_000.bin"
@@ -196,6 +197,7 @@ class Drive(pufferlib.PufferEnv):
                 self.truncations[cur:nxt],
                 seed,
                 action_type=self._action_type_flag,
+                dynamics_model=self._dynamics_model_flag,
                 human_agent_idx=human_agent_idx,
                 reward_vehicle_collision=reward_vehicle_collision,
                 reward_offroad_collision=reward_offroad_collision,
@@ -288,6 +290,7 @@ class Drive(pufferlib.PufferEnv):
                     self.truncations[cur:nxt],
                     seed,
                     action_type=self._action_type_flag,
+                    dynamics_model=self._dynamics_model_flag,
                     human_agent_idx=self.human_agent_idx,
                     reward_vehicle_collision=self.reward_vehicle_collision,
                     reward_offroad_collision=self.reward_offroad_collision,
@@ -305,6 +308,7 @@ class Drive(pufferlib.PufferEnv):
                     offroad_behavior=self.offroad_behavior,
                     dt=self.dt,
                     episode_length=(int(self.episode_length) if self.episode_length is not None else None),
+                    termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                     max_controlled_agents=self.max_controlled_agents,
                     map_id=map_ids[i],
                     max_agents=nxt - cur,

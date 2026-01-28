@@ -185,6 +185,42 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "episode_length must be > 0 (set in INI or kwargs)");
         return -1;
     }
+
+    // Allow all settings to be overridden via kwargs (ini provides defaults)
+    #define OVERRIDE_INT(field) \
+        if (kwargs && PyDict_GetItemString(kwargs, #field)) { \
+            conf.field = (int)unpack(kwargs, #field); \
+        }
+    #define OVERRIDE_FLOAT(field) \
+        if (kwargs && PyDict_GetItemString(kwargs, #field)) { \
+            conf.field = (float)unpack(kwargs, #field); \
+        }
+
+    OVERRIDE_INT(action_type);
+    OVERRIDE_INT(dynamics_model);
+    OVERRIDE_FLOAT(reward_vehicle_collision);
+    OVERRIDE_FLOAT(reward_offroad_collision);
+    OVERRIDE_FLOAT(reward_goal);
+    OVERRIDE_FLOAT(reward_goal_post_respawn);
+    OVERRIDE_INT(use_guided_autonomy);
+    OVERRIDE_FLOAT(guidance_speed_weight);
+    OVERRIDE_FLOAT(guidance_heading_weight);
+    OVERRIDE_FLOAT(waypoint_reach_threshold);
+    OVERRIDE_INT(collision_behavior);
+    OVERRIDE_INT(offroad_behavior);
+    OVERRIDE_FLOAT(dt);
+    OVERRIDE_INT(termination_mode);
+    OVERRIDE_INT(init_mode);
+    OVERRIDE_INT(control_mode);
+    OVERRIDE_INT(goal_behavior);
+    OVERRIDE_FLOAT(goal_target_distance);
+    OVERRIDE_FLOAT(goal_radius);
+    OVERRIDE_FLOAT(goal_speed);
+
+    #undef OVERRIDE_INT
+    #undef OVERRIDE_FLOAT
+
+    // Assign all settings from conf (which now has ini defaults + any kwargs overrides)
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
@@ -197,21 +233,16 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->waypoint_reach_threshold = conf.waypoint_reach_threshold;
     env->episode_length = conf.episode_length;
     env->termination_mode = conf.termination_mode;
-    env->use_guided_autonomy = conf.use_guided_autonomy;
-    env->guidance_speed_weight = conf.guidance_speed_weight;
-    env->guidance_heading_weight = conf.guidance_heading_weight;
-    env->waypoint_reach_threshold = conf.waypoint_reach_threshold;
-    env->goal_radius = conf.goal_radius;
     env->collision_behavior = conf.collision_behavior;
     env->offroad_behavior = conf.offroad_behavior;
-    env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
     env->dt = conf.dt;
-    env->init_mode = (int)unpack(kwargs, "init_mode");
-    env->control_mode = (int)unpack(kwargs, "control_mode");
-    env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
-    env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
-    env->goal_radius = (float)unpack(kwargs, "goal_radius");
-    env->goal_speed = (float)unpack(kwargs, "goal_speed");
+    env->init_mode = conf.init_mode;
+    env->control_mode = conf.control_mode;
+    env->goal_behavior = conf.goal_behavior;
+    env->goal_target_distance = conf.goal_target_distance;
+    env->goal_radius = conf.goal_radius;
+    env->goal_speed = conf.goal_speed;
+    env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
     char *map_dir = unpack_str(kwargs, "map_dir");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");

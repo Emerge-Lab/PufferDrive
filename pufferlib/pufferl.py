@@ -1162,8 +1162,16 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         if args["eval"]["wosac_aggregate_results"]:
             import json
 
+            # Convert numpy types to native Python types for JSON serialization
+            def to_native(obj):
+                if hasattr(obj, 'item'):  # numpy scalar
+                    return obj.item()
+                return obj
+
+            native_results = {k: to_native(v) for k, v in results.items()}
+
             print("\nWOSAC_METRICS_START")
-            print(json.dumps(results))
+            print(json.dumps(native_results))
             print("WOSAC_METRICS_END")
 
         return results
@@ -1189,8 +1197,16 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         import json
 
+        # Convert numpy types to native Python types for JSON serialization
+        def to_native(obj):
+            if hasattr(obj, 'item'):  # numpy scalar
+                return obj.item()
+            return obj
+
+        native_results = {k: to_native(v) for k, v in results.items()}
+
         print("HUMAN_REPLAY_METRICS_START")
-        print(json.dumps(results))
+        print(json.dumps(native_results))
         print("HUMAN_REPLAY_METRICS_END")
 
         return results

@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 import pandas as pd
 import torch
@@ -10,6 +11,36 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
 POLICY_DIR = "models"
+
+# Policy configurations: (filename, display_name, dynamics_model)
+# Update these paths to match your actual checkpoint files
+POLICY_CONFIGS = {
+    # "bc_policy": {
+    #     "path": POLICY_DIR + "/bc_policy.pt",
+    #     "dynamics": "classic",
+    #     "type": "bc",
+    # },
+    "self_play_rl (classic)": {
+        "path": POLICY_DIR + "/self_play_rl_simple_policy.pt",
+        "dynamics": "classic",
+        "type": "rl",
+    },
+    "guided_self_play_rl (classic)": {
+        "path": POLICY_DIR + "/guided_self_play_classic_policy.pt",
+        "dynamics": "classic",
+        "type": "rl",
+    },
+    # "self_play_rl (jerk)": {
+    #     "path": POLICY_DIR + "/self_play_jerk_policy.pt",
+    #     "dynamics": "jerk",
+    #     "type": "rl",
+    # },
+    "guided_self_play_rl (jerk)": {
+        "path": POLICY_DIR + "/guided_self_play_jerk_policy.pt",
+        "dynamics": "jerk",
+        "type": "rl",
+    },
+}
 
 COLUMN_ORDER = [
     "policy",
@@ -246,6 +277,15 @@ def evaluate_bc_policy(config, vecenv, evaluator, policy_path):
 def evaluate_rl_policy(config, vecenv, evaluator, policy_path):
     """Evaluate an RL policy using WOSAC metrics."""
 
+    # Use a copy to avoid mutating the original config
+    config = copy.deepcopy(config)
+
+    # Ensure evaluator is in RL mode (may have been changed by BC evaluation)
+    evaluator.mode = "rl"
+
+    # Enable RNN state initialization for LSTM-based policies
+    config["train"]["use_rnn"] = True
+
     config["load_model_path"] = policy_path
 
     # Load policy
@@ -273,13 +313,13 @@ def evaluate_rl_policy(config, vecenv, evaluator, policy_path):
     return results
 
 
-def pipeline(env_name="puffer_drive"):
-    """Obtain WOSAC scores for various baselines and policies."""
-
+def create_config_and_env(env_name, dynamics_model="classic"):
+    """Create a config and vecenv for a specific dynamics model."""
     config = load_config(env_name)
 
-    config["env"]["num_maps"] = 229
-    config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/validation_interactive_small"
+    # Common WOSAC evaluation settings
+    config["env"]["num_maps"] = 100
+    config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/validation"
     config["wosac"]["enabled"] = True
     config["vec"]["backend"] = "PufferEnv"
     config["vec"]["num_envs"] = 1
@@ -290,58 +330,98 @@ def pipeline(env_name="puffer_drive"):
     config["env"]["goal_behavior"] = 2
     config["env"]["goal_radius"] = 1.0
 
-    # Make env
-    vecenv = load_env(env_name, config)
+    # Set dynamics model
+    config["env"]["dynamics_model"] = dynamics_model
 
-    # Make evaluator
+    # Disable human data preparation for jerk dynamics (not implemented)
+    if dynamics_model == "jerk":
+        config["env"]["prep_human_data"] = False
+
+    vecenv = load_env(env_name, config)
     evaluator = WOSACEvaluator(config)
 
-    # Baseline: Ground truth
-    df_results_gt = evaluate_ground_truth(config, vecenv, evaluator)
+    return config, vecenv, evaluator
+
+
+def pipeline(env_name="puffer_drive"):
+    """Obtain WOSAC scores for various baselines and policies across dynamics models."""
+
+    all_results = []
+
+    config_classic, vecenv_classic, evaluator_classic = create_config_and_env(env_name, "classic")
+
+    # Ground truth (dynamics-agnostic, only need to run once)
+    print("Evaluating: ground_truth")
+    df_results_gt = evaluate_ground_truth(config_classic, vecenv_classic, evaluator_classic)
     df_results_gt["policy"] = "ground_truth"
+    all_results.append(df_results_gt)
 
-    # Baseline: Agent with inferred human actions (using classic bicycle dynamics model)
-    df_results_inferred_human = evaluate_human_inferred_actions(config, vecenv, evaluator)
-    df_results_inferred_human["policy"] = "inferred_human_actions"
+    # Inferred human actions (classic only - not implemented for jerk)
+    print("Evaluating: inferred_human_actions (classic)")
+    df_results_inferred_human = evaluate_human_inferred_actions(config_classic, vecenv_classic, evaluator_classic)
+    df_results_inferred_human["policy"] = "inferred_human (classic)"
+    all_results.append(df_results_inferred_human)
 
-    # Baseline: Imitation learning policy
-    df_results_bc = evaluate_bc_policy(config, vecenv, evaluator, POLICY_DIR + "/bc_policy.pt")
-    df_results_bc["policy"] = "bc_policy"
+    # --- Classic dynamics evaluations ---
+    print("=" * 60)
+    print("Running evaluations with CLASSIC dynamics model...")
+    print("=" * 60)
 
-    # Baseline: Self-play RL policy
-    df_results_self_play = evaluate_rl_policy(config, vecenv, evaluator, POLICY_DIR + "/self_play_policy.pt")
-    df_results_self_play["policy"] = "self_play_rl"
+    # Random baseline for classic
+    print("Evaluating: random (classic)")
+    df_results_random_classic = evaluate_random_policy(config_classic, vecenv_classic, evaluator_classic)
+    df_results_random_classic["policy"] = "random (classic)"
+    all_results.append(df_results_random_classic)
 
-    # Guided self-play policy
-    df_results_guided_self_play = evaluate_rl_policy(config, vecenv, evaluator, POLICY_DIR + "/guided_self_play_policy.pt")
-    df_results_guided_self_play["policy"] = "guided_self_play_rl"
+    # Evaluate classic dynamics policies
+    for policy_name, policy_cfg in POLICY_CONFIGS.items():
+        if policy_cfg["dynamics"] != "classic":
+            continue
+        print(f"Evaluating: {policy_name}")
+        if policy_cfg["type"] == "bc":
+            df_result = evaluate_bc_policy(config_classic, vecenv_classic, evaluator_classic, policy_cfg["path"])
+        else:
+            df_result = evaluate_rl_policy(config_classic, vecenv_classic, evaluator_classic, policy_cfg["path"])
+        df_result["policy"] = policy_name
+        all_results.append(df_result)
 
-    # Baseline: Random policy
-    df_results_random = evaluate_random_policy(config, vecenv, evaluator)
-    df_results_random["policy"] = "random"
+    # --- Jerk dynamics evaluations ---
+    # Check if any jerk policies are configured
+    jerk_policies = {k: v for k, v in POLICY_CONFIGS.items() if v["dynamics"] == "jerk"}
 
-    # Combine
-    df = pd.concat(
-        [
-            df_results_gt,
-            df_results_inferred_human,
-            df_results_random,
-            df_results_bc,
-            df_results_self_play,
-            df_results_guided_self_play,
-        ],
-        ignore_index=True,
-    )
+    if jerk_policies:
+        print("=" * 60)
+        print("Running evaluations with JERK dynamics model...")
+        print("=" * 60)
 
+        config_jerk, vecenv_jerk, evaluator_jerk = create_config_and_env(env_name, "jerk")
+
+        # Random baseline for jerk (different action space, so separate baseline)
+        print("Evaluating: random (jerk)")
+        df_results_random_jerk = evaluate_random_policy(config_jerk, vecenv_jerk, evaluator_jerk)
+        df_results_random_jerk["policy"] = "random (jerk)"
+        all_results.append(df_results_random_jerk)
+
+        # Evaluate jerk dynamics policies
+        for policy_name, policy_cfg in jerk_policies.items():
+            print(f"Evaluating: {policy_name}")
+            df_result = evaluate_rl_policy(config_jerk, vecenv_jerk, evaluator_jerk, policy_cfg["path"])
+            df_result["policy"] = policy_name
+            all_results.append(df_result)
+
+    # Combine all results
+    df = pd.concat(all_results, ignore_index=True)
     df = df[COLUMN_ORDER]
 
     # Visualize
     plot_wosac_results(df)
     plot_realism_score_distributions(df)
 
-    print(df.groupby("policy")["realism_meta_score"].mean())
-    print(df.shape[0])
-
+    # Print summary
+    print("\n" + "=" * 60)
+    print("RESULTS SUMMARY")
+    print("=" * 60)
+    print(df.groupby("policy")["realism_meta_score"].mean().sort_values(ascending=False))
 
 if __name__ == "__main__":
     pipeline()
