@@ -124,7 +124,7 @@ class PuffeRL:
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
         self.render = config["render"]
-        self.render_async = config["render_async"] and self.render      # Only supported if rendering is enabled
+        self.render_async = config["render_async"] and self.render  # Only supported if rendering is enabled
         self.render_interval = config["render_interval"]
 
         if self.render:
@@ -200,6 +200,9 @@ class PuffeRL:
         self.logger = logger
         if logger is None:
             self.logger = NoLogger(config)
+        if self.render_async:
+            self.logger.wandb.define_metric("render_step", hidden=True)
+            self.logger.wandb.define_metric("render/*", step_metric="render_step")
 
         # Learning rate scheduler
         epochs = config["total_timesteps"] // config["batch_size"]
@@ -526,16 +529,33 @@ class PuffeRL:
                         wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
                         wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
                         if self.render_async:
-                            print("Starting async render process...")
                             render_proc = multiprocessing.Process(
                                 target=pufferlib.utils.render_videos,
-                                args=(self.config, env_cfg, self.logger.run_id, wandb_log, self.epoch, self.global_step, bin_path, self.render_async, self.render_queue)
+                                args=(
+                                    self.config,
+                                    env_cfg,
+                                    self.logger.run_id,
+                                    wandb_log,
+                                    self.epoch,
+                                    self.global_step,
+                                    bin_path,
+                                    self.render_async,
+                                    self.render_queue,
+                                ),
                             )
                             render_proc.start()
                             print(f"Started async render process with PID {render_proc.pid}")
                         else:
                             pufferlib.utils.render_videos(
-                                self.config, env_cfg, self.logger.run_id, wandb_log, self.epoch, self.global_step, bin_path, self.render_async, wandb_run=wandb_run
+                                self.config,
+                                env_cfg,
+                                self.logger.run_id,
+                                wandb_log,
+                                self.epoch,
+                                self.global_step,
+                                bin_path,
+                                self.render_async,
+                                wandb_run=wandb_run,
                             )
 
                     except Exception as e:
@@ -553,19 +573,19 @@ class PuffeRL:
 
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
-        if not self.render_async or not hasattr(self, 'render_queue'):
+        if not self.render_async or not hasattr(self, "render_queue"):
             return
 
-        start_time = time.time()
         try:
             while not self.render_queue.empty():
                 result = self.render_queue.get_nowait()
                 step = result["step"]
                 videos = result["videos"]
-                
+
                 # Log to wandb if available
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
                     import wandb
+
                     payload = {}
                     if videos["output_topdown"]:
                         payload["render/world_state"] = [wandb.Video(p) for p in videos["output_topdown"]]
@@ -573,8 +593,9 @@ class PuffeRL:
                         payload["render/agent_view"] = [wandb.Video(p) for p in videos["output_agent"]]
 
                     if payload:
-                        self.logger.wandb.log(payload, step=step)
-                        print(f"Logged async videos for step {step} in {time.time() - start_time:.2f}s")
+                        # Custom step for render logs to prevent monotonic loggic wandb errors
+                        payload["render_step"] = step
+                        self.logger.wandb.log(payload)
 
         except queue.Empty:
             pass
@@ -622,7 +643,7 @@ class PuffeRL:
         self.vecenv.close()
         self.utilization.stop()
 
-        if self.render_async and hasattr(self, 'render_queue'):
+        if self.render_async and hasattr(self, "render_queue"):
             self.render_queue.close()
             self.render_queue.join_thread()
 

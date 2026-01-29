@@ -167,7 +167,9 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {type(e).__name__}: {e}")
 
 
-def render_videos(config, env_cfg, run_id, wandb_log, epoch, global_step, bin_path, render_async, render_queue=None, wandb_run=None):
+def render_videos(
+    config, env_cfg, run_id, wandb_log, epoch, global_step, bin_path, render_async, render_queue=None, wandb_run=None
+):
     """
     Generate and log training videos using C-based rendering.
 
@@ -205,7 +207,7 @@ def render_videos(config, env_cfg, run_id, wandb_log, epoch, global_step, bin_pa
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
 
         # Base command with only visualization flags (env config comes from INI)
-        base_cmd = ["./visualize"]
+        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
         # Visualization config flags only
         if config.get("show_grid", False):
@@ -276,7 +278,6 @@ def render_videos(config, env_cfg, run_id, wandb_log, epoch, global_step, bin_pa
             vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
                 "resources/drive/output_agent.mp4"
             )
-            print("Videos Generated:", vids_exist)
 
             if result.returncode == 0 or (result.returncode == 1 and vids_exist):
                 videos = [
@@ -298,7 +299,7 @@ def render_videos(config, env_cfg, run_id, wandb_log, epoch, global_step, bin_pa
                         shutil.move(source_vid, target_path)
                         generated_videos[vid_type].append(target_path)
                         if render_async:
-                             continue
+                            continue
                         # Accumulate for a single wandb.log call
                         if wandb_log:
                             import wandb
@@ -313,10 +314,12 @@ def render_videos(config, env_cfg, run_id, wandb_log, epoch, global_step, bin_pa
                 print(f"C rendering failed (map index {i}) with exit code {result.returncode}: {result.stdout}")
 
         if render_async:
-            render_queue.put({
-                "videos": generated_videos,
-                "step": global_step,
-            })
+            render_queue.put(
+                {
+                    "videos": generated_videos,
+                    "step": global_step,
+                }
+            )
 
         # Log all videos at once so W&B keeps all of them under the same step
         if wandb_log and (videos_to_log_world or videos_to_log_agent) and not render_async:
