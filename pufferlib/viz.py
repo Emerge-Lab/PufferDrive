@@ -478,7 +478,7 @@ def _img_from_fig(fig: matplotlib.figure.Figure) -> np.ndarray:
     return img
 
 
-def unpack_obs(obs_flat, dynamics_model=0, target_type=0):
+def unpack_obs(obs_flat, dynamics_model=0, target_type=0, reward_conditioning=False):
     """
     Unpack the flattened observation into the ego state and visible state.
     Args:
@@ -510,8 +510,10 @@ def unpack_obs(obs_flat, dynamics_model=0, target_type=0):
     # Extract ego state
     ego_state = obs_flat[:, :ego_dim]
 
-    # Extract GPS path (only if waypoints included)
     gps_start = ego_dim
+    if reward_conditioning:
+        gps_start += binding.NUM_REWARD_COEFS
+
     if include_waypoints:
         gps_end = gps_start + max_gps_objects * gps_feature_size
         gps_obs = obs_flat[:, gps_start:gps_end]
@@ -541,7 +543,7 @@ def unpack_obs(obs_flat, dynamics_model=0, target_type=0):
     return ego_state[0], partners_obs[0], road_obs[0], traffic_obs[0], gps_obs[0], include_goal, include_waypoints
 
 
-def plot_observation(obs, dynamics_model="classic", target_type="goal") -> np.ndarray:
+def plot_observation(obs, dynamics_model="classic", target_type="goal", reward_conditioning=False) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
     Args:
@@ -552,7 +554,10 @@ def plot_observation(obs, dynamics_model="classic", target_type="goal") -> np.nd
     fig, ax = plt.subplots(figsize=(20, 20))
 
     ego_state, partners_obs, road_obs, traffic_obs, gps_obs, include_goal, include_waypoints = unpack_obs(
-        obs, dynamics_model, target_type
+        obs,
+        dynamics_model,
+        target_type,
+        reward_conditioning,
     )
 
     # Unpack ego state based on dynamics model and target_type

@@ -1737,7 +1737,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->human_agent_idx = unpack(kwargs, "human_agent_idx");
     env->ini_file = unpack_str(kwargs, "ini_file");
-
     env_init_config conf = {0};
     if (ini_parse(env->ini_file, handler, &conf) < 0) {
         printf("Error while loading %s", env->ini_file);
@@ -1752,59 +1751,58 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "scenario_length must be > 0 (set in INI or kwargs)");
         return -1;
     }
-    env->action_type = conf.action_type;
-    env->dynamics_model = conf.dynamics_model;
-    env->reward_vehicle_collision = conf.reward_vehicle_collision;
-    env->reward_offroad_collision = conf.reward_offroad_collision;
-    env->reward_traffic_light_violation = conf.reward_traffic_light_violation;
-    env->reward_goal = conf.reward_goal;
-    env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
-    env->reward_ade = conf.reward_ade;
-    env->reward_progression = conf.reward_progression;
-    env->reward_offroute = conf.reward_offroute;
-    env->reward_speed = conf.reward_speed;
-    env->reward_comfort = conf.reward_comfort;
-    env->reward_velocity = conf.reward_velocity;
-    env->reward_lane_align = conf.reward_lane_align;
-    env->reward_lane_center = conf.reward_lane_center;
-    env->reward_timestep = conf.reward_timestep;
-    env->termination_mode = conf.termination_mode;
-    env->goal_radius = conf.goal_radius;
-    env->scenario_length = conf.scenario_length;
-    env->reach_goal_behavior = conf.reach_goal_behavior;
-    env->target_type = conf.target_type;
-    env->collision_behavior = conf.collision_behavior;
-    env->offroad_behavior = conf.offroad_behavior;
-    env->traffic_light_behavior = conf.traffic_light_behavior;
-    env->end_sdc_path_behavior = conf.end_sdc_path_behavior;
-    env->goal_distance = conf.goal_distance;
-    env->waypoints_spacing = conf.waypoints_spacing;
-    env->reward_conditioning = conf.reward_conditioning;
-    env->reward_randomization = conf.reward_randomization;
+    env->action_type = (int)unpack(kwargs, "action_type");
+    env->dynamics_model = (int)unpack(kwargs, "dynamics_model");
+    env->reward_vehicle_collision = (float)unpack(kwargs, "reward_vehicle_collision");
+    env->reward_offroad_collision = (float)unpack(kwargs, "reward_offroad_collision");
+    env->reward_traffic_light_violation = (float)unpack(kwargs, "reward_traffic_light_violation");
+    env->reward_goal = (float)unpack(kwargs, "reward_goal");
+    env->reward_goal_post_respawn = (float)unpack(kwargs, "reward_goal_post_respawn");
+    env->reward_ade = (float)unpack(kwargs, "reward_ade");
+    env->reward_progression = (float)unpack(kwargs, "reward_progression");
+    env->reward_offroute = (float)unpack(kwargs, "reward_offroute");
+    env->reward_speed = (float)unpack(kwargs, "reward_speed");
+    env->reward_under_speed = (float)unpack(kwargs, "reward_under_speed");
+    env->reward_comfort = (float)unpack(kwargs, "reward_comfort");
+    env->reward_velocity = (float)unpack(kwargs, "reward_velocity");
+    env->reward_lane_align = (float)unpack(kwargs, "reward_lane_align");
+    env->reward_lane_center = (float)unpack(kwargs, "reward_lane_center");
+    env->reward_timestep = (float)unpack(kwargs, "reward_timestep");
+    env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
+    env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
+    env->traffic_light_behavior = (int)unpack(kwargs, "traffic_light_behavior");
+    env->end_sdc_path_behavior = (int)unpack(kwargs, "end_sdc_path_behavior");
+    env->goal_radius = (int)unpack(kwargs, "goal_radius");
+    env->goal_distance = (int)unpack(kwargs, "goal_distance");
+    env->waypoints_spacing = (int)unpack(kwargs, "waypoints_spacing");
     // env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
     // env->control_all_agents = unpack(kwargs, "control_all_agents");
     // env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
-    env->dt = conf.dt;
+    env->reach_goal_behavior = (int)unpack(kwargs, "reach_goal_behavior");
+    env->target_type = (int)unpack(kwargs, "target_type");
+    env->dt = (float)unpack(kwargs, "dt");
+    env->scenario_length = (int)unpack(kwargs, "scenario_length");
+    env->termination_mode = (int)unpack(kwargs, "termination_mode");
+    char *map_dir = unpack_str(kwargs, "map_dir");
+    int map_id = (int)unpack(kwargs, "map_id");
+    char map_file[100];
+    sprintf(map_file, "%s/map_%03d.bin", map_dir, map_id);
+    env->map_name = strdup(map_file);
+    int max_agents = (int)unpack(kwargs, "max_agents");
+    env->num_controllable_agents = max_agents;
+    int max_agents_per_env = (int)unpack(kwargs, "max_agents_per_env");
+    env->num_max_agents = max_agents_per_env;
+
+    int init_steps = (int)unpack(kwargs, "init_steps");
+    env->init_steps = init_steps;
+    env->timestep = init_steps;
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->simulation_mode = (int)unpack(kwargs, "simulation_mode");
-    env->reach_goal_behavior = (int)unpack(kwargs, "reach_goal_behavior");
+    env->reward_conditioning = (bool)unpack(kwargs, "reward_conditioning");
+    env->reward_randomization = (bool)unpack(kwargs, "reward_randomization");
     env->eval_mode = (int)unpack(kwargs, "eval_mode");
-    if (kwargs && PyDict_GetItemString(kwargs, "target_type")) {
-        env->target_type = (int)unpack(kwargs, "target_type");
-    }
-    env->goal_radius = (float)unpack(kwargs, "goal_radius");
-    char *map_dir = unpack_str(kwargs, "map_dir");
-    int map_id = unpack(kwargs, "map_id");
-    int max_agents = unpack(kwargs, "max_agents");
-    int init_steps = unpack(kwargs, "init_steps");
-    char map_file[100];
-    sprintf(map_file, "%s/map_%03d.bin", map_dir, map_id);
-    env->num_controllable_agents = max_agents;
-    env->num_max_agents = conf.max_agents_per_env;
-    env->map_name = strdup(map_file);
-    env->init_steps = init_steps;
-    env->timestep = init_steps;
+
     init(env);
     return 0;
 }

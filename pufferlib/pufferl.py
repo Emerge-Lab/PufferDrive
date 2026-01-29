@@ -513,7 +513,7 @@ class PuffeRL:
 
             if self.render and self.epoch % self.render_interval == 0:
                 model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-                model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+                model_files = glob.glob(os.path.join(model_dir, "models", "model_*.pt"))
 
                 if model_files:
                     # Take the latest checkpoint
@@ -626,8 +626,10 @@ class PuffeRL:
         if not os.path.exists(path):
             os.makedirs(path)
 
+        models_dir = os.path.join(path, "models")
+        os.makedirs(models_dir, exist_ok=True)
         model_name = f"model_{self.config['env']}_{self.epoch:06d}.pt"
-        model_path = os.path.join(path, model_name)
+        model_path = os.path.join(models_dir, model_name)
         if os.path.exists(model_path):
             return model_path
 
@@ -1048,21 +1050,6 @@ def _save_experiment_config(args, path):
         yaml.dump(json.loads(json.dumps(args)), f)
 
 
-def write_key_to_ini(ini_file_path, section, key, value):
-    """Writes a single key/value pair to an INI file section."""
-    config = configparser.ConfigParser(allow_no_value=True)
-    # Read the existing file to preserve all other settings
-    config.read(ini_file_path)
-
-    if section not in config:
-        config[section] = {}
-
-    config[section][key] = str(value)  # Ensure value is a string
-
-    with open(ini_file_path, "w") as configfile:
-        config.write(configfile)
-
-
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     args = args or load_config(env_name)
 
@@ -1071,21 +1058,18 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     run_name = args.get("run")
 
     if os.environ.get("RUNNING_IN_GCP", False):
-        dir_gcp = args["train"].get("dir_gcp")
-        if not dir_gcp.startswith("gs://"):
-            dir_gcp = f"gs://{dir_gcp}"
+        gcs_bucket = os.environ.get("GCS_BUCKET")
+        if not gcs_bucket:
+            raise ValueError("GCS_BUCKET env var required when running on GCP")
 
         if experiment_name is not None:
             if run_name is not None:
-                # Use experiment/run structure
-                args["train"]["gcs_path"] = f"{dir_gcp}/{experiment_name}/{run_name}"
+                args["train"]["gcs_path"] = f"{gcs_bucket}/{experiment_name}/{run_name}"
             else:
-                # Fallback: use experiment with timestamp if no run specified
                 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                args["train"]["gcs_path"] = f"{dir_gcp}/{experiment_name}/{timestamp}"
+                args["train"]["gcs_path"] = f"{gcs_bucket}/{experiment_name}/{timestamp}"
         else:
-            print("Error: GCP training requires an experiment name.")
-            print("Please set --experiment to a unique name for your experiment.")
+            raise ValueError("GCP training requires --experiment name")
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     if "LOCAL_RANK" in os.environ:
@@ -1217,8 +1201,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 "max_agents_per_env": 40,
                 "reward_randomization": False,
                 "scenario_length": 200,
-                "num_maps": 10,
-                "resample_frequency": 200,
             },
         }
         args = load_eval_config(env_name, model_path, eval_overrides)
@@ -1357,6 +1339,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                             ob,
                             dynamics_model=args["env"]["dynamics_model"],
                             target_type=args["env"]["target_type"],
+                            reward_conditioning=args["env"]["reward_conditioning"],
                         )
 
                     with torch.no_grad():
@@ -1808,7 +1791,7 @@ def load_config(env_name, config_dir=None):
         choices=["auto", "human", "ansi", "rgb_array", "raylib", "matplotlib", "None"],
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
-    parser.add_argument("--num_scenarios", type=int, default=10, help="Number of scenarios to eval")
+    parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument(
         "--render_obs", type=int, default=0, help="Rendering the observation of first agent in evaluation"

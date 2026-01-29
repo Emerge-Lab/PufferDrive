@@ -73,6 +73,8 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
+        self.goal_distance = goal_distance
+        self.waypoints_spacing = waypoints_spacing
         self.reach_goal_behavior = reach_goal_behavior
         self.target_type_str = target_type
         if target_type == "goal":
@@ -100,6 +102,12 @@ class Drive(pufferlib.PufferEnv):
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        if dynamics_model == "classic":
+            self.dynamics_model_flag = 0
+        elif dynamics_model == "jerk":
+            self.dynamics_model_flag = 1
+        else:
+            raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         self.eval_mode = eval_mode
         self.termination_mode = termination_mode
         self.seed = seed
@@ -240,39 +248,45 @@ class Drive(pufferlib.PufferEnv):
                 self.truncations[cur:nxt],
                 seed,
                 action_type=self._action_type_flag,
-                human_agent_idx=human_agent_idx,
-                reward_vehicle_collision=reward_vehicle_collision,
-                reward_offroad_collision=reward_offroad_collision,
-                reward_traffic_light_violation=reward_traffic_light_violation,
-                reward_goal=reward_goal,
-                reward_goal_post_respawn=reward_goal_post_respawn,
-                reward_ade=reward_ade,
-                reward_progression=reward_progression,
-                reward_offroute=reward_offroute,
-                reward_speed=reward_speed,
-                reward_comfort=reward_comfort,
-                reward_velocity=reward_velocity,
-                reward_lane_align=reward_lane_align,
-                reward_lane_center=reward_lane_center,
-                reward_timestep=reward_timestep,
-                collision_behavior=collision_behavior,
-                offroad_behavior=offroad_behavior,
-                traffic_light_behavior=traffic_light_behavior,
-                end_sdc_path_behavior=end_sdc_path_behavior,
-                goal_radius=goal_radius,
+                dynamics_model=self.dynamics_model_flag,
+                human_agent_idx=self.human_agent_idx,
+                reward_vehicle_collision=self.reward_vehicle_collision,
+                reward_offroad_collision=self.reward_offroad_collision,
+                reward_traffic_light_violation=self.reward_traffic_light_violation,
+                reward_goal=self.reward_goal,
+                reward_goal_post_respawn=self.reward_goal_post_respawn,
+                reward_ade=self.reward_ade,
+                reward_progression=self.reward_progression,
+                reward_offroute=self.reward_offroute,
+                reward_speed=self.reward_speed,
+                reward_comfort=self.reward_comfort,
+                reward_velocity=self.reward_velocity,
+                reward_lane_align=self.reward_lane_align,
+                reward_lane_center=self.reward_lane_center,
+                reward_timestep=self.reward_timestep,
+                collision_behavior=self.collision_behavior,
+                offroad_behavior=self.offroad_behavior,
+                traffic_light_behavior=self.traffic_light_behavior,
+                end_sdc_path_behavior=self.end_sdc_path_behavior,
+                goal_radius=self.goal_radius,
+                goal_distance=self.goal_distance,
+                waypoints_spacing=self.waypoints_spacing,
                 reach_goal_behavior=self.reach_goal_behavior,
                 target_type=self.target_type,
-                dt=dt,
-                scenario_length=(int(scenario_length) if scenario_length is not None else None),
+                dt=self.dt,
+                scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
                 termination_mode=int(self.termination_mode),
+                map_dir=self.map_dir,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
+                max_agents_per_env=self.max_agents_per_env,
                 ini_file="pufferlib/config/ocean/drive.ini",
-                init_steps=init_steps,
+                init_steps=self.init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
                 simulation_mode=self.simulation_mode,
-                map_dir=map_dir,
+                reward_conditioning=self.reward_conditioning,
+                reward_randomization=self.reward_randomization,
                 eval_mode=self.eval_mode,
             )
             env_ids.append(env_id)
@@ -353,18 +367,24 @@ class Drive(pufferlib.PufferEnv):
                         traffic_light_behavior=self.traffic_light_behavior,
                         end_sdc_path_behavior=self.end_sdc_path_behavior,
                         goal_radius=self.goal_radius,
+                        goal_distance=self.goal_distance,
+                        waypoints_spacing=self.waypoints_spacing,
                         reach_goal_behavior=self.reach_goal_behavior,
                         target_type=self.target_type,
                         dt=self.dt,
                         scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
+                        termination_mode=int(self.termination_mode),
+                        map_dir=self.map_dir,
                         map_id=map_ids[i],
                         max_agents=nxt - cur,
+                        max_agents_per_env=self.max_agents_per_env,
                         ini_file="pufferlib/config/ocean/drive.ini",
                         init_steps=self.init_steps,
                         init_mode=self.init_mode,
                         control_mode=self.control_mode,
                         simulation_mode=self.simulation_mode,
-                        map_dir=self.map_dir,
+                        reward_conditioning=self.reward_conditioning,
+                        reward_randomization=self.reward_randomization,
                         eval_mode=self.eval_mode,
                     )
                     env_ids.append(env_id)
