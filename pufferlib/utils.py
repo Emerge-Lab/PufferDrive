@@ -196,10 +196,6 @@ def render_videos(
         video_output_dir = os.path.join(model_dir, "videos")
         os.makedirs(video_output_dir, exist_ok=True)
 
-        # Record the path of the latest weights file
-        latest_weights_path = "resources/drive/puffer_drive_weights.bin"
-        os.makedirs(os.path.dirname(latest_weights_path), exist_ok=True)
-
         # TODO: Fix memory leaks so that this is not needed
         # Suppress AddressSanitizer exit code (temp)
         env_vars = os.environ.copy()
@@ -265,7 +261,7 @@ def render_videos(
         videos_to_log_agent = []
         generated_videos = {"output_topdown": [], "output_agent": []}
         output_topdown = f"resources/drive/output_topdown_{epoch}"
-        output_agent = f"resources/drive/output_agent_{epoch}.mp4"
+        output_agent = f"resources/drive/output_agent_{epoch}"
 
         for i, map_path in enumerate(render_maps):
             cmd = list(base_cmd)  # copy
@@ -345,7 +341,5 @@ def render_videos(
 
     finally:
         # Clean up bin weights file
-        if os.path.exists(latest_weights_path):
-            os.remove(latest_weights_path)
         if os.path.exists(bin_path):
             os.remove(bin_path)
