@@ -54,6 +54,7 @@ rich.traceback.install(show_locals=False)
 import signal  # Aggressively exit on ctrl+c
 
 import multiprocessing
+import queue
 
 signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 
@@ -123,11 +124,14 @@ class PuffeRL:
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
         self.render = config["render"]
-        self.render_async = config["render_async"]
+        self.render_async = config["render_async"] and self.render      # Only supported if rendering is enabled
         self.render_interval = config["render_interval"]
 
         if self.render:
             ensure_drive_binary()
+
+        if self.render_async:
+            self.render_queue = multiprocessing.Queue()
 
         # LSTM
         if config["use_rnn"]:
@@ -517,16 +521,21 @@ class PuffeRL:
                             path=bin_path,
                             silent=True,
                         )
-                        
+
+                        env_cfg = getattr(self.vecenv, "driver_env", None)
+                        wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
+                        wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
                         if self.render_async:
+                            print("Starting async render process...")
                             render_proc = multiprocessing.Process(
                                 target=pufferlib.utils.render_videos,
-                                args=(self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path)
+                                args=(self.config, env_cfg, self.logger.run_id, wandb_log, self.epoch, self.global_step, bin_path, self.render_async, self.render_queue)
                             )
                             render_proc.start()
+                            print(f"Started async render process with PID {render_proc.pid}")
                         else:
                             pufferlib.utils.render_videos(
-                                self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
+                                self.config, env_cfg, self.logger.run_id, wandb_log, self.epoch, self.global_step, bin_path, self.render_async, wandb_run=wandb_run
                             )
 
                     except Exception as e:
@@ -542,7 +551,41 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
+    def check_render_queue(self):
+        """Check if any async render jobs finished and log them."""
+        if not self.render_async or not hasattr(self, 'render_queue'):
+            return
+
+        start_time = time.time()
+        try:
+            while not self.render_queue.empty():
+                result = self.render_queue.get_nowait()
+                step = result["step"]
+                videos = result["videos"]
+                
+                # Log to wandb if available
+                if hasattr(self.logger, "wandb") and self.logger.wandb:
+                    import wandb
+                    payload = {}
+                    if videos["output_topdown"]:
+                        payload["render/world_state"] = [wandb.Video(p) for p in videos["output_topdown"]]
+                    if videos["output_agent"]:
+                        payload["render/agent_view"] = [wandb.Video(p) for p in videos["output_agent"]]
+
+                    if payload:
+                        self.logger.wandb.log(payload, step=step)
+                        print(f"Logged async videos for step {step} in {time.time() - start_time:.2f}s")
+
+        except queue.Empty:
+            pass
+        except Exception as e:
+            print(f"Error reading render queue: {e}")
+        pass
+
     def mean_and_log(self):
+        # Check render queue for finished async jobs
+        self.check_render_queue()
+
         config = self.config
         for k in list(self.stats.keys()):
             v = self.stats[k]
@@ -578,6 +621,11 @@ class PuffeRL:
     def close(self):
         self.vecenv.close()
         self.utilization.stop()
+
+        if self.render_async and hasattr(self, 'render_queue'):
+            self.render_queue.close()
+            self.render_queue.join_thread()
+
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
         path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}.pt")
