@@ -53,6 +53,8 @@ rich.traceback.install(show_locals=False)
 
 import signal  # Aggressively exit on ctrl+c
 
+import multiprocessing
+
 signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 
 # Assume advantage kernel has been built if CUDA compiler is available
@@ -121,6 +123,7 @@ class PuffeRL:
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
         self.render = config["render"]
+        self.render_async = config["render_async"]
         self.render_interval = config["render_interval"]
 
         if self.render:
@@ -514,9 +517,17 @@ class PuffeRL:
                             path=bin_path,
                             silent=True,
                         )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
+                        
+                        if self.render_async:
+                            render_proc = multiprocessing.Process(
+                                target=pufferlib.utils.render_videos,
+                                args=(self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path)
+                            )
+                            render_proc.start()
+                        else:
+                            pufferlib.utils.render_videos(
+                                self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
+                            )
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
