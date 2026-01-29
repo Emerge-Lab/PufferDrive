@@ -132,6 +132,7 @@ class PuffeRL:
 
         if self.render_async:
             self.render_queue = multiprocessing.Queue()
+            self.render_processes = []
 
         # LSTM
         if config["use_rnn"]:
@@ -532,6 +533,17 @@ class PuffeRL:
                         wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
                         wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
                         if self.render_async:
+                            # Clean up finished processes
+                            self.render_processes = [p for p in self.render_processes if p.is_alive()]
+
+                            # Cap the number of processes to num_workers
+                            max_processes = self.config.get("num_workers")
+                            if len(self.render_processes) >= max_processes:
+                                print("Waiting for render processes to finish...")
+                            while len(self.render_processes) >= max_processes:
+                                time.sleep(1)
+                                self.render_processes = [p for p in self.render_processes if p.is_alive()]
+
                             render_proc = multiprocessing.Process(
                                 target=pufferlib.utils.render_videos,
                                 args=(
@@ -547,7 +559,7 @@ class PuffeRL:
                                 ),
                             )
                             render_proc.start()
-                            print(f"Started async render process with PID {render_proc.pid}")
+                            self.render_processes.append(render_proc)
                         else:
                             pufferlib.utils.render_videos(
                                 self.config,
@@ -1082,6 +1094,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         logger = None
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    if "vec" in args and "num_workers" in args["vec"]:
+        train_config["num_workers"] = args["vec"]["num_workers"]
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     all_logs = []
