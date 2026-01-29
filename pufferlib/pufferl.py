@@ -537,7 +537,7 @@ class PuffeRL:
                             self.render_processes = [p for p in self.render_processes if p.is_alive()]
 
                             # Cap the number of processes to num_workers
-                            max_processes = self.config.get("num_workers")
+                            max_processes = self.config.get("num_workers", 1)
                             if len(self.render_processes) >= max_processes:
                                 print("Waiting for render processes to finish...")
                             while len(self.render_processes) >= max_processes:
@@ -603,12 +603,12 @@ class PuffeRL:
 
                     payload = {}
                     if videos["output_topdown"]:
-                        payload["render/world_state"] = [wandb.Video(p) for p in videos["output_topdown"]]
+                        payload["render/world_state"] = [wandb.Video(p, format="mp4") for p in videos["output_topdown"]]
                     if videos["output_agent"]:
-                        payload["render/agent_view"] = [wandb.Video(p) for p in videos["output_agent"]]
+                        payload["render/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
 
                     if payload:
-                        # Custom step for render logs to prevent monotonic loggic wandb errors
+                        # Custom step for render logs to prevent monotonic logic wandb errors
                         payload["render_step"] = step
                         self.logger.wandb.log(payload)
 
@@ -616,7 +616,6 @@ class PuffeRL:
             pass
         except Exception as e:
             print(f"Error reading render queue: {e}")
-        pass
 
     def mean_and_log(self):
         # Check render queue for finished async jobs
@@ -658,9 +657,23 @@ class PuffeRL:
         self.vecenv.close()
         self.utilization.stop()
 
-        if self.render_async and hasattr(self, "render_queue"):
-            self.render_queue.close()
-            self.render_queue.join_thread()
+        if self.render_async: # Ensure all render processes are properly terminated before closing the queue if hasattr(self, "render_processes"): for p in self.render_processes: try: if p.is_alive(): p.terminate() p.join(timeout=5) if p.is_alive(): p.kill() except Exception: # Best-effort cleanup; avoid letting close() crash on process errors pass # Optionally clear the list to drop references to finished processes self.render_processes = [] if hasattr(self, "render_queue"): self.render_queue.close() self.render_queue.join_thread()
+            if hasattr(self, "render_processes"):
+                for p in self.render_processes:
+                    try:
+                        if p.is_alive():
+                            p.terminate()
+                            p.join(timeout=5)
+                            if p.is_alive():
+                                p.kill()
+                    except Exception:
+                        # Best-effort cleanup; avoid letting close() crash on process errors
+                        print(f"Failed to terminate render process {p.pid}")
+                # Optionally clear the list to drop references to finished processes
+                self.render_processes = []
+            if hasattr(self, "render_queue"):
+                self.render_queue.close()
+                self.render_queue.join_thread()
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id

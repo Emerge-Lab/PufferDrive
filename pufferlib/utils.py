@@ -264,7 +264,7 @@ def render_videos(
         videos_to_log_world = []
         videos_to_log_agent = []
         generated_videos = {"output_topdown": [], "output_agent": []}
-        output_topdown = f"resources/drive/output_topdown_{epoch}.mp4"
+        output_topdown = f"resources/drive/output_topdown_{epoch}"
         output_agent = f"resources/drive/output_agent_{epoch}.mp4"
 
         for i, map_path in enumerate(render_maps):
@@ -272,24 +272,27 @@ def render_videos(
             if map_path is not None and os.path.exists(map_path):
                 cmd.extend(["--map-name", str(map_path)])
 
+            output_topdown_map = output_topdown + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
+            output_agent_map = output_agent + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
+
             # Output paths (overwrite each iteration; then moved/renamed)
-            cmd.extend(["--output-topdown", output_topdown])
-            cmd.extend(["--output-agent", output_agent])
+            cmd.extend(["--output-topdown", output_topdown_map])
+            cmd.extend(["--output-agent", output_agent_map])
 
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
 
-            vids_exist = os.path.exists(output_topdown) and os.path.exists(output_agent)
+            vids_exist = os.path.exists(output_topdown_map) and os.path.exists(output_agent_map)
 
             if result.returncode == 0 or (result.returncode == 1 and vids_exist):
                 videos = [
                     (
                         "output_topdown",
-                        output_topdown,
+                        output_topdown_map,
                         f"epoch_{epoch:06d}_map{i:02d}_topdown.mp4" if map_path else f"epoch_{epoch:06d}_topdown.mp4",
                     ),
                     (
                         "output_agent",
-                        output_agent,
+                        output_agent_map,
                         f"epoch_{epoch:06d}_map{i:02d}_agent.mp4" if map_path else f"epoch_{epoch:06d}_agent.mp4",
                     ),
                 ]
