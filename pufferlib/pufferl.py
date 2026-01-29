@@ -657,7 +657,7 @@ class PuffeRL:
         self.vecenv.close()
         self.utilization.stop()
 
-        if self.render_async: # Ensure all render processes are properly terminated before closing the queue if hasattr(self, "render_processes"): for p in self.render_processes: try: if p.is_alive(): p.terminate() p.join(timeout=5) if p.is_alive(): p.kill() except Exception: # Best-effort cleanup; avoid letting close() crash on process errors pass # Optionally clear the list to drop references to finished processes self.render_processes = [] if hasattr(self, "render_queue"): self.render_queue.close() self.render_queue.join_thread()
+        if self.render_async:  # Ensure all render processes are properly terminated before closing the queue if hasattr(self, "render_processes"): for p in self.render_processes: try: if p.is_alive(): p.terminate() p.join(timeout=5) if p.is_alive(): p.kill() except Exception: # Best-effort cleanup; avoid letting close() crash on process errors pass # Optionally clear the list to drop references to finished processes self.render_processes = [] if hasattr(self, "render_queue"): self.render_queue.close() self.render_queue.join_thread()
             if hasattr(self, "render_processes"):
                 for p in self.render_processes:
                     try:
