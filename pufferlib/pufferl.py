@@ -200,7 +200,7 @@ class PuffeRL:
         self.logger = logger
         if logger is None:
             self.logger = NoLogger(config)
-        if self.render_async:
+        if self.render_async and hasattr(self.logger, "wandb") and self.logger.wandb:
             self.logger.wandb.define_metric("render_step", hidden=True)
             self.logger.wandb.define_metric("render/*", step_metric="render_step")
 
@@ -525,6 +525,9 @@ class PuffeRL:
                             silent=True,
                         )
 
+                        bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
+                        shutil.copy2(bin_path, bin_path_epoch)
+
                         env_cfg = getattr(self.vecenv, "driver_env", None)
                         wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
                         wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
@@ -538,7 +541,7 @@ class PuffeRL:
                                     wandb_log,
                                     self.epoch,
                                     self.global_step,
-                                    bin_path,
+                                    bin_path_epoch,
                                     self.render_async,
                                     self.render_queue,
                                 ),
@@ -553,7 +556,7 @@ class PuffeRL:
                                 wandb_log,
                                 self.epoch,
                                 self.global_step,
-                                bin_path,
+                                bin_path_epoch,
                                 self.render_async,
                                 wandb_run=wandb_run,
                             )

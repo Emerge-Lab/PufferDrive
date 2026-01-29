@@ -196,10 +196,9 @@ def render_videos(
         video_output_dir = os.path.join(model_dir, "videos")
         os.makedirs(video_output_dir, exist_ok=True)
 
-        # Copy the binary weights to the expected location
-        expected_weights_path = "resources/drive/puffer_drive_weights.bin"
-        os.makedirs(os.path.dirname(expected_weights_path), exist_ok=True)
-        shutil.copy2(bin_path, expected_weights_path)
+        # Record the path of the latest weights file
+        latest_weights_path = "resources/drive/puffer_drive_weights.bin"
+        os.makedirs(os.path.dirname(latest_weights_path), exist_ok=True)
 
         # TODO: Fix memory leaks so that this is not needed
         # Suppress AddressSanitizer exit code (temp)
@@ -234,6 +233,8 @@ def render_videos(
         if env_cfg is not None and getattr(env_cfg, "num_maps", None):
             base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
 
+        base_cmd.extend(["--policy-name", bin_path])
+
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
         if render_maps is None or render_maps == "none":
@@ -263,6 +264,8 @@ def render_videos(
         videos_to_log_world = []
         videos_to_log_agent = []
         generated_videos = {"output_topdown": [], "output_agent": []}
+        output_topdown = f"resources/drive/output_topdown_{epoch}.mp4"
+        output_agent = f"resources/drive/output_agent_{epoch}.mp4"
 
         for i, map_path in enumerate(render_maps):
             cmd = list(base_cmd)  # copy
@@ -270,25 +273,23 @@ def render_videos(
                 cmd.extend(["--map-name", str(map_path)])
 
             # Output paths (overwrite each iteration; then moved/renamed)
-            cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
-            cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+            cmd.extend(["--output-topdown", output_topdown])
+            cmd.extend(["--output-agent", output_agent])
 
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
 
-            vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
-                "resources/drive/output_agent.mp4"
-            )
+            vids_exist = os.path.exists(output_topdown) and os.path.exists(output_agent)
 
             if result.returncode == 0 or (result.returncode == 1 and vids_exist):
                 videos = [
                     (
                         "output_topdown",
-                        "resources/drive/output_topdown.mp4",
+                        output_topdown,
                         f"epoch_{epoch:06d}_map{i:02d}_topdown.mp4" if map_path else f"epoch_{epoch:06d}_topdown.mp4",
                     ),
                     (
                         "output_agent",
-                        "resources/drive/output_agent.mp4",
+                        output_agent,
                         f"epoch_{epoch:06d}_map{i:02d}_agent.mp4" if map_path else f"epoch_{epoch:06d}_agent.mp4",
                     ),
                 ]
@@ -337,5 +338,7 @@ def render_videos(
 
     finally:
         # Clean up bin weights file
-        if os.path.exists(expected_weights_path):
-            os.remove(expected_weights_path)
+        if os.path.exists(latest_weights_path):
+            os.remove(latest_weights_path)
+        if os.path.exists(bin_path):
+            os.remove(bin_path)
