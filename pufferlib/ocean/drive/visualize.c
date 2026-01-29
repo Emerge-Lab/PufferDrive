@@ -523,7 +523,7 @@ int main(int argc, char *argv[]) {
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
     int num_maps = 100;
-    int control = ACTIONS_INFERRED_FROM_HUMAN; // ACTIONS_INFERRED_FROM_HUMAN;
+    int control = ACTIONS_FROM_POLICY; // ACTIONS_INFERRED_FROM_HUMAN;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {

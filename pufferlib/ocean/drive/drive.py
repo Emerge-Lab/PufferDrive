@@ -12,6 +12,8 @@ from tqdm import tqdm
 
 
 class Drive(pufferlib.PufferEnv):
+    _human_data_prepped = False
+
     def __init__(
         self,
         render_mode=None,
@@ -234,11 +236,12 @@ class Drive(pufferlib.PufferEnv):
 
         os.makedirs(self.human_data_dir, exist_ok=True)
 
-        if self.prep_human_data:
+        if self.prep_human_data and not Drive._human_data_prepped:
             self._prep_human_data(
                 bptt_horizon,
                 self.max_expert_sequences,
             )
+            Drive._human_data_prepped = True
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -437,6 +440,9 @@ class Drive(pufferlib.PufferEnv):
         self._cache_size = num_sequences
 
         if self.save_data_to_disk:
+            print(
+                f"Saving {num_sequences} expert sequences of length {bptt_horizon} to disk at {self.human_data_dir}..."
+            )
             torch.save(
                 torch.from_numpy(discrete_sequences),
                 os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt"),
@@ -481,6 +487,10 @@ class Drive(pufferlib.PufferEnv):
         # Sample indices
         samples = min(n_samples, self._cache_size)
         indices = torch.randint(0, self._cache_size, (samples,))
+
+        # print(f'Sampling {samples} expert sequences from {self._cache_size} available sequences.')
+        # print(indices)
+
         sampled_obs = observations_full[indices]
 
         if return_both:
@@ -981,7 +991,7 @@ if __name__ == "__main__":
     # test_human_demonstrations()
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/processed/10_val_womd_maps")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
