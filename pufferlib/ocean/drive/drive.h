@@ -43,7 +43,6 @@
 #define LANE_DISTANCE_NORMALIZATION 4.0f
 #define LANE_SWITCH_THRESHOLD 0.05f // Hysteresis: new lane must be 5% better to switch
 
-#define AGENT_STOPPED_SPEED_THRESHOLD 0.05f
 // Dynamics Models
 #define CLASSIC 0
 #define JERK 1
@@ -1331,30 +1330,6 @@ static float find_closest_segment_on_lane(RoadMapElement *lane, float agent_x, f
     return sqrtf(min_dist_sq);
 }
 
-static float compute_log_trajectory_distance(Agent *agent) {
-    if (agent == NULL || agent->trajectory_length < 2) {
-        return 0.0f;
-    }
-
-    float total_distance = 0.0f;
-    for (int i = 0; i < agent->trajectory_length - 1; i++) {
-        // Check if both points are valid
-        if (agent->log_valid[i] && agent->log_valid[i + 1]) {
-            float x1 = agent->log_trajectory_x[i];
-            float y1 = agent->log_trajectory_y[i];
-            float x2 = agent->log_trajectory_x[i + 1];
-            float y2 = agent->log_trajectory_y[i + 1];
-
-            if (x1 != INVALID_POSITION && y1 != INVALID_POSITION && x2 != INVALID_POSITION && y2 != INVALID_POSITION) {
-                float dx = x2 - x1;
-                float dy = y2 - y1;
-                total_distance += sqrtf(dx * dx + dy * dy);
-            }
-        }
-    }
-    return total_distance;
-}
-
 // ========================================
 // Route/Path/Goal Functions
 // ========================================
@@ -1423,7 +1398,6 @@ static void build_path(Drive *drive, int agent_idx) {
     float waypoints_spacing = drive->waypoints_spacing;
 
     Agent *agent = &drive->agents[agent_idx];
-    agent->log_trajectory_distance = fmaxf(10.0, compute_log_trajectory_distance(agent));
 
     if (agent->path != NULL)
         free(agent->path);
@@ -1671,7 +1645,6 @@ static int compute_new_route(Drive *env, int agent_idx, int current_lane_id) {
 
     agent->current_route_index = 0;
     float route_dist = compute_route_distance(env, agent->route, agent->route_length);
-    agent->log_trajectory_distance = route_dist;
 
     // Update path
     build_path(env, agent_idx);

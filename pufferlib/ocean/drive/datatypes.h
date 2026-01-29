@@ -143,7 +143,6 @@ struct Agent {
 
     // Log trajectory
     int trajectory_length;
-    float log_trajectory_distance;
     float *log_trajectory_x;
     float *log_trajectory_y;
     float *log_trajectory_z;
