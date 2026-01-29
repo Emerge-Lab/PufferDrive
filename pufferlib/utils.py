@@ -311,6 +311,10 @@ def render_videos(
                                 videos_to_log_agent.append(wandb.Video(target_path, format="mp4"))
                     else:
                         print(f"Video generation completed but {source_vid} not found")
+                        if result.stdout:
+                            print(f"StdOUT: {result.stdout}")
+                        if result.stderr:
+                            print(f"StdERR: {result.stderr}")
             else:
                 print(f"C rendering failed (map index {i}) with exit code {result.returncode}: {result.stdout}")
 
