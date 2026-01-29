@@ -559,7 +559,7 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
-        if os.environ.get("RUNNING_IN_GCP", False) and (
+        if (
             self.epoch % self.config["checkpoint_interval"] == 0
             or self.epoch % self.config["log_interval"] == 0
             or done_training
@@ -1052,24 +1052,6 @@ def _save_experiment_config(args, path):
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     args = args or load_config(env_name)
-
-    # Handle experiment/run naming for GCS
-    experiment_name = args.get("experiment")
-    run_name = args.get("run")
-
-    if os.environ.get("RUNNING_IN_GCP", False):
-        gcs_bucket = os.environ.get("GCS_BUCKET")
-        if not gcs_bucket:
-            raise ValueError("GCS_BUCKET env var required when running on GCP")
-
-        if experiment_name is not None:
-            if run_name is not None:
-                args["train"]["gcs_path"] = f"{gcs_bucket}/{experiment_name}/{run_name}"
-            else:
-                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                args["train"]["gcs_path"] = f"{gcs_bucket}/{experiment_name}/{timestamp}"
-        else:
-            raise ValueError("GCP training requires --experiment name")
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     if "LOCAL_RANK" in os.environ:

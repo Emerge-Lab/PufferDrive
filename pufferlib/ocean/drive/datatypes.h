@@ -178,7 +178,7 @@ struct Agent {
     int closest_path_idx_wp;
 
     // Metrics and status tracking
-    float metrics_array[11]; // [collision, offroad, red_light, reached_goal, progression, lane_dist,
+    float metrics_array[10]; // [collision, offroad, red_light, reached_goal, lane_dist,
                              // avg_displacement_error, comfort_violation, velocity_progress, speed_limit, lane_angle]
     int current_lane_index;
     int current_lane_geometry_idx;
@@ -188,7 +188,6 @@ struct Agent {
     int mark_as_expert;
     float cumulative_displacement;
     int displacement_sample_count;
-    float current_progression;
 
     // Goal positions
     float goal_position_x;

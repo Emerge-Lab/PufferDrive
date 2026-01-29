@@ -16,8 +16,6 @@ typedef struct {
     float reward_goal;
     float reward_goal_post_respawn;
     float reward_ade;
-    float reward_progression;
-    float reward_offroute;
     float reward_speed;
     float reward_comfort;
     float reward_velocity;
@@ -103,10 +101,6 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_goal_post_respawn = atof(value);
     } else if (MATCH("env", "reward_ade")) {
         env_config->reward_ade = atof(value);
-    } else if (MATCH("env", "reward_progression")) {
-        env_config->reward_progression = atof(value);
-    } else if (MATCH("env", "reward_offroute")) {
-        env_config->reward_offroute = atof(value);
     } else if (MATCH("env", "reward_speed")) {
         env_config->reward_speed = atof(value);
     } else if (MATCH("env", "reward_comfort")) {

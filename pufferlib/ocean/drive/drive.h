@@ -56,7 +56,7 @@
 #define END_OF_PATH 4
 
 // Metrics array indices
-#define NUM_METRICS 11
+#define NUM_METRICS 10
 #define COLLISION_IDX 0
 #define OFFROAD_IDX 1
 #define RED_LIGHT_IDX 2
@@ -67,7 +67,6 @@
 #define VELOCITY_PROGRESS_IDX 7
 #define SPEED_LIMIT_IDX 8
 #define AVG_DISPLACEMENT_ERROR_IDX 9
-#define PROGRESSION_IDX 10
 
 // Grid cell size
 #define GRID_CELL_SIZE 5.0f
@@ -184,7 +183,6 @@ struct Log {
     float lane_center_rate;
     float completion_rate;
     float dnf_rate;
-    float progression_rate;
     float avg_displacement_error;
     float avg_offroad_per_agent;
     float avg_collisions_per_agent;
@@ -258,8 +256,6 @@ struct Drive {
     float dt;
     float reward_goal;
     float reward_goal_post_respawn;
-    float reward_progression;
-    float reward_offroute;
     float reward_speed;
     float reward_comfort;
     float reward_velocity;
@@ -1284,52 +1280,6 @@ static float compute_lane_end_distance_sq(RoadMapElement *lane, float origin_x, 
     return dx * dx + dy * dy;
 }
 
-static float compute_lane_center_distance(Agent *agent) {
-    float min_dist = 10000.0f;
-
-    // Loop through every *segment* of the path (from wp[i] to wp[i+1])
-    for (int i = fmaxf(0, agent->closest_path_idx_wp - 1); i < agent->path->num_waypoints - 1; ++i) {
-        const struct Waypoint wp_a = agent->path->waypoints[i];     // Segment start
-        const struct Waypoint wp_b = agent->path->waypoints[i + 1]; // Segment end
-
-        // Calculate the segment vector
-        const float seg_dx = wp_b.x - wp_a.x;
-        const float seg_dy = wp_b.y - wp_a.y;
-        const float seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
-
-        // Calculate the projection factor 't'
-        // t = dot(Vector(Agent - A), Vector(B - A)) / |Vector(B - A)|^2
-        float t;
-        if (seg_len_sq < 1e-6f) {
-            // Segment is a single point (or very small), 't' is 0
-            t = 0.0f;
-        } else {
-            // Vector from segment start (wp_a) to the agent
-            const float agent_dx = agent->sim_x - wp_a.x;
-            const float agent_dy = agent->sim_y - wp_a.y;
-            t = (agent_dx * seg_dx + agent_dy * seg_dy) / seg_len_sq;
-        }
-
-        // Clamp 't' to the range [0, 1] to find the closest point on the segment
-        const float clamped_t = fmaxf(0.0f, fminf(1.0f, t));
-
-        // Calculate the coordinates of this closest point
-        const float closest_x = wp_a.x + clamped_t * seg_dx;
-        const float closest_y = wp_a.y + clamped_t * seg_dy;
-
-        // Calculate the distance from the agent to this point
-        const float dist_sq = (agent->sim_x - closest_x) * (agent->sim_x - closest_x) +
-                              (agent->sim_y - closest_y) * (agent->sim_y - closest_y);
-        const float dist = sqrtf(dist_sq);
-
-        if (dist < min_dist) {
-            min_dist = dist;
-        }
-    }
-
-    return min_dist;
-}
-
 // Returns distance to closest segment, sets out_segment_idx to closest segment index
 static float find_closest_segment_on_lane(RoadMapElement *lane, float agent_x, float agent_y, int *out_segment_idx) {
     int num_segments = lane->segment_length - 1;
@@ -1845,58 +1795,6 @@ static float compute_displacement_error(Agent *agent, int timestep) {
     return displacement;
 }
 
-static float compute_progression(Agent *agent) {
-    float min_dist_sq = 10000.0f;
-    float best_s = agent->path->waypoints[0].s; // Default to the start
-
-    // Loop through every *segment* of the path (from wp[i] to wp[i+1])
-    for (int i = 0; i < agent->path->num_waypoints - 1; ++i) {
-        const struct Waypoint wp_a = agent->path->waypoints[i];     // Segment start
-        const struct Waypoint wp_b = agent->path->waypoints[i + 1]; // Segment end
-
-        // Calculate the segment vector
-        const float seg_dx = wp_b.x - wp_a.x;
-        const float seg_dy = wp_b.y - wp_a.y;
-        const float seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
-
-        // Calculate the projection factor 't'
-        // t = dot(Vector(Agent - A), Vector(B - A)) / |Vector(B - A)|^2
-        float t;
-        if (seg_len_sq < 1e-6f) {
-            // Segment is a single point (or very small), 't' is 0
-            t = 0.0f;
-        } else {
-            // Vector from segment start (wp_a) to the agent
-            const float agent_dx = agent->sim_x - wp_a.x;
-            const float agent_dy = agent->sim_y - wp_a.y;
-            t = (agent_dx * seg_dx + agent_dy * seg_dy) / seg_len_sq;
-        }
-
-        // Clamp 't' to the range [0, 1] to find the closest point
-        // *on the segment* (not the infinite line)
-        const float clamped_t = fmaxf(0.0f, fminf(1.0f, t));
-
-        // Calculate the coordinates of this closest point
-        const float closest_x = wp_a.x + clamped_t * seg_dx;
-        const float closest_y = wp_a.y + clamped_t * seg_dy;
-
-        // Calculate the distance squared from the agent to this point
-        const float dist_sq = (agent->sim_x - closest_x) * (agent->sim_x - closest_x) +
-                              (agent->sim_y - closest_y) * (agent->sim_y - closest_y);
-
-        // If this point is the closest we've found so far,
-        // store its interpolated 's' value.
-        if (dist_sq < min_dist_sq) {
-            min_dist_sq = dist_sq;
-
-            // Interpolate the 's' value using the clamped 't'
-            best_s = wp_a.s + clamped_t * (wp_b.s - wp_a.s);
-        }
-    }
-
-    return best_s;
-}
-
 static bool check_red_light_violation(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     int current_lane_index = agent->current_lane_index;
@@ -2103,10 +2001,6 @@ static void add_log(Drive *env) {
         if (!offroad && !collided && !red_light_violations && num_goals_reached < 1) {
             env->log.dnf_rate += 1.0f;
         }
-        // clip the progression rate to 1 by agent
-        env->logs[i].progression_rate = fminf(env->logs[i].progression_rate, 1.0f);
-        float progression = env->logs[i].progression_rate;
-        env->log.progression_rate += progression;
         float displacement_error = env->logs[i].avg_displacement_error;
         env->log.avg_displacement_error += displacement_error;
         env->log.episode_length += env->logs[i].episode_length;
@@ -2151,7 +2045,6 @@ static void reset_agent_state(Agent *agent) {
     agent->jerk_long = 0.0f;
     agent->jerk_lat = 0.0f;
     agent->steering_angle = 0.0f;
-    agent->current_progression = 0.0f;
     agent->closest_path_idx_wp = 0;
 }
 
@@ -2981,14 +2874,6 @@ static void compute_metrics(Drive *env, int agent_idx) {
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;
     }
 
-    // Progression on the path (LEGACY)
-    float current_progression = compute_progression(agent);
-    float progress_distance = fmaxf(current_progression - agent->current_progression, 0.0f);
-    agent->metrics_array[PROGRESSION_IDX] = progress_distance;
-    if (progress_distance > 0.0f) {
-        agent->current_progression = current_progression;
-    }
-
     // Speed limit metric (CUSTOM)
     float target_speed = 15.0f; // Default target speed
     int current_lane_index = agent->current_lane_index;
@@ -3169,34 +3054,6 @@ static void compute_rewards(Drive *env, int i) {
     env->rewards[i] += speed_reward;
     env->logs[i].avg_speed_per_agent += agent->sim_speed;
     env->logs[i].episode_return += speed_reward;
-
-    // Progression reward (CUSTOM)
-    if (agent->metrics_array[PROGRESSION_IDX] > 0.0f) {
-        float total_distance = agent->log_trajectory_distance;
-        float normalized_progression = 0.0;
-
-        // Use actual trajectory distance, with a minimum to avoid division issues
-        total_distance = fmaxf(total_distance, 10.0f);
-        if (total_distance > 0) {
-            normalized_progression = (agent->metrics_array[PROGRESSION_IDX] / total_distance);
-        }
-
-        env->logs[i].progression_rate += normalized_progression; // Log the actual distance
-        env->rewards[i] += env->reward_progression;
-        env->logs[i].episode_return += env->reward_progression;
-    }
-
-    // Under speed reward (CUSTOM)
-    float max_speed = 15.0f;
-    int current_lane_index = agent->current_lane_index;
-    if (current_lane_index != -1 && env->road_elements[current_lane_index].speed_limit > 0) {
-        max_speed = env->road_elements[current_lane_index].speed_limit;
-    }
-    float speed_error_close_to_max = fmaxf(0.0f, max_speed - agent->sim_speed);
-    float normalized_error_close_to_max = speed_error_close_to_max / max_speed;
-    float under_speed_penalty = -fminf(1.0f, normalized_error_close_to_max);
-    env->rewards[i] += under_speed_penalty * env->reward_under_speed;
-    env->logs[i].episode_return += under_speed_penalty * env->reward_under_speed;
 
     // ADE reward (CUSTOM)
     float current_ade = agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX];

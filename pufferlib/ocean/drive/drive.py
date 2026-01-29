@@ -26,8 +26,6 @@ class Drive(pufferlib.PufferEnv):
         reward_goal_post_respawn=0.5,
         reward_ade=0.0,
         reach_goal_behavior=0,
-        reward_progression=0.0,
-        reward_offroute=0.0,
         reward_speed=0.0,
         reward_comfort=-0.05,
         reward_velocity=0.0,
@@ -86,8 +84,6 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(f"target_type must be 'goal', 'waypoints', or 'both'. Got: {target_type}")
         self.reward_ade = reward_ade
-        self.reward_progression = reward_progression
-        self.reward_offroute = reward_offroute
         self.reward_speed = reward_speed
         self.reward_comfort = reward_comfort
         self.reward_velocity = reward_velocity
@@ -256,8 +252,6 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal=self.reward_goal,
                 reward_goal_post_respawn=self.reward_goal_post_respawn,
                 reward_ade=self.reward_ade,
-                reward_progression=self.reward_progression,
-                reward_offroute=self.reward_offroute,
                 reward_speed=self.reward_speed,
                 reward_comfort=self.reward_comfort,
                 reward_velocity=self.reward_velocity,
@@ -354,8 +348,6 @@ class Drive(pufferlib.PufferEnv):
                         reward_goal=self.reward_goal,
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_ade=self.reward_ade,
-                        reward_progression=self.reward_progression,
-                        reward_offroute=self.reward_offroute,
                         reward_speed=self.reward_speed,
                         reward_comfort=self.reward_comfort,
                         reward_velocity=self.reward_velocity,

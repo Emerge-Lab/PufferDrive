@@ -1759,10 +1759,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_goal = (float)unpack(kwargs, "reward_goal");
     env->reward_goal_post_respawn = (float)unpack(kwargs, "reward_goal_post_respawn");
     env->reward_ade = (float)unpack(kwargs, "reward_ade");
-    env->reward_progression = (float)unpack(kwargs, "reward_progression");
-    env->reward_offroute = (float)unpack(kwargs, "reward_offroute");
     env->reward_speed = (float)unpack(kwargs, "reward_speed");
-    env->reward_under_speed = (float)unpack(kwargs, "reward_under_speed");
     env->reward_comfort = (float)unpack(kwargs, "reward_comfort");
     env->reward_velocity = (float)unpack(kwargs, "reward_velocity");
     env->reward_lane_align = (float)unpack(kwargs, "reward_lane_align");
@@ -1819,7 +1816,6 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
-    assign_to_dict(dict, "progression_rate", log->progression_rate);
     assign_to_dict(dict, "lane_align_rate", log->lane_align_rate);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
