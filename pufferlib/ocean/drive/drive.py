@@ -239,7 +239,6 @@ class Drive(pufferlib.PufferEnv):
         if self.prep_human_data and not Drive._human_data_prepped:
             self._prep_human_data(
                 bptt_horizon,
-                self.max_expert_sequences,
             )
             Drive._human_data_prepped = True
 
@@ -392,7 +391,7 @@ class Drive(pufferlib.PufferEnv):
 
         return trajectories
 
-    def _prep_human_data(self, bptt_horizon=32, max_expert_sequences=256):
+    def _prep_human_data(self, bptt_horizon=32):
         """Collect and save expert trajectories with bptt_horizon length sequences."""
         trajectory_length = 91
 
@@ -423,7 +422,7 @@ class Drive(pufferlib.PufferEnv):
         valid_expert_observations = self.expert_observations_full[:, valid_agent_indices, :]
 
         # Determine how many sequences we can actually store
-        num_sequences = min(len(valid_agent_indices), max_expert_sequences)
+        num_sequences = min(len(valid_agent_indices), self.max_expert_sequences)
 
         # Preallocate sequences
         discrete_sequences = np.zeros((num_sequences, bptt_horizon, 1), dtype=np.float32)
@@ -991,7 +990,7 @@ if __name__ == "__main__":
     # test_human_demonstrations()
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/10_val_womd_maps")
+    process_all_maps(data_folder="data/processed/wosac/validation_interactive_small")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

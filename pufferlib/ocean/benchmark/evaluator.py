@@ -565,6 +565,7 @@ class WOSACEvaluator:
             # Aggregate over scenarios
             aggregate_metrics = df_scene_level.mean().to_dict()
             aggregate_metrics["total_num_agents"] = df_scene_level["num_agents_per_scene"].sum()
+            aggregate_metrics["realism_score_std"] = df_scene_level["realism_meta_score"].std()
             return aggregate_metrics
         else:
             return df_scene_level
