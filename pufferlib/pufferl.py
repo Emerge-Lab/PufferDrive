@@ -428,11 +428,6 @@ class PuffeRL:
                 self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
             )
 
-            # Use helper function to compute realism metrics
-            # self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
-            # self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
-
-            # Select appropriate action type for training
             use_continuous = self.vecenv.driver_env._action_type_flag == 1
             human_actions = continuous_human_actions if use_continuous else discrete_human_actions
             human_actions = human_actions.reshape(-1, 1).to(device)

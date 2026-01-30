@@ -269,10 +269,8 @@ def pipeline(env_name="puffer_drive"):
 
     config = load_config(env_name)
 
-    config["env"]["num_maps"] = 20  # 229
-    config["env"]["map_dir"] = (
-        "pufferlib/resources/drive/binaries/training"  # "pufferlib/resources/drive/binaries/validation_interactive_small"
-    )
+    config["env"]["num_maps"] = 60
+    config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/validation_interactive_small"
     config["wosac"]["enabled"] = True
     config["vec"]["backend"] = "PufferEnv"
     config["vec"]["num_envs"] = 1
@@ -282,6 +280,7 @@ def pipeline(env_name="puffer_drive"):
     config["env"]["init_steps"] = 10
     config["env"]["goal_behavior"] = 2
     config["env"]["goal_radius"] = 1.0
+    config["env"]["save_data_to_disk"] = False
 
     # Make env
     vecenv = load_env(env_name, config)
@@ -294,8 +293,8 @@ def pipeline(env_name="puffer_drive"):
     df_results_gt["policy"] = "ground_truth"
 
     # Baseline: Agent with inferred human actions (using classic bicycle dynamics model)
-    # df_results_inferred_human = evaluate_human_inferred_actions(config, vecenv, evaluator)
-    # df_results_inferred_human["policy"] = "inferred_human_actions"
+    df_results_inferred_human = evaluate_human_inferred_actions(config, vecenv, evaluator)
+    df_results_inferred_human["policy"] = "inferred_human_actions"
 
     # Baseline: Imitation learning policy
     # df_results_bc = evaluate_bc_policy(config, vecenv, evaluator, POLICY_DIR + "/bc_policy.pt")
@@ -303,10 +302,10 @@ def pipeline(env_name="puffer_drive"):
 
     # Baseline: Self-play RL policy
     # run: https://wandb.ai/emerge_/gsp/runs/qld2z6tn?nw=nwuserdaphnecor
-    df_results_self_play = evaluate_rl_policy(
-        config, vecenv, evaluator, "pufferlib/resources/drive/pufferdrive_weights.pt"
-    )  # POLICY_DIR + "/puffer_drive_sp_qld2z6tn.pt")
-    df_results_self_play["policy"] = "self_play_rl_base"
+    # df_results_self_play = evaluate_rl_policy(
+    #     config, vecenv, evaluator, "pufferlib/resources/drive/pufferdrive_weights.pt"
+    # )  # POLICY_DIR + "/puffer_drive_sp_qld2z6tn.pt")
+    # df_results_self_play["policy"] = "self_play_rl_base"
 
     # TODO: Guided self-play policy (guidance in rewards)
     # ...
@@ -322,10 +321,10 @@ def pipeline(env_name="puffer_drive"):
     df = pd.concat(
         [
             df_results_gt,
-            # df_results_inferred_human,
+            df_results_inferred_human,
             df_results_random,
             # df_results_bc,
-            df_results_self_play,
+            # df_results_self_play,
         ],
         ignore_index=True,
     )
@@ -337,7 +336,12 @@ def pipeline(env_name="puffer_drive"):
     plot_realism_score_distributions(df)
 
     print(df.groupby("policy")["realism_meta_score"].mean())
-    print(df.shape[0])
+    print("---")
+    print(df.groupby("policy")["kinematic_metrics"].mean())
+    print("---")
+    print(df.groupby("policy")["interactive_metrics"].mean())
+    print("---")
+    print(df.groupby("policy")["map_based_metrics"].mean())
 
 
 if __name__ == "__main__":
