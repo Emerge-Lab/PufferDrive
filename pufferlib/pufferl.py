@@ -226,6 +226,12 @@ class PuffeRL:
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
 
+        if hasattr(vecenv, "driver_env") and hasattr(vecenv.driver_env, "expert_data_metrics"):
+            expert_metrics = vecenv.driver_env.expert_data_metrics
+            if expert_metrics:
+                # Log to wandb/neptune immediately at step 0
+                self.logger.log(expert_metrics, step=0)
+
     @property
     def uptime(self):
         return time.time() - self.start_time
@@ -429,14 +435,13 @@ class PuffeRL:
             # Select appropriate action type for training
             use_continuous = self.vecenv.driver_env._action_type_flag == 1
             human_actions = continuous_human_actions if use_continuous else discrete_human_actions
-            human_actions = human_actions.to(device)
+            human_actions = human_actions.reshape(-1, 1).to(device)
             human_observations = human_observations.to(device)
 
             # 2: Compute the log-likelihood of human actions under the current policy,
             # given the corresponding human observations. A higher likelihood indicates
             # that the policy behaves more like a human under the same observations.
             human_state = dict(
-                action=human_actions,
                 lstm_h=None,
                 lstm_c=None,
             )
@@ -473,8 +478,7 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
-            human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
-            human_loss = human_loss_clipped.mean()
+            human_nll = human_log_prob.mean()
 
             entropy_loss = entropy.mean()
 
@@ -482,7 +486,7 @@ class PuffeRL:
                 pg_loss
                 + config["vf_coef"] * v_loss
                 - config["ent_coef"] * entropy_loss
-                - config["human_ll_coef"] * human_loss
+                - config["human_ll_coef"] * human_nll
             )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
@@ -498,7 +502,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["human_loss"] += human_loss / self.total_minibatches
+            losses["human_nll"] += human_nll / self.total_minibatches
             self.realism["human_log_prob"] = human_log_prob.mean().item()
 
             # Learn on accumulated minibatches
@@ -565,7 +569,12 @@ class PuffeRL:
             try:
                 v = np.mean(v)
             except:
-                del self.stats[k]
+                # Keep single-value metrics (like resampled expert data metrics)
+                if isinstance(v, (int, float)):
+                    pass
+                else:
+                    del self.stats[k]
+                    continue
 
             self.stats[k] = v
 
