@@ -1181,6 +1181,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
         args["env"]["episode_length"] = 91  # WOMD scenario length
+        args["env"]["num_maps"] = args["eval"]["human_replay_num_agents"]
 
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
