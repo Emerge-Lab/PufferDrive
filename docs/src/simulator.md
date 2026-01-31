@@ -26,7 +26,7 @@ A high-performance autonomous driving simulator in C with Python bindings.
 - `control_sdc_only`: Self-driving car only
 
 > [!NOTE]
-> `control_vehicles` filters out agents marked as "expert" and those too close to their goal (<2m). For full WOMD evaluation, use `control_tracks_to_predict`.
+> `control_vehicles` filters out agents marked as "expert" and those too close to their goal (<2m). For full WOMD evaluation, use `control_wosac`.
 
 > [!IMPORTANT]
 > **Agent Dynamics:** The simulator supports three types of agents:

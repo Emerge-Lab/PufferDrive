@@ -36,7 +36,7 @@ Adjust the screen size and color depth as needed. The `xvfb-run` wrapper allows 
 
 ## Arguments & Configuration
 
-The `visualize` tool supports several CLI arguments to control the rendering output. It also reads the `pufferlib/config/ocean/drive.ini` file for default  environment settings(For more details on these settings, refer to [Configuration](simulator.md#configuration)).
+The `visualize` tool supports several CLI arguments to control the rendering output. It also reads the `pufferlib/config/ocean/drive.ini` file for default environment settings(For more details on these settings, refer to [Configuration](simulator.md#configuration)).
 
 ### Command Line Arguments
 
