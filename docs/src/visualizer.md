@@ -67,4 +67,3 @@ The visualizer initializes the environment using `pufferlib/config/ocean/drive.i
 - `[env] episode_length`: Duration of the playback. defaults to 91 if set to 0.
 - `[env] control_mode`: Determines which agents are active (`control_vehicles` vs `control_sdc_only`).
 - `[env] goal_behavior`: Defines agent behavior upon reaching goals (respawn vs stop).
-
