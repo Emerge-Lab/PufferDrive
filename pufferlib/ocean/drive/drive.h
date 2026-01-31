@@ -971,7 +971,7 @@ int collision_check(Drive *env, int agent_idx) {
         int index = -1;
         if (i < env->active_agent_count) {
             index = env->active_agent_indices[i];
-        } else if (i < env->num_actors) {
+        } else if (i < env->num_actors && env->static_agent_count > 0) {
             index = env->static_agent_indices[i - env->active_agent_count];
         }
         if (index == -1)
@@ -1791,7 +1791,7 @@ void compute_observations(Drive *env) {
             int index = -1;
             if (j < env->active_agent_count) {
                 index = env->active_agent_indices[j];
-            } else if (j < env->num_actors) {
+            } else if (j < env->num_actors && env->static_agent_count > 0) {
                 index = env->static_agent_indices[j - env->active_agent_count];
             }
             if (index == -1)
@@ -2803,7 +2803,7 @@ void c_render(Drive *env) {
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
 
-    if (IsKeyPressed(KEY_TAB)) {
+    if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
         env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
     }
 
