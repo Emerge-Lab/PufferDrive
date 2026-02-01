@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import psutil
+from multiprocessing.pool import ThreadPool
 
 import torch
 import torch.distributed
@@ -1040,6 +1041,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
+    render_videos_enabled = args["eval"]["render_videos_eval"]
     args["env"]["map_dir"] = args["eval"]["map_dir"]
     args["env"]["num_maps"] = args["eval"]["num_maps"]
     args["env"]["use_all_maps"] = True
@@ -1122,6 +1124,65 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print("HUMAN_REPLAY_METRICS_END")
 
         return results
+
+    elif render_videos_enabled:
+        # Renders first num_maps from map_dir using visualize binary
+        map_dir = args["eval"]["map_dir"]
+        num_maps = args["eval"]["num_maps"]
+        view_mode = args["eval"].get("render_view_mode", "both")
+        render_policy_path = args["eval"].get("render_policy_path", None)
+        num_workers = args["vec"]["num_workers"]
+        render_maps = [os.path.join(map_dir, f) for f in sorted(os.listdir(map_dir)) if f.endswith(".bin")][:num_maps]
+        output_dir = "resources/drive/render_videos"
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Rebuild visualize binary
+        ensure_drive_binary()
+
+        def render_task(map_path):
+            base_cmd = (
+                ["./visualize"]
+                if sys.platform == "darwin"
+                else ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+            )
+            cmd = base_cmd.copy()
+            cmd.extend(["--map-name", map_path])
+            train_configs = args["train"]
+            if train_configs.get("show_grid", False):
+                cmd.append("--show-grid")
+            if train_configs.get("obs_only", False):
+                cmd.append("--obs-only")
+            if train_configs.get("show_lasers", False):
+                cmd.append("--lasers")
+            if train_configs.get("show_human_logs", False):
+                cmd.append("--show-human-logs")
+            if train_configs.get("zoom_in", False):
+                cmd.append("--zoom-in")
+            if train_configs.get("frame_skip", 1) > 1:
+                cmd.extend(["--frame-skip", str(train_configs["frame_skip"])])
+            cmd.extend(["--view", view_mode])
+            if render_policy_path is not None:
+                cmd.extend(["--policy-name", render_policy_path])
+
+            map_name = os.path.basename(map_path).replace(".bin", "")
+
+            if view_mode == "topdown" or view_mode == "both":
+                cmd.extend(["--output-topdown", output_dir + f"/topdown_{map_name}.mp4"])
+            if view_mode == "agent" or view_mode == "both":
+                cmd.extend(["--output-agent", output_dir + f"/agent_{map_name}.mp4"])
+
+            env_vars = os.environ.copy()
+            env_vars["ASAN_OPTIONS"] = "exitcode=0"
+            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
+            if result.returncode != 0:
+                print(f"Error rendering {map_name}: {result.stderr}")
+
+        if render_maps:
+            print(f"Rendering {len(render_maps)} from {map_dir} with {num_workers} workers...")
+            with ThreadPool(num_workers) as pool:
+                pool.map(render_task, render_maps)
+            print(f"Finished rendering videos to {output_dir}")
+
     else:  # Standard evaluation: Render
         backend = args["vec"]["backend"]
         if backend != "PufferEnv":

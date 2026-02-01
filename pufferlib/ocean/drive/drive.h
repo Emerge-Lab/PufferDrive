@@ -332,6 +332,7 @@ float point_to_segment_distance_2d(float px, float py, float x1, float y1, float
 void init_goal_positions(Drive *env);
 float clipSpeed(float speed);
 void sample_new_goal(Drive *env, int agent_idx);
+int check_lane_aligned(Entity *car, Entity *lane, int geometry_idx);
 
 // ========================================
 // Utility Functions
