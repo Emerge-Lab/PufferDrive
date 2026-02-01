@@ -1132,6 +1132,10 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         view_mode = args["eval"].get("render_view_mode", "both")
         render_policy_path = args["eval"].get("render_policy_path", None)
         num_workers = args["vec"]["num_workers"]
+
+        if num_maps > len(os.listdir(map_dir)):
+            num_maps = len(os.listdir(map_dir))
+
         render_maps = [os.path.join(map_dir, f) for f in sorted(os.listdir(map_dir)) if f.endswith(".bin")][:num_maps]
         output_dir = "resources/drive/render_videos"
         os.makedirs(output_dir, exist_ok=True)
