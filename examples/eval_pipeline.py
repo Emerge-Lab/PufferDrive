@@ -335,6 +335,8 @@ def pipeline(env_name="puffer_drive"):
     plot_wosac_results(df)
     plot_realism_score_distributions(df)
 
+    print(f"total agents: {df_results_gt['num_agents_per_scene'].sum().item()}")
+
     print(df.groupby("policy")["realism_meta_score"].mean())
     print("---")
     print(df.groupby("policy")["kinematic_metrics"].mean())
@@ -342,6 +344,8 @@ def pipeline(env_name="puffer_drive"):
     print(df.groupby("policy")["interactive_metrics"].mean())
     print("---")
     print(df.groupby("policy")["map_based_metrics"].mean())
+
+    breakpoint()
 
 
 if __name__ == "__main__":

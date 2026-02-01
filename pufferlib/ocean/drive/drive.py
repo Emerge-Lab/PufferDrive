@@ -234,13 +234,25 @@ class Drive(pufferlib.PufferEnv):
         self.human_data_dir = human_data_dir
         self.save_data_to_disk = save_data_to_disk
 
+        self.expert_data_metrics = {}
+
         os.makedirs(self.human_data_dir, exist_ok=True)
 
         if self.prep_human_data and not Drive._human_data_prepped:
-            self._prep_human_data(
-                bptt_horizon,
-            )
+            self.expert_data_metrics = self._prep_human_data(bptt_horizon)
             Drive._human_data_prepped = True
+        elif self.prep_human_data:
+            if self.save_data_to_disk and os.path.exists(
+                os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt")
+            ):
+                discrete_actions = torch.load(
+                    os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt"),
+                    map_location="cpu",
+                    weights_only=False,
+                )
+                self._cache_size = len(discrete_actions)
+            else:
+                self._cache_size = 0
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -321,6 +333,16 @@ class Drive(pufferlib.PufferEnv):
 
             binding.vec_reset(self.c_envs, seed)
             self.terminals[:] = 1
+
+            # Resample human data if needed and capture metrics
+            if self.prep_human_data and hasattr(self, "_needs_resampling") and self._needs_resampling:
+                resample_metrics = self.resample_human_data()
+                # Add resampling metrics to info for logging
+                if resample_metrics:
+                    # Prefix with "resampled_" to distinguish from initial metrics
+                    resample_metrics = {f"resampled_{k}": v for k, v in resample_metrics.items()}
+                    info.append(resample_metrics)
+
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):
@@ -391,8 +413,29 @@ class Drive(pufferlib.PufferEnv):
 
         return trajectories
 
+    def resample_human_data(self):
+        """Resample human data when needed (called during environment resampling).
+
+        Returns:
+            dict: Metrics about the expert data collection for logging
+        """
+        if not hasattr(self, "_needs_resampling") or not self._needs_resampling:
+            return {}
+
+        print(
+            f"Resampling human data (max_expert_sequences={self.max_expert_sequences} > "
+            f"available={self._total_available_sequences})..."
+        )
+
+        # Re-prepare human data with the new environment state
+        return self._prep_human_data(self.bptt_horizon)
+
     def _prep_human_data(self, bptt_horizon=32):
-        """Collect and save expert trajectories with bptt_horizon length sequences."""
+        """Collect and save expert trajectories with bptt_horizon length sequences.
+
+        Returns:
+            dict: Metrics about the expert data collection for logging
+        """
         trajectory_length = 91
 
         if self.dynamics_model == "jerk":
@@ -410,33 +453,74 @@ class Drive(pufferlib.PufferEnv):
             self.c_envs, self.expert_actions_discrete, self.expert_actions_continuous, self.expert_observations_full
         )
 
-        # Check if first N timesteps are all valid (not -1) for each agent
-        # Shape: (bptt_horizon, 1024, 1) -> (1024,) after checking all are valid
-        first_n_valid = np.all(self.expert_actions_discrete[:bptt_horizon, :, 0] != -1.0, axis=0)
+        # Extract all valid sequences of length bptt_horizon from all trajectories
+        discrete_sequences_list = []
+        continuous_sequences_list = []
+        obs_sequences_list = []
 
-        # Get indices of agents with valid first N timesteps
-        valid_agent_indices = np.where(first_n_valid)[0]
+        # Track metrics
+        unique_agents = set()
+        total_sequences_extracted = 0
 
-        valid_expert_actions_discrete = self.expert_actions_discrete[:, valid_agent_indices, :]
-        valid_expert_actions_continuous = self.expert_actions_continuous[:, valid_agent_indices, :]
-        valid_expert_observations = self.expert_observations_full[:, valid_agent_indices, :]
+        for agent_idx in range(self.num_agents):
+            # Extract all valid windows of length bptt_horizon for this agent
+            for start_t in range(trajectory_length - bptt_horizon + 1):
+                end_t = start_t + bptt_horizon
 
-        # Determine how many sequences we can actually store
-        num_sequences = min(len(valid_agent_indices), self.max_expert_sequences)
+                # Check if this window is entirely valid (no -1 values)
+                window_valid = np.all(self.expert_actions_discrete[start_t:end_t, agent_idx, 0] != -1.0)
 
-        # Preallocate sequences
-        discrete_sequences = np.zeros((num_sequences, bptt_horizon, 1), dtype=np.float32)
-        continuous_sequences = np.zeros((num_sequences, bptt_horizon, 2), dtype=np.float32)
-        obs_sequences = np.zeros((num_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
+                if window_valid:
+                    discrete_sequences_list.append(self.expert_actions_discrete[start_t:end_t, agent_idx, :].copy())
+                    continuous_sequences_list.append(self.expert_actions_continuous[start_t:end_t, agent_idx, :].copy())
+                    obs_sequences_list.append(self.expert_observations_full[start_t:end_t, agent_idx, :].copy())
+                    unique_agents.add(agent_idx)
+                    total_sequences_extracted += 1
 
-        # Take one sequence per agent (starting from timestep 0)
-        for agent_idx in range(num_sequences):
-            # For joint discrete, reshape to (bptt_horizon, 1)
-            discrete_sequences[agent_idx] = valid_expert_actions_discrete[:bptt_horizon, agent_idx, :]
-            continuous_sequences[agent_idx] = valid_expert_actions_continuous[:bptt_horizon, agent_idx, :]
-            obs_sequences[agent_idx] = valid_expert_observations[:bptt_horizon, agent_idx, :]
+        # Convert lists to arrays
+        if len(discrete_sequences_list) == 0:
+            raise ValueError("No valid expert sequences found!")
+
+        all_discrete = np.stack(discrete_sequences_list, axis=0)
+        all_continuous = np.stack(continuous_sequences_list, axis=0)
+        all_obs = np.stack(obs_sequences_list, axis=0)
+
+        # Sample sequences (with replacement if max_expert_sequences > available)
+        num_sequences = self.max_expert_sequences
+        needs_resampling = num_sequences > len(discrete_sequences_list)
+
+        # Randomly sample indices (with replacement if necessary)
+        sampled_indices = np.random.choice(len(discrete_sequences_list), size=num_sequences, replace=needs_resampling)
+
+        discrete_sequences = all_discrete[sampled_indices]
+        continuous_sequences = all_continuous[sampled_indices]
+        obs_sequences = all_obs[sampled_indices]
 
         self._cache_size = num_sequences
+        self._total_available_sequences = len(discrete_sequences_list)
+        self._needs_resampling = needs_resampling
+
+        # Compute statistics
+        avg_sequences_per_agent = total_sequences_extracted / len(unique_agents) if len(unique_agents) > 0 else 0
+        coverage_pct = 100 * len(unique_agents) / self.num_agents if self.num_agents > 0 else 0
+        utilization_pct = (
+            100 * min(num_sequences, total_sequences_extracted) / total_sequences_extracted
+            if total_sequences_extracted > 0
+            else 0
+        )
+
+        data_metrics = {
+            "expert_data/total_agents": self.num_agents,
+            "expert_data/unique_agents_with_data": len(unique_agents),
+            "expert_data/agent_coverage_pct": coverage_pct,
+            "expert_data/total_sequences_extracted": total_sequences_extracted,
+            "expert_data/avg_sequences_per_agent": avg_sequences_per_agent,
+            "expert_data/sequences_stored": num_sequences,
+            "expert_data/sequence_length": bptt_horizon,
+            "expert_data/storage_utilization_pct": utilization_pct,
+            "expert_data/resampling_enabled": int(needs_resampling),
+            "expert_data/resampling_factor": num_sequences / len(discrete_sequences_list) if needs_resampling else 1.0,
+        }
 
         if self.save_data_to_disk:
             print(
@@ -454,6 +538,8 @@ class Drive(pufferlib.PufferEnv):
                 torch.from_numpy(obs_sequences),
                 os.path.join(self.human_data_dir, f"expert_observations_h{bptt_horizon}.pt"),
             )
+
+        return data_metrics
 
     def sample_expert_data(self, n_samples=512, return_both=False):
         """Sample a random batch of human (expert) sequences from disk.
@@ -482,6 +568,8 @@ class Drive(pufferlib.PufferEnv):
         observations_path = os.path.join(self.human_data_dir, f"expert_observations_h{self.bptt_horizon}.pt")
 
         observations_full = torch.load(observations_path, map_location="cpu", weights_only=False)
+
+        # breakpoint()
 
         # Sample indices
         samples = min(n_samples, self._cache_size)
