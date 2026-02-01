@@ -1171,15 +1171,18 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             map_name = os.path.basename(map_path).replace(".bin", "")
 
             if view_mode == "topdown" or view_mode == "both":
-                cmd.extend(["--output-topdown", output_dir + f"/topdown_{map_name}.mp4"])
+                cmd.extend(["--output-topdown", os.path.join(output_dir, f"topdown_{map_name}.mp4")])
             if view_mode == "agent" or view_mode == "both":
-                cmd.extend(["--output-agent", output_dir + f"/agent_{map_name}.mp4"])
+                cmd.extend(["--output-agent", os.path.join(output_dir, f"agent_{map_name}.mp4")])
 
             env_vars = os.environ.copy()
             env_vars["ASAN_OPTIONS"] = "exitcode=0"
-            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
-            if result.returncode != 0:
-                print(f"Error rendering {map_name}: {result.stderr}")
+            try:
+                result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
+                if result.returncode != 0:
+                    print(f"Error rendering {map_name}: {result.stderr}")
+            except subprocess.TimeoutExpired:
+                print(f"Timeout rendering {map_name}: exceeded 600 seconds")
 
         if render_maps:
             print(f"Rendering {len(render_maps)} from {map_dir} with {num_workers} workers...")

@@ -35,7 +35,7 @@ xvfb-run -s "-screen 0 1280x720x24" ./visualize
 Adjust the screen size and color depth as needed. The `xvfb-run` wrapper allows Raylib to render without an attached display, which is convenient for servers and CI jobs.
 
 ## Evaluation Rendering
-You can batch render videos for multiple maps using the evaluation mode. This will render the first `num_maps`(limited by number of maps in the directory) from `map_dir` in parallel using the `visualize` binary.
+You can batch render videos for multiple maps using the evaluation mode. This will render the first `num_maps` maps (capped by the number of maps in the directory) from `map_dir` in parallel using the `visualize` binary.
 
 To enable this, set `render_videos_eval = True` and configure `eval.num_maps` in your `drive.ini`. Then run:
 
