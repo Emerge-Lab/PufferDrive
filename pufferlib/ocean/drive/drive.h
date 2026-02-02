@@ -1046,9 +1046,9 @@ void add_log(Drive *env) {
             last_goal_reached = (e->goals_reached_this_episode + 1 >= e->goals_sampled_this_episode);
         }
 
-        int collision_occurred =
-            (env->goal_behavior == GOAL_RESPAWN) ? e->collided_before_goal : 
-            (env->logs[i].collision_rate || env->logs[i].offroad_rate);
+        int collision_occurred = (env->goal_behavior == GOAL_RESPAWN)
+                                     ? e->collided_before_goal
+                                     : (env->logs[i].collision_rate || env->logs[i].offroad_rate);
         if (last_goal_reached && !collision_occurred) {
             env->log.score += 1.0f;
         }
