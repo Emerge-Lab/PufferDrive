@@ -5,9 +5,11 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
 import warnings
+import os
 
 from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
+from pufferlib.ocean.benchmark import metrics
 
 POLICY_DIR = "models"
 
@@ -142,6 +144,217 @@ def plot_realism_score_distributions(df):
     return fig
 
 
+def collision_sweep_from_ground_truth(
+    config,
+    vecenv,
+    evaluator,
+    max_k=10,
+    sweep_collision_rollouts=False,
+):
+    gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+    num_rollouts = config["eval"]["wosac_num_rollouts"]
+    fake_simulated_trajectories = gt_trajectories.copy()
+    for key in ["x", "y", "heading", "id"]:
+        fake_simulated_trajectories[key] = np.repeat(gt_trajectories[key], num_rollouts, axis=1)
+    fake_simulated_trajectories["id"] = fake_simulated_trajectories["id"][..., np.newaxis]
+    agent_state = vecenv.driver_env.get_global_agent_state()
+    road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+
+    eval_mask = gt_trajectories["id"][:, 0] >= 0
+    valid_mask = np.repeat(gt_trajectories["valid"][eval_mask].astype(bool), num_rollouts, axis=1)
+
+    _, base_collision_per_step, _ = metrics.compute_interaction_features(
+        fake_simulated_trajectories["x"],
+        fake_simulated_trajectories["y"],
+        fake_simulated_trajectories["heading"],
+        gt_trajectories["scenario_id"],
+        agent_state["length"],
+        agent_state["width"],
+        eval_mask,
+        device=config["train"]["device"],
+    )
+
+    if sweep_collision_rollouts:
+        max_k = min(max_k, base_collision_per_step.shape[1])
+    else:
+        max_k = min(max_k, base_collision_per_step.shape[2])
+    k_values = np.arange(max_k + 1)
+    realism_scores = []
+    collision_likelihoods = []
+    offroad_likelihoods = []
+
+    for k in k_values:
+        override = base_collision_per_step.copy()
+        if k:
+            for a in range(override.shape[0]):
+                if sweep_collision_rollouts:
+                    for r in range(k):
+                        idx = np.flatnonzero(valid_mask[a, r])
+                        if idx.size:
+                            override[a, r, idx[0]] = True
+                else:
+                    for r in range(override.shape[1]):
+                        idx = np.flatnonzero(valid_mask[a, r])
+                        override[a, r, idx[:k]] = True
+
+        results = evaluator.compute_metrics(
+            gt_trajectories,
+            fake_simulated_trajectories,
+            agent_state,
+            road_edge_polylines,
+            override_sim_collision_per_step=override,
+        )
+        realism_scores.append(results["realism_meta_score"].mean())
+        collision_likelihoods.append(results["likelihood_collision_indication"].mean())
+        offroad_likelihoods.append(results["likelihood_offroad_indication"].mean())
+
+    return k_values, np.array(realism_scores), np.array(collision_likelihoods), np.array(offroad_likelihoods)
+
+
+def plot_collision_sweep(k_values, scores, gt_baseline=None, random_no_collision=None, x_label=None):
+    sns.set("notebook", font_scale=1.05)
+    sns.set_style("ticks", rc={"figure.facecolor": "none", "axes.facecolor": "none"})
+    warnings.filterwarnings("ignore")
+    plt.set_loglevel("WARNING")
+
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    ax.plot(k_values, scores, marker="o", color="tab:blue")
+    if gt_baseline is not None:
+        ax.axhline(gt_baseline, color="tab:green", linestyle="--", label="GT baseline")
+    if random_no_collision is not None:
+        ax.axhline(random_no_collision, color="tab:orange", linestyle="--", label="Random no collision")
+    if gt_baseline is not None or random_no_collision is not None:
+        ax.legend()
+    ax.set_title("Realism vs collisions per agent")
+    ax.set_xlabel(x_label or "# collisions per agent per rollout")
+    ax.set_ylabel("Realism meta score")
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    sns.despine(ax=ax)
+
+    plt.tight_layout()
+    plt.savefig("wosac_collision_sweep.png", dpi=300, bbox_inches="tight", facecolor="white")
+    plt.show()
+
+    return fig
+
+
+def plot_likelihood_sweep(k_values, values, title, filename, gt_baseline=None, x_label=None):
+    sns.set("notebook", font_scale=1.05)
+    sns.set_style("ticks", rc={"figure.facecolor": "none", "axes.facecolor": "none"})
+    warnings.filterwarnings("ignore")
+    plt.set_loglevel("WARNING")
+
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    ax.plot(k_values, values, marker="o", color="tab:blue")
+    if gt_baseline is not None:
+        ax.axhline(gt_baseline, color="tab:green", linestyle="--", label="GT baseline")
+    if gt_baseline is not None:
+        ax.legend()
+    ax.set_title(title)
+    ax.set_xlabel(x_label or "# collisions per agent per rollout")
+    ax.set_ylabel("Likelihood")
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    sns.despine(ax=ax)
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.show()
+
+    return fig
+
+
+def variance_sweep_from_ground_truth(config, vecenv, evaluator, plot_agent_idx=None):
+    sigmas_xy = [0.0, 0.1, 0.2, 0.5, 1.0]
+    sigmas_heading = [0.0, 0.02, 0.05, 0.1, 0.2]
+
+    gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+    num_rollouts = config["eval"]["wosac_num_rollouts"]
+    fake_simulated_trajectories = gt_trajectories.copy()
+    for key in ["x", "y", "heading", "id"]:
+        fake_simulated_trajectories[key] = np.repeat(gt_trajectories[key], num_rollouts, axis=1)
+    fake_simulated_trajectories["id"] = fake_simulated_trajectories["id"][..., np.newaxis]
+    agent_state = vecenv.driver_env.get_global_agent_state()
+    road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+
+    eval_mask = gt_trajectories["id"][:, 0] >= 0
+    eval_sim_x = fake_simulated_trajectories["x"][eval_mask]
+    eval_sim_y = fake_simulated_trajectories["y"][eval_mask]
+    eval_sim_heading = fake_simulated_trajectories["heading"][eval_mask]
+    eval_scenario_ids = gt_trajectories["scenario_id"][eval_mask]
+    eval_agent_length = agent_state["length"][eval_mask]
+    eval_agent_width = agent_state["width"][eval_mask]
+
+    _, base_collision_per_step, _ = metrics.compute_interaction_features(
+        fake_simulated_trajectories["x"],
+        fake_simulated_trajectories["y"],
+        fake_simulated_trajectories["heading"],
+        gt_trajectories["scenario_id"],
+        agent_state["length"],
+        agent_state["width"],
+        eval_mask,
+        device=config["train"]["device"],
+    )
+
+    _, base_offroad_per_step = metrics.compute_map_features(
+        eval_sim_x,
+        eval_sim_y,
+        eval_sim_heading,
+        eval_scenario_ids,
+        eval_agent_length,
+        eval_agent_width,
+        road_edge_polylines,
+        device=config["train"]["device"],
+    )
+
+    realism_scores = []
+    for sx, sh in zip(sigmas_xy, sigmas_heading):
+        simulated = {k: v.copy() for k, v in fake_simulated_trajectories.items()}
+        simulated["x"] += np.random.normal(0.0, sx, size=simulated["x"].shape)
+        simulated["y"] += np.random.normal(0.0, sx, size=simulated["y"].shape)
+        simulated["heading"] += np.random.normal(0.0, sh, size=simulated["heading"].shape)
+        simulated["heading"] = (simulated["heading"] + np.pi) % (2 * np.pi) - np.pi
+
+        if plot_agent_idx is not None:
+            evaluator._quick_sanity_check(gt_trajectories, simulated, agent_idx=plot_agent_idx)
+            os.replace(
+                f"trajectory_comparison_agent_{plot_agent_idx}.png",
+                f"trajectory_comparison_agent_{plot_agent_idx}_sigma_xy_{sx:.2f}_sigma_h_{sh:.2f}.png",
+            )
+
+        results = evaluator.compute_metrics(
+            gt_trajectories,
+            simulated,
+            agent_state,
+            road_edge_polylines,
+            override_sim_collision_per_step=base_collision_per_step,
+            override_sim_offroad_per_step=base_offroad_per_step,
+        )
+        realism_scores.append(results["realism_meta_score"].mean())
+
+    return np.array(sigmas_xy), np.array(realism_scores)
+
+
+def plot_variance_sweep(sigmas_xy, scores):
+    sns.set("notebook", font_scale=1.05)
+    sns.set_style("ticks", rc={"figure.facecolor": "none", "axes.facecolor": "none"})
+    warnings.filterwarnings("ignore")
+    plt.set_loglevel("WARNING")
+
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    ax.plot(sigmas_xy, scores, marker="o", color="tab:blue")
+    ax.set_title("Realism vs trajectory noise")
+    ax.set_xlabel("sigma_xy (m) / sigma_heading (rad)")
+    ax.set_ylabel("Realism meta score")
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    sns.despine(ax=ax)
+
+    plt.tight_layout()
+    plt.savefig("wosac_variance_sweep.png", dpi=300, bbox_inches="tight", facecolor="white")
+    plt.show()
+
+    return fig
+
+
 def evaluate_ground_truth(config, vecenv, evaluator):
     """Compute WOSAC metrics for ground truth trajectories."""
 
@@ -193,7 +406,7 @@ def evaluate_human_inferred_actions(config, vecenv, evaluator):
     return results
 
 
-def evaluate_random_policy(config, vecenv, evaluator):
+def evaluate_random_policy(config, vecenv, evaluator, return_trajectories=False):
     gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
     simulated_trajectories = evaluator.collect_wosac_random_baseline(vecenv)
 
@@ -207,6 +420,8 @@ def evaluate_random_policy(config, vecenv, evaluator):
         road_edge_polylines,
     )
 
+    if return_trajectories:
+        return results, gt_trajectories, simulated_trajectories, agent_state, road_edge_polylines
     return results
 
 
@@ -265,7 +480,12 @@ def evaluate_rl_policy(config, vecenv, evaluator, policy_path):
     return results
 
 
-def pipeline(env_name="puffer_drive"):
+def pipeline(
+    env_name="puffer_drive",
+    sweep_collision_rollouts=False,
+    variance_sweep=False,
+    variance_plot_agent=None,
+):
     """Obtain WOSAC scores for various baselines and policies."""
 
     config = load_config(env_name)
@@ -315,8 +535,25 @@ def pipeline(env_name="puffer_drive"):
     # ...
 
     # Baseline: Random policy
-    df_results_random = evaluate_random_policy(config, vecenv, evaluator)
+    (
+        df_results_random,
+        gt_traj_random,
+        sim_traj_random,
+        agent_state_random,
+        road_edge_polylines_random,
+    ) = evaluate_random_policy(config, vecenv, evaluator, return_trajectories=True)
     df_results_random["policy"] = "random"
+
+    eval_mask = gt_traj_random["id"][:, 0] >= 0
+    no_collision_override = np.zeros((int(np.sum(eval_mask)),) + sim_traj_random["x"].shape[1:], dtype=bool)
+    df_results_random_no_collision = evaluator.compute_metrics(
+        gt_traj_random,
+        sim_traj_random,
+        agent_state_random,
+        road_edge_polylines_random,
+        override_sim_collision_per_step=no_collision_override,
+    )
+    df_results_random_no_collision["policy"] = "random_no_collision"
 
     # Combine
     df = pd.concat(
@@ -324,6 +561,7 @@ def pipeline(env_name="puffer_drive"):
             df_results_gt,
             df_results_inferred_human,
             df_results_random,
+            df_results_random_no_collision,
             # df_results_bc,
             # df_results_self_play,
         ],
@@ -335,6 +573,44 @@ def pipeline(env_name="puffer_drive"):
     # Visualize
     plot_wosac_results(df)
     plot_realism_score_distributions(df)
+    max_k = 10
+    x_label = "colliding rollouts per agent" if sweep_collision_rollouts else "# collisions per agent per rollout"
+    k_values, scores, collision_likelihoods, offroad_likelihoods = collision_sweep_from_ground_truth(
+        config,
+        vecenv,
+        evaluator,
+        max_k=max_k,
+        sweep_collision_rollouts=sweep_collision_rollouts,
+    )
+    random_no_collision_score = df_results_random_no_collision["realism_meta_score"].mean()
+    plot_collision_sweep(
+        k_values,
+        scores,
+        gt_baseline=df_results_gt["realism_meta_score"].mean(),
+        random_no_collision=random_no_collision_score,
+        x_label=x_label,
+    )
+    plot_likelihood_sweep(
+        k_values,
+        collision_likelihoods,
+        "Collision likelihood vs collisions per agent",
+        "wosac_collision_likelihood_sweep.png",
+        gt_baseline=df_results_gt["likelihood_collision_indication"].mean(),
+        x_label=x_label,
+    )
+    plot_likelihood_sweep(
+        k_values,
+        offroad_likelihoods,
+        "Offroad likelihood vs collisions per agent",
+        "wosac_offroad_likelihood_sweep.png",
+        gt_baseline=df_results_gt["likelihood_offroad_indication"].mean(),
+        x_label=x_label,
+    )
+    if variance_sweep:
+        sigmas_xy, variance_scores = variance_sweep_from_ground_truth(
+            config, vecenv, evaluator, plot_agent_idx=variance_plot_agent
+        )
+        plot_variance_sweep(sigmas_xy, variance_scores)
 
     print(f"total agents: {df_results_gt['num_agents_per_scene'].sum().item()}")
 
@@ -348,4 +624,17 @@ def pipeline(env_name="puffer_drive"):
 
 
 if __name__ == "__main__":
-    pipeline()
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--collision-rollouts-sweep", action="store_true")
+    parser.add_argument("--variance-sweep", action="store_true")
+    parser.add_argument("--variance-plot-agent", type=int, default=None)
+    args, remaining = parser.parse_known_args()
+    sys.argv = [sys.argv[0]] + remaining
+    pipeline(
+        sweep_collision_rollouts=args.collision_rollouts_sweep,
+        variance_sweep=args.variance_sweep,
+        variance_plot_agent=args.variance_plot_agent,
+    )

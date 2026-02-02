@@ -209,6 +209,8 @@ class WOSACEvaluator:
         agent_state: Dict,
         road_edge_polylines: Dict,
         aggregate_results: bool = False,
+        override_sim_collision_per_step: np.ndarray | None = None,
+        override_sim_offroad_per_step: np.ndarray | None = None,
     ) -> Dict:
         """Compute realism metrics comparing simulated and ground truth trajectories.
 
@@ -217,6 +219,8 @@ class WOSACEvaluator:
             simulated_trajectories: Dict with keys ['x', 'y', 'z', 'heading', 'id']
             agent_state: Dict with length and width of agents.
             road_edge_polylines: Dict with keys ['x', 'y', 'lengths', 'scenario_id']
+            override_sim_collision_per_step: Optional collision flags override.
+            override_sim_offroad_per_step: Optional offroad flags override.
 
         Note: z-position currently not used.
 
@@ -304,6 +308,12 @@ class WOSACEvaluator:
             road_edge_polylines,
             device=self.device,
         )
+
+        if override_sim_collision_per_step is not None:
+            sim_collision_per_step = override_sim_collision_per_step
+
+        if override_sim_offroad_per_step is not None:
+            sim_offroad_per_step = override_sim_offroad_per_step
 
         ref_distance_to_road_edge, ref_offroad_per_step = metrics.compute_map_features(
             eval_ref_x,
@@ -616,7 +626,8 @@ class WOSACEvaluator:
 
         for agent_idx in agent_indices:
             valid_mask = gt_trajectories["valid"][agent_idx, 0, :] == 1
-            invalid_mask = ~valid_mask
+            if not valid_mask.any():
+                continue
 
             last_valid_idx = np.where(valid_mask)[0][-1] if valid_mask.any() else 0
             goal_x = gt_trajectories["x"][agent_idx, 0, last_valid_idx]
@@ -696,30 +707,16 @@ class WOSACEvaluator:
             axs[1].set_aspect("equal", adjustable="datalim")
 
             axs[2].set_title(f"Heading timeseries for agent ID: {simulated_trajectories['id'][agent_idx, 0][0]}")
-            time_steps = list(range(self.sim_steps))
+            time_steps = np.where(valid_mask)[0]
             for r in range(self.num_rollouts):
                 axs[2].plot(
                     time_steps,
-                    simulated_trajectories["heading"][agent_idx, r, :],
+                    simulated_trajectories["heading"][agent_idx, r, valid_mask],
                     color="b",
                     alpha=0.1,
                     label="Simulated" if r == 0 else "",
                 )
-            axs[2].plot(time_steps, gt_trajectories["heading"][agent_idx, 0, :], color="g", label="Ground truth")
-
-            if invalid_mask.any():
-                invalid_timesteps = np.where(invalid_mask)[0]
-                axs[2].scatter(
-                    invalid_timesteps,
-                    gt_trajectories["heading"][agent_idx, 0, invalid_mask],
-                    color="r",
-                    marker="^",
-                    s=100,
-                    label="Invalid",
-                    zorder=6,
-                    edgecolors="darkred",
-                    linewidths=1,
-                )
+            axs[2].plot(time_steps, gt_trajectories["heading"][agent_idx, 0, valid_mask], color="g", label="Ground truth")
 
             axs[2].set_xlabel("Time step")
             axs[2].legend()
