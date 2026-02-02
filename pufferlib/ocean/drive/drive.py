@@ -145,17 +145,17 @@ class Drive(pufferlib.PufferEnv):
 
         # Check maps availability
         available_maps = len(self.map_files)
-        if num_maps > available_maps:
+        if self.num_maps > available_maps:
             if allow_fewer_maps:
                 print("\n" + "=" * 80)
                 print("WARNING: FEWER MAPS THAN REQUESTED")
-                print(f"Requested {num_maps} maps but only {available_maps} available in {map_dir}")
+                print(f"Requested {self.num_maps} maps but only {available_maps} available in {map_dir}")
                 print(f"Maps will be randomly sampled from the {available_maps} available maps.")
                 print("=" * 80 + "\n")
-                num_maps = available_maps
+                self.num_maps = available_maps
             else:
                 raise ValueError(
-                    f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). "
+                    f"num_maps ({self.num_maps}) exceeds available maps in directory ({available_maps}). "
                     f"Please reduce num_maps, add more maps to {map_dir}, or set allow_fewer_maps=True."
                 )
         self.max_controlled_agents = int(max_controlled_agents)
@@ -164,7 +164,7 @@ class Drive(pufferlib.PufferEnv):
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
             num_agents=num_agents,
-            num_maps=num_maps,
+            num_maps=self.num_maps,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             init_steps=self.init_steps,
