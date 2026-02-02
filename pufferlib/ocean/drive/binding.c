@@ -193,9 +193,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     if (ini_check == NULL) {
         char error_msg[1024];
         snprintf(error_msg, sizeof(error_msg),
-            "INI config file not found: '%s'. "
-            "Please ensure the file exists at this path.",
-            env->ini_file);
+                 "INI config file not found: '%s'. "
+                 "Please ensure the file exists at this path.",
+                 env->ini_file);
         PyErr_SetString(PyExc_FileNotFoundError, error_msg);
         return -1;
     }
@@ -203,8 +203,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
 
     if (ini_parse(env->ini_file, handler, &conf) < 0) {
         char error_msg[1024];
-        snprintf(error_msg, sizeof(error_msg),
-            "Failed to parse INI config file: '%s'", env->ini_file);
+        snprintf(error_msg, sizeof(error_msg), "Failed to parse INI config file: '%s'", env->ini_file);
         PyErr_SetString(PyExc_ValueError, error_msg);
         return -1;
     }
