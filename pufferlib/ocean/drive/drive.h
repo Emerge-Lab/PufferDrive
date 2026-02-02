@@ -1039,25 +1039,20 @@ void add_log(Drive *env) {
         float collisions_per_agent = env->logs[i].collisions_per_agent;
         env->log.collisions_per_agent += collisions_per_agent;
 
-        float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
-
         // Update score, which is an aggregate measure whether the agent fully solved its task
         // Note: When resampling goals, performance is relative to the number of goals sampled
-        float threshold = 0.99f; // Default threshold for 1 goal
-        if (e->goals_sampled_this_episode == 2.0f) {
-            threshold = 0.5f; // Require ≥50% completion for 2 goals
-        } else if (e->goals_sampled_this_episode < 5.0f) {
-            threshold = 0.8f; // Require ≥80% completion for 3-4 goals
-        } else {
-            threshold = 0.9f; // Require ≥90% completion for 5+ goals
+        int last_goal_reached = 0;
+        if (e->goals_reached_this_episode > 0) {
+            last_goal_reached = (e->goals_reached_this_episode + 1 >= e->goals_sampled_this_episode);
         }
 
         int collision_occurred =
-            (env->goal_behavior == GOAL_RESPAWN) ? e->collided_before_goal : env->logs[i].collision_rate;
-        if (frac_goal_reached > threshold && !collision_occurred) {
+            (env->goal_behavior == GOAL_RESPAWN) ? e->collided_before_goal : 
+            (env->logs[i].collision_rate || env->logs[i].offroad_rate);
+        if (last_goal_reached && !collision_occurred) {
             env->log.score += 1.0f;
         }
-        if (!offroad && !collided && frac_goal_reached < 1.0f) {
+        if (!offroad && !collided && !last_goal_reached) {
             env->log.dnf_rate += 1.0f;
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
