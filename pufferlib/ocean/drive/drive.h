@@ -104,6 +104,7 @@
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
+#define GOAL_STOP_AND_TRUNCATE 3
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
@@ -2331,6 +2332,16 @@ void c_step(Drive *env) {
             if (reached_goal) {
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+            }
+        }
+    } else if (env->goal_behavior == GOAL_STOP_AND_TRUNCATE) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
+            if (reached_goal) {
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+                env->truncations[i] = 1; // Mark as truncated
             }
         }
     }
