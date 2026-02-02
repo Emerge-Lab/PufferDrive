@@ -53,6 +53,9 @@ rich.traceback.install(show_locals=False)
 
 import signal  # Aggressively exit on ctrl+c
 
+import multiprocessing
+import queue
+
 signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 
 # Assume advantage kernel has been built if CUDA compiler is available
@@ -121,10 +124,15 @@ class PuffeRL:
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
         self.render = config["render"]
+        self.render_async = config["render_async"] and self.render  # Only supported if rendering is enabled
         self.render_interval = config["render_interval"]
 
         if self.render:
             ensure_drive_binary()
+
+        if self.render_async:
+            self.render_queue = multiprocessing.Queue()
+            self.render_processes = []
 
         # LSTM
         if config["use_rnn"]:
@@ -193,6 +201,9 @@ class PuffeRL:
         self.logger = logger
         if logger is None:
             self.logger = NoLogger(config)
+        if self.render_async and hasattr(self.logger, "wandb") and self.logger.wandb:
+            self.logger.wandb.define_metric("render_step", hidden=True)
+            self.logger.wandb.define_metric("render/*", step_metric="render_step")
 
         # Learning rate scheduler
         epochs = config["total_timesteps"] // config["batch_size"]
@@ -514,9 +525,53 @@ class PuffeRL:
                             path=bin_path,
                             silent=True,
                         )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
+
+                        bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
+                        shutil.copy2(bin_path, bin_path_epoch)
+
+                        env_cfg = getattr(self.vecenv, "driver_env", None)
+                        wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
+                        wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
+                        if self.render_async:
+                            # Clean up finished processes
+                            self.render_processes = [p for p in self.render_processes if p.is_alive()]
+
+                            # Cap the number of processes to num_workers
+                            max_processes = self.config.get("num_workers", 1)
+                            if len(self.render_processes) >= max_processes:
+                                print("Waiting for render processes to finish...")
+                            while len(self.render_processes) >= max_processes:
+                                time.sleep(1)
+                                self.render_processes = [p for p in self.render_processes if p.is_alive()]
+
+                            render_proc = multiprocessing.Process(
+                                target=pufferlib.utils.render_videos,
+                                args=(
+                                    self.config,
+                                    env_cfg,
+                                    self.logger.run_id,
+                                    wandb_log,
+                                    self.epoch,
+                                    self.global_step,
+                                    bin_path_epoch,
+                                    self.render_async,
+                                    self.render_queue,
+                                ),
+                            )
+                            render_proc.start()
+                            self.render_processes.append(render_proc)
+                        else:
+                            pufferlib.utils.render_videos(
+                                self.config,
+                                env_cfg,
+                                self.logger.run_id,
+                                wandb_log,
+                                self.epoch,
+                                self.global_step,
+                                bin_path_epoch,
+                                self.render_async,
+                                wandb_run=wandb_run,
+                            )
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
@@ -531,7 +586,41 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
+    def check_render_queue(self):
+        """Check if any async render jobs finished and log them."""
+        if not self.render_async or not hasattr(self, "render_queue"):
+            return
+
+        try:
+            while not self.render_queue.empty():
+                result = self.render_queue.get_nowait()
+                step = result["step"]
+                videos = result["videos"]
+
+                # Log to wandb if available
+                if hasattr(self.logger, "wandb") and self.logger.wandb:
+                    import wandb
+
+                    payload = {}
+                    if videos["output_topdown"]:
+                        payload["render/world_state"] = [wandb.Video(p, format="mp4") for p in videos["output_topdown"]]
+                    if videos["output_agent"]:
+                        payload["render/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
+
+                    if payload:
+                        # Custom step for render logs to prevent monotonic logic wandb errors
+                        payload["render_step"] = step
+                        self.logger.wandb.log(payload)
+
+        except queue.Empty:
+            pass
+        except Exception as e:
+            print(f"Error reading render queue: {e}")
+
     def mean_and_log(self):
+        # Check render queue for finished async jobs
+        self.check_render_queue()
+
         config = self.config
         for k in list(self.stats.keys()):
             v = self.stats[k]
@@ -567,6 +656,25 @@ class PuffeRL:
     def close(self):
         self.vecenv.close()
         self.utilization.stop()
+
+        if self.render_async:  # Ensure all render processes are properly terminated before closing the queue
+            if hasattr(self, "render_processes"):
+                for p in self.render_processes:
+                    try:
+                        if p.is_alive():
+                            p.terminate()
+                            p.join(timeout=5)
+                            if p.is_alive():
+                                p.kill()
+                    except Exception:
+                        # Best-effort cleanup; avoid letting close() crash on process errors
+                        print(f"Failed to terminate render process {p.pid}")
+                # Optionally clear the list to drop references to finished processes
+                self.render_processes = []
+            if hasattr(self, "render_queue"):
+                self.render_queue.close()
+                self.render_queue.join_thread()
+
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
         path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}.pt")
@@ -999,6 +1107,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         logger = None
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    if "vec" in args and "num_workers" in args["vec"]:
+        train_config["num_workers"] = args["vec"]["num_workers"]
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     all_logs = []
