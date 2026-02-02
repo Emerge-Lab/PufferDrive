@@ -167,7 +167,9 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {type(e).__name__}: {e}")
 
 
-def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
+def render_videos(
+    config, env_cfg, run_id, wandb_log, epoch, global_step, bin_path, render_async, render_queue=None, wandb_run=None
+):
     """
     Generate and log training videos using C-based rendering.
 
@@ -186,7 +188,6 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         print(f"Binary weights file does not exist: {bin_path}")
         return
 
-    run_id = logger.run_id
     model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
 
     # Now call the C rendering function
@@ -194,11 +195,6 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         # Create output directory for videos
         video_output_dir = os.path.join(model_dir, "videos")
         os.makedirs(video_output_dir, exist_ok=True)
-
-        # Copy the binary weights to the expected location
-        expected_weights_path = "resources/drive/puffer_drive_weights.bin"
-        os.makedirs(os.path.dirname(expected_weights_path), exist_ok=True)
-        shutil.copy2(bin_path, expected_weights_path)
 
         # TODO: Fix memory leaks so that this is not needed
         # Suppress AddressSanitizer exit code (temp)
@@ -230,9 +226,10 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         base_cmd.extend(["--view", view_mode])
 
         # Get num_maps if available
-        env_cfg = getattr(vecenv, "driver_env", None)
         if env_cfg is not None and getattr(env_cfg, "num_maps", None):
             base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
+
+        base_cmd.extend(["--policy-name", bin_path])
 
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
@@ -262,40 +259,49 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         # Collect videos to log as lists so W&B shows all in the same step
         videos_to_log_world = []
         videos_to_log_agent = []
+        generated_videos = {"output_topdown": [], "output_agent": []}
+        output_topdown = f"resources/drive/output_topdown_{epoch}"
+        output_agent = f"resources/drive/output_agent_{epoch}"
 
         for i, map_path in enumerate(render_maps):
             cmd = list(base_cmd)  # copy
             if map_path is not None and os.path.exists(map_path):
                 cmd.extend(["--map-name", str(map_path)])
 
+            output_topdown_map = output_topdown + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
+            output_agent_map = output_agent + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
+
             # Output paths (overwrite each iteration; then moved/renamed)
-            cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
-            cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+            cmd.extend(["--output-topdown", output_topdown_map])
+            cmd.extend(["--output-agent", output_agent_map])
 
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
 
-            vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
-                "resources/drive/output_agent.mp4"
-            )
+            vids_exist = os.path.exists(output_topdown_map) and os.path.exists(output_agent_map)
 
             if result.returncode == 0 or (result.returncode == 1 and vids_exist):
                 videos = [
                     (
-                        "resources/drive/output_topdown.mp4",
+                        "output_topdown",
+                        output_topdown_map,
                         f"epoch_{epoch:06d}_map{i:02d}_topdown.mp4" if map_path else f"epoch_{epoch:06d}_topdown.mp4",
                     ),
                     (
-                        "resources/drive/output_agent.mp4",
+                        "output_agent",
+                        output_agent_map,
                         f"epoch_{epoch:06d}_map{i:02d}_agent.mp4" if map_path else f"epoch_{epoch:06d}_agent.mp4",
                     ),
                 ]
 
-                for source_vid, target_filename in videos:
+                for vid_type, source_vid, target_filename in videos:
                     if os.path.exists(source_vid):
                         target_path = os.path.join(video_output_dir, target_filename)
                         shutil.move(source_vid, target_path)
+                        generated_videos[vid_type].append(target_path)
+                        if render_async:
+                            continue
                         # Accumulate for a single wandb.log call
-                        if hasattr(logger, "wandb") and logger.wandb:
+                        if wandb_log:
                             import wandb
 
                             if "topdown" in target_filename:
@@ -304,17 +310,29 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
                                 videos_to_log_agent.append(wandb.Video(target_path, format="mp4"))
                     else:
                         print(f"Video generation completed but {source_vid} not found")
+                        if result.stdout:
+                            print(f"StdOUT: {result.stdout}")
+                        if result.stderr:
+                            print(f"StdERR: {result.stderr}")
             else:
                 print(f"C rendering failed (map index {i}) with exit code {result.returncode}: {result.stdout}")
 
+        if render_async:
+            render_queue.put(
+                {
+                    "videos": generated_videos,
+                    "step": global_step,
+                }
+            )
+
         # Log all videos at once so W&B keeps all of them under the same step
-        if hasattr(logger, "wandb") and logger.wandb and (videos_to_log_world or videos_to_log_agent):
+        if wandb_log and (videos_to_log_world or videos_to_log_agent) and not render_async:
             payload = {}
             if videos_to_log_world:
                 payload["render/world_state"] = videos_to_log_world
             if videos_to_log_agent:
                 payload["render/agent_view"] = videos_to_log_agent
-            logger.wandb.log(payload, step=global_step)
+            wandb_run.log(payload, step=global_step)
 
     except subprocess.TimeoutExpired:
         print("C rendering timed out")
@@ -323,5 +341,5 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
     finally:
         # Clean up bin weights file
-        if os.path.exists(expected_weights_path):
-            os.remove(expected_weights_path)
+        if os.path.exists(bin_path):
+            os.remove(bin_path)
