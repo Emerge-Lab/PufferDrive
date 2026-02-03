@@ -82,8 +82,8 @@
 #define PARTNER_FEATURES 8
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 8
-#define EGO_FEATURES_JERK 11
+#define EGO_FEATURES_CLASSIC 7
+#define EGO_FEATURES_JERK 10
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -1777,10 +1777,8 @@ void compute_observations(Drive *env) {
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
             obs[8] = ego_entity->a_lat / JERK_LAT[2];
             obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[10] = (i == 0) ? 1 : 0;
         } else {
             obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[7] = (i == 0) ? 1 : 0;
         }
 
         // Relative Pos of other cars
