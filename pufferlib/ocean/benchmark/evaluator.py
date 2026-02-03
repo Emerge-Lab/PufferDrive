@@ -435,8 +435,8 @@ class WOSACEvaluator:
         sim_collision_indication = np.any(np.where(eval_ref_valid, sim_collision_per_step, False), axis=2)
         ref_collision_indication = np.any(np.where(eval_ref_valid, ref_collision_per_step, False), axis=2)
 
-        sim_num_collisions = np.sum(sim_collision_indication, axis=1)
-        ref_num_collisions = np.sum(ref_collision_indication, axis=1)
+        sim_num_collisions = np.mean(sim_collision_indication, axis=1)
+        ref_num_collisions = np.mean(ref_collision_indication, axis=1)
 
         collision_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_collision_indication[:, 0],
@@ -451,8 +451,8 @@ class WOSACEvaluator:
         sim_offroad_indication = np.any(np.where(eval_ref_valid, sim_offroad_per_step, False), axis=2)
         ref_offroad_indication = np.any(np.where(eval_ref_valid, ref_offroad_per_step, False), axis=2)
 
-        sim_num_offroad = np.sum(sim_offroad_indication, axis=1)
-        ref_num_offroad = np.sum(ref_offroad_indication, axis=1)
+        sim_num_offroad = np.mean(sim_offroad_indication, axis=1)
+        ref_num_offroad = np.mean(ref_offroad_indication, axis=1)
 
         offroad_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_offroad_indication[:, 0],
