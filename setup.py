@@ -248,10 +248,12 @@ if not NO_TRAIN:
         "tqdm",
         "matplotlib",
         "imageio",
+        "pyro-ppl",
         "mediapy",
         "heavyball<2.0.0",
         "neptune",
         "wandb",
+        "tensorboard",
     ]
 
 setup(

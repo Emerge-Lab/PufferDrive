@@ -1024,24 +1024,22 @@ PyMODINIT_FUNC PyInit_binding(void) {
     }
 
     // Make constants accessible from Python
+    PyModule_AddIntConstant(m, "MAX_LANE_SEGMENT_OBSERVATIONS", MAX_LANE_SEGMENT_OBSERVATIONS);
     PyModule_AddIntConstant(m, "MAX_ROAD_SEGMENT_OBSERVATIONS", MAX_ROAD_SEGMENT_OBSERVATIONS);
     PyModule_AddIntConstant(m, "MAX_AGENTS_OBSERVATIONS", MAX_AGENTS_OBSERVATIONS);
     PyModule_AddIntConstant(m, "MAX_TRAFFIC_CONTROLS", MAX_TRAFFIC_CONTROLS);
     PyModule_AddIntConstant(m, "MAX_ENTITIES_PER_CELL", MAX_ENTITIES_PER_CELL);
-    PyModule_AddIntConstant(m, "MAX_GPS_OBSERVATIONS", MAX_GPS_OBSERVATIONS);
-
     PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_FEATURES", TRAFFIC_CONTROL_FEATURES);
     PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC", EGO_FEATURES_CLASSIC);
     PyModule_AddIntConstant(m, "EGO_FEATURES_JERK", EGO_FEATURES_JERK);
-    PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC_NO_GOAL", EGO_FEATURES_CLASSIC_NO_GOAL);
-    PyModule_AddIntConstant(m, "EGO_FEATURES_JERK_NO_GOAL", EGO_FEATURES_JERK_NO_GOAL);
-    PyModule_AddIntConstant(m, "GPS_FEATURES", GPS_FEATURES);
+    PyModule_AddIntConstant(m, "STATIC_TARGET_FEATURES", STATIC_TARGET_FEATURES);
+    PyModule_AddIntConstant(m, "DYNAMIC_TARGET_FEATURES", DYNAMIC_TARGET_FEATURES);
+    PyModule_AddIntConstant(m, "MAX_TARGET_WAYPOINTS", MAX_TARGET_WAYPOINTS);
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
-    PyModule_AddIntConstant(m, "TARGET_GOAL", TARGET_GOAL);
-    PyModule_AddIntConstant(m, "TARGET_WAYPOINTS", TARGET_WAYPOINTS);
-    PyModule_AddIntConstant(m, "TARGET_BOTH", TARGET_BOTH);
+    PyModule_AddIntConstant(m, "TARGET_STATIC", TARGET_STATIC);
+    PyModule_AddIntConstant(m, "TARGET_DYNAMIC", TARGET_DYNAMIC);
 
     return m;
 }

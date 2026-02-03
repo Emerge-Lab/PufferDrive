@@ -11,13 +11,14 @@
 #define REWARD_COEF_TRAFFIC_LIGHT 7
 #define REWARD_COEF_CENTER_BIAS 8
 #define REWARD_COEF_VEL_ALIGN 9
-#define REWARD_COEF_SPEED 10
+#define REWARD_COEF_OVERSPEED 10
 #define REWARD_COEF_TIMESTEP 11
+#define REWARD_COEF_REVERSE 12
 // Dynamic conditioning coefficients
-#define REWARD_COEF_THROTTLE 12
-#define REWARD_COEF_STEER 13
-#define REWARD_COEF_ACC 14
-#define NUM_REWARD_COEFS 15
+#define REWARD_COEF_THROTTLE 13
+#define REWARD_COEF_STEER 14
+#define REWARD_COEF_ACC 15
+#define NUM_REWARD_COEFS 16
 
 // -- AGENT TYPE
 #define VEHICLE 1
@@ -57,6 +58,7 @@
 
 // Path
 #define MAX_NUM_WP_PATH 200
+#define MAX_TARGET_WAYPOINTS 20
 
 struct Waypoint {
     float s;       // Arc length (cumulative distance from the start) - init position
@@ -162,6 +164,7 @@ struct Agent {
     float sim_vx;
     float sim_vy;
     float sim_speed;
+    float sim_speed_signed;
     float sim_length;
     float sim_width;
     float sim_height;
@@ -178,7 +181,7 @@ struct Agent {
 
     // Metrics and status tracking
     float metrics_array[10]; // [collision, offroad, red_light, reached_goal, lane_dist,
-                             // avg_displacement_error, comfort_violation, velocity_progress, speed_limit, lane_angle]
+                             // lane_angle, comfort_violation, velocity_progress, speed_limit, avg_displacement_error]
     int current_lane_index;
     int current_lane_geometry_idx;
     int reached_goal_this_episode;
@@ -188,12 +191,13 @@ struct Agent {
     float cumulative_displacement;
     int displacement_sample_count;
 
-    // Goal positions
-    float goal_position_x;
-    float goal_position_y;
-    float goal_position_z;
-    float init_goal_x; // Initialized from goal_position
-    float init_goal_y; // Initialized from goal_position
+    // Goal positions (N sequential waypoints)
+    float goal_positions_x[MAX_TARGET_WAYPOINTS];
+    float goal_positions_y[MAX_TARGET_WAYPOINTS];
+    float goal_position_x; // alias = goal_positions_x[current_goal_idx]
+    float goal_position_y; // alias = goal_positions_y[current_goal_idx]
+    float goal_position_z; // from binary file, unused
+    int current_goal_idx;  // index of next goal to reach (0..N-1)
 
     // Respawn tracking
     int respawn_timestep;

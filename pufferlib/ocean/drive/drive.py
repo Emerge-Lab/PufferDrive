@@ -20,18 +20,20 @@ class Drive(pufferlib.PufferEnv):
         reward_vehicle_collision=-0.1,
         reward_offroad_collision=-0.1,
         reward_traffic_light_violation=-0.5,
-        goal_distance=40.0,
-        waypoints_spacing=5.0,
+        min_goal_spacing=20.0,
+        max_goal_spacing=60.0,
+        num_target_waypoints=3,
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
         reward_ade=0.0,
         reach_goal_behavior=0,
-        reward_speed=0.0,
+        reward_overspeed=0.0,
         reward_comfort=-0.05,
         reward_velocity=0.0,
         reward_lane_align=-0.01,
         reward_lane_center=-0.005,
         reward_timestep=-0.000025,
+        reward_reverse=-0.005,
         goal_radius=2.0,
         collision_behavior=0,
         offroad_behavior=0,
@@ -55,7 +57,7 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir=None,
-        target_type="goal",
+        target_type="static",
         reward_conditioning=False,
         reward_randomization=False,
     ):
@@ -71,25 +73,25 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
-        self.goal_distance = goal_distance
-        self.waypoints_spacing = waypoints_spacing
+        self.min_goal_spacing = min_goal_spacing
+        self.max_goal_spacing = max_goal_spacing
+        self.num_target_waypoints = num_target_waypoints
         self.reach_goal_behavior = reach_goal_behavior
         self.target_type_str = target_type
-        if target_type == "goal":
-            self.target_type = binding.TARGET_GOAL
-        elif target_type == "waypoints":
-            self.target_type = binding.TARGET_WAYPOINTS
-        elif target_type == "both":
-            self.target_type = binding.TARGET_BOTH
+        if target_type == "static":
+            self.target_type = binding.TARGET_STATIC
+        elif target_type == "dynamic":
+            self.target_type = binding.TARGET_DYNAMIC
         else:
-            raise ValueError(f"target_type must be 'goal', 'waypoints', or 'both'. Got: {target_type}")
+            raise ValueError(f"target_type must be 'static' or 'dynamic'. Got: {target_type}")
         self.reward_ade = reward_ade
-        self.reward_speed = reward_speed
+        self.reward_overspeed = reward_overspeed
         self.reward_comfort = reward_comfort
         self.reward_velocity = reward_velocity
         self.reward_lane_align = reward_lane_align
         self.reward_lane_center = reward_lane_center
         self.reward_timestep = reward_timestep
+        self.reward_reverse = reward_reverse
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
@@ -111,37 +113,35 @@ class Drive(pufferlib.PufferEnv):
         self.max_agents_per_env = max_agents_per_env
 
         # Observation space calculation based on target_type
-        include_goal = self.target_type in (binding.TARGET_GOAL, binding.TARGET_BOTH)
-        include_waypoints = self.target_type in (binding.TARGET_WAYPOINTS, binding.TARGET_BOTH)
-
-        if include_goal:
-            self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
-                dynamics_model
-            )
-        else:
-            self.ego_features = {
-                "classic": binding.EGO_FEATURES_CLASSIC_NO_GOAL,
-                "jerk": binding.EGO_FEATURES_JERK_NO_GOAL,
-            }.get(dynamics_model)
+        self.ego_features = {
+            "classic": binding.EGO_FEATURES_CLASSIC,
+            "jerk": binding.EGO_FEATURES_JERK,
+        }.get(dynamics_model)
 
         # Extract observation shapes from constants
-        # These need to be defined in C, since they determine the shape of the arrays
-        self.max_road_objects = binding.MAX_ROAD_SEGMENT_OBSERVATIONS
+        self.max_lane_objects = binding.MAX_LANE_SEGMENT_OBSERVATIONS
+        self.max_boundary_objects = binding.MAX_ROAD_SEGMENT_OBSERVATIONS
         self.max_partner_objects = binding.MAX_AGENTS_OBSERVATIONS
         self.max_traffic_controls = binding.MAX_TRAFFIC_CONTROLS
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
-        self.gps_features = binding.GPS_FEATURES
-        self.max_gps_objects = binding.MAX_GPS_OBSERVATIONS if include_waypoints else 0
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
+
+        # Target features based on target_type
+        if target_type == "static":
+            self.target_features = binding.STATIC_TARGET_FEATURES
+        else:
+            self.target_features = binding.DYNAMIC_TARGET_FEATURES
+        self.target_dim = num_target_waypoints * self.target_features
+
         self.num_obs = (
             self.ego_features
             + self.num_reward_coefs
+            + self.target_dim
             + self.max_partner_objects * self.partner_features
-            + self.max_road_objects * self.road_features
+            + (self.max_lane_objects + self.max_boundary_objects) * self.road_features
             + self.max_traffic_controls * self.traffic_control_features
-            + self.max_gps_objects * self.gps_features
         )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
@@ -252,19 +252,21 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal=self.reward_goal,
                 reward_goal_post_respawn=self.reward_goal_post_respawn,
                 reward_ade=self.reward_ade,
-                reward_speed=self.reward_speed,
+                reward_overspeed=self.reward_overspeed,
                 reward_comfort=self.reward_comfort,
                 reward_velocity=self.reward_velocity,
                 reward_lane_align=self.reward_lane_align,
                 reward_lane_center=self.reward_lane_center,
                 reward_timestep=self.reward_timestep,
+                reward_reverse=self.reward_reverse,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 traffic_light_behavior=self.traffic_light_behavior,
                 end_sdc_path_behavior=self.end_sdc_path_behavior,
                 goal_radius=self.goal_radius,
-                goal_distance=self.goal_distance,
-                waypoints_spacing=self.waypoints_spacing,
+                min_goal_spacing=self.min_goal_spacing,
+                max_goal_spacing=self.max_goal_spacing,
+                num_target_waypoints=self.num_target_waypoints,
                 reach_goal_behavior=self.reach_goal_behavior,
                 target_type=self.target_type,
                 dt=self.dt,
@@ -341,6 +343,7 @@ class Drive(pufferlib.PufferEnv):
                         self.truncations[cur:nxt],
                         random_seed,
                         action_type=self._action_type_flag,
+                        dynamics_model=self.dynamics_model_flag,
                         human_agent_idx=self.human_agent_idx,
                         reward_vehicle_collision=self.reward_vehicle_collision,
                         reward_offroad_collision=self.reward_offroad_collision,
@@ -348,19 +351,21 @@ class Drive(pufferlib.PufferEnv):
                         reward_goal=self.reward_goal,
                         reward_goal_post_respawn=self.reward_goal_post_respawn,
                         reward_ade=self.reward_ade,
-                        reward_speed=self.reward_speed,
+                        reward_overspeed=self.reward_overspeed,
                         reward_comfort=self.reward_comfort,
                         reward_velocity=self.reward_velocity,
                         reward_lane_align=self.reward_lane_align,
                         reward_lane_center=self.reward_lane_center,
                         reward_timestep=self.reward_timestep,
+                        reward_reverse=self.reward_reverse,
                         collision_behavior=self.collision_behavior,
                         offroad_behavior=self.offroad_behavior,
                         traffic_light_behavior=self.traffic_light_behavior,
                         end_sdc_path_behavior=self.end_sdc_path_behavior,
                         goal_radius=self.goal_radius,
-                        goal_distance=self.goal_distance,
-                        waypoints_spacing=self.waypoints_spacing,
+                        min_goal_spacing=self.min_goal_spacing,
+                        max_goal_spacing=self.max_goal_spacing,
+                        num_target_waypoints=self.num_target_waypoints,
                         reach_goal_behavior=self.reach_goal_behavior,
                         target_type=self.target_type,
                         dt=self.dt,

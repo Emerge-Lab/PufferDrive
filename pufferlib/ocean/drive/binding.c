@@ -1201,11 +1201,14 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
 
             /* Lane-specific fields */
-            tmp = PyLong_FromLong(r->entry_lanes);
+            tmp = PyList_New(r->num_entries);
             if (!tmp) {
                 Py_DECREF(road);
                 Py_DECREF(road_list);
                 return NULL;
+            }
+            for (int k = 0; k < r->num_entries; k++) {
+                PyList_SET_ITEM(tmp, k, PyLong_FromLong(r->entry_lanes[k]));
             }
             if (PyDict_SetItemString(road, "entry_lanes", tmp) < 0) {
                 Py_DECREF(tmp);
@@ -1215,11 +1218,14 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            tmp = PyLong_FromLong(r->exit_lanes);
+            tmp = PyList_New(r->num_exits);
             if (!tmp) {
                 Py_DECREF(road);
                 Py_DECREF(road_list);
                 return NULL;
+            }
+            for (int k = 0; k < r->num_exits; k++) {
+                PyList_SET_ITEM(tmp, k, PyLong_FromLong(r->exit_lanes[k]));
             }
             if (PyDict_SetItemString(road, "exit_lanes", tmp) < 0) {
                 Py_DECREF(tmp);
@@ -1469,22 +1475,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
     if (env->observations && env->active_agent_count > 0) {
         /* Agent observations */
-        int include_goal = (env->target_type == TARGET_GOAL || env->target_type == TARGET_BOTH);
-        int include_waypoints = (env->target_type == TARGET_WAYPOINTS || env->target_type == TARGET_BOTH);
-        int ego_dim;
-        if (include_goal) {
-            ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-        } else {
-            ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK_NO_GOAL : EGO_FEATURES_CLASSIC_NO_GOAL;
-        }
-        int max_obs = ego_dim + PARTNER_FEATURES * MAX_AGENTS_OBSERVATIONS +
-                      ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS + MAX_TRAFFIC_CONTROLS * TRAFFIC_CONTROL_FEATURES;
-        if (include_waypoints) {
-            max_obs += GPS_FEATURES * MAX_GPS_OBSERVATIONS;
-        }
-        if (env->reward_conditioning) {
-            max_obs += NUM_REWARD_COEFS;
-        }
+        int max_obs = compute_observation_size(env);
         PyObject *obs_data = PyList_New(env->active_agent_count);
         if (!obs_data)
             return NULL;
@@ -1759,19 +1750,21 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_goal = (float)unpack(kwargs, "reward_goal");
     env->reward_goal_post_respawn = (float)unpack(kwargs, "reward_goal_post_respawn");
     env->reward_ade = (float)unpack(kwargs, "reward_ade");
-    env->reward_speed = (float)unpack(kwargs, "reward_speed");
+    env->reward_overspeed = (float)unpack(kwargs, "reward_overspeed");
     env->reward_comfort = (float)unpack(kwargs, "reward_comfort");
     env->reward_velocity = (float)unpack(kwargs, "reward_velocity");
     env->reward_lane_align = (float)unpack(kwargs, "reward_lane_align");
     env->reward_lane_center = (float)unpack(kwargs, "reward_lane_center");
     env->reward_timestep = (float)unpack(kwargs, "reward_timestep");
+    env->reward_reverse = (float)unpack(kwargs, "reward_reverse");
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int)unpack(kwargs, "traffic_light_behavior");
     env->end_sdc_path_behavior = (int)unpack(kwargs, "end_sdc_path_behavior");
-    env->goal_radius = (int)unpack(kwargs, "goal_radius");
-    env->goal_distance = (int)unpack(kwargs, "goal_distance");
-    env->waypoints_spacing = (int)unpack(kwargs, "waypoints_spacing");
+    env->goal_radius = (float)unpack(kwargs, "goal_radius");
+    env->min_goal_spacing = (float)unpack(kwargs, "min_goal_spacing");
+    env->max_goal_spacing = (float)unpack(kwargs, "max_goal_spacing");
+    env->num_target_waypoints = (int)unpack(kwargs, "num_target_waypoints");
     // env->policy_agents_per_env = unpack(kwargs, "num_policy_controlled_agents");
     // env->control_all_agents = unpack(kwargs, "control_all_agents");
     // env->deterministic_agent_selection = unpack(kwargs, "deterministic_agent_selection");
@@ -1816,8 +1809,8 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
-    assign_to_dict(dict, "lane_align_rate", log->lane_align_rate);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
+    assign_to_dict(dict, "lane_heading_aligned_rate", log->lane_heading_aligned_rate);
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "score", log->score);
     // assign_to_dict(dict, "active_agent_count", log->active_agent_count);

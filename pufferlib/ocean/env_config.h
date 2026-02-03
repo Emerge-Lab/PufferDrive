@@ -16,14 +16,14 @@ typedef struct {
     float reward_goal;
     float reward_goal_post_respawn;
     float reward_ade;
-    float reward_speed;
+    float reward_overspeed;
     float reward_comfort;
     float reward_velocity;
     float reward_lane_align;
     float reward_lane_center;
     float reward_timestep;
+    float reward_reverse;
     float goal_radius;
-    float goal_distance;
     int collision_behavior;
     int offroad_behavior;
     int traffic_light_behavior;
@@ -39,7 +39,9 @@ typedef struct {
     int control_mode;
     int simulation_mode;
     char map_dir[256];
-    float waypoints_spacing;
+    float min_goal_spacing;
+    float max_goal_spacing;
+    int num_target_waypoints;
     int reward_conditioning;
     int reward_randomization;
     int max_agents_per_env;
@@ -79,14 +81,12 @@ static int handler(void *config, const char *section, const char *name, const ch
     } else if (MATCH("env", "reach_goal_behavior")) {
         env_config->reach_goal_behavior = atoi(value);
     } else if (MATCH("env", "target_type")) {
-        if (strcmp(value, "\"goal\"") == 0 || strcmp(value, "goal") == 0) {
-            env_config->target_type = 0; // TARGET_GOAL
-        } else if (strcmp(value, "\"waypoints\"") == 0 || strcmp(value, "waypoints") == 0) {
-            env_config->target_type = 1; // TARGET_WAYPOINTS
-        } else if (strcmp(value, "\"both\"") == 0 || strcmp(value, "both") == 0) {
-            env_config->target_type = 2; // TARGET_BOTH
+        if (strcmp(value, "\"static\"") == 0 || strcmp(value, "static") == 0) {
+            env_config->target_type = 0; // TARGET_STATIC
+        } else if (strcmp(value, "\"dynamic\"") == 0 || strcmp(value, "dynamic") == 0) {
+            env_config->target_type = 1; // TARGET_DYNAMIC
         } else {
-            printf("Warning: Unknown target_type value '%s', defaulting to goal\n", value);
+            printf("Warning: Unknown target_type value '%s', defaulting to static\n", value);
             env_config->target_type = 0;
         }
     } else if (MATCH("env", "reward_vehicle_collision")) {
@@ -101,8 +101,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_goal_post_respawn = atof(value);
     } else if (MATCH("env", "reward_ade")) {
         env_config->reward_ade = atof(value);
-    } else if (MATCH("env", "reward_speed")) {
-        env_config->reward_speed = atof(value);
+    } else if (MATCH("env", "reward_overspeed")) {
+        env_config->reward_overspeed = atof(value);
     } else if (MATCH("env", "reward_comfort")) {
         env_config->reward_comfort = atof(value);
     } else if (MATCH("env", "reward_velocity")) {
@@ -113,10 +113,10 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_lane_center = atof(value);
     } else if (MATCH("env", "reward_timestep")) {
         env_config->reward_timestep = atof(value);
+    } else if (MATCH("env", "reward_reverse")) {
+        env_config->reward_reverse = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
-    } else if (MATCH("env", "goal_distance")) {
-        env_config->goal_distance = atof(value);
     } else if (MATCH("env", "spawn_immunity_timer")) {
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "dt")) {
@@ -140,8 +140,12 @@ static int handler(void *config, const char *section, const char *name, const ch
             strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);
             env_config->map_dir[sizeof(env_config->map_dir) - 1] = '\0';
         }
-    } else if (MATCH("env", "waypoints_spacing")) {
-        env_config->waypoints_spacing = atof(value);
+    } else if (MATCH("env", "min_goal_spacing")) {
+        env_config->min_goal_spacing = atof(value);
+    } else if (MATCH("env", "max_goal_spacing")) {
+        env_config->max_goal_spacing = atof(value);
+    } else if (MATCH("env", "num_target_waypoints")) {
+        env_config->num_target_waypoints = atoi(value);
     } else if (MATCH("env", "reward_conditioning")) {
         if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
             env_config->reward_conditioning = 1;

@@ -19,24 +19,18 @@ class Drive(nn.Module):
         self.observation_size = env.single_observation_space.shape[0]
         self.max_partner_objects = env.max_partner_objects
         self.partner_features = env.partner_features
-        self.max_road_objects = env.max_road_objects
+        self.max_lane_objects = env.max_lane_objects
+        self.max_boundary_objects = env.max_boundary_objects
         self.road_features = env.road_features
-        self.road_features_after_onehot = env.road_features + 3  # 6 is the number of one-hot encoded categorie
         self.traffic_control_features = env.traffic_control_features
-        self.traffic_control_features_after_onehot = env.traffic_control_features + 3
         self.max_traffic_controls = env.max_traffic_controls
-        self.target_type = env.target_type
-        if self.target_type == 1 or self.target_type == 2:
-            self.max_gps_objects = env.max_gps_objects
-            self.gps_features = env.gps_features
+        # Ego = pure kinematic state only (no goal/gps)
+        self.ego_dim = env.ego_features
 
-        if self.target_type == 0 or self.target_type == 2:
-            self.ego_dim = 8 if env.dynamics_model == "jerk" else 5
-        else:
-            self.ego_dim = 6 if env.dynamics_model == "jerk" else 3
-
-        # Reward conditioning
+        # Conditioning = reward_coefs + target waypoints (all adjacent in C obs layout)
         self.num_reward_coefs = getattr(env, "num_reward_coefs", 0)
+        target_dim = getattr(env, "target_dim", 0)
+        self.conditioning_dim = self.num_reward_coefs + target_dim
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
@@ -44,8 +38,14 @@ class Drive(nn.Module):
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
-        self.road_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(self.road_features_after_onehot, input_size)),
+        self.lane_encoder = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(self.road_features, input_size)),
+            nn.LayerNorm(input_size),
+            # nn.ReLU(),
+            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+        )
+        self.boundary_encoder = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(self.road_features, input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
@@ -56,24 +56,18 @@ class Drive(nn.Module):
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
+        # # Traffic light features: 2 position + 4 one-hot state (state normalized to -1,0,1,2 -> shifted to 0,1,2,3)
+        # self.traffic_control_features_after_onehot = 2 + 4
         # self.traffic_light_encoder = nn.Sequential(
         #     pufferlib.pytorch.layer_init(nn.Linear(self.traffic_control_features_after_onehot, input_size)),
         #     nn.LayerNorm(input_size),
-        #     # nn.ReLU(),
         #     pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         # )
 
-        num_feature_sets = 3
-        if self.num_reward_coefs > 0:
+        num_feature_sets = 4  # 5 if traffic lights are used
+        if self.conditioning_dim > 0:
             self.conditioning_encoder = nn.Sequential(
-                pufferlib.pytorch.layer_init(nn.Linear(self.num_reward_coefs, input_size)),
-                nn.LayerNorm(input_size),
-                pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
-            )
-            num_feature_sets += 1
-        if self.target_type == 1 or self.target_type == 2:
-            self.gps_encoder = nn.Sequential(
-                pufferlib.pytorch.layer_init(nn.Linear(self.gps_features, input_size)),
+                pufferlib.pytorch.layer_init(nn.Linear(self.conditioning_dim, input_size)),
                 nn.LayerNorm(input_size),
                 # nn.ReLU(),
                 pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
@@ -103,77 +97,57 @@ class Drive(nn.Module):
         return self.forward(x, state)
 
     def encode_observations(self, observations, state=None):
-        ego_dim = self.ego_dim
         partner_dim = self.max_partner_objects * self.partner_features
-        road_dim = self.max_road_objects * self.road_features
-        # traffic_light_dim = self.max_traffic_controls * self.traffic_control_features
+        lane_dim = self.max_lane_objects * self.road_features
+        boundary_dim = self.max_boundary_objects * self.road_features
+        # traffic_dim = self.max_traffic_controls * self.traffic_control_features
 
-        # Unflatten observations
-        if self.target_type in [1, 2]:
-            gps_dim = self.max_gps_objects * self.gps_features
-        else:
-            gps_dim = 0
-
-        slide_idx = ego_dim
+        # Slice obs: ego | conditioning | partners | lanes | boundaries | traffic_lights
+        slide_idx = self.ego_dim
         ego_obs = observations[:, :slide_idx]
 
-        # Reward conditioning coefficients (after ego, before gps)
-        if self.num_reward_coefs > 0:
-            coef_obs = observations[:, slide_idx : slide_idx + self.num_reward_coefs]
-            slide_idx += self.num_reward_coefs
+        if self.conditioning_dim > 0:
+            conditioning_obs = observations[:, slide_idx : slide_idx + self.conditioning_dim]
+        slide_idx += self.conditioning_dim
 
-        gps_obs = observations[:, slide_idx : slide_idx + gps_dim]
-        slide_idx += gps_dim
         partner_obs = observations[:, slide_idx : slide_idx + partner_dim]
         slide_idx += partner_dim
-        road_obs = observations[:, slide_idx : slide_idx + road_dim]
-        slide_idx += road_dim
-        # traffic_light_obs = observations[:, slide_idx : slide_idx + traffic_light_dim]
+        lane_obs = observations[:, slide_idx : slide_idx + lane_dim]
+        slide_idx += lane_dim
+        boundary_obs = observations[:, slide_idx : slide_idx + boundary_dim]
+        # slide_idx += boundary_dim
+        # traffic_light_obs = observations[:, slide_idx : slide_idx + traffic_dim]
 
         # Reshape object observations
         partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
-        road_objects = road_obs.view(-1, self.max_road_objects, self.road_features)
-        # traffic_light_obs = traffic_light_obs.view(-1, self.max_traffic_controls, self.traffic_control_features)
-        if self.target_type == 1 or self.target_type == 2:
-            gps_objects = gps_obs.view(-1, self.max_gps_objects, self.gps_features)
+        lane_objects = lane_obs.view(-1, self.max_lane_objects, self.road_features)
+        boundary_objects = boundary_obs.view(-1, self.max_boundary_objects, self.road_features)
+        # traffic_light_raw = traffic_light_obs.view(-1, self.max_traffic_controls, self.traffic_control_features)
 
-        # Road object one-hot encoding
-        road_continuous = road_objects[:, :, : self.road_features - 1]
-        road_categorical = road_objects[:, :, self.road_features - 1]
-        road_onehot = F.one_hot((road_categorical + 1).long(), num_classes=4)  # Shape: [batch, ROAD_MAX_OBJECTS, 4]
-        road_objects = torch.cat([road_continuous, road_onehot], dim=2)
-
-        # # Traffic light one-hot encoding
-        # traffic_light_continuous = traffic_light_obs[:, :, : self.traffic_control_features - 1]
-        # traffic_light_categorical = traffic_light_obs[:, :, self.traffic_control_features - 1]
-        # # normalize_traffic_light_state returns -1, 0, 1, or 2. Shift to [0, 3] for one-hot
-        # traffic_light_onehot = F.one_hot((traffic_light_categorical + 1).long(), num_classes=4)  # Shape: [batch, 10, 4]
+        # Traffic light one-hot encoding: features are [rel_x, rel_y, state]
+        # state is normalized to -1, 0, 1, 2 -> shift to 0, 1, 2, 3 for one-hot
+        # traffic_light_continuous = traffic_light_raw[:, :, :2]  # rel_x, rel_y
+        # traffic_light_categorical = traffic_light_raw[:, :, 2]  # state
+        # traffic_light_onehot = F.one_hot((traffic_light_categorical + 1).long(), num_classes=4).float()
         # traffic_light_objects = torch.cat([traffic_light_continuous, traffic_light_onehot], dim=2)
 
         # Encode each observation type
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
-        road_features, _ = self.road_encoder(road_objects).max(dim=1)
+        lane_features, _ = self.lane_encoder(lane_objects).max(dim=1)
+        boundary_features, _ = self.boundary_encoder(boundary_objects).max(dim=1)
         # traffic_light_features, _ = self.traffic_light_encoder(traffic_light_objects).max(dim=1)
 
-        # Build feature list
-        feature_list = [ego_features, road_features, partner_features]
+        feature_list = [ego_features, lane_features, boundary_features, partner_features]  # , traffic_light_features]
 
-        # Add conditioning features if enabled
-        if self.num_reward_coefs > 0:
-            coef_features = self.conditioning_encoder(coef_obs)
-            feature_list.append(coef_features)
-
-        # Add GPS features if enabled
-        if self.target_type == 1 or self.target_type == 2:
-            gps_features, _ = self.gps_encoder(gps_objects).max(dim=1)
-            feature_list.append(gps_features)
+        if self.conditioning_dim > 0:
+            conditioning_features = self.conditioning_encoder(conditioning_obs)
+            feature_list.append(conditioning_features)
 
         concat_features = torch.cat(feature_list, dim=1)
 
         # Pass through shared embedding
         embedding = F.relu(self.shared_embedding(concat_features))
-        # embedding = self.shared_embedding(concat_features)
         return embedding
 
     def decode_actions(self, flat_hidden):
