@@ -173,18 +173,16 @@ class TargetDrive(nn.Module):
         road_dim = self.max_road_objects * self.road_features
         ego_obs = observations[:, :ego_dim]
 
-        # The stripping of the ego_obs (skip last value) is easy, what about partners ?
+        # NOTE: If you want to strip a ego feature like before add a +1 here
         unstripped_partner_dim = self.max_partner_objects * (self.partner_features + 1)
-        unstripped_partner_obs = observations[:, ego_dim + 1 : ego_dim + 1 + unstripped_partner_dim]
+        unstripped_partner_obs = observations[:, ego_dim : ego_dim + unstripped_partner_dim]
         bs = unstripped_partner_obs.shape[0]
         partner_objects = unstripped_partner_obs.view(bs, self.max_partner_objects, self.partner_features + 1)
 
         # Drop the unwanted feature:
         partner_objects = partner_objects[..., :-1]
 
-        road_obs = observations[
-            :, ego_dim + 1 + unstripped_partner_dim : ego_dim + 1 + unstripped_partner_dim + road_dim
-        ]
+        road_obs = observations[:, ego_dim + unstripped_partner_dim : ego_dim + unstripped_partner_dim + road_dim]
 
         road_objects = road_obs.view(-1, self.max_road_objects, self.road_features)
         road_continuous = road_objects[:, :, : self.road_features - 1]
