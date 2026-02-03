@@ -28,7 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/extra-1e76a9d8.css">
+        <link rel="stylesheet" href="theme/extra-534a9ef5.css">
 
         <!-- MathJax -->
         <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
@@ -38,7 +38,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f4073e00.js";
+            window.path_to_searchindex_js = "searchindex-f7ab028c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8d227c1c.js"></script>
@@ -190,6 +190,38 @@
 <pre><code class="language-bash">./drive
 </code></pre>
 <p>This will run <code>demo()</code> with an existing model checkpoint.</p>
+<h2 id="arguments--configuration"><a class="header" href="#arguments--configuration">Arguments &amp; Configuration</a></h2>
+<p>The <code>drive</code> tool supports similar CLI arguments as the visualizer to control the environment and rendering. It also reads the <code>pufferlib/config/ocean/drive.ini</code> file for default environment settings.</p>
+<h3 id="command-line-arguments"><a class="header" href="#command-line-arguments">Command Line Arguments</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">Argument</th><th style="text-align: left">Description</th><th style="text-align: left">Default</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>--map-name &lt;path&gt;</code></td><td style="text-align: left">Path to the map binary file (e.g., <code>resources/drive/binaries/training/map_000.bin</code>). If omitted, picks a random map out of <code>num_maps</code> from <code>map_dir</code> in <code>drive.ini</code>.</td><td style="text-align: left">Random</td></tr>
+<tr><td style="text-align: left"><code>--policy-name &lt;path&gt;</code></td><td style="text-align: left"><code>Path to the policy weights file (.bin).</code></td><td style="text-align: left"><code>resources/drive/puffer_drive_weights.bin</code></td></tr>
+<tr><td style="text-align: left"><code>--view &lt;mode&gt;</code></td><td style="text-align: left">Selects which views to render: <code>agent</code>, <code>topdown</code>, or <code>both</code>.</td><td style="text-align: left"><code>both</code></td></tr>
+<tr><td style="text-align: left"><code>--frame-skip &lt;n&gt;</code></td><td style="text-align: left">Renders every Nth frame to speed up simulation (framerate remains 30fps).</td><td style="text-align: left"><code>1</code></td></tr>
+<tr><td style="text-align: left"><code>--num-maps &lt;n&gt;</code></td><td style="text-align: left">Overrides the number of maps to sample from if <code>--map-name</code> is not set.</td><td style="text-align: left"><code>drive.ini</code> value</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="visualization-flags"><a class="header" href="#visualization-flags">Visualization Flags</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">Flag</th><th style="text-align: left">Description</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>--show-grid</code></td><td style="text-align: left">Draws the underlying nav-graph/grid on the map.</td></tr>
+<tr><td style="text-align: left"><code>--obs-only</code></td><td style="text-align: left">Hides objects not currently visible to the agent’s sensors (fog of war).</td></tr>
+<tr><td style="text-align: left"><code>--lasers</code></td><td style="text-align: left">Visualizes the raycast sensor lines from the agent.</td></tr>
+<tr><td style="text-align: left"><code>--log-trajectories</code></td><td style="text-align: left">Draws the ground-truth “human” expert trajectories as green lines.</td></tr>
+<tr><td style="text-align: left"><code>--zoom-in</code></td><td style="text-align: left">Zooms the camera mainly on the active region rather than the full map bounds.</td></tr>
+</tbody>
+</table>
+</div>
 <h3 id="controls"><a class="header" href="#controls">Controls</a></h3>
 <p><strong>General:</strong></p>
 <ul>

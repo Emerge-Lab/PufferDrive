@@ -29,7 +29,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="theme/extra-1e76a9d8.css">
+        <link rel="stylesheet" href="theme/extra-534a9ef5.css">
 
         <!-- MathJax -->
         <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
@@ -39,7 +39,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f4073e00.js";
+            window.path_to_searchindex_js = "searchindex-f7ab028c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8d227c1c.js"></script>
@@ -390,6 +390,38 @@ values = [10, 20, 30]
 <pre><code class="language-bash">./drive
 </code></pre>
 <p>This will run <code>demo()</code> with an existing model checkpoint.</p>
+<h2 id="arguments--configuration"><a class="header" href="#arguments--configuration">Arguments &amp; Configuration</a></h2>
+<p>The <code>drive</code> tool supports similar CLI arguments as the visualizer to control the environment and rendering. It also reads the <code>pufferlib/config/ocean/drive.ini</code> file for default environment settings.</p>
+<h3 id="command-line-arguments"><a class="header" href="#command-line-arguments">Command Line Arguments</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">Argument</th><th style="text-align: left">Description</th><th style="text-align: left">Default</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>--map-name &lt;path&gt;</code></td><td style="text-align: left">Path to the map binary file (e.g., <code>resources/drive/binaries/training/map_000.bin</code>). If omitted, picks a random map out of <code>num_maps</code> from <code>map_dir</code> in <code>drive.ini</code>.</td><td style="text-align: left">Random</td></tr>
+<tr><td style="text-align: left"><code>--policy-name &lt;path&gt;</code></td><td style="text-align: left"><code>Path to the policy weights file (.bin).</code></td><td style="text-align: left"><code>resources/drive/puffer_drive_weights.bin</code></td></tr>
+<tr><td style="text-align: left"><code>--view &lt;mode&gt;</code></td><td style="text-align: left">Selects which views to render: <code>agent</code>, <code>topdown</code>, or <code>both</code>.</td><td style="text-align: left"><code>both</code></td></tr>
+<tr><td style="text-align: left"><code>--frame-skip &lt;n&gt;</code></td><td style="text-align: left">Renders every Nth frame to speed up simulation (framerate remains 30fps).</td><td style="text-align: left"><code>1</code></td></tr>
+<tr><td style="text-align: left"><code>--num-maps &lt;n&gt;</code></td><td style="text-align: left">Overrides the number of maps to sample from if <code>--map-name</code> is not set.</td><td style="text-align: left"><code>drive.ini</code> value</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="visualization-flags"><a class="header" href="#visualization-flags">Visualization Flags</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">Flag</th><th style="text-align: left">Description</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>--show-grid</code></td><td style="text-align: left">Draws the underlying nav-graph/grid on the map.</td></tr>
+<tr><td style="text-align: left"><code>--obs-only</code></td><td style="text-align: left">Hides objects not currently visible to the agent’s sensors (fog of war).</td></tr>
+<tr><td style="text-align: left"><code>--lasers</code></td><td style="text-align: left">Visualizes the raycast sensor lines from the agent.</td></tr>
+<tr><td style="text-align: left"><code>--log-trajectories</code></td><td style="text-align: left">Draws the ground-truth “human” expert trajectories as green lines.</td></tr>
+<tr><td style="text-align: left"><code>--zoom-in</code></td><td style="text-align: left">Zooms the camera mainly on the active region rather than the full map bounds.</td></tr>
+</tbody>
+</table>
+</div>
 <h3 id="controls"><a class="header" href="#controls">Controls</a></h3>
 <p><strong>General:</strong></p>
 <ul>
@@ -441,12 +473,35 @@ values = [10, 20, 30]
 <ul>
 <li><code>control_vehicles</code>: Only vehicles</li>
 <li><code>control_agents</code>: All agent types (vehicles, cyclists, pedestrians)</li>
-<li><code>control_tracks_to_predict</code>: WOMD evaluation mode</li>
+<li><code>control_wosac</code>: WOSAC evaluation mode (controls all valid agents ignoring expert flag and start to goal distance)</li>
 <li><code>control_sdc_only</code>: Self-driving car only</li>
 </ul>
 <blockquote class="blockquote-tag blockquote-tag-note">
 <p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
-<p><code>control_vehicles</code> filters out agents marked as “expert” and those too close to their goal (&lt;2m). For full WOMD evaluation, use <code>control_tracks_to_predict</code>.</p>
+<p><code>control_vehicles</code> filters out agents marked as “expert” and those too close to their goal (&lt;2m). For full WOMD evaluation, use <code>control_wosac</code>.</p>
+</blockquote>
+<blockquote class="blockquote-tag blockquote-tag-important">
+<p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v9.5A1.75 1.75 0 0 1 14.25 13H8.06l-2.573 2.573A1.458 1.458 0 0 1 3 14.543V13H1.75A1.75 1.75 0 0 1 0 11.25Zm1.75-.25a.25.25 0 0 0-.25.25v9.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h6.5a.25.25 0 0 0 .25-.25v-9.5a.25.25 0 0 0-.25-.25Zm7 2.25v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"></path></svg>Important</p>
+<p><strong>Agent Dynamics:</strong> The simulator supports three types of agents:</p>
+<ol>
+<li><strong>Policy-Controlled:</strong> Stepped by your model’s actions.</li>
+<li><strong>Experts:</strong> Stepped using ground-truth log trajectories.</li>
+<li><strong>Static:</strong> Remain frozen in place.</li>
+</ol>
+<p>In the simulator, agents not selected for policy control will be treated as <strong>Static</strong> by default. To make them follow their <strong>Expert trajectories</strong>, you must set <code>mark_as_expert=true</code> for those agents in the jsons. This is critical for <code>control_sdc_only</code> to ensure the environment behaves realistically around the policy-controlled agents.</p>
+</blockquote>
+<h3 id="init-modes"><a class="header" href="#init-modes">Init modes</a></h3>
+<ul>
+<li>
+<p><strong><code>create_all_valid</code></strong> (Default): Initializes every valid agent present in the map file. This includes policy-controlled agents, experts (if marked), and static agents.</p>
+</li>
+<li>
+<p><strong><code>create_only_controlled</code></strong>: Initializes <strong>only</strong> the agents that are directly controlled by the policy.</p>
+</li>
+</ul>
+<blockquote class="blockquote-tag blockquote-tag-note">
+<p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
+<p>In <code>create_only_controlled</code> mode, the environment will contain <strong>no static or expert agents</strong>. Only the policy-controlled agents will exist.</p>
 </blockquote>
 <h3 id="goal-behaviors"><a class="header" href="#goal-behaviors">Goal behaviors</a></h3>
 <p>Three modes determine what happens when an agent reaches its goal:</p>
@@ -807,11 +862,53 @@ sudo apt install ffmpeg xvfb
 <pre><code class="language-bash">bash scripts/build_ocean.sh visualize local
 </code></pre>
 <p>If you need to force a rebuild, remove the cached binary first (<code>rm ./visualize</code>).</p>
-<h2 id="run-headless"><a class="header" href="#run-headless">Run headless</a></h2>
-<p>Launch the visualizer with a virtual display and export an <code>.mp4</code>:</p>
+<h2 id="rendering-a-video"><a class="header" href="#rendering-a-video">Rendering a Video</a></h2>
+<p>Launch the visualizer with a virtual display and export an <code>.mp4</code> for the binary scenario:</p>
 <pre><code class="language-bash">xvfb-run -s "-screen 0 1280x720x24" ./visualize
 </code></pre>
 <p>Adjust the screen size and color depth as needed. The <code>xvfb-run</code> wrapper allows Raylib to render without an attached display, which is convenient for servers and CI jobs.</p>
+<h2 id="arguments--configuration-1"><a class="header" href="#arguments--configuration-1">Arguments &amp; Configuration</a></h2>
+<p>The <code>visualize</code> tool supports several CLI arguments to control the rendering output. It also reads the <code>pufferlib/config/ocean/drive.ini</code> file for default environment settings(For more details on these settings, refer to <a href="#configuration">Configuration</a>).</p>
+<h3 id="command-line-arguments-1"><a class="header" href="#command-line-arguments-1">Command Line Arguments</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">Argument</th><th style="text-align: left">Description</th><th style="text-align: left">Default</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>--map-name &lt;path&gt;</code></td><td style="text-align: left">Path to the map binary file (e.g., <code>resources/drive/binaries/training/map_000.bin</code>). If omitted, picks a random map out of <code>num_maps</code> from <code>map_dir</code> in <code>drive.ini</code>.</td><td style="text-align: left">Random</td></tr>
+<tr><td style="text-align: left"><code>--policy-name &lt;path&gt;</code></td><td style="text-align: left">Path to the policy weights file (<code>.bin</code>).</td><td style="text-align: left"><code>resources/drive/puffer_drive_weights.bin</code></td></tr>
+<tr><td style="text-align: left"><code>--view &lt;mode&gt;</code></td><td style="text-align: left">Selects which views to render: <code>agent</code>, <code>topdown</code>, or <code>both</code>.</td><td style="text-align: left"><code>both</code></td></tr>
+<tr><td style="text-align: left"><code>--output-agent &lt;path&gt;</code></td><td style="text-align: left">Output filename for agent view video.</td><td style="text-align: left"><code>&lt;policy&gt;_agent.mp4</code></td></tr>
+<tr><td style="text-align: left"><code>--output-topdown &lt;path&gt;</code></td><td style="text-align: left">Output filename for top-down view video.</td><td style="text-align: left"><code>&lt;policy&gt;_topdown.mp4</code></td></tr>
+<tr><td style="text-align: left"><code>--frame-skip &lt;n&gt;</code></td><td style="text-align: left">Renders every Nth frame to speed up generation (framerate remains 30fps).</td><td style="text-align: left"><code>1</code></td></tr>
+<tr><td style="text-align: left"><code>--num-maps &lt;n&gt;</code></td><td style="text-align: left">Overrides the number of maps to sample from if <code>--map-name</code> is not set.</td><td style="text-align: left"><code>drive.ini</code> value</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="visualization-flags-1"><a class="header" href="#visualization-flags-1">Visualization Flags</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">Flag</th><th style="text-align: left">Description</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><code>--show-grid</code></td><td style="text-align: left">Draws the underlying nav-graph/grid on the map.</td></tr>
+<tr><td style="text-align: left"><code>--obs-only</code></td><td style="text-align: left">Hides objects not currently visible to the agent’s sensors (fog of war).</td></tr>
+<tr><td style="text-align: left"><code>--lasers</code></td><td style="text-align: left">Visualizes the raycast sensor lines from the agent.</td></tr>
+<tr><td style="text-align: left"><code>--log-trajectories</code></td><td style="text-align: left">Draws the ground-truth “human” expert trajectories as green lines.</td></tr>
+<tr><td style="text-align: left"><code>--zoom-in</code></td><td style="text-align: left">Zooms the camera mainly on the active region rather than the full map bounds.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="key-driveini-settings"><a class="header" href="#key-driveini-settings">Key <code>drive.ini</code> Settings</a></h3>
+<p>The visualizer initializes the environment using <code>pufferlib/config/ocean/drive.ini</code>. Important settings include:</p>
+<ul>
+<li><code>[env] dynamics_model</code>: <code>classic</code> or <code>jerk</code>. Must match the trained policy.</li>
+<li><code>[env] episode_length</code>: Duration of the playback. defaults to 91 if set to 0.</li>
+<li><code>[env] control_mode</code>: Determines which agents are active (<code>control_vehicles</code> vs <code>control_sdc_only</code>).</li>
+<li><code>[env] goal_behavior</code>: Defines agent behavior upon reaching goals (respawn vs stop).</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="data"><a class="header" href="#data">Data</a></h1>
 <p>PufferDrive consumes map binaries generated from multiple data sources, including the <a href="https://github.com/waymo-research/waymo-open-dataset">Waymo Open Motion Dataset (WOMD)</a> JSON files, <a href="https://github.com/valeoai/V-Max">ScenarioMax</a>, and <a href="https://carla.org/">CARLA</a>. This page covers how to obtain data and convert it into the binary format expected by the simulator.</p>
