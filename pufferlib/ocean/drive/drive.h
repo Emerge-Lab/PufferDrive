@@ -3334,7 +3334,7 @@ void c_render(Drive *env) {
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
 
-    if (IsKeyPressed(KEY_TAB)) {
+    if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
         env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
     }
 

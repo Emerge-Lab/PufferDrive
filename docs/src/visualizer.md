@@ -25,8 +25,8 @@ bash scripts/build_ocean.sh visualize local
 
 If you need to force a rebuild, remove the cached binary first (`rm ./visualize`).
 
-## Run headless
-Launch the visualizer with a virtual display and export an `.mp4`:
+## Rendering a Video
+Launch the visualizer with a virtual display and export an `.mp4` for the binary scenario:
 
 ```bash
 xvfb-run -s "-screen 0 1280x720x24" ./visualize

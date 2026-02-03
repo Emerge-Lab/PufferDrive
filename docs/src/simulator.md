@@ -22,11 +22,28 @@ A high-performance autonomous driving simulator in C with Python bindings.
 
 - `control_vehicles`: Only vehicles
 - `control_agents`: All agent types (vehicles, cyclists, pedestrians)
-- `control_tracks_to_predict`: WOMD evaluation mode
+- `control_wosac`: WOSAC evaluation mode (controls all valid agents ignoring expert flag and start to goal distance)
 - `control_sdc_only`: Self-driving car only
 
 > [!NOTE]
-> `control_vehicles` filters out agents marked as "expert" and those too close to their goal (<2m). For full WOMD evaluation, use `control_tracks_to_predict`.
+> `control_vehicles` filters out agents marked as "expert" and those too close to their goal (<2m). For full WOMD evaluation, use `control_wosac`.
+
+> [!IMPORTANT]
+> **Agent Dynamics:** The simulator supports three types of agents:
+> 1. **Policy-Controlled:** Stepped by your model's actions.
+> 2. **Experts:** Stepped using ground-truth log trajectories.
+> 3. **Static:** Remain frozen in place.
+>
+> In the simulator, agents not selected for policy control will be treated as **Static** by default. To make them follow their **Expert trajectories**, you must set `mark_as_expert=true` for those agents in the jsons. This is critical for `control_sdc_only` to ensure the environment behaves realistically around the policy-controlled agents.
+
+### Init modes
+
+- **`create_all_valid`** (Default): Initializes every valid agent present in the map file. This includes policy-controlled agents, experts (if marked), and static agents.
+
+- **`create_only_controlled`**: Initializes **only** the agents that are directly controlled by the policy.
+
+> [!NOTE]
+> In `create_only_controlled` mode, the environment will contain **no static or expert agents**. Only the policy-controlled agents will exist.
 
 ### Goal behaviors
 
