@@ -33,3 +33,13 @@ xvfb-run -s "-screen 0 1280x720x24" ./visualize
 ```
 
 Adjust the screen size and color depth as needed. The `xvfb-run` wrapper allows Raylib to render without an attached display, which is convenient for servers and CI jobs.
+
+## Rendering Mode
+You can batch render videos for multiple maps using the evaluation mode. This will render the first `num_maps` maps (capped by the number of maps in the directory) from `map_dir` in parallel using the `visualize` binary and create these videos in an `output_dir`(All configs in [render] of `drive.ini`).
+
+After setting the configs run:
+```bash
+puffer render puffer_drive
+```
+
+This mode parallelizes rendering based on `vec.num_workers`.
