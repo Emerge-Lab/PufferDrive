@@ -2,6 +2,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from typing import Optional
 
 np.set_printoptions(suppress=True)
@@ -70,8 +71,8 @@ def log_likelihood_estimate_timeseries(
     num_bins: int,
     additive_smoothing: float,
     treat_timesteps_independently: bool = True,
+    sim_valid: Optional[np.ndarray] = None,
     sanity_check: bool = False,
-    plot_agent_idx: int = 0,
 ) -> np.ndarray:
     """Computes log-likelihood estimates for time-series simulated features on a per-agent basis.
 
@@ -83,6 +84,7 @@ def log_likelihood_estimate_timeseries(
         num_bins: Number of histogram bins
         additive_smoothing: Pseudocount for Laplace smoothing
         treat_timesteps_independently: If True, treat each timestep independently
+        sim_valid: Optional boolean array of shape (n_agents, n_rollouts, n_steps) indicating valid sim values
         sanity_check: If True, plot visualizations for debugging
         plot_agent_idx: Which agent to plot if sanity_check=True
         plot_rollouts: How many rollouts to show if sanity_check=True
@@ -98,6 +100,21 @@ def log_likelihood_estimate_timeseries(
         # Ignore temporal structure: We end up with (n_agents, n_rollouts * n_steps)
         log_flat = log_values.reshape(n_agents, n_steps)
         sim_flat = sim_values.reshape(n_agents, n_rollouts * n_steps)
+
+        # Filter if sim_valid is provided
+        if sim_valid is not None:
+            sim_valid_flat = sim_valid.reshape(n_agents, n_rollouts * n_steps)
+
+            # Diagnostic: show average number of valid samples per agent
+            valid_counts = np.sum(sim_valid_flat, axis=1)
+            avg_valid_samples = np.mean(valid_counts)
+            total_samples = n_rollouts * n_steps
+            print(
+                f"Average valid samples per agent for histogram: {avg_valid_samples:.2f} / {total_samples} ({100 * avg_valid_samples / total_samples:.1f}%)"
+            )
+
+            # Set invalid samples to NaN (histogram_estimate will filter these out)
+            sim_flat = np.where(sim_valid_flat, sim_flat, np.nan)
 
     else:
         # If values in time are instead to be compared per-step, reshape:
@@ -115,7 +132,7 @@ def log_likelihood_estimate_timeseries(
 
     # Sanity check visualization
     if sanity_check:
-        _plot_histogram_sanity_check(log_flat, sim_flat, log_probs, plot_agent_idx)
+        _plot_histogram_sanity_check(log_flat, sim_flat, log_probs)
 
     return log_probs
 
@@ -204,45 +221,62 @@ def _plot_histogram_sanity_check(
     log_samples: np.ndarray,
     sim_samples: np.ndarray,
     log_probs: np.ndarray,
-    idx: int,
+    num_rollouts: int = 32,
+    num_steps: int = 81,
 ):
     """Plot data as sanity check."""
 
-    for idx in range(log_samples.shape[0]):
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-        fig.suptitle(f"Histogram Log-Likelihood Sanity Check for Agent {idx}")
+    sns.set_theme(style="ticks")
 
-        # Plot 1: Simulated distribution (histogram)
-        axes[0].hist(sim_samples[idx], density=True, alpha=0.7, color="blue")
-        axes[0].set_xlabel("Value")
-        axes[0].set_ylabel("Density")
-        axes[0].set_title("Simulated distribution")
-        axes[0].grid(alpha=0.3)
+    for agent_idx in range(10):
+        log_samples_agent = log_samples[agent_idx]
+        sim_samples_agent = sim_samples[agent_idx]
+        log_probs_agent = log_probs[agent_idx]
+
+        valid_mask_logs = ~np.isnan(log_samples_agent)
+        valid_mask_sims = ~np.isnan(sim_samples_agent)
+
+        log_probs_agent = log_probs_agent[valid_mask_logs]
+        sim_samples_agent_flat = sim_samples_agent[valid_mask_sims]
+        log_samples_agent_flat = log_samples_agent[valid_mask_logs]
+
+        fig, axes = plt.subplots(1, 3, figsize=(12, 4), dpi=150)
+        fig.suptitle(f"Agent {agent_idx}", fontsize=12)
+
+        # Plot 1: Time-series of simulated samples
+        sim_feat_timeseries = sim_samples_agent.reshape(num_rollouts, num_steps)
+        for rollout_idx in range(sim_feat_timeseries.shape[0]):
+            axes[0].plot(
+                list(range(num_steps)), sim_feat_timeseries[rollout_idx, :], color=sns.color_palette()[0], alpha=0.5
+            )
+
+        axes[0].plot(list(range(num_steps)), log_samples_agent, color="green", alpha=1.0)
+        axes[0].set_ylabel("Value")
+        axes[0].set_xlabel("Timestep")
+        axes[0].set_title("Feature time-series")
 
         # Plot 2: Ground-truth values overlaid on simulated
-        axes[1].hist(sim_samples[idx], density=True, alpha=0.5, color="blue", label="Simulated")
-        axes[1].scatter(
-            log_samples[idx],
-            np.zeros_like(log_samples[idx]),
-            color="green",
-            marker="|",
-            s=200,
-            linewidths=2,
-            label="Ground-truth",
-            zorder=5,
+        sns.histplot(log_samples_agent_flat, alpha=0.5, color="green", label="Ground-truth", stat="density", ax=axes[1])
+        sns.histplot(
+            sim_samples_agent_flat,
+            alpha=0.5,
+            color=sns.color_palette()[0],
+            label="Simulated",
+            stat="density",
+            ax=axes[1],
         )
         axes[1].set_xlabel("Value")
         axes[1].set_ylabel("Density")
-        axes[1].set_title("Ground-truth vs Simulated")
+        axes[1].set_title("Ground-truth vs simulated")
         axes[1].legend()
-        axes[1].grid(alpha=0.3)
 
-        # Plot 3: Log-likelihood values
-        axes[2].hist(log_samples[idx], alpha=0.7, color="orange")
-        axes[2].set_ylabel("Log-likelihood")
-        axes[2].set_title("Log-likelihood of Ground-truth")
-        axes[2].grid(alpha=0.3)
-        axes[2].axhline(y=0, color="k", linestyle="--", alpha=0.3)
+        # Plot 3: GT value x likelihood score
+        likelihood = np.exp(log_probs_agent)
+        sns.scatterplot(x=log_samples_agent_flat, y=likelihood, color="purple", alpha=0.7, ax=axes[2])
+        axes[2].set_title(f"Average likelihood for agent \n across [R, T]: {likelihood.mean():.3f}")
+        axes[2].set_ylabel("Likelihood")
+        axes[2].set_xlabel("Value")
 
         plt.tight_layout()
-        plt.savefig(f"histogram_sanity_check_agent_{idx}.png")
+        plt.savefig(f"histogram_sanity_check_agent_{agent_idx}.png", dpi=150, bbox_inches="tight")
+        plt.close()
