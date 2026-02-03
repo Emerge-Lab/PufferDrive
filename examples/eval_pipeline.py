@@ -151,6 +151,7 @@ def evaluate_ground_truth(config, vecenv, evaluator):
     for key in ["x", "y", "heading", "id"]:
         fake_simulated_trajectories[key] = np.repeat(gt_trajectories[key], config["eval"]["wosac_num_rollouts"], axis=1)
     fake_simulated_trajectories["id"] = fake_simulated_trajectories["id"][..., np.newaxis]
+    fake_simulated_trajectories["dones"] = np.zeros_like(fake_simulated_trajectories["x"])
 
     # Compute metrics
     agent_state = vecenv.driver_env.get_global_agent_state()
@@ -344,8 +345,6 @@ def pipeline(env_name="puffer_drive"):
     print(df.groupby("policy")["interactive_metrics"].mean())
     print("---")
     print(df.groupby("policy")["map_based_metrics"].mean())
-
-    breakpoint()
 
 
 if __name__ == "__main__":

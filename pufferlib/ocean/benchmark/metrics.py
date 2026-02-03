@@ -28,6 +28,8 @@ def compute_displacement_error(
     ref_x: np.ndarray,
     ref_y: np.ndarray,
     ref_valid: np.ndarray,
+    dones: np.ndarray,
+    filter_out_post_done: bool = False,
 ) -> np.ndarray:
     """Compute average displacement error (ADE) between simulated and ground truth trajectories.
 
@@ -35,7 +37,7 @@ def compute_displacement_error(
         pred_x, pred_y: Simulated positions, shape (n_agents, n_rollouts, n_steps)
         ref_x, ref_y: Ground truth positions, shape (n_agents, 1, n_steps)
         ref_valid: Valid timesteps, shape (n_agents, 1, n_steps)
-
+        dones: Done timesteps, shape (n_agents, n_rollouts, n_steps)
     Returns:
         Average displacement error per agent per rollout, shape (n_agents, n_rollouts)
     """
@@ -46,11 +48,19 @@ def compute_displacement_error(
     # Compute displacement error for each timestep and every agent and rollout
     displacement = np.linalg.norm(pred_traj - ref_traj, axis=-1)  # (n_agents, n_rollouts, n_steps)
 
+    # Create valid mask
+    if filter_out_post_done:
+        print(f"Filtering out post-done timesteps for ADE computation.")
+        # Mask out timesteps where done is True
+        valid_mask = ref_valid & ~dones  # (n_agents, n_rollouts, n_steps)
+    else:
+        valid_mask = ref_valid  # (n_agents, 1, n_steps)
+
     # Mask invalid timesteps
-    displacement = np.where(ref_valid, displacement, 0.0)
+    displacement = np.where(valid_mask, displacement, 0.0)
 
     # Aggregate
-    valid_count = np.sum(ref_valid, axis=2)  # (n_agents, 1)
+    valid_count = np.sum(valid_mask, axis=2)  # (n_agents, n_rollouts)
 
     # Compute ADE
     ade_per_rollout = np.sum(displacement, axis=2) / np.maximum(valid_count, 1)  # (n_agents, n_rollouts)

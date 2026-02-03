@@ -36,6 +36,7 @@ class WOSACEvaluator:
         self.init_steps = config.get("eval", {}).get("wosac_init_steps", 0)
         self.sim_steps = self.num_steps - self.init_steps
         self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
+        self.filter_out_post_done = config.get("eval", {}).get("wosac_filter_out_post_done", True)
         self.device = config.get("train", {}).get("device", "cuda")
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
@@ -93,12 +94,14 @@ class WOSACEvaluator:
             "z": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "heading": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
+            "dones": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.bool_),
         }
 
         for rollout_idx in tqdm(range(self.num_rollouts), desc="Collecting rollouts", colour="blue"):
             print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
 
             obs, info = puffer_env.reset()
+            truncations = np.zeros((num_agents,), dtype=bool)
             state = {}
 
             if args["train"]["use_rnn"] and policy is not None:
@@ -115,6 +118,7 @@ class WOSACEvaluator:
                 trajectories["z"][:, rollout_idx, time_idx] = agent_state["z"]
                 trajectories["heading"][:, rollout_idx, time_idx] = agent_state["heading"]
                 trajectories["id"][:, rollout_idx, time_idx] = agent_state["id"]
+                trajectories["dones"][:, rollout_idx, time_idx] = truncations
 
                 # Step policy
                 if policy is None and actions is not None:
@@ -146,7 +150,7 @@ class WOSACEvaluator:
                         if isinstance(logits, torch.distributions.Normal):
                             action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-                obs, _, _, _, _ = puffer_env.step(action_np)
+                obs, rewards, terminals, truncations, infos = puffer_env.step(action_np)
 
         return trajectories
 
@@ -162,6 +166,7 @@ class WOSACEvaluator:
             "y": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "heading": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
+            "dones": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.bool_),
         }
 
         for rollout_idx in range(self.num_rollouts):
@@ -224,6 +229,7 @@ class WOSACEvaluator:
         )
 
         print("Computing metrics...")
+        print("Filtering out post-done timesteps:", self.filter_out_post_done)
 
         eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
 
@@ -231,6 +237,7 @@ class WOSACEvaluator:
         sim_x = simulated_trajectories["x"]
         sim_y = simulated_trajectories["y"]
         sim_heading = simulated_trajectories["heading"]
+        sim_dones = simulated_trajectories["dones"]
         ref_x = ground_truth_trajectories["x"]
         ref_y = ground_truth_trajectories["y"]
         ref_heading = ground_truth_trajectories["heading"]
@@ -246,6 +253,7 @@ class WOSACEvaluator:
         eval_sim_heading = sim_heading[eval_mask]
         eval_ref_x = ref_x[eval_mask]
         eval_ref_y = ref_y[eval_mask]
+        eval_dones = sim_dones[eval_mask]
         eval_ref_heading = ref_heading[eval_mask]
         eval_ref_valid = ref_valid[eval_mask]
         eval_agent_length = agent_length[eval_mask]
@@ -313,7 +321,7 @@ class WOSACEvaluator:
         # Average Displacement Error (ADE) and minADE
         # Note: This metric is not included in the scoring meta-metric, as per WOSAC rules.
         ade, min_ade = metrics.compute_displacement_error(
-            eval_sim_x, eval_sim_y, eval_ref_x, eval_ref_y, eval_ref_valid
+            eval_sim_x, eval_sim_y, eval_ref_x, eval_ref_y, eval_ref_valid, eval_dones, self.filter_out_post_done
         )
 
         # Log-likelihood metrics
@@ -330,6 +338,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -344,6 +353,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -358,6 +368,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -372,6 +383,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -385,7 +397,8 @@ class WOSACEvaluator:
             max_val=max_val,
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
-            sanity_check=False,
+            sanity_check=True,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -400,6 +413,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         # Map-based features log-likelihoods
@@ -415,6 +429,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         speed_log_likelihood = metrics._reduce_average_with_validity(
@@ -465,8 +480,19 @@ class WOSACEvaluator:
         # in the logged scenario, we need to filter possible collisions in simulation.
         # `sim_collision_indication` shape: (n_samples, n_objects).
 
-        sim_collision_indication = np.any(np.where(eval_ref_valid, sim_collision_per_step, False), axis=2)
-        ref_collision_indication = np.any(np.where(eval_ref_valid, ref_collision_per_step, False), axis=2)
+        # Combine validity masks: only count events when ref is valid and agent is not done
+        if self.filter_out_post_done:
+            active_mask = eval_ref_valid & ~eval_dones  # (n_agents, n_rollouts, n_steps)
+        else:
+            active_mask = eval_ref_valid  # (n_agents, 1, n_steps)
+
+        # Diagnostic: show average number of active timesteps per rollout
+        active_timesteps_per_rollout = np.sum(active_mask, axis=2)  # (n_agents, n_rollouts)
+        avg_active_timesteps = np.mean(active_timesteps_per_rollout)
+        print(f"Average active timesteps for collision detection: {avg_active_timesteps:.2f}")
+
+        sim_collision_indication = np.any(np.where(active_mask, sim_collision_per_step, False), axis=2)
+        ref_collision_indication = np.any(np.where(active_mask, ref_collision_per_step, False), axis=2)
 
         sim_num_collisions = np.sum(sim_collision_indication, axis=1)
         ref_num_collisions = np.sum(ref_collision_indication, axis=1)
@@ -481,8 +507,8 @@ class WOSACEvaluator:
         )
 
         # Offroad likelihood (same pattern as collision)
-        sim_offroad_indication = np.any(np.where(eval_ref_valid, sim_offroad_per_step, False), axis=2)
-        ref_offroad_indication = np.any(np.where(eval_ref_valid, ref_offroad_per_step, False), axis=2)
+        sim_offroad_indication = np.any(np.where(active_mask, sim_offroad_per_step, False), axis=2)
+        ref_offroad_indication = np.any(np.where(active_mask, ref_offroad_per_step, False), axis=2)
 
         sim_num_offroad = np.sum(sim_offroad_indication, axis=1)
         ref_num_offroad = np.sum(ref_offroad_indication, axis=1)
@@ -495,6 +521,14 @@ class WOSACEvaluator:
             num_bins=2,
             use_bernoulli=True,
         )
+
+        print(sim_num_offroad)
+        print(sim_num_collisions)
+        print(f"Offroad events: {sim_num_offroad.sum()}")
+        print(f"Collision events: {sim_num_collisions.sum()}")
+
+        print("---")
+        print(f"ADE: {ade.mean():.3f}, minADE: {min_ade.mean():.3f}")
 
         # Get agent IDs
         eval_agent_ids = ground_truth_trajectories["id"][eval_mask]
@@ -566,6 +600,9 @@ class WOSACEvaluator:
             aggregate_metrics = df_scene_level.mean().to_dict()
             aggregate_metrics["total_num_agents"] = df_scene_level["num_agents_per_scene"].sum()
             aggregate_metrics["realism_score_std"] = df_scene_level["realism_meta_score"].std()
+            print(
+                f"realism_meta_score: {aggregate_metrics['realism_meta_score']:.3f} ± {aggregate_metrics['realism_score_std']:.3f}"
+            )
             return aggregate_metrics
         else:
             return df_scene_level
