@@ -2133,6 +2133,12 @@ void c_step(Drive *env) {
             // Assign adversarial reward
             env->rewards[i] = -sdc_reward;
             env->logs[i].episode_return += -sdc_reward;
+
+            // Let's add back the offroad penalty
+            if (collision_state == OFFROAD) {
+                env->rewards[i] += env->reward_offroad_collision;
+                env->logs[i].episode_return += env->reward_offroad_collision;
+            }
         }
     }
 
