@@ -120,62 +120,65 @@ def is_forward_dir(lane):
 def create_lane_link_elements(road_network, roads, road_link_map):
     roads_json_cnt = [[], [], []]
     print(f"Network has {len(roads)} roads.")
+    skipped_roads = []
     for road_obj in roads:
-        lane_sections = road_obj.lane_sections
+        try:
+            lane_sections = road_obj.lane_sections
 
-        is_road_junction = False if road_obj.road_xml.attrib["junction"] == "-1" else True
-        pred_lane_section_ids = {}
-        for predecessor_xml in road_obj.road_xml.find("link").findall("predecessor"):
-            if predecessor_xml.attrib["elementType"] == "road":
-                pred_road_id = predecessor_xml.attrib["elementId"]
-                if predecessor_xml.attrib["contactPoint"] == "start":
-                    pred_lane_section_ids[pred_road_id] = 0
-                else:
-                    pred_road = get_road(road_network, pred_road_id)
-                    pred_lane_section_ids[pred_road_id] = len(pred_road.lane_sections) - 1
+            is_road_junction = False if road_obj.road_xml.attrib["junction"] == "-1" else True
+            pred_lane_section_ids = {}
+            for predecessor_xml in road_obj.road_xml.find("link").findall("predecessor"):
+                if predecessor_xml.attrib["elementType"] == "road":
+                    pred_road_id = predecessor_xml.attrib["elementId"]
+                    if predecessor_xml.attrib["contactPoint"] == "start":
+                        pred_lane_section_ids[pred_road_id] = 0
+                    else:
+                        pred_road = get_road(road_network, pred_road_id)
+                        pred_lane_section_ids[pred_road_id] = len(pred_road.lane_sections) - 1
 
-        succ_lane_section_ids = {}
-        for successor_xml in road_obj.road_xml.find("link").findall("successor"):
-            if successor_xml.attrib["elementType"] == "road":
-                succ_road_id = successor_xml.attrib["elementId"]
-                if successor_xml.attrib["contactPoint"] == "start":
-                    succ_lane_section_ids[succ_road_id] = 0
-                else:
-                    succ_road = get_road(road_network, succ_road_id)
-                    succ_lane_section_ids[succ_road_id] = len(succ_road.lane_sections) - 1
+            succ_lane_section_ids = {}
+            for successor_xml in road_obj.road_xml.find("link").findall("successor"):
+                if successor_xml.attrib["elementType"] == "road":
+                    succ_road_id = successor_xml.attrib["elementId"]
+                    if successor_xml.attrib["contactPoint"] == "start":
+                        succ_lane_section_ids[succ_road_id] = 0
+                    else:
+                        succ_road = get_road(road_network, succ_road_id)
+                        succ_lane_section_ids[succ_road_id] = len(succ_road.lane_sections) - 1
 
-        road_link_object = RoadLinkObject(
-            road_id=road_obj.id,
-            pred_lane_section_ids=pred_lane_section_ids,
-            succ_lane_section_ids=succ_lane_section_ids,
-        )
+            road_link_object = RoadLinkObject(
+                road_id=road_obj.id,
+                pred_lane_section_ids=pred_lane_section_ids,
+                succ_lane_section_ids=succ_lane_section_ids,
+            )
 
-        for lane_section in lane_sections:
-            road_edges = []
-            road_lines = []
-            lanes = []
-            # sidwalks = []
+            for lane_section in lane_sections:
+                road_edges = []
+                road_lines = []
+                lanes = []
+                # sidwalks = []
 
-            left_immediate_driveable = False
-            right_immediate_driveable = False
+                left_immediate_driveable = False
+                right_immediate_driveable = False
 
-            # Left Lanes
-            add_lane_data = False
-            add_edge_data = False
-            previous_lane = None
-            for i, left_lane in enumerate(lane_section.left_lanes):
-                if left_lane.type == "driving":  # We only deal with driving lanes
-                    if i == 0:
-                        left_immediate_driveable = True
+                # Left Lanes
+                add_lane_data = False
+                add_edge_data = False
+                previous_lane = None
+                for i, left_lane in enumerate(lane_section.left_lanes):
+                    if left_lane.type == "driving":  # We only deal with driving lanes
+                        if i == 0:
+                            left_immediate_driveable = True
 
-                    if add_lane_data:
-                        road_line_data = get_lane_data(previous_lane, "BOUNDARY")
-                        road_line_data = road_line_data[::40]
-                        road_lines.append(road_line_data)
-                        waypoints = get_lane_data(previous_lane, "CENTERLINE")
-                        lanes.append(waypoints)
-                        road_link_object.lane_links_map[(str(previous_lane.id), lane_section.lane_section_ordinal)] = (
-                            LaneLinkObject(
+                        if add_lane_data:
+                            road_line_data = get_lane_data(previous_lane, "BOUNDARY")
+                            road_line_data = road_line_data[::40]
+                            road_lines.append(road_line_data)
+                            waypoints = get_lane_data(previous_lane, "CENTERLINE")
+                            lanes.append(waypoints)
+                            road_link_object.lane_links_map[
+                                (str(previous_lane.id), lane_section.lane_section_ordinal)
+                            ] = LaneLinkObject(
                                 lane_id=previous_lane.id,
                                 lane_section_index=lane_section.lane_section_ordinal,
                                 road_id=road_obj.id,
@@ -184,19 +187,19 @@ def create_lane_link_elements(road_network, roads, road_link_map):
                                 forward_dir=is_forward_dir(previous_lane),
                                 is_junction=is_road_junction,
                             )
-                        )
-                    # Add outer edge as road edge
-                    elif add_edge_data:
-                        road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
-                    add_lane_data = True
-                    add_edge_data = False
-                else:
-                    # Add inner lane as road edge
-                    if add_lane_data and i != 0:
-                        waypoints = get_lane_data(previous_lane, "CENTERLINE")
-                        lanes.append(waypoints)
-                        road_link_object.lane_links_map[(str(previous_lane.id), lane_section.lane_section_ordinal)] = (
-                            LaneLinkObject(
+                        # Add outer edge as road edge
+                        elif add_edge_data:
+                            road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                        add_lane_data = True
+                        add_edge_data = False
+                    else:
+                        # Add inner lane as road edge
+                        if add_lane_data and i != 0:
+                            waypoints = get_lane_data(previous_lane, "CENTERLINE")
+                            lanes.append(waypoints)
+                            road_link_object.lane_links_map[
+                                (str(previous_lane.id), lane_section.lane_section_ordinal)
+                            ] = LaneLinkObject(
                                 lane_id=previous_lane.id,
                                 lane_section_index=lane_section.lane_section_ordinal,
                                 road_id=road_obj.id,
@@ -205,45 +208,45 @@ def create_lane_link_elements(road_network, roads, road_link_map):
                                 forward_dir=is_forward_dir(previous_lane),
                                 is_junction=is_road_junction,
                             )
-                        )
-                        road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
-                    add_edge_data = True
-                    add_lane_data = False
-                previous_lane = left_lane
+                            road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                        add_edge_data = True
+                        add_lane_data = False
+                    previous_lane = left_lane
 
-            if add_lane_data:
-                waypoints = get_lane_data(previous_lane, "CENTERLINE")
-                lanes.append(waypoints)
-                road_link_object.lane_links_map[(str(previous_lane.id), lane_section.lane_section_ordinal)] = (
-                    LaneLinkObject(
-                        lane_id=previous_lane.id,
-                        lane_section_index=lane_section.lane_section_ordinal,
-                        road_id=road_obj.id,
-                        lane=previous_lane,
-                        lane_centerpoints=waypoints,
-                        forward_dir=is_forward_dir(previous_lane),
-                        is_junction=is_road_junction,
+                if add_lane_data:
+                    waypoints = get_lane_data(previous_lane, "CENTERLINE")
+                    lanes.append(waypoints)
+                    road_link_object.lane_links_map[(str(previous_lane.id), lane_section.lane_section_ordinal)] = (
+                        LaneLinkObject(
+                            lane_id=previous_lane.id,
+                            lane_section_index=lane_section.lane_section_ordinal,
+                            road_id=road_obj.id,
+                            lane=previous_lane,
+                            lane_centerpoints=waypoints,
+                            forward_dir=is_forward_dir(previous_lane),
+                            is_junction=is_road_junction,
+                        )
                     )
-                )
-                road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                    road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
 
-            # Right Lanes
-            add_lane_data = False
-            add_edge_data = False
-            previous_lane = None
-            for i, right_lane in enumerate(lane_section.right_lanes):
-                if right_lane.type == "driving":
-                    if i == 0:
-                        right_immediate_driveable = True
+                # Right Lanes
+                add_lane_data = False
+                add_edge_data = False
+                previous_lane = None
+                for i, right_lane in enumerate(lane_section.right_lanes):
+                    if right_lane.type == "driving":
+                        if i == 0:
+                            right_immediate_driveable = True
 
-                    if add_lane_data:
-                        road_line_data = get_lane_data(previous_lane, "BOUNDARY")
-                        road_line_data = road_line_data[::40]
-                        road_lines.append(road_line_data)
-                        waypoints = get_lane_data(previous_lane, "CENTERLINE")
-                        lanes.append(waypoints)
-                        road_link_object.lane_links_map[(str(previous_lane.id), lane_section.lane_section_ordinal)] = (
-                            LaneLinkObject(
+                        if add_lane_data:
+                            road_line_data = get_lane_data(previous_lane, "BOUNDARY")
+                            road_line_data = road_line_data[::40]
+                            road_lines.append(road_line_data)
+                            waypoints = get_lane_data(previous_lane, "CENTERLINE")
+                            lanes.append(waypoints)
+                            road_link_object.lane_links_map[
+                                (str(previous_lane.id), lane_section.lane_section_ordinal)
+                            ] = LaneLinkObject(
                                 lane_id=previous_lane.id,
                                 lane_section_index=lane_section.lane_section_ordinal,
                                 road_id=road_obj.id,
@@ -252,19 +255,19 @@ def create_lane_link_elements(road_network, roads, road_link_map):
                                 forward_dir=is_forward_dir(previous_lane),
                                 is_junction=is_road_junction,
                             )
-                        )
-                    # Add outer edge as road edge
-                    elif add_edge_data:
-                        road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
-                    add_lane_data = True
-                    add_edge_data = False
-                else:
-                    # Add inner lane as road edge
-                    if add_lane_data and i != 0:
-                        waypoints = get_lane_data(previous_lane, "CENTERLINE")
-                        lanes.append(waypoints)
-                        road_link_object.lane_links_map[(str(previous_lane.id), lane_section.lane_section_ordinal)] = (
-                            LaneLinkObject(
+                        # Add outer edge as road edge
+                        elif add_edge_data:
+                            road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                        add_lane_data = True
+                        add_edge_data = False
+                    else:
+                        # Add inner lane as road edge
+                        if add_lane_data and i != 0:
+                            waypoints = get_lane_data(previous_lane, "CENTERLINE")
+                            lanes.append(waypoints)
+                            road_link_object.lane_links_map[
+                                (str(previous_lane.id), lane_section.lane_section_ordinal)
+                            ] = LaneLinkObject(
                                 lane_id=previous_lane.id,
                                 lane_section_index=lane_section.lane_section_ordinal,
                                 road_id=road_obj.id,
@@ -273,166 +276,185 @@ def create_lane_link_elements(road_network, roads, road_link_map):
                                 forward_dir=is_forward_dir(previous_lane),
                                 is_junction=is_road_junction,
                             )
-                        )
-                        road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
-                    add_edge_data = True
-                    add_lane_data = False
-                previous_lane = right_lane
+                            road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                        add_edge_data = True
+                        add_lane_data = False
+                    previous_lane = right_lane
 
-            if add_lane_data:
-                waypoints = get_lane_data(previous_lane, "CENTERLINE")
-                lanes.append(waypoints)
-                road_link_object.lane_links_map[(str(previous_lane.id), lane_section.lane_section_ordinal)] = (
-                    LaneLinkObject(
-                        lane_id=previous_lane.id,
-                        lane_section_index=lane_section.lane_section_ordinal,
-                        road_id=road_obj.id,
-                        lane=previous_lane,
-                        lane_centerpoints=waypoints,
-                        forward_dir=is_forward_dir(previous_lane),
-                        is_junction=is_road_junction,
+                if add_lane_data:
+                    waypoints = get_lane_data(previous_lane, "CENTERLINE")
+                    lanes.append(waypoints)
+                    road_link_object.lane_links_map[(str(previous_lane.id), lane_section.lane_section_ordinal)] = (
+                        LaneLinkObject(
+                            lane_id=previous_lane.id,
+                            lane_section_index=lane_section.lane_section_ordinal,
+                            road_id=road_obj.id,
+                            lane=previous_lane,
+                            lane_centerpoints=waypoints,
+                            forward_dir=is_forward_dir(previous_lane),
+                            is_junction=is_road_junction,
+                        )
                     )
-                )
-                road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
+                    road_edges.append(get_lane_data(previous_lane, "BOUNDARY"))
 
-            road_link_map[road_obj.id] = road_link_object
+                road_link_map[road_obj.id] = road_link_object
 
-            roads_json_cnt[0].append(len(road_edges))
-            roads_json_cnt[1].append(len(road_lines))
-            roads_json_cnt[2].append(len(lanes))
+                roads_json_cnt[0].append(len(road_edges))
+                roads_json_cnt[1].append(len(road_lines))
+                roads_json_cnt[2].append(len(lanes))
+
+        except (IndexError, ValueError) as e:
+            skipped_roads.append(road_obj.id)
+            print(f"WARNING: Skipping road {road_obj.id} due to malformed geometry: {e}")
+            continue
 
     print(f"Total roads JSON count: {sum(roads_json_cnt[0]) + sum(roads_json_cnt[1]) + sum(roads_json_cnt[2])}")
     print(f"Lanes count: {sum(roads_json_cnt[2])}")
+    print(f"Skipped {len(skipped_roads)} roads with malformed geometry: {skipped_roads}")
     total_lane_links = sum(len(obj.lane_links_map) for obj in road_link_map.values())
     assert sum(roads_json_cnt[2]) == total_lane_links
 
 
 def create_successor_predecessor_elements(road_network, roads, road_link_map):
     stopping_points = 0
+    skipped_lane_links = 0
 
     for road_obj in roads:
+        # Skip roads that weren't added to road_link_map (were skipped due to errors)
+        if road_obj.id not in road_link_map:
+            continue
+
         road_link_object = road_link_map[road_obj.id]
         lane_sections = road_obj.lane_sections
 
         for lane_link_obj in road_link_object.lane_links_map.values():
-            lane_link_obj.predecessor_lanes = []
-            lane_link_obj.successor_lanes = []
+            try:
+                lane_link_obj.predecessor_lanes = []
+                lane_link_obj.successor_lanes = []
 
-            lane = lane_link_obj.lane
+                lane = lane_link_obj.lane
 
-            link_xml = lane.lane_xml.find("link")
+                link_xml = lane.lane_xml.find("link")
 
-            successor_is_junction = True
-            if link_xml is not None and link_xml.findall("successor") != []:
-                successor_is_junction = False
-                # Process Successor Links
-                for successor in link_xml.findall("successor"):
-                    successor_id = successor.get("id")
+                successor_is_junction = True
+                if link_xml is not None and link_xml.findall("successor") != []:
+                    successor_is_junction = False
+                    # Process Successor Links
+                    for successor in link_xml.findall("successor"):
+                        successor_id = successor.get("id")
 
-                    if lane_link_obj.lane_section_index + 1 < len(lane_sections):
-                        # Lane link in next lane section
-                        lane_link_obj.successor_lanes.append(
-                            road_link_object.lane_links_map[(successor_id, lane_link_obj.lane_section_index + 1)]
-                        )
-                    else:
-                        # Lane link in successor roads
-                        for road_succ in road_obj.road_xml.find("link").findall("successor"):
-                            if road_succ.attrib["elementType"] == "road":
-                                succ_road_id = road_succ.attrib["elementId"]
-                                succ_road = road_link_map[succ_road_id]
-                                succ_lane_section_index = road_link_object.succ_lane_section_ids[succ_road_id]
-                                lane_link_obj.successor_lanes.append(
-                                    succ_road.lane_links_map[(successor_id, succ_lane_section_index)]
-                                )
-                            else:
-                                # Junction case
-                                successor_is_junction = True
-            elif successor_is_junction:
-                # Handle junction case
-                for successor in road_obj.road_xml.find("link").findall("successor"):
-                    if successor.attrib["elementType"] == "junction":
-                        junction_id = successor.attrib["elementId"]
-                        junction = get_junction(road_network, junction_id)
-                        connected_lanes = junction.get_lane_junction_lanes(str(lane.id), road_id=road_obj.id)
-                        if len(connected_lanes) == 0 and lane_link_obj.forward_dir:
-                            stopping_points += 1
-                            print(
-                                f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is an ending lane"
-                            )
-                        for conn_lane in connected_lanes:
-                            succ_road_obj = get_road(road_network, conn_lane["road_id"])
-                            succ_road = road_link_map[conn_lane["road_id"]]
-                            succ_lane_section_index = conn_lane["lane_section_index"]
-                            if succ_lane_section_index == -1:
-                                succ_lane_section_index = len(succ_road_obj.lane_sections) - 1
-                            succ_lane_id = conn_lane["lane_id"]
+                        if lane_link_obj.lane_section_index + 1 < len(lane_sections):
+                            # Lane link in next lane section
                             lane_link_obj.successor_lanes.append(
-                                succ_road.lane_links_map[(str(succ_lane_id), succ_lane_section_index)]
+                                road_link_object.lane_links_map[(successor_id, lane_link_obj.lane_section_index + 1)]
                             )
-                    else:
-                        if lane_link_obj.forward_dir:
-                            # Stopping point
-                            stopping_points += 1
-                            print(
-                                f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is an ending lane"
-                            )
-
-            predecessor_is_junction = True
-            if link_xml is not None and link_xml.findall("predecessor") != []:
-                predecessor_is_junction = False
-                # Process Predecessor Links
-                for predecessor in link_xml.findall("predecessor"):
-                    predecessor_id = predecessor.get("id")
-
-                    if lane_link_obj.lane_section_index - 1 >= 0:
-                        # Lane link in previous lane section
-                        lane_link_obj.predecessor_lanes.append(
-                            road_link_object.lane_links_map[(predecessor_id, lane_link_obj.lane_section_index - 1)]
-                        )
-                    else:
-                        # Lane link in predecessor roads
-                        for road_pred in road_obj.road_xml.find("link").findall("predecessor"):
-                            if road_pred.attrib["elementType"] == "road":
-                                pred_id = road_pred.attrib["elementId"]
-                                pred_road = road_link_map[pred_id]
-                                pred_lane_section_index = road_link_object.pred_lane_section_ids[pred_id]
-                                lane_link_obj.predecessor_lanes.append(
-                                    pred_road.lane_links_map[(predecessor_id, pred_lane_section_index)]
+                        else:
+                            # Lane link in successor roads
+                            for road_succ in road_obj.road_xml.find("link").findall("successor"):
+                                if road_succ.attrib["elementType"] == "road":
+                                    succ_road_id = road_succ.attrib["elementId"]
+                                    succ_road = road_link_map[succ_road_id]
+                                    succ_lane_section_index = road_link_object.succ_lane_section_ids[succ_road_id]
+                                    lane_link_obj.successor_lanes.append(
+                                        succ_road.lane_links_map[(successor_id, succ_lane_section_index)]
+                                    )
+                                else:
+                                    # Junction case
+                                    successor_is_junction = True
+                elif successor_is_junction:
+                    # Handle junction case
+                    for successor in road_obj.road_xml.find("link").findall("successor"):
+                        if successor.attrib["elementType"] == "junction":
+                            junction_id = successor.attrib["elementId"]
+                            junction = get_junction(road_network, junction_id)
+                            connected_lanes = junction.get_lane_junction_lanes(str(lane.id), road_id=road_obj.id)
+                            if len(connected_lanes) == 0 and lane_link_obj.forward_dir:
+                                stopping_points += 1
+                                print(
+                                    f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is an ending lane"
                                 )
-                            else:
-                                # Junction case
-                                predecessor_is_junction = True
-            elif predecessor_is_junction:
-                # Handle junction case
-                for predecessor in road_obj.road_xml.find("link").findall("predecessor"):
-                    if predecessor.attrib["elementType"] == "junction":
-                        junction_id = predecessor.attrib["elementId"]
-                        junction = get_junction(road_network, junction_id)
-                        connected_lanes = junction.get_lane_junction_lanes(lane_id=str(lane.id), road_id=road_obj.id)
-                        if len(connected_lanes) == 0 and not lane_link_obj.forward_dir:
-                            stopping_points += 1
-                            print(
-                                f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is a starting lane"
-                            )
-                        for conn_lane in connected_lanes:
-                            pred_road_obj = get_road(road_network, conn_lane["road_id"])
-                            pred_road = road_link_map[conn_lane["road_id"]]
-                            pred_lane_section_index = conn_lane["lane_section_index"]
-                            if pred_lane_section_index == -1:
-                                pred_lane_section_index = len(pred_road_obj.lane_sections) - 1
-                            pred_lane_id = conn_lane["lane_id"]
+                            for conn_lane in connected_lanes:
+                                succ_road_obj = get_road(road_network, conn_lane["road_id"])
+                                succ_road = road_link_map[conn_lane["road_id"]]
+                                succ_lane_section_index = conn_lane["lane_section_index"]
+                                if succ_lane_section_index == -1:
+                                    succ_lane_section_index = len(succ_road_obj.lane_sections) - 1
+                                succ_lane_id = conn_lane["lane_id"]
+                                lane_link_obj.successor_lanes.append(
+                                    succ_road.lane_links_map[(str(succ_lane_id), succ_lane_section_index)]
+                                )
+                        else:
+                            if lane_link_obj.forward_dir:
+                                # Stopping point
+                                stopping_points += 1
+                                print(
+                                    f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is an ending lane"
+                                )
+
+                predecessor_is_junction = True
+                if link_xml is not None and link_xml.findall("predecessor") != []:
+                    predecessor_is_junction = False
+                    # Process Predecessor Links
+                    for predecessor in link_xml.findall("predecessor"):
+                        predecessor_id = predecessor.get("id")
+
+                        if lane_link_obj.lane_section_index - 1 >= 0:
+                            # Lane link in previous lane section
                             lane_link_obj.predecessor_lanes.append(
-                                pred_road.lane_links_map[(str(pred_lane_id), pred_lane_section_index)]
+                                road_link_object.lane_links_map[(predecessor_id, lane_link_obj.lane_section_index - 1)]
                             )
-                    else:
-                        if not lane_link_obj.forward_dir:
-                            # Stopping case
-                            stopping_points += 1
-                            print(
-                                f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is a starting lane"
+                        else:
+                            # Lane link in predecessor roads
+                            for road_pred in road_obj.road_xml.find("link").findall("predecessor"):
+                                if road_pred.attrib["elementType"] == "road":
+                                    pred_id = road_pred.attrib["elementId"]
+                                    pred_road = road_link_map[pred_id]
+                                    pred_lane_section_index = road_link_object.pred_lane_section_ids[pred_id]
+                                    lane_link_obj.predecessor_lanes.append(
+                                        pred_road.lane_links_map[(predecessor_id, pred_lane_section_index)]
+                                    )
+                                else:
+                                    # Junction case
+                                    predecessor_is_junction = True
+                elif predecessor_is_junction:
+                    # Handle junction case
+                    for predecessor in road_obj.road_xml.find("link").findall("predecessor"):
+                        if predecessor.attrib["elementType"] == "junction":
+                            junction_id = predecessor.attrib["elementId"]
+                            junction = get_junction(road_network, junction_id)
+                            connected_lanes = junction.get_lane_junction_lanes(
+                                lane_id=str(lane.id), road_id=road_obj.id
                             )
+                            if len(connected_lanes) == 0 and not lane_link_obj.forward_dir:
+                                stopping_points += 1
+                                print(
+                                    f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is a starting lane"
+                                )
+                            for conn_lane in connected_lanes:
+                                pred_road_obj = get_road(road_network, conn_lane["road_id"])
+                                pred_road = road_link_map[conn_lane["road_id"]]
+                                pred_lane_section_index = conn_lane["lane_section_index"]
+                                if pred_lane_section_index == -1:
+                                    pred_lane_section_index = len(pred_road_obj.lane_sections) - 1
+                                pred_lane_id = conn_lane["lane_id"]
+                                lane_link_obj.predecessor_lanes.append(
+                                    pred_road.lane_links_map[(str(pred_lane_id), pred_lane_section_index)]
+                                )
+                        else:
+                            if not lane_link_obj.forward_dir:
+                                # Stopping case
+                                stopping_points += 1
+                                print(
+                                    f"Non junction road: {road_obj.id}, lane_section: {lane_link_obj.lane_section_index}, lane: {lane_link_obj.lane.id} has no junction or road links, it is a starting lane"
+                                )
+
+            except KeyError as e:
+                # Skip lane links that reference missing roads/lanes (that were skipped earlier)
+                skipped_lane_links += 1
+                continue
 
     print(f"Road network has {stopping_points} stopping points (lanes with no predecessors or successors).")
+    print(f"Skipped {skipped_lane_links} lane links due to missing predecessor/successor roads.")
 
 
 def add_incoming_outgoing_edges(road_network, roads, road_link_map):
@@ -841,7 +863,8 @@ def generate_data_each_map(
         for id in range(num_data_per_map):
             output_json_path = os.path.join(output_json_root_dir, f"{town_name}_{id}.json")
 
-            road_network = RoadNetwork(xodr_file_path=odr_file, resolution=resolution)
+            # Use higher max_samples for large maps (default 10000 causes errors on Town13)
+            road_network = RoadNetwork(xodr_file_path=odr_file, resolution=resolution, max_samples=30000)
             roads = road_network.get_roads()
             print(f"Number of roads in the network: {len(roads)}")
 
@@ -916,7 +939,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--town_names",
         nargs="+",
-        default=["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"],
+        default=["Town13"],
         help="List of CARLA town names",
     )
     parser.add_argument(

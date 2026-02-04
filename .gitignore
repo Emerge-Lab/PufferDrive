@@ -13,6 +13,12 @@ __pycache__/
 *.npy
 cy_*.c
 
+# Carla maps / large assets
+data/CarlaXODRs/
+data/processed/carla_data/
+data_utils/carla/carla_py123d/
+
+
 # C extensions
 *.so
 
