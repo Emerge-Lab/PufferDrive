@@ -209,6 +209,8 @@ class WOSACEvaluator:
         agent_state: Dict,
         road_edge_polylines: Dict,
         aggregate_results: bool = False,
+        collisions_to_add_per_rollout: int = 0,
+        collisions_to_add_per_timestep: int = 0,
     ) -> Dict:
         """Compute realism metrics comparing simulated and ground truth trajectories.
 
@@ -491,8 +493,21 @@ class WOSACEvaluator:
         avg_active_timesteps = np.mean(active_timesteps_per_rollout)
         print(f"Average active timesteps for collision detection: {avg_active_timesteps:.2f}")
 
+        # Shape is (n_agents, n_rollouts, n_steps)
+        if collisions_to_add_per_rollout > 0:
+            # Always add to first step
+            sim_collision_per_step[:, :collisions_to_add_per_rollout, 0] = True
+
+        if collisions_to_add_per_timestep > 0:
+            # Always add to first rollout
+            sim_collision_per_step[:, 0, :collisions_to_add_per_timestep] = True
+
+        # Shape is (n_agents, n_rollouts)
         sim_collision_indication = np.any(np.where(active_mask, sim_collision_per_step, False), axis=2)
         ref_collision_indication = np.any(np.where(active_mask, ref_collision_per_step, False), axis=2)
+
+        self.ref_collisions = ref_collision_per_step
+        self.ref_offroad = ref_offroad_per_step
 
         sim_num_collisions = np.sum(sim_collision_indication, axis=1)
         ref_num_collisions = np.sum(ref_collision_indication, axis=1)
@@ -522,14 +537,6 @@ class WOSACEvaluator:
             use_bernoulli=True,
         )
 
-        print(sim_num_offroad)
-        print(sim_num_collisions)
-        print(f"Offroad events: {sim_num_offroad.sum()}")
-        print(f"Collision events: {sim_num_collisions.sum()}")
-
-        print("---")
-        print(f"ADE: {ade.mean():.3f}, minADE: {min_ade.mean():.3f}")
-
         # Get agent IDs
         eval_agent_ids = ground_truth_trajectories["id"][eval_mask]
 
@@ -557,6 +564,10 @@ class WOSACEvaluator:
 
         # Aggregate along agent dimenision: Obtain one score per scenario
         df_scene_level = df.groupby("scenario_id").mean().drop(columns=["agent_id"]).dropna()
+
+        print(f"Total collisions in references: {ref_num_collisions.sum()}")
+        print(f"Total offroad events in references: {ref_num_offroad.sum()}")
+        print(f"Perce")
 
         # Exponentiate the averaged log-likelihoods to get final likelihoods
         likelihood_columns = [col for col in df_scene_level.columns if col.startswith("likelihood_")]

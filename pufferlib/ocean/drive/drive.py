@@ -1081,8 +1081,8 @@ if __name__ == "__main__":
     # test_human_demonstrations()
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/wosac/validation_interactive_small")
+    # process_all_maps(data_folder="data/processed/wosac/validation_interactive_small")
     # Process the validation/test dataset
-    # process_all_maps(data_folder="data/processed/validation")
+    process_all_maps(data_folder="data/processed/training")
     # # Process the validation_interactive dataset
     # process_all_maps(data_folder="data/processed/validation_interactive")
