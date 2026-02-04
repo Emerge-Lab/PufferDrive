@@ -1001,13 +1001,18 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
     }
 
     int trajectory_length = PyArray_DIM(expert_actions_discrete, 0);
-    int max_obs = 7 + 7 * (MAX_AGENTS - 1) + 7 * MAX_ROAD_SEGMENT_OBSERVATIONS;
 
     // Process each environment
     int agent_offset = 0;
     for (int i = 0; i < vec->num_envs; i++) {
         Env *env = vec->envs[i];
         int num_agents = env->active_agent_count;
+
+        // Compute max_obs dynamically based on environment config
+        int ego_dim_base = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+        int guidance_size = env->use_guidance_observations ? GUIDANCE_OBS_SIZE : 0;
+        int ego_dim = ego_dim_base + guidance_size;
+        int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
 
         // Allocate temporary buffers for this environment
         float *env_actions_discrete = (float *)malloc(trajectory_length * num_agents * 1 * sizeof(float));
@@ -1110,6 +1115,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
     PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC", EGO_FEATURES_CLASSIC);
     PyModule_AddIntConstant(m, "EGO_FEATURES_JERK", EGO_FEATURES_JERK);
+    PyModule_AddIntConstant(m, "GUIDANCE_OBS_SIZE", GUIDANCE_OBS_SIZE);
 
     return m;
 }

@@ -19,6 +19,7 @@ typedef struct {
     float guidance_speed_weight;    // Weight for speed deviation penalty
     float guidance_heading_weight;  // Weight for heading deviation penalty
     float waypoint_reach_threshold; // Distance threshold for hitting waypoints
+    int use_guidance_observations;  // Boolean: whether to include egocentric guidance waypoints in observations
     float goal_radius;
     float goal_speed;
     int collision_behavior;
@@ -80,6 +81,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->guidance_heading_weight = atof(value);
     } else if (MATCH("env", "waypoint_reach_threshold")) {
         env_config->waypoint_reach_threshold = atof(value);
+    } else if (MATCH("env", "use_guidance_observations")) {
+        env_config->use_guidance_observations = atoi(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
     } else if (MATCH("env", "goal_speed")) {

@@ -27,6 +27,7 @@ class Drive(pufferlib.PufferEnv):
         guidance_speed_weight=0.0,
         guidance_heading_weight=0.0,
         waypoint_reach_threshold=2.0,
+        use_guidance_observations=0,
         goal_behavior=0,
         goal_target_distance=10.0,
         goal_radius=2.0,
@@ -75,6 +76,7 @@ class Drive(pufferlib.PufferEnv):
         self.guidance_speed_weight = guidance_speed_weight
         self.guidance_heading_weight = guidance_heading_weight
         self.waypoint_reach_threshold = waypoint_reach_threshold
+        self.use_guidance_observations = use_guidance_observations
         self.human_agent_idx = human_agent_idx
         self.episode_length = episode_length
         self.termination_mode = termination_mode
@@ -84,9 +86,11 @@ class Drive(pufferlib.PufferEnv):
         self.save_data_to_disk = save_data_to_disk
 
         # Observation space calculation
-        self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
+        ego_features_base = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
             dynamics_model
         )
+        guidance_obs_size = binding.GUIDANCE_OBS_SIZE if use_guidance_observations else 0
+        self.ego_features = ego_features_base + guidance_obs_size
 
         # Extract observation shapes from constants
         # These need to be defined in C, since they determine the shape of the arrays
@@ -207,6 +211,7 @@ class Drive(pufferlib.PufferEnv):
                 guidance_speed_weight=guidance_speed_weight,
                 guidance_heading_weight=guidance_heading_weight,
                 waypoint_reach_threshold=waypoint_reach_threshold,
+                use_guidance_observations=use_guidance_observations,
                 goal_radius=goal_radius,
                 goal_speed=goal_speed,
                 goal_behavior=self.goal_behavior,
@@ -300,6 +305,7 @@ class Drive(pufferlib.PufferEnv):
                     guidance_speed_weight=self.guidance_speed_weight,
                     guidance_heading_weight=self.guidance_heading_weight,
                     waypoint_reach_threshold=self.waypoint_reach_threshold,
+                    use_guidance_observations=self.use_guidance_observations,
                     goal_radius=self.goal_radius,
                     goal_behavior=self.goal_behavior,
                     goal_target_distance=self.goal_target_distance,

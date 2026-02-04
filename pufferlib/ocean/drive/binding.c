@@ -206,6 +206,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     OVERRIDE_FLOAT(guidance_speed_weight);
     OVERRIDE_FLOAT(guidance_heading_weight);
     OVERRIDE_FLOAT(waypoint_reach_threshold);
+    OVERRIDE_INT(use_guidance_observations);
     OVERRIDE_INT(collision_behavior);
     OVERRIDE_INT(offroad_behavior);
     OVERRIDE_FLOAT(dt);
@@ -231,6 +232,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->guidance_speed_weight = conf.guidance_speed_weight;
     env->guidance_heading_weight = conf.guidance_heading_weight;
     env->waypoint_reach_threshold = conf.waypoint_reach_threshold;
+    env->use_guidance_observations = conf.use_guidance_observations;
     env->episode_length = conf.episode_length;
     env->termination_mode = conf.termination_mode;
     env->collision_behavior = conf.collision_behavior;

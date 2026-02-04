@@ -22,8 +22,8 @@ class Drive(nn.Module):
         self.road_features = env.road_features
         self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
 
-        # Determine ego dimension from environment's dynamics model
-        self.ego_dim = 10 if env.dynamics_model == "jerk" else 7
+        # Determine ego dimension from environment (includes guidance observations if enabled)
+        self.ego_dim = env.ego_features
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),

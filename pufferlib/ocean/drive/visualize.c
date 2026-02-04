@@ -338,6 +338,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
+        .use_guidance_observations = conf.use_guidance_observations,
         .map_name = (char *)map_name,
     };
 
@@ -392,7 +393,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     if (control == ACTIONS_FROM_POLICY) {
         weights = load_weights(policy_name);
         printf("Active agents in map: %d\n", env.active_agent_count);
-        net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+        net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.use_guidance_observations);
     }
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;

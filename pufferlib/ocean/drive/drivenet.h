@@ -46,10 +46,12 @@ struct DriveNet {
     Multidiscrete *multidiscrete;
 };
 
-DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model) {
+DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, int use_guidance_observations) {
     DriveNet *net = calloc(1, sizeof(DriveNet));
     // Use constants directly from drive.h
-    int ego_dim = (dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int ego_dim_base = (dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int guidance_size = use_guidance_observations ? GUIDANCE_OBS_SIZE : 0;
+    int ego_dim = ego_dim_base + guidance_size;
     int max_partners = MAX_AGENTS - 1;
     int max_road_obs = MAX_ROAD_SEGMENT_OBSERVATIONS;
     int partner_features = PARTNER_FEATURES;

@@ -24,6 +24,7 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
 
         # Prepare evaluation command
         eval_config = config["eval"]
+        env_config = config.get("env_args", {})
         cmd = [
             sys.executable,
             "-m",
@@ -40,6 +41,11 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
             str(eval_config["human_replay_num_agents"]),
             "--eval.human-replay-control-mode",
             str(eval_config["human_replay_control_mode"]),
+            # Pass through environment config that affects observation size
+            "--env.use-guidance-observations",
+            str(env_config.get("use_guidance_observations", 0)),
+            "--env.dynamics-model",
+            str(env_config.get("dynamics_model", "classic")),
         ]
 
         # Run human replay evaluation in subprocess
@@ -93,6 +99,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
 
         # Prepare evaluation command
         eval_config = config.get("eval", {})
+        env_config = config.get("env_args", {})
         cmd = [
             sys.executable,
             "-m",
@@ -117,6 +124,11 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             str(eval_config.get("wosac_sanity_check", False)),
             "--eval.wosac-aggregate-results",
             str(eval_config.get("wosac_aggregate_results", True)),
+            # Pass through environment config that affects observation size
+            "--env.use-guidance-observations",
+            str(env_config.get("use_guidance_observations", 0)),
+            "--env.dynamics-model",
+            str(env_config.get("dynamics_model", "classic")),
         ]
 
         if not model_files:

@@ -85,6 +85,11 @@
 #define EGO_FEATURES_CLASSIC 7
 #define EGO_FEATURES_JERK 10
 
+// Guidance waypoint observations
+#define GUIDANCE_WAYPOINT_FEATURES 2    // x, y per waypoint
+#define NUM_GUIDANCE_WAYPOINTS 91       // Full trajectory length
+#define GUIDANCE_OBS_SIZE (NUM_GUIDANCE_WAYPOINTS * GUIDANCE_WAYPOINT_FEATURES)  // 182
+
 // Observation normalization constants
 #define MAX_SPEED 100.0f
 #define MAX_VEH_LEN 30.0f
@@ -338,6 +343,7 @@ struct Drive {
     float guidance_speed_weight;    // Weight for speed deviation penalty
     float guidance_heading_weight;  // Weight for heading deviation penalty
     float waypoint_reach_threshold; // Distance threshold for hitting waypoints (e.g., 2.0m)
+    int use_guidance_observations;  // Boolean: whether to include egocentric guidance waypoints in observations
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -1513,7 +1519,7 @@ void set_active_agents(Drive *env) {
 
         is_controlled = should_control_agent(env, i);
 
-        if (is_controlled) {
+        if (is_controlled && env->active_agent_count < env->num_agents) {
             active_agent_indices[env->active_agent_count] = i;
             env->active_agent_count++;
             env->entities[i].active_agent = 1;
@@ -1654,7 +1660,9 @@ void c_close(Drive *env) {
 
 void allocate(Drive *env) {
     init(env);
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int ego_dim_base = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int guidance_size = env->use_guidance_observations ? GUIDANCE_OBS_SIZE : 0;
+    int ego_dim = ego_dim_base + guidance_size;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float *)calloc(env->active_agent_count * max_obs, sizeof(float));
     env->actions = (float *)calloc(env->active_agent_count * 2, sizeof(float));
@@ -1934,7 +1942,9 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 }
 
 void compute_observations(Drive *env) {
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int ego_dim_base = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int guidance_size = env->use_guidance_observations ? GUIDANCE_OBS_SIZE : 0;
+    int ego_dim = ego_dim_base + guidance_size;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
@@ -1974,6 +1984,35 @@ void compute_observations(Drive *env) {
             obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
         } else {
             obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+        }
+
+        // Egocentric guidance waypoint observations
+        if (env->use_guidance_observations) {
+            int guidance_start_idx = ego_dim_base;
+            for (int w = 0; w < NUM_GUIDANCE_WAYPOINTS; w++) {
+                int traj_idx = env->timestep + w;
+                float wp_ego_x = 0.0f;
+                float wp_ego_y = 0.0f;
+
+                // Check if trajectory index is valid and within bounds
+                if (traj_idx < ego_entity->array_size && ego_entity->traj_valid[traj_idx]) {
+                    float wp_world_x = ego_entity->traj_x[traj_idx];
+                    float wp_world_y = ego_entity->traj_y[traj_idx];
+
+                    // Skip invalid positions
+                    if (wp_world_x != INVALID_POSITION && wp_world_y != INVALID_POSITION) {
+                        // Transform to egocentric coordinates
+                        float dx = wp_world_x - ego_entity->x;
+                        float dy = wp_world_y - ego_entity->y;
+                        wp_ego_x = dx * cos_heading + dy * sin_heading;
+                        wp_ego_y = -dx * sin_heading + dy * cos_heading;
+                    }
+                }
+
+                // Store normalized egocentric waypoint (same scale as goal: 0.005)
+                obs[guidance_start_idx + w * 2] = wp_ego_x * 0.005f;
+                obs[guidance_start_idx + w * 2 + 1] = wp_ego_y * 0.005f;
+            }
         }
 
         // Relative Pos of other cars
@@ -2348,8 +2387,10 @@ void c_step(Drive *env) {
 void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_actions_continuous_out,
                            float *expert_obs_out) {
 
-    int ego_dim = (env->dynamics_model == JERK) ? 10 : 7;
-    int max_obs = ego_dim + 7 * (MAX_AGENTS - 1) + 7 * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim_base = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int guidance_size = env->use_guidance_observations ? GUIDANCE_OBS_SIZE : 0;
+    int ego_dim = ego_dim_base + guidance_size;
+    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
 
     int original_timestep = env->timestep;
 
@@ -2601,7 +2642,9 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int ego_dim_base = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int guidance_size = env->use_guidance_observations ? GUIDANCE_OBS_SIZE : 0;
+    int ego_dim = ego_dim_base + guidance_size;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     float *agent_obs = &observations[agent_index][0];
