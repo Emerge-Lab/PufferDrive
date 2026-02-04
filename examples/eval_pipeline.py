@@ -294,8 +294,8 @@ def pipeline(env_name="puffer_drive"):
     df_results_gt["policy"] = "ground_truth"
 
     # Baseline: Agent with inferred human actions (using classic bicycle dynamics model)
-    df_results_inferred_human = evaluate_human_inferred_actions(config, vecenv, evaluator)
-    df_results_inferred_human["policy"] = "inferred_human_actions"
+    # df_results_inferred_human = evaluate_human_inferred_actions(config, vecenv, evaluator)
+    # df_results_inferred_human["policy"] = "inferred_human_actions"
 
     # Baseline: Imitation learning policy
     # df_results_bc = evaluate_bc_policy(config, vecenv, evaluator, POLICY_DIR + "/bc_policy.pt")
@@ -315,15 +315,15 @@ def pipeline(env_name="puffer_drive"):
     # ...
 
     # Baseline: Random policy
-    df_results_random = evaluate_random_policy(config, vecenv, evaluator)
-    df_results_random["policy"] = "random"
+    # df_results_random = evaluate_random_policy(config, vecenv, evaluator)
+    # df_results_random["policy"] = "random"
 
     # Combine
     df = pd.concat(
         [
             df_results_gt,
-            df_results_inferred_human,
-            df_results_random,
+            # df_results_inferred_human,
+            # df_results_random,
             # df_results_bc,
             # df_results_self_play,
         ],

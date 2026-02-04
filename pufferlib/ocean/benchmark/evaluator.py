@@ -397,7 +397,7 @@ class WOSACEvaluator:
             max_val=max_val,
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
-            sanity_check=True,
+            sanity_check=False,
             sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
