@@ -11,6 +11,26 @@
 #include "rlgl.h"
 #include <time.h>
 #include "error.h"
+#include "datatypes.h"
+
+// templates for bringing in some datatypes we might use later
+// if we do this we can have a transition phase in which we can start testing with
+// the types from datatypes, without losing the ones defined in this file.
+#define DT_STOP_SIGN STOP_SIGN
+#define DT_CROSSWALK CROSSWALK
+
+// remove the values from datatypes.h
+#undef NONE
+#undef VEHICLE
+#undef PEDESTRIAN
+#undef CYCLIST
+#undef ROAD_LANE
+#undef ROAD_LINE
+#undef ROAD_EDGE
+#undef STOP_SIGN
+#undef CROSSWALK
+#undef SPEED_BUMP
+#undef DRIVEWAY
 
 // Entity Types
 #define NONE 0
@@ -154,6 +174,9 @@ struct timespec ts;
 typedef struct Drive Drive;
 typedef struct Client Client;
 typedef struct Log Log;
+typedef struct Agent Agent;
+typedef struct RoadMapElement RoadMapElement;
+typedef struct TrafficControlElement TrafficControlElement;
 
 struct Log {
     float episode_return;
@@ -281,6 +304,15 @@ struct Drive {
     int *active_agent_indices;
     int action_type;
     int human_agent_idx;
+    // currently unused, we will eventually substitute the general Entity with each of these
+    Agent *agents;
+    RoadMapElement *road_elements;
+    TrafficControlElement *traffic_elements;
+    int num_total_agents; // or map to num_actors
+    int num_max_agents;
+    int num_road_elements; // or map to num_roads
+    int num_traffic_elements;
+    //
     Entity *entities;
     int num_entities;
     int num_actors;
