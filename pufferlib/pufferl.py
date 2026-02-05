@@ -1178,11 +1178,15 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 "batch_size": 1,
             },
             "env": {
-                "num_agents": 40,
-                "min_agents_per_env": 40,
-                "max_agents_per_env": 40,
+                "dt": 0.1,
+                "eval_mode": 1,
+                "num_agents": 50,
+                "min_agents_per_env": 50,
+                "max_agents_per_env": 50,
                 "reward_randomization": False,
-                "scenario_length": 200,
+                "scenario_length": 500,
+                "resample_frequency": 500,
+                "num_maps": 6,
             },
         }
         args = load_eval_config(env_name, model_path, eval_overrides)
@@ -1322,6 +1326,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                             dynamics_model=args["env"]["dynamics_model"],
                             target_type=args["env"]["target_type"],
                             reward_conditioning=args["env"]["reward_conditioning"],
+                            num_target_waypoints=args["env"]["num_target_waypoints"],
                         )
 
                     with torch.no_grad():
@@ -1342,6 +1347,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 mediapy.write_video(sim_video_path, np.array(sim_frames), fps=20)
                 if args["render_obs"]:
                     mediapy.write_video(video_path_obs, np.array(frames_obs), fps=20)
+                pufferlib.viz.close_figure(f"video_{i}")
         else:
             frames = []
             driver = vecenv.driver_env
@@ -1717,6 +1723,8 @@ def load_policy(args, vecenv, env_name=""):
     env_module = importlib.import_module(module_name)
 
     device = args["train"]["device"]
+    if isinstance(device, int):
+        device = torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
     policy_cls = getattr(env_module.torch, args["policy_name"])
     policy = policy_cls(vecenv.driver_env, **args["policy"])
 
