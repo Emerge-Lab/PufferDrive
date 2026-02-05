@@ -228,10 +228,7 @@ class WOSACEvaluator:
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
-        print("Computing metrics...")
-        print("Filtering out post-done timesteps:", self.filter_out_post_done)
-
-        eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
+        eval_mask = ground_truth_trajectories["is_track_to_predict"][:, 0]
 
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
@@ -494,8 +491,8 @@ class WOSACEvaluator:
         sim_collision_indication = np.any(np.where(active_mask, sim_collision_per_step, False), axis=2)
         ref_collision_indication = np.any(np.where(active_mask, ref_collision_per_step, False), axis=2)
 
-        sim_num_collisions = np.sum(sim_collision_indication, axis=1)
-        ref_num_collisions = np.sum(ref_collision_indication, axis=1)
+        sim_num_collisions = np.mean(sim_collision_indication, axis=1)
+        ref_num_collisions = np.mean(ref_collision_indication, axis=1)
 
         collision_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_collision_indication[:, 0],
@@ -510,8 +507,8 @@ class WOSACEvaluator:
         sim_offroad_indication = np.any(np.where(active_mask, sim_offroad_per_step, False), axis=2)
         ref_offroad_indication = np.any(np.where(active_mask, ref_offroad_per_step, False), axis=2)
 
-        sim_num_offroad = np.sum(sim_offroad_indication, axis=1)
-        ref_num_offroad = np.sum(ref_offroad_indication, axis=1)
+        sim_num_offroad = np.mean(sim_offroad_indication, axis=1)
+        ref_num_offroad = np.mean(ref_offroad_indication, axis=1)
 
         offroad_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_offroad_indication[:, 0],

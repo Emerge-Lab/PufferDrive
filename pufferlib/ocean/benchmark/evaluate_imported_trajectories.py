@@ -1,49 +1,30 @@
 import sys
 import pickle
 import numpy as np
-from scipy.spatial import cKDTree
 import pufferlib.pufferl as pufferl
 from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
 
-def align_trajectories_by_initial_position(simulated, ground_truth, tolerance=1e-4):
-    """
-    If the trajectories where generated using the same dataset, then regardless of the algorithm the initial positions should be the same.
-    We use this information to align the trajectories for WOSAC evaluation.
+def align_trajectories(simulated, ground_truth):
+    # Idea is to use the (scenario_id, id) pair to reindex simulated_trajectories in order to align it with GT
+    gt_scenario_ids = ground_truth["scenario_id"][:, 0]
+    sim_scenario_ids = simulated["scenario_id"][:, 0, 0]
 
-    Ideally we would not have to use a tolerance, but the preprocessing in SMART shifts some values by around 2-e5 for some agents.
+    gt_ids = ground_truth["id"][:, 0]
+    sim_ids = simulated["id"][:, 0, 0]
 
-    Also, the preprocessing in SMART messes up some heading values, so I decided not to include heading.
+    lookup = {(s_id, a_id): idx for idx, (s_id, a_id) in enumerate(zip(sim_scenario_ids, sim_ids))}
 
-    Idea of this script, use a nearest neighbor algorithm to associate all initial positions in gt to positions in simulated,
-    and check that everyone matching respects the tolerance and there are no duplicates.
-    """
+    try:
+        indices = [lookup[(s, i)] for (s, i) in zip(gt_scenario_ids, gt_ids)]
+        indices = np.array(indices, dtype=int)
+    except KeyError:
+        print("An agent present in the GT is missing in your simulation")
+        raise
 
-    sim_pos = np.stack([simulated["x"][:, 0, 0], simulated["y"][:, 0, 0], simulated["z"][:, 0, 0]], axis=1).astype(
-        np.float64
-    )
+    sim_traj = {k: v[indices] for k, v in simulated.items()}
 
-    gt_pos = np.stack(
-        [ground_truth["x"][:, 0, 0], ground_truth["y"][:, 0, 0], ground_truth["z"][:, 0, 0]], axis=1
-    ).astype(np.float64)
-
-    tree = cKDTree(sim_pos)
-
-    dists, indices = tree.query(gt_pos, k=1)
-
-    tol_check = dists <= tolerance
-
-    if not np.all(tol_check):
-        max_dist = np.max(dists)
-        raise ValueError(f"Didn't find a match for {np.sum(~tol_check)} agents, tolerance broken by {max_dist}m.")
-
-    if len(set(indices)) != len(indices):
-        raise ValueError("Duplicate matching found, I am sorry but this likely indicates that your data is wrong")
-
-    reordered_sim = {}
-    for key, val in simulated.items():
-        reordered_sim[key] = val[indices]
-    return reordered_sim
+    return sim_traj
 
 
 def check_alignment(simulated, ground_truth, tolerance=1e-4):
@@ -97,30 +78,26 @@ def evaluate_trajectories(simulated_trajectory_file, args):
 
     print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
     print(f"Number of controlled agents: {num_agents_gt}")
-    print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
+    print(f"Number of evaluated agents: {gt_trajectories['is_track_to_predict'].sum()}")
 
     print(f"Loading simulated trajectories from {simulated_trajectory_file}...")
     with open(simulated_trajectory_file, "rb") as f:
         sim_trajectories = pickle.load(f)
 
-    if sim_trajectories["x"].shape[0] != gt_trajectories["x"].shape[0]:
-        print("\nThe number of agents in simulated and ground truth trajectories do not match.")
-        print("This is okay if you are running this script on a subset of the val dataset")
-        print("But please also check that in drive.h MAX_AGENTS is set to 256 and recompile")
+    num_agents_sim = sim_trajectories["x"].shape[0]
+    assert num_agents_sim >= num_agents_gt, (
+        "There is less agents in your simulation than in the GT, so the computation won't be valid"
+    )
 
-    if not check_alignment(sim_trajectories, gt_trajectories):
-        print("\nTrajectories are not aligned, trying to align them, if it fails consider changing the tolerance.")
-        sim_trajectories = align_trajectories_by_initial_position(sim_trajectories, gt_trajectories)
-        assert check_alignment(sim_trajectories, gt_trajectories), (
-            "There might be an issue with the way you generated your data."
-        )
-        print("Alignment successful")
-    else:
-        sim_trajectories = {k: v[:num_agents_gt] for k, v in sim_trajectories.items()}
+    if num_agents_sim > num_agents_gt:
+        print("If you are evaluating on a subset of your trajectories it is fine.")
+        print("\n Else, you should consider changing the value of MAX_AGENTS in drive.h and compile")
 
-    # Evaluator code expects to have matching ids between gt and sim trajectories
-    # Since alignment is checked it is safe to do that
-    sim_trajectories["id"][:] = gt_trajectories["id"][..., None]
+    sim_trajectories = align_trajectories(sim_trajectories, gt_trajectories)
+
+    assert check_alignment(sim_trajectories, gt_trajectories), (
+        "There might be an issue with the way you generated your data."
+    )
 
     agent_state = vecenv.driver_env.get_global_agent_state()
     road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
