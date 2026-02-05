@@ -196,11 +196,6 @@ void render_snapshot(Drive *env, Client *client, DriveNet *net,
                      int zoom_in, int img_width, int img_height,
                      const char *output_filename) {
 
-    Color traj_colors[] = {
-        ORANGE, SKYBLUE, GREEN, YELLOW, PURPLE, PINK, BEIGE, VIOLET
-    };
-    int num_traj_colors = sizeof(traj_colors) / sizeof(traj_colors[0]);
-
     // Allocate trajectory storage
     int num_agents = env->active_agent_count;
     float *traj_x = (float *)calloc(num_agents * frame_count, sizeof(float));
@@ -274,29 +269,27 @@ void render_snapshot(Drive *env, Client *client, DriveNet *net,
         }
     }
 
-    // Draw policy trajectories
+    // Draw policy trajectories (blue for all vehicles)
     for (int i = 0; i < num_agents; i++) {
-        Color color = traj_colors[i % num_traj_colors];
-
         // Draw trajectory lines
         for (int t = 1; t < frame_count; t++) {
             if (traj_valid[i * frame_count + t] && traj_valid[i * frame_count + t - 1]) {
                 Vector3 start = {traj_x[i * frame_count + t - 1], traj_y[i * frame_count + t - 1], 1.0f};
                 Vector3 end = {traj_x[i * frame_count + t], traj_y[i * frame_count + t], 1.0f};
-                DrawLine3D(start, end, color);
+                DrawLine3D(start, end, BLUE);
             }
         }
 
         // Draw start marker
         if (traj_valid[i * frame_count]) {
-            DrawSphere((Vector3){traj_x[i * frame_count], traj_y[i * frame_count], 1.0f}, 0.8f, color);
+            DrawSphere((Vector3){traj_x[i * frame_count], traj_y[i * frame_count], 1.0f}, 0.8f, BLUE);
         }
 
         // Draw end marker (last valid position)
         for (int t = frame_count - 1; t >= 0; t--) {
             if (traj_valid[i * frame_count + t]) {
                 DrawSphere((Vector3){traj_x[i * frame_count + t], traj_y[i * frame_count + t], 1.0f}, 0.8f,
-                           Fade(color, 0.5f));
+                           Fade(BLUE, 0.5f));
                 break;
             }
         }
@@ -603,7 +596,7 @@ int main(int argc, char *argv[]) {
             obs_only = 1;
         } else if (strcmp(argv[i], "--lasers") == 0) {
             lasers = 1;
-        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
+        } else if (strcmp(argv[i], "--show-human-logs") == 0) {
             show_human_logs = 1;
         } else if (strcmp(argv[i], "--frame-skip") == 0) {
             if (i + 1 < argc) {
