@@ -303,7 +303,7 @@ struct Drive {
     float min_goal_distance;
     float max_goal_distance;
     char *ini_file;
-    char *scenario_id;
+    char scenario_id[16];
     int collision_behavior;
     int offroad_behavior;
     int sdc_track_index;
