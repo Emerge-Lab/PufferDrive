@@ -1678,6 +1678,8 @@ def render(env_name, args=None):
     # Rebuild visualize binary
     ensure_drive_binary()
 
+    snapshot_only = render_configs.get("snapshot_only", False)
+
     def render_task(map_path):
         base_cmd = (
             ["./visualize"]
@@ -1702,10 +1704,15 @@ def render(env_name, args=None):
 
         map_name = os.path.basename(map_path).replace(".bin", "")
 
-        if view_mode == "topdown" or view_mode == "both":
-            cmd.extend(["--output-topdown", os.path.join(output_dir, f"topdown_{map_name}.mp4")])
-        if view_mode == "agent" or view_mode == "both":
-            cmd.extend(["--output-agent", os.path.join(output_dir, f"agent_{map_name}.mp4")])
+        if snapshot_only:
+            # snapshot_only: only pass --output-topdown with .png extension
+            # The C binary reads snapshot_only from drive.ini and handles the rest
+            cmd.extend(["--output-topdown", os.path.join(output_dir, f"topdown_{map_name}.png")])
+        else:
+            if view_mode == "topdown" or view_mode == "both":
+                cmd.extend(["--output-topdown", os.path.join(output_dir, f"topdown_{map_name}.mp4")])
+            if view_mode == "agent" or view_mode == "both":
+                cmd.extend(["--output-agent", os.path.join(output_dir, f"agent_{map_name}.mp4")])
 
         env_vars = os.environ.copy()
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
@@ -1717,10 +1724,11 @@ def render(env_name, args=None):
             print(f"Timeout rendering {map_name}: exceeded 600 seconds")
 
     if render_maps:
-        print(f"Rendering {len(render_maps)} from {map_dir} with {num_workers} workers...")
+        output_type = "snapshots" if snapshot_only else "videos"
+        print(f"Rendering {len(render_maps)} {output_type} from {map_dir} with {num_workers} workers...")
         with ThreadPool(num_workers) as pool:
             pool.map(render_task, render_maps)
-        print(f"Finished rendering videos to {output_dir}")
+        print(f"Finished rendering {output_type} to {output_dir}")
 
 
 def main():
