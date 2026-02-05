@@ -3026,7 +3026,7 @@ static void compute_rewards(Drive *env, int i) {
     float exp_decay = 0.05f / expf(adjusted_dist - 0.5f);
 
     float lane_center_reward =
-        agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * (cos_theta > 0.5f) * adjusted_dist - exp_decay;
+        agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
 
     env->rewards[i] += lane_center_reward;
     env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
