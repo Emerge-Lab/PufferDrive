@@ -446,7 +446,6 @@ def save_map_binary(map_data, output_file, unique_map_id):
         tracks_to_predict = metadata.get("tracks_to_predict", [])
 
         # Write original scenario_id
-        # NOTE: Think about how it might break CARLA ? (can add a default value)
         scenario_id = map_data["scenario_id"]
         f.write(struct.pack("16s", scenario_id.encode("utf-8")))
 
