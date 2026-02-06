@@ -42,16 +42,18 @@ class WOSACEvaluator:
         self.metrics_config = configparser.ConfigParser()
         self.metrics_config.read(wosac_metrics_path)
 
-    def evaluate(self, args, vecenv, policy):
+    def evaluate(self, args, vecenv, policy, drop_scene_duplicates=True):
         """Run full WOSAC evaluation with batched iteration over target scenarios.
 
         Args:
             args: Configuration dictionary
             vecenv: Vectorized environment
             policy: Policy to evaluate
+            drop_scene_duplicates: Whether to drop duplicate scenarios
 
         Returns:
-            dict: Aggregated metrics across all batches
+            dict: Aggregated metrics across all batches if aggregate_batch_results=True
+            DataFrame: Full results if aggregate_batch_results=False
         """
         num_target_maps = args["eval"]["wosac_target_scenarios"]
         max_batches = args["eval"].get("wosac_max_batches", 100)
@@ -78,7 +80,7 @@ class WOSACEvaluator:
                     simulated_trajectories,
                     agent_state,
                     road_edge_polylines,
-                    aggregate_results=True,
+                    aggregate_results=False,
                 )
 
                 # Optional: sanity check on first batch
@@ -107,16 +109,20 @@ class WOSACEvaluator:
                     f"\nWarning: Only covered {len(unique_files_sampled)}/{num_target_maps} scenarios after {batch_idx} batches"
                 )
 
-        # Aggregate results across all batches
-        results = self.aggregate_batch_results(combined_results)
+            # Combine batch results into single dataframe
+            df_combined = pd.concat(combined_results)
 
-        # Add metadata
-        results["total_batches_processed"] = batch_idx
-        results["unique_scenarios_evaluated"] = len(unique_files_sampled)
-        results["target_scenarios"] = num_target_maps
-        results["coverage_percentage"] = (len(unique_files_sampled) / num_target_maps) * 100
+            # Optionally drop duplicate scenarios (keep first occurrence)
+            if drop_scene_duplicates:
+                initial_count = len(df_combined)
+                df_combined = df_combined[~df_combined.index.duplicated(keep="first")]
+                dropped = initial_count - len(df_combined)
+                if dropped > 0:
+                    print(f"\nDropped {dropped} duplicate scenarios.")
 
-        return results
+            print(f"\nCollected {len(df_combined)} agent records from {batch_idx} batches")
+
+            return df_combined
 
     def _compute_metametric(self, metrics: pd.Series) -> float:
         metametric = 0.0
@@ -565,104 +571,54 @@ class WOSACEvaluator:
             }
         )
 
-        scene_level_results = df.groupby("scenario_id")[
+        # Aggregate along agent dimenision: Obtain one score per scenario
+        df_scene_level = df.groupby("scenario_id", as_index=True).mean().drop(columns=["agent_id"]).dropna()
+
+        # Exponentiate the averaged log-likelihoods to get final likelihoods
+        likelihood_columns = [col for col in df_scene_level.columns if col.startswith("likelihood_")]
+        df_scene_level[likelihood_columns] = np.exp(df_scene_level[likelihood_columns])
+
+        df_scene_level["realism_meta_score"] = df_scene_level.apply(self._compute_metametric, axis=1)
+        df_scene_level["num_agents_per_scene"] = df.groupby("scenario_id").size()
+        df_scene_level = df_scene_level.round(3)
+
+        # Get group summary metrics
+        kinematic_metrics = np.mean(
             [
-                "ade",
-                "min_ade",
-                "num_collisions_sim",
-                "num_collisions_ref",
-                "num_offroad_sim",
-                "num_offroad_ref",
-                "likelihood_linear_speed",
-                "likelihood_linear_acceleration",
-                "likelihood_angular_speed",
-                "likelihood_angular_acceleration",
-                "likelihood_distance_to_nearest_object",
-                "likelihood_time_to_collision",
-                "likelihood_collision_indication",
-                "likelihood_distance_to_road_edge",
-                "likelihood_offroad_indication",
+                df_scene_level["likelihood_linear_speed"],
+                df_scene_level["likelihood_linear_acceleration"],
+                df_scene_level["likelihood_angular_speed"],
+                df_scene_level["likelihood_angular_acceleration"],
             ]
-        ].mean()
+        )
 
-        # Transform log-likelihoods to positive scores:
-        likelihood_cols = [c for c in scene_level_results.columns if "likelihood" in c]
-        scene_level_results[likelihood_cols] = np.exp(scene_level_results[likelihood_cols])
+        interactive_metrics = np.mean(
+            [
+                df_scene_level["likelihood_collision_indication"],
+                df_scene_level["likelihood_distance_to_nearest_object"],
+                df_scene_level["likelihood_time_to_collision"],
+            ]
+        )
 
-        scene_level_results["realism_meta_score"] = scene_level_results.apply(self._compute_metametric, axis=1)
-        scene_level_results["num_agents"] = df.groupby("scenario_id").size()
-        scene_level_results = scene_level_results[
-            ["num_agents"] + [col for col in scene_level_results.columns if col != "num_agents"]
-        ]
+        map_metrics = np.mean(
+            [
+                df_scene_level["likelihood_distance_to_road_edge"],
+                df_scene_level["likelihood_offroad_indication"],
+            ]
+        )
+
+        df_scene_level["kinematic_metrics"] = kinematic_metrics
+        df_scene_level["interactive_metrics"] = interactive_metrics
+        df_scene_level["map_based_metrics"] = map_metrics
 
         if aggregate_results:
-            aggregate_metrics = scene_level_results.mean().to_dict()
-            aggregate_metrics["total_num_agents"] = scene_level_results["num_agents"].sum()
-            # Convert numpy types to Python native types
-            return {k: v.item() if hasattr(v, "item") else v for k, v in aggregate_metrics.items()}
+            # Aggregate over scenarios
+            aggregate_metrics = df_scene_level.mean().to_dict()
+            aggregate_metrics["total_num_agents"] = df_scene_level["num_agents_per_scene"].sum()
+            aggregate_metrics["realism_score_std"] = df_scene_level["realism_meta_score"].std()
+            return aggregate_metrics
         else:
-            print("\n Scene-level results:\n")
-            print(scene_level_results)
-
-            print(f"\n Overall realism meta score: {scene_level_results['realism_meta_score'].mean():.4f}")
-            print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
-            print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
-
-            # print(f"\n Full agent-level results:\n")
-            # print(df)
-            return scene_level_results
-
-    def aggregate_batch_results(self, batch_results_list):
-        """Aggregate results from multiple batches.
-
-        Args:
-            batch_results_list: List of dictionaries, each containing aggregated metrics from one batch
-
-        Returns:
-            dict: Weighted average of metrics across all batches
-        """
-        if len(batch_results_list) == 0:
-            raise ValueError("No batch results to aggregate")
-
-        if len(batch_results_list) == 1:
-            return batch_results_list[0]
-
-        # Extract weights (number of agents per batch)
-        weights = np.array([batch["total_num_agents"] for batch in batch_results_list])
-        total_weight = weights.sum()
-
-        # Initialize aggregated results
-        aggregated = {}
-
-        # Get all metric keys (excluding total_num_agents which we'll handle separately)
-        metric_keys = [k for k in batch_results_list[0].keys() if k != "total_num_agents"]
-
-        # Compute weighted average for each metric
-        for key in metric_keys:
-            values = np.array([batch[key] for batch in batch_results_list])
-            weighted_avg = np.average(values, weights=weights)
-            aggregated[key] = float(weighted_avg)  # Convert to Python float
-
-        # Store total number of agents across all batches
-        aggregated["total_num_agents"] = int(total_weight)
-        aggregated["num_batches"] = len(batch_results_list)
-
-        # Add per-batch statistics for transparency
-        aggregated["batch_statistics"] = {
-            "realism_meta_scores": [float(batch["realism_meta_score"]) for batch in batch_results_list],
-            "min_ades": [float(batch["min_ade"]) for batch in batch_results_list],
-            "ades": [float(batch["ade"]) for batch in batch_results_list],
-            "agents_per_batch": weights.tolist(),
-        }
-
-        print(f"\nAggregated {len(batch_results_list)} batches:")
-        print(f"  Total agents evaluated: {aggregated['total_num_agents']}")
-        print(f"  Overall realism meta score: {aggregated['realism_meta_score']:.4f}")
-        print(f"  Overall minADE: {aggregated['min_ade']:.4f}")
-        print(f"  Overall ADE: {aggregated['ade']:.4f}")
-        print(f"  Batch realism scores: {[f'{s:.4f}' for s in aggregated['batch_statistics']['realism_meta_scores']]}")
-
-        return aggregated
+            return df_scene_level
 
     def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None, max_agents_to_plot=10):
         if agent_idx is None:
