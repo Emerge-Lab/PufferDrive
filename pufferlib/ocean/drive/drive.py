@@ -42,7 +42,6 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
-        use_map_as_resampling_target=False,
     ):
         # env
         self.dt = dt
@@ -64,7 +63,6 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
-        self.use_map_as_resampling_target = use_map_as_resampling_target
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -155,7 +153,6 @@ class Drive(pufferlib.PufferEnv):
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
-            use_map_as_resampling_target=use_map_as_resampling_target,
         )
 
         self.num_agents = agent_offsets[-1]
@@ -207,12 +204,10 @@ class Drive(pufferlib.PufferEnv):
         self.tick = 0
         return self.observations, []
 
-    def resample_maps(self, use_map_as_resampling_target=False):
+    def resample_maps(self):
         """Resample environment maps.
         Args:
-            use_map_as_resampling_target: If None, uses the instance's setting.
-                If True, samples exactly num_maps scenes (WOSAC eval).
-                If False, samples until num_agents is reached (training).
+
         """
         self.tick = 0
         binding.vec_close(self.c_envs)
@@ -227,7 +222,6 @@ class Drive(pufferlib.PufferEnv):
             goal_target_distance=self.goal_target_distance,
             goal_speed=self.goal_speed,
             map_dir=self.map_dir,
-            use_map_as_resampling_target=use_map_as_resampling_target,
         )
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids

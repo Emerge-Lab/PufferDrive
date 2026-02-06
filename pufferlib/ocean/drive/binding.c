@@ -76,31 +76,27 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
-    int use_map_as_resampling_target = unpack(kwargs, "use_map_as_resampling_target");
 
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec); // Always use random sampling with replacement
 
     int total_agent_count = 0;
     int env_count = 0;
-    // When use_map_as_resampling_target=True: stop after exactly num_maps maps (WOSAC eval)
-    // When use_map_as_resampling_target=False: stop when we reach num_agents (training)
-    int max_envs = use_map_as_resampling_target ? num_maps : num_agents;
+
+    int max_envs = num_agents;
     int map_idx = 0;
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
 
-    // getting env count
-    // Loop conditions:
-    // - use_map_as_resampling_target=True: stop when we've sampled num_maps maps
-    // - use_map_as_resampling_target=False: stop when we have enough agents
-    while ((use_map_as_resampling_target && env_count < num_maps) ||
-           (!use_map_as_resampling_target && total_agent_count < num_agents && env_count < max_envs)) {
+    // Getting env count
+    while (total_agent_count < num_agents && env_count < max_envs) {
         char map_file[512];
 
         // Always sample randomly with replacement
         int map_id = rand() % num_maps;
+
+        // printf("Sampling map_id: %d\n", map_id);
 
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
@@ -163,9 +159,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env);
     }
 
-    // When use_map_as_resampling_target=False, cap at num_agents
-    // When use_map_as_resampling_target=True, use whatever total we got from num_maps
-    if (!use_map_as_resampling_target && total_agent_count > num_agents) {
+    if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
 
