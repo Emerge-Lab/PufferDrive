@@ -290,8 +290,7 @@ class Drive(pufferlib.PufferEnv):
             use_all_maps=use_all_maps,
         )
 
-        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if sequential_map_sampling is True
-        self.num_agents = num_agents if not sequential_map_sampling else agent_offsets[-1]
+        self.num_agents = agent_offsets[-1]
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -376,6 +375,70 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
         return self.observations, []
+
+    def resample_maps(self):
+        """Resample environment maps.
+        Args:
+
+        """
+        self.tick = 0
+        binding.vec_close(self.c_envs)
+        agent_offsets, map_ids, num_envs = binding.shared(
+            num_agents=self.num_agents,
+            num_maps=self.num_maps,
+            init_mode=self.init_mode,
+            control_mode=self.control_mode,
+            init_steps=self.init_steps,
+            max_controlled_agents=self.max_controlled_agents,
+            goal_behavior=self.goal_behavior,
+            goal_target_distance=self.goal_target_distance,
+            goal_speed=self.goal_speed,
+            map_dir=self.map_dir,
+        )
+        self.agent_offsets = agent_offsets
+        self.map_ids = map_ids
+        self.num_envs = num_envs
+        env_ids = []
+        seed = np.random.randint(0, 2**32 - 1)
+        for i in range(num_envs):
+            cur = agent_offsets[i]
+            nxt = agent_offsets[i + 1]
+            env_id = binding.env_init(
+                self.observations[cur:nxt],
+                self.actions[cur:nxt],
+                self.rewards[cur:nxt],
+                self.terminals[cur:nxt],
+                self.truncations[cur:nxt],
+                seed,
+                action_type=self._action_type_flag,
+                human_agent_idx=self.human_agent_idx,
+                reward_vehicle_collision=self.reward_vehicle_collision,
+                reward_offroad_collision=self.reward_offroad_collision,
+                reward_goal=self.reward_goal,
+                reward_goal_post_respawn=self.reward_goal_post_respawn,
+                goal_radius=self.goal_radius,
+                goal_behavior=self.goal_behavior,
+                goal_target_distance=self.goal_target_distance,
+                goal_speed=self.goal_speed,
+                collision_behavior=self.collision_behavior,
+                offroad_behavior=self.offroad_behavior,
+                dt=self.dt,
+                episode_length=(int(self.episode_length) if self.episode_length is not None else None),
+                max_controlled_agents=self.max_controlled_agents,
+                map_id=map_ids[i],
+                max_agents=nxt - cur,
+                ini_file="pufferlib/config/ocean/drive.ini",
+                init_steps=self.init_steps,
+                init_mode=self.init_mode,
+                control_mode=self.control_mode,
+                map_dir=self.map_dir,
+                termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
+            )
+            env_ids.append(env_id)
+        self.c_envs = binding.vectorize(*env_ids)
+
+        binding.vec_reset(self.c_envs, seed)
+        self.terminals[:] = 1
 
     def step(self, actions):
         self.terminals[:] = 0
@@ -516,8 +579,9 @@ class Drive(pufferlib.PufferEnv):
                 env_ids.append(env_id)
             self.c_envs = binding.vectorize(*env_ids)
 
-            binding.vec_reset(self.c_envs, seed)
-            self.terminals[:] = 1
+        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+            self.resample_maps()
+
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):
