@@ -535,6 +535,58 @@ class WOSACEvaluator:
             # print(df)
             return scene_level_results
 
+    def aggregate_batch_results(self, batch_results_list):
+        """Aggregate results from multiple batches.
+
+        Args:
+            batch_results_list: List of dictionaries, each containing aggregated metrics from one batch
+
+        Returns:
+            dict: Weighted average of metrics across all batches
+        """
+        if len(batch_results_list) == 0:
+            raise ValueError("No batch results to aggregate")
+
+        if len(batch_results_list) == 1:
+            return batch_results_list[0]
+
+        # Extract weights (number of agents per batch)
+        weights = np.array([batch["total_num_agents"] for batch in batch_results_list])
+        total_weight = weights.sum()
+
+        # Initialize aggregated results
+        aggregated = {}
+
+        # Get all metric keys (excluding total_num_agents which we'll handle separately)
+        metric_keys = [k for k in batch_results_list[0].keys() if k != "total_num_agents"]
+
+        # Compute weighted average for each metric
+        for key in metric_keys:
+            values = np.array([batch[key] for batch in batch_results_list])
+            weighted_avg = np.average(values, weights=weights)
+            aggregated[key] = float(weighted_avg)  # Convert to Python float
+
+        # Store total number of agents across all batches
+        aggregated["total_num_agents"] = int(total_weight)
+        aggregated["num_batches"] = len(batch_results_list)
+
+        # Add per-batch statistics for transparency
+        aggregated["batch_statistics"] = {
+            "realism_meta_scores": [float(batch["realism_meta_score"]) for batch in batch_results_list],
+            "min_ades": [float(batch["min_ade"]) for batch in batch_results_list],
+            "ades": [float(batch["ade"]) for batch in batch_results_list],
+            "agents_per_batch": weights.tolist(),
+        }
+
+        print(f"\nAggregated {len(batch_results_list)} batches:")
+        print(f"  Total agents evaluated: {aggregated['total_num_agents']}")
+        print(f"  Overall realism meta score: {aggregated['realism_meta_score']:.4f}")
+        print(f"  Overall minADE: {aggregated['min_ade']:.4f}")
+        print(f"  Overall ADE: {aggregated['ade']:.4f}")
+        print(f"  Batch realism scores: {[f'{s:.4f}' for s in aggregated['batch_statistics']['realism_meta_scores']]}")
+
+        return aggregated
+
     def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None, max_agents_to_plot=10):
         if agent_idx is None:
             agent_indices = range(np.clip(simulated_trajectories["x"].shape[0], 1, max_agents_to_plot))

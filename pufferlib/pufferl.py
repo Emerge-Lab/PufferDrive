@@ -1039,12 +1039,11 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
-    args["env"]["map_dir"] = args["eval"]["map_dir"]
-    args["env"]["num_maps"] = args["eval"]["wosac_num_maps"]
-    args["env"]["random_map_resampling"] = args["eval"]["wosac_random_map_resampling"]
-    dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     if wosac_enabled:
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        dataset_name = args["env"]["map_dir"].split("/")[-1]
+
         print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
@@ -1056,46 +1055,148 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["env"]["init_steps"] = args["eval"]["wosac_init_steps"]
         args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
         args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
+        args["env"]["use_map_as_resampling_target"] = args["eval"]["wosac_use_map_as_resampling_target"]
 
+        # Get evaluation parameters
+        num_maps_per_batch = args["eval"]["wosac_num_maps_per_batch"]
+        num_maps_total = args["eval"]["wosac_num_maps_total"]
+
+        # Set num_maps to maps_per_batch for environment initialization
+        args["env"]["num_maps"] = num_maps_per_batch
+
+        # Create vecenv
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
 
         evaluator = WOSACEvaluator(args)
 
-        # Collect ground truth trajectories from the dataset
+        # Collect ground truth to determine number of scenarios
         gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+        unique_scenarios = np.unique(gt_trajectories["scenario_id"])
+        num_scenarios_in_batch = len(unique_scenarios)
 
-        print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
-        print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
-        print(f"Number of evaluated agents: {gt_trajectories['is_track_to_predict'].sum()}")
+        # Calculate number of batches needed
+        num_batches = int(np.ceil(num_maps_total / num_scenarios_in_batch))
+        total_evaluations = num_batches * num_scenarios_in_batch
 
-        # Roll out trained policy in the simulator
-        simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
+        if num_batches > 1:
+            print(f"\nRunning batched evaluation: {num_batches} batches × {num_scenarios_in_batch} scenarios")
 
-        if args["eval"]["wosac_sanity_check"]:
-            evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
+            all_batch_results = []
+            batch_scenario_ids = []  # Track scenario IDs per batch
 
-        # Analyze and compute metrics
-        agent_state = vecenv.driver_env.get_global_agent_state()
-        road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-        results = evaluator.compute_metrics(
-            gt_trajectories,
-            simulated_trajectories,
-            agent_state,
-            road_edge_polylines,
-            args["eval"]["wosac_aggregate_results"],
-        )
+            for batch_idx in range(num_batches):
+                print(f"\n{'=' * 60}")
+                print(f"BATCH {batch_idx + 1}/{num_batches}")
+                print(f"{'=' * 60}")
 
-        if args["eval"]["wosac_aggregate_results"]:
+                # Resample maps with different random initialization
+                if batch_idx > 0:
+                    vecenv.driver_env.resample_maps(
+                        use_map_as_resampling_target=args["env"]["use_map_as_resampling_target"]
+                    )
+
+                # Collect ground truth for this batch
+                gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+                current_scenarios = np.unique(gt_trajectories["scenario_id"])
+
+                print(f"Number of scenarios in batch: {len(current_scenarios)}")
+                print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
+                print(f"Number of evaluated agents: {gt_trajectories['is_track_to_predict'].sum()}")
+
+                # REMOVE the scenario consistency check - we WANT different maps each batch!
+
+                # Roll out trained policy in the simulator
+                simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
+
+                # ... rest of batch processing
+                # Roll out trained policy in the simulator
+                simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
+
+                if args["eval"]["wosac_sanity_check"] and batch_idx == 0:
+                    # Only run sanity check on first batch to avoid too many plots
+                    evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
+
+                # Analyze and compute metrics for this batch
+                agent_state = vecenv.driver_env.get_global_agent_state()
+                road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+                batch_results = evaluator.compute_metrics(
+                    gt_trajectories,
+                    simulated_trajectories,
+                    agent_state,
+                    road_edge_polylines,
+                    aggregate_results=True,  # Always aggregate for batched evaluation
+                )
+
+                all_batch_results.append(batch_results)
+
+                print(f"\nBatch {batch_idx + 1} realism meta score: {batch_results['realism_meta_score']:.4f}")
+                print(f"Batch {batch_idx + 1} minADE: {batch_results['min_ade']:.4f}")
+
+            # Final sanity check summary
+            print(f"\n{'=' * 60}")
+            print("SCENARIO CONSISTENCY CHECK")
+            print(f"{'=' * 60}")
+            all_match = all(batch_scenario_ids[0] == batch_scenario_ids[i] for i in range(num_batches))
+            if all_match:
+                print(f"✓ All {num_batches} batches evaluated the same {len(batch_scenario_ids[0])} scenarios")
+                print(
+                    f"  Scenario IDs: {sorted(list(batch_scenario_ids[0]))[:5]}{'...' if len(batch_scenario_ids[0]) > 5 else ''}"
+                )
+            else:
+                print(f"✗ WARNING: Inconsistent scenarios across batches!")
+
+            # Aggregate results across all batches
+            results = evaluator.aggregate_batch_results(all_batch_results)
+
+            print(f"\n{'=' * 60}")
+            print("FINAL AGGREGATED RESULTS")
+            print(f"{'=' * 60}")
+
             import json
 
             print("\nWOSAC_METRICS_START")
             print(json.dumps(results))
             print("WOSAC_METRICS_END")
 
+        else:
+            # Single batch evaluation
+            print(f"\nRunning single batch evaluation")
+            print(f"Number of scenarios: {num_scenarios_in_batch}")
+            print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
+            print(f"Number of evaluated agents: {gt_trajectories['is_track_to_predict'].sum()}")
+
+            # Roll out trained policy in the simulator
+            simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
+
+            if args["eval"]["wosac_sanity_check"]:
+                evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
+
+            # Analyze and compute metrics
+            agent_state = vecenv.driver_env.get_global_agent_state()
+            road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+            results = evaluator.compute_metrics(
+                gt_trajectories,
+                simulated_trajectories,
+                agent_state,
+                road_edge_polylines,
+                args["eval"]["wosac_aggregate_results"],
+            )
+
+            if args["eval"]["wosac_aggregate_results"]:
+                import json
+
+                print("\nWOSAC_METRICS_START")
+                print(json.dumps(results))
+                print("WOSAC_METRICS_END")
+
+        vecenv.close()
         return results
 
     elif human_replay_enabled:
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        dataset_name = args["env"]["map_dir"].split("/")[-1]
+
         print(f"Running human replay evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
