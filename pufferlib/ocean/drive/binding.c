@@ -84,7 +84,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int env_count = 0;
 
     int max_envs = num_agents;
-    int map_idx = 0;
+
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
