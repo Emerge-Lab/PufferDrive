@@ -76,21 +76,28 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
-    int sequential_map_sampling = unpack(kwargs, "sequential_map_sampling");
+
     clock_gettime(CLOCK_REALTIME, &ts);
-    srand(ts.tv_nsec);
+    srand(ts.tv_nsec); // Always use random sampling with replacement
+
     int total_agent_count = 0;
     int env_count = 0;
-    int max_envs = sequential_map_sampling ? num_maps : num_agents;
-    int map_idx = 0;
+
+    int max_envs = num_agents;
+
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
-    // getting env count
-    while (sequential_map_sampling ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
+
+    // Getting env count
+    while (total_agent_count < num_agents && env_count < max_envs) {
         char map_file[512];
-        // Take the next map in sequence or a random map
-        int map_id = sequential_map_sampling ? map_idx++ : rand() % num_maps;
+
+        // Always sample randomly with replacement
+        int map_id = rand() % num_maps;
+
+        // printf("Sampling map_id: %d\n", map_id);
+
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
@@ -103,26 +110,24 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            if (!sequential_map_sampling) {
-                maps_checked++;
+            maps_checked++;
 
-                // Safeguard: if we've checked all available maps and found no active agents, raise an error
-                if (maps_checked >= num_maps) {
-                    for (int j = 0; j < env->num_entities; j++) {
-                        free_entity(&env->entities[j]);
-                    }
-                    free(env->entities);
-                    free(env->active_agent_indices);
-                    free(env->static_agent_indices);
-                    free(env->expert_static_agent_indices);
-                    free(env);
-                    Py_DECREF(agent_offsets);
-                    Py_DECREF(map_ids);
-                    char error_msg[256];
-                    sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
-                    PyErr_SetString(PyExc_ValueError, error_msg);
-                    return NULL;
+            // Safeguard: if we've checked all available maps and found no active agents, raise an error
+            if (maps_checked >= num_maps) {
+                for (int j = 0; j < env->num_entities; j++) {
+                    free_entity(&env->entities[j]);
                 }
+                free(env->entities);
+                free(env->active_agent_indices);
+                free(env->static_agent_indices);
+                free(env->expert_static_agent_indices);
+                free(env);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
             }
 
             for (int j = 0; j < env->num_entities; j++) {
@@ -153,14 +158,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env->expert_static_agent_indices);
         free(env);
     }
-    // printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count,
-    // num_agents);
-    if (!sequential_map_sampling && total_agent_count >= num_agents) {
+
+    if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
+
     PyObject *final_total_agent_count = PyLong_FromLong(total_agent_count);
     PyList_SetItem(agent_offsets, env_count, final_total_agent_count);
     PyObject *final_env_count = PyLong_FromLong(env_count);
+
     // resize lists
     PyObject *resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject *resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);

@@ -101,8 +101,12 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             config["env"],
             "--eval.wosac-realism-eval",
             "True",
-            "--eval.wosac-num-maps",
-            str(eval_config.get("wosac_num_maps", 256)),
+            "--eval.wosac-batch-size",
+            str(eval_config.get("wosac_batch_size", 32)),
+            "--eval.wosac-target-scenarios",
+            str(eval_config.get("wosac_target_scenarios", 64)),
+            "--eval.wosac-scenario-pool-size",
+            str(eval_config.get("wosac_scenario_pool_size", 10_000)),
             "--eval.wosac-init-mode",
             str(eval_config.get("wosac_init_mode", "create_all_valid")),
             "--eval.wosac-control-mode",
@@ -115,8 +119,6 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             str(eval_config.get("wosac_goal_radius", 1.0)),
             "--eval.wosac-sanity-check",
             str(eval_config.get("wosac_sanity_check", False)),
-            "--eval.wosac-aggregate-results",
-            str(eval_config.get("wosac_aggregate_results", True)),
         ]
 
         if not model_files:
@@ -142,12 +144,12 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
                     logger.wandb.log(
                         {
                             "eval/wosac_realism_meta_score_mean": wosac_metrics["realism_meta_score"],
-                            "eval/wosac_realism_meta_score_std": wosac_metrics["realism_score_std"],
-                            "eval/wosac_ade": wosac_metrics["ade"],
-                            "eval/wosac_min_ade": wosac_metrics["min_ade"],
+                            "eval/wosac_realism_meta_score_std": wosac_metrics["realism_meta_score_std"],
                             "eval/wosac_kinematic_metrics": wosac_metrics["kinematic_metrics"],
                             "eval/wosac_interactive_metrics": wosac_metrics["interactive_metrics"],
-                            "eval/map_based_metrics": wosac_metrics["map_based_metrics"],
+                            "eval/wosac_map_based_metrics": wosac_metrics["map_based_metrics"],
+                            "eval/wosac_ade": wosac_metrics["ade"],
+                            "eval/wosac_min_ade": wosac_metrics["min_ade"],
                             "eval/wosac_likelihood_ttc": wosac_metrics["likelihood_time_to_collision"],
                             "eval/wosac_likelihood_collision": wosac_metrics["likelihood_collision_indication"],
                             "eval/wosac_likelihood_dist_to_no": wosac_metrics["likelihood_distance_to_nearest_object"],

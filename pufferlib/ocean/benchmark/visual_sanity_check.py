@@ -107,7 +107,6 @@ def main():
 
     config["env"]["map_dir"] = config["eval"]["map_dir"]
     config["env"]["num_maps"] = config["eval"]["wosac_num_maps"]
-    config["env"]["sequential_map_sampling"] = True
 
     vecenv = load_env(args.env, config)
     policy = load_policy(config, vecenv, args.env)
