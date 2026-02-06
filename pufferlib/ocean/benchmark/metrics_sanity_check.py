@@ -90,7 +90,6 @@ def main():
     config["eval"]["enabled"] = True
     config["eval"]["wosac_num_rollouts"] = 32
     config["env"]["map_dir"] = config["eval"]["map_dir"]
-    config["env"]["num_maps"] = config["eval"]["wosac_num_maps_total"]
 
     config["env"]["init_mode"] = config["eval"]["wosac_init_mode"]
     config["env"]["control_mode"] = config["eval"]["wosac_control_mode"]

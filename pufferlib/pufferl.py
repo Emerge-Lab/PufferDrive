@@ -1115,7 +1115,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 batch_idx += 1
 
                 if len(unique_files_sampled) >= num_target_maps:
-                    print(f"Reached target number of unique scenarios: {len(unique_files_sampled)}")
                     break
 
         # Aggregate results across all batches
