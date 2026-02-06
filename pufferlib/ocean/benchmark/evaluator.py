@@ -37,12 +37,13 @@ class WOSACEvaluator:
         self.sim_steps = self.num_steps - self.init_steps
         self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
         self.device = config.get("train", {}).get("device", "cuda")
+        self.eval_mode = config.get("eval", {}).get("wosac_eval_mode", "policy")
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
         self.metrics_config.read(wosac_metrics_path)
 
-    def evaluate(self, args, vecenv, policy, drop_scene_duplicates=True):
+    def evaluate(self, args, vecenv, policy=None, drop_scene_duplicates=True):
         """Run full WOSAC evaluation with batched iteration over target scenarios.
 
         Args:
@@ -67,9 +68,22 @@ class WOSACEvaluator:
                 if batch_idx > 0:
                     vecenv.driver_env.resample_maps()
 
-                # Collect data for this batch
+                # Obtain ground truth trajectories
                 gt_trajectories = self.collect_ground_truth_trajectories(vecenv)
-                simulated_trajectories = self.collect_simulated_trajectories(args, vecenv, policy)
+
+                # Collect simulated trajectories
+                if policy is not None and self.eval_mode == "policy":
+                    simulated_trajectories = self.collect_simulated_trajectories(args, vecenv, policy)
+                elif self.eval_mode == "ground_truth":
+                    # Create fake simulated trajectories by repeating ground truth
+                    simulated_trajectories = gt_trajectories.copy()
+                    for key in ["x", "y", "heading", "id"]:
+                        simulated_trajectories[key] = np.repeat(
+                            gt_trajectories[key], args["eval"]["wosac_num_rollouts"], axis=1
+                        )
+                    simulated_trajectories["id"] = simulated_trajectories["id"][..., np.newaxis]
+                else:
+                    raise ValueError(f"Policy is None or unknown evaluation mode: {self.eval_mode}")
 
                 # Compute metrics for this batch
                 agent_state = vecenv.driver_env.get_global_agent_state()
