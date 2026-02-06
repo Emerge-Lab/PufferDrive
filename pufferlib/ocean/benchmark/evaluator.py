@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from typing import Dict
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 import configparser
 import os
 
@@ -40,6 +41,82 @@ class WOSACEvaluator:
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
         self.metrics_config.read(wosac_metrics_path)
+
+    def evaluate(self, args, vecenv, policy):
+        """Run full WOSAC evaluation with batched iteration over target scenarios.
+
+        Args:
+            args: Configuration dictionary
+            vecenv: Vectorized environment
+            policy: Policy to evaluate
+
+        Returns:
+            dict: Aggregated metrics across all batches
+        """
+        num_target_maps = args["eval"]["wosac_target_scenarios"]
+        max_batches = args["eval"].get("wosac_max_batches", 100)
+
+        unique_files_sampled = set()
+        combined_results = []
+
+        with tqdm(total=100, desc="Processing batches", unit="%", colour="cyan") as pbar:
+            batch_idx = 0
+            while batch_idx < max_batches:
+                # Resample maps for each batch (except first)
+                if batch_idx > 0:
+                    vecenv.driver_env.resample_maps()
+
+                # Collect data for this batch
+                gt_trajectories = self.collect_ground_truth_trajectories(vecenv)
+                simulated_trajectories = self.collect_simulated_trajectories(args, vecenv, policy)
+
+                # Compute metrics for this batch
+                agent_state = vecenv.driver_env.get_global_agent_state()
+                road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+                batch_results = self.compute_metrics(
+                    gt_trajectories,
+                    simulated_trajectories,
+                    agent_state,
+                    road_edge_polylines,
+                    aggregate_results=True,
+                )
+
+                # Optional: sanity check on first batch
+                if args["eval"].get("wosac_sanity_check", False) and batch_idx == 0:
+                    self._quick_sanity_check(gt_trajectories, simulated_trajectories)
+
+                # Track coverage
+                unique_files_sampled.update(str(s) for s in np.unique(gt_trajectories["scenario_id"]))
+                combined_results.append(batch_results)
+
+                # Update progress
+                coverage = len(unique_files_sampled) / num_target_maps
+                pbar.n = int(coverage * 100)
+                pbar.set_postfix({"n": len(unique_files_sampled), "batch": batch_idx + 1})
+                pbar.refresh()
+
+                batch_idx += 1
+
+                # Stop if we've covered all target scenarios
+                if len(unique_files_sampled) >= num_target_maps:
+                    break
+
+            # Check if we didn't reach target coverage
+            if len(unique_files_sampled) < num_target_maps:
+                print(
+                    f"\nWarning: Only covered {len(unique_files_sampled)}/{num_target_maps} scenarios after {batch_idx} batches"
+                )
+
+        # Aggregate results across all batches
+        results = self.aggregate_batch_results(combined_results)
+
+        # Add metadata
+        results["total_batches_processed"] = batch_idx
+        results["unique_scenarios_evaluated"] = len(unique_files_sampled)
+        results["target_scenarios"] = num_target_maps
+        results["coverage_percentage"] = (len(unique_files_sampled) / num_target_maps) * 100
+
+        return results
 
     def _compute_metametric(self, metrics: pd.Series) -> float:
         metametric = 0.0

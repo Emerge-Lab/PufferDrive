@@ -20,7 +20,6 @@ import importlib
 import configparser
 from threading import Thread
 from collections import defaultdict, deque
-from tqdm import tqdm
 from pathlib import Path
 
 import numpy as np
@@ -1045,11 +1044,13 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["env"]["map_dir"] = args["eval"]["map_dir"]
         dataset_name = args["env"]["map_dir"].split("/")[-1]
 
-        print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
+        print(f"Running WOSAC realism evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
         backend = args["eval"]["backend"]
         assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
+
+        # Configure environment for WOSAC
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
         args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
@@ -1057,68 +1058,20 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
         args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
 
-        # Convert the batch size (in number of scenarios) to the number of agents and envs to create.
-        # Assume the scenarios are rather sparse and each scene has ~ 10 controllable agents.
+        # Batch size configuration
         num_scenes_per_batch = args["eval"]["wosac_batch_size"]
         args["env"]["num_agents"] = num_scenes_per_batch * 10
+        args["env"]["num_maps"] = args["eval"]["wosac_scenario_pool_size"]
 
-        num_target_maps = args["eval"]["wosac_target_scenarios"]
-        num_maps_to_sample_from = args["eval"]["wosac_scenario_pool_size"]
-        max_batches = 100
-
-        # This is the pool of maps to sample from (sample with replacement)
-        args["env"]["num_maps"] = num_maps_to_sample_from
-
-        # Create env
+        # Create environment and policy
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
 
+        # Run evaluation
         evaluator = WOSACEvaluator(args)
+        results = evaluator.evaluate(args, vecenv, policy)
 
-        unique_files_sampled = set()
-        combined_results = []
-
-        with tqdm(total=100, desc="Processing batches", unit="%", colour="cyan") as pbar:
-            batch_idx = 0
-            while batch_idx < max_batches:
-                # Resample maps
-                if batch_idx > 0:
-                    vecenv.driver_env.resample_maps()
-
-                # Collect data
-                gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
-                simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
-
-                # Analyze and compute metrics for this batch
-                agent_state = vecenv.driver_env.get_global_agent_state()
-                road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-                batch_results = evaluator.compute_metrics(
-                    gt_trajectories,
-                    simulated_trajectories,
-                    agent_state,
-                    road_edge_polylines,
-                    aggregate_results=True,
-                )
-
-                if args["eval"]["wosac_sanity_check"] and batch_idx == 0:
-                    # Only run sanity check on first batch to avoid too many plots
-                    evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
-
-                unique_files_sampled.update(str(s) for s in np.unique(gt_trajectories["scenario_id"]))
-                combined_results.append(batch_results)
-
-                coverage = len(unique_files_sampled) / num_target_maps
-                pbar.n = int(coverage * 100)
-                pbar.set_postfix({"n": len(unique_files_sampled), "batch": batch_idx + 1})
-                pbar.refresh()
-
-                batch_idx += 1
-
-                if len(unique_files_sampled) >= num_target_maps:
-                    break
-
-        # Aggregate results across all batches
-        results = evaluator.aggregate_batch_results(combined_results)
+        # Output results
         import json
 
         print("\nWOSAC_METRICS_START")
