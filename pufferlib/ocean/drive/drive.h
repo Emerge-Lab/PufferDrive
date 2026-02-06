@@ -97,8 +97,8 @@
 #define PARTNER_FEATURES 8
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 8
-#define EGO_FEATURES_JERK 11
+#define EGO_FEATURES_CLASSIC 11
+#define EGO_FEATURES_JERK 14
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -1673,6 +1673,18 @@ void compute_observations(Drive *env) {
         float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
 
         float rel_goal_z = goal_z; // No rotation needed for vertical component
+
+        // Adding speed limit calculation
+        float speed_limit = 20.0f;
+        int current_lane_index = ego_entity->current_lane_index;
+        if (current_lane_index != -1 && env->road_elements[current_lane_index].speed_limit > 0) {
+            speed_limit = env->road_elements[current_lane_index].speed_limit;
+        }
+
+        // Adding lane center calculation
+        float lane_center_dist = ego_entity->metrics_array[LANE_DIST_IDX] / LANE_DISTANCE_NORMALIZATION;
+        lane_center_dist = fmaxf(-1.0f, fminf(1.0f, lane_center_dist));
+
         obs[0] = rel_goal_x * 0.005f;
         obs[1] = rel_goal_y * 0.005f;
         obs[2] = rel_goal_z * 0.005f;
@@ -1688,9 +1700,18 @@ void compute_observations(Drive *env) {
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
             obs[9] = ego_entity->a_lat / JERK_LAT[2];
             obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            // Adding speed limit and lane center/lane angle observations
+            obs[11] = fminf(speed_limit / MAX_SPEED, 1.0f);
+            obs[12] = lane_center_dist;
+            obs[13] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         } else {
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            // Adding speed limit and lane center/lane angle observations
+            obs[8] = fminf(speed_limit / MAX_SPEED, 1.0f);
+            obs[9] = lane_center_dist;
+            obs[10] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         }
+        // TODO - Add Reward conditioning observations next
 
         // Relative Pos of other cars
         int obs_idx = ego_dim;
