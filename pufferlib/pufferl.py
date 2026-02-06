@@ -1077,15 +1077,14 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         results_dict = df_results.mean().to_dict()
         results_dict["total_num_agents"] = df_results["num_agents_per_scene"].sum()
         results_dict["total_unique_scenarios"] = df_results.index.unique().shape[0]
+        results_dict["realism_meta_score_std"] = df_results["realism_meta_score"].std()
         results_dict = {k: v.item() if hasattr(v, "item") else v for k, v in results_dict.items()}
 
-        # Output results
         import json
 
         print("\nWOSAC_METRICS_START")
         print(json.dumps(results_dict))
         print("WOSAC_METRICS_END")
-
         vecenv.close()
         return results_dict
 

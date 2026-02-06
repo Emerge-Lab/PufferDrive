@@ -146,6 +146,10 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
                     logger.wandb.log(
                         {
                             "eval/wosac_realism_meta_score": wosac_metrics["realism_meta_score"],
+                            "eval/realism_meta_score_std": wosac_metrics["realism_meta_score_std"],
+                            "eval/wosac_kinematic_metrics": wosac_metrics["kinematic_metrics"],
+                            "eval/wosac_interactive_metrics": wosac_metrics["interactive_metrics"],
+                            "eval/wosac_map_based_metrics": wosac_metrics["map_based_metrics"],
                             "eval/wosac_ade": wosac_metrics["ade"],
                             "eval/wosac_min_ade": wosac_metrics["min_ade"],
                             "eval/wosac_total_num_agents": wosac_metrics["total_num_agents"],

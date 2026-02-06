@@ -52,8 +52,7 @@ class WOSACEvaluator:
             drop_scene_duplicates: Whether to drop duplicate scenarios
 
         Returns:
-            dict: Aggregated metrics across all batches if aggregate_batch_results=True
-            DataFrame: Full results if aggregate_batch_results=False
+            DataFrame: Full results aggregated by scenario.
         """
         num_target_maps = args["eval"]["wosac_target_scenarios"]
         max_batches = args["eval"].get("wosac_max_batches", 100)
@@ -289,6 +288,8 @@ class WOSACEvaluator:
         agent_width = agent_state["width"]
         is_vehicle = ground_truth_trajectories["is_vehicle"]
         scenario_ids = ground_truth_trajectories["scenario_id"]
+
+        last_scenario_id = scenario_ids[-1]
 
         # We evaluate the metrics only for the Tracks to Predict.
         eval_sim_x = sim_x[eval_mask]
@@ -570,6 +571,8 @@ class WOSACEvaluator:
                 "likelihood_offroad_indication": offroad_log_likelihood,
             }
         )
+
+        # TODO: Safety measure: Drop last scenario because it may be incomplete
 
         # Aggregate along agent dimenision: Obtain one score per scenario
         df_scene_level = df.groupby("scenario_id", as_index=True).mean().drop(columns=["agent_id"]).dropna()
