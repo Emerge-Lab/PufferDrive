@@ -289,7 +289,7 @@ class WOSACEvaluator:
         is_vehicle = ground_truth_trajectories["is_vehicle"]
         scenario_ids = ground_truth_trajectories["scenario_id"]
 
-        last_scenario_id = scenario_ids[-1]
+        last_scenario_id = str(scenario_ids[-1][0])
 
         # We evaluate the metrics only for the Tracks to Predict.
         eval_sim_x = sim_x[eval_mask]
@@ -572,8 +572,6 @@ class WOSACEvaluator:
             }
         )
 
-        # TODO: Safety measure: Drop last scenario because it may be incomplete
-
         # Aggregate along agent dimenision: Obtain one score per scenario
         df_scene_level = df.groupby("scenario_id", as_index=True).mean().drop(columns=["agent_id"]).dropna()
 
@@ -613,6 +611,10 @@ class WOSACEvaluator:
         df_scene_level["kinematic_metrics"] = kinematic_metrics
         df_scene_level["interactive_metrics"] = interactive_metrics
         df_scene_level["map_based_metrics"] = map_metrics
+
+        # Safety: drop the last scenario (potentially incomplete) from the scene-level results
+        if last_scenario_id in df_scene_level.index:
+            df_scene_level = df_scene_level.drop(last_scenario_id)
 
         if aggregate_results:
             # Aggregate over scenarios
