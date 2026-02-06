@@ -260,6 +260,7 @@ class Drive(pufferlib.PufferEnv):
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
                 map_dir=self.map_dir,
+                termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)

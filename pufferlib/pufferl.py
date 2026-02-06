@@ -1036,6 +1036,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     """Evaluate a policy."""
 
     args = args or load_config(env_name)
+    args["env"]["termination_mode"] = 0
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
@@ -1091,11 +1092,13 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     elif human_replay_enabled:
         args["env"]["map_dir"] = args["eval"]["map_dir"]
         dataset_name = args["env"]["map_dir"].split("/")[-1]
-
         print(f"Running human replay evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
         backend = args["eval"].get("backend", "PufferEnv")
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
+
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
         args["env"]["episode_length"] = 91  # WOMD scenario length
