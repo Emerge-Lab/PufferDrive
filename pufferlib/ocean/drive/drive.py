@@ -42,7 +42,7 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
-        sequential_map_sampling=False,
+        random_map_resampling=True,
     ):
         # env
         self.dt = dt
@@ -64,6 +64,7 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.random_map_resampling = random_map_resampling
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -154,11 +155,10 @@ class Drive(pufferlib.PufferEnv):
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
-            sequential_map_sampling=sequential_map_sampling,
+            random_map_resampling=random_map_resampling,
         )
 
-        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if sequential_map_sampling is True
-        self.num_agents = num_agents if not sequential_map_sampling else agent_offsets[-1]
+        self.num_agents = agent_offsets[-1]
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -232,7 +232,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_target_distance=self.goal_target_distance,
                 goal_speed=self.goal_speed,
                 map_dir=self.map_dir,
-                sequential_map_sampling=False,  # Always use random sampling with replacement
+                random_map_resampling=True,
             )
             self.agent_offsets = agent_offsets
             self.map_ids = map_ids

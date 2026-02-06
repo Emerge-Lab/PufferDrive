@@ -1041,7 +1041,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     human_replay_enabled = args["eval"]["human_replay_eval"]
     args["env"]["map_dir"] = args["eval"]["map_dir"]
     args["env"]["num_maps"] = args["eval"]["wosac_num_maps"]
-    args["env"]["sequential_map_sampling"] = True
+    args["env"]["random_map_resampling"] = args["eval"]["wosac_random_map_resampling"]
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     if wosac_enabled:
