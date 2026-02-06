@@ -270,7 +270,7 @@ def pipeline(env_name="puffer_drive"):
 
     config = load_config(env_name)
 
-    config["env"]["num_maps"] = 60
+    config["env"]["num_maps"] = 229
     config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/validation_interactive_small"
     config["wosac"]["enabled"] = True
     config["vec"]["backend"] = "PufferEnv"
