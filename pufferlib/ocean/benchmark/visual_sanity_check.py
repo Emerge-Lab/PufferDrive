@@ -92,20 +92,21 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.env)
+
+    config["load_model_path"] = "resources/drive/pufferdrive_weights.pt"
+
     config["vec"]["backend"] = "PufferEnv"
     config["vec"]["num_envs"] = 1
     config["eval"]["enabled"] = True
     config["eval"]["wosac_num_rollouts"] = 1
 
-    config["env"]["num_agents"] = config["eval"]["wosac_num_agents"]
     config["env"]["init_mode"] = config["eval"]["wosac_init_mode"]
     config["env"]["control_mode"] = config["eval"]["wosac_control_mode"]
     config["env"]["init_steps"] = config["eval"]["wosac_init_steps"]
     config["env"]["goal_behavior"] = config["eval"]["wosac_goal_behavior"]
 
     config["env"]["map_dir"] = config["eval"]["map_dir"]
-    config["env"]["num_maps"] = config["eval"]["num_maps"]
-    config["env"]["use_all_maps"] = True
+    config["env"]["num_maps"] = config["eval"]["wosac_num_maps"]
 
     vecenv = load_env(args.env, config)
     policy = load_policy(config, vecenv, args.env)

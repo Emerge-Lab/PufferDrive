@@ -578,12 +578,12 @@ class PuffeRL:
                         print(f"Failed to export model weights: {e}")
 
         if self.config["eval"]["wosac_realism_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
         if self.config["eval"]["human_replay_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
@@ -1148,20 +1148,22 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     """Evaluate a policy."""
 
     args = args or load_config(env_name)
+    args["env"]["termination_mode"] = 0
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
-    args["env"]["map_dir"] = args["eval"]["map_dir"]
-    args["env"]["num_maps"] = args["eval"]["num_maps"]
-    args["env"]["use_all_maps"] = True
-    dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     if wosac_enabled:
-        print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        dataset_name = args["env"]["map_dir"].split("/")[-1]
+
+        print(f"Running WOSAC realism evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
         backend = args["eval"]["backend"]
         assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
+
+        # Configure environment for WOSAC
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
         args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
@@ -1169,49 +1171,46 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
         args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
 
+        # Batch size configuration
+        num_scenes_per_batch = args["eval"]["wosac_batch_size"]
+        args["env"]["num_agents"] = num_scenes_per_batch * 10
+        args["env"]["num_maps"] = args["eval"]["wosac_scenario_pool_size"]
+
+        # Create environment and policy
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
 
+        # Make eval class instance
         evaluator = WOSACEvaluator(args)
 
-        # Collect ground truth trajectories from the dataset
-        gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+        # Obtain scores
+        df_results = evaluator.evaluate(args, vecenv, policy)
 
-        print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
-        print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
-        print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
+        # Average results over scenarios
+        results_dict = df_results.mean().to_dict()
+        results_dict["total_num_agents"] = df_results["num_agents_per_scene"].sum()
+        results_dict["total_unique_scenarios"] = df_results.index.unique().shape[0]
+        results_dict["realism_meta_score_std"] = df_results["realism_meta_score"].std()
+        results_dict = {k: v.item() if hasattr(v, "item") else v for k, v in results_dict.items()}
 
-        # Roll out trained policy in the simulator
-        simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
+        import json
 
-        if args["eval"]["wosac_sanity_check"]:
-            evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
-
-        # Analyze and compute metrics
-        agent_state = vecenv.driver_env.get_global_agent_state()
-        road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-        results = evaluator.compute_metrics(
-            gt_trajectories,
-            simulated_trajectories,
-            agent_state,
-            road_edge_polylines,
-            args["eval"]["wosac_aggregate_results"],
-        )
-
-        if args["eval"]["wosac_aggregate_results"]:
-            import json
-
-            print("\nWOSAC_METRICS_START")
-            print(json.dumps(results))
-            print("WOSAC_METRICS_END")
-
-        return results
+        print("\nWOSAC_METRICS_START")
+        print(json.dumps(results_dict))
+        print("WOSAC_METRICS_END")
+        vecenv.close()
+        return results_dict
 
     elif human_replay_enabled:
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        dataset_name = args["env"]["map_dir"].split("/")[-1]
         print(f"Running human replay evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
         backend = args["eval"].get("backend", "PufferEnv")
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
+
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
         args["env"]["episode_length"] = 91  # WOMD scenario length

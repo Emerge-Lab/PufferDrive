@@ -313,7 +313,7 @@ struct Drive {
     int goal_behavior;
     float goal_target_distance;
     char *ini_file;
-    char *scenario_id;
+    char scenario_id[16];
     int collision_behavior;
     int offroad_behavior;
     int sdc_track_index;
@@ -967,7 +967,7 @@ int collision_check(Drive *env, int agent_idx) {
         int index = -1;
         if (i < env->active_agent_count) {
             index = env->active_agent_indices[i];
-        } else if (i < env->num_actors) {
+        } else if (i < env->num_actors && env->static_agent_count > 0) {
             index = env->static_agent_indices[i - env->active_agent_count];
         }
         if (index == -1)
@@ -1163,10 +1163,6 @@ bool should_control_agent(Drive *env, int agent_idx) {
 
     Entity *entity = &env->entities[agent_idx];
 
-    // TODO: Move this elsewhere or remove
-    entity->width *= 0.7f;
-    entity->length *= 0.7f;
-
     if (env->control_mode == CONTROL_SDC_ONLY) {
         return agent_idx == env->sdc_track_index;
     }
@@ -1214,7 +1210,7 @@ void set_active_agents(Drive *env) {
     env->active_agent_count = 0;        // Policy-controlled agents
     env->static_agent_count = 0;        // Non-moving background agents
     env->expert_static_agent_count = 0; // Expert replay agents (non-controlled)
-    env->num_actors = 0;                // Total agents created
+    env->num_actors = 0;                // Total agents created (there is always the SDC)
 
     int active_agent_indices[MAX_AGENTS];
     int static_agent_indices[MAX_AGENTS];
@@ -1224,8 +1220,23 @@ void set_active_agents(Drive *env) {
         env->num_agents = MAX_AGENTS;
     }
 
+    // If we have a SDC index (WOMD), initialize it first:
+    int sdc_index = env->sdc_track_index;
+
+    if (sdc_index >= 0) {
+        active_agent_indices[0] = sdc_index;
+        env->num_actors++;
+        env->active_agent_count++;
+        env->entities[sdc_index].active_agent = 1;
+    }
+
     // Iterate through entities to find agents to create and/or control
     for (int i = 0; i < env->num_objects && env->num_actors < MAX_AGENTS; i++) {
+
+        // Skip if its the SDC
+        if (i == sdc_index) {
+            continue;
+        }
 
         Entity *entity = &env->entities[i];
 
@@ -1411,16 +1422,16 @@ void free_allocated(Drive *env) {
 // Extra C API Functions
 // ========================================
 
-static inline int get_track_id_or_placeholder(Drive *env, int agent_idx) {
+static inline int is_in_track_to_predicts(Drive *env, int agent_idx) {
     if (env->tracks_to_predict_indices == NULL || env->num_tracks_to_predict == 0) {
-        return -1;
+        return 0;
     }
     for (int k = 0; k < env->num_tracks_to_predict; k++) {
         if (env->tracks_to_predict_indices[k] == agent_idx) {
-            return env->tracks_to_predict_indices[k];
+            return 1;
         }
     }
-    return -1;
+    return 0;
 }
 
 void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out, int *id_out,
@@ -1434,19 +1445,24 @@ void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_o
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z + env->world_mean_z;
         heading_out[i] = agent->heading;
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        id_out[i] = agent->id;
         length_out[i] = agent->length;
         width_out[i] = agent->width;
     }
 }
 
 void c_get_global_ground_truth_trajectories(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out,
-                                            int *valid_out, int *id_out, int *scenario_id_out) {
+                                            int *valid_out, int *id_out, bool *is_vehicle_out,
+                                            bool *is_track_to_predict_out, char *scenario_id_out) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Entity *agent = &env->entities[agent_idx];
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
-        scenario_id_out[i] = agent->scenario_id;
+        id_out[i] = agent->id;
+        is_vehicle_out[i] = agent->type == VEHICLE;
+        is_track_to_predict_out[i] = is_in_track_to_predicts(env, agent_idx);
+
+        // The scenario_id is an array of 16 char
+        memcpy(scenario_id_out + (i * 16), env->scenario_id, 16);
 
         for (int t = env->init_steps; t < agent->array_size; t++) {
             int out_idx = i * (agent->array_size - env->init_steps) + (t - env->init_steps);
@@ -1472,13 +1488,16 @@ void c_get_road_edge_counts(Drive *env, int *num_polylines_out, int *total_point
     *total_points_out = points;
 }
 
-void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *lengths_out, int *scenario_ids_out) {
+void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *lengths_out, char *scenario_ids_out) {
     int poly_idx = 0, pt_idx = 0;
     for (int i = env->num_objects; i < env->num_entities; i++) {
         Entity *e = &env->entities[i];
         if (e->type == ROAD_EDGE) {
             lengths_out[poly_idx] = e->array_size;
-            scenario_ids_out[poly_idx] = e->scenario_id;
+
+            char *scenario_id_ptr = scenario_ids_out + poly_idx * 16;
+            memcpy(scenario_id_ptr, env->scenario_id, 16);
+
             for (int j = 0; j < e->array_size; j++) {
                 x_out[pt_idx] = e->traj_x[j] + env->world_mean_x;
                 y_out[pt_idx] = e->traj_y[j] + env->world_mean_y;
@@ -1677,7 +1696,7 @@ void compute_observations(Drive *env) {
             int index = -1;
             if (j < env->active_agent_count) {
                 index = env->active_agent_indices[j];
-            } else if (j < env->num_actors) {
+            } else if (j < env->num_actors && env->static_agent_count > 0) {
                 index = env->static_agent_indices[j - env->active_agent_count];
             }
             if (index == -1)
@@ -2925,7 +2944,7 @@ void c_render(Drive *env) {
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
 
-    if (IsKeyPressed(KEY_TAB)) {
+    if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
         env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
     }
 

@@ -1,4 +1,7 @@
 #include "drivenet.h"
+#include "error.h"
+#include "libgen.h"
+#include "../env_config.h"
 #include <string.h>
 #include "../env_config.h"
 
@@ -90,6 +93,12 @@ void demo() {
         .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
     };
     allocate(&env);
+    if (env.active_agent_count == 0) {
+        fprintf(stderr, "Error: No active agents found in map '%s' with init_mode=%d. Cannot run demo.\n", env.map_name,
+                conf.init_mode);
+        free_allocated(&env);
+        return -1;
+    }
     c_reset(&env);
     c_render(&env);
     Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
@@ -165,6 +174,7 @@ void demo() {
     free_allocated(&env);
     free_drivenet(net);
     free(weights);
+    return 0;
 }
 
 void performance_test() {
@@ -208,9 +218,93 @@ void performance_test() {
     free_allocated(&env);
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+    // Visualization-only parameters (not in [env] section)
+    int show_grid = 0;
+    int obs_only = 0;
+    int lasers = 0;
+    int show_human_logs = 0;
+    int frame_skip = 1;
+    int zoom_in = 0;
+    const char *view_mode = "both";
+
+    // File paths and num_maps (not in [env] section)
+    const char *map_name = NULL;
+    const char *policy_name = "resources/drive/puffer_drive_weights.bin";
+    const char *output_topdown = NULL;
+    const char *output_agent = NULL;
+    int num_maps = 1;
+
+    // Parse command line arguments
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--show-grid") == 0) {
+            show_grid = 1;
+        } else if (strcmp(argv[i], "--obs-only") == 0) {
+            obs_only = 1;
+        } else if (strcmp(argv[i], "--lasers") == 0) {
+            lasers = 1;
+        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
+            show_human_logs = 1;
+        } else if (strcmp(argv[i], "--frame-skip") == 0) {
+            if (i + 1 < argc) {
+                frame_skip = atoi(argv[i + 1]);
+                i++;
+                if (frame_skip <= 0) {
+                    frame_skip = 1;
+                }
+            }
+        } else if (strcmp(argv[i], "--zoom-in") == 0) {
+            zoom_in = 1;
+        } else if (strcmp(argv[i], "--view") == 0) {
+            if (i + 1 < argc) {
+                view_mode = argv[i + 1];
+                i++;
+                if (strcmp(view_mode, "both") != 0 && strcmp(view_mode, "topdown") != 0 &&
+                    strcmp(view_mode, "agent") != 0) {
+                    fprintf(stderr, "Error: --view must be 'both', 'topdown', or 'agent'\n");
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "Error: --view option requires a value (both/topdown/agent)\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--map-name") == 0) {
+            if (i + 1 < argc) {
+                map_name = argv[i + 1];
+                i++;
+            } else {
+                fprintf(stderr, "Error: --map-name option requires a map file path\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--policy-name") == 0) {
+            if (i + 1 < argc) {
+                policy_name = argv[i + 1];
+                i++;
+            } else {
+                fprintf(stderr, "Error: --policy-name option requires a policy file path\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--output-topdown") == 0) {
+            if (i + 1 < argc) {
+                output_topdown = argv[i + 1];
+                i++;
+            }
+        } else if (strcmp(argv[i], "--output-agent") == 0) {
+            if (i + 1 < argc) {
+                output_agent = argv[i + 1];
+                i++;
+            }
+        } else if (strcmp(argv[i], "--num-maps") == 0) {
+            if (i + 1 < argc) {
+                num_maps = atoi(argv[i + 1]);
+                i++;
+            }
+        }
+    }
+
     // performance_test();
-    demo();
+    demo(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
+         output_agent, num_maps, zoom_in);
     // test_drivenet();
     return 0;
 }
