@@ -110,7 +110,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         // Get map file path from Python list
         PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
         const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
-        env->entities = load_map_binary(map_file_path, env);
+        load_map_binary(map_file_path, env);
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
@@ -120,10 +120,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
                 // Safeguard: if we've checked all available maps and found no active agents, raise an error
                 if (maps_checked >= num_maps) {
-                    for (int j = 0; j < env->num_entities; j++) {
-                        free_entity(&env->entities[j]);
+                    for (int j = 0; j < env->num_objects; j++) {
+                        free_agent(&env->agents[j]);
                     }
-                    free(env->entities);
+                    for (int j = 0; j < env->num_roads; j++) {
+                        free_road_element(&env->road_elements[j]);
+                    }
+                    free(env->agents);
+                    free(env->road_elements);
+                    free(env->road_scenario_ids);
                     free(env->active_agent_indices);
                     free(env->static_agent_indices);
                     free(env->expert_static_agent_indices);
@@ -137,10 +142,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 }
             }
 
-            for (int j = 0; j < env->num_entities; j++) {
-                free_entity(&env->entities[j]);
+            for (int j = 0; j < env->num_objects; j++) {
+                free_agent(&env->agents[j]);
             }
-            free(env->entities);
+            for (int j = 0; j < env->num_roads; j++) {
+                free_road_element(&env->road_elements[j]);
+            }
+            free(env->agents);
+            free(env->road_elements);
+            free(env->road_scenario_ids);
             free(env->active_agent_indices);
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
@@ -156,10 +166,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyList_SetItem(agent_offsets, env_count, offset);
         total_agent_count += env->active_agent_count;
         env_count++;
-        for (int j = 0; j < env->num_entities; j++) {
-            free_entity(&env->entities[j]);
+        for (int j = 0; j < env->num_objects; j++) {
+            free_agent(&env->agents[j]);
         }
-        free(env->entities);
+        for (int j = 0; j < env->num_roads; j++) {
+            free_road_element(&env->road_elements[j]);
+        }
+        free(env->agents);
+        free(env->road_elements);
+        free(env->road_scenario_ids);
         free(env->active_agent_indices);
         free(env->static_agent_indices);
         free(env->expert_static_agent_indices);

@@ -142,6 +142,7 @@ int unnormalize_traffic_light_state(int norm_state) {
 struct Agent {
     int id;
     int type;
+    int scenario_id;
 
     // Log trajectory
     int trajectory_length;
@@ -161,6 +162,8 @@ struct Agent {
     float sim_y;
     float sim_z;
     float sim_heading;
+    float heading_x;
+    float heading_y;
     float sim_vx;
     float sim_vy;
     float sim_speed;
@@ -182,10 +185,19 @@ struct Agent {
     // Metrics and status tracking
     float metrics_array[10]; // [collision, offroad, red_light, reached_goal, lane_dist,
                              // lane_angle, comfort_violation, velocity_progress, speed_limit, avg_displacement_error]
+    int collision_state;
+    int aabb_collision_state;
     int current_lane_index;
     int current_lane_geometry_idx;
     int reached_goal_this_episode;
     int num_goals_reached;
+    float goals_reached_this_episode;
+    float goals_sampled_this_episode;
+    int current_goal_reached;
+    int collided_before_goal;
+    float init_goal_x;
+    float init_goal_y;
+    float init_goal_z;
     int active_agent;
     int mark_as_expert;
     float cumulative_displacement;
