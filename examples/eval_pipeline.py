@@ -318,7 +318,7 @@ def plot_scenes_with_events(df, ref_collisions, ref_offroad):
 
     Creates 1 figure with 2 subplots:
     1. Bar chart: Percentage of scenes with collision vs off-road events
-    2. Histogram: Distribution of number of collisions/off-road events per agent
+    2. Bar chart: Percentage of agents with at least one false positive
 
     Args:
         df: DataFrame with columns 'policy', 'num_collisions_ref', 'num_offroad_ref'
@@ -329,20 +329,8 @@ def plot_scenes_with_events(df, ref_collisions, ref_offroad):
     # Filter to only ground truth
     gt_df = df[df["policy"] == "ground_truth"].copy()
 
-    if len(gt_df) == 0:
-        print("Warning: No ground_truth policy found in dataframe")
-        return None
-
-    # Check which columns are available
-    has_collision_data = "num_collisions_ref" in gt_df.columns
-    has_offroad_data = "num_offroad_ref" in gt_df.columns
-
-    if not has_collision_data and not has_offroad_data:
-        print("Warning: No collision or off-road data columns found")
-        return None
-
     # Set style
-    sns.set("notebook", font_scale=1.05)
+    sns.set("notebook", font_scale=1.1)
     sns.set_style("ticks", rc={"figure.facecolor": "none", "axes.facecolor": "none"})
     warnings.filterwarnings("ignore")
     plt.set_loglevel("WARNING")
@@ -350,13 +338,12 @@ def plot_scenes_with_events(df, ref_collisions, ref_offroad):
     total_scenes = len(gt_df)
 
     # Calculate counts
-    scenes_with_collision = (gt_df["num_collisions_ref"] > 0).sum() if has_collision_data else 0
-    scenes_with_offroad = (gt_df["num_offroad_ref"] > 0).sum() if has_offroad_data else 0
+    scenes_with_collision = (gt_df["num_collisions_ref"] > 0).sum()
+    scenes_with_offroad = (gt_df["num_offroad_ref"] > 0).sum()
 
-    # Create figure with 2 subplots
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Left plot: Percentage bar chart (red colors for false positives)
+    # Left plot: Percentage bar chart
     pct_collision = (scenes_with_collision / total_scenes) * 100
     pct_offroad = (scenes_with_offroad / total_scenes) * 100
 
@@ -366,14 +353,14 @@ def plot_scenes_with_events(df, ref_collisions, ref_offroad):
         data=pct_data,
         x="Event type",
         y="Percentage",
-        palette=["lightcoral", "darkred"],  # Red colors for false positives
+        palette=["lightcoral", "darkred"],
         ax=axes[0],
         alpha=0.8,
     )
 
-    axes[0].set_title("Scenes with at least one event (Reference)")
+    axes[0].set_title("Scenes containing one or more\nfalse positives in reference trajectories")
     axes[0].set_xlabel("Event type")
-    axes[0].set_ylabel("Percentage of scenes (%)")
+    axes[0].set_ylabel("Percentage (%)")
     axes[0].set_ylim(0, max(pct_collision, pct_offroad) * 1.15)
     axes[0].grid(axis="y", alpha=0.3, linestyle="--")
 
@@ -388,24 +375,48 @@ def plot_scenes_with_events(df, ref_collisions, ref_offroad):
             fontweight="bold",
         )
 
-    # Add total scenes
-    axes[0].text(
-        0.98,
-        0.98,
-        f"Total scenes: {total_scenes}",
-        transform=axes[0].transAxes,
-        verticalalignment="top",
-        horizontalalignment="right",
-        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-        fontsize=9,
+    sns.despine(ax=axes[0])
+
+    # Middle plot: Percentage of agents with at least one false positive
+    avg_collision_fp_per_agent = (ref_collisions.sum(axis=-1) > 0).mean()
+    avg_offroad_fp_per_agent = (ref_offroad.sum(axis=-1) > 0).mean()
+
+    pct_fp_collision = avg_collision_fp_per_agent * 100
+    pct_fp_offroad = avg_offroad_fp_per_agent * 100
+    fp_data = pd.DataFrame({"Event type": ["Collision", "Off-road"], "Percentage": [pct_fp_collision, pct_fp_offroad]})
+
+    sns.barplot(
+        data=fp_data,
+        x="Event type",
+        y="Percentage",
+        palette=["lightcoral", "darkred"],
+        ax=axes[1],
+        alpha=0.8,
     )
 
-    sns.despine(ax=axes[0])
+    axes[1].set_title("Agents with at least one\nfalse positive in their trajectory")
+    axes[1].set_xlabel("Event type")
+    axes[1].set_ylabel("Percentage (%)")
+    axes[1].set_ylim(0, max(pct_fp_collision, pct_fp_offroad) * 1.15)
+    axes[1].grid(axis="y", alpha=0.3, linestyle="--")
+
+    # Add percentage labels on bars
+    for i, (idx, row) in enumerate(fp_data.iterrows()):
+        axes[1].text(
+            i,
+            row["Percentage"] + max(pct_fp_collision, pct_fp_offroad) * 0.02,
+            f"{row['Percentage']:.1f}%",
+            ha="center",
+            va="bottom",
+            fontweight="bold",
+        )
+
+    sns.despine(ax=axes[1])
 
     # Right plot: Distribution histogram
     # Calculate number of collisions and off-road events per agent across all timesteps
-    collisions_per_agent = ref_collisions.sum(axis=(1, 2))  # Sum across rollout and time dimensions
-    offroad_per_agent = ref_offroad.sum(axis=(1, 2))  # Sum across rollout and time dimensions
+    collisions_per_agent = ref_collisions.sum(axis=(1, 2))  # Sum across time dimensions
+    offroad_per_agent = ref_offroad.sum(axis=(1, 2))  # Sum across time dimensions
 
     # Create histogram data
     hist_data = []
@@ -416,51 +427,10 @@ def plot_scenes_with_events(df, ref_collisions, ref_offroad):
 
     hist_df = pd.DataFrame(hist_data)
 
-    # Plot overlapping histograms
-    colors = {"Collision": "lightcoral", "Off-road": "darkred"}  # Red colors for false positives
-    for event_type in ["Collision", "Off-road"]:
-        data = hist_df[hist_df["Event type"] == event_type]["Count"]
-        axes[1].hist(data, bins=20, alpha=0.6, color=colors[event_type], edgecolor="black", label=event_type)
-
-    axes[1].set_title("Distribution of events per agent")
-    axes[1].set_xlabel("Number of events per agent")
-    axes[1].set_ylabel("Number of agents")
-    axes[1].grid(axis="y", alpha=0.3, linestyle="--")
-    axes[1].legend()
-
-    # Add statistics
-    total_agents = len(collisions_per_agent)
-    total_collisions = collisions_per_agent.sum()
-    total_offroad = offroad_per_agent.sum()
-    agents_with_collisions = (collisions_per_agent > 0).sum()
-    agents_with_offroad = (offroad_per_agent > 0).sum()
-    pct_agents_collision = (agents_with_collisions / total_agents) * 100
-    pct_agents_offroad = (agents_with_offroad / total_agents) * 100
-
-    stats_text = f"Total agents: {total_agents}\n"
-    stats_text += f"\nCollision:\n"
-    stats_text += f"  Total events: {total_collisions}\n"
-    stats_text += f"  Agents w/ ≥1: {pct_agents_collision:.1f}%\n"
-    stats_text += f"\nOff-road:\n"
-    stats_text += f"  Total events: {total_offroad}\n"
-    stats_text += f"  Agents w/ ≥1: {pct_agents_offroad:.1f}%"
-
-    axes[1].text(
-        0.98,
-        0.98,
-        stats_text,
-        transform=axes[1].transAxes,
-        verticalalignment="top",
-        horizontalalignment="right",
-        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-        fontsize=9,
-    )
-
-    sns.despine(ax=axes[1])
+    sns.despine()
 
     plt.tight_layout()
     plt.savefig("wosac_scenes_with_events.png", dpi=300, bbox_inches="tight", facecolor="white")
-    plt.show()
 
     return fig
 
@@ -663,10 +633,11 @@ def pipeline(env_name="puffer_drive"):
     config = load_config(env_name)
 
     # Dataset configuration
-    config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/training"
-    config["eval"]["wosac_target_scenarios"] = 1000
+    config["eval"]["map_dir"] = "pufferlib/resources/drive/binaries/training"
+    config["eval"]["wosac_target_scenarios"] = 5000
     config["eval"]["wosac_batch_size"] = 100
-    config["eval"]["wosac_scenario_pool_size"] = 10_0000
+    config["eval"]["wosac_scenario_pool_size"] = 10000
+    config["eval"]["wosac_max_batches"] = 1000
 
     # WOSAC settings
     config["wosac"]["enabled"] = True
@@ -678,7 +649,8 @@ def pipeline(env_name="puffer_drive"):
     config["env"]["goal_behavior"] = 2  # Stop at goal
     config["env"]["goal_radius"] = 1.0
     config["env"]["save_data_to_disk"] = False
-
+    config["env"]["map_dir"] = config["eval"]["map_dir"]
+    config["env"]["num_maps"] = config["eval"]["wosac_scenario_pool_size"]
     # Make env
     vecenv = load_env(env_name, config)
 
@@ -687,8 +659,11 @@ def pipeline(env_name="puffer_drive"):
 
     # Baseline: Ground truth
     evaluator.eval_mode = "ground_truth"
-    df_results_gt = evaluator.evaluate(config, vecenv, policy=None)
-    ref_collisions, ref_offroad = evaluator.ref_collisions, evaluator.ref_offroad
+    df_results_gt, ref_collisions, ref_offroad = evaluator.evaluate(config, vecenv, policy=None)
+
+    ref_collisions = np.concatenate(ref_collisions, axis=0)
+    ref_offroad = np.concatenate(ref_offroad, axis=0)
+
     df_results_gt["policy"] = "ground_truth"
 
     # Baseline: Random policy
@@ -709,6 +684,7 @@ def pipeline(env_name="puffer_drive"):
     # Visualize basic results
     plot_wosac_results(df)
     plot_realism_score_distributions(df)
+
     plot_scenes_with_events(df, ref_collisions, ref_offroad)
 
     # # Run collision sensitivity analysis

@@ -63,6 +63,8 @@ class WOSACEvaluator:
 
         unique_files_sampled = set()
         combined_results = []
+        ref_collisions = []
+        ref_offroad = []
 
         with tqdm(total=100, desc="Processing batches", unit="%", colour="cyan") as pbar:
             batch_idx = 0
@@ -107,6 +109,8 @@ class WOSACEvaluator:
                 # Track coverage
                 unique_files_sampled.update(str(s) for s in np.unique(gt_trajectories["scenario_id"]))
                 combined_results.append(batch_results)
+                ref_collisions.append(self.ref_collisions)
+                ref_offroad.append(self.ref_offroad)
 
                 # Update progress
                 coverage = len(unique_files_sampled) / num_target_maps
@@ -139,7 +143,7 @@ class WOSACEvaluator:
 
             print(f"\nCollected {len(df_combined)} agent records from {batch_idx} batches")
 
-            return df_combined
+            return df_combined, ref_collisions, ref_offroad
 
     def _compute_metametric(self, metrics: pd.Series) -> float:
         metametric = 0.0
