@@ -662,6 +662,8 @@ def pipeline(env_name="puffer_drive"):
 
     config = load_config(env_name)
 
+    config["env"]["num_maps"] = 229
+    config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/validation_interactive_small"
     config["env"]["num_maps"] = 200
     config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/training"
     config["wosac"]["enabled"] = True
@@ -682,7 +684,9 @@ def pipeline(env_name="puffer_drive"):
     evaluator = WOSACEvaluator(config)
 
     # Baseline: Ground truth
-    df_results_gt, ref_collisions, ref_offroad = evaluate_ground_truth(config, vecenv, evaluator)
+    evaluator.eval_mode = "ground_truth"
+    df_results_gt = evaluator.evaluate(config, vecenv, policy=None)
+    ref_collisions, ref_offroad = evaluator.ref_collisions, evaluator.ref_offroad
     df_results_gt["policy"] = "ground_truth"
 
     # Baseline: Random policy
