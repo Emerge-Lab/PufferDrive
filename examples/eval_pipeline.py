@@ -46,7 +46,17 @@ def plot_wosac_results(df):
     mpl.rcParams["lines.markersize"] = 8
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    palette = sns.color_palette("Set2", n_colors=len(df["policy"].unique()))
+
+    set2_colors = sns.color_palette("Set2", n_colors=8)
+    color_map = {
+        "ground_truth": set2_colors[0],
+        "random": set2_colors[1],
+        "superhuman": set2_colors[2],
+    }
+
+    # Get palette in the order of policies in the dataframe
+    policies = df["policy"].unique()
+    palette = [color_map[policy] for policy in policies]
 
     # Left: Realism meta score
     sns.barplot(data=df, x="policy", y="realism_meta_score", errorbar="sd", palette=palette, ax=axes[0], alpha=0.8)
@@ -108,15 +118,20 @@ def plot_realism_score_distributions(df):
     if n_policies == 1:
         axes = [axes]
 
-    palette = sns.color_palette("Set2", n_colors=n_policies)
+    set2_colors = sns.color_palette("Set2", n_colors=8)
+    color_map = {
+        "ground_truth": set2_colors[0],
+        "random": set2_colors[1],
+        "superhuman": set2_colors[2],
+    }
 
-    total_scenes = df[df["policy"] == "random"]["realism_meta_score"].shape[0]
+    total_scenes = df[df["policy"] == policies[0]]["realism_meta_score"].shape[0]
 
     for idx, (policy, ax) in enumerate(zip(policies, axes)):
         policy_data = df[df["policy"] == policy]["realism_meta_score"]
 
-        # Plot histogram
-        ax.hist(policy_data, bins=20, alpha=0.8, color=palette[idx], edgecolor="black")
+        # Plot histogram with color based on policy name
+        ax.hist(policy_data, bins=20, alpha=0.8, color=color_map[policy], edgecolor="black")
 
         # Add mean line
         mean_val = policy_data.mean()
@@ -555,23 +570,6 @@ def evaluate_human_inferred_actions(config, vecenv, evaluator):
     return results
 
 
-def evaluate_random_policy(config, vecenv, evaluator):
-    gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
-    simulated_trajectories = evaluator.collect_wosac_random_baseline(vecenv)
-
-    # Compute metrics
-    agent_state = vecenv.driver_env.get_global_agent_state()
-    road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-    results = evaluator.compute_metrics(
-        gt_trajectories,
-        simulated_trajectories,
-        agent_state,
-        road_edge_polylines,
-    )
-
-    return results
-
-
 def evaluate_bc_policy(config, vecenv, evaluator, policy_path):
     config["train"]["use_rnn"] = False
     evaluator.mode = "bc_policy"
@@ -634,8 +632,8 @@ def pipeline(env_name="puffer_drive"):
 
     # Dataset configuration
     config["eval"]["map_dir"] = "pufferlib/resources/drive/binaries/training"
-    config["eval"]["wosac_target_scenarios"] = 5000
-    config["eval"]["wosac_batch_size"] = 100
+    config["eval"]["wosac_target_scenarios"] = 5500
+    config["eval"]["wosac_batch_size"] = 150
     config["eval"]["wosac_scenario_pool_size"] = 10000
     config["eval"]["wosac_max_batches"] = 1000
 
@@ -657,23 +655,28 @@ def pipeline(env_name="puffer_drive"):
     # Make evaluator
     evaluator = WOSACEvaluator(config)
 
+    # Baseline: Random policy
+    evaluator.eval_mode = "random"
+    df_results_random, _, _ = evaluator.evaluate(config, vecenv, policy=None)
+    df_results_random["policy"] = "random"
+
     # Baseline: Ground truth
     evaluator.eval_mode = "ground_truth"
     df_results_gt, ref_collisions, ref_offroad = evaluator.evaluate(config, vecenv, policy=None)
-
     ref_collisions = np.concatenate(ref_collisions, axis=0)
     ref_offroad = np.concatenate(ref_offroad, axis=0)
-
     df_results_gt["policy"] = "ground_truth"
 
-    # Baseline: Random policy
-    # df_results_random = evaluate_random_policy(config, vecenv, evaluator)
-    # df_results_random["policy"] = "random"
+    # Test: Superhuman policy
+    evaluator.eval_mode = "superhuman"
+    df_results_superhuman, _, _ = evaluator.evaluate(config, vecenv, policy=None)
+    df_results_superhuman["policy"] = "superhuman"
 
     # Combine results for basic plots
     df = pd.concat(
         [
             df_results_gt,
+            df_results_superhuman,
             # df_results_random,
         ],
         ignore_index=True,
@@ -684,7 +687,6 @@ def pipeline(env_name="puffer_drive"):
     # Visualize basic results
     plot_wosac_results(df)
     plot_realism_score_distributions(df)
-
     plot_scenes_with_events(df, ref_collisions, ref_offroad)
 
     # # Run collision sensitivity analysis

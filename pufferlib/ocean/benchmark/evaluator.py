@@ -79,7 +79,7 @@ class WOSACEvaluator:
                 # Collect simulated trajectories
                 if policy is not None and self.eval_mode == "policy":
                     simulated_trajectories = self.collect_simulated_trajectories(args, vecenv, policy)
-                elif self.eval_mode == "ground_truth":
+                elif self.eval_mode == "ground_truth" or self.eval_mode == "superhuman":
                     # Create fake simulated trajectories by repeating ground truth
                     simulated_trajectories = gt_trajectories.copy()
                     for key in ["x", "y", "heading", "id"]:
@@ -88,19 +88,31 @@ class WOSACEvaluator:
                         )
                     simulated_trajectories["id"] = simulated_trajectories["id"][..., np.newaxis]
                     simulated_trajectories["dones"] = np.zeros_like(simulated_trajectories["x"])
+                elif self.eval_mode == "random":
+                    simulated_trajectories = self.collect_wosac_random_baseline(vecenv)
                 else:
                     raise ValueError(f"Policy is None or unknown evaluation mode: {self.eval_mode}")
 
                 # Compute metrics for this batch
                 agent_state = vecenv.driver_env.get_global_agent_state()
                 road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-                batch_results = self.compute_metrics(
-                    gt_trajectories,
-                    simulated_trajectories,
-                    agent_state,
-                    road_edge_polylines,
-                    aggregate_results=False,
-                )
+                if self.eval_mode == "superhuman":
+                    batch_results = self.compute_metrics(
+                        gt_trajectories,
+                        simulated_trajectories,
+                        agent_state,
+                        road_edge_polylines,
+                        aggregate_results=False,
+                        remove_all_sim_collision_and_offroad_events=True,
+                    )
+                else:
+                    batch_results = self.compute_metrics(
+                        gt_trajectories,
+                        simulated_trajectories,
+                        agent_state,
+                        road_edge_polylines,
+                        aggregate_results=False,
+                    )
 
                 # Optional: sanity check on first batch
                 if args["eval"].get("wosac_sanity_check", False) and batch_idx == 0:
@@ -312,6 +324,7 @@ class WOSACEvaluator:
         aggregate_results: bool = False,
         collisions_to_add_per_rollout: int = 0,
         collisions_to_add_per_timestep: int = 0,
+        remove_all_sim_collision_and_offroad_events: bool = False,
     ) -> Dict:
         """Compute realism metrics comparing simulated and ground truth trajectories.
 
@@ -602,6 +615,11 @@ class WOSACEvaluator:
             # Always add to first rollout
             sim_collision_per_step[:, 0, :collisions_to_add_per_timestep] = True
 
+        if remove_all_sim_collision_and_offroad_events:
+            # Remove any collision and offroad events in the simulated trajectories to mimic a superhuman policy
+            sim_collision_per_step = np.zeros_like(sim_collision_per_step, dtype=bool)
+            sim_offroad_per_step = np.zeros_like(sim_offroad_per_step, dtype=bool)
+
         # Shape is (n_agents, n_rollouts)
         sim_collision_indication = np.any(np.where(active_mask, sim_collision_per_step, False), axis=2)
         ref_collision_indication = np.any(np.where(active_mask, ref_collision_per_step, False), axis=2)
@@ -664,10 +682,6 @@ class WOSACEvaluator:
 
         # Aggregate along agent dimenision: Obtain one score per scenario
         df_scene_level = df.groupby("scenario_id", as_index=True).mean().drop(columns=["agent_id"]).dropna()
-
-        print(f"Total collisions in references: {ref_num_collisions.sum()}")
-        print(f"Total offroad events in references: {ref_num_offroad.sum()}")
-        print(f"Perce")
 
         # Exponentiate the averaged log-likelihoods to get final likelihoods
         likelihood_columns = [col for col in df_scene_level.columns if col.startswith("likelihood_")]
