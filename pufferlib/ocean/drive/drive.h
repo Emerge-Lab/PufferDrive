@@ -60,6 +60,17 @@
 #define CONTROL_WOSAC 2
 #define CONTROL_SDC_ONLY 3
 
+// Simulation modes
+#define SIMULATION_GIGAFLOW 0
+#define SIMULATION_REPLAY 1
+
+// Lane selection scoring
+#define LANE_SELECTION_DISTANCE_WEIGHT 0.6f
+#define LANE_SELECTION_HEADING_WEIGHT 0.4f
+#define LANE_DISTANCE_NORMALIZATION 4.0f
+#define LANE_SWITCH_THRESHOLD 0.05f // Hysteresis: new lane must be 5% better to switch
+#define LANE_ALIGN_COS_THRESHOLD 0.5f
+
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
 
@@ -78,14 +89,27 @@
 // Metrics array indices
 #define COLLISION_IDX 0
 #define OFFROAD_IDX 1
-#define REACHED_GOAL_IDX 2
-#define LANE_ALIGNED_IDX 3
+#define RED_LIGHT_IDX 2
+#define REACHED_GOAL_IDX 3
+#define LANE_DIST_IDX 4
+#define LANE_ANGLE_IDX 5
+#define COMFORT_VIOLATION_IDX 6
+#define VELOCITY_PROGRESS_IDX 7
+#define SPEED_LIMIT_IDX 8
+#define AVG_DISPLACEMENT_ERROR_IDX 9
+#define LANE_ALIGNED_IDX 10
 
 // Grid cell size
 #define GRID_CELL_SIZE 5.0f
 
 // Observation constants
+#define MAX_LANE_SEGMENT_OBSERVATIONS 128
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
+#define ROAD_OBS_FRONT_DIST 100.0f
+#define ROAD_OBS_BEHIND_DIST 20.0f
+#define ROAD_OBS_SIDE_DIST 20.0f
+#define MAX_AGENTS_OBSERVATIONS 16
+#define MAX_TRAFFIC_CONTROLS 1
 #ifndef MAX_AGENTS
 #define MAX_AGENTS 32
 #endif
@@ -95,6 +119,15 @@
 #define ROAD_FEATURES 8
 #define ROAD_FEATURES_ONEHOT 14
 #define PARTNER_FEATURES 8
+#define TRAFFIC_CONTROL_FEATURES 3
+#define STATIC_TARGET_FEATURES 2
+#define DYNAMIC_TARGET_FEATURES 4
+
+#define MAX_CHECKED_LANES 32
+
+// Traffic light observations
+#define MAX_TRAFFIC_LIGHT_DISTANCE 40.0f
+#define TRAFFIC_LIGHT_DISTANCE_THRESHOLD 10.0f
 
 // Ego features depend on dynamics model
 #define EGO_FEATURES_CLASSIC 11
@@ -119,6 +152,10 @@
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
+
+// TARGET_TYPE modes (controls what target info is in observations)
+#define TARGET_STATIC 0
+#define TARGET_DYNAMIC 1
 
 // Offsets
 #define COLLISION_RANGE 5
@@ -228,10 +265,12 @@ struct Drive {
     float *actions;
     float *rewards;
     unsigned char *terminals;
+    unsigned char *truncations;
     Log log;
     Log *logs;
     int num_agents;
     int active_agent_count;
+    int num_controllable_agents; // Max number of controllable agents
     int *active_agent_indices;
     int action_type;
     int human_agent_idx;
@@ -259,6 +298,8 @@ struct Drive {
     int termination_mode;
     float reward_vehicle_collision;
     float reward_offroad_collision;
+    float reward_traffic_light_violation;
+    float reward_ade;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -266,21 +307,50 @@ struct Drive {
     float dt;
     float reward_goal;
     float reward_goal_post_respawn;
+    float reward_overspeed;
+    float reward_comfort;
+    float reward_velocity;
+    float reward_lane_align;
+    float reward_lane_center;
+    float reward_timestep;
+    float reward_reverse;
     float goal_radius;
+    float min_goal_spacing;
+    float max_goal_spacing;
+    int num_target_waypoints;
     float goal_speed;
     int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
     float goal_target_distance;
+    int reach_goal_behavior;
+    int target_type;
     char *ini_file;
     char *scenario_id;
     int collision_behavior;
     int offroad_behavior;
     int sdc_track_index;
+    int traffic_light_behavior; // 0 = none, 1=stop, 2 = remove
+    int end_sdc_path_behavior;  // 0 = none, 1=stop, 2 = remove
+    int control_non_vehicles;
+    // Metadata fields
+    char scenario_id[128];
+    int map_index;
+    char dataset_name[64];
+    int log_length;
+    int sdc_index;
+    int num_objects_of_interest;
+    int *objects_of_interest;
     int num_tracks_to_predict;
     int *tracks_to_predict_indices;
+    int *tracks_to_predict;
     int init_mode;
     int control_mode;
+    int simulation_mode;
+    int termination_mode;
+    int reward_conditioning;
+    int reward_randomization;
+    int eval_mode;
 };
 
 // ========================================
@@ -302,6 +372,23 @@ int check_lane_aligned(Agent *car, RoadMapElement *lane, int geometry_idx);
 float relative_distance(float a, float b) {
     float distance = sqrtf(powf(a - b, 2));
     return distance;
+}
+
+typedef struct {
+    int index;
+    float dist_sq;
+    float dx; // Store dx/dy to avoid re-calculating
+    float dy;
+} AgentDistance;
+
+static int compare_agent_dist(const void *a, const void *b) {
+    AgentDistance *agentA = (AgentDistance *)a;
+    AgentDistance *agentB = (AgentDistance *)b;
+    if (agentA->dist_sq < agentB->dist_sq)
+        return -1;
+    if (agentA->dist_sq > agentB->dist_sq)
+        return 1;
+    return 0;
 }
 
 // NOTE: Valentin renamed to compute_euclidean_distance, we will have to re-think
@@ -391,10 +478,48 @@ void set_means(Drive *env) {
             mean_z += (road->z[j] - mean_z) / point_count;
         }
     }
+    // Compute mean from dynamic agents
+    for (int i = 0; i < env->num_total_agents; i++) {
+        Agent *agent = &env->agents[i];
+        for (int j = 0; j < agent->trajectory_length; j++) {
+            if (agent->log_valid[j]) {
+                point_count++;
+                mean_x += (agent->log_trajectory_x[j] - mean_x) / point_count;
+                mean_y += (agent->log_trajectory_y[j] - mean_y) / point_count;
+                mean_z += (agent->log_trajectory_z[j] - mean_z) / point_count;
+            }
+        }
+    }
+
+    // Compute mean from road elements
+    for (int i = 0; i < env->num_road_elements; i++) {
+        RoadMapElement *element = &env->road_elements[i];
+        for (int j = 0; j < element->segment_length; j++) {
+            if (element->x[j] == INVALID_POSITION)
+                continue;
+            point_count++;
+            mean_x += (element->x[j] - mean_x) / point_count;
+            mean_y += (element->y[j] - mean_y) / point_count;
+            mean_z += (element->z[j] - mean_z) / point_count;
+        }
+    }
+
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *element = &env->traffic_elements[i];
+        if (element->x == INVALID_POSITION)
+            continue;
+        point_count++;
+        mean_x += (element->x - mean_x) / point_count;
+        mean_y += (element->y - mean_y) / point_count;
+        mean_z += (element->z - mean_z) / point_count;
+    }
+
     env->world_mean_x = mean_x;
     env->world_mean_y = mean_y;
     env->world_mean_z = mean_z;
-    for (int i = 0; i < env->num_objects; i++) {
+
+    // Subtract mean from dynamic agents
+    for (int i = 0; i < env->num_total_agents; i++) {
         Agent *agent = &env->agents[i];
         for (int j = 0; j < agent->trajectory_length; j++) {
             if (agent->log_trajectory_x[j] == INVALID_POSITION)
@@ -403,19 +528,37 @@ void set_means(Drive *env) {
             agent->log_trajectory_y[j] -= mean_y;
             agent->log_trajectory_z[j] -= mean_z;
         }
+        // Normalize current sim position (scalars)
+        if (agent->sim_x != INVALID_POSITION) {
+            agent->sim_x -= mean_x;
+            agent->sim_y -= mean_y;
+            agent->sim_z -= mean_z;
+        }
         agent->goal_position_x -= mean_x;
         agent->goal_position_y -= mean_y;
         agent->goal_position_z -= mean_z;
     }
-    for (int i = 0; i < env->num_roads; i++) {
-        RoadMapElement *road = &env->road_elements[i];
-        for (int j = 0; j < road->segment_length; j++) {
-            if (road->x[j] == INVALID_POSITION)
+
+    // Subtract mean from road elements
+    for (int i = 0; i < env->num_road_elements; i++) {
+        RoadMapElement *element = &env->road_elements[i];
+        for (int j = 0; j < element->segment_length; j++) {
+            if (element->x[j] == INVALID_POSITION)
                 continue;
-            road->x[j] -= mean_x;
-            road->y[j] -= mean_y;
-            road->z[j] -= mean_z;
+            element->x[j] -= mean_x;
+            element->y[j] -= mean_y;
+            element->z[j] -= mean_z;
         }
+    }
+
+    // Subtract mean from traffic elements
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *element = &env->traffic_elements[i];
+        if (element->x == INVALID_POSITION)
+            continue;
+        element->x -= mean_x;
+        element->y -= mean_y;
+        element->z -= mean_z;
     }
 }
 
@@ -723,126 +866,324 @@ GridMapEntity *checkNeighbors(Drive *env, float x, float y, const int (*local_of
 // Map Loading Functions
 // ========================================
 
-void load_map_binary(const char *filename, Drive *env) {
+int *load_map_binary(const char *filename, Drive *env) {
     FILE *file = fopen(filename, "rb");
     if (!file)
-        return;
+        {return -1;}
 
-    // Read sdc_track_index
-    fread(&env->sdc_track_index, sizeof(int), 1, file);
-
-    // Read tracks_to_predict
-    fread(&env->num_tracks_to_predict, sizeof(int), 1, file);
-    if (env->num_tracks_to_predict > 0) {
-        env->tracks_to_predict_indices = (int *)malloc(env->num_tracks_to_predict * sizeof(int));
-
-        for (int i = 0; i < env->num_tracks_to_predict; i++) {
-            fread(&env->tracks_to_predict_indices[i], sizeof(int), 1, file);
-        }
-    } else {
-        env->tracks_to_predict_indices = NULL;
+    int num_total_agents, num_roads, num_traffic;
+    if (fread(&num_total_agents, sizeof(int), 1, file) != 1) {
+        fclose(file);
+        return -1;
+    }
+    if (fread(&num_roads, sizeof(int), 1, file) != 1) {
+        fclose(file);
+        return -1;
+    }
+    if (fread(&num_traffic, sizeof(int), 1, file) != 1) {
+        fclose(file);
+        return -1;
     }
 
-    fread(&env->num_objects, sizeof(int), 1, file);
-    fread(&env->num_roads, sizeof(int), 1, file);
+    env->num_total_agents = num_total_agents;
+    env->num_road_elements = num_roads;
+    env->num_traffic_elements = num_traffic;
 
-    env->agents = (Agent *)calloc(env->num_objects, sizeof(Agent));
-    env->road_elements = (RoadMapElement *)calloc(env->num_roads, sizeof(RoadMapElement));
-    env->road_scenario_ids = (int *)calloc(env->num_roads, sizeof(int));
+    if (num_total_agents > 0) {
+        env->agents = (Agent *)calloc(num_total_agents, sizeof(Agent));
+    }
 
-    int total_entities = env->num_objects + env->num_roads;
-    int agent_idx = 0;
-    int road_idx = 0;
-    for (int i = 0; i < total_entities; i++) {
-        int scenario_id = 0;
-        int type = 0;
-        int id = 0;
-        int array_size = 0;
-        float width = 0.0f, length = 0.0f, height = 0.0f;
-        float goal_x = 0.0f, goal_y = 0.0f, goal_z = 0.0f;
-        int mark_as_expert = 0;
+    if (num_roads > 0) {
+        env->road_elements = (RoadMapElement *)calloc(num_roads, sizeof(RoadMapElement));
+    }
 
-        // Read base entity data
-        fread(&scenario_id, sizeof(int), 1, file);
-        fread(&type, sizeof(int), 1, file);
-        fread(&id, sizeof(int), 1, file);
-        fread(&array_size, sizeof(int), 1, file);
+    if (num_traffic > 0) {
+        env->traffic_elements = (TrafficControlElement *)calloc(num_traffic, sizeof(TrafficControlElement));
+    }
 
-        if (i < env->num_objects) {
-            Agent *agent = &env->agents[agent_idx];
-            agent->id = id;
-            agent->type = type;
-            agent->scenario_id = scenario_id;
-            agent->trajectory_length = array_size;
+    for (int i = 0; i < num_total_agents; i++) {
+        Agent *agent = &env->agents[i];
 
-            agent->log_trajectory_x = (float *)malloc(array_size * sizeof(float));
-            agent->log_trajectory_y = (float *)malloc(array_size * sizeof(float));
-            agent->log_trajectory_z = (float *)malloc(array_size * sizeof(float));
-            agent->log_velocity_x = (float *)malloc(array_size * sizeof(float));
-            agent->log_velocity_y = (float *)malloc(array_size * sizeof(float));
-            agent->log_heading = (float *)malloc(array_size * sizeof(float));
-            agent->log_valid = (int *)malloc(array_size * sizeof(int));
-
-            fread(agent->log_trajectory_x, sizeof(float), array_size, file);
-            fread(agent->log_trajectory_y, sizeof(float), array_size, file);
-            fread(agent->log_trajectory_z, sizeof(float), array_size, file);
-            fread(agent->log_velocity_x, sizeof(float), array_size, file);
-            fread(agent->log_velocity_y, sizeof(float), array_size, file);
-
-            // Skip velocity z (unused)
-            float *tmp_vz = (float *)malloc(array_size * sizeof(float));
-            fread(tmp_vz, sizeof(float), array_size, file);
-            free(tmp_vz);
-
-            fread(agent->log_heading, sizeof(float), array_size, file);
-            fread(agent->log_valid, sizeof(int), array_size, file);
-
-            // Read remaining scalar fields
-            fread(&width, sizeof(float), 1, file);
-            fread(&length, sizeof(float), 1, file);
-            fread(&height, sizeof(float), 1, file);
-            fread(&goal_x, sizeof(float), 1, file);
-            fread(&goal_y, sizeof(float), 1, file);
-            fread(&goal_z, sizeof(float), 1, file);
-            fread(&mark_as_expert, sizeof(int), 1, file);
-
-            agent->sim_width = width;
-            agent->sim_length = length;
-            agent->sim_height = height;
-            agent->goal_position_x = goal_x;
-            agent->goal_position_y = goal_y;
-            agent->goal_position_z = goal_z;
-            agent->mark_as_expert = mark_as_expert;
-            agent_idx++;
-        } else {
-            RoadMapElement *road = &env->road_elements[road_idx];
-            road->id = id;
-            road->type = type;
-            road->segment_length = array_size;
-
-            road->x = (float *)malloc(array_size * sizeof(float));
-            road->y = (float *)malloc(array_size * sizeof(float));
-            road->z = (float *)malloc(array_size * sizeof(float));
-
-            fread(road->x, sizeof(float), array_size, file);
-            fread(road->y, sizeof(float), array_size, file);
-            fread(road->z, sizeof(float), array_size, file);
-
-            // Read and discard remaining scalar fields
-            fread(&width, sizeof(float), 1, file);
-            fread(&length, sizeof(float), 1, file);
-            fread(&height, sizeof(float), 1, file);
-            fread(&goal_x, sizeof(float), 1, file);
-            fread(&goal_y, sizeof(float), 1, file);
-            fread(&goal_z, sizeof(float), 1, file);
-            fread(&mark_as_expert, sizeof(int), 1, file);
-
-            env->road_scenario_ids[road_idx] = scenario_id;
-            road_idx++;
+        if (fread(&agent->id, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
         }
+        if (fread(&agent->type, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&agent->trajectory_length, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+
+        int tlen = agent->trajectory_length;
+        agent->log_trajectory_x = (float *)malloc(tlen * sizeof(float));
+        agent->log_trajectory_y = (float *)malloc(tlen * sizeof(float));
+        agent->log_trajectory_z = (float *)malloc(tlen * sizeof(float));
+        agent->log_heading = (float *)malloc(tlen * sizeof(float));
+        agent->log_velocity_x = (float *)malloc(tlen * sizeof(float));
+        agent->log_velocity_y = (float *)malloc(tlen * sizeof(float));
+        agent->log_length = (float *)malloc(tlen * sizeof(float));
+        agent->log_width = (float *)malloc(tlen * sizeof(float));
+        agent->log_height = (float *)malloc(tlen * sizeof(float));
+        agent->log_valid = (int *)malloc(tlen * sizeof(int));
+
+        if ((size_t)tlen > 0 && fread(agent->log_trajectory_x, sizeof(float), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)tlen > 0 && fread(agent->log_trajectory_y, sizeof(float), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)tlen > 0 && fread(agent->log_trajectory_z, sizeof(float), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)tlen > 0 && fread(agent->log_heading, sizeof(float), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)tlen > 0 && fread(agent->log_velocity_x, sizeof(float), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)tlen > 0 && fread(agent->log_velocity_y, sizeof(float), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)tlen > 0 && fread(agent->log_length, sizeof(float), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)tlen > 0 && fread(agent->log_width, sizeof(float), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)tlen > 0 && fread(agent->log_height, sizeof(float), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)tlen > 0 && fread(agent->log_valid, sizeof(int), tlen, file) != (size_t)tlen) {
+            fclose(file);
+            return -1;
+        }
+
+        if (fread(&agent->route_length, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+
+        if (agent->route_length > 0) {
+            agent->route = (int *)malloc(agent->route_length * sizeof(int));
+            if (fread(agent->route, sizeof(int), agent->route_length, file) != (size_t)agent->route_length) {
+                fclose(file);
+                return -1;
+            }
+        } else {
+            agent->route = NULL;
+        }
+
+        if (fread(&agent->goal_position_x, sizeof(float), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&agent->goal_position_y, sizeof(float), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&agent->goal_position_z, sizeof(float), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&agent->mark_as_expert, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+    }
+
+    for (int i = 0; i < num_roads; i++) {
+        RoadMapElement *road = &env->road_elements[i];
+
+        if (fread(&road->id, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&road->type, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&road->segment_length, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+
+        int slen = road->segment_length;
+
+        road->x = (float *)malloc(slen * sizeof(float));
+        road->y = (float *)malloc(slen * sizeof(float));
+        road->z = (float *)malloc(slen * sizeof(float));
+
+        if ((size_t)slen > 0 && fread(road->x, sizeof(float), slen, file) != (size_t)slen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)slen > 0 && fread(road->y, sizeof(float), slen, file) != (size_t)slen) {
+            fclose(file);
+            return -1;
+        }
+        if ((size_t)slen > 0 && fread(road->z, sizeof(float), slen, file) != (size_t)slen) {
+            fclose(file);
+            return -1;
+        }
+
+        if (is_road_lane(road->type)) {
+            if (fread(&road->num_entries, sizeof(int), 1, file) != 1) {
+                fclose(file);
+                return -1;
+            }
+            if (road->num_entries > 0) {
+                road->entry_lanes = (int *)malloc(road->num_entries * sizeof(int));
+                if (fread(road->entry_lanes, sizeof(int), road->num_entries, file) != (size_t)road->num_entries) {
+                    fclose(file);
+                    return -1;
+                }
+            } else {
+                road->entry_lanes = NULL;
+            }
+
+            if (fread(&road->num_exits, sizeof(int), 1, file) != 1) {
+                fclose(file);
+                return -1;
+            }
+            if (road->num_exits > 0) {
+                road->exit_lanes = (int *)malloc(road->num_exits * sizeof(int));
+                if (fread(road->exit_lanes, sizeof(int), road->num_exits, file) != (size_t)road->num_exits) {
+                    fclose(file);
+                    return -1;
+                }
+            } else {
+                road->exit_lanes = NULL;
+            }
+
+            if (fread(&road->speed_limit, sizeof(float), 1, file) != 1) {
+                fclose(file);
+                return -1;
+            }
+        } else {
+            road->entry_lanes = NULL;
+            road->exit_lanes = NULL;
+            road->speed_limit = 0.0f;
+        }
+    }
+
+    for (int i = 0; i < num_traffic; i++) {
+        TrafficControlElement *traffic = &env->traffic_elements[i];
+
+        if (fread(&traffic->id, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&traffic->type, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&traffic->x, sizeof(float), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&traffic->y, sizeof(float), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&traffic->z, sizeof(float), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (fread(&traffic->state_length, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+
+        int state_len = traffic->state_length;
+
+        traffic->states = (int *)malloc(state_len * sizeof(int));
+        if ((size_t)state_len > 0 && fread(traffic->states, sizeof(int), state_len, file) != (size_t)state_len) {
+            fclose(file);
+            return -1;
+        }
+
+        if (fread(&traffic->num_controlled_lanes, sizeof(int), 1, file) != 1) {
+            fclose(file);
+            return -1;
+        }
+        if (traffic->num_controlled_lanes > 0) {
+            traffic->controlled_lanes = (int *)malloc(traffic->num_controlled_lanes * sizeof(int));
+            if (fread(traffic->controlled_lanes, sizeof(int), traffic->num_controlled_lanes, file) !=
+                (size_t)traffic->num_controlled_lanes) {
+                fclose(file);
+                return -1;
+            }
+        } else {
+            traffic->controlled_lanes = NULL;
+        }
+    }
+
+    if (fread(env->scenario_id, sizeof(char), 128, file) != 128) {
+        fclose(file);
+        return -1;
+    }
+    if (fread(&env->map_index, sizeof(int), 1, file) != 1) {
+        fclose(file);
+        return -1;
+    }
+    if (fread(env->dataset_name, sizeof(char), 64, file) != 64) {
+        fclose(file);
+        return -1;
+    }
+    if (fread(&env->log_length, sizeof(int), 1, file) != 1) {
+        fclose(file);
+        return -1;
+    }
+    if (fread(&env->sdc_index, sizeof(int), 1, file) != 1) {
+        fclose(file);
+        return -1;
+    }
+    if (fread(&env->num_objects_of_interest, sizeof(int), 1, file) != 1) {
+        fclose(file);
+        return -1;
+    }
+
+    if (env->num_objects_of_interest > 0) {
+        env->objects_of_interest = (int *)malloc(env->num_objects_of_interest * sizeof(int));
+        if (fread(env->objects_of_interest, sizeof(int), env->num_objects_of_interest, file) !=
+            (size_t)env->num_objects_of_interest) {
+            fclose(file);
+            return -1;
+        }
+    } else {
+        env->objects_of_interest = NULL;
+    }
+
+    if (fread(&env->num_tracks_to_predict, sizeof(int), 1, file) != 1) {
+        fclose(file);
+        return -1;
+    }
+
+    if (env->num_tracks_to_predict > 0) {
+        env->tracks_to_predict = (int *)malloc(env->num_tracks_to_predict * sizeof(int));
+        if (fread(env->tracks_to_predict, sizeof(int), env->num_tracks_to_predict, file) !=
+            (size_t)env->num_tracks_to_predict) {
+            fclose(file);
+            return -1;
+        }
+    } else {
+        env->tracks_to_predict = NULL;
     }
 
     fclose(file);
+    return 0;
 }
 
 // ========================================
@@ -1410,10 +1751,27 @@ void c_close(Drive *env) {
     free(env->ini_file);
 }
 
+static int compute_observation_size(Drive *env) {
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+
+    int max_obs = ego_dim + PARTNER_FEATURES * MAX_AGENTS_OBSERVATIONS +
+                  ROAD_FEATURES * (MAX_LANE_SEGMENT_OBSERVATIONS + MAX_ROAD_SEGMENT_OBSERVATIONS) +
+                  TRAFFIC_CONTROL_FEATURES * MAX_TRAFFIC_CONTROLS;
+    if (env->reward_conditioning) {
+        max_obs += NUM_REWARD_COEFS;
+    }
+    if (env->target_type == TARGET_STATIC) {
+        max_obs += env->num_target_waypoints * STATIC_TARGET_FEATURES;
+    } else if (env->target_type == TARGET_DYNAMIC) {
+        max_obs += env->num_target_waypoints * DYNAMIC_TARGET_FEATURES;
+    }
+
+    return max_obs;
+}
+
 void allocate(Drive *env) {
     init(env);
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = compute_observation_size(env);
     env->observations = (float *)calloc(env->active_agent_count * max_obs, sizeof(float));
     env->actions = (float *)calloc(env->active_agent_count * 2, sizeof(float));
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
@@ -1645,23 +2003,31 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 // void compute_rewards(void){}
 
 void compute_observations(Drive *env) {
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = compute_observation_size(env);
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     for (int i = 0; i < env->active_agent_count; i++) {
         float *obs = &observations[i][0];
-        int ego_idx = env->active_agent_indices[i];
-        Agent *ego_entity = &env->agents[ego_idx];
-        if (ego_entity->type > CYCLIST)
+        int obs_idx = 0;
+        Agent *ego_entity = &env->agents[env->active_agent_indices[i]];
+        if (ego_entity->type > 3)
             break;
 
-        float cos_heading = cosf(ego_entity->sim_heading);
-        float sin_heading = sinf(ego_entity->sim_heading);
-        float speed_magnitude =
-            sqrtf(ego_entity->sim_vx * ego_entity->sim_vx + ego_entity->sim_vy * ego_entity->sim_vy);
-        float v_dot_heading = ego_entity->sim_vx * cos_heading + ego_entity->sim_vy * sin_heading;
-        float signed_speed = copysignf(speed_magnitude, v_dot_heading);
+        float ego_heading = ego_entity->sim_heading;
+        float cos_heading = cosf(ego_heading);
+        float sin_heading = sinf(ego_heading);
+
+        if (env->dynamics_model == JERK) {
+            obs[obs_idx++] = ego_entity->steering_angle / M_PI;
+            obs[obs_idx++] =
+                (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
+            obs[obs_idx++] = ego_entity->a_lat / JERK_LAT[2];
+        }
+
+        float lane_center_dist = ego_entity->metrics_array[LANE_DIST_IDX] / LANE_DISTANCE_NORMALIZATION;
+        lane_center_dist = fmaxf(-1.0f, fminf(1.0f, lane_center_dist));
+        obs[obs_idx++] = lane_center_dist;
+        obs[obs_idx++] = ego_entity->metrics_array[LANE_ANGLE_IDX];
 
         // Set goal distances
         float goal_x = ego_entity->goal_position_x - ego_entity->sim_x;
@@ -1680,41 +2046,22 @@ void compute_observations(Drive *env) {
         if (current_lane_index != -1 && env->road_elements[current_lane_index].speed_limit > 0) {
             speed_limit = env->road_elements[current_lane_index].speed_limit;
         }
+        obs[obs_idx++] = fminf(speed_limit / MAX_SPEED, 1.0f);
+        obs[obs_idx++] =
+            (ego_entity->respawn_timestep != -1) ? 1 : 0; // This wasnt in Valentin's PR, but was in 3.0 codebase
+        obs[obs_idx++] = rel_goal_x * 0.005f;
+        obs[obs_idx++] = rel_goal_y * 0.005f;
+        obs[obs_idx++] = rel_goal_z * 0.005f;
+        obs[obs_idx++] =
+            ego_entity->sim_speed_signed / MAX_SPEED; // Valentin's code has sim_speed but we use the signed variant
+        obs[obs_idx++] = ego_entity->sim_width / MAX_VEH_WIDTH;
+        obs[obs_idx++] = ego_entity->sim_length / MAX_VEH_LEN;
+        obs[obs_idx++] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
 
-        // Adding lane center calculation
-        float lane_center_dist = ego_entity->metrics_array[LANE_DIST_IDX] / LANE_DISTANCE_NORMALIZATION;
-        lane_center_dist = fmaxf(-1.0f, fminf(1.0f, lane_center_dist));
-
-        obs[0] = rel_goal_x * 0.005f;
-        obs[1] = rel_goal_y * 0.005f;
-        obs[2] = rel_goal_z * 0.005f;
-        obs[3] = signed_speed / MAX_SPEED;
-        obs[4] = ego_entity->sim_width / MAX_VEH_WIDTH;
-        obs[5] = ego_entity->sim_length / MAX_VEH_LEN;
-        obs[6] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
-
-        if (env->dynamics_model == JERK) {
-            obs[7] = ego_entity->steering_angle / M_PI;
-            // Asymmetric normalization for a_long to match action space
-            obs[8] =
-                (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
-            obs[9] = ego_entity->a_lat / JERK_LAT[2];
-            obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            // Adding speed limit and lane center/lane angle observations
-            obs[11] = fminf(speed_limit / MAX_SPEED, 1.0f);
-            obs[12] = lane_center_dist;
-            obs[13] = ego_entity->metrics_array[LANE_ANGLE_IDX];
-        } else {
-            obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            // Adding speed limit and lane center/lane angle observations
-            obs[8] = fminf(speed_limit / MAX_SPEED, 1.0f);
-            obs[9] = lane_center_dist;
-            obs[10] = ego_entity->metrics_array[LANE_ANGLE_IDX];
-        }
-        // TODO - Add Reward conditioning observations next
+        // TODO - Add Reward conditioning observations next, also modifications for static/dynamic raget are not
+        // implemented yet
 
         // Relative Pos of other cars
-        int obs_idx = ego_dim;
         int cars_seen = 0;
         for (int j = 0; j < MAX_AGENTS; j++) {
             int index = -1;
@@ -1725,16 +2072,20 @@ void compute_observations(Drive *env) {
             }
             if (index == -1)
                 continue;
-            if (env->agents[index].type > CYCLIST)
-                break;
+            if (env->agents[index].type > 3)
+                continue; // Why was this "break" before ?
             if (index == env->active_agent_indices[i])
                 continue; // Skip self, but don't increment obs_idx
+            Agent *other_entity = &env->agents[index];
             Agent *other_entity = &env->agents[index];
             if (ego_entity->respawn_timestep != -1)
                 continue;
             if (other_entity->respawn_timestep != -1)
                 continue;
             // Store original relative positions
+            float dx = other_entity->sim_x - ego_entity->sim_x;
+            float dy = other_entity->sim_y - ego_entity->sim_y;
+            float dz = other_entity->sim_z - ego_entity->sim_z;
             float dx = other_entity->sim_x - ego_entity->sim_x;
             float dy = other_entity->sim_y - ego_entity->sim_y;
             float dz = other_entity->sim_z - ego_entity->sim_z;
@@ -1751,18 +2102,25 @@ void compute_observations(Drive *env) {
             obs[obs_idx + 2] = rel_z * 0.02f;
             obs[obs_idx + 3] = other_entity->sim_width / MAX_VEH_WIDTH;
             obs[obs_idx + 4] = other_entity->sim_length / MAX_VEH_LEN;
+            obs[obs_idx + 3] = other_entity->sim_width / MAX_VEH_WIDTH;
+            obs[obs_idx + 4] = other_entity->sim_length / MAX_VEH_LEN;
             // relative heading
-            float other_cos = cosf(other_entity->sim_heading);
-            float other_sin = sinf(other_entity->sim_heading);
+            float other_heading = other_entity->sim_heading;
+            float other_cos = cosf(other_heading);
+            float other_sin = sinf(other_heading);
             float rel_heading_x =
                 other_cos * cos_heading + other_sin * sin_heading; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
+                other_cos * cos_heading + other_sin * sin_heading; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
             float rel_heading_y =
+                other_sin * cos_heading - other_cos * sin_heading; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
                 other_sin * cos_heading - other_cos * sin_heading; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
 
             obs[obs_idx + 5] = rel_heading_x;
             obs[obs_idx + 6] = rel_heading_y;
             // relative speed
             float other_speed_magnitude =
+                sqrtf(other_entity->sim_vx * other_entity->sim_vx + other_entity->sim_vy * other_entity->sim_vy);
+            float other_v_dot_heading = other_entity->sim_vx * other_cos + other_entity->sim_vy * other_sin;
                 sqrtf(other_entity->sim_vx * other_entity->sim_vx + other_entity->sim_vy * other_entity->sim_vy);
             float other_v_dot_heading = other_entity->sim_vx * other_cos + other_entity->sim_vy * other_sin;
             float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
@@ -1778,8 +2136,15 @@ void compute_observations(Drive *env) {
         int grid_idx = getGridIndex(env, ego_entity->sim_x, ego_entity->sim_y);
 
         int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
+        int lane_added = 0;
+        int boundary_added = 0;
+        int lane_obs_idx = obs_idx;
+        int boundary_obs_idx = lane_obs_idx + MAX_LANE_SEGMENT_OBSERVATIONS * ROAD_FEATURES;
 
         for (int k = 0; k < list_size; k++) {
+            if (lane_added >= MAX_LANE_SEGMENT_OBSERVATIONS && boundary_added >= MAX_ROAD_SEGMENT_OBSERVATIONS) {
+                break;
+            }
             int entity_idx = entity_list[k].entity_idx;
             int geometry_idx = entity_list[k].geometry_idx;
 
@@ -1789,20 +2154,20 @@ void compute_observations(Drive *env) {
                 continue;
             }
 
-            RoadMapElement *entity = &env->road_elements[entity_idx];
+            RoadMapElement *element = &env->road_elements[entity_idx];
 
             // Validate geometry_idx before accessing
-            if (geometry_idx < 0 || geometry_idx >= entity->segment_length) {
-                printf("ERROR: Invalid geometry_idx %d for road %d (max: %d)\n", geometry_idx, entity_idx,
-                       entity->segment_length - 1);
+            if (geometry_idx < 0 || geometry_idx >= element->segment_length - 1) {
+                printf("ERROR: Invalid geometry_idx %d for road element %d (max: %d)\n", geometry_idx, entity_idx,
+                       element->segment_length - 2);
                 continue;
             }
-            float start_x = entity->x[geometry_idx];
-            float start_y = entity->y[geometry_idx];
-            float start_z = entity->z[geometry_idx];
-            float end_x = entity->x[geometry_idx + 1];
-            float end_y = entity->y[geometry_idx + 1];
-            float end_z = entity->z[geometry_idx + 1];
+            float start_x = element->x[geometry_idx];
+            float start_y = element->y[geometry_idx];
+            float start_z = element->z[geometry_idx];
+            float end_x = element->x[geometry_idx + 1];
+            float end_y = element->y[geometry_idx + 1];
+            float end_z = element->z[geometry_idx + 1];
             float mid_x = (start_x + end_x) / 2.0f;
             float mid_y = (start_y + end_y) / 2.0f;
             float mid_z = (start_z + end_z) / 2.0f;
@@ -1834,10 +2199,11 @@ void compute_observations(Drive *env) {
             obs[obs_idx + 4] = width / MAX_ROAD_SCALE;
             obs[obs_idx + 5] = cos_angle;
             obs[obs_idx + 6] = sin_angle;
-            obs[obs_idx + 7] = entity->type - 4.0f;
+            obs[obs_idx + 7] = element->type - 4.0f; // Valentin's PR doesent have this, I have retined this
             obs_idx += 8;
         }
         int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 8;
+        // TODO : Add Traffic light observations
         // Set the entire block to 0 at once
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
     }

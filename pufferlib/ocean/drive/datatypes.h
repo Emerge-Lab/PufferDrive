@@ -173,6 +173,10 @@ struct Agent {
     float sim_height;
     int sim_valid;
 
+    // Collision state
+    int collision_state;      // 2.5D collision state
+    int aabb_collision_state; // 2D collision state
+
     // Route information
     int route_length;
     int *route;
@@ -183,8 +187,8 @@ struct Agent {
     int closest_path_idx_wp;
 
     // Metrics and status tracking
-    float metrics_array[10]; // [collision, offroad, red_light, reached_goal, lane_dist,
-                             // lane_angle, comfort_violation, velocity_progress, speed_limit, avg_displacement_error]
+    float metrics_array[11]; // [collision, offroad, red_light, reached_goal, lane_dist,
+                             // lane_angle, comfort_violation, velocity_progress, speed_limit, avg_displacement_error, lane_aligned_idx]
     int collision_state;
     int aabb_collision_state;
     int current_lane_index;
