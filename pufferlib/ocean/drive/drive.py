@@ -1039,7 +1039,6 @@ def test_human_demonstrations():
 
     args["env"]["map_dir"] = args["eval"]["map_dir"]
     args["env"]["num_maps"] = args["eval"]["wosac_num_maps"]
-    args["env"]["sequential_map_sampling"] = True
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     args["vec"] = dict(backend=backend, num_envs=1)

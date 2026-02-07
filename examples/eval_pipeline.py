@@ -662,14 +662,16 @@ def pipeline(env_name="puffer_drive"):
 
     config = load_config(env_name)
 
-    config["env"]["num_maps"] = 229
-    config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/validation_interactive_small"
-    config["env"]["num_maps"] = 200
+    # Dataset configuration
     config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/training"
+    config["eval"]["wosac_target_scenarios"] = 1000
+    config["eval"]["wosac_batch_size"] = 100
+    config["eval"]["wosac_scenario_pool_size"] = 10_0000
+
+    # WOSAC settings
     config["wosac"]["enabled"] = True
     config["vec"]["backend"] = "PufferEnv"
     config["vec"]["num_envs"] = 1
-    config["env"]["sequential_map_sampling"] = True
     config["env"]["init_mode"] = "create_all_valid"
     config["env"]["control_mode"] = "control_wosac"
     config["env"]["init_steps"] = 10

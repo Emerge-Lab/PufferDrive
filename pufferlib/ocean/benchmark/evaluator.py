@@ -85,6 +85,7 @@ class WOSACEvaluator:
                             gt_trajectories[key], args["eval"]["wosac_num_rollouts"], axis=1
                         )
                     simulated_trajectories["id"] = simulated_trajectories["id"][..., np.newaxis]
+                    simulated_trajectories["dones"] = np.zeros_like(simulated_trajectories["x"])
                 else:
                     raise ValueError(f"Policy is None or unknown evaluation mode: {self.eval_mode}")
 
