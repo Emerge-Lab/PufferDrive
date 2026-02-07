@@ -142,29 +142,6 @@ def plot_realism_score_distributions(df):
     return fig
 
 
-def evaluate_ground_truth(config, vecenv, evaluator):
-    """Compute WOSAC metrics for ground truth trajectories."""
-
-    gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
-
-    fake_simulated_trajectories = gt_trajectories.copy()
-    for key in ["x", "y", "heading", "id"]:
-        fake_simulated_trajectories[key] = np.repeat(gt_trajectories[key], config["eval"]["wosac_num_rollouts"], axis=1)
-    fake_simulated_trajectories["id"] = fake_simulated_trajectories["id"][..., np.newaxis]
-    fake_simulated_trajectories["dones"] = np.zeros_like(fake_simulated_trajectories["x"])
-
-    # Compute metrics
-    agent_state = vecenv.driver_env.get_global_agent_state()
-    road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-    results = evaluator.compute_metrics(
-        gt_trajectories,
-        fake_simulated_trajectories,
-        agent_state,
-        road_edge_polylines,
-    )
-    return results
-
-
 def evaluate_human_inferred_actions(config, vecenv, evaluator):
     """Compute WOSAC metrics for human inferred actions."""
 
@@ -290,7 +267,8 @@ def pipeline(env_name="puffer_drive"):
     evaluator = WOSACEvaluator(config)
 
     # Baseline: Ground truth
-    df_results_gt = evaluate_ground_truth(config, vecenv, evaluator)
+    evaluator.eval_mode = "ground_truth"
+    df_results_gt = evaluator.evaluate(config, vecenv, policy=None)
     df_results_gt["policy"] = "ground_truth"
 
     # Baseline: Agent with inferred human actions (using classic bicycle dynamics model)
