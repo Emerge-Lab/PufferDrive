@@ -294,6 +294,7 @@ struct Drive {
     int dynamics_model;
     GridMap *grid_map;
     int *neighbor_offsets;
+    int scenario_length;
     int episode_length;
     int termination_mode;
     float reward_vehicle_collision;
@@ -326,7 +327,6 @@ struct Drive {
     int reach_goal_behavior;
     int target_type;
     char *ini_file;
-    char *scenario_id;
     int collision_behavior;
     int offroad_behavior;
     int sdc_track_index;
@@ -347,7 +347,6 @@ struct Drive {
     int init_mode;
     int control_mode;
     int simulation_mode;
-    int termination_mode;
     int reward_conditioning;
     int reward_randomization;
     int eval_mode;
@@ -2250,9 +2249,6 @@ void compute_observations(Drive *env) {
             if (index == env->active_agent_indices[i])
                 continue; // Skip self, but don't increment obs_idx
             Agent *other_entity = &env->agents[index];
-            Agent *other_entity = &env->agents[index];
-            if (ego_entity->respawn_timestep != -1)
-                continue;
             if (other_entity->respawn_timestep != -1)
                 continue;
             // Store original relative positions
@@ -2288,8 +2284,6 @@ void compute_observations(Drive *env) {
             // relative speed
             float other_speed_magnitude =
                 sqrtf(other_entity->sim_vx * other_entity->sim_vx + other_entity->sim_vy * other_entity->sim_vy);
-            float other_v_dot_heading = other_entity->sim_vx * other_cos + other_entity->sim_vy * other_sin;
-            sqrtf(other_entity->sim_vx * other_entity->sim_vx + other_entity->sim_vy * other_entity->sim_vy);
             float other_v_dot_heading = other_entity->sim_vx * other_cos + other_entity->sim_vy * other_sin;
             float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
             obs[obs_idx + 7] = other_signed_speed / MAX_SPEED;

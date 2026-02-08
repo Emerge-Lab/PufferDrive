@@ -32,6 +32,85 @@ void test_drivenet() {
     free(weights);
 }
 
+void test_load_map_binary() {
+    printf("=== Testing load_map_binary ===\n");
+
+    // Initialize environment
+    Drive *env = (Drive *)calloc(1, sizeof(Drive));
+
+    // Test with a known map file
+    const char *test_map = "resources/drive/binaries/NewMaps/map_000.bin";
+
+    printf("Loading map: %s\n", test_map);
+    load_map_binary(test_map, env);
+
+    // Validation checks
+    printf("\n--- Map Load Results ---\n");
+    printf("SDC track index: %d\n", env->sdc_track_index);
+    printf("Num tracks to predict: %d\n", env->num_tracks_to_predict);
+    printf("Num objects (agents): %d\n", env->num_objects);
+    printf("Num roads: %d\n", env->num_roads);
+
+    // Sanity checks
+    int passed = 1;
+
+    if (env->num_objects <= 0) {
+        printf("❌ FAIL: num_objects is %d (expected > 0)\n", env->num_objects);
+        passed = 0;
+    } else {
+        printf("✅ PASS: num_objects = %d\n", env->num_objects);
+    }
+
+    if (env->num_roads <= 0) {
+        printf("❌ FAIL: num_roads is %d (expected > 0)\n", env->num_roads);
+        passed = 0;
+    } else {
+        printf("✅ PASS: num_roads = %d\n", env->num_roads);
+    }
+
+    // Check first agent
+    if (env->agents != NULL && env->num_objects > 0) {
+        Agent *first_agent = &env->agents[0];
+        printf("\n--- First Agent Details ---\n");
+        printf("ID: %d\n", first_agent->id);
+        printf("Type: %d\n", first_agent->type);
+        printf("Trajectory length: %d\n", first_agent->trajectory_length);
+        printf("Width: %.2f, Length: %.2f, Height: %.2f\n", first_agent->sim_width, first_agent->sim_length,
+               first_agent->sim_height);
+
+        if (first_agent->trajectory_length > 0) {
+            printf("First position: (%.2f, %.2f, %.2f)\n", first_agent->log_trajectory_x[0],
+                   first_agent->log_trajectory_y[0], first_agent->log_trajectory_z[0]);
+            printf("✅ PASS: Agent trajectory data loaded\n");
+        } else {
+            printf("❌ FAIL: Agent trajectory_length is 0\n");
+            passed = 0;
+        }
+    }
+
+    // Check first road
+    if (env->road_elements != NULL && env->num_roads > 0) {
+        RoadMapElement *first_road = &env->road_elements[0];
+        printf("\n--- First Road Details ---\n");
+        printf("ID: %d\n", first_road->id);
+        printf("Type: %d\n", first_road->type);
+        printf("Segment length: %d\n", first_road->segment_length);
+
+        if (first_road->segment_length > 0) {
+            printf("First point: (%.2f, %.2f, %.2f)\n", first_road->x[0], first_road->y[0], first_road->z[0]);
+            printf("✅ PASS: Road geometry data loaded\n");
+        } else {
+            printf("❌ FAIL: Road segment_length is 0\n");
+            passed = 0;
+        }
+    }
+
+    printf("\n=== Test Result: %s ===\n\n", passed ? "✅ ALL PASSED" : "❌ SOME FAILED");
+
+    // Cleanup
+    // ... (add proper cleanup if needed)
+}
+
 void demo() {
     // Read configuration from INI file
     env_init_config conf = {0};
@@ -209,6 +288,7 @@ void performance_test() {
 }
 
 int main() {
+    test_load_map_binary();
     // performance_test();
     demo();
     // test_drivenet();
