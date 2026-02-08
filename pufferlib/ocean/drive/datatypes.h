@@ -188,9 +188,8 @@ struct Agent {
 
     // Metrics and status tracking
     float metrics_array[11]; // [collision, offroad, red_light, reached_goal, lane_dist,
-                             // lane_angle, comfort_violation, velocity_progress, speed_limit, avg_displacement_error, lane_aligned_idx]
-    int collision_state;
-    int aabb_collision_state;
+                             // lane_angle, comfort_violation, velocity_progress, speed_limit, avg_displacement_error,
+                             // lane_aligned_idx]
     int current_lane_index;
     int current_lane_geometry_idx;
     int reached_goal_this_episode;
