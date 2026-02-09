@@ -938,8 +938,8 @@ class HumanReplayEvaluator:
             # Delta metrics (self_play - human_replay)
             # Positive = better in self-play, Negative = worse in self-play
             "delta": {
-                " Δ_cr": sp["collision_rate"] - hr["collision_rate"],
-                " Δ_or": sp["offroad_rate"] - hr["offroad_rate"],
+                " Δ_cr": hr["collision_rate"] - sp["collision_rate"],
+                " Δ_or": hr["offroad_rate"] - sp["offroad_rate"],
                 " Δ_comp": sp["completion_rate"] - hr["completion_rate"],
                 " Δ_score": sp["score"] - hr["score"],
             },
