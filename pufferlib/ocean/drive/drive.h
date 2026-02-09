@@ -2455,8 +2455,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
         float goal_z_world = pz + goal_z;
         DrawSphere((Vector3){goal_x_world, goal_y_world, goal_z_world}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x_world, goal_y_world, goal_z_world}, env->agents[active_idx].goal_radius, (Vector3){0, 0, 1}, 90.0f,
-                     Fade(LIGHTGREEN, 0.3f));
+        DrawCircle3D((Vector3){goal_x_world, goal_y_world, goal_z_world}, env->agents[active_idx].goal_radius,
+                     (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
     int obs_idx = ego_dim; // Start after ego obs
