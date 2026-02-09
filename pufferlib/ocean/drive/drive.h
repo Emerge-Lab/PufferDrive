@@ -1375,6 +1375,14 @@ void init(Drive *env) {
     remove_bad_trajectories(env);
     set_start_position(env);
     init_goal_positions(env);
+    for (int x = 0; x < env->active_agent_count; x++) {
+        int agent_idx = env->active_agent_indices[x];
+        if (env->goal_radius_randomization) {
+            env->agents[agent_idx].goal_radius = 2.0f + ((float)rand() / RAND_MAX) * 10.0f;
+        } else {
+            env->agents[agent_idx].goal_radius = env->goal_radius;
+        }
+    }
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
 }
 
