@@ -257,7 +257,7 @@ def evaluate_rl_policy(config, vecenv, evaluator, policy_path):
     # Use a copy to avoid mutating the original config
     config = copy.deepcopy(config)
 
-    # Ensure evaluator is in RL mode 
+    # Ensure evaluator is in RL mode
     evaluator.mode = "rl"
 
     # Enable RNN state initialization for LSTM-based policies
