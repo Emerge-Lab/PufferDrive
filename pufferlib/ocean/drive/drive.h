@@ -86,9 +86,9 @@
 #define EGO_FEATURES_JERK 11
 
 // Guidance waypoint observations
-#define GUIDANCE_WAYPOINT_FEATURES 2    // x, y per waypoint
-#define NUM_GUIDANCE_WAYPOINTS 91       // Full trajectory length
-#define GUIDANCE_OBS_SIZE (NUM_GUIDANCE_WAYPOINTS * GUIDANCE_WAYPOINT_FEATURES)  // 182
+#define GUIDANCE_WAYPOINT_FEATURES 2                                            // x, y per waypoint
+#define NUM_GUIDANCE_WAYPOINTS 91                                               // Full trajectory length
+#define GUIDANCE_OBS_SIZE (NUM_GUIDANCE_WAYPOINTS * GUIDANCE_WAYPOINT_FEATURES) // 182
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f

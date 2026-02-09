@@ -192,15 +192,15 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         return -1;
     }
 
-    // Allow all settings to be overridden via kwargs (ini provides defaults)
-    #define OVERRIDE_INT(field) \
-        if (kwargs && PyDict_GetItemString(kwargs, #field)) { \
-            conf.field = (int)unpack(kwargs, #field); \
-        }
-    #define OVERRIDE_FLOAT(field) \
-        if (kwargs && PyDict_GetItemString(kwargs, #field)) { \
-            conf.field = (float)unpack(kwargs, #field); \
-        }
+// Allow all settings to be overridden via kwargs (ini provides defaults)
+#define OVERRIDE_INT(field)                                                                                            \
+    if (kwargs && PyDict_GetItemString(kwargs, #field)) {                                                              \
+        conf.field = (int)unpack(kwargs, #field);                                                                      \
+    }
+#define OVERRIDE_FLOAT(field)                                                                                          \
+    if (kwargs && PyDict_GetItemString(kwargs, #field)) {                                                              \
+        conf.field = (float)unpack(kwargs, #field);                                                                    \
+    }
 
     OVERRIDE_INT(action_type);
     OVERRIDE_INT(dynamics_model);
@@ -224,8 +224,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     OVERRIDE_FLOAT(goal_radius);
     OVERRIDE_FLOAT(goal_speed);
 
-    #undef OVERRIDE_INT
-    #undef OVERRIDE_FLOAT
+#undef OVERRIDE_INT
+#undef OVERRIDE_FLOAT
 
     // Assign all settings from conf (which now has ini defaults + any kwargs overrides)
     env->action_type = conf.action_type;
