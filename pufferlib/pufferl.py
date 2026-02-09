@@ -1265,6 +1265,10 @@ def render_adversarial(env_name, args=None, vecenv=None, policy=None, target_pol
 
         print("\n Plotting Trajectories")
 
+        run_name = (args["load_model_path"].split("/")[-1]).split(".")[0]
+        save_folder = f"adversarial_rendering/{run_name}"
+        os.makedirs(save_folder, exist_ok=True)
+
         unique_scenarios = np.unique(scenario_ids)
         for i, scenario_id in enumerate(unique_scenarios):
             print(f"Rendering scenario {i + 1}/{len(unique_scenarios)}")
@@ -1273,7 +1277,7 @@ def render_adversarial(env_name, args=None, vecenv=None, policy=None, target_pol
             # Create animation
             ani = FuncAnimation(fig, update_frame, fargs=(ax, scenario_id), frames=sim_steps, interval=50)
 
-            ani.save(f"scenario_{scenario_id}.mp4", writer="ffmpeg")
+            ani.save(f"{save_folder}/scenario_{scenario_id}.mp4", writer="ffmpeg")
             plt.close(fig)
 
 
