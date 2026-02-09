@@ -39,7 +39,7 @@ void test_load_map_binary() {
     Drive *env = (Drive *)calloc(1, sizeof(Drive));
 
     // Test with a known map file
-    const char *test_map = "resources/drive/binaries/NewMaps/map_000.bin";
+    const char *test_map = "resources/drive/binaries/womd/map_001.bin";
 
     printf("Loading map: %s\n", test_map);
     load_map_binary(test_map, env);
@@ -166,7 +166,7 @@ void demo() {
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
-        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .map_name = "resources/drive/binaries/NewMaps/map_001.bin",
     };
     allocate(&env);
     c_reset(&env);
@@ -290,7 +290,7 @@ void performance_test() {
 int main() {
     test_load_map_binary();
     // performance_test();
-    demo();
+    // demo();
     // test_drivenet();
     return 0;
 }

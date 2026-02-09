@@ -894,6 +894,10 @@ int load_map_binary(const char *filename, Drive *env) {
     env->num_road_elements = num_roads;
     env->num_traffic_elements = num_traffic;
 
+    // Also set the alternate field names for compatibility
+    env->num_objects = num_total_agents;
+    env->num_roads = num_roads;
+
     if (num_total_agents > 0) {
         env->agents = (Agent *)calloc(num_total_agents, sizeof(Agent));
     }
