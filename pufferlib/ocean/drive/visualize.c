@@ -101,10 +101,11 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
             Vector3 prev_point = {0};
             bool has_prev = false;
 
-            for (int j = 0; j < env->entities[idx].array_size; j++) {
-                float x = env->entities[idx].traj_x[j];
-                float y = env->entities[idx].traj_y[j];
-                float valid = env->entities[idx].traj_valid[j];
+            Agent *agent = &env->agents[idx];
+            for (int j = 0; j < agent->trajectory_length; j++) {
+                float x = agent->log_trajectory_x[j];
+                float y = agent->log_trajectory_y[j];
+                float valid = agent->log_valid[j];
 
                 if (!valid) {
                     has_prev = false;
@@ -139,16 +140,16 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
 void renderAgentView(Drive *env, Client *client, int map_height, int obs_only, int lasers, int show_grid) {
     // Agent perspective camera following the selected agent
     int agent_idx = env->active_agent_indices[env->human_agent_idx];
-    Entity *agent = &env->entities[agent_idx];
+    Agent *agent = &env->agents[agent_idx];
 
     BeginDrawing();
 
     Camera3D camera = {0};
     // Position camera behind and above the agent
-    camera.position = (Vector3){agent->x - (25.0f * cosf(agent->heading)), agent->y - (25.0f * sinf(agent->heading)),
-                                agent->z + 15.0f};
-    camera.target =
-        (Vector3){agent->x + 40.0f * cosf(agent->heading), agent->y + 40.0f * sinf(agent->heading), agent->z + 1.0f};
+    camera.position = (Vector3){agent->sim_x - (25.0f * cosf(agent->sim_heading)),
+                                agent->sim_y - (25.0f * sinf(agent->sim_heading)), agent->sim_z + 15.0f};
+    camera.target = (Vector3){agent->sim_x + 40.0f * cosf(agent->sim_heading),
+                              agent->sim_y + 40.0f * sinf(agent->sim_heading), agent->sim_z + 1.0f};
     camera.up = (Vector3){0.0f, 0.0f, 1.0f};
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
@@ -370,7 +371,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         printf("Recording agent view...\n");
         for (int i = 0; i < frame_count; i++) {
             int human_idx = env.active_agent_indices[env.human_agent_idx];
-            if (env.entities[human_idx].respawn_count > 0) {
+            if (env.agents[human_idx].respawn_count > 0) {
                 break;
             }
             if (i % frame_skip == 0) {
