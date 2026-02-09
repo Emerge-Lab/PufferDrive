@@ -12,8 +12,7 @@ from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
 POLICY_DIR = "models"
 
-# Policy configurations: (filename, display_name, dynamics_model)
-# Update these paths to match your actual checkpoint files
+# Policy configurations: (path, dynamics_model, type)
 POLICY_CONFIGS = {
     "bc_policy": {
         "path": POLICY_DIR + "/bc_policy.pt",
@@ -258,7 +257,7 @@ def evaluate_rl_policy(config, vecenv, evaluator, policy_path):
     # Use a copy to avoid mutating the original config
     config = copy.deepcopy(config)
 
-    # Ensure evaluator is in RL mode (may have been changed by BC evaluation)
+    # Ensure evaluator is in RL mode 
     evaluator.mode = "rl"
 
     # Enable RNN state initialization for LSTM-based policies
