@@ -80,6 +80,7 @@ void demo() {
         .goal_behavior = conf.goal_behavior,
         .goal_target_distance = conf.goal_target_distance,
         .goal_speed = conf.goal_speed,
+        .goal_speed_tolerance = conf.goal_speed_tolerance,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
