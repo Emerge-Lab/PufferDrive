@@ -12,6 +12,8 @@ from tqdm import tqdm
 
 
 class Drive(pufferlib.PufferEnv):
+    _human_data_prepped = False
+
     def __init__(
         self,
         render_mode=None,
@@ -53,7 +55,6 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
-        sequential_map_sampling=False,
         ini_file_path="pufferlib/config/ocean/drive.ini",
         save_data_to_disk=True,
     ):
@@ -180,11 +181,9 @@ class Drive(pufferlib.PufferEnv):
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
-            sequential_map_sampling=sequential_map_sampling,
         )
 
-        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if sequential_map_sampling is True
-        self.num_agents = num_agents if not sequential_map_sampling else agent_offsets[-1]
+        self.num_agents = agent_offsets[-1]
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -239,21 +238,103 @@ class Drive(pufferlib.PufferEnv):
         self.human_data_dir = human_data_dir
         self.save_data_to_disk = save_data_to_disk
 
+        self.expert_data_metrics = {}
+
         os.makedirs(self.human_data_dir, exist_ok=True)
 
-        if self.prep_human_data:
-            self._prep_human_data(
-                bptt_horizon,
-                self.max_expert_sequences,
-            )
+        if self.prep_human_data and not Drive._human_data_prepped:
+            self.expert_data_metrics = self._prep_human_data(bptt_horizon)
+            Drive._human_data_prepped = True
+        elif self.prep_human_data:
+            if self.save_data_to_disk and os.path.exists(
+                os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt")
+            ):
+                discrete_actions = torch.load(
+                    os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt"),
+                    map_location="cpu",
+                    weights_only=False,
+                )
+                self._cache_size = len(discrete_actions)
+            else:
+                self._cache_size = 0
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
+        self.truncations[:] = 0
         return self.observations, []
+
+    def resample_maps(self):
+        """Resample environment maps.
+        Args:
+
+        """
+        self.tick = 0
+        binding.vec_close(self.c_envs)
+        agent_offsets, map_ids, num_envs = binding.shared(
+            num_agents=self.num_agents,
+            num_maps=self.num_maps,
+            init_mode=self.init_mode,
+            control_mode=self.control_mode,
+            init_steps=self.init_steps,
+            max_controlled_agents=self.max_controlled_agents,
+            goal_behavior=self.goal_behavior,
+            goal_target_distance=self.goal_target_distance,
+            goal_speed=self.goal_speed,
+            map_dir=self.map_dir,
+        )
+        self.agent_offsets = agent_offsets
+        self.map_ids = map_ids
+        self.num_envs = num_envs
+        env_ids = []
+        seed = np.random.randint(0, 2**32 - 1)
+        for i in range(num_envs):
+            cur = agent_offsets[i]
+            nxt = agent_offsets[i + 1]
+            env_id = binding.env_init(
+                self.observations[cur:nxt],
+                self.actions[cur:nxt],
+                self.rewards[cur:nxt],
+                self.terminals[cur:nxt],
+                self.truncations[cur:nxt],
+                seed,
+                action_type=self._action_type_flag,
+                human_agent_idx=self.human_agent_idx,
+                reward_vehicle_collision=self.reward_vehicle_collision,
+                reward_offroad_collision=self.reward_offroad_collision,
+                reward_goal=self.reward_goal,
+                reward_goal_post_respawn=self.reward_goal_post_respawn,
+                use_guided_autonomy=self.use_guided_autonomy,
+                guidance_speed_weight=self.guidance_speed_weight,
+                guidance_heading_weight=self.guidance_heading_weight,
+                waypoint_reach_threshold=self.waypoint_reach_threshold,
+                goal_radius=self.goal_radius,
+                goal_behavior=self.goal_behavior,
+                goal_target_distance=self.goal_target_distance,
+                goal_speed=self.goal_speed,
+                collision_behavior=self.collision_behavior,
+                offroad_behavior=self.offroad_behavior,
+                dt=self.dt,
+                episode_length=(int(self.episode_length) if self.episode_length is not None else None),
+                max_controlled_agents=self.max_controlled_agents,
+                map_id=map_ids[i],
+                max_agents=nxt - cur,
+                ini_file=self.ini_file_path,
+                init_steps=self.init_steps,
+                init_mode=self.init_mode,
+                control_mode=self.control_mode,
+                map_dir=self.map_dir,
+                termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
+            )
+            env_ids.append(env_id)
+        self.c_envs = binding.vectorize(*env_ids)
+        binding.vec_reset(self.c_envs, seed)
+        self.terminals[:] = 1
+        self.truncations[:] = 1
 
     def step(self, actions):
         self.terminals[:] = 0
+        self.truncations[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
@@ -262,73 +343,18 @@ class Drive(pufferlib.PufferEnv):
             log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
                 info.append(log)
-                # print(log)
-        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
-            self.tick = 0
-            binding.vec_close(self.c_envs)
-            agent_offsets, map_ids, num_envs = binding.shared(
-                num_agents=self.num_agents,
-                num_maps=self.num_maps,
-                init_mode=self.init_mode,
-                control_mode=self.control_mode,
-                init_steps=self.init_steps,
-                max_controlled_agents=self.max_controlled_agents,
-                goal_behavior=self.goal_behavior,
-                goal_target_distance=self.goal_target_distance,
-                goal_speed=self.goal_speed,
-                map_dir=self.map_dir,
-                sequential_map_sampling=False,  # Always use random sampling with replacement
-            )
-            self.agent_offsets = agent_offsets
-            self.map_ids = map_ids
-            self.num_envs = num_envs
-            env_ids = []
-            seed = np.random.randint(0, 2**32 - 1)
-            for i in range(num_envs):
-                cur = agent_offsets[i]
-                nxt = agent_offsets[i + 1]
-                env_id = binding.env_init(
-                    self.observations[cur:nxt],
-                    self.actions[cur:nxt],
-                    self.rewards[cur:nxt],
-                    self.terminals[cur:nxt],
-                    self.truncations[cur:nxt],
-                    seed,
-                    action_type=self._action_type_flag,
-                    dynamics_model=self._dynamics_model_flag,
-                    human_agent_idx=self.human_agent_idx,
-                    reward_vehicle_collision=self.reward_vehicle_collision,
-                    reward_offroad_collision=self.reward_offroad_collision,
-                    reward_goal=self.reward_goal,
-                    reward_goal_post_respawn=self.reward_goal_post_respawn,
-                    use_guided_autonomy=self.use_guided_autonomy,
-                    guidance_speed_weight=self.guidance_speed_weight,
-                    guidance_heading_weight=self.guidance_heading_weight,
-                    waypoint_reach_threshold=self.waypoint_reach_threshold,
-                    use_guidance_observations=self.use_guidance_observations,
-                    goal_radius=self.goal_radius,
-                    goal_behavior=self.goal_behavior,
-                    goal_target_distance=self.goal_target_distance,
-                    goal_speed=self.goal_speed,
-                    collision_behavior=self.collision_behavior,
-                    offroad_behavior=self.offroad_behavior,
-                    dt=self.dt,
-                    episode_length=(int(self.episode_length) if self.episode_length is not None else None),
-                    termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
-                    max_controlled_agents=self.max_controlled_agents,
-                    map_id=map_ids[i],
-                    max_agents=nxt - cur,
-                    ini_file=self.ini_file_path,
-                    init_steps=self.init_steps,
-                    init_mode=self.init_mode,
-                    control_mode=self.control_mode,
-                    map_dir=self.map_dir,
-                )
-                env_ids.append(env_id)
-            self.c_envs = binding.vectorize(*env_ids)
 
-            binding.vec_reset(self.c_envs, seed)
-            self.terminals[:] = 1
+        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+            self.resample_maps()
+            # Resample human data if needed and capture metrics
+            if self.prep_human_data and hasattr(self, "_needs_resampling") and self._needs_resampling:
+                resample_metrics = self.resample_human_data()
+                # Add resampling metrics to info for logging
+                if resample_metrics:
+                    # Prefix with "resampled_" to distinguish from initial metrics
+                    resample_metrics = {f"resampled_{k}": v for k, v in resample_metrics.items()}
+                    info.append(resample_metrics)
+
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):
@@ -378,8 +404,9 @@ class Drive(pufferlib.PufferEnv):
             "heading": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.float32),
             "valid": np.zeros((num_agents, self.episode_length - self.init_steps), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
-            "is_vehicle": np.zeros(num_agents, dtype=np.int32),
-            "scenario_id": np.zeros(num_agents, dtype=np.int32),
+            "is_vehicle": np.zeros(num_agents, dtype=bool),
+            "is_track_to_predict": np.zeros(num_agents, dtype=bool),
+            "scenario_id": np.zeros(num_agents, dtype="S16"),
         }
 
         binding.vec_get_global_ground_truth_trajectories(
@@ -391,16 +418,40 @@ class Drive(pufferlib.PufferEnv):
             trajectories["valid"],
             trajectories["id"],
             trajectories["is_vehicle"],
+            trajectories["is_track_to_predict"],
             trajectories["scenario_id"],
         )
 
         for key in trajectories:
             trajectories[key] = trajectories[key][:, None]
 
+        trajectories["scenario_id"] = trajectories["scenario_id"].astype(str)
+
         return trajectories
 
-    def _prep_human_data(self, bptt_horizon=32, max_expert_sequences=256):
-        """Collect and save expert trajectories with bptt_horizon length sequences."""
+    def resample_human_data(self):
+        """Resample human data when needed (called during environment resampling).
+
+        Returns:
+            dict: Metrics about the expert data collection for logging
+        """
+        if not hasattr(self, "_needs_resampling") or not self._needs_resampling:
+            return {}
+
+        print(
+            f"Resampling human data (max_expert_sequences={self.max_expert_sequences} > "
+            f"available={self._total_available_sequences})..."
+        )
+
+        # Re-prepare human data with the new environment state
+        return self._prep_human_data(self.bptt_horizon)
+
+    def _prep_human_data(self, bptt_horizon=32):
+        """Collect and save expert trajectories with bptt_horizon length sequences.
+
+        Returns:
+            dict: Metrics about the expert data collection for logging
+        """
         trajectory_length = 91
 
         if self.dynamics_model == "jerk":
@@ -418,35 +469,79 @@ class Drive(pufferlib.PufferEnv):
             self.c_envs, self.expert_actions_discrete, self.expert_actions_continuous, self.expert_observations_full
         )
 
-        # Check if first N timesteps are all valid (not -1) for each agent
-        # Shape: (bptt_horizon, 1024, 1) -> (1024,) after checking all are valid
-        first_n_valid = np.all(self.expert_actions_discrete[:bptt_horizon, :, 0] != -1.0, axis=0)
+        # Extract all valid sequences of length bptt_horizon from all trajectories
+        discrete_sequences_list = []
+        continuous_sequences_list = []
+        obs_sequences_list = []
 
-        # Get indices of agents with valid first N timesteps
-        valid_agent_indices = np.where(first_n_valid)[0]
+        # Track metrics
+        unique_agents = set()
+        total_sequences_extracted = 0
 
-        valid_expert_actions_discrete = self.expert_actions_discrete[:, valid_agent_indices, :]
-        valid_expert_actions_continuous = self.expert_actions_continuous[:, valid_agent_indices, :]
-        valid_expert_observations = self.expert_observations_full[:, valid_agent_indices, :]
+        for agent_idx in range(self.num_agents):
+            # Extract all valid windows of length bptt_horizon for this agent
+            for start_t in range(trajectory_length - bptt_horizon + 1):
+                end_t = start_t + bptt_horizon
 
-        # Determine how many sequences we can actually store
-        num_sequences = min(len(valid_agent_indices), max_expert_sequences)
+                # Check if this window is entirely valid (no -1 values)
+                window_valid = np.all(self.expert_actions_discrete[start_t:end_t, agent_idx, 0] != -1.0)
 
-        # Preallocate sequences
-        discrete_sequences = np.zeros((num_sequences, bptt_horizon, 1), dtype=np.float32)
-        continuous_sequences = np.zeros((num_sequences, bptt_horizon, 2), dtype=np.float32)
-        obs_sequences = np.zeros((num_sequences, bptt_horizon, self.num_obs), dtype=np.float32)
+                if window_valid:
+                    discrete_sequences_list.append(self.expert_actions_discrete[start_t:end_t, agent_idx, :].copy())
+                    continuous_sequences_list.append(self.expert_actions_continuous[start_t:end_t, agent_idx, :].copy())
+                    obs_sequences_list.append(self.expert_observations_full[start_t:end_t, agent_idx, :].copy())
+                    unique_agents.add(agent_idx)
+                    total_sequences_extracted += 1
 
-        # Take one sequence per agent (starting from timestep 0)
-        for agent_idx in range(num_sequences):
-            # For joint discrete, reshape to (bptt_horizon, 1)
-            discrete_sequences[agent_idx] = valid_expert_actions_discrete[:bptt_horizon, agent_idx, :]
-            continuous_sequences[agent_idx] = valid_expert_actions_continuous[:bptt_horizon, agent_idx, :]
-            obs_sequences[agent_idx] = valid_expert_observations[:bptt_horizon, agent_idx, :]
+        # Convert lists to arrays
+        if len(discrete_sequences_list) == 0:
+            raise ValueError("No valid expert sequences found!")
+
+        all_discrete = np.stack(discrete_sequences_list, axis=0)
+        all_continuous = np.stack(continuous_sequences_list, axis=0)
+        all_obs = np.stack(obs_sequences_list, axis=0)
+
+        # Sample sequences (with replacement if max_expert_sequences > available)
+        num_sequences = self.max_expert_sequences
+        needs_resampling = num_sequences > len(discrete_sequences_list)
+
+        # Randomly sample indices (with replacement if necessary)
+        sampled_indices = np.random.choice(len(discrete_sequences_list), size=num_sequences, replace=needs_resampling)
+
+        discrete_sequences = all_discrete[sampled_indices]
+        continuous_sequences = all_continuous[sampled_indices]
+        obs_sequences = all_obs[sampled_indices]
 
         self._cache_size = num_sequences
+        self._total_available_sequences = len(discrete_sequences_list)
+        self._needs_resampling = needs_resampling
+
+        # Compute statistics
+        avg_sequences_per_agent = total_sequences_extracted / len(unique_agents) if len(unique_agents) > 0 else 0
+        coverage_pct = 100 * len(unique_agents) / self.num_agents if self.num_agents > 0 else 0
+        utilization_pct = (
+            100 * min(num_sequences, total_sequences_extracted) / total_sequences_extracted
+            if total_sequences_extracted > 0
+            else 0
+        )
+
+        data_metrics = {
+            "expert_data/total_agents": self.num_agents,
+            "expert_data/unique_agents_with_data": len(unique_agents),
+            "expert_data/agent_coverage_pct": coverage_pct,
+            "expert_data/total_sequences_extracted": total_sequences_extracted,
+            "expert_data/avg_sequences_per_agent": avg_sequences_per_agent,
+            "expert_data/sequences_stored": num_sequences,
+            "expert_data/sequence_length": bptt_horizon,
+            "expert_data/storage_utilization_pct": utilization_pct,
+            "expert_data/resampling_enabled": int(needs_resampling),
+            "expert_data/resampling_factor": num_sequences / len(discrete_sequences_list) if needs_resampling else 1.0,
+        }
 
         if self.save_data_to_disk:
+            print(
+                f"Saving {num_sequences} expert sequences of length {bptt_horizon} to disk at {self.human_data_dir}..."
+            )
             torch.save(
                 torch.from_numpy(discrete_sequences),
                 os.path.join(self.human_data_dir, f"expert_actions_discrete_h{bptt_horizon}.pt"),
@@ -459,6 +554,8 @@ class Drive(pufferlib.PufferEnv):
                 torch.from_numpy(obs_sequences),
                 os.path.join(self.human_data_dir, f"expert_observations_h{bptt_horizon}.pt"),
             )
+
+        return data_metrics
 
     def sample_expert_data(self, n_samples=512, return_both=False):
         """Sample a random batch of human (expert) sequences from disk.
@@ -488,9 +585,15 @@ class Drive(pufferlib.PufferEnv):
 
         observations_full = torch.load(observations_path, map_location="cpu", weights_only=False)
 
+        # breakpoint()
+
         # Sample indices
         samples = min(n_samples, self._cache_size)
         indices = torch.randint(0, self._cache_size, (samples,))
+
+        # print(f'Sampling {samples} expert sequences from {self._cache_size} available sequences.')
+        # print(indices)
+
         sampled_obs = observations_full[indices]
 
         if return_both:
@@ -518,7 +621,7 @@ class Drive(pufferlib.PufferEnv):
             "x": np.zeros(total_points, dtype=np.float32),
             "y": np.zeros(total_points, dtype=np.float32),
             "lengths": np.zeros(num_polylines, dtype=np.int32),
-            "scenario_id": np.zeros(num_polylines, dtype=np.int32),
+            "scenario_id": np.zeros(num_polylines, dtype="S16"),
         }
 
         binding.vec_get_road_edge_polylines(
@@ -528,6 +631,8 @@ class Drive(pufferlib.PufferEnv):
             polylines["lengths"],
             polylines["scenario_id"],
         )
+
+        polylines["scenario_id"] = polylines["scenario_id"].astype(str)
 
         return polylines
 
@@ -682,6 +787,10 @@ def save_map_binary(map_data, output_file, unique_map_id):
         metadata = map_data.get("metadata", {})
         sdc_track_index = metadata.get("sdc_track_index", -1)  # -1 as default if not found
         tracks_to_predict = metadata.get("tracks_to_predict", [])
+
+        # Write original scenario_id with fallback to placeholder
+        scenario_id = map_data.get("scenario_id", f"map_{unique_map_id:03d}")
+        f.write(struct.pack("16s", scenario_id.encode("utf-8")))
 
         # Write sdc_track_index
         f.write(struct.pack("i", sdc_track_index))
@@ -921,6 +1030,8 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         atn = actions[tick % atn_cache]
         env.step(atn)
         tick += 1
+        if tick > 5:
+            break
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
 
@@ -937,7 +1048,6 @@ def test_human_demonstrations():
 
     args["env"]["map_dir"] = args["eval"]["map_dir"]
     args["env"]["num_maps"] = args["eval"]["wosac_num_maps"]
-    args["env"]["sequential_map_sampling"] = True
     dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     args["vec"] = dict(backend=backend, num_envs=1)

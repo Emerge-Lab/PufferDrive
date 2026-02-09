@@ -328,6 +328,7 @@ if not NO_TRAIN:
         "neptune",
         "wandb",
         "matplotlib",
+        "tqdm",
     ]
 
 setup(

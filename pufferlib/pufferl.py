@@ -226,6 +226,12 @@ class PuffeRL:
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
 
+        if hasattr(vecenv, "driver_env") and hasattr(vecenv.driver_env, "expert_data_metrics"):
+            expert_metrics = vecenv.driver_env.expert_data_metrics
+            if expert_metrics:
+                # Log to wandb/neptune immediately at step 0
+                self.logger.log(expert_metrics, step=0)
+
     @property
     def uptime(self):
         return time.time() - self.start_time
@@ -259,7 +265,6 @@ class PuffeRL:
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
 
-            done_mask = d + t  # TODO: Handle truncations separately
             self.global_step += int(mask.sum())
 
             profile("eval_copy", epoch)
@@ -267,12 +272,14 @@ class PuffeRL:
             o_device = o.to(device)  # , non_blocking=True)
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
+            t = torch.as_tensor(t).to(device)  # , non_blocking=True)
+            done_mask = (d + t).clamp(max=1)
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
                 state = dict(
                     reward=r,
-                    done=d,
+                    done=done_mask,
                     env_id=env_id,
                     mask=mask,
                 )
@@ -302,8 +309,16 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
+                # Truncation bootstrap hack for auto-reset envs.
+                # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
+                # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
+                # proxy for the pre-reset terminal value (bootstrap term is not clipped).
+                if l > 0:
+                    trunc_mask = (t > 0) & (d == 0)
+                    r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
-                self.terminals[batch_rows, l] = d.float()
+                self.terminals[batch_rows, l] = done_mask.float()
+                self.truncations[batch_rows, l] = t.float()
                 self.values[batch_rows, l] = value.flatten()
 
                 # Note: We are not yet handling masks in this version
@@ -423,10 +438,6 @@ class PuffeRL:
                     self.vecenv.driver_env.sample_expert_data(n_samples=config["human_sequences"], return_both=True)
                 )
 
-                # Use helper function to compute realism metrics
-                # self.realism["human_data_accel_var"] = continuous_human_actions[:, :, 0].flatten().var().item()
-                # self.realism["human_data_steer_var"] = continuous_human_actions[:, :, 1].flatten().var().item()
-
                 # Select appropriate action type for training
                 use_continuous = self.vecenv.driver_env._action_type_flag == 1
                 human_actions = continuous_human_actions if use_continuous else discrete_human_actions
@@ -437,7 +448,6 @@ class PuffeRL:
                 # given the corresponding human observations. A higher likelihood indicates
                 # that the policy behaves more like a human under the same observations.
                 human_state = dict(
-                    action=human_actions,
                     lstm_h=None,
                     lstm_c=None,
                 )
@@ -475,10 +485,9 @@ class PuffeRL:
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
             if config["human_sequences"] > 0:
-                human_loss_clipped = torch.clamp(human_log_prob, -human_clip, 0)
-                human_loss = human_loss_clipped.mean()
+                human_nll = human_log_prob.mean()
             else:
-                human_loss = torch.tensor(0.0, device=device)
+                human_nll = torch.tensor(0.0, device=device)
 
             entropy_loss = entropy.mean()
 
@@ -486,7 +495,7 @@ class PuffeRL:
                 pg_loss
                 + config["vf_coef"] * v_loss
                 - config["ent_coef"] * entropy_loss
-                - config["human_ll_coef"] * human_loss
+                - config["human_ll_coef"] * human_nll
             )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
@@ -502,7 +511,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["human_loss"] += human_loss / self.total_minibatches
+            losses["human_nll"] += human_nll / self.total_minibatches
             if config["human_sequences"] > 0:
                 self.realism["human_log_prob"] = human_log_prob.mean().item()
 
@@ -570,7 +579,12 @@ class PuffeRL:
             try:
                 v = np.mean(v)
             except:
-                del self.stats[k]
+                # Keep single-value metrics (like resampled expert data metrics)
+                if isinstance(v, (int, float)):
+                    pass
+                else:
+                    del self.stats[k]
+                    continue
 
             self.stats[k] = v
 
@@ -1109,20 +1123,22 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
     args = args or load_config(env_name)
     args["env"]["prep_human_data"] = False
+    args["env"]["termination_mode"] = 0
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
     human_replay_enabled = args["eval"]["human_replay_eval"]
-    args["env"]["map_dir"] = args["eval"]["map_dir"]
-    args["env"]["num_maps"] = args["eval"]["wosac_num_maps"]
-    args["env"]["sequential_map_sampling"] = True
-    dataset_name = args["env"]["map_dir"].split("/")[-1]
 
     if wosac_enabled:
-        print(f"Running WOSAC realism evaluation with {dataset_name} dataset. \n")
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        dataset_name = args["env"]["map_dir"].split("/")[-1]
+
+        print(f"Running WOSAC realism evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
         backend = args["eval"]["backend"]
         assert backend == "PufferEnv" or not wosac_enabled, "WOSAC evaluation only supports PufferEnv backend."
+
+        # Configure environment for WOSAC
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["init_mode"] = args["eval"]["wosac_init_mode"]
         args["env"]["control_mode"] = args["eval"]["wosac_control_mode"]
@@ -1130,86 +1146,80 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["env"]["goal_behavior"] = args["eval"]["wosac_goal_behavior"]
         args["env"]["goal_radius"] = args["eval"]["wosac_goal_radius"]
 
+        # Batch size configuration
+        num_scenes_per_batch = args["eval"]["wosac_batch_size"]
+        args["env"]["num_agents"] = num_scenes_per_batch * 10
+        args["env"]["num_maps"] = args["eval"]["wosac_scenario_pool_size"]
+
+        # Create environment and policy
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
 
+        # Make eval class instance
         evaluator = WOSACEvaluator(args)
 
-        # Collect ground truth trajectories from the dataset
-        gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
+        # Obtain scores
+        df_results = evaluator.evaluate(args, vecenv, policy)
 
-        print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
-        print(f"Number of controlled agents: {gt_trajectories['x'].shape[0]}")
-        print(f"Number of evaluated agents: {np.sum(gt_trajectories['id'] >= 0)}")
+        # Average results over scenarios
+        results_dict = df_results.mean().to_dict()
+        results_dict["total_num_agents"] = df_results["num_agents_per_scene"].sum()
+        results_dict["total_unique_scenarios"] = df_results.index.unique().shape[0]
+        results_dict["realism_meta_score_std"] = df_results["realism_meta_score"].std()
+        results_dict = {k: v.item() if hasattr(v, "item") else v for k, v in results_dict.items()}
 
-        # Roll out trained policy in the simulator
-        simulated_trajectories = evaluator.collect_simulated_trajectories(args, vecenv, policy)
+        import json
 
-        if args["eval"]["wosac_sanity_check"]:
-            evaluator._quick_sanity_check(gt_trajectories, simulated_trajectories)
-
-        # Analyze and compute metrics
-        agent_state = vecenv.driver_env.get_global_agent_state()
-        road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-        results = evaluator.compute_metrics(
-            gt_trajectories,
-            simulated_trajectories,
-            agent_state,
-            road_edge_polylines,
-            args["eval"]["wosac_aggregate_results"],
-        )
-
-        if args["eval"]["wosac_aggregate_results"]:
-            import json
-
-            # Convert numpy types to native Python types for JSON serialization
-            def to_native(obj):
-                if hasattr(obj, 'item'):  # numpy scalar
-                    return obj.item()
-                return obj
-
-            native_results = {k: to_native(v) for k, v in results.items()}
-
-            print("\nWOSAC_METRICS_START")
-            print(json.dumps(native_results))
-            print("WOSAC_METRICS_END")
-
-        return results
+        print("\nWOSAC_METRICS_START")
+        print(json.dumps(results_dict))
+        print("WOSAC_METRICS_END")
+        vecenv.close()
+        return results_dict
 
     elif human_replay_enabled:
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        dataset_name = args["env"]["map_dir"].split("/")[-1]
         print(f"Running human replay evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
         backend = args["eval"].get("backend", "PufferEnv")
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
+
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
         args["env"]["episode_length"] = 91  # WOMD scenario length
+        args["env"]["num_maps"] = args["eval"]["human_replay_num_agents"]
+        args["env"]["termination_mode"] = 0  # End at episode length
 
-        vecenv = vecenv or load_env(env_name, args)
-        policy = policy or load_policy(args, vecenv, env_name)
+        # Create two different envs
+        hr_args = args.copy()
+        hr_args["env"]["control_mode"] = "control_sdc_only"
+        hr_env = load_env(env_name, hr_args)
 
-        print(f"Effective number of scenarios used: {len(vecenv.driver_env.agent_offsets) - 1}")
+        sp_args = args.copy()
+        sp_args["env"]["control_mode"] = "control_vehicles"
+        sp_env = load_env(env_name, sp_args)
 
-        evaluator = HumanReplayEvaluator(args)
+        # Load policy
+        policy = policy or load_policy(args, sp_env, env_name)
 
-        # Run rollouts with human replays
-        results = evaluator.rollout(args, vecenv, policy)
+        # Create evaluator
+        evaluator = HumanReplayEvaluator(args, sp_env, hr_env)
 
+        # Run both rollouts
+        evaluator.rollout(args, policy, mode="self_play")
+        evaluator.rollout(args, policy, mode="human_replay")
+
+        # Get all stats including deltas
+        all_stats = evaluator.aggregate_stats()
+
+        # Log results
         import json
 
-        # Convert numpy types to native Python types for JSON serialization
-        def to_native(obj):
-            if hasattr(obj, 'item'):  # numpy scalar
-                return obj.item()
-            return obj
-
-        native_results = {k: to_native(v) for k, v in results.items()}
-
-        print("HUMAN_REPLAY_METRICS_START")
-        print(json.dumps(native_results))
+        print("\nHUMAN_REPLAY_METRICS_START")
+        print(json.dumps(all_stats, indent=2))
         print("HUMAN_REPLAY_METRICS_END")
-
-        return results
+        return all_stats
     else:  # Standard evaluation: Render
         backend = args["vec"]["backend"]
         if backend != "PufferEnv":

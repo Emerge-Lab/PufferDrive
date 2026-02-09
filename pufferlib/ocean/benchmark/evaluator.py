@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from typing import Dict
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 import configparser
 import os
 from tqdm import tqdm
@@ -36,12 +37,109 @@ class WOSACEvaluator:
         self.init_steps = config.get("eval", {}).get("wosac_init_steps", 0)
         self.sim_steps = self.num_steps - self.init_steps
         self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
+        self.filter_out_post_done = config.get("eval", {}).get("wosac_filter_out_post_done", True)
         self.device = config.get("train", {}).get("device", "cuda")
+        self.eval_mode = config.get("eval", {}).get("wosac_eval_mode", "policy")
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
         self.metrics_config.read(wosac_metrics_path)
         self.mode = "rl"
+
+    def evaluate(self, args, vecenv, policy=None, drop_scene_duplicates=True):
+        """Run full WOSAC evaluation with batched iteration over target scenarios.
+
+        Args:
+            args: Configuration dictionary
+            vecenv: Vectorized environment
+            policy: Policy to evaluate
+            drop_scene_duplicates: Whether to drop duplicate scenarios
+
+        Returns:
+            DataFrame: Full results aggregated by scenario.
+        """
+        num_target_maps = args["eval"]["wosac_target_scenarios"]
+        max_batches = args["eval"].get("wosac_max_batches", 100)
+
+        unique_files_sampled = set()
+        combined_results = []
+
+        with tqdm(total=100, desc="Processing batches", unit="%", colour="cyan") as pbar:
+            batch_idx = 0
+            while batch_idx < max_batches:
+                # Resample maps for each batch (except first)
+                if batch_idx > 0:
+                    vecenv.driver_env.resample_maps()
+
+                # Obtain ground truth trajectories
+                gt_trajectories = self.collect_ground_truth_trajectories(vecenv)
+
+                # Collect simulated trajectories
+                if policy is not None and self.eval_mode == "policy":
+                    simulated_trajectories = self.collect_simulated_trajectories(args, vecenv, policy)
+                elif self.eval_mode == "ground_truth":
+                    # Create fake simulated trajectories by repeating ground truth
+                    simulated_trajectories = gt_trajectories.copy()
+                    for key in ["x", "y", "heading", "id"]:
+                        simulated_trajectories[key] = np.repeat(
+                            gt_trajectories[key], args["eval"]["wosac_num_rollouts"], axis=1
+                        )
+                    simulated_trajectories["id"] = simulated_trajectories["id"][..., np.newaxis]
+                    simulated_trajectories["dones"] = np.zeros_like(simulated_trajectories["x"])
+                else:
+                    raise ValueError(f"Policy is None or unknown evaluation mode: {self.eval_mode}")
+
+                # Compute metrics for this batch
+                agent_state = vecenv.driver_env.get_global_agent_state()
+                road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+                batch_results = self.compute_metrics(
+                    gt_trajectories,
+                    simulated_trajectories,
+                    agent_state,
+                    road_edge_polylines,
+                    aggregate_results=False,
+                )
+
+                # Optional: sanity check on first batch
+                if args["eval"].get("wosac_sanity_check", False) and batch_idx == 0:
+                    self._quick_sanity_check(gt_trajectories, simulated_trajectories)
+
+                # Track coverage
+                unique_files_sampled.update(str(s) for s in np.unique(gt_trajectories["scenario_id"]))
+                combined_results.append(batch_results)
+
+                # Update progress
+                coverage = len(unique_files_sampled) / num_target_maps
+                pbar.n = int(coverage * 100)
+                pbar.set_postfix({"n": len(unique_files_sampled), "batch": batch_idx + 1})
+                pbar.refresh()
+
+                batch_idx += 1
+
+                # Stop if we've covered all target scenarios
+                if len(unique_files_sampled) >= num_target_maps:
+                    break
+
+            # Check if we didn't reach target coverage
+            if len(unique_files_sampled) < num_target_maps:
+                print(
+                    f"\nWarning: Only covered {len(unique_files_sampled)}/{num_target_maps} scenarios after {batch_idx} batches"
+                )
+
+            # Combine batch results into single dataframe
+            df_combined = pd.concat(combined_results)
+
+            # Optionally drop duplicate scenarios (keep first occurrence)
+            if drop_scene_duplicates:
+                initial_count = len(df_combined)
+                df_combined = df_combined[~df_combined.index.duplicated(keep="first")]
+                dropped = initial_count - len(df_combined)
+                if dropped > 0:
+                    print(f"\nDropped {dropped} duplicate scenarios.")
+
+            print(f"\nCollected {len(df_combined)} agent records from {batch_idx} batches")
+
+            return df_combined
 
     def _compute_metametric(self, metrics: pd.Series) -> float:
         metametric = 0.0
@@ -93,12 +191,14 @@ class WOSACEvaluator:
             "z": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "heading": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
+            "dones": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.bool_),
         }
 
         for rollout_idx in tqdm(range(self.num_rollouts), desc="Collecting rollouts", colour="blue"):
             print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
 
             obs, info = puffer_env.reset()
+            truncations = np.zeros((num_agents,), dtype=bool)
             state = {}
 
             if args["train"]["use_rnn"] and policy is not None:
@@ -115,6 +215,7 @@ class WOSACEvaluator:
                 trajectories["z"][:, rollout_idx, time_idx] = agent_state["z"]
                 trajectories["heading"][:, rollout_idx, time_idx] = agent_state["heading"]
                 trajectories["id"][:, rollout_idx, time_idx] = agent_state["id"]
+                trajectories["dones"][:, rollout_idx, time_idx] = truncations
 
                 # Step policy
                 if policy is None and actions is not None:
@@ -130,23 +231,23 @@ class WOSACEvaluator:
                         # Discrete action space
                         action_np[invalid_mask] = 45  # Do nothing action
 
-                elif policy is not None and self.mode == "rl":
-                    with torch.no_grad():
-                        ob_tensor = torch.as_tensor(obs).to(device)
-                        logits, value = policy.forward_eval(ob_tensor, state)
-                        action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                        action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                elif policy is not None:
+                    if self.mode == "bc_policy":
+                        with torch.no_grad():
+                            ob_tensor = torch.as_tensor(obs).to(device)
+                            pred_action = policy(ob_tensor, deterministic=True)
+                            action_np = pred_action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                    else:
+                        with torch.no_grad():
+                            ob_tensor = torch.as_tensor(obs).to(device)
+                            logits, value = policy.forward_eval(ob_tensor, state)
+                            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                            action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
-                    if isinstance(logits, torch.distributions.Normal):
-                        action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
+                        if isinstance(logits, torch.distributions.Normal):
+                            action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-                elif policy is not None and self.mode == "bc_policy":
-                    with torch.no_grad():
-                        ob_tensor = torch.as_tensor(obs).to(device)
-                        pred_action = policy(ob_tensor, deterministic=True)
-                        action_np = pred_action.cpu().numpy().reshape(puffer_env.action_space.shape)
-
-                obs, _, _, _, _ = puffer_env.step(action_np)
+                obs, rewards, terminals, truncations, infos = puffer_env.step(action_np)
 
         return trajectories
 
@@ -162,6 +263,7 @@ class WOSACEvaluator:
             "y": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "heading": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
             "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
+            "dones": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.bool_),
         }
 
         for rollout_idx in range(self.num_rollouts):
@@ -223,14 +325,13 @@ class WOSACEvaluator:
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
-        print("Computing metrics...")
-
-        eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
+        eval_mask = ground_truth_trajectories["is_track_to_predict"][:, 0]
 
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
         sim_y = simulated_trajectories["y"]
         sim_heading = simulated_trajectories["heading"]
+        sim_dones = simulated_trajectories["dones"]
         ref_x = ground_truth_trajectories["x"]
         ref_y = ground_truth_trajectories["y"]
         ref_heading = ground_truth_trajectories["heading"]
@@ -240,12 +341,15 @@ class WOSACEvaluator:
         is_vehicle = ground_truth_trajectories["is_vehicle"]
         scenario_ids = ground_truth_trajectories["scenario_id"]
 
+        last_scenario_id = str(scenario_ids[-1][0])
+
         # We evaluate the metrics only for the Tracks to Predict.
         eval_sim_x = sim_x[eval_mask]
         eval_sim_y = sim_y[eval_mask]
         eval_sim_heading = sim_heading[eval_mask]
         eval_ref_x = ref_x[eval_mask]
         eval_ref_y = ref_y[eval_mask]
+        eval_dones = sim_dones[eval_mask]
         eval_ref_heading = ref_heading[eval_mask]
         eval_ref_valid = ref_valid[eval_mask]
         eval_agent_length = agent_length[eval_mask]
@@ -313,7 +417,7 @@ class WOSACEvaluator:
         # Average Displacement Error (ADE) and minADE
         # Note: This metric is not included in the scoring meta-metric, as per WOSAC rules.
         ade, min_ade = metrics.compute_displacement_error(
-            eval_sim_x, eval_sim_y, eval_ref_x, eval_ref_y, eval_ref_valid
+            eval_sim_x, eval_sim_y, eval_ref_x, eval_ref_y, eval_ref_valid, eval_dones, self.filter_out_post_done
         )
 
         # Log-likelihood metrics
@@ -330,6 +434,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -344,6 +449,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -358,6 +464,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -372,6 +479,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -386,6 +494,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -400,6 +509,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         # Map-based features log-likelihoods
@@ -415,6 +525,7 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
+            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         speed_log_likelihood = metrics._reduce_average_with_validity(
@@ -465,11 +576,22 @@ class WOSACEvaluator:
         # in the logged scenario, we need to filter possible collisions in simulation.
         # `sim_collision_indication` shape: (n_samples, n_objects).
 
-        sim_collision_indication = np.any(np.where(eval_ref_valid, sim_collision_per_step, False), axis=2)
-        ref_collision_indication = np.any(np.where(eval_ref_valid, ref_collision_per_step, False), axis=2)
+        # Combine validity masks: only count events when ref is valid and agent is not done
+        if self.filter_out_post_done:
+            active_mask = eval_ref_valid & ~eval_dones  # (n_agents, n_rollouts, n_steps)
+        else:
+            active_mask = eval_ref_valid  # (n_agents, 1, n_steps)
 
-        sim_num_collisions = np.sum(sim_collision_indication, axis=1)
-        ref_num_collisions = np.sum(ref_collision_indication, axis=1)
+        # Diagnostic: show average number of active timesteps per rollout
+        active_timesteps_per_rollout = np.sum(active_mask, axis=2)  # (n_agents, n_rollouts)
+        avg_active_timesteps = np.mean(active_timesteps_per_rollout)
+        print(f"Average active timesteps for collision detection: {avg_active_timesteps:.2f}")
+
+        sim_collision_indication = np.any(np.where(active_mask, sim_collision_per_step, False), axis=2)
+        ref_collision_indication = np.any(np.where(active_mask, ref_collision_per_step, False), axis=2)
+
+        sim_num_collisions = np.mean(sim_collision_indication, axis=1)
+        ref_num_collisions = np.mean(ref_collision_indication, axis=1)
 
         collision_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_collision_indication[:, 0],
@@ -481,11 +603,11 @@ class WOSACEvaluator:
         )
 
         # Offroad likelihood (same pattern as collision)
-        sim_offroad_indication = np.any(np.where(eval_ref_valid, sim_offroad_per_step, False), axis=2)
-        ref_offroad_indication = np.any(np.where(eval_ref_valid, ref_offroad_per_step, False), axis=2)
+        sim_offroad_indication = np.any(np.where(active_mask, sim_offroad_per_step, False), axis=2)
+        ref_offroad_indication = np.any(np.where(active_mask, ref_offroad_per_step, False), axis=2)
 
-        sim_num_offroad = np.sum(sim_offroad_indication, axis=1)
-        ref_num_offroad = np.sum(ref_offroad_indication, axis=1)
+        sim_num_offroad = np.mean(sim_offroad_indication, axis=1)
+        ref_num_offroad = np.mean(ref_offroad_indication, axis=1)
 
         offroad_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_offroad_indication[:, 0],
@@ -495,6 +617,14 @@ class WOSACEvaluator:
             num_bins=2,
             use_bernoulli=True,
         )
+
+        print(sim_num_offroad)
+        print(sim_num_collisions)
+        print(f"Offroad events: {sim_num_offroad.sum()}")
+        print(f"Collision events: {sim_num_collisions.sum()}")
+
+        print("---")
+        print(f"ADE: {ade.mean():.3f}, minADE: {min_ade.mean():.3f}")
 
         # Get agent IDs
         eval_agent_ids = ground_truth_trajectories["id"][eval_mask]
@@ -522,7 +652,7 @@ class WOSACEvaluator:
         )
 
         # Aggregate along agent dimenision: Obtain one score per scenario
-        df_scene_level = df.groupby("scenario_id").mean().drop(columns=["agent_id"]).dropna()
+        df_scene_level = df.groupby("scenario_id", as_index=True).mean().drop(columns=["agent_id"]).dropna()
 
         # Exponentiate the averaged log-likelihoods to get final likelihoods
         likelihood_columns = [col for col in df_scene_level.columns if col.startswith("likelihood_")]
@@ -561,10 +691,15 @@ class WOSACEvaluator:
         df_scene_level["interactive_metrics"] = interactive_metrics
         df_scene_level["map_based_metrics"] = map_metrics
 
+        # Safety: drop the last scenario (potentially incomplete) from the scene-level results
+        if last_scenario_id in df_scene_level.index:
+            df_scene_level = df_scene_level.drop(last_scenario_id)
+
         if aggregate_results:
             # Aggregate over scenarios
             aggregate_metrics = df_scene_level.mean().to_dict()
             aggregate_metrics["total_num_agents"] = df_scene_level["num_agents_per_scene"].sum()
+            aggregate_metrics["realism_score_std"] = df_scene_level["realism_meta_score"].std()
             return aggregate_metrics
         else:
             return df_scene_level
@@ -692,37 +827,47 @@ class WOSACEvaluator:
 
 
 class HumanReplayEvaluator:
-    """Evaluates policies against human replays in PufferDrive."""
+    """Evaluates policies against human replays in PufferDrive.
 
-    def __init__(self, config: Dict):
+    Compares policy performance in two scenarios:
+    1. Self-play: All agents controlled by policy
+    2. Human replay: Only SDC controlled by policy, others replay human trajectories
+
+    The delta between these modes indicates how well the policy adapts to human behavior.
+    """
+
+    def __init__(self, config: Dict, sp_env, hr_env):
         self.config = config
-        self.sim_steps = 91 - self.config["env"]["init_steps"]
+        self.sim_steps = 90
+        self.sp_env = sp_env
+        self.hr_env = hr_env
+        self.human_replay_stats = {}
+        self.self_play_stats = {}
 
-    def rollout(self, args, puffer_env, policy):
-        """Roll out policy in env with human replays. Store statistics.
-
-        In human replay mode, only the SDC (self-driving car) is controlled by the policy
-        while all other agents replay their human trajectories. This tests how compatible
-        the policy is with (static) human partners.
+    def rollout(self, args, policy, mode="self_play"):
+        """Roll out policy and collect episode statistics.
 
         Args:
-            args: Config dict with train settings (device, use_rnn, etc.)
-            puffer_env: PufferLib environment wrapper
-            policy: Trained policy to evaluate
+            args: Configuration dictionary
+            policy: Policy to evaluate
+            mode: Either "self_play" or "human_replay"
 
         Returns:
-            dict: Aggregated metrics including:
-                - avg_collisions_per_agent: Average collisions per agent
-                - avg_offroad_per_agent: Average offroad events per agent
+            Dictionary of aggregated statistics
         """
         import numpy as np
         import torch
         import pufferlib
 
-        num_agents = puffer_env.observation_space.shape[0]
+        env = self.sp_env if mode == "self_play" else self.hr_env
+
+        num_agents = env.observation_space.shape[0]
         device = args["train"]["device"]
 
-        obs, info = puffer_env.reset()
+        # Reset environment
+        obs, info = env.reset()
+
+        # Initialize RNN state if needed
         state = {}
         if args["train"]["use_rnn"]:
             state = dict(
@@ -730,19 +875,74 @@ class HumanReplayEvaluator:
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
+        # Rollout
         for time_idx in range(self.sim_steps):
-            # Step policy
+            print(f"Time step: {time_idx}")
+            # Get action from policy
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
                 logits, value = policy.forward_eval(ob_tensor, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                action_np = action.cpu().numpy().reshape(env.action_space.shape)
 
+            # Clip continuous actions to valid range
             if isinstance(logits, torch.distributions.Normal):
-                action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
+                action_np = np.clip(action_np, env.action_space.low, env.action_space.high)
 
-            obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
+            # Step environment
+            obs, rewards, dones, truncs, info_list = env.step(action_np)
 
-            if len(info_list) > 0:  # Happens at the end of episode
-                results = info_list[0]
-                return results
+            if truncs.all():
+                print(info_list)
+                break
+
+        # Aggregate final statistics
+        final_info = info_list[0] if info_list else {}
+
+        if mode == "human_replay":
+            self.human_replay_stats = final_info
+        else:
+            self.self_play_stats = final_info
+
+    def aggregate_stats(self):
+        """Aggregate statistics from both modes and compute deltas.
+
+        Returns:
+            Dictionary with self_play, human_replay, and delta statistics
+        """
+
+        if not self.self_play_stats or not self.human_replay_stats:
+            raise ValueError("Must run rollouts in both modes before aggregating stats")
+
+        # Extract metrics (assume they exist)
+        sp = self.self_play_stats
+        hr = self.human_replay_stats
+
+        results = {
+            # Self-play metrics
+            "self_play": {
+                "collision_rate": sp["collision_rate"],
+                "offroad_rate": sp["offroad_rate"],
+                "completion_rate": sp["completion_rate"],
+                "score": sp["score"],
+                "num_agents": sp["n"],
+            },
+            # Human replay metrics
+            "human_replay": {
+                "collision_rate": hr["collision_rate"],
+                "offroad_rate": hr["offroad_rate"],
+                "completion_rate": hr["completion_rate"],
+                "score": hr["score"],
+                "num_agents": sp["n"],
+            },
+            # Delta metrics (self_play - human_replay)
+            # Positive = better in self-play, Negative = worse in self-play
+            "delta": {
+                " Δ_cr": sp["collision_rate"] - hr["collision_rate"],
+                " Δ_or": sp["offroad_rate"] - hr["offroad_rate"],
+                " Δ_comp": sp["completion_rate"] - hr["completion_rate"],
+                " Δ_score": sp["score"] - hr["score"],
+            },
+        }
+
+        return results

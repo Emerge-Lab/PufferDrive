@@ -15,31 +15,31 @@ POLICY_DIR = "models"
 # Policy configurations: (filename, display_name, dynamics_model)
 # Update these paths to match your actual checkpoint files
 POLICY_CONFIGS = {
-    # "bc_policy": {
-    #     "path": POLICY_DIR + "/bc_policy.pt",
+    "bc_policy": {
+        "path": POLICY_DIR + "/bc_policy.pt",
+        "dynamics": "classic",
+        "type": "bc",
+    },
+    # "self_play_rl (classic)": {
+    #     "path": POLICY_DIR + "/self_play_rl_simple_policy.pt",
     #     "dynamics": "classic",
-    #     "type": "bc",
+    #     "type": "rl",
     # },
-    "self_play_rl (classic)": {
-        "path": POLICY_DIR + "/self_play_rl_simple_policy.pt",
-        "dynamics": "classic",
-        "type": "rl",
-    },
-    "guided_self_play_rl (classic)": {
-        "path": POLICY_DIR + "/guided_self_play_classic_policy.pt",
-        "dynamics": "classic",
-        "type": "rl",
-    },
+    # "guided_self_play_rl (classic)": {
+    #     "path": POLICY_DIR + "/guided_self_play_classic_policy.pt",
+    #     "dynamics": "classic",
+    #     "type": "rl",
+    # },
     # "self_play_rl (jerk)": {
     #     "path": POLICY_DIR + "/self_play_jerk_policy.pt",
     #     "dynamics": "jerk",
     #     "type": "rl",
     # },
-    "guided_self_play_rl (jerk)": {
-        "path": POLICY_DIR + "/guided_self_play_jerk_policy.pt",
-        "dynamics": "jerk",
-        "type": "rl",
-    },
+    # "guided_self_play_rl (jerk)": {
+    #     "path": POLICY_DIR + "/guided_self_play_jerk_policy.pt",
+    #     "dynamics": "jerk",
+    #     "type": "rl",
+    # },
 }
 
 COLUMN_ORDER = [
@@ -80,7 +80,7 @@ def plot_wosac_results(df):
     axes[0].set_title("Aggregate realism score")
     # axes[0].set_ylim(0, 1.0)
     axes[0].grid(axis="y", alpha=0.3, linestyle="--")
-    axes[0].tick_params(axis="x", rotation=15)
+    axes[0].tick_params(axis="x", rotation=30)
 
     # Middle: Metric Categories
     df_metrics = df.melt(
@@ -95,7 +95,7 @@ def plot_wosac_results(df):
     # axes[1].set_ylim(0, 1.0)
     axes[1].legend(title="Policy", loc="upper left")
     axes[1].grid(axis="y", alpha=0.3, linestyle="--")
-    axes[1].tick_params(axis="x", rotation=15)
+    axes[1].tick_params(axis="x", rotation=30)
 
     # Right: ADE and minADE
     df_ade = df.melt(id_vars=["policy"], value_vars=["ade", "min_ade"])
@@ -171,28 +171,6 @@ def plot_realism_score_distributions(df):
     plt.show()
 
     return fig
-
-
-def evaluate_ground_truth(config, vecenv, evaluator):
-    """Compute WOSAC metrics for ground truth trajectories."""
-
-    gt_trajectories = evaluator.collect_ground_truth_trajectories(vecenv)
-
-    fake_simulated_trajectories = gt_trajectories.copy()
-    for key in ["x", "y", "heading", "id"]:
-        fake_simulated_trajectories[key] = np.repeat(gt_trajectories[key], config["eval"]["wosac_num_rollouts"], axis=1)
-    fake_simulated_trajectories["id"] = fake_simulated_trajectories["id"][..., np.newaxis]
-
-    # Compute metrics
-    agent_state = vecenv.driver_env.get_global_agent_state()
-    road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-    results = evaluator.compute_metrics(
-        gt_trajectories,
-        fake_simulated_trajectories,
-        agent_state,
-        road_edge_polylines,
-    )
-    return results
 
 
 def evaluate_human_inferred_actions(config, vecenv, evaluator):
@@ -320,15 +298,18 @@ def create_config_and_env(env_name, dynamics_model="classic"):
     # Common WOSAC evaluation settings
     config["env"]["num_maps"] = 100
     config["env"]["map_dir"] = "pufferlib/resources/drive/binaries/validation"
+    config["eval"]["wosac_target_scenarios"] = 1000
+    config["eval"]["wosac_batch_size"] = 100
+    config["eval"]["wosac_scenario_pool_size"] = 10_000
     config["wosac"]["enabled"] = True
     config["vec"]["backend"] = "PufferEnv"
     config["vec"]["num_envs"] = 1
-    config["env"]["sequential_map_sampling"] = True
     config["env"]["init_mode"] = "create_all_valid"
     config["env"]["control_mode"] = "control_wosac"
     config["env"]["init_steps"] = 10
     config["env"]["goal_behavior"] = 2
     config["env"]["goal_radius"] = 1.0
+    config["env"]["save_data_to_disk"] = False
 
     # Set dynamics model
     config["env"]["dynamics_model"] = dynamics_model
@@ -352,7 +333,8 @@ def pipeline(env_name="puffer_drive"):
 
     # Ground truth (dynamics-agnostic, only need to run once)
     print("Evaluating: ground_truth")
-    df_results_gt = evaluate_ground_truth(config_classic, vecenv_classic, evaluator_classic)
+    evaluator_classic.eval_mode = "ground_truth"
+    df_results_gt = evaluator_classic.evaluate(config_classic, vecenv_classic, policy=None)
     df_results_gt["policy"] = "ground_truth"
     all_results.append(df_results_gt)
 
@@ -374,6 +356,7 @@ def pipeline(env_name="puffer_drive"):
     all_results.append(df_results_random_classic)
 
     # Evaluate classic dynamics policies
+    evaluator_classic.eval_mode = "policy"
     for policy_name, policy_cfg in POLICY_CONFIGS.items():
         if policy_cfg["dynamics"] != "classic":
             continue
@@ -422,6 +405,12 @@ def pipeline(env_name="puffer_drive"):
     print("RESULTS SUMMARY")
     print("=" * 60)
     print(df.groupby("policy")["realism_meta_score"].mean().sort_values(ascending=False))
+    print("---")
+    print(df.groupby("policy")["kinematic_metrics"].mean())
+    print("---")
+    print(df.groupby("policy")["interactive_metrics"].mean())
+    print("---")
+    print(df.groupby("policy")["map_based_metrics"].mean())
 
 if __name__ == "__main__":
     pipeline()

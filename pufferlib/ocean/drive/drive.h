@@ -109,18 +109,19 @@
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
+#define GOAL_STOP_AND_TRUNCATE 3
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 
 // Classic action space (for CLASSIC dynamics model)
-#define NUM_ACCEL_BINS 21
+#define NUM_ACCEL_BINS 7 // 21
 #define ACCEL_MIN -4.0f
 #define ACCEL_MAX 4.0f
 
-#define NUM_STEER_BINS 31
-#define STEER_MIN -1.0f // radians
+#define NUM_STEER_BINS 13 // 31
+#define STEER_MIN -1.0f   // radians
 #define STEER_MAX 1.0f
 
 static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
@@ -314,6 +315,7 @@ struct Drive {
     float *actions;
     float *rewards;
     unsigned char *terminals;
+    unsigned char *truncations;
     Log log;
     Log *logs;
     int num_agents;
@@ -357,7 +359,7 @@ struct Drive {
     int goal_behavior;
     float goal_target_distance;
     char *ini_file;
-    char *scenario_id;
+    char scenario_id[16];
     int collision_behavior;
     int offroad_behavior;
     int sdc_track_index;
@@ -563,6 +565,9 @@ Entity *load_map_binary(const char *filename, Drive *env) {
     FILE *file = fopen(filename, "rb");
     if (!file)
         return NULL;
+
+    // Read scenario_id
+    fread(env->scenario_id, sizeof(char), 16, file);
 
     // Read sdc_track_index
     fread(&env->sdc_track_index, sizeof(int), 1, file);
@@ -1178,7 +1183,7 @@ int collision_check(Drive *env, int agent_idx) {
         int index = -1;
         if (i < env->active_agent_count) {
             index = env->active_agent_indices[i];
-        } else if (i < env->num_actors) {
+        } else if (i < env->num_actors && env->static_agent_count > 0) {
             index = env->static_agent_indices[i - env->active_agent_count];
         }
         if (index == -1)
@@ -1668,6 +1673,7 @@ void allocate(Drive *env) {
     env->actions = (float *)calloc(env->active_agent_count * 2, sizeof(float));
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
     env->terminals = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
+    env->truncations = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
 }
 
 void free_allocated(Drive *env) {
@@ -1675,6 +1681,7 @@ void free_allocated(Drive *env) {
     free(env->actions);
     free(env->rewards);
     free(env->terminals);
+    free(env->truncations);
     c_close(env);
 }
 
@@ -1862,16 +1869,16 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
-static inline int get_track_id_or_placeholder(Drive *env, int agent_idx) {
+static inline int is_in_track_to_predicts(Drive *env, int agent_idx) {
     if (env->tracks_to_predict_indices == NULL || env->num_tracks_to_predict == 0) {
-        return -1;
+        return 0;
     }
     for (int k = 0; k < env->num_tracks_to_predict; k++) {
         if (env->tracks_to_predict_indices[k] == agent_idx) {
-            return env->tracks_to_predict_indices[k];
+            return 1;
         }
     }
-    return -1;
+    return 0;
 }
 
 void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out, int *id_out,
@@ -1885,20 +1892,24 @@ void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_o
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        id_out[i] = agent->id;
         length_out[i] = agent->length;
         width_out[i] = agent->width;
     }
 }
 
 void c_get_global_ground_truth_trajectories(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out,
-                                            int *valid_out, int *id_out, int *is_vehicle_out, int *scenario_id_out) {
+                                            int *valid_out, int *id_out, bool *is_vehicle_out,
+                                            bool *is_track_to_predict_out, char *scenario_id_out) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Entity *agent = &env->entities[agent_idx];
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        id_out[i] = agent->id;
         is_vehicle_out[i] = agent->type == VEHICLE;
-        scenario_id_out[i] = agent->scenario_id;
+        is_track_to_predict_out[i] = is_in_track_to_predicts(env, agent_idx);
+
+        // The scenario_id is an array of 16 char
+        memcpy(scenario_id_out + (i * 16), env->scenario_id, 16);
 
         for (int t = env->init_steps; t < agent->array_size; t++) {
             int out_idx = i * (agent->array_size - env->init_steps) + (t - env->init_steps);
@@ -1924,13 +1935,16 @@ void c_get_road_edge_counts(Drive *env, int *num_polylines_out, int *total_point
     *total_points_out = points;
 }
 
-void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *lengths_out, int *scenario_ids_out) {
+void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *lengths_out, char *scenario_ids_out) {
     int poly_idx = 0, pt_idx = 0;
     for (int i = env->num_objects; i < env->num_entities; i++) {
         Entity *e = &env->entities[i];
         if (e->type == ROAD_EDGE) {
             lengths_out[poly_idx] = e->array_size;
-            scenario_ids_out[poly_idx] = e->scenario_id;
+
+            char *scenario_id_ptr = scenario_ids_out + poly_idx * 16;
+            memcpy(scenario_id_ptr, env->scenario_id, 16);
+
             for (int j = 0; j < e->array_size; j++) {
                 x_out[pt_idx] = e->traj_x[j] + env->world_mean_x;
                 y_out[pt_idx] = e->traj_y[j] + env->world_mean_y;
@@ -2024,7 +2038,7 @@ void compute_observations(Drive *env) {
             int index = -1;
             if (j < env->active_agent_count) {
                 index = env->active_agent_indices[j];
-            } else if (j < env->num_actors) {
+            } else if (j < env->num_actors && env->static_agent_count > 0) {
                 index = env->static_agent_indices[j - env->active_agent_count];
             }
             if (index == -1)
@@ -2250,23 +2264,8 @@ void respawn_agent(Drive *env, int agent_idx) {
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
+    memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
-
-    int originals_remaining = 0;
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        // Keep flag true if there is at least one agent that has not been respawned yet
-        if (env->entities[agent_idx].respawn_count == 0) {
-            originals_remaining = 1;
-            break;
-        }
-    }
-
-    if (env->timestep == env->episode_length || (!originals_remaining && env->termination_mode == 1)) {
-        add_log(env);
-        c_reset(env);
-        return;
-    }
 
     // Move static experts
     for (int i = 0; i < env->expert_static_agent_count; i++) {
@@ -2368,6 +2367,7 @@ void c_step(Drive *env) {
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
             if (reached_goal) {
+                env->terminals[i] = 1;
                 respawn_agent(env, agent_idx);
                 env->entities[agent_idx].respawn_count++;
             }
@@ -2381,6 +2381,37 @@ void c_step(Drive *env) {
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
             }
         }
+    } else if (env->goal_behavior == GOAL_STOP_AND_TRUNCATE) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
+            if (reached_goal) {
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+                env->truncations[i] = 1; // Mark as truncated
+            }
+        }
+    }
+
+    // Episode boundary after this step: treat time-limit and early-termination as truncation.
+    // `timestep` is incremented at step start, so truncate when `(timestep + 1) >= episode_length`.
+    int originals_remaining = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        if (env->entities[agent_idx].respawn_count == 0) {
+            originals_remaining = 1;
+            break;
+        }
+    }
+    int reached_time_limit = (env->timestep + 1) >= env->episode_length;
+    int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
+    if (reached_time_limit || reached_early_termination) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            env->truncations[i] = 1;
+        }
+        add_log(env);
+        c_reset(env);
+        return;
     }
 
     compute_observations(env);
@@ -3156,7 +3187,7 @@ void c_render(Drive *env) {
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
 
-    if (IsKeyPressed(KEY_TAB)) {
+    if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
         env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
     }
 

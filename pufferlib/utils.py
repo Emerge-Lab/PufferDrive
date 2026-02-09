@@ -58,18 +58,25 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
                 start = stdout.find("HUMAN_REPLAY_METRICS_START") + len("HUMAN_REPLAY_METRICS_START")
                 end = stdout.find("HUMAN_REPLAY_METRICS_END")
                 json_str = stdout[start:end].strip()
-                human_replay_metrics = json.loads(json_str)
+                metrics = json.loads(json_str)
 
                 # Log to wandb if available
                 if hasattr(logger, "wandb") and logger.wandb:
-                    logger.wandb.log(
-                        {
-                            "eval/human_replay_collision_rate": human_replay_metrics["collision_rate"],
-                            "eval/human_replay_offroad_rate": human_replay_metrics["offroad_rate"],
-                            "eval/human_replay_completion_rate": human_replay_metrics["completion_rate"],
-                        },
-                        step=global_step,
-                    )
+                    log_dict = {
+                        # Self-play metrics
+                        "eval/sp_collision_rate": metrics["self_play"]["collision_rate"],
+                        "eval/sp_score": metrics["self_play"]["score"],
+                        # Human replay metrics
+                        "eval/hr_collision_rate": metrics["human_replay"]["collision_rate"],
+                        "eval/hr_score": metrics["human_replay"]["score"],
+                        # Delta metrics (self_play - human_replay)
+                        "eval/Δ_cr": metrics["delta"][" Δ_cr"],
+                        "eval/Δ_or": metrics["delta"][" Δ_or"],
+                        "eval/Δ_comp": metrics["delta"][" Δ_comp"],
+                        "eval/Δ_score": metrics["delta"][" Δ_score"],
+                    }
+
+                    logger.wandb.log(log_dict, step=global_step)
         else:
             print(f"Human replay evaluation failed with exit code {result.returncode}: {result.stderr}")
 
@@ -108,8 +115,12 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             config["env"],
             "--eval.wosac-realism-eval",
             "True",
-            "--eval.wosac-num-maps",
-            str(eval_config.get("wosac_num_maps", 256)),
+            "--eval.wosac-batch-size",
+            str(eval_config.get("wosac_batch_size", 32)),
+            "--eval.wosac-target-scenarios",
+            str(eval_config.get("wosac_target_scenarios", 64)),
+            "--eval.wosac-scenario-pool-size",
+            str(eval_config.get("wosac_scenario_pool_size", 10_000)),
             "--eval.wosac-init-mode",
             str(eval_config.get("wosac_init_mode", "create_all_valid")),
             "--eval.wosac-control-mode",
@@ -119,7 +130,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             "--eval.wosac-goal-behavior",
             str(eval_config.get("wosac_goal_behavior", 2)),
             "--eval.wosac-goal-radius",
-            str(eval_config.get("wosac_goal_radius", 2.0)),
+            str(eval_config.get("wosac_goal_radius", 1.0)),
             "--eval.wosac-sanity-check",
             str(eval_config.get("wosac_sanity_check", False)),
             "--eval.wosac-aggregate-results",
@@ -153,13 +164,18 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
                 if hasattr(logger, "wandb") and logger.wandb:
                     logger.wandb.log(
                         {
-                            "eval/wosac_realism_meta_score": wosac_metrics["realism_meta_score"],
+                            "eval/wosac_realism_meta_score_mean": wosac_metrics["realism_meta_score"],
+                            "eval/wosac_realism_meta_score_std": wosac_metrics["realism_meta_score_std"],
+                            "eval/wosac_kinematic_metrics": wosac_metrics["kinematic_metrics"],
+                            "eval/wosac_interactive_metrics": wosac_metrics["interactive_metrics"],
+                            "eval/wosac_map_based_metrics": wosac_metrics["map_based_metrics"],
                             "eval/wosac_ade": wosac_metrics["ade"],
                             "eval/wosac_min_ade": wosac_metrics["min_ade"],
-                            "eval/likelihood_linear_speed": wosac_metrics["likelihood_linear_speed"],
-                            "eval/likelihood_linear_acceleration": wosac_metrics["likelihood_linear_acceleration"],
-                            "eval/likelihood_angular_speed": wosac_metrics["likelihood_angular_speed"],
-                            "eval/likelihood_angular_acceleration": wosac_metrics["likelihood_angular_acceleration"],
+                            "eval/wosac_likelihood_ttc": wosac_metrics["likelihood_time_to_collision"],
+                            "eval/wosac_likelihood_collision": wosac_metrics["likelihood_collision_indication"],
+                            "eval/wosac_likelihood_dist_to_no": wosac_metrics["likelihood_distance_to_nearest_object"],
+                            "eval/num_collisions_sim": wosac_metrics["num_collisions_sim"],
+                            "eval/num_collisions_ref": wosac_metrics["num_collisions_ref"],
                             "eval/wosac_total_num_agents": wosac_metrics["total_num_agents"],
                         },
                         step=global_step,
