@@ -1023,6 +1023,8 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         atn = actions[tick % atn_cache]
         env.step(atn)
         tick += 1
+        if tick > 5:
+            break
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
 
@@ -1092,7 +1094,7 @@ if __name__ == "__main__":
     # test_human_demonstrations()
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/wosac/validation_interactive_small")
+    process_all_maps(data_folder="data/processed/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
