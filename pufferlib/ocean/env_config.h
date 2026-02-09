@@ -33,7 +33,9 @@ typedef struct {
     int init_steps;
     int init_mode;
     int control_mode;
+    int num_maps;
     char map_dir[256];
+    int snapshot_only;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -129,6 +131,10 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->map_dir[sizeof(env_config->map_dir) - 1] = '\0';
         }
         // printf("Parsed map_dir: '%s'\n", env_config->map_dir);
+    } else if (MATCH("env", "num_maps")) {
+        env_config->num_maps = atoi(value);
+    } else if (MATCH("render", "snapshot_only")) {
+        env_config->snapshot_only = (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || atoi(value) == 1);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

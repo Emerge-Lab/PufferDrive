@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import psutil
+from multiprocessing.pool import ThreadPool
 
 import torch
 import torch.distributed
@@ -1636,8 +1637,96 @@ def load_config(env_name, config_dir=None):
     return args
 
 
+def render(env_name, args=None):
+    args = args or load_config(env_name)
+    render_configs = args.get("render", {})
+
+    # Renders first num_maps from map_dir using visualize binary
+    try:
+        map_dir = render_configs["map_dir"]
+        num_maps = render_configs.get("num_maps", 1)
+        view_mode = render_configs["view_mode"]
+        render_policy_path = render_configs["policy_path"]
+        overwork = render_configs.get("overwork", False)
+        num_workers = args["vec"]["num_workers"]
+        output_dir = render_configs["output_dir"]
+    except KeyError as e:
+        raise pufferlib.APIUsageError(f"Missing render config: {e}")
+
+    cpu_cores = psutil.cpu_count(logical=False)
+    if num_workers > cpu_cores and not overwork:
+        raise pufferlib.APIUsageError(
+            " ".join(
+                [
+                    f"num_workers ({num_workers}) > hardware cores ({cpu_cores}) is disallowed by default.",
+                    "PufferLib multiprocessing is heavily optimized for 1 process per hardware core.",
+                    "If you really want to do this, set overwork=True (--vec-overwork in our demo.py).",
+                ]
+            )
+        )
+
+    if num_maps > len(os.listdir(map_dir)):
+        num_maps = len(os.listdir(map_dir))
+
+    render_maps = [os.path.join(map_dir, f) for f in sorted(os.listdir(map_dir)) if f.endswith(".bin")][:num_maps]
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Rebuild visualize binary
+    ensure_drive_binary()
+
+    snapshot_only = render_configs.get("snapshot_only", False)
+
+    def render_task(map_path):
+        base_cmd = (
+            ["./visualize"]
+            if sys.platform == "darwin"
+            else ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+        )
+        cmd = base_cmd.copy()
+        cmd.extend(["--map-name", map_path])
+        if render_configs.get("show_grid", False):
+            cmd.append("--show-grid")
+        if render_configs.get("obs_only", False):
+            cmd.append("--obs-only")
+        if render_configs.get("show_lasers", False):
+            cmd.append("--lasers")
+        if render_configs.get("show_human_logs", False):
+            cmd.append("--show-human-logs")
+        if render_configs.get("zoom_in", False):
+            cmd.append("--zoom-in")
+        cmd.extend(["--view", view_mode])
+        if render_policy_path is not None:
+            cmd.extend(["--policy-name", render_policy_path])
+
+        map_name = os.path.basename(map_path).replace(".bin", "")
+
+        if snapshot_only:
+            cmd.extend(["--output-topdown", os.path.join(output_dir, f"topdown_{map_name}.png")])
+        else:
+            if view_mode == "topdown" or view_mode == "both":
+                cmd.extend(["--output-topdown", os.path.join(output_dir, f"topdown_{map_name}.mp4")])
+            if view_mode == "agent" or view_mode == "both":
+                cmd.extend(["--output-agent", os.path.join(output_dir, f"agent_{map_name}.mp4")])
+
+        env_vars = os.environ.copy()
+        env_vars["ASAN_OPTIONS"] = "exitcode=0"
+        try:
+            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
+            if result.returncode != 0:
+                print(f"Error rendering {map_name}: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            print(f"Timeout rendering {map_name}: exceeded 600 seconds")
+
+    if render_maps:
+        output_type = "snapshots" if snapshot_only else "videos"
+        print(f"Rendering {len(render_maps)} {output_type} from {map_dir} with {num_workers} workers...")
+        with ThreadPool(num_workers) as pool:
+            pool.map(render_task, render_maps)
+        print(f"Finished rendering {output_type} to {output_dir}")
+
+
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export, sanity] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export, sanity, render] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -1659,6 +1748,8 @@ def main():
         export(env_name=env_name)
     elif mode == "sanity":
         sanity(env_name=env_name)
+    elif mode == "render":
+        render(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 

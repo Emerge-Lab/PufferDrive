@@ -281,6 +281,124 @@ static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
     }
 }
 
+void render_snapshot(Drive *env, Client *client, DriveNet *net,
+                     int frame_count, float map_height,
+                     int show_human_logs, int show_grid, int lasers,
+                     int zoom_in, int img_width, int img_height,
+                     const char *output_filename) {
+
+    // Allocate trajectory storage
+    int num_agents = env->active_agent_count;
+    float *traj_x = (float *)calloc(num_agents * frame_count, sizeof(float));
+    float *traj_y = (float *)calloc(num_agents * frame_count, sizeof(float));
+    int *traj_valid = (int *)calloc(num_agents * frame_count, sizeof(int));
+
+    // Run simulation, record positions
+    printf("Running simulation for %d steps...\n", frame_count);
+    for (int t = 0; t < frame_count; t++) {
+        for (int i = 0; i < num_agents; i++) {
+            int idx = env->active_agent_indices[i];
+            traj_x[i * frame_count + t] = env->entities[idx].x;
+            traj_y[i * frame_count + t] = env->entities[idx].y;
+            traj_valid[i * frame_count + t] = (env->entities[idx].respawn_timestep == -1);
+        }
+        forward(net, env->observations, (int *)env->actions);
+        c_step(env);
+    }
+
+    // Reset env to get initial scene for the background
+    c_reset(env);
+
+    // Render one top-down frame
+    BeginDrawing();
+
+    Camera3D camera = {0};
+    if (zoom_in) {
+        camera.position = (Vector3){0.0f, 0.0f, 500.0f};
+        camera.target = (Vector3){0.0f, 0.0f, 0.0f};
+        camera.fovy = map_height;
+    } else {
+        camera.position = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 500.0f};
+        camera.target = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0.0f};
+        camera.fovy = 2 * map_height;
+    }
+    camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+    camera.projection = CAMERA_ORTHOGRAPHIC;
+
+    client->width = img_width;
+    client->height = img_height;
+
+    Color road = (Color){35, 35, 37, 255};
+    ClearBackground(road);
+    BeginMode3D(camera);
+    rlEnableDepthTest();
+
+    // Draw human replay trajectories if enabled
+    if (show_human_logs) {
+        for (int i = 0; i < num_agents; i++) {
+            int idx = env->active_agent_indices[i];
+            Vector3 prev_point = {0};
+            bool has_prev = false;
+
+            for (int j = 0; j < env->entities[idx].array_size; j++) {
+                float x = env->entities[idx].traj_x[j];
+                float y = env->entities[idx].traj_y[j];
+                float valid = env->entities[idx].traj_valid[j];
+
+                if (!valid) {
+                    has_prev = false;
+                    continue;
+                }
+
+                Vector3 curr_point = {x, y, 0.5f};
+                if (has_prev) {
+                    DrawLine3D(prev_point, curr_point, Fade(LIGHTGREEN, 0.6f));
+                }
+                prev_point = curr_point;
+                has_prev = true;
+            }
+        }
+    }
+
+    // Draw policy trajectories (blue for all vehicles)
+    for (int i = 0; i < num_agents; i++) {
+        // Draw trajectory lines
+        for (int t = 1; t < frame_count; t++) {
+            if (traj_valid[i * frame_count + t] && traj_valid[i * frame_count + t - 1]) {
+                Vector3 start = {traj_x[i * frame_count + t - 1], traj_y[i * frame_count + t - 1], 1.0f};
+                Vector3 end = {traj_x[i * frame_count + t], traj_y[i * frame_count + t], 1.0f};
+                DrawLine3D(start, end, BLUE);
+            }
+        }
+
+        // Draw start marker
+        if (traj_valid[i * frame_count]) {
+            DrawSphere((Vector3){traj_x[i * frame_count], traj_y[i * frame_count], 1.0f}, 0.8f, BLUE);
+        }
+
+        // Draw end marker (last valid position)
+        for (int t = frame_count - 1; t >= 0; t--) {
+            if (traj_valid[i * frame_count + t]) {
+                DrawSphere((Vector3){traj_x[i * frame_count + t], traj_y[i * frame_count + t], 1.0f}, 0.8f,
+                           Fade(BLUE, 0.5f));
+                break;
+            }
+        }
+    }
+
+    // Draw the scene (roads, vehicles at t=0, curbs, grid)
+    draw_scene(env, client, 1, 0, lasers, show_grid);
+    EndMode3D();
+    EndDrawing();
+
+    TakeScreenshot(output_filename);
+    printf("Snapshot saved to %s\n", output_filename);
+
+    free(traj_x);
+    free(traj_y);
+    free(traj_valid);
+}
+
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
              const char *output_agent, int num_maps, int zoom_in, int control) {
@@ -397,6 +515,47 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
+
+    // Snapshot mode: render single PNG with trajectory overlays
+    if (conf.snapshot_only) {
+        char snapshot_filename[256];
+        if (output_topdown != NULL) {
+            strcpy(snapshot_filename, output_topdown);
+            char *ext = strrchr(snapshot_filename, '.');
+            if (ext != NULL) {
+                strcpy(ext, ".png");
+            }
+        } else {
+            char policy_base[256];
+            strcpy(policy_base, policy_name);
+            *strrchr(policy_base, '.') = '\0';
+
+            char map[256];
+            strcpy(map, basename((char *)map_name));
+            *strrchr(map, '.') = '\0';
+
+            char video_dir[256];
+            sprintf(video_dir, "%s/video", policy_base);
+            char mkdir_cmd[512];
+            snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", video_dir);
+            system(mkdir_cmd);
+
+            sprintf(snapshot_filename, "%s/video/%s_snapshot.png", policy_base, map);
+        }
+
+        render_snapshot(&env, client, net, frame_count, map_height,
+                        show_human_logs, show_grid, lasers, zoom_in,
+                        img_width, img_height, snapshot_filename);
+
+        CloseWindow();
+        free(client);
+        free_allocated(&env);
+        free_drivenet(net);
+        free(weights);
+        return 0;
+    }
+
+    // Video mode (existing behavior)
     char filename_topdown[256];
     char filename_agent[256];
 
@@ -509,6 +668,13 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 }
 
 int main(int argc, char *argv[]) {
+    // Parse configuration from INI file
+    env_init_config conf = {0};
+    const char *ini_file = "pufferlib/config/ocean/drive.ini";
+    if (ini_parse(ini_file, handler, &conf) < 0) {
+        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+        return -1;
+    }
     // Visualization-only parameters (not in [env] section)
     int show_grid = 0;
     int obs_only = 0;
@@ -523,7 +689,7 @@ int main(int argc, char *argv[]) {
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
-    int num_maps = 100;
+    int num_maps = conf.num_maps;
     int control = ACTIONS_FROM_POLICY; // ACTIONS_INFERRED_FROM_HUMAN;
 
     // Parse command line arguments
