@@ -30,6 +30,7 @@ typedef struct {
     int control_mode;
     int num_maps;
     char map_dir[256];
+    int goal_radius_randomization;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -99,6 +100,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         // printf("Parsed map_dir: '%s'\n", env_config->map_dir);
     } else if (MATCH("env", "num_maps")) {
         env_config->num_maps = atoi(value);
+    } else if (MATCH("env", "goal_radius_randomization")) {
+        env_config->goal_radius_randomization = atoi(value);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

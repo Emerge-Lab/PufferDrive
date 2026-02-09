@@ -24,6 +24,7 @@ class Drive(pufferlib.PufferEnv):
         goal_behavior=0,
         goal_target_distance=10.0,
         goal_radius=2.0,
+        goal_radius_randomization=0,
         goal_speed=20.0,
         collision_behavior=0,
         offroad_behavior=0,

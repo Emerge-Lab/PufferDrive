@@ -97,8 +97,8 @@
 #define PARTNER_FEATURES 8
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 8
-#define EGO_FEATURES_JERK 11
+#define EGO_FEATURES_CLASSIC 9
+#define EGO_FEATURES_JERK 12
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -281,6 +281,7 @@ struct Drive {
     int *tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    int goal_radius_randomization;
 };
 
 // ========================================
@@ -1688,8 +1689,10 @@ void compute_observations(Drive *env) {
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
             obs[9] = ego_entity->a_lat / JERK_LAT[2];
             obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[11] = ego_entity->goal_radius / 12.0f;
         } else {
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[8] = ego_entity->goal_radius / 12.0f;
         }
 
         // Relative Pos of other cars
@@ -1846,6 +1849,12 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->jerk_long = 0.0f;
     agent->jerk_lat = 0.0f;
     agent->steering_angle = 0.0f;
+
+    if (env->goal_radius_randomization) {
+        agent->goal_radius = 2.0f + ((float)rand() / RAND_MAX) * 10.0f;
+    } else {
+        agent->goal_radius = env->goal_radius;
+    }
 }
 
 void move_expert(Drive *env, float *actions, int agent_idx) {
@@ -2115,6 +2124,12 @@ void c_reset(Drive *env) {
             agent->goal_position_z = agent->init_goal_z;
         }
 
+        if (env->goal_radius_randomization) {
+            agent->goal_radius = 2.0f + ((float)rand() / RAND_MAX) * 10.0f;
+        } else {
+            agent->goal_radius = env->goal_radius;
+        }
+
         compute_agent_metrics(env, agent_idx);
     }
     compute_observations(env);
@@ -2203,7 +2218,7 @@ void c_step(Drive *env) {
                                     env->agents[agent_idx].sim_vy * env->agents[agent_idx].sim_vy);
 
         // Reward agent if it is within X meters of goal and speed is below threshold
-        bool within_distance = distance_to_goal < env->goal_radius;
+        bool within_distance = distance_to_goal < env->agents[agent_idx].goal_radius;
         bool within_speed = current_speed <= env->goal_speed;
 
         if (within_distance && within_speed && !env->agents[agent_idx].current_goal_reached) {
@@ -2423,7 +2438,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
     if (mode == 0) {
         DrawSphere((Vector3){goal_x, goal_y, goal_z}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x, goal_y, goal_z}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
+        DrawCircle3D((Vector3){goal_x, goal_y, goal_z}, env->agents[active_idx].goal_radius, (Vector3){0, 0, 1}, 90.0f,
                      Fade(LIGHTGREEN, 0.3f));
     }
 
@@ -2432,7 +2447,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
         float goal_z_world = pz + goal_z;
         DrawSphere((Vector3){goal_x_world, goal_y_world, goal_z_world}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x_world, goal_y_world, goal_z_world}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
+        DrawCircle3D((Vector3){goal_x_world, goal_y_world, goal_z_world}, env->agents[active_idx].goal_radius, (Vector3){0, 0, 1}, 90.0f,
                      Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
@@ -2871,7 +2886,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         agent->goal_position_y,
                         agent->goal_position_z,
                     },
-                    env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
+                    agent->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
             }
         }
     }

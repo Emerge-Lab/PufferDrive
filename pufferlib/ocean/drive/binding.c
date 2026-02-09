@@ -230,6 +230,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->goal_speed = (float)unpack(kwargs, "goal_speed");
+    env->goal_radius_randomization = conf.goal_radius_randomization;
     char *map_path = unpack_str(kwargs, "map_path");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");

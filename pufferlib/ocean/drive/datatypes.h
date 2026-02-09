@@ -209,6 +209,7 @@ struct Agent {
     float goal_position_x; // alias = goal_positions_x[current_goal_idx]
     float goal_position_y; // alias = goal_positions_y[current_goal_idx]
     float goal_position_z; // from binary file, unused
+    float goal_radius;     // Per-agent goal reaching radius (2-12m when randomized)
     int current_goal_idx;  // index of next goal to reach (0..N-1)
 
     // Respawn tracking
