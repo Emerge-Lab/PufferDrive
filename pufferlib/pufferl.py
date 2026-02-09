@@ -488,21 +488,25 @@ class PuffeRL:
             adv = mb_prio * (adv - f_mean) / (f_std + 1e-8)
 
             loss_mask = (~mb_target_masks).float()
+
+            # Add a protection against NaNs that might appear if all envs are sdc only by lol
+            denominator = 1.0 if loss_mask.sum() == 0 else loss_mask.sum()
+
             # Losses
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
             pg_loss = torch.max(pg_loss1, pg_loss2)
-            pg_loss = (pg_loss * loss_mask).sum() / loss_mask.sum()
+            pg_loss = (pg_loss * loss_mask).sum() / denominator
 
             newvalue = newvalue.view(mb_returns.shape)
             v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
-            v_loss = (v_loss * loss_mask).sum() / loss_mask.sum()
+            v_loss = (v_loss * loss_mask).sum() / denominator
 
             entropy_loss = entropy.view(mb_target_masks.shape)  # Can this be wrong ?
-            entropy_loss = (entropy_loss * loss_mask).sum() / loss_mask.sum()
+            entropy_loss = (entropy_loss * loss_mask).sum() / denominator
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging

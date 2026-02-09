@@ -41,7 +41,7 @@
 #define CONTROL_SDC_ONLY 3
 
 // Minimum distance to goal position
-#define MIN_DISTANCE_TO_GOAL 2.0f
+#define MIN_DISTANCE_TO_GOAL 0.0f
 
 // Actions
 #define NOOP 0
