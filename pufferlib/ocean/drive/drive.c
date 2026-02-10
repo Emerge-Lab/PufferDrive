@@ -88,6 +88,7 @@ void demo() {
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .reward_conditioning = 1,
     };
     allocate(&env);
     c_reset(&env);

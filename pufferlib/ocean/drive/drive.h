@@ -1654,6 +1654,7 @@ void c_close(Drive *env) {
 }
 
 void allocate(Drive *env) {
+
     init(env);
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
@@ -2578,7 +2579,7 @@ void c_step(Drive *env) {
         env->rewards[i] += lane_align_reward;
         env->logs[i].episode_return += lane_align_reward;
 
-        // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05*exp(|x_f - bias| - 0.5))
+        // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05/(exp(|x_f - bias| - 0.5))
         float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
         float adjusted_dist = fabsf(lane_center_distance - agent->reward_coefs[REWARD_COEF_CENTER_BIAS]);
         float exp_decay = 0.05f / expf(adjusted_dist - 0.5f);
