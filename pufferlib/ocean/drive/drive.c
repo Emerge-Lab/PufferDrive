@@ -92,7 +92,7 @@ void demo() {
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
+    Weights *weights = load_weights("resources/drive/puffer_drive_resampling_speed_lane.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
     int accel_delta = 1;

@@ -306,6 +306,7 @@ struct Drive {
     int init_mode;
     int control_mode;
     int reward_randomization;
+    int reward_conditioning;
 };
 
 // ========================================
@@ -380,6 +381,20 @@ DepthPoint compute_z_distance_to_road_segment(Agent *agent, RoadMapElement *lane
 int compare_depthpoint(const void *a, const void *b) {
     float diff = ((DepthPoint *)a)->dis - ((DepthPoint *)b)->dis;
     return (diff > 0) - (diff < 0); // returns 1, 0, or -1
+}
+
+static float random_uniform(float min_val, float max_val) {
+    float scale = (float)rand() / (float)RAND_MAX;
+    return min_val + scale * (max_val - min_val);
+}
+
+// Mixed uniform distribution X(a) = 0.5*U(1/a, 1) + 0.5*U(1, a)
+static float mixed_uniform(float a) {
+    if ((float)rand() / (float)RAND_MAX < 0.5f) {
+        return random_uniform(1.0f / a, 1.0f);
+    } else {
+        return random_uniform(1.0f, a);
+    }
 }
 
 typedef struct {
@@ -1729,8 +1744,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     float sin_heading = sinf(agent->sim_heading);
     float min_distance = (float)INT16_MAX;
 
-    int closest_lane_entity_idx = -1;
-    int closest_lane_geometry_idx = -1;
     float best_score = 1e9f;
     int best_candidate_entity_idx = -1;
     int best_candidate_geometry_idx = -1;
@@ -1782,8 +1795,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             break;
 
         // Find closest point on the road centerline to the agent
-
-        if (is_drivable_road_lane(entity->type)) {
+        if (is_drivable_road_lane(entity->type) || entity->type == ROAD_LANE) {
             // Check if we've already processed this lane (skip duplicates)
             int already_checked = 0;
             for (int c = 0; c < num_checked_lanes; c++) {
@@ -1804,7 +1816,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             int closest_segment_idx;
             float signed_dist = find_closest_segment_on_lane(entity, agent->sim_x, agent->sim_y, &closest_segment_idx);
             float abs_dist = fabsf(signed_dist);
-
             if (abs_dist > max_distance_threshold)
                 continue; // Skip this lane, too far away
 
@@ -1829,6 +1840,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
             // Track best candidate
             if (score < best_score) {
+
                 min_distance = abs_dist;
                 best_score = score;
                 best_candidate_entity_idx = entity_idx;
@@ -1838,7 +1850,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             }
         }
     }
-
     // Update lane alignment metric (running average)
     if (best_candidate_entity_idx != -1) {
         agent->current_lane_index = best_candidate_entity_idx;
@@ -1859,14 +1870,12 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     }
 
     // check if aligned with closest lane and set current lane
-    // 4.0m threshold: agents more than 4 meters from any lane are considered off-road
-    if (min_distance > max_distance_threshold || closest_lane_entity_idx == -1) {
+    if (min_distance > max_distance_threshold || best_candidate_entity_idx == -1) {
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
         agent->current_lane_index = -1;
     } else {
-        agent->current_lane_index = closest_lane_entity_idx;
-        int lane_aligned =
-            check_lane_aligned(agent, &env->road_elements[closest_lane_entity_idx], closest_lane_geometry_idx);
+        agent->current_lane_index = best_candidate_entity_idx;
+        int lane_aligned = (fabs(agent->metrics_array[LANE_ANGLE_IDX]) > 0.965) ? 1 : 0;
         agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned;
     }
 
@@ -2516,7 +2525,6 @@ void c_step(Drive *env) {
             env->agents[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
             env->logs[i].speed_at_goal = current_speed;
         }
-        Agent agent = env->agents[agent_idx];
         int lane_aligned = env->agents[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
 

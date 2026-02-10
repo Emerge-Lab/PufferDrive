@@ -25,6 +25,7 @@ class Drive(pufferlib.PufferEnv):
         reward_goal_post_respawn=0.5,
         goal_behavior=0,
         reward_randomization=0,
+        reward_conditioning=0,
         goal_target_distance=10.0,
         goal_radius=2.0,
         goal_speed=20.0,
@@ -63,6 +64,7 @@ class Drive(pufferlib.PufferEnv):
         self.goal_speed = goal_speed
         self.goal_behavior = goal_behavior
         self.reward_randomization = reward_randomization
+        self.reward_conditioning = reward_conditioning
         self.goal_target_distance = goal_target_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
@@ -177,6 +179,7 @@ class Drive(pufferlib.PufferEnv):
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
+            reward_conditioning=self.reward_conditioning,
             goal_target_distance=self.goal_target_distance,
             use_all_maps=use_all_maps,
         )
@@ -210,6 +213,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_speed=goal_speed,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
+                reward_conditioning=self.reward_conditioning,
                 goal_target_distance=self.goal_target_distance,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
@@ -257,6 +261,7 @@ class Drive(pufferlib.PufferEnv):
                 max_controlled_agents=self.max_controlled_agents,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
+                reward_conditioning=self.reward_conditioning,
                 goal_target_distance=self.goal_target_distance,
                 use_all_maps=False,
             )
@@ -286,6 +291,7 @@ class Drive(pufferlib.PufferEnv):
                     goal_radius=self.goal_radius,
                     goal_behavior=self.goal_behavior,
                     reward_randomization=self.reward_randomization,
+                    reward_conditioning=self.reward_conditioning,
                     goal_target_distance=self.goal_target_distance,
                     goal_speed=self.goal_speed,
                     collision_behavior=self.collision_behavior,
