@@ -12,6 +12,8 @@ typedef struct {
     int dynamics_model;
     float reward_vehicle_collision;
     float reward_offroad_collision;
+    float reward_lane_center;
+    float reward_lane_align;
     float reward_goal;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
@@ -22,6 +24,7 @@ typedef struct {
     int spawn_immunity_timer;
     float dt;
     int goal_behavior;
+    int reward_randomization;
     float goal_target_distance;
     int episode_length;
     int termination_mode;
@@ -57,8 +60,14 @@ static int handler(void *config, const char *section, const char *name, const ch
         }
     } else if (MATCH("env", "goal_behavior")) {
         env_config->goal_behavior = atoi(value);
+    } else if (MATCH("env", "reward_randomization")) {
+        env_config->reward_randomization = atoi(value);
     } else if (MATCH("env", "goal_target_distance")) {
         env_config->goal_target_distance = atof(value);
+    } else if (MATCH("env", "reward_lane_center")) {
+        env_config->reward_lane_center = atof(value);
+    } else if (MATCH("env", "reward_lane_align")) {
+        env_config->reward_lane_align = atof(value);
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {

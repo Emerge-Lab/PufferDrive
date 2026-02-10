@@ -275,6 +275,7 @@ struct Drive {
     int termination_mode;
     float reward_vehicle_collision;
     float reward_offroad_collision;
+    float reward_traffic_light_violation;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -282,6 +283,13 @@ struct Drive {
     float dt;
     float reward_goal;
     float reward_goal_post_respawn;
+    float reward_overspeed;
+    float reward_comfort;
+    float reward_velocity;
+    float reward_lane_align;
+    float reward_lane_center;
+    float reward_timestep;
+    float reward_reverse;
     float goal_radius;
     float goal_speed;
     int max_controlled_agents;
@@ -297,6 +305,7 @@ struct Drive {
     int *tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    int reward_randomization;
 };
 
 // ========================================
@@ -403,7 +412,61 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
 
 // void mixed_uniform(void){}
 
-// void generate_reward_coefs(void){}
+// Generate per-agent reward conditioning coefficients
+// Full function, but wont be FULLY used as of yet - should be compatible for later iterations
+static void generate_reward_coefs(Drive *env, Agent *agent) {
+    if (env->reward_randomization) {
+        // Standard Uniform Randomizations (referencing the bounds array)
+        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(REWARD_BOUNDS[REWARD_COEF_GOAL_RADIUS].min_val,
+                                                                      REWARD_BOUNDS[REWARD_COEF_GOAL_RADIUS].max_val);
+        agent->reward_coefs[REWARD_COEF_COLLISION] =
+            random_uniform(REWARD_BOUNDS[REWARD_COEF_COLLISION].min_val, REWARD_BOUNDS[REWARD_COEF_COLLISION].max_val);
+        agent->reward_coefs[REWARD_COEF_OFFROAD] =
+            random_uniform(REWARD_BOUNDS[REWARD_COEF_OFFROAD].min_val, REWARD_BOUNDS[REWARD_COEF_OFFROAD].max_val);
+        agent->reward_coefs[REWARD_COEF_COMFORT] =
+            random_uniform(REWARD_BOUNDS[REWARD_COEF_COMFORT].min_val, REWARD_BOUNDS[REWARD_COEF_COMFORT].max_val);
+        agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = random_uniform(REWARD_BOUNDS[REWARD_COEF_LANE_ALIGN].min_val,
+                                                                     REWARD_BOUNDS[REWARD_COEF_LANE_ALIGN].max_val);
+        agent->reward_coefs[REWARD_COEF_LANE_CENTER] = random_uniform(REWARD_BOUNDS[REWARD_COEF_LANE_CENTER].min_val,
+                                                                      REWARD_BOUNDS[REWARD_COEF_LANE_CENTER].max_val);
+        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] = random_uniform(
+            REWARD_BOUNDS[REWARD_COEF_TRAFFIC_LIGHT].min_val, REWARD_BOUNDS[REWARD_COEF_TRAFFIC_LIGHT].max_val);
+        agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = random_uniform(REWARD_BOUNDS[REWARD_COEF_CENTER_BIAS].min_val,
+                                                                      REWARD_BOUNDS[REWARD_COEF_CENTER_BIAS].max_val);
+        agent->reward_coefs[REWARD_COEF_VEL_ALIGN] =
+            random_uniform(REWARD_BOUNDS[REWARD_COEF_VEL_ALIGN].min_val, REWARD_BOUNDS[REWARD_COEF_VEL_ALIGN].max_val);
+        agent->reward_coefs[REWARD_COEF_OVERSPEED] =
+            random_uniform(REWARD_BOUNDS[REWARD_COEF_OVERSPEED].min_val, REWARD_BOUNDS[REWARD_COEF_OVERSPEED].max_val);
+        agent->reward_coefs[REWARD_COEF_REVERSE] =
+            random_uniform(REWARD_BOUNDS[REWARD_COEF_REVERSE].min_val, REWARD_BOUNDS[REWARD_COEF_REVERSE].max_val);
+        // Fixed values (Must fall within the bounds defined above)
+        agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
+        agent->reward_coefs[REWARD_COEF_TIMESTEP] = -2.5e-5f;
+        // Dynamic conditioning (Mixed Uniform)
+        agent->reward_coefs[REWARD_COEF_THROTTLE] = mixed_uniform(1.25f);
+        agent->reward_coefs[REWARD_COEF_STEER] = mixed_uniform(1.25f);
+        agent->reward_coefs[REWARD_COEF_ACC] = mixed_uniform(1.5f);
+    } else {
+        // Fixed coefficients
+        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
+        agent->reward_coefs[REWARD_COEF_COLLISION] = env->reward_vehicle_collision;
+        agent->reward_coefs[REWARD_COEF_OFFROAD] = env->reward_offroad_collision;
+        agent->reward_coefs[REWARD_COEF_COMFORT] = env->reward_comfort;
+        agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = env->reward_lane_align;
+        agent->reward_coefs[REWARD_COEF_LANE_CENTER] = env->reward_lane_center;
+        agent->reward_coefs[REWARD_COEF_VELOCITY] = env->reward_velocity;
+        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] = env->reward_traffic_light_violation;
+        agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = 0.0f;
+        agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = 1.0f;
+        agent->reward_coefs[REWARD_COEF_OVERSPEED] = env->reward_overspeed;
+        agent->reward_coefs[REWARD_COEF_TIMESTEP] = env->reward_timestep;
+        agent->reward_coefs[REWARD_COEF_REVERSE] = env->reward_reverse;
+        // Dynamic conditioning coefficients
+        agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
+        agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
+        agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
+    }
+}
 
 // void normalize_reward_coef(void){}
 
@@ -1302,6 +1365,7 @@ void set_start_position(Drive *env) {
         e->jerk_lat = 0.0f;
         e->steering_angle = 0.0f;
         e->wheelbase = 0.6f * e->sim_length;
+        generate_reward_coefs(env, e);
     }
 }
 
@@ -1902,7 +1966,15 @@ void compute_observations(Drive *env) {
             obs[10] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         }
 
-        // Relative Pos of other cars
+        // Placeholder for reward conditioning encoder -
+        //  Encoder -> Conditioning and goal waypoints
+        //  if (env->reward_conditioning) {
+        //      for (int c = 0; c < NUM_REWARD_COEFS; c++) {
+        //          obs[obs_idx++] = normalize_reward_coef(ego_entity->reward_coefs[c], c);
+        //      }
+        //  }
+        //
+        //  Relative Pos of other cars
         int obs_idx = ego_dim;
         int cars_seen = 0;
         for (int j = 0; j < MAX_AGENTS; j++) {
@@ -2058,6 +2130,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->jerk_long = 0.0f;
     agent->jerk_lat = 0.0f;
     agent->steering_angle = 0.0f;
+    generate_reward_coefs(env, agent);
 }
 
 void move_expert(Drive *env, float *actions, int agent_idx) {
@@ -2322,6 +2395,7 @@ void c_reset(Drive *env) {
         agent->metrics_array[LANE_DIST_IDX] = 0.0f;  // distance from lane center
         agent->stopped = 0;
         agent->removed = 0;
+        generate_reward_coefs(env, agent);
 
         if (env->goal_behavior == GOAL_GENERATE_NEW) {
             agent->goal_position_x = agent->init_goal_x;
@@ -2387,6 +2461,7 @@ void c_step(Drive *env) {
     // Compute rewards
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
+        Agent *agent = &env->agents[agent_idx];
         env->agents[agent_idx].collision_state = 0;
         env->agents[agent_idx].aabb_collision_state = 0;
         compute_agent_metrics(env, agent_idx);
@@ -2441,9 +2516,42 @@ void c_step(Drive *env) {
             env->agents[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
             env->logs[i].speed_at_goal = current_speed;
         }
-
+        Agent agent = env->agents[agent_idx];
         int lane_aligned = env->agents[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
+
+        // Add lane rewards
+        //  Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
+        float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
+        float theta_f = acosf(fminf(fmaxf(cos_theta, -1.0f), 1.0f)); // Get |θ_f| from cos
+        // env->logs[i].lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f;
+
+        // Rl-align (GIGAFLOW): min(cos,0) + vel_align*min(cos*v,0) + 0.0025*(1-|θ|/(π/2))
+        float against_lane_penalty = fminf(cos_theta, 0.0f); // negative when >90 degrees off
+        float vel_aligned_penalty =
+            agent->reward_coefs[REWARD_COEF_VEL_ALIGN] * fminf(cos_theta * agent->sim_speed, 0.0f);
+        float alignment_bonus = 0.0025f * (1.0f - theta_f / (M_PI / 2.0f));
+
+        float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt *
+                                  (against_lane_penalty + vel_aligned_penalty + alignment_bonus);
+
+        env->rewards[i] += lane_align_reward;
+        env->logs[i].episode_return += lane_align_reward;
+
+        // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05*exp(|x_f - bias| - 0.5))
+        float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
+        float adjusted_dist = fabsf(lane_center_distance - agent->reward_coefs[REWARD_COEF_CENTER_BIAS]);
+        float exp_decay = 0.05f / expf(adjusted_dist - 0.5f);
+
+        float lane_center_reward =
+            agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
+
+        env->rewards[i] += lane_center_reward;
+        // env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
+        env->logs[i].episode_return += lane_center_reward;
+        //
+
+        // Further support to be added for all other types of reward conditioning
     }
 
     if (env->goal_behavior == GOAL_RESPAWN) {

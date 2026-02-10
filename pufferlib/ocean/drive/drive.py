@@ -19,9 +19,12 @@ class Drive(pufferlib.PufferEnv):
         human_agent_idx=0,
         reward_vehicle_collision=-0.1,
         reward_offroad_collision=-0.1,
+        reward_lane_center=1,
+        reward_lane_align=1,
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
         goal_behavior=0,
+        reward_randomization=0,
         goal_target_distance=10.0,
         goal_radius=2.0,
         goal_speed=20.0,
@@ -52,11 +55,14 @@ class Drive(pufferlib.PufferEnv):
         self.report_interval = report_interval
         self.reward_vehicle_collision = reward_vehicle_collision
         self.reward_offroad_collision = reward_offroad_collision
+        self.reward_lane_align = reward_lane_align
+        self.reward_lane_center = reward_lane_center
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
         self.goal_speed = goal_speed
         self.goal_behavior = goal_behavior
+        self.reward_randomization = reward_randomization
         self.goal_target_distance = goal_target_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
@@ -170,6 +176,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
+            reward_randomization=self.reward_randomization,
             goal_target_distance=self.goal_target_distance,
             use_all_maps=use_all_maps,
         )
@@ -195,11 +202,14 @@ class Drive(pufferlib.PufferEnv):
                 human_agent_idx=human_agent_idx,
                 reward_vehicle_collision=reward_vehicle_collision,
                 reward_offroad_collision=reward_offroad_collision,
+                reward_lane_center=reward_lane_center,
+                reward_lane_align=reward_lane_align,
                 reward_goal=reward_goal,
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 goal_radius=goal_radius,
                 goal_speed=goal_speed,
                 goal_behavior=self.goal_behavior,
+                reward_randomization=self.reward_randomization,
                 goal_target_distance=self.goal_target_distance,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
@@ -246,6 +256,7 @@ class Drive(pufferlib.PufferEnv):
                 init_steps=self.init_steps,
                 max_controlled_agents=self.max_controlled_agents,
                 goal_behavior=self.goal_behavior,
+                reward_randomization=self.reward_randomization,
                 goal_target_distance=self.goal_target_distance,
                 use_all_maps=False,
             )
@@ -268,10 +279,13 @@ class Drive(pufferlib.PufferEnv):
                     human_agent_idx=self.human_agent_idx,
                     reward_vehicle_collision=self.reward_vehicle_collision,
                     reward_offroad_collision=self.reward_offroad_collision,
+                    reward_lane_align=self.reward_lane_align,
+                    reward_lane_center=self.reward_lane_center,
                     reward_goal=self.reward_goal,
                     reward_goal_post_respawn=self.reward_goal_post_respawn,
                     goal_radius=self.goal_radius,
                     goal_behavior=self.goal_behavior,
+                    reward_randomization=self.reward_randomization,
                     goal_target_distance=self.goal_target_distance,
                     goal_speed=self.goal_speed,
                     collision_behavior=self.collision_behavior,
