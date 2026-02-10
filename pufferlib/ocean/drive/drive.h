@@ -1790,15 +1790,15 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     // check if aligned with closest lane and set current lane
     // 4.0m threshold: agents more than 4 meters from any lane are considered off-road
-    // if (min_distance > 4.0f || closest_lane_entity_idx == -1) {
-    //     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-    //     agent->current_lane_index = -1;
-    // } else {
-    //     agent->current_lane_index = closest_lane_entity_idx;
-    //     int lane_aligned =
-    //         check_lane_aligned(agent, &env->road_elements[closest_lane_entity_idx], closest_lane_geometry_idx);
-    //     agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned;
-    // }
+    if (min_distance > 4.0f || closest_lane_entity_idx == -1) {
+        agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+        agent->current_lane_index = -1;
+    } else {
+        agent->current_lane_index = closest_lane_entity_idx;
+        int lane_aligned =
+            check_lane_aligned(agent, &env->road_elements[closest_lane_entity_idx], closest_lane_geometry_idx);
+        agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned;
+    }
 
     // Check for vehicle collisions
     int car_collided_with_index = collision_check(env, agent_idx);
