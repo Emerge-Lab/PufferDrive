@@ -1641,8 +1641,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     float sin_heading = sinf(agent->sim_heading);
     float min_distance = (float)INT16_MAX;
 
-    int closest_lane_entity_idx = -1;
-    int closest_lane_geometry_idx = -1;
     float best_score = 1e9f;
     int best_candidate_entity_idx = -1;
     int best_candidate_geometry_idx = -1;
@@ -1694,8 +1692,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             break;
 
         // Find closest point on the road centerline to the agent
-
-        if (is_drivable_road_lane(entity->type)) {
+        if (is_drivable_road_lane(entity->type) || entity->type == ROAD_LANE) {
             // Check if we've already processed this lane (skip duplicates)
             int already_checked = 0;
             for (int c = 0; c < num_checked_lanes; c++) {
@@ -1771,14 +1768,12 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     }
 
     // check if aligned with closest lane and set current lane
-    // 4.0m threshold: agents more than 4 meters from any lane are considered off-road
-    if (min_distance > max_distance_threshold || closest_lane_entity_idx == -1) {
+    if (min_distance > max_distance_threshold || best_candidate_entity_idx == -1) {
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
         agent->current_lane_index = -1;
     } else {
-        agent->current_lane_index = closest_lane_entity_idx;
-        int lane_aligned =
-            check_lane_aligned(agent, &env->road_elements[closest_lane_entity_idx], closest_lane_geometry_idx);
+        agent->current_lane_index = best_candidate_entity_idx;
+        int lane_aligned = (fabs(agent->metrics_array[LANE_ANGLE_IDX]) > 0.965) ? 1 : 0;
         agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned;
     }
 
