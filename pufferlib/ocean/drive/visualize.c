@@ -281,10 +281,8 @@ static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
     }
 }
 
-void render_snapshot(Drive *env, Client *client, DriveNet *net,
-                     int frame_count, float map_height,
-                     int show_human_logs, int show_grid, int lasers,
-                     int zoom_in, int img_width, int img_height,
+void render_snapshot(Drive *env, Client *client, DriveNet *net, int frame_count, float map_height, int show_human_logs,
+                     int show_grid, int lasers, int zoom_in, int img_width, int img_height,
                      const char *output_filename) {
 
     // Allocate trajectory storage
@@ -293,18 +291,32 @@ void render_snapshot(Drive *env, Client *client, DriveNet *net,
     float *traj_y = (float *)calloc(num_agents * frame_count, sizeof(float));
     int *traj_valid = (int *)calloc(num_agents * frame_count, sizeof(int));
 
+    // Track whether each agent is done (respawned, stopped, or removed)
+    int *agent_done = (int *)calloc(num_agents, sizeof(int));
+
     // Run simulation, record positions
     printf("Running simulation for %d steps...\n", frame_count);
     for (int t = 0; t < frame_count; t++) {
+        // Record positions before stepping
         for (int i = 0; i < num_agents; i++) {
             int idx = env->active_agent_indices[i];
             traj_x[i * frame_count + t] = env->entities[idx].x;
             traj_y[i * frame_count + t] = env->entities[idx].y;
-            traj_valid[i * frame_count + t] = (env->entities[idx].respawn_timestep == -1);
+            traj_valid[i * frame_count + t] = !agent_done[i];
         }
         forward(net, env->observations, (int *)env->actions);
         c_step(env);
+        // Check for done agents after stepping (respawn/stop/remove happens inside c_step)
+        for (int i = 0; i < num_agents; i++) {
+            int idx = env->active_agent_indices[i];
+            if (env->entities[idx].respawn_timestep != -1 ||
+                env->entities[idx].stopped ||
+                env->entities[idx].removed) {
+                agent_done[i] = 1;
+            }
+        }
     }
+    free(agent_done);
 
     // Reset env to get initial scene for the background
     c_reset(env);
@@ -543,8 +555,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             sprintf(snapshot_filename, "%s/video/%s_snapshot.png", policy_base, map);
         }
 
-        render_snapshot(&env, client, net, frame_count, map_height,
-                        show_human_logs, show_grid, lasers, zoom_in,
+        render_snapshot(&env, client, net, frame_count, map_height, show_human_logs, show_grid, lasers, zoom_in,
                         img_width, img_height, snapshot_filename);
 
         CloseWindow();
