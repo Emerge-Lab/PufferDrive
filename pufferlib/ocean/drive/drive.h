@@ -373,6 +373,30 @@ int compare_depthpoint(const void *a, const void *b) {
     return (diff > 0) - (diff < 0); // returns 1, 0, or -1
 }
 
+typedef struct {
+    float min_val;
+    float max_val;
+} RewardBound;
+
+static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
+    {2.0f, 12.0f},        // REWARD_COEF_GOAL_RADIUS
+    {-3.0f, 0.0f},        // REWARD_COEF_COLLISION
+    {-3.0f, 0.0f},        // REWARD_COEF_OFFROAD
+    {-0.1f, 0.0f},        // REWARD_COEF_COMFORT
+    {2.5e-4f, 2.5e-2f},   // REWARD_COEF_LANE_ALIGN
+    {-7.5e-3f, -2.5e-4f}, // REWARD_COEF_LANE_CENTER
+    {0.0f, 5e-3f},        // REWARD_COEF_VELOCITY (Fixed value 2.5e-3)
+    {-1.0f, 0.0f},        // REWARD_COEF_TRAFFIC_LIGHT
+    {-0.5f, 0.5f},        // REWARD_COEF_CENTER_BIAS
+    {0.0f, 1.0f},         // REWARD_COEF_VEL_ALIGN
+    {-1.0f, 0.0f},        // REWARD_COEF_OVERSPEED
+    {-5e-5f, 0.0f},       // REWARD_COEF_TIMESTEP (Fixed value -2.5e-5)
+    {-7.5e-3f, -2.5e-4f}, // REWARD_COEF_REVERSE
+    {0.8f, 1.25f},        // REWARD_COEF_THROTTLE
+    {0.8f, 1.25f},        // REWARD_COEF_STEER
+    {0.666f, 1.5f}        // REWARD_COEF_ACC
+};
+
 // void compute_heading_diff(void){}
 
 // void random_uniform(void){}
