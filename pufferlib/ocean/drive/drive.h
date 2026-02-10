@@ -1206,7 +1206,10 @@ void reset_agent_metrics(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     agent->metrics_array[COLLISION_IDX] = 0.0f;    // vehicle collision
     agent->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
+    agent->metrics_array[REACHED_GOAL_IDX] = 0.0f; // goal reached
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+    agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;   // lane angle
+    agent->metrics_array[LANE_DIST_IDX] = 0.0f;    // distance from lane center
     agent->collision_state = 0;
     agent->aabb_collision_state = 0;
 }
@@ -1261,6 +1264,8 @@ void set_start_position(Drive *env) {
         e->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
         e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
         e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
+        e->metrics_array[LANE_ANGLE_IDX] = 0.0f;   // lane angle
+        e->metrics_array[LANE_DIST_IDX] = 0.0f;    // distance from lane center
         e->respawn_timestep = -1;
         e->stopped = 0;
         e->removed = 0;
@@ -1689,30 +1694,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             break;
 
         // Find closest point on the road centerline to the agent
-        if (entity->type == ROAD_LANE) {
-            int entity_idx = entity_list[i].entity_idx;
-            int geometry_idx = entity_list[i].geometry_idx;
-
-            float start[2] = {entity->x[geometry_idx], entity->y[geometry_idx]};
-            float end[2] = {entity->x[geometry_idx + 1], entity->y[geometry_idx + 1]};
-
-            float dist = point_to_segment_distance_2d(agent->sim_x, agent->sim_y, start[0], start[1], end[0], end[1]);
-            float heading_diff = fabsf(atan2f(end[1] - start[1], end[0] - start[0]) - agent->sim_heading);
-
-            // Normalize heading difference to [0, pi]
-            if (heading_diff > M_PI)
-                heading_diff = 2.0f * M_PI - heading_diff;
-
-            // Penalize if heading differs by more than 30 degrees
-            if (heading_diff > (M_PI / 6.0f))
-                dist += 3.0f;
-
-            if (dist < min_distance) {
-                min_distance = dist;
-                closest_lane_entity_idx = entity_idx;
-                closest_lane_geometry_idx = geometry_idx;
-            }
-        }
 
         if (is_drivable_road_lane(entity->type)) {
             // Check if we've already processed this lane (skip duplicates)
@@ -1760,6 +1741,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
             // Track best candidate
             if (score < best_score) {
+                min_distance = abs_dist;
                 best_score = score;
                 best_candidate_entity_idx = entity_idx;
                 best_candidate_geometry_idx = closest_segment_idx;
@@ -1790,7 +1772,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     // check if aligned with closest lane and set current lane
     // 4.0m threshold: agents more than 4 meters from any lane are considered off-road
-    if (min_distance > 4.0f || closest_lane_entity_idx == -1) {
+    if (min_distance > max_distance_threshold || closest_lane_entity_idx == -1) {
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
         agent->current_lane_index = -1;
     } else {
@@ -2040,6 +2022,8 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->metrics_array[OFFROAD_IDX] = 0.0f;
     agent->metrics_array[REACHED_GOAL_IDX] = 0.0f;
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+    agent->metrics_array[LANE_ANGLE_IDX] = 0.0f; // lane angle
+    agent->metrics_array[LANE_DIST_IDX] = 0.0f;  // distance from lane center
 
     agent->respawn_timestep = env->timestep;
     agent->collided_before_goal = 0;
@@ -2310,6 +2294,8 @@ void c_reset(Drive *env) {
         agent->metrics_array[OFFROAD_IDX] = 0.0f;
         agent->metrics_array[REACHED_GOAL_IDX] = 0.0f;
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
+        agent->metrics_array[LANE_ANGLE_IDX] = 0.0f; // lane angle
+        agent->metrics_array[LANE_DIST_IDX] = 0.0f;  // distance from lane center
         agent->stopped = 0;
         agent->removed = 0;
 
