@@ -309,9 +309,7 @@ void render_snapshot(Drive *env, Client *client, DriveNet *net, int frame_count,
         // Check for done agents after stepping (respawn/stop/remove happens inside c_step)
         for (int i = 0; i < num_agents; i++) {
             int idx = env->active_agent_indices[i];
-            if (env->entities[idx].respawn_timestep != -1 ||
-                env->entities[idx].stopped ||
-                env->entities[idx].removed) {
+            if (env->entities[idx].respawn_timestep != -1 || env->entities[idx].stopped || env->entities[idx].removed) {
                 agent_done[i] = 1;
             }
         }
