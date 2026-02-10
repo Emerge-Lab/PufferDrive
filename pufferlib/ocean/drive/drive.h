@@ -483,7 +483,36 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
     }
 }
 
-// void normalize_reward_coef(void){}
+static float normalize_reward_coef(float value, int coef_idx) {
+    // NOTE: This prevents having coefficients outside of hardcoded bounds
+    // What if we want to allow that?
+    // RETURNING 0 COEF FOR NON LANE REWARDS - TO BE REMOVED ONCE ALL REWARD CONDITIONING IS IMPLEMENTED
+    if (!(coef_idx == REWARD_COEF_LANE_ALIGN || coef_idx == REWARD_COEF_LANE_CENTER ||
+          coef_idx == REWARD_COEF_VEL_ALIGN || coef_idx == REWARD_COEF_CENTER_BIAS)) {
+        return 0;
+    }
+    //
+    float min_v = REWARD_BOUNDS[coef_idx].min_val;
+    float max_v = REWARD_BOUNDS[coef_idx].max_val;
+    float range = max_v - min_v;
+
+    // Safety: prevent division by zero if range is singular
+    if (range < 1e-9f) {
+        return 0.0f;
+    }
+
+    // Normalize to [0, 1]
+    float normalized = (value - min_v) / range;
+
+    // Clamp to [0, 1] to handle floating point noise
+    if (normalized < 0.0f)
+        normalized = 0.0f;
+    if (normalized > 1.0f)
+        normalized = 1.0f;
+
+    // Scale to [-1, 1]
+    return 2.0f * normalized - 1.0f;
+}
 
 // void find_lane_index_by_id(void){}
 
@@ -1627,6 +1656,7 @@ void c_close(Drive *env) {
 void allocate(Drive *env) {
     init(env);
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float *)calloc(env->active_agent_count * max_obs, sizeof(float));
     env->actions = (float *)calloc(env->active_agent_count * 2, sizeof(float));
@@ -1916,6 +1946,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
 void compute_observations(Drive *env) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
@@ -1974,17 +2005,17 @@ void compute_observations(Drive *env) {
             obs[9] = lane_center_dist;
             obs[10] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         }
-
+        int obs_idx = (env->reward_conditioning == 1) ? ego_dim - NUM_REWARD_COEFS : ego_dim;
         // Placeholder for reward conditioning encoder -
         //  Encoder -> Conditioning and goal waypoints
-        //  if (env->reward_conditioning) {
-        //      for (int c = 0; c < NUM_REWARD_COEFS; c++) {
-        //          obs[obs_idx++] = normalize_reward_coef(ego_entity->reward_coefs[c], c);
-        //      }
-        //  }
+        if (env->reward_conditioning) {
+            for (int c = 0; c < NUM_REWARD_COEFS; c++) {
+                obs[obs_idx++] = normalize_reward_coef(ego_entity->reward_coefs[c], c);
+            }
+        }
         //
         //  Relative Pos of other cars
-        int obs_idx = ego_dim;
+
         int cars_seen = 0;
         for (int j = 0; j < MAX_AGENTS; j++) {
             int index = -1;
@@ -2532,7 +2563,8 @@ void c_step(Drive *env) {
         //  Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
         float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
         float theta_f = acosf(fminf(fmaxf(cos_theta, -1.0f), 1.0f)); // Get |θ_f| from cos
-        // env->logs[i].lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f;
+        // env->logs[i].lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f; <- Commented
+        // becaue this is already catered by us
 
         // Rl-align (GIGAFLOW): min(cos,0) + vel_align*min(cos*v,0) + 0.0025*(1-|θ|/(π/2))
         float against_lane_penalty = fminf(cos_theta, 0.0f); // negative when >90 degrees off
@@ -2555,11 +2587,12 @@ void c_step(Drive *env) {
             agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
 
         env->rewards[i] += lane_center_reward;
-        // env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
+        // env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f; <- Commented for now (
+        // need to add this to add_log)
         env->logs[i].episode_return += lane_center_reward;
         //
 
-        // Further support to be added for all other types of reward conditioning
+        // Further support TO BE ADDED for all other types of reward conditioning
     }
 
     if (env->goal_behavior == GOAL_RESPAWN) {
@@ -2736,6 +2769,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
 
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     float *agent_obs = &observations[agent_index][0];
