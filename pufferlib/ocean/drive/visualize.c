@@ -248,6 +248,25 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
+        .reward_bounds =
+            {
+                {conf.reward_bound_collision_min, conf.reward_bound_goal_radius_min},
+                {conf.reward_bound_goal_radius_max, conf.reward_bound_collision_max},
+                {conf.reward_bound_offroad_min, conf.reward_bound_offroad_max},
+                {conf.reward_bound_comfort_min, conf.reward_bound_comfort_max},
+                {conf.reward_bound_lane_align_min, conf.reward_bound_lane_align_max},
+                {conf.reward_bound_lane_center_min, conf.reward_bound_lane_center_max},
+                {conf.reward_bound_velocity_min, conf.reward_bound_velocity_max},
+                {conf.reward_bound_traffic_light_min, conf.reward_bound_traffic_light_max},
+                {conf.reward_bound_center_bias_min, conf.reward_bound_center_bias_max},
+                {conf.reward_bound_vel_align_min, conf.reward_bound_vel_align_max},
+                {conf.reward_bound_overspeed_min, conf.reward_bound_overspeed_max},
+                {conf.reward_bound_timestep_min, conf.reward_bound_timestep_max},
+                {conf.reward_bound_reverse_min, conf.reward_bound_reverse_max},
+                {conf.reward_bound_throttle_min, conf.reward_bound_throttle_max},
+                {conf.reward_bound_steer_min, conf.reward_bound_steer_max},
+                {conf.reward_bound_acc_min, conf.reward_bound_acc_max},
+            },
         .map_name = (char *)map_name,
     };
 

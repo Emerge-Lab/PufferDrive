@@ -220,6 +220,11 @@ struct GridMapEntity {
     int geometry_idx;
 };
 
+typedef struct {
+    float min_val;
+    float max_val;
+} RewardBound;
+
 typedef struct GridMap GridMap;
 struct GridMap {
     float top_left_x;
@@ -307,6 +312,7 @@ struct Drive {
     int control_mode;
     int reward_randomization;
     int reward_conditioning;
+    RewardBound reward_bounds[NUM_REWARD_COEFS];
 };
 
 // ========================================
@@ -397,30 +403,6 @@ static float mixed_uniform(float a) {
     }
 }
 
-typedef struct {
-    float min_val;
-    float max_val;
-} RewardBound;
-
-static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
-    {2.0f, 12.0f},        // REWARD_COEF_GOAL_RADIUS
-    {-3.0f, 0.0f},        // REWARD_COEF_COLLISION
-    {-3.0f, 0.0f},        // REWARD_COEF_OFFROAD
-    {-0.1f, 0.0f},        // REWARD_COEF_COMFORT
-    {2.5e-4f, 2.5e-2f},   // REWARD_COEF_LANE_ALIGN
-    {-7.5e-3f, -2.5e-4f}, // REWARD_COEF_LANE_CENTER
-    {0.0f, 5e-3f},        // REWARD_COEF_VELOCITY (Fixed value 2.5e-3)
-    {-1.0f, 0.0f},        // REWARD_COEF_TRAFFIC_LIGHT
-    {-0.5f, 0.5f},        // REWARD_COEF_CENTER_BIAS
-    {0.0f, 1.0f},         // REWARD_COEF_VEL_ALIGN
-    {-1.0f, 0.0f},        // REWARD_COEF_OVERSPEED
-    {-5e-5f, 0.0f},       // REWARD_COEF_TIMESTEP (Fixed value -2.5e-5)
-    {-7.5e-3f, -2.5e-4f}, // REWARD_COEF_REVERSE
-    {0.8f, 1.25f},        // REWARD_COEF_THROTTLE
-    {0.8f, 1.25f},        // REWARD_COEF_STEER
-    {0.666f, 1.5f}        // REWARD_COEF_ACC
-};
-
 // void compute_heading_diff(void){}
 
 // void random_uniform(void){}
@@ -432,28 +414,29 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
 static void generate_reward_coefs(Drive *env, Agent *agent) {
     if (env->reward_randomization) {
         // Standard Uniform Randomizations (referencing the bounds array)
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(REWARD_BOUNDS[REWARD_COEF_GOAL_RADIUS].min_val,
-                                                                      REWARD_BOUNDS[REWARD_COEF_GOAL_RADIUS].max_val);
-        agent->reward_coefs[REWARD_COEF_COLLISION] =
-            random_uniform(REWARD_BOUNDS[REWARD_COEF_COLLISION].min_val, REWARD_BOUNDS[REWARD_COEF_COLLISION].max_val);
-        agent->reward_coefs[REWARD_COEF_OFFROAD] =
-            random_uniform(REWARD_BOUNDS[REWARD_COEF_OFFROAD].min_val, REWARD_BOUNDS[REWARD_COEF_OFFROAD].max_val);
-        agent->reward_coefs[REWARD_COEF_COMFORT] =
-            random_uniform(REWARD_BOUNDS[REWARD_COEF_COMFORT].min_val, REWARD_BOUNDS[REWARD_COEF_COMFORT].max_val);
-        agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = random_uniform(REWARD_BOUNDS[REWARD_COEF_LANE_ALIGN].min_val,
-                                                                     REWARD_BOUNDS[REWARD_COEF_LANE_ALIGN].max_val);
-        agent->reward_coefs[REWARD_COEF_LANE_CENTER] = random_uniform(REWARD_BOUNDS[REWARD_COEF_LANE_CENTER].min_val,
-                                                                      REWARD_BOUNDS[REWARD_COEF_LANE_CENTER].max_val);
-        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] = random_uniform(
-            REWARD_BOUNDS[REWARD_COEF_TRAFFIC_LIGHT].min_val, REWARD_BOUNDS[REWARD_COEF_TRAFFIC_LIGHT].max_val);
-        agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = random_uniform(REWARD_BOUNDS[REWARD_COEF_CENTER_BIAS].min_val,
-                                                                      REWARD_BOUNDS[REWARD_COEF_CENTER_BIAS].max_val);
-        agent->reward_coefs[REWARD_COEF_VEL_ALIGN] =
-            random_uniform(REWARD_BOUNDS[REWARD_COEF_VEL_ALIGN].min_val, REWARD_BOUNDS[REWARD_COEF_VEL_ALIGN].max_val);
-        agent->reward_coefs[REWARD_COEF_OVERSPEED] =
-            random_uniform(REWARD_BOUNDS[REWARD_COEF_OVERSPEED].min_val, REWARD_BOUNDS[REWARD_COEF_OVERSPEED].max_val);
-        agent->reward_coefs[REWARD_COEF_REVERSE] =
-            random_uniform(REWARD_BOUNDS[REWARD_COEF_REVERSE].min_val, REWARD_BOUNDS[REWARD_COEF_REVERSE].max_val);
+        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(
+            env->reward_bounds[REWARD_COEF_GOAL_RADIUS].min_val, env->reward_bounds[REWARD_COEF_GOAL_RADIUS].max_val);
+        agent->reward_coefs[REWARD_COEF_COLLISION] = random_uniform(env->reward_bounds[REWARD_COEF_COLLISION].min_val,
+                                                                    env->reward_bounds[REWARD_COEF_COLLISION].max_val);
+        agent->reward_coefs[REWARD_COEF_OFFROAD] = random_uniform(env->reward_bounds[REWARD_COEF_OFFROAD].min_val,
+                                                                  env->reward_bounds[REWARD_COEF_OFFROAD].max_val);
+        agent->reward_coefs[REWARD_COEF_COMFORT] = random_uniform(env->reward_bounds[REWARD_COEF_COMFORT].min_val,
+                                                                  env->reward_bounds[REWARD_COEF_COMFORT].max_val);
+        agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = random_uniform(
+            env->reward_bounds[REWARD_COEF_LANE_ALIGN].min_val, env->reward_bounds[REWARD_COEF_LANE_ALIGN].max_val);
+        agent->reward_coefs[REWARD_COEF_LANE_CENTER] = random_uniform(
+            env->reward_bounds[REWARD_COEF_LANE_CENTER].min_val, env->reward_bounds[REWARD_COEF_LANE_CENTER].max_val);
+        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] =
+            random_uniform(env->reward_bounds[REWARD_COEF_TRAFFIC_LIGHT].min_val,
+                           env->reward_bounds[REWARD_COEF_TRAFFIC_LIGHT].max_val);
+        agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = random_uniform(
+            env->reward_bounds[REWARD_COEF_CENTER_BIAS].min_val, env->reward_bounds[REWARD_COEF_CENTER_BIAS].max_val);
+        agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = random_uniform(env->reward_bounds[REWARD_COEF_VEL_ALIGN].min_val,
+                                                                    env->reward_bounds[REWARD_COEF_VEL_ALIGN].max_val);
+        agent->reward_coefs[REWARD_COEF_OVERSPEED] = random_uniform(env->reward_bounds[REWARD_COEF_OVERSPEED].min_val,
+                                                                    env->reward_bounds[REWARD_COEF_OVERSPEED].max_val);
+        agent->reward_coefs[REWARD_COEF_REVERSE] = random_uniform(env->reward_bounds[REWARD_COEF_REVERSE].min_val,
+                                                                  env->reward_bounds[REWARD_COEF_REVERSE].max_val);
         // Fixed values (Must fall within the bounds defined above)
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = -2.5e-5f;
@@ -483,7 +466,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
     }
 }
 
-static float normalize_reward_coef(float value, int coef_idx) {
+static float normalize_reward_coef(float value, int coef_idx, Drive *env) {
     // NOTE: This prevents having coefficients outside of hardcoded bounds
     // What if we want to allow that?
     // RETURNING 0 COEF FOR NON LANE REWARDS - TO BE REMOVED ONCE ALL REWARD CONDITIONING IS IMPLEMENTED
@@ -492,8 +475,8 @@ static float normalize_reward_coef(float value, int coef_idx) {
         return 0;
     }
     //
-    float min_v = REWARD_BOUNDS[coef_idx].min_val;
-    float max_v = REWARD_BOUNDS[coef_idx].max_val;
+    float min_v = env->reward_bounds[coef_idx].min_val;
+    float max_v = env->reward_bounds[coef_idx].max_val;
     float range = max_v - min_v;
 
     // Safety: prevent division by zero if range is singular
@@ -2011,7 +1994,7 @@ void compute_observations(Drive *env) {
         //  Encoder -> Conditioning and goal waypoints
         if (env->reward_conditioning) {
             for (int c = 0; c < NUM_REWARD_COEFS; c++) {
-                obs[obs_idx++] = normalize_reward_coef(ego_entity->reward_coefs[c], c);
+                obs[obs_idx++] = normalize_reward_coef(ego_entity->reward_coefs[c], c, env);
             }
         }
         //
