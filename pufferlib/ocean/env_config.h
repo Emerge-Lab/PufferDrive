@@ -117,6 +117,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_vehicle_collision_post_respawn = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
+    } else if (MATCH("env", "goal_speed")) {
+        env_config->goal_speed = atof(value);
     } else if (MATCH("env", "reward_bound_collision_min")) {
         env_config->reward_bound_collision_min = atof(value);
     } else if (MATCH("env", "reward_bound_goal_radius_min")) {

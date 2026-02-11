@@ -234,12 +234,16 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_lane_align = conf.reward_lane_align,
+        .reward_lane_center = conf.reward_lane_center,
         .reward_goal = conf.reward_goal,
         .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .goal_radius = conf.goal_radius,
-        .goal_behavior = conf.goal_behavior,
-        .goal_target_distance = conf.goal_target_distance,
         .goal_speed = conf.goal_speed,
+        .goal_behavior = conf.goal_behavior,
+        .reward_randomization = conf.reward_randomization,
+        .reward_conditioning = conf.reward_conditioning,
+        .goal_target_distance = conf.goal_target_distance,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
@@ -317,7 +321,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     Weights *weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
     char filename_topdown[256];
