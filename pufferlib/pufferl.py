@@ -480,9 +480,6 @@ class PuffeRL:
         if config["anneal_lr"]:
             self.scheduler.step()
 
-        if config["anneal_entropy"]:
-            self.ent_scheduler.step()
-
         y_pred = self.values.flatten()
         y_true = advantages.flatten() + self.values.flatten()
         var_y = y_true.var()
