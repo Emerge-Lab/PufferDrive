@@ -248,7 +248,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
-        .goal_radius_randomization = conf.goal_radius_randomization,
+        .reward_randomization = conf.reward_randomization,
+        .reward_conditioning = conf.reward_conditioning,
         .map_name = (char *)map_name,
     };
 

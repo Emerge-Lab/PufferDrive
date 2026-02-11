@@ -12,6 +12,8 @@ typedef struct {
     int dynamics_model;
     float reward_vehicle_collision;
     float reward_offroad_collision;
+    float reward_lane_center;
+    float reward_lane_align;
     float reward_goal;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
@@ -22,6 +24,8 @@ typedef struct {
     int spawn_immunity_timer;
     float dt;
     int goal_behavior;
+    int reward_randomization;
+    int reward_conditioning;
     float goal_target_distance;
     int episode_length;
     int termination_mode;
@@ -30,7 +34,6 @@ typedef struct {
     int control_mode;
     int num_maps;
     char map_dir[256];
-    int goal_radius_randomization;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -58,8 +61,16 @@ static int handler(void *config, const char *section, const char *name, const ch
         }
     } else if (MATCH("env", "goal_behavior")) {
         env_config->goal_behavior = atoi(value);
+    } else if (MATCH("env", "reward_randomization")) {
+        env_config->reward_randomization = atoi(value);
+    } else if (MATCH("env", "reward_conditioning")) {
+        env_config->reward_conditioning = atoi(value);
     } else if (MATCH("env", "goal_target_distance")) {
         env_config->goal_target_distance = atof(value);
+    } else if (MATCH("env", "reward_lane_center")) {
+        env_config->reward_lane_center = atof(value);
+    } else if (MATCH("env", "reward_lane_align")) {
+        env_config->reward_lane_align = atof(value);
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {
@@ -100,8 +111,6 @@ static int handler(void *config, const char *section, const char *name, const ch
         // printf("Parsed map_dir: '%s'\n", env_config->map_dir);
     } else if (MATCH("env", "num_maps")) {
         env_config->num_maps = atoi(value);
-    } else if (MATCH("env", "goal_radius_randomization")) {
-        env_config->goal_radius_randomization = atoi(value);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

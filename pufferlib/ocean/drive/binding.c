@@ -86,6 +86,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
+    int reward_randomization = unpack(kwargs, "reward_randomization");
+    int reward_conditioning = unpack(kwargs, "reward_conditioning");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
     int use_all_maps = unpack(kwargs, "use_all_maps");
 
@@ -106,6 +108,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->control_mode = control_mode;
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
+        env->reward_randomization = reward_randomization;
+        env->reward_conditioning = reward_conditioning;
         env->goal_target_distance = goal_target_distance;
         // Get map file path from Python list
         PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
@@ -215,6 +219,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
+    env->reward_lane_align = conf.reward_lane_align;
+    env->reward_lane_center = conf.reward_lane_center;
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
@@ -227,10 +233,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
+    env->reward_randomization = (int)unpack(kwargs, "reward_randomization");
+    env->reward_conditioning = (int)unpack(kwargs, "reward_conditioning");
     env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->goal_speed = (float)unpack(kwargs, "goal_speed");
-    env->goal_radius_randomization = conf.goal_radius_randomization;
     char *map_path = unpack_str(kwargs, "map_path");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
