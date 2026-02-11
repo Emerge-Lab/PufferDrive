@@ -13,7 +13,12 @@
 #include "drivenet.h"
 #include "libgen.h"
 #include "../env_config.h"
+
 #define TRAJECTORY_LENGTH_DEFAULT 91
+
+#define ACTIONS_FROM_POLICY 0
+#define ACTIONS_INFERRED_FROM_HUMAN 1
+#define ACTIONS_RANDOM 2
 
 typedef struct {
     int pipefd[2];
@@ -67,7 +72,7 @@ void CloseVideo(VideoRecorder *recorder) {
 
 void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int lasers, int trajectories,
                        int frame_count, float *path, int show_human_logs, int show_grid, int img_width, int img_height,
-                       int zoom_in) {
+                       int zoom_in, int control) {
     BeginDrawing();
 
     // Top-down orthographic camera
@@ -133,6 +138,26 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
     // Draw scene
     draw_scene(env, client, 1, obs, lasers, show_grid);
     EndMode3D();
+
+    // Draw control overlay text
+    const char *control_text;
+    Color text_color;
+    if (control == ACTIONS_INFERRED_FROM_HUMAN) {
+        control_text = "Control: Inferred human actions";
+        text_color = LIGHTGREEN;
+    } else if (control == ACTIONS_RANDOM) {
+        control_text = "Control: Random actions";
+        text_color = RED;
+    } else {
+        control_text = "Control: Policy actions";
+        text_color = YELLOW;
+    }
+
+    int text_width = MeasureText(control_text, 30);
+    int text_x = img_width - text_width - 20;
+    int text_y = 20;
+
+    DrawText(control_text, text_x, text_y, 30, text_color);
     EndDrawing();
 }
 
@@ -189,9 +214,76 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
     return 0;
 }
 
+static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
+    // Helper function to set actions based on control type
+    if (control == ACTIONS_INFERRED_FROM_HUMAN) {
+        // Use expert actions from trajectory data
+        for (int j = 0; j < env->active_agent_count; j++) {
+            int agent_idx = env->active_agent_indices[j];
+            Entity *agent = &env->entities[agent_idx];
+
+            // Check bounds
+            if (timestep < agent->array_size && agent->expert_accel && agent->expert_steering) {
+
+                // Check if expert actions are invalid (-1 means no action available)
+                if (agent->expert_accel[timestep] == -1.0f && agent->expert_steering[timestep] == -1.0f) {
+                    // Do nothing - apply zero action
+                    continue;
+                }
+                if (env->action_type == 1) { // continuous
+                    float (*action_array_f)[2] = (float (*)[2])env->actions;
+                    action_array_f[j][0] = agent->expert_accel[timestep] / ACCEL_MAX;
+                    action_array_f[j][1] = agent->expert_steering[timestep] / STEER_MAX;
+                } else { // discrete
+                    // Discretize to nearest action
+                    int best_accel_idx = 0;
+                    float min_accel_diff = fabsf(agent->expert_accel[timestep] - ACCELERATION_VALUES[0]);
+                    for (int k = 1; k < NUM_ACCEL_BINS; k++) {
+                        float diff = fabsf(agent->expert_accel[timestep] - ACCELERATION_VALUES[k]);
+                        if (diff < min_accel_diff) {
+                            min_accel_diff = diff;
+                            best_accel_idx = k;
+                        }
+                    }
+
+                    int best_steer_idx = 0;
+                    float min_steer_diff = fabsf(agent->expert_steering[timestep] - STEERING_VALUES[0]);
+                    for (int k = 1; k < NUM_STEER_BINS; k++) {
+                        float diff = fabsf(agent->expert_steering[timestep] - STEERING_VALUES[k]);
+                        if (diff < min_steer_diff) {
+                            min_steer_diff = diff;
+                            best_steer_idx = k;
+                        }
+                    }
+
+                    int *action_array = (int *)env->actions;
+                    action_array[j] = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
+                }
+            }
+        }
+    } else if (control == ACTIONS_RANDOM) {
+        // Use random actions
+        for (int j = 0; j < env->active_agent_count; j++) {
+            if (env->action_type == 1) { // continuous
+                float (*action_array_f)[2] = (float (*)[2])env->actions;
+                // Random values in range [-1, 1]
+                action_array_f[j][0] = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+                action_array_f[j][1] = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+            } else { // discrete
+                int *action_array = (int *)env->actions;
+                // Random action index
+                action_array[j] = rand() % (NUM_ACCEL_BINS * NUM_STEER_BINS);
+            }
+        }
+    } else {
+        // Use policy by default (ACTIONS_FROM_POLICY)
+        forward(net, env->observations, (int *)env->actions);
+    }
+}
+
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
-             const char *output_agent, int num_maps, int zoom_in) {
+             const char *output_agent, int num_maps, int zoom_in, int control) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};
@@ -294,9 +386,14 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     client->cyclist = LoadModel("resources/drive/cyclist.glb");
     client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
 
-    Weights *weights = load_weights(policy_name);
-    printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    Weights *weights = NULL;
+    DriveNet *net = NULL;
+
+    if (control == ACTIONS_FROM_POLICY) {
+        weights = load_weights(policy_name);
+        printf("Active agents in map: %d\n", env.active_agent_count);
+        net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    }
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
     char filename_topdown[256];
@@ -355,11 +452,11 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         for (int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, show_human_logs, show_grid,
-                                  img_width, img_height, zoom_in);
+                                  img_width, img_height, zoom_in, control);
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            forward(net, env.observations, (int *)env.actions);
+            set_actions(&env, i, control, net);
             c_step(&env);
         }
     }
@@ -377,7 +474,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
                 WriteFrame(&agent_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            forward(net, env.observations, (int *)env.actions);
+            set_actions(&env, i, control, net);
             c_step(&env);
         }
     }
@@ -399,8 +496,14 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     free(client);
     free_allocated(&env);
-    free_drivenet(net);
-    free(weights);
+
+    if (net != NULL) {
+        free_drivenet(net);
+    }
+    if (weights != NULL) {
+        free(weights);
+    }
+
     return 0;
 }
 
@@ -409,17 +512,18 @@ int main(int argc, char *argv[]) {
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
-    int show_human_logs = 0;
+    int show_human_logs = 1;
     int frame_skip = 1;
-    int zoom_in = 0;
-    const char *view_mode = "both";
+    int zoom_in = 1;
+    const char *view_mode = "topdown";
 
     // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
-    int num_maps = 1;
+    int num_maps = 100;
+    int control = ACTIONS_FROM_POLICY; // ACTIONS_INFERRED_FROM_HUMAN;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -429,7 +533,7 @@ int main(int argc, char *argv[]) {
             obs_only = 1;
         } else if (strcmp(argv[i], "--lasers") == 0) {
             lasers = 1;
-        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
+        } else if (strcmp(argv[i], "--show-human-logs") == 0) {
             show_human_logs = 1;
         } else if (strcmp(argv[i], "--frame-skip") == 0) {
             if (i + 1 < argc) {
@@ -485,10 +589,28 @@ int main(int argc, char *argv[]) {
                 num_maps = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--control") == 0) {
+            if (i + 1 < argc) {
+                const char *control_str = argv[i + 1];
+                i++;
+                if (strcmp(control_str, "policy") == 0) {
+                    control = ACTIONS_FROM_POLICY;
+                } else if (strcmp(control_str, "inferred_human") == 0) {
+                    control = ACTIONS_INFERRED_FROM_HUMAN;
+                } else if (strcmp(control_str, "random") == 0) {
+                    control = ACTIONS_RANDOM;
+                } else {
+                    fprintf(stderr, "Error: --control must be 'policy' or 'inferred_human'\n");
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "Error: --control option requires a value (policy/inferred_human)\n");
+                return 1;
+            }
         }
     }
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
-             output_agent, num_maps, zoom_in);
+             output_agent, num_maps, zoom_in, control);
     return 0;
 }
