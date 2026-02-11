@@ -15,33 +15,36 @@ typedef enum {
     ERROR_MEMORY_ALLOCATION,
     ERROR_FILE_NOT_FOUND,
     ERROR_INITIALIZATION_FAILED,
-    ERROR_UNKNOWN
+    ERROR_UNKNOWN,
+    ERROR_UNHANDLED_CASE
 } ErrorType;
 
 const char *error_type_to_string(ErrorType type) {
     switch (type) {
     case ERROR_NONE:
-        return "No Error";
+        return "NO ERROR";
     case ERROR_NULL_POINTER:
-        return "Null Pointer";
+        return "NULL POINTER";
     case ERROR_INVALID_ARGUMENT:
-        return "Invalid Argument";
+        return "INVALID ARGUMENT";
     case ERROR_OUT_OF_BOUNDS:
-        return "Out of Bounds";
+        return "OUT OF BOUNDS";
     case ERROR_MEMORY_ALLOCATION:
-        return "Memory Allocation Failed";
+        return "MEMORY ALLOCATION FAILED";
     case ERROR_FILE_NOT_FOUND:
-        return "File Not Found";
+        return "FILE NOT FOUND";
     case ERROR_INITIALIZATION_FAILED:
-        return "Initialization Failed";
+        return "INITIALIZATION FAILED";
+    case ERROR_UNHANDLED_CASE:
+        return "UNHANDLED CASE";
     default:
-        return "Unknown Error";
+        return "UNKNOWN ERROR";
     }
 }
 
 // Enhanced error function with custom message support
 void raise_error_with_message(ErrorType type, const char *format, ...) {
-    printf("Error occurred: %s", error_type_to_string(type));
+    printf("Error %s:", error_type_to_string(type));
 
     if (format != NULL) {
         printf(" - ");

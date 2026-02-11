@@ -228,6 +228,14 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
     fclose(policy_file);
 
+    AgentSpawnSettings spawn_settings = {
+        .min_w = conf.spawn_width_min,
+        .max_w = conf.spawn_width_max,
+        .min_l = conf.spawn_length_min,
+        .max_l = conf.spawn_length_max,
+        .h = conf.spawn_height,
+    };
+
     // Initialize environment with all config values from INI [env] section
     Drive env = {
         .action_type = conf.action_type,
@@ -248,8 +256,13 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
+        .spawn_settings = spawn_settings,
         .map_name = (char *)map_name,
     };
+
+    if (conf.init_mode == RANDOM_AGENTS) {
+        env.num_agents = conf.min_agents_per_env + rand() % (conf.max_agents_per_env - conf.min_agents_per_env + 1);
+    }
 
     allocate(&env);
 
@@ -424,7 +437,7 @@ int main(int argc, char *argv[]) {
 
     // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
-    const char *policy_name = "resources/drive/puffer_drive_weights.bin";
+    const char *policy_name = "resources/drive/puffer_drive_weights_resampling_300.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
     int num_maps = conf.num_maps;

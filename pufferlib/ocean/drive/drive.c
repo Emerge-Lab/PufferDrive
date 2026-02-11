@@ -67,6 +67,42 @@ void demo() {
     //     .map_name = "resources/drive/map_town_02_carla.bin",
     // };
 
+    printf("Loaded configuration from %s:\n", ini_file);
+    printf("  action_type: %d\n", conf.action_type);
+    printf("  dynamics_model: %d\n", conf.dynamics_model);
+    printf("  reward_vehicle_collision: %f\n", conf.reward_vehicle_collision);
+    printf("  reward_offroad_collision: %f\n", conf.reward_offroad_collision);
+    printf("  reward_goal: %f\n", conf.reward_goal);
+    printf("  reward_goal_post_respawn: %f\n", conf.reward_goal_post_respawn);
+    printf("  reward_vehicle_collision_post_respawn: %f\n", conf.reward_vehicle_collision_post_respawn);
+    printf("  goal_radius: %f\n", conf.goal_radius);
+    printf("  goal_behavior: %d\n", conf.goal_behavior);
+    printf("  goal_target_distance: %f\n", conf.goal_target_distance);
+    printf("  goal_speed: %f\n", conf.goal_speed);
+    printf("  dt: %f\n", conf.dt);
+    printf("  episode_length: %d\n", conf.episode_length);
+    printf("  termination_mode: %d\n", conf.termination_mode);
+    printf("  collision_behavior: %d\n", conf.collision_behavior);
+    printf("  offroad_behavior: %d\n", conf.offroad_behavior);
+    printf("  init_steps: %d\n", conf.init_steps);
+    printf("  init_mode: %d\n", conf.init_mode);
+    printf("  control_mode: %d\n", conf.control_mode);
+    printf("  max_agents_per_env: %d\n", conf.max_agents_per_env);
+    printf("  min_agents_per_env: %d\n", conf.min_agents_per_env);
+    printf("  spawn_width_min: %f\n", conf.spawn_width_min);
+    printf("  spawn_width_max: %f\n", conf.spawn_width_max);
+    printf("  spawn_length_min: %f\n", conf.spawn_length_min);
+    printf("  spawn_length_max: %f\n", conf.spawn_length_max);
+    printf("  spawn_height: %f\n", conf.spawn_height);
+
+    AgentSpawnSettings spawn_settings = {
+        .min_w = conf.spawn_width_min,
+        .max_w = conf.spawn_width_max,
+        .min_l = conf.spawn_length_min,
+        .max_l = conf.spawn_length_max,
+        .h = conf.spawn_height,
+    };
+
     Drive env = {
         .human_agent_idx = 0,
         .action_type = 0, // Demo doesn't support continuous action space
@@ -87,12 +123,18 @@ void demo() {
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
-        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .spawn_settings = spawn_settings,
+        .map_name = "resources/drive/binaries/carla/carla_3D/map_000.bin",
     };
+
+    if (conf.init_mode == RANDOM_AGENTS) {
+        env.num_agents = conf.min_agents_per_env + rand() % (conf.max_agents_per_env - conf.min_agents_per_env + 1);
+    }
+
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
+    Weights *weights = load_weights("resources/drive/puffer_drive_weights_resampling_300.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
     int accel_delta = 1;
