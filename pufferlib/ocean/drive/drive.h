@@ -1300,6 +1300,10 @@ void set_active_agents(Drive *env) {
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
 
+    free(active_agent_indices);
+    free(static_agent_indices);
+    free(expert_static_agent_indices);
+
     return;
 }
 
