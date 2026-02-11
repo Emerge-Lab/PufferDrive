@@ -200,8 +200,6 @@ class PuffeRL:
         self.total_epochs = epochs
 
         self.ent_coef_initial = config["ent_coef"]
-        if config["anneal_entropy"]:
-            self.ent_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=0.0)
 
         # Automatic mixed precision
         precision = config["precision"]
@@ -445,10 +443,10 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
+            # Get current entropy coefficient
             if config["anneal_entropy"]:
-                current_ent_coef = self.ent_coef_initial * (
-                    self.ent_scheduler.get_last_lr()[0] / self.optimizer.param_groups[0]["initial_lr"]
-                )
+                # Cosine annealing from initial to 0.0
+                current_ent_coef = 0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
             else:
                 current_ent_coef = config["ent_coef"]
 
@@ -566,8 +564,7 @@ class PuffeRL:
             "epoch": int(dist_sum(self.epoch, device)),
             "learning_rate": self.optimizer.param_groups[0]["lr"],
             "ent_coef": (
-                self.ent_coef_initial
-                * (self.ent_scheduler.get_last_lr()[0] / self.optimizer.param_groups[0]["initial_lr"])
+                0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
                 if config["anneal_entropy"]
                 else config["ent_coef"]
             ),
