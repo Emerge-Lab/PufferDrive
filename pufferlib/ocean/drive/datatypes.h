@@ -275,6 +275,13 @@ void free_agent(struct Agent *agent) {
     free(agent->path);
 }
 
+void free_agents(struct Agent *agents, int num_agents) {
+    for (int i = 0; i < num_agents; i++) {
+        free_agent(&agents[i]);
+    }
+    free(agents);
+}
+
 void free_road_element(struct RoadMapElement *element) {
     free(element->x);
     free(element->y);
