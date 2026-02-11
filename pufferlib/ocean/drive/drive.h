@@ -382,19 +382,15 @@ void add_log(Drive *env) {
         float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
 
         // Update score, which is an aggregate measure whether the agent fully solved its task
-        // Note: When resampling goals, performance is relative to the number of goals sampled
-        float threshold = 0.99f; // Default threshold for 1 goal
-        if (e->goals_sampled_this_episode == 2.0f) {
-            threshold = 0.5f; // Require ≥50% completion for 2 goals
-        } else if (e->goals_sampled_this_episode < 5.0f) {
-            threshold = 0.8f; // Require ≥80% completion for 3-4 goals
-        } else {
-            threshold = 0.9f; // Require ≥90% completion for 5+ goals
+        float threshold = 1.0f; // Default threshold for 1 goal (must complete it)
+        if (e->goals_sampled_this_episode > 1) {
+            // For multiple goals, require n-1 goals to be reached
+            threshold = (e->goals_sampled_this_episode - 1.0f) / e->goals_sampled_this_episode;
         }
 
         int collision_occurred =
             (env->goal_behavior == GOAL_RESPAWN) ? e->collided_before_goal : env->logs[i].collision_rate;
-        if (frac_goal_reached > threshold && !collision_occurred) {
+        if (frac_goal_reached >= threshold && !collision_occurred) {
             env->log.score += 1.0f;
         }
         if (!offroad && !collided && frac_goal_reached < 1.0f) {
