@@ -211,6 +211,8 @@ class PuffeRL:
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
         self.total_epochs = epochs
 
+        self.ent_coef_initial = config["ent_coef"]
+
         # Automatic mixed precision
         precision = config["precision"]
         self.amp_context = contextlib.nullcontext()
@@ -453,7 +455,15 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            # Get current entropy coefficient
+            if config["anneal_entropy"]:
+                # Cosine annealing from initial to 0.0
+                current_ent_coef = 0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
+            else:
+                current_ent_coef = config["ent_coef"]
+
+            loss = pg_loss + config["vf_coef"] * v_loss - current_ent_coef * entropy_loss
+
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -640,6 +650,11 @@ class PuffeRL:
             "uptime": time.time() - self.start_time,
             "epoch": int(dist_sum(self.epoch, device)),
             "learning_rate": self.optimizer.param_groups[0]["lr"],
+            "ent_coef": (
+                0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
+                if config["anneal_entropy"]
+                else config["ent_coef"]
+            ),
             **{f"environment/{k}": v for k, v in self.stats.items()},
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
