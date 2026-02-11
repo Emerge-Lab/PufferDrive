@@ -199,6 +199,10 @@ class PuffeRL:
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
         self.total_epochs = epochs
 
+        self.ent_coef_initial = config["ent_coef"]
+        if config["anneal_entropy"]:
+            self.ent_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=0.0)
+
         # Automatic mixed precision
         precision = config["precision"]
         self.amp_context = contextlib.nullcontext()
@@ -441,7 +445,16 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            if config["anneal_entropy"]:
+                # Use the cosine schedule value scaled by initial ent_coef
+                current_ent_coef = self.ent_coef_initial * (
+                    self.ent_scheduler.get_last_lr()[0] / self.optimizer.param_groups[0]["initial_lr"]
+                )
+            else:
+                current_ent_coef = config["ent_coef"]
+
+            loss = pg_loss + config["vf_coef"] * v_loss - current_ent_coef * entropy_loss
+
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -469,6 +482,9 @@ class PuffeRL:
         profile("train_misc", epoch)
         if config["anneal_lr"]:
             self.scheduler.step()
+
+        if config["anneal_entropy"]:
+            self.ent_scheduler.step()
 
         y_pred = self.values.flatten()
         y_true = advantages.flatten() + self.values.flatten()
@@ -550,6 +566,12 @@ class PuffeRL:
             "uptime": time.time() - self.start_time,
             "epoch": int(dist_sum(self.epoch, device)),
             "learning_rate": self.optimizer.param_groups[0]["lr"],
+            "ent_coef": (
+                self.ent_coef_initial
+                * (self.ent_scheduler.get_last_lr()[0] / self.optimizer.param_groups[0]["initial_lr"])
+                if config["anneal_entropy"]
+                else config["ent_coef"]
+            ),
             **{f"environment/{k}": v for k, v in self.stats.items()},
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
