@@ -1106,6 +1106,7 @@ static bool check_offroad(Drive *env, Agent* agent) {
     int list_size = 0;
     GridMapEntity *entity_list = checkNeighbors(env, agent->sim_x, agent->sim_y, collision_offsets,
                                                 COLLISION_RANGE * COLLISION_RANGE, &list_size);
+    bool offroad = false;
     for (int i = 0; i < list_size; i++) {
         if (entity_list[i].entity_idx == -1)
             continue;
@@ -1124,11 +1125,13 @@ static bool check_offroad(Drive *env, Agent* agent) {
             for (int k = 0; k < 4; k++) {
                 int next = (k + 1) % 4;
                 if (check_line_intersection(corners[k], corners[next], start, end)) {
-                    return true;
+                    offroad = true;
                 }
             }
         }
     }
+    free(entity_list);
+    return offroad;
 }
 
 void add_log(Drive *env) {
@@ -1460,7 +1463,7 @@ bool should_control_agent(Drive *env, int agent_idx) {
 
 int spawn_active_agents(Drive *env, int num_agents_to_create){
     // Free any pre-existing agents allocated during map loading
-    free(env->agents);
+    free_agents(env->agents, env->num_objects);
 
     env->agents = (Agent *)calloc(num_agents_to_create, sizeof(Agent));
 
@@ -1545,6 +1548,7 @@ void set_active_agents(Drive *env) {
 
     if (env->init_mode == RANDOM_AGENTS) {
         spawn_agents_with_counts(env);
+        env->num_objects = env->num_created_agents;
         return;
     }
 
@@ -1694,13 +1698,10 @@ void init(Drive *env) {
 }
 
 void c_close(Drive *env) {
-    for (int i = 0; i < env->num_objects; i++) {
-        free_agent(&env->agents[i]);
-    }
+    free_agents(env->agents, env->num_objects);
     for (int i = 0; i < env->num_roads; i++) {
         free_road_element(&env->road_elements[i]);
     }
-    free(env->agents);
     free(env->road_elements);
     free(env->road_scenario_ids);
     free(env->active_agent_indices);
@@ -3434,7 +3435,6 @@ void init_goal_positions(Drive *env) {
         int agent_idx = env->active_agent_indices[x];
         if (env->init_mode == RANDOM_AGENTS) {
             sample_new_goal(env, agent_idx);
-            continue;
         }
         Agent *agent = &env->agents[agent_idx];
         agent->init_goal_x = agent->goal_position_x;
