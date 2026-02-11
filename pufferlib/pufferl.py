@@ -446,7 +446,6 @@ class PuffeRL:
             entropy_loss = entropy.mean()
 
             if config["anneal_entropy"]:
-                # Use the cosine schedule value scaled by initial ent_coef
                 current_ent_coef = self.ent_coef_initial * (
                     self.ent_scheduler.get_last_lr()[0] / self.optimizer.param_groups[0]["initial_lr"]
                 )

@@ -350,7 +350,6 @@ void add_log(Drive *env) {
         float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
 
         // Update score, which is an aggregate measure whether the agent fully solved its task
-        // Note: When resampling goals, performance is n - 1 out of n goals
         float threshold = 1.0f; // Default threshold for 1 goal (must complete it)
         if (e->goals_sampled_this_episode > 1) {
             // For multiple goals, require n-1 goals to be reached
