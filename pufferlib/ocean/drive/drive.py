@@ -112,7 +112,8 @@ class Drive(pufferlib.PufferEnv):
         if action_type == "discrete":
             if dynamics_model == "classic":
                 # Joint action space (assume dependence)
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 13])
+                self.joint_action_space_size = binding.NUM_ACCEL_BINS * binding.NUM_STEER_BINS
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([self.joint_action_space_size])
                 # Multi discrete (assume independence)
                 # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
             elif dynamics_model == "jerk":
@@ -202,6 +203,7 @@ class Drive(pufferlib.PufferEnv):
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
+        self.truncations[:] = 0
         return self.observations, []
 
     def resample_maps(self):
@@ -266,6 +268,7 @@ class Drive(pufferlib.PufferEnv):
         self.c_envs = binding.vectorize(*env_ids)
 
         binding.vec_reset(self.c_envs, seed)
+        self.truncations[:] = 1
         self.terminals[:] = 1
 
     def step(self, actions):

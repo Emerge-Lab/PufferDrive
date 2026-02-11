@@ -128,7 +128,7 @@ static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "Truncations must be 1D");
         return NULL;
     }
-    // env->truncations = PyArray_DATA(truncations);
+    env->truncations = PyArray_DATA(truncations);
 
     PyObject *seed_arg = PyTuple_GetItem(args, 5);
     if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
@@ -412,7 +412,7 @@ static PyObject *vec_init(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->actions = (void *)((char *)PyArray_DATA(actions) + i * PyArray_STRIDE(actions, 0));
         env->rewards = (void *)((char *)PyArray_DATA(rewards) + i * PyArray_STRIDE(rewards, 0));
         env->terminals = (void *)((char *)PyArray_DATA(terminals) + i * PyArray_STRIDE(terminals, 0));
-        // env->truncations = (void*)((char*)PyArray_DATA(truncations) + i*PyArray_STRIDE(truncations, 0));
+        env->truncations = (void *)((char *)PyArray_DATA(truncations) + i * PyArray_STRIDE(truncations, 0));
 
         // Assumes each process has the same number of environments
         int env_seed = i + seed * vec->num_envs;
@@ -1002,6 +1002,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "MAX_AGENTS", MAX_AGENTS);
     PyModule_AddIntConstant(m, "TRAJECTORY_LENGTH", TRAJECTORY_LENGTH);
     PyModule_AddIntConstant(m, "MAX_ENTITIES_PER_CELL", MAX_ENTITIES_PER_CELL);
+    PyModule_AddIntConstant(m, "NUM_ACCEL_BINS", NUM_ACCEL_BINS);
+    PyModule_AddIntConstant(m, "NUM_STEER_BINS", NUM_STEER_BINS);
 
     PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);

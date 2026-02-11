@@ -104,15 +104,23 @@
 #define GOAL_RESPAWN 0
 #define GOAL_GENERATE_NEW 1
 #define GOAL_STOP 2
+#define GOAL_STOP_AND_TRUNCATE 3
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 
 // Classic action space (for CLASSIC dynamics model)
-static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
-static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f,
-                                          0.167f,  0.333f,  0.500f,  0.667f,  0.833f,  1.000f};
+#define NUM_ACCEL_BINS 7 // 21
+#define ACCEL_MIN -4.0f
+#define ACCEL_MAX 4.0f
+
+#define NUM_STEER_BINS 13 // 31
+#define STEER_MIN -1.0f   // radians
+#define STEER_MAX 1.0f
+
+static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
+static float STEERING_VALUES[NUM_STEER_BINS];
 
 static const float offsets[4][2] = {
     {-1, 1}, // top-left
@@ -179,6 +187,8 @@ struct Entity {
     float *traj_vz;
     float *traj_heading;
     int *traj_valid;
+    float *expert_accel;
+    float *expert_steering;
     float width;
     float length;
     float height;
@@ -283,6 +293,7 @@ struct Drive {
     float *actions;
     float *rewards;
     unsigned char *terminals;
+    unsigned char *truncations;
     Log log;
     Log *logs;
     int num_agents;
@@ -377,6 +388,18 @@ void add_log(Drive *env) {
     }
 }
 
+void init_action_space() {
+    float accel_step = (ACCEL_MAX - ACCEL_MIN) / (NUM_ACCEL_BINS - 1);
+    for (int i = 0; i < NUM_ACCEL_BINS; i++) {
+        ACCELERATION_VALUES[i] = ACCEL_MIN + i * accel_step;
+    }
+
+    float steer_step = (STEER_MAX - STEER_MIN) / (NUM_STEER_BINS - 1);
+    for (int i = 0; i < NUM_STEER_BINS; i++) {
+        STEERING_VALUES[i] = STEER_MIN + i * steer_step;
+    }
+}
+
 Entity *load_map_binary(const char *filename, Drive *env) {
     FILE *file = fopen(filename, "rb");
     if (!file)
@@ -404,6 +427,7 @@ Entity *load_map_binary(const char *filename, Drive *env) {
     fread(&env->num_roads, sizeof(int), 1, file);
     env->num_entities = env->num_objects + env->num_roads;
     Entity *entities = (Entity *)malloc(env->num_entities * sizeof(Entity));
+
     for (int i = 0; i < env->num_entities; i++) {
         // Read base entity data
         fread(&entities[i].scenario_id, sizeof(int), 1, file);
@@ -1407,6 +1431,7 @@ void init_goal_positions(Drive *env) {
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
+    init_action_space();
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
     init_grid_map(env);
@@ -1457,6 +1482,7 @@ void allocate(Drive *env) {
     env->actions = (float *)calloc(env->active_agent_count * 2, sizeof(float));
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
     env->terminals = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
+    env->truncations = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
 }
 
 void free_allocated(Drive *env) {
@@ -1464,6 +1490,7 @@ void free_allocated(Drive *env) {
     free(env->actions);
     free(env->rewards);
     free(env->terminals);
+    free(env->truncations);
     c_close(env);
 }
 
@@ -1507,12 +1534,12 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             acceleration = action_array_f[action_idx][0];
             steering = action_array_f[action_idx][1];
 
-            acceleration *= ACCELERATION_VALUES[6];
-            steering *= STEERING_VALUES[12];
+            acceleration *= ACCEL_MAX;
+            steering *= STEER_MAX;
         } else { // discrete
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
             int *action_array = (int *)env->actions;
-            int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+            int num_steer = NUM_STEER_BINS;
             int action_val = action_array[action_idx];
             int acceleration_index = action_val / num_steer;
             int steering_index = action_val % num_steer;
@@ -2023,23 +2050,8 @@ void respawn_agent(Drive *env, int agent_idx) {
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
+    memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
-
-    int originals_remaining = 0;
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        // Keep flag true if there is at least one agent that has not been respawned yet
-        if (env->entities[agent_idx].respawn_count == 0) {
-            originals_remaining = 1;
-            break;
-        }
-    }
-
-    if (env->timestep == env->episode_length || (!originals_remaining && env->termination_mode == 1)) {
-        add_log(env);
-        c_reset(env);
-        return;
-    }
 
     // Move static experts
     for (int i = 0; i < env->expert_static_agent_count; i++) {
@@ -2135,6 +2147,7 @@ void c_step(Drive *env) {
             int agent_idx = env->active_agent_indices[i];
             int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
             if (reached_goal) {
+                env->terminals[i] = 1;
                 respawn_agent(env, agent_idx);
                 env->entities[agent_idx].respawn_count++;
             }
@@ -2148,6 +2161,37 @@ void c_step(Drive *env) {
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
             }
         }
+    } else if (env->goal_behavior == GOAL_STOP_AND_TRUNCATE) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            int reached_goal = env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX];
+            if (reached_goal) {
+                env->entities[agent_idx].stopped = 1;
+                env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
+                env->truncations[i] = 1; // Mark as truncated
+            }
+        }
+    }
+
+    // Episode boundary after this step: treat time-limit and early-termination as truncation.
+    // `timestep` is incremented at step start, so truncate when `(timestep + 1) >= episode_length`.
+    int originals_remaining = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        if (env->entities[agent_idx].respawn_count == 0) {
+            originals_remaining = 1;
+            break;
+        }
+    }
+    int reached_time_limit = (env->timestep + 1) >= env->episode_length;
+    int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
+    if (reached_time_limit || reached_early_termination) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            env->truncations[i] = 1;
+        }
+        add_log(env);
+        c_reset(env);
+        return;
     }
 
     compute_observations(env);
@@ -2834,9 +2878,8 @@ void c_render(Drive *env) {
         int action_val = action_array[env->human_agent_idx];
 
         if (env->dynamics_model == CLASSIC) {
-            int num_steer = 13;
-            int accel_idx = action_val / num_steer;
-            int steer_idx = action_val % num_steer;
+            int accel_idx = action_val / NUM_STEER_BINS;
+            int steer_idx = action_val % NUM_STEER_BINS;
             float accel_value = ACCELERATION_VALUES[accel_idx];
             float steer_value = STEERING_VALUES[steer_idx];
 
