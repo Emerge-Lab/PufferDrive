@@ -1,5 +1,7 @@
 # PufferDrive
 
+[![Unit Tests](https://github.com/Emerge-Lab/PufferDrive/actions/workflows/utest.yml/badge.svg)](https://github.com/Emerge-Lab/PufferDrive/actions/workflows/utest.yml)
+
 <img align="left" style="width:260px" src="https://github.com/Emerge-Lab/PufferDrive/blob/main/pufferlib/resources/drive/pufferdrive_20fps_long.gif" width="288px">
 
 **PufferDrive is a fast and friendly driving simulator to train and test RL-based models.**
@@ -21,9 +23,11 @@
 
 ---
 
-> **Note**: 🚀 `PufferDrive` release `2.0` coming soon and includes extended functionality + documentation
+### See our 2.0 release video
 
-
+<a href="https://www.youtube.com/watch?v=LfQ324R-cbE">
+  <img src="https://img.youtube.com/vi/LfQ324R-cbE/0.jpg" alt="PufferDrive 2.0" width="300">
+</a>
 
 ## Installation
 
@@ -193,6 +197,7 @@ Open the served URL to see a local version of the docs.
 To edit the browser demo, follow these steps:
 - Download [emscripten](https://github.com/emscripten-core/emscripten)
 - emscripten install latest
+- Activate: `source emsdk/emsdk_env.sh`
 - Run `bash scripts/build_ocean.sh drive web`
 - This generates a number of `game*` files, move them to `assets/` to include them on the webpage
 
@@ -203,8 +208,8 @@ To edit the browser demo, follow these steps:
 
 If you use PufferDrive in your research, please cite:
 ```bibtex
-@software{pufferdrive2024github,
-  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Eugene Vinitsky},
+@software{pufferdrive2025github,
+  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Valentin Charraut and Aditya Gupta and Joseph Suarez and Eugene Vinitsky},
   title = {{PufferDrive}: A Fast and Friendly Driving Simulator for Training and Evaluating {RL} Agents},
   url = {https://github.com/Emerge-Lab/PufferDrive},
   version = {2.0.0},

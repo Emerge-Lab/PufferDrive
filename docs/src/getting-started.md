@@ -1,4 +1,4 @@
-# Getting Started
+# Getting started
 
 This page walks through installing PufferDrive from source, building the native extensions, and running a first training job.
 
@@ -35,7 +35,7 @@ Once map binaries are available (see [Data](data.md)), launch a quick training r
 puffer train puffer_drive
 ```
 
-For multi-node training(Only uses Data Parallelism with torch ddp)
+For multi-node training (only uses Data Parallelism with torch ddp)
 ```bash
 torchrun --standalone --nnodes=1 --nproc-per-node=6 -m puffer train puffer_drive
 ```
@@ -44,6 +44,7 @@ If map binaries are missing, follow the steps in [Data](data.md) to generate the
 
 
 ## Logging with Weights & Biases
+
 Enable W&B logging with the built-in CLI flags (the package is already a dependency in `setup.py`):
 
 ```bash

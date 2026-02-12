@@ -322,7 +322,7 @@ struct Drive {
     int goal_behavior;
     float goal_target_distance;
     char *ini_file;
-    char *scenario_id;
+    char scenario_id[16];
     int collision_behavior;
     int offroad_behavior;
     int sdc_track_index;
@@ -350,9 +350,16 @@ void add_log(Drive *env) {
 
         float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
 
-        // Update score, which measures whether the agent fully solved its task
-        float threshold = (e->goals_sampled_this_episode == 1.0f) ? 0.999f : 0.9f;
-        if (frac_goal_reached > threshold && !e->collided_before_goal) {
+        // Update score, which is an aggregate measure whether the agent fully solved its task
+        float threshold = 1.0f; // Default threshold for 1 goal (must complete it)
+        if (e->goals_sampled_this_episode > 1) {
+            // For multiple goals, require n-1 goals to be reached
+            threshold = (e->goals_sampled_this_episode - 1.0f) / e->goals_sampled_this_episode;
+        }
+
+        int collision_occurred =
+            (env->goal_behavior == GOAL_RESPAWN) ? e->collided_before_goal : env->logs[i].collision_rate;
+        if (frac_goal_reached >= threshold && !collision_occurred) {
             env->log.score += 1.0f;
         }
         if (!offroad && !collided && frac_goal_reached < 1.0f) {
@@ -375,6 +382,9 @@ Entity *load_map_binary(const char *filename, Drive *env) {
     FILE *file = fopen(filename, "rb");
     if (!file)
         return NULL;
+
+    // Read scenario_id
+    fread(env->scenario_id, sizeof(char), 16, file);
 
     // Read sdc_track_index
     fread(&env->sdc_track_index, sizeof(int), 1, file);
@@ -961,7 +971,7 @@ int collision_check(Drive *env, int agent_idx) {
         int index = -1;
         if (i < env->active_agent_count) {
             index = env->active_agent_indices[i];
-        } else if (i < env->num_actors) {
+        } else if (i < env->num_actors && env->static_agent_count > 0) {
             index = env->static_agent_indices[i - env->active_agent_count];
         }
         if (index == -1)
@@ -1200,10 +1210,6 @@ bool should_control_agent(Drive *env, int agent_idx) {
 
     Entity *entity = &env->entities[agent_idx];
 
-    // TODO: Move this elsewhere or remove
-    entity->width *= 0.7f;
-    entity->length *= 0.7f;
-
     if (env->control_mode == CONTROL_SDC_ONLY) {
         return agent_idx == env->sdc_track_index;
     }
@@ -1251,7 +1257,7 @@ void set_active_agents(Drive *env) {
     env->active_agent_count = 0;        // Policy-controlled agents
     env->static_agent_count = 0;        // Non-moving background agents
     env->expert_static_agent_count = 0; // Expert replay agents (non-controlled)
-    env->num_actors = 0;                // Total agents created
+    env->num_actors = 0;                // Total agents created (there is always the SDC)
 
     int active_agent_indices[MAX_AGENTS];
     int static_agent_indices[MAX_AGENTS];
@@ -1261,8 +1267,23 @@ void set_active_agents(Drive *env) {
         env->num_agents = MAX_AGENTS;
     }
 
+    // If we have a SDC index (WOMD), initialize it first:
+    int sdc_index = env->sdc_track_index;
+
+    if (sdc_index >= 0) {
+        active_agent_indices[0] = sdc_index;
+        env->num_actors++;
+        env->active_agent_count++;
+        env->entities[sdc_index].active_agent = 1;
+    }
+
     // Iterate through entities to find agents to create and/or control
     for (int i = 0; i < env->num_objects && env->num_actors < MAX_AGENTS; i++) {
+
+        // Skip if its the SDC
+        if (i == sdc_index) {
+            continue;
+        }
 
         Entity *entity = &env->entities[i];
 
@@ -1643,16 +1664,16 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
-static inline int get_track_id_or_placeholder(Drive *env, int agent_idx) {
+static inline int is_in_track_to_predicts(Drive *env, int agent_idx) {
     if (env->tracks_to_predict_indices == NULL || env->num_tracks_to_predict == 0) {
-        return -1;
+        return 0;
     }
     for (int k = 0; k < env->num_tracks_to_predict; k++) {
         if (env->tracks_to_predict_indices[k] == agent_idx) {
-            return env->tracks_to_predict_indices[k];
+            return 1;
         }
     }
-    return -1;
+    return 0;
 }
 
 void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out, int *id_out,
@@ -1666,19 +1687,24 @@ void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_o
         y_out[i] = agent->y + env->world_mean_y;
         z_out[i] = agent->z;
         heading_out[i] = agent->heading;
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        id_out[i] = agent->id;
         length_out[i] = agent->length;
         width_out[i] = agent->width;
     }
 }
 
 void c_get_global_ground_truth_trajectories(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out,
-                                            int *valid_out, int *id_out, int *scenario_id_out) {
+                                            int *valid_out, int *id_out, bool *is_vehicle_out,
+                                            bool *is_track_to_predict_out, char *scenario_id_out) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Entity *agent = &env->entities[agent_idx];
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
-        scenario_id_out[i] = agent->scenario_id;
+        id_out[i] = agent->id;
+        is_vehicle_out[i] = agent->type == VEHICLE;
+        is_track_to_predict_out[i] = is_in_track_to_predicts(env, agent_idx);
+
+        // The scenario_id is an array of 16 char
+        memcpy(scenario_id_out + (i * 16), env->scenario_id, 16);
 
         for (int t = env->init_steps; t < agent->array_size; t++) {
             int out_idx = i * (agent->array_size - env->init_steps) + (t - env->init_steps);
@@ -1704,13 +1730,16 @@ void c_get_road_edge_counts(Drive *env, int *num_polylines_out, int *total_point
     *total_points_out = points;
 }
 
-void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *lengths_out, int *scenario_ids_out) {
+void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *lengths_out, char *scenario_ids_out) {
     int poly_idx = 0, pt_idx = 0;
     for (int i = env->num_objects; i < env->num_entities; i++) {
         Entity *e = &env->entities[i];
         if (e->type == ROAD_EDGE) {
             lengths_out[poly_idx] = e->array_size;
-            scenario_ids_out[poly_idx] = e->scenario_id;
+
+            char *scenario_id_ptr = scenario_ids_out + poly_idx * 16;
+            memcpy(scenario_id_ptr, env->scenario_id, 16);
+
             for (int j = 0; j < e->array_size; j++) {
                 x_out[pt_idx] = e->traj_x[j] + env->world_mean_x;
                 y_out[pt_idx] = e->traj_y[j] + env->world_mean_y;
@@ -1771,7 +1800,7 @@ void compute_observations(Drive *env) {
             int index = -1;
             if (j < env->active_agent_count) {
                 index = env->active_agent_indices[j];
-            } else if (j < env->num_actors) {
+            } else if (j < env->num_actors && env->static_agent_count > 0) {
                 index = env->static_agent_indices[j - env->active_agent_count];
             }
             if (index == -1)
@@ -1984,6 +2013,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX] = 0.0f;
 
     env->entities[agent_idx].respawn_timestep = env->timestep;
+    env->entities[agent_idx].collided_before_goal = 0;
     env->entities[agent_idx].stopped = 0;
     env->entities[agent_idx].removed = 0;
     env->entities[agent_idx].a_long = 0.0f;
@@ -2048,9 +2078,7 @@ void c_step(Drive *env) {
                 env->logs[i].offroad_per_agent += 1.0f;
             }
 
-            if (env->entities[agent_idx].goals_reached_this_episode < 1.0) {
-                env->entities[agent_idx].collided_before_goal = 1;
-            }
+            env->entities[agent_idx].collided_before_goal = 1;
         }
 
         float distance_to_goal =
@@ -2373,7 +2401,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float arrow_x_world;
         float arrow_y_world;
         if (mode == 0) {
-            DrawLine3D((Vector3){x, y, 1}, (Vector3){arrow_x, arrow_y, 1}, PUFF_WHITE);
+            DrawLine3D((Vector3){x, y, 0.0}, (Vector3){arrow_x, arrow_y, 0.0}, PUFF_WHITE);
         }
         if (mode == 1) {
             arrow_x_world = px + (arrow_x * heading_self_x - arrow_y * heading_self_y);
@@ -2401,8 +2429,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
             // Draw the two lines forming the arrow head
             if (mode == 0) {
-                DrawLine3D((Vector3){arrow_x, arrow_y, 1}, (Vector3){arrow_x_end1, arrow_y_end1, 1}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x, arrow_y, 1}, (Vector3){arrow_x_end2, arrow_y_end2, 1}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, 0.0}, (Vector3){arrow_x_end1, arrow_y_end1, 0.0}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, 0.0}, (Vector3){arrow_x_end2, arrow_y_end2, 0.0}, PUFF_WHITE);
             }
 
             if (mode == 1) {
@@ -2410,10 +2438,10 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
                 float arrow_y_end1_world = py + (arrow_x_end1 * heading_self_y + arrow_y_end1 * heading_self_x);
                 float arrow_x_end2_world = px + (arrow_x_end2 * heading_self_x - arrow_y_end2 * heading_self_y);
                 float arrow_y_end2_world = py + (arrow_x_end2 * heading_self_y + arrow_y_end2 * heading_self_x);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 1},
-                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, 1}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 1},
-                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, 1}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 0.0},
+                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, 0.0}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 0.0},
+                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, 0.0}, PUFF_WHITE);
             }
         }
 
@@ -2790,6 +2818,10 @@ void c_render(Drive *env) {
     BeginMode3D(client->camera);
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
+
+    if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
+        env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
+    }
 
     // Draw debug info
     DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,

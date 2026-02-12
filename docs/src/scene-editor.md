@@ -9,7 +9,7 @@ A browser-based playground for inspecting and editing Waymo Open Motion Dataset 
 </div>
 
 ## Quick start
-- Open <https://womd-editor.vercel.app/> in a modern Chromium/Firefox browser.
+- Open <https://emerge-scenario-editor.vercel.app/> in a modern Chromium/Firefox browser.
 - Click **Import JSON…** in the left sidebar and drop one or more scenario files (Waymo/ScenarioMax JSON or editor exports).
 - The app stores everything in-memory only; nothing is uploaded to a server.
 
