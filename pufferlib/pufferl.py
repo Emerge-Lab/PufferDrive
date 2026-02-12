@@ -480,17 +480,25 @@ class PuffeRL:
             # # One-liner to cancel my loss-masking:
             # mb_target_masks = torch.zeros_like(mb_target_masks)
 
-            # I wasn't rescaling the advantages properly, this might make things better
+            # Rescale the advantages and pay attention to the edge case where there is only targets in a batch
             filtered_adv = adv[~mb_target_masks]
-            f_mean = filtered_adv.mean()
-            f_std = filtered_adv.std()
+            if filtered_adv.numel() > 1:
+                f_mean = filtered_adv.mean()
+                f_std = filtered_adv.std()
+            elif filtered_adv.numel() == 1:
+                f_mean = filtered_adv[0]
+                f_std = 1.0
+            else:
+                # In this case the batch contains no interesting agent, skip it.
+                # Also I might want later to make sure this never happens by increasing MAX AGENTS
+                pass
 
             adv = mb_prio * (adv - f_mean) / (f_std + 1e-8)
 
             loss_mask = (~mb_target_masks).float()
 
             # Add a protection against NaNs that might appear if all envs are sdc only by lol
-            denominator = 1.0 if loss_mask.sum() == 0 else loss_mask.sum()
+            denominator = 1.0 if loss_mask.sum() == 0.0 else loss_mask.sum()
 
             # Losses
             pg_loss1 = -adv * ratio
