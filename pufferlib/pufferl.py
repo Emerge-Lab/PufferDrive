@@ -1122,6 +1122,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         return results_dict
 
     elif human_replay_enabled:
+        # Ensure the episode is only after a number of steps
+        args["env"]["termination_mode"] = 0
         args["env"]["map_dir"] = args["eval"]["map_dir"]
         dataset_name = args["env"]["map_dir"].split("/")[-1]
         print(f"Running human replay evaluation with {dataset_name} dataset.\n")
@@ -1134,7 +1136,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["episode_length"] = 91  # WOMD scenario length
         args["env"]["num_maps"] = args["eval"]["human_replay_num_agents"]
-        args["env"]["termination_mode"] = 0  # End at episode length
 
         # Create two different envs
         hr_args = args.copy()
