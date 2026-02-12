@@ -244,6 +244,7 @@ struct Drive {
     Log log;
     Log *logs;
     int num_agents; // Max controlled agents
+    int num_agents; // Max controlled agents
     int active_agent_count;
     int *active_agent_indices;
     int action_type;
@@ -1026,6 +1027,7 @@ int collision_check(Drive *env, int agent_idx) {
         if (i < env->active_agent_count) {
             index = env->active_agent_indices[i];
         } else if (i < env->num_created_agents) {
+        } else if (i < env->num_created_agents) {
             index = env->static_agent_indices[i - env->active_agent_count];
         }
         if (index == -1)
@@ -1613,6 +1615,10 @@ void set_active_agents(Drive *env) {
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
+
+    free(active_agent_indices);
+    free(static_agent_indices);
+    free(expert_static_agent_indices);
 
     return;
 }
