@@ -79,7 +79,7 @@ class TestDriveConfig(unittest.TestCase):
         if ASSERTION_LEVEL >= 3:
             self.assertEqual(args["train"]["total_timesteps"], 3_000_000_000)
             self.assertEqual(args["train"]["batch_size"], "auto")
-            self.assertEqual(args["train"]["bptt_horizon"], 91)
+            self.assertEqual(args["train"]["rollout_horizon"], 91)
             self.assertEqual(args["train"]["minibatch_size"], 11648)
             self.assertEqual(args["train"]["learning_rate"], 0.001)
             self.assertEqual(args["train"]["gamma"], 0.98)
