@@ -69,6 +69,11 @@ class Drive(nn.Module):
     def forward_train(self, x, state=None):
         return self.forward(x, state)
 
+    def forward_eval(self, observations, state=None):
+        hidden = self.encode_observations(observations, state=state)
+        logits, values = self.decode_actions(hidden)
+        return logits, values
+
     def encode_observations(self, observations, state=None):
         ego_dim = self.ego_dim
         partner_dim = self.max_partner_objects * self.partner_features
