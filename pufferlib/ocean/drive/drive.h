@@ -244,7 +244,6 @@ struct Drive {
     Log log;
     Log *logs;
     int num_agents; // Max controlled agents
-    int num_agents; // Max controlled agents
     int active_agent_count;
     int *active_agent_indices;
     int action_type;
@@ -877,20 +876,32 @@ void load_map_binary(const char *filename, Drive *env) {
 
 static void get_random_point_on_lane(RoadMapElement *lane, float *out_x, float *out_y, float *out_z,
                                      float *out_heading) {
-    // If the lane is sparse, we should interpolate between points for better accuracy.
+    // TODO: If the lane is sparse, we should interpolate between points for better accuracy.
+
+    if (lane->segment_length < 2) {
+        if (lane->segment_length == 0) {
+            raise_error_with_message(ERROR_INVALID_MAP_ELEMENT, "RoadMapElement type %d, id=%d has no segments",
+                                     lane->type, lane->id);
+        }
+        if (lane->segment_length < 0) {
+            raise_error_with_message(ERROR_INITIALIZATION_FAILED,
+                                     "RoadMapElement type %d, id=%d has negative segment length", lane->type, lane->id);
+        }
+        *out_x = lane->x[0];
+        *out_y = lane->y[0];
+        *out_z = lane->z[0];
+        *out_heading = rand() / (float)RAND_MAX * 2 * M_PI - M_PI;
+        return;
+    }
     int seg_idx = rand() % (lane->segment_length - 1);
 
     float x0 = lane->x[seg_idx];
     float y0 = lane->y[seg_idx];
     float z0 = lane->z[seg_idx];
 
-    if (lane->segment_length != 1) {
-        float dx = lane->x[seg_idx + 1] - x0;
-        float dy = lane->y[seg_idx + 1] - y0;
-        *out_heading = atan2f(dy, dx);
-    } else {
-        *out_heading = rand() / (float)RAND_MAX * 2 * M_PI - M_PI;
-    }
+    float dx = lane->x[seg_idx + 1] - x0;
+    float dy = lane->y[seg_idx + 1] - y0;
+    *out_heading = atan2f(dy, dx);
 
     *out_x = x0;
     *out_y = y0;
@@ -1252,7 +1263,7 @@ static bool check_spawn_offroad(Drive *env, float spawn_x, float spawn_y, float 
     return false;
 }
 
-static int spawn_agent(Drive *env, int agent_idx, int agents_to_check) {
+static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check) {
     Agent *agent = &env->agents[agent_idx];
 
     if (agent->route != NULL) {
@@ -1298,6 +1309,7 @@ static int spawn_agent(Drive *env, int agent_idx, int agents_to_check) {
     float spawn_x, spawn_y, spawn_z, spawn_heading;
     RoadMapElement *start_lane;
     int start_lane_idx;
+    bool successfully_spawned = false;
 
     // Sampling rejection loop
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
@@ -1317,7 +1329,12 @@ static int spawn_agent(Drive *env, int agent_idx, int agents_to_check) {
         if (check_spawn_offroad(env, spawn_x, spawn_y, spawn_z, spawn_heading, spawn_length, spawn_width, spawn_height))
             continue;
 
+        successfully_spawned = true;
         break;
+    }
+
+    if (!successfully_spawned) {
+        return false; // Failed to find a valid spawn with current spawn settings and max attempts
     }
 
     // Update simulation state
@@ -1343,7 +1360,7 @@ static int spawn_agent(Drive *env, int agent_idx, int agents_to_check) {
     //     return 0; // Failed to compute new goal
     // }
 
-    return 1;
+    return successfully_spawned;
 }
 
 void set_start_position(Drive *env) {
@@ -1474,7 +1491,6 @@ int spawn_active_agents(Drive *env, int num_agents_to_create) {
                 successfully_created++;
                 created = 1;
                 break;
-            } else {
             }
         }
         if (!created) {
@@ -2146,6 +2162,7 @@ void compute_observations(Drive *env) {
 void respawn_agent(Drive *env, int agent_idx) {
 
     if (env->init_mode == RANDOM_AGENTS) {
+        // TODO: Needs to be handled later if we want GOAL_RESPAWN for random agents
         spawn_agents_with_counts(env);
         return;
     }

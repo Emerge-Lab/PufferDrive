@@ -15,8 +15,9 @@ typedef enum {
     ERROR_MEMORY_ALLOCATION,
     ERROR_FILE_NOT_FOUND,
     ERROR_INITIALIZATION_FAILED,
+    ERROR_UNHANDLED_CASE,
+    ERROR_INVALID_MAP_ELEMENT,
     ERROR_UNKNOWN,
-    ERROR_UNHANDLED_CASE
 } ErrorType;
 
 const char *error_type_to_string(ErrorType type) {
