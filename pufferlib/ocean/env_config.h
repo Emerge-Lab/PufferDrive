@@ -12,8 +12,6 @@ typedef struct {
     int dynamics_model;
     float reward_vehicle_collision;
     float reward_offroad_collision;
-    float reward_lane_center;
-    float reward_lane_align;
     float reward_goal;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
@@ -24,43 +22,7 @@ typedef struct {
     int spawn_immunity_timer;
     float dt;
     int goal_behavior;
-    int reward_randomization;
-    int reward_conditioning;
     float goal_target_distance;
-
-    float reward_bound_collision_min;
-    float reward_bound_goal_radius_min;
-    float reward_bound_goal_radius_max;
-    float reward_bound_collision_max;
-    float reward_bound_offroad_min;
-    float reward_bound_offroad_max;
-    float reward_bound_comfort_min;
-    float reward_bound_comfort_max;
-    float reward_bound_lane_align_min;
-    float reward_bound_lane_align_max;
-    float reward_bound_lane_center_min;
-    float reward_bound_lane_center_max;
-    float reward_bound_velocity_min;
-    float reward_bound_velocity_max;
-    float reward_bound_traffic_light_min;
-    float reward_bound_traffic_light_max;
-    float reward_bound_center_bias_min;
-    float reward_bound_center_bias_max;
-    float reward_bound_vel_align_min;
-    float reward_bound_vel_align_max;
-    float reward_bound_overspeed_min;
-    float reward_bound_overspeed_max;
-    float reward_bound_timestep_min;
-    float reward_bound_timestep_max;
-    float reward_bound_reverse_min;
-    float reward_bound_reverse_max;
-    float reward_bound_throttle_min;
-    float reward_bound_throttle_max;
-    float reward_bound_steer_min;
-    float reward_bound_steer_max;
-    float reward_bound_acc_min;
-    float reward_bound_acc_max;
-
     int episode_length;
     int termination_mode;
     int init_steps;
@@ -95,16 +57,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         }
     } else if (MATCH("env", "goal_behavior")) {
         env_config->goal_behavior = atoi(value);
-    } else if (MATCH("env", "reward_randomization")) {
-        env_config->reward_randomization = atoi(value);
-    } else if (MATCH("env", "reward_conditioning")) {
-        env_config->reward_conditioning = atoi(value);
     } else if (MATCH("env", "goal_target_distance")) {
         env_config->goal_target_distance = atof(value);
-    } else if (MATCH("env", "reward_lane_center")) {
-        env_config->reward_lane_center = atof(value);
-    } else if (MATCH("env", "reward_lane_align")) {
-        env_config->reward_lane_align = atof(value);
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {
@@ -119,70 +73,6 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->goal_radius = atof(value);
     } else if (MATCH("env", "goal_speed")) {
         env_config->goal_speed = atof(value);
-    } else if (MATCH("env", "reward_bound_collision_min")) {
-        env_config->reward_bound_collision_min = atof(value);
-    } else if (MATCH("env", "reward_bound_goal_radius_min")) {
-        env_config->reward_bound_goal_radius_min = atof(value);
-    } else if (MATCH("env", "reward_bound_goal_radius_max")) {
-        env_config->reward_bound_goal_radius_max = atof(value);
-    } else if (MATCH("env", "reward_bound_collision_max")) {
-        env_config->reward_bound_collision_max = atof(value);
-    } else if (MATCH("env", "reward_bound_offroad_min")) {
-        env_config->reward_bound_offroad_min = atof(value);
-    } else if (MATCH("env", "reward_bound_offroad_max")) {
-        env_config->reward_bound_offroad_max = atof(value);
-    } else if (MATCH("env", "reward_bound_comfort_min")) {
-        env_config->reward_bound_comfort_min = atof(value);
-    } else if (MATCH("env", "reward_bound_comfort_max")) {
-        env_config->reward_bound_comfort_max = atof(value);
-    } else if (MATCH("env", "reward_bound_lane_align_min")) {
-        env_config->reward_bound_lane_align_min = atof(value);
-    } else if (MATCH("env", "reward_bound_lane_align_max")) {
-        env_config->reward_bound_lane_align_max = atof(value);
-    } else if (MATCH("env", "reward_bound_lane_center_min")) {
-        env_config->reward_bound_lane_center_min = atof(value);
-    } else if (MATCH("env", "reward_bound_lane_center_max")) {
-        env_config->reward_bound_lane_center_max = atof(value);
-    } else if (MATCH("env", "reward_bound_velocity_min")) {
-        env_config->reward_bound_velocity_min = atof(value);
-    } else if (MATCH("env", "reward_bound_velocity_max")) {
-        env_config->reward_bound_velocity_max = atof(value);
-    } else if (MATCH("env", "reward_bound_traffic_light_min")) {
-        env_config->reward_bound_traffic_light_min = atof(value);
-    } else if (MATCH("env", "reward_bound_traffic_light_max")) {
-        env_config->reward_bound_traffic_light_max = atof(value);
-    } else if (MATCH("env", "reward_bound_center_bias_min")) {
-        env_config->reward_bound_center_bias_min = atof(value);
-    } else if (MATCH("env", "reward_bound_center_bias_max")) {
-        env_config->reward_bound_center_bias_max = atof(value);
-    } else if (MATCH("env", "reward_bound_vel_align_min")) {
-        env_config->reward_bound_vel_align_min = atof(value);
-    } else if (MATCH("env", "reward_bound_vel_align_max")) {
-        env_config->reward_bound_vel_align_max = atof(value);
-    } else if (MATCH("env", "reward_bound_overspeed_min")) {
-        env_config->reward_bound_overspeed_min = atof(value);
-    } else if (MATCH("env", "reward_bound_overspeed_max")) {
-        env_config->reward_bound_overspeed_max = atof(value);
-    } else if (MATCH("env", "reward_bound_timestep_min")) {
-        env_config->reward_bound_timestep_min = atof(value);
-    } else if (MATCH("env", "reward_bound_timestep_max")) {
-        env_config->reward_bound_timestep_max = atof(value);
-    } else if (MATCH("env", "reward_bound_reverse_min")) {
-        env_config->reward_bound_reverse_min = atof(value);
-    } else if (MATCH("env", "reward_bound_reverse_max")) {
-        env_config->reward_bound_reverse_max = atof(value);
-    } else if (MATCH("env", "reward_bound_throttle_min")) {
-        env_config->reward_bound_throttle_min = atof(value);
-    } else if (MATCH("env", "reward_bound_throttle_max")) {
-        env_config->reward_bound_throttle_max = atof(value);
-    } else if (MATCH("env", "reward_bound_steer_min")) {
-        env_config->reward_bound_steer_min = atof(value);
-    } else if (MATCH("env", "reward_bound_steer_max")) {
-        env_config->reward_bound_steer_max = atof(value);
-    } else if (MATCH("env", "reward_bound_acc_min")) {
-        env_config->reward_bound_acc_min = atof(value);
-    } else if (MATCH("env", "reward_bound_acc_max")) {
-        env_config->reward_bound_acc_max = atof(value);
     } else if (MATCH("env", "collision_behavior")) {
         env_config->collision_behavior = atoi(value);
     } else if (MATCH("env", "offroad_behavior")) {

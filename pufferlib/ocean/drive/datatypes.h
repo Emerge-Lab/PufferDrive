@@ -183,7 +183,7 @@ struct Agent {
     int closest_path_idx_wp;
 
     // Metrics and status tracking
-    float metrics_array[11]; // [collision, offroad, red_light, reached_goal, lane_dist,
+    float metrics_array[10]; // [collision, offroad, red_light, reached_goal, lane_dist,
                              // lane_angle, comfort_violation, velocity_progress, speed_limit, avg_displacement_error]
     int collision_state;
     int aabb_collision_state;

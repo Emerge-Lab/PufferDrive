@@ -60,13 +60,6 @@
 #define CONTROL_WOSAC 2
 #define CONTROL_SDC_ONLY 3
 
-// Lane selection scoring
-#define LANE_SELECTION_DISTANCE_WEIGHT 0.6f
-#define LANE_SELECTION_HEADING_WEIGHT 0.4f
-#define LANE_DISTANCE_NORMALIZATION 4.0f
-#define LANE_SWITCH_THRESHOLD 0.05f // Hysteresis: new lane must be 5% better to switch
-#define LANE_ALIGN_COS_THRESHOLD 0.5f
-
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
 
@@ -85,15 +78,8 @@
 // Metrics array indices
 #define COLLISION_IDX 0
 #define OFFROAD_IDX 1
-#define RED_LIGHT_IDX 2
-#define REACHED_GOAL_IDX 3
-#define LANE_DIST_IDX 4
-#define LANE_ANGLE_IDX 5
-#define COMFORT_VIOLATION_IDX 6
-#define VELOCITY_PROGRESS_IDX 7
-#define SPEED_LIMIT_IDX 8
-#define AVG_DISPLACEMENT_ERROR_IDX 9
-#define LANE_ALIGNED_IDX 10
+#define REACHED_GOAL_IDX 2
+#define LANE_ALIGNED_IDX 3
 
 // Grid cell size
 #define GRID_CELL_SIZE 5.0f
@@ -111,11 +97,9 @@
 #define ROAD_FEATURES_ONEHOT 14
 #define PARTNER_FEATURES 8
 
-#define MAX_CHECKED_LANES 32
-
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 11
-#define EGO_FEATURES_JERK 14
+#define EGO_FEATURES_CLASSIC 8
+#define EGO_FEATURES_JERK 11
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -221,11 +205,6 @@ struct GridMapEntity {
     int geometry_idx;
 };
 
-typedef struct {
-    float min_val;
-    float max_val;
-} RewardBound;
-
 typedef struct GridMap GridMap;
 struct GridMap {
     float top_left_x;
@@ -280,7 +259,6 @@ struct Drive {
     int termination_mode;
     float reward_vehicle_collision;
     float reward_offroad_collision;
-    float reward_traffic_light_violation;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -288,13 +266,6 @@ struct Drive {
     float dt;
     float reward_goal;
     float reward_goal_post_respawn;
-    float reward_overspeed;
-    float reward_comfort;
-    float reward_velocity;
-    float reward_lane_align;
-    float reward_lane_center;
-    float reward_timestep;
-    float reward_reverse;
     float goal_radius;
     float goal_speed;
     int logs_capacity;
@@ -309,9 +280,6 @@ struct Drive {
     int *tracks_to_predict_indices;
     int init_mode;
     int control_mode;
-    int reward_randomization;
-    int reward_conditioning;
-    RewardBound reward_bounds[NUM_REWARD_COEFS];
 };
 
 // ========================================
@@ -360,11 +328,6 @@ float normalize_heading(float heading) {
     return heading;
 }
 
-static float compute_heading_diff(float heading1, float heading2) {
-    float heading_diff = heading1 - heading2;
-    return normalize_heading(heading_diff);
-}
-
 // Note: added for 2.5D
 typedef struct {
     float dis;
@@ -388,113 +351,15 @@ int compare_depthpoint(const void *a, const void *b) {
     return (diff > 0) - (diff < 0); // returns 1, 0, or -1
 }
 
-static float random_uniform(float min_val, float max_val) {
-    float scale = (float)rand() / (float)RAND_MAX;
-    return min_val + scale * (max_val - min_val);
-}
-
-// Mixed uniform distribution X(a) = 0.5*U(1/a, 1) + 0.5*U(1, a)
-static float mixed_uniform(float a) {
-    if ((float)rand() / (float)RAND_MAX < 0.5f) {
-        return random_uniform(1.0f / a, 1.0f);
-    } else {
-        return random_uniform(1.0f, a);
-    }
-}
-
 // void compute_heading_diff(void){}
 
 // void random_uniform(void){}
 
 // void mixed_uniform(void){}
 
-// Generate per-agent reward conditioning coefficients
-// Full function, but wont be FULLY used as of yet - should be compatible for later iterations
-static void generate_reward_coefs(Drive *env, Agent *agent) {
-    if (env->reward_randomization) {
-        // Standard Uniform Randomizations (referencing the bounds array)
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(
-            env->reward_bounds[REWARD_COEF_GOAL_RADIUS].min_val, env->reward_bounds[REWARD_COEF_GOAL_RADIUS].max_val);
-        agent->reward_coefs[REWARD_COEF_COLLISION] = random_uniform(env->reward_bounds[REWARD_COEF_COLLISION].min_val,
-                                                                    env->reward_bounds[REWARD_COEF_COLLISION].max_val);
-        agent->reward_coefs[REWARD_COEF_OFFROAD] = random_uniform(env->reward_bounds[REWARD_COEF_OFFROAD].min_val,
-                                                                  env->reward_bounds[REWARD_COEF_OFFROAD].max_val);
-        agent->reward_coefs[REWARD_COEF_COMFORT] = random_uniform(env->reward_bounds[REWARD_COEF_COMFORT].min_val,
-                                                                  env->reward_bounds[REWARD_COEF_COMFORT].max_val);
-        agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = random_uniform(
-            env->reward_bounds[REWARD_COEF_LANE_ALIGN].min_val, env->reward_bounds[REWARD_COEF_LANE_ALIGN].max_val);
-        agent->reward_coefs[REWARD_COEF_LANE_CENTER] = random_uniform(
-            env->reward_bounds[REWARD_COEF_LANE_CENTER].min_val, env->reward_bounds[REWARD_COEF_LANE_CENTER].max_val);
-        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] =
-            random_uniform(env->reward_bounds[REWARD_COEF_TRAFFIC_LIGHT].min_val,
-                           env->reward_bounds[REWARD_COEF_TRAFFIC_LIGHT].max_val);
-        agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = random_uniform(
-            env->reward_bounds[REWARD_COEF_CENTER_BIAS].min_val, env->reward_bounds[REWARD_COEF_CENTER_BIAS].max_val);
-        agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = random_uniform(env->reward_bounds[REWARD_COEF_VEL_ALIGN].min_val,
-                                                                    env->reward_bounds[REWARD_COEF_VEL_ALIGN].max_val);
-        agent->reward_coefs[REWARD_COEF_OVERSPEED] = random_uniform(env->reward_bounds[REWARD_COEF_OVERSPEED].min_val,
-                                                                    env->reward_bounds[REWARD_COEF_OVERSPEED].max_val);
-        agent->reward_coefs[REWARD_COEF_REVERSE] = random_uniform(env->reward_bounds[REWARD_COEF_REVERSE].min_val,
-                                                                  env->reward_bounds[REWARD_COEF_REVERSE].max_val);
-        // Fixed values (Must fall within the bounds defined above)
-        agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
-        agent->reward_coefs[REWARD_COEF_TIMESTEP] = -2.5e-5f;
-        // Dynamic conditioning (Mixed Uniform)
-        agent->reward_coefs[REWARD_COEF_THROTTLE] = mixed_uniform(1.25f);
-        agent->reward_coefs[REWARD_COEF_STEER] = mixed_uniform(1.25f);
-        agent->reward_coefs[REWARD_COEF_ACC] = mixed_uniform(1.5f);
-    } else {
-        // Fixed coefficients
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
-        agent->reward_coefs[REWARD_COEF_COLLISION] = env->reward_vehicle_collision;
-        agent->reward_coefs[REWARD_COEF_OFFROAD] = env->reward_offroad_collision;
-        agent->reward_coefs[REWARD_COEF_COMFORT] = env->reward_comfort;
-        agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = env->reward_lane_align;
-        agent->reward_coefs[REWARD_COEF_LANE_CENTER] = env->reward_lane_center;
-        agent->reward_coefs[REWARD_COEF_VELOCITY] = env->reward_velocity;
-        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] = env->reward_traffic_light_violation;
-        agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = 0.0f;
-        agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = 1.0f;
-        agent->reward_coefs[REWARD_COEF_OVERSPEED] = env->reward_overspeed;
-        agent->reward_coefs[REWARD_COEF_TIMESTEP] = env->reward_timestep;
-        agent->reward_coefs[REWARD_COEF_REVERSE] = env->reward_reverse;
-        // Dynamic conditioning coefficients
-        agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
-        agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
-        agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
-    }
-}
+// void generate_reward_coefs(void){}
 
-static float normalize_reward_coef(float value, int coef_idx, Drive *env) {
-    // NOTE: This prevents having coefficients outside of hardcoded bounds
-    // What if we want to allow that?
-    // RETURNING 0 COEF FOR NON LANE REWARDS - TO BE REMOVED ONCE ALL REWARD CONDITIONING IS IMPLEMENTED
-    if (!(coef_idx == REWARD_COEF_LANE_ALIGN || coef_idx == REWARD_COEF_LANE_CENTER ||
-          coef_idx == REWARD_COEF_VEL_ALIGN || coef_idx == REWARD_COEF_CENTER_BIAS)) {
-        return 0;
-    }
-    //
-    float min_v = env->reward_bounds[coef_idx].min_val;
-    float max_v = env->reward_bounds[coef_idx].max_val;
-    float range = max_v - min_v;
-
-    // Safety: prevent division by zero if range is singular
-    if (range < 1e-9f) {
-        return 0.0f;
-    }
-
-    // Normalize to [0, 1]
-    float normalized = (value - min_v) / range;
-
-    // Clamp to [0, 1] to handle floating point noise
-    if (normalized < 0.0f)
-        normalized = 0.0f;
-    if (normalized > 1.0f)
-        normalized = 1.0f;
-
-    // Scale to [-1, 1]
-    return 2.0f * normalized - 1.0f;
-}
+// void normalize_reward_coef(void){}
 
 // void find_lane_index_by_id(void){}
 
@@ -986,37 +851,6 @@ void load_map_binary(const char *filename, Drive *env) {
 // ========================================
 
 // void compute_multi_segment_alignment(void){}
-static float compute_multi_segment_alignment(RoadMapElement *element, int center_seg_idx) {
-    // NOTE: This function returns the average heading in radians for a lane segment,
-    // with more weight given to the center segment.
-
-    float avg_heading = 0.0f;
-    float total_weight = 0.0f;
-
-    int start = (center_seg_idx > 0) ? (center_seg_idx - 1) : center_seg_idx;
-    int end = (center_seg_idx < element->segment_length - 2) ? (center_seg_idx + 1) : (element->segment_length - 2);
-
-    for (int seg_idx = start; seg_idx <= end; seg_idx++) {
-        if (seg_idx < 0 || seg_idx >= element->segment_length - 1)
-            continue;
-
-        float dx = element->x[seg_idx + 1] - element->x[seg_idx];
-        float dy = element->y[seg_idx + 1] - element->y[seg_idx];
-        float seg_heading = atan2f(dy, dx);
-
-        float weight = (seg_idx == center_seg_idx) ? 2.0f : 1.0f;
-
-        if (total_weight == 0.0f) {
-            avg_heading = seg_heading;
-        } else {
-            float angle_diff = compute_heading_diff(seg_heading, avg_heading);
-            avg_heading += weight * angle_diff / (total_weight + weight);
-        }
-        total_weight += weight;
-    }
-
-    return avg_heading;
-}
 
 // void get_drivable_lane_indices(void){}
 
@@ -1027,60 +861,6 @@ static float compute_multi_segment_alignment(RoadMapElement *element, int center
 // void compute_remaining_lane_distance(void){}
 
 // void find_closest_segment_on_lane(void){}
-static float find_closest_segment_on_lane(RoadMapElement *lane, float agent_x, float agent_y, int *out_segment_idx) {
-    int num_segments = lane->segment_length - 1;
-    if (num_segments < 1) {
-        *out_segment_idx = 0;
-        return 1e9f;
-    }
-
-    float min_dist_sq = 1e18f;
-    int closest_idx = 0;
-    float closest_cross = 0.0f;
-
-    for (int seg_idx = 0; seg_idx < num_segments; seg_idx++) {
-        float seg_start_x = lane->x[seg_idx];
-        float seg_start_y = lane->y[seg_idx];
-        float seg_end_x = lane->x[seg_idx + 1];
-        float seg_end_y = lane->y[seg_idx + 1];
-
-        float seg_dx = seg_end_x - seg_start_x;
-        float seg_dy = seg_end_y - seg_start_y;
-        float seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy;
-
-        float to_agent_x = agent_x - seg_start_x;
-        float to_agent_y = agent_y - seg_start_y;
-
-        // cross > 0 means agent is left of lane direction
-        float cross = seg_dx * to_agent_y - seg_dy * to_agent_x;
-
-        float dist_sq;
-        if (seg_length_sq > 1e-6f) {
-            float t = (to_agent_x * seg_dx + to_agent_y * seg_dy) / seg_length_sq;
-            if (t <= 0.0f) {
-                dist_sq = to_agent_x * to_agent_x + to_agent_y * to_agent_y;
-            } else if (t >= 1.0f) {
-                float dx = agent_x - seg_end_x;
-                float dy = agent_y - seg_end_y;
-                dist_sq = dx * dx + dy * dy;
-            } else {
-                dist_sq = (cross * cross) / seg_length_sq;
-            }
-        } else {
-            dist_sq = to_agent_x * to_agent_x + to_agent_y * to_agent_y;
-        }
-
-        if (dist_sq < min_dist_sq) {
-            min_dist_sq = dist_sq;
-            closest_idx = seg_idx;
-            closest_cross = cross;
-        }
-    }
-
-    *out_segment_idx = closest_idx;
-    float abs_dist = sqrtf(min_dist_sq);
-    return (closest_cross >= 0.0f) ? -abs_dist : abs_dist;
-}
 
 // void compute_log_trajectory_distance(void){}
 
@@ -1321,10 +1101,7 @@ void reset_agent_metrics(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     agent->metrics_array[COLLISION_IDX] = 0.0f;    // vehicle collision
     agent->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
-    agent->metrics_array[REACHED_GOAL_IDX] = 0.0f; // goal reached
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
-    agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;   // lane angle
-    agent->metrics_array[LANE_DIST_IDX] = 0.0f;    // distance from lane center
     agent->collision_state = 0;
     agent->aabb_collision_state = 0;
 }
@@ -1379,8 +1156,6 @@ void set_start_position(Drive *env) {
         e->metrics_array[OFFROAD_IDX] = 0.0f;      // offroad
         e->metrics_array[REACHED_GOAL_IDX] = 0.0f; // reached goal
         e->metrics_array[LANE_ALIGNED_IDX] = 0.0f; // lane aligned
-        e->metrics_array[LANE_ANGLE_IDX] = 0.0f;   // lane angle
-        e->metrics_array[LANE_DIST_IDX] = 0.0f;    // distance from lane center
         e->respawn_timestep = -1;
         e->stopped = 0;
         e->removed = 0;
@@ -1393,7 +1168,6 @@ void set_start_position(Drive *env) {
         e->jerk_lat = 0.0f;
         e->steering_angle = 0.0f;
         e->wheelbase = 0.6f * e->sim_length;
-        generate_reward_coefs(env, e);
     }
 }
 
@@ -1641,10 +1415,8 @@ void c_close(Drive *env) {
 }
 
 void allocate(Drive *env) {
-
     init(env);
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float *)calloc(env->active_agent_count * max_obs, sizeof(float));
     env->actions = (float *)calloc(env->active_agent_count * 2, sizeof(float));
@@ -1762,11 +1534,8 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     float sin_heading = sinf(agent->sim_heading);
     float min_distance = (float)INT16_MAX;
 
-    float best_score = 1e9f;
-    int best_candidate_entity_idx = -1;
-    int best_candidate_geometry_idx = -1;
-    float best_candidate_signed_lane_distance = 0.0f;
-    float best_candidate_lane_heading = 0.0f;
+    int closest_lane_entity_idx = -1;
+    int closest_lane_geometry_idx = -1;
 
     float corners[4][2];
     for (int i = 0; i < 4; i++) {
@@ -1776,12 +1545,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             agent->sim_y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
     }
     int list_size = 0;
-    // Vehicle-width based distance threshold (3x width)
-    float max_distance_threshold = 3.0f * agent->sim_width;
-
-    // Track already-checked drivable lanes to avoid redundant processing
-    int checked_lanes[MAX_CHECKED_LANES];
-    int num_checked_lanes = 0;
     GridMapEntity *entity_list = checkNeighbors(env, agent->sim_x, agent->sim_y, collision_offsets,
                                                 COLLISION_RANGE * COLLISION_RANGE, &list_size);
     for (int i = 0; i < list_size; i++) {
@@ -1791,7 +1554,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             continue;
         RoadMapElement *entity;
         entity = &env->road_elements[entity_list[i].entity_idx];
-        int entity_idx = entity_list[i].entity_idx;
 
         // Check for offroad collision with road edges
         if (entity->type == ROAD_EDGE) {
@@ -1813,87 +1575,41 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             break;
 
         // Find closest point on the road centerline to the agent
-        if (is_drivable_road_lane(entity->type) || entity->type == ROAD_LANE) {
-            // Check if we've already processed this lane (skip duplicates)
-            int already_checked = 0;
-            for (int c = 0; c < num_checked_lanes; c++) {
-                if (checked_lanes[c] == entity_idx) {
-                    already_checked = 1;
-                    break;
-                }
-            }
-            if (already_checked)
-                continue;
+        if (entity->type == ROAD_LANE) {
+            int entity_idx = entity_list[i].entity_idx;
+            int geometry_idx = entity_list[i].geometry_idx;
 
-            // Mark this lane as checked
-            if (num_checked_lanes < MAX_CHECKED_LANES) {
-                checked_lanes[num_checked_lanes++] = entity_idx;
-            }
+            float start[2] = {entity->x[geometry_idx], entity->y[geometry_idx]};
+            float end[2] = {entity->x[geometry_idx + 1], entity->y[geometry_idx + 1]};
 
-            // Find closest segment on this lane (returns signed distance)
-            int closest_segment_idx;
-            float signed_dist = find_closest_segment_on_lane(entity, agent->sim_x, agent->sim_y, &closest_segment_idx);
-            float abs_dist = fabsf(signed_dist);
-            if (abs_dist > max_distance_threshold)
-                continue; // Skip this lane, too far away
+            float dist = point_to_segment_distance_2d(agent->sim_x, agent->sim_y, start[0], start[1], end[0], end[1]);
+            float heading_diff = fabsf(atan2f(end[1] - start[1], end[0] - start[0]) - agent->sim_heading);
 
-            // Compute lane heading using multi-segment alignment
-            float avg_lane_heading = compute_multi_segment_alignment(entity, closest_segment_idx);
+            // Normalize heading difference to [0, pi]
+            if (heading_diff > M_PI)
+                heading_diff = 2.0f * M_PI - heading_diff;
 
-            // Compute heading alignment penalty (0.0 = perfect, 1.0 = opposite)
-            float heading_diff = compute_heading_diff(agent->sim_heading, avg_lane_heading);
-            float heading_penalty = fabsf(heading_diff) / M_PI; // Normalize to [0, 1]
+            // Penalize if heading differs by more than 30 degrees
+            if (heading_diff > (M_PI / 6.0f))
+                dist += 3.0f;
 
-            // Normalize distance for scoring
-            float distance_penalty = abs_dist / LANE_DISTANCE_NORMALIZATION;
-
-            // Combined score using defined weights
-            float score =
-                LANE_SELECTION_DISTANCE_WEIGHT * distance_penalty + LANE_SELECTION_HEADING_WEIGHT * heading_penalty;
-
-            // Hysteresis: penalize switching away from current lane
-            if (agent->current_lane_index != entity_idx && agent->current_lane_index != -1) {
-                score += LANE_SWITCH_THRESHOLD;
-            }
-
-            // Track best candidate
-            if (score < best_score) {
-
-                min_distance = abs_dist;
-                best_score = score;
-                best_candidate_entity_idx = entity_idx;
-                best_candidate_geometry_idx = closest_segment_idx;
-                best_candidate_signed_lane_distance = signed_dist;
-                best_candidate_lane_heading = avg_lane_heading;
+            if (dist < min_distance) {
+                min_distance = dist;
+                closest_lane_entity_idx = entity_idx;
+                closest_lane_geometry_idx = geometry_idx;
             }
         }
     }
-    // Update lane alignment metric (running average)
-    if (best_candidate_entity_idx != -1) {
-        agent->current_lane_index = best_candidate_entity_idx;
-        agent->current_lane_geometry_idx = best_candidate_geometry_idx;
-
-        // Lane distance and angle metrics (GIGAFLOW Frenet coordinates)
-        // x_f = lateral offset from lane center (left = negative, right = positive)
-        agent->metrics_array[LANE_DIST_IDX] = best_candidate_signed_lane_distance;
-        // theta_f = angle relative to lane heading
-        float theta_f = compute_heading_diff(agent->sim_heading, best_candidate_lane_heading);
-        agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f); // Store cos(θ_f)
-    } else {
-        // Agent not on any lane - use "bad" values to indicate offroad state
-        agent->current_lane_index = -1;
-        agent->current_lane_geometry_idx = -1;
-        agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION; // Max distance (far from lane)
-        agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;
-    }
 
     // check if aligned with closest lane and set current lane
-    if (min_distance > max_distance_threshold || best_candidate_entity_idx == -1) {
+    // 4.0m threshold: agents more than 4 meters from any lane are considered off-road
+    if (min_distance > 4.0f || closest_lane_entity_idx == -1) {
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
         agent->current_lane_index = -1;
     } else {
-        agent->current_lane_index = best_candidate_entity_idx;
-        int lane_aligned = (fabs(agent->metrics_array[LANE_ANGLE_IDX]) > 0.965) ? 1 : 0;
+        agent->current_lane_index = closest_lane_entity_idx;
+        int lane_aligned =
+            check_lane_aligned(agent, &env->road_elements[closest_lane_entity_idx], closest_lane_geometry_idx);
         agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned;
     }
 
@@ -1934,7 +1650,6 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
 void compute_observations(Drive *env) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
@@ -1952,13 +1667,6 @@ void compute_observations(Drive *env) {
         float v_dot_heading = ego_entity->sim_vx * cos_heading + ego_entity->sim_vy * sin_heading;
         float signed_speed = copysignf(speed_magnitude, v_dot_heading);
 
-        // Adding speed limit calculation
-        float speed_limit = 20.0f;
-        // We need to add speed limit calculation
-
-        // Adding lane angle and center information
-        float lane_center_dist = ego_entity->metrics_array[LANE_DIST_IDX] / LANE_DISTANCE_NORMALIZATION;
-        lane_center_dist = fmaxf(-1.0f, fminf(1.0f, lane_center_dist));
         // Set goal distances
         float goal_x = ego_entity->goal_position_x - ego_entity->sim_x;
         float goal_y = ego_entity->goal_position_y - ego_entity->sim_y;
@@ -1984,26 +1692,12 @@ void compute_observations(Drive *env) {
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
             obs[9] = ego_entity->a_lat / JERK_LAT[2];
             obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[11] = fminf(speed_limit / MAX_SPEED, 1.0f);
-            obs[12] = lane_center_dist;
-            obs[13] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         } else {
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[8] = fminf(speed_limit / MAX_SPEED, 1.0f);
-            obs[9] = lane_center_dist;
-            obs[10] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         }
-        int obs_idx = (env->reward_conditioning == 1) ? ego_dim - NUM_REWARD_COEFS : ego_dim;
-        // Placeholder for reward conditioning encoder -
-        //  Encoder -> Conditioning and goal waypoints
-        if (env->reward_conditioning) {
-            for (int c = 0; c < NUM_REWARD_COEFS; c++) {
-                obs[obs_idx++] = normalize_reward_coef(ego_entity->reward_coefs[c], c, env);
-            }
-        }
-        //
-        //  Relative Pos of other cars
 
+        // Relative Pos of other cars
+        int obs_idx = ego_dim;
         int cars_seen = 0;
         for (int j = 0; j < MAX_AGENTS; j++) {
             int index = -1;
@@ -2146,8 +1840,6 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->metrics_array[OFFROAD_IDX] = 0.0f;
     agent->metrics_array[REACHED_GOAL_IDX] = 0.0f;
     agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-    agent->metrics_array[LANE_ANGLE_IDX] = 0.0f; // lane angle
-    agent->metrics_array[LANE_DIST_IDX] = 0.0f;  // distance from lane center
 
     agent->respawn_timestep = env->timestep;
     agent->collided_before_goal = 0;
@@ -2158,7 +1850,6 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->jerk_long = 0.0f;
     agent->jerk_lat = 0.0f;
     agent->steering_angle = 0.0f;
-    generate_reward_coefs(env, agent);
 }
 
 void move_expert(Drive *env, float *actions, int agent_idx) {
@@ -2419,11 +2110,8 @@ void c_reset(Drive *env) {
         agent->metrics_array[OFFROAD_IDX] = 0.0f;
         agent->metrics_array[REACHED_GOAL_IDX] = 0.0f;
         agent->metrics_array[LANE_ALIGNED_IDX] = 0.0f;
-        agent->metrics_array[LANE_ANGLE_IDX] = 0.0f; // lane angle
-        agent->metrics_array[LANE_DIST_IDX] = 0.0f;  // distance from lane center
         agent->stopped = 0;
         agent->removed = 0;
-        generate_reward_coefs(env, agent);
 
         if (env->goal_behavior == GOAL_GENERATE_NEW) {
             agent->goal_position_x = agent->init_goal_x;
@@ -2489,7 +2177,6 @@ void c_step(Drive *env) {
     // Compute rewards
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
-        Agent *agent = &env->agents[agent_idx];
         env->agents[agent_idx].collision_state = 0;
         env->agents[agent_idx].aabb_collision_state = 0;
         compute_agent_metrics(env, agent_idx);
@@ -2544,43 +2231,9 @@ void c_step(Drive *env) {
             env->agents[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
             env->logs[i].speed_at_goal = current_speed;
         }
+
         int lane_aligned = env->agents[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
-
-        // Add lane rewards
-        //  Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
-        float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
-        float theta_f = acosf(fminf(fmaxf(cos_theta, -1.0f), 1.0f)); // Get |θ_f| from cos
-        // env->logs[i].lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f; <- Commented
-        // becaue this is already catered by us
-
-        // Rl-align (GIGAFLOW): min(cos,0) + vel_align*min(cos*v,0) + 0.0025*(1-|θ|/(π/2))
-        float against_lane_penalty = fminf(cos_theta, 0.0f); // negative when >90 degrees off
-        float vel_aligned_penalty =
-            agent->reward_coefs[REWARD_COEF_VEL_ALIGN] * fminf(cos_theta * agent->sim_speed, 0.0f);
-        float alignment_bonus = 0.0025f * (1.0f - theta_f / (M_PI / 2.0f));
-
-        float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt *
-                                  (against_lane_penalty + vel_aligned_penalty + alignment_bonus);
-
-        env->rewards[i] += lane_align_reward;
-        env->logs[i].episode_return += lane_align_reward;
-
-        // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05/(exp(|x_f - bias| - 0.5))
-        float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
-        float adjusted_dist = fabsf(lane_center_distance - agent->reward_coefs[REWARD_COEF_CENTER_BIAS]);
-        float exp_decay = 0.05f / expf(adjusted_dist - 0.5f);
-
-        float lane_center_reward =
-            agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
-
-        env->rewards[i] += lane_center_reward;
-        // env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f; <- Commented for now (
-        // need to add this to add_log)
-        env->logs[i].episode_return += lane_center_reward;
-        //
-
-        // Further support TO BE ADDED for all other types of reward conditioning
     }
 
     if (env->goal_behavior == GOAL_RESPAWN) {
@@ -2757,7 +2410,6 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
 
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     float *agent_obs = &observations[agent_index][0];
