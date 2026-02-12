@@ -88,7 +88,7 @@
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
 #ifndef MAX_AGENTS // Needs to be replaced with MAX_PARTNER_OBS(agents in obs_radius) throughout observations code and
                    // with env->max_agents_in_sim throughout all agent for loops
-#define MAX_AGENTS 64
+#define MAX_AGENTS 32
 #endif
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
@@ -749,7 +749,7 @@ void load_map_binary(const char *filename, Drive *env) {
     env->road_elements = (RoadMapElement *)calloc(env->num_roads, sizeof(RoadMapElement));
     env->road_scenario_ids = (int *)calloc(env->num_roads, sizeof(int));
 
-    env->max_agents_in_sim = env->num_objects; // Needs to be handled for random agents init
+    env->max_agents_in_sim = MAX_AGENTS; // Needs to be handled for random agents init
 
     int total_entities = env->num_objects + env->num_roads;
     int agent_idx = 0;
