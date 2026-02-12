@@ -235,8 +235,6 @@ class Drive(pufferlib.PufferEnv):
                     f"Please reduce num_maps, add more maps to {map_dir}, or set allow_fewer_maps=True."
                 )
 
-        self.use_all_maps = use_all_maps
-
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
