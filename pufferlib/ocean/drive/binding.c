@@ -93,15 +93,10 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
-    int total_agent_count = 0;
-    int env_count = 0;
-    int max_envs = use_all_maps ? num_maps : num_agents;
-    int map_idx = 0;
-    int maps_checked = 0;
-    PyObject *agent_offsets = PyList_New(max_envs + 1);
-    PyObject *map_ids = PyList_New(max_envs);
 
-    if(init_mode == RANDOM_AGENTS) {
+    int max_envs = use_all_maps ? num_maps : num_agents;
+
+    if (init_mode == RANDOM_AGENTS) {
         // Training mode: random agent counts per env
         int agent_counts[max_envs];
         int remaining = num_agents;
@@ -130,13 +125,22 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             PyList_SetItem(map_ids_list, i, PyLong_FromLong(rand() % num_maps));
             offset += agent_counts[i];
         }
-        PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(num_agents));      // In random mode, we guarantee num_agents accross all envs
+        PyList_SetItem(agent_offsets, env_count,
+                       PyLong_FromLong(num_agents)); // In random mode, we guarantee num_agents accross all envs
         PyObject *tuple = PyTuple_New(3);
         PyTuple_SetItem(tuple, 0, agent_offsets);
         PyTuple_SetItem(tuple, 1, map_ids_list);
         PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
         return tuple;
     }
+
+    // For all other modes
+    int total_agent_count = 0;
+    int env_count = 0;
+    int map_idx = 0;
+    int maps_checked = 0;
+    PyObject *agent_offsets = PyList_New(max_envs + 1);
+    PyObject *map_ids = PyList_New(max_envs);
 
     // getting env count
     while (use_all_maps ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
@@ -285,7 +289,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
 
     env->num_agents = max_agents;
     if (env->init_mode == RANDOM_AGENTS) {
-        env->spawn_settings.max_agents_in_sim = max_agents_per_env;    // Random Agents only supports controlled agents
+        env->spawn_settings.max_agents_in_sim = max_agents_per_env; // Random Agents only supports controlled agents
     }
     env->map_name = map_path;
     env->init_steps = init_steps;

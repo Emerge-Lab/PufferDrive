@@ -122,10 +122,14 @@ class Drive(pufferlib.PufferEnv):
         self.min_agents_per_env = int(min_agents_per_env)
         self.max_agents_per_env = int(max_agents_per_env)
         if self.max_agents_per_env < self.min_agents_per_env:
-            raise ValueError(f"max_agents_per_env ({self.max_agents_per_env}) must be >= min_agents_per_env ({self.min_agents_per_env})")
+            raise ValueError(
+                f"max_agents_per_env ({self.max_agents_per_env}) must be >= min_agents_per_env ({self.min_agents_per_env})"
+            )
         if self.max_agents_per_env > binding.MAX_AGENTS:
             # TODO: Check needs to be removed once MAX_PARTNER_OBS deprecates MAX_AGENTS
-            raise ValueError(f"max_agents_per_env ({self.max_agents_per_env}) cannot exceed MAX_AGENTS ({binding.MAX_AGENTS}) defined in C code.")
+            raise ValueError(
+                f"max_agents_per_env ({self.max_agents_per_env}) cannot exceed MAX_AGENTS ({binding.MAX_AGENTS}) defined in C code."
+            )
         self.spawn_width_min = float(spawn_width_min)
         self.spawn_width_max = float(spawn_width_max)
         self.spawn_length_min = float(spawn_length_min)
@@ -247,7 +251,6 @@ class Drive(pufferlib.PufferEnv):
         self.c_envs = binding.vectorize(*env_ids)
 
     def reset(self, seed=0):
-        print("Resetting environments...")
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
         return self.observations, []
@@ -276,8 +279,8 @@ class Drive(pufferlib.PufferEnv):
                 goal_behavior=self.goal_behavior,
                 goal_target_distance=self.goal_target_distance,
                 use_all_maps=self.use_all_maps,
-                min_spawn_agents=self.min_spawn_agents,
-                max_spawn_agents=self.max_spawn_agents,
+                min_agents_per_env=self.min_agents_per_env,
+                max_agents_per_env=self.max_agents_per_env,
             )
             self.agent_offsets = agent_offsets
             self.map_ids = map_ids
