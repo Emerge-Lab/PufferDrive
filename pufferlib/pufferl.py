@@ -91,6 +91,7 @@ class PuffeRL:
         batch_size = config["batch_size"]
         rollout_horizon = config["rollout_horizon"]
         bptt_horizon = config["rollout_horizon"]  # LSTM backprop horizon
+        config["bptt_horizon"] = bptt_horizon
         segments = batch_size // rollout_horizon  # Use rollout_horizon
 
         # Number of independent rollout sequences stored in the experience buffer
