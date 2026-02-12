@@ -657,8 +657,7 @@ void init_grid_map(Drive *env) {
             }
         }
     }
-    int cell_entities_insert_index[grid_cell_count]; // Helper array for insertion index
-    memset(cell_entities_insert_index, 0, grid_cell_count * sizeof(int));
+    int *cell_entities_insert_index = (int *)calloc(grid_cell_count, sizeof(int)); // Helper array for insertion index
 
     // Initialize grid cells
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
@@ -685,6 +684,9 @@ void init_grid_map(Drive *env) {
             }
         }
     }
+
+    // Free the helper array
+    free(cell_entities_insert_index);
 }
 
 void init_neighbor_offsets(Drive *env) {
@@ -2004,32 +2006,77 @@ void compute_observations(Drive *env) {
         //
         //  Relative Pos of other cars
 
-        int cars_seen = 0;
-        for (int j = 0; j < MAX_AGENTS; j++) {
+        // First pass: collect all valid agents with their distances
+        typedef struct {
+            int index;
+            float dist_sq;
+        } AgentDistance;
+
+        AgentDistance *agent_distances = (AgentDistance *)malloc(env->num_created_agents * sizeof(AgentDistance));
+        int num_valid_agents = 0;
+
+        for (int j = 0; j < env->num_created_agents; j++) {
             int index = -1;
             if (j < env->active_agent_count) {
                 index = env->active_agent_indices[j];
-            } else if (j < env->num_created_agents) {
+            } else {
                 index = env->static_agent_indices[j - env->active_agent_count];
             }
+
             if (index == -1)
                 continue;
             if (env->agents[index].type > CYCLIST)
-                break;
+                continue;
             if (index == env->active_agent_indices[i])
-                continue; // Skip self, but don't increment obs_idx
+                continue; // Skip self
+
             Agent *other_entity = &env->agents[index];
             if (ego_entity->respawn_timestep != -1)
                 continue;
             if (other_entity->respawn_timestep != -1)
                 continue;
-            // Store original relative positions
+
+            // Calculate distance
             float dx = other_entity->sim_x - ego_entity->sim_x;
             float dy = other_entity->sim_y - ego_entity->sim_y;
             float dz = other_entity->sim_z - ego_entity->sim_z;
-            float dist = (dx * dx + dy * dy + dz * dz);
-            if (dist > 2500.0f)
-                continue;
+            float dist_sq = dx * dx + dy * dy + dz * dz;
+
+            if (dist_sq > 2500.0f)
+                continue; // Filter out agents beyond 50m
+
+            // Add to list
+            agent_distances[num_valid_agents].index = index;
+            agent_distances[num_valid_agents].dist_sq = dist_sq;
+            num_valid_agents++;
+        }
+
+        // Sort by distance (simple selection sort, efficient for small lists)
+        for (int j = 0; j < num_valid_agents - 1; j++) {
+            int min_idx = j;
+            for (int k = j + 1; k < num_valid_agents; k++) {
+                if (agent_distances[k].dist_sq < agent_distances[min_idx].dist_sq) {
+                    min_idx = k;
+                }
+            }
+            if (min_idx != j) {
+                AgentDistance temp = agent_distances[j];
+                agent_distances[j] = agent_distances[min_idx];
+                agent_distances[min_idx] = temp;
+            }
+        }
+
+        // Second pass: add observations for nearest (MAX_AGENTS - 1) agents
+        int cars_seen = 0;
+        int max_partners = MAX_AGENTS - 1;
+        for (int j = 0; j < num_valid_agents && cars_seen < max_partners; j++) {
+            int index = agent_distances[j].index;
+            Agent *other_entity = &env->agents[index];
+
+            // Calculate relative positions
+            float dx = other_entity->sim_x - ego_entity->sim_x;
+            float dy = other_entity->sim_y - ego_entity->sim_y;
+            float dz = other_entity->sim_z - ego_entity->sim_z;
             // Rotate to ego vehicle's frame
             float rel_x = dx * cos_heading + dy * sin_heading;
             float rel_y = -dx * sin_heading + dy * cos_heading;
@@ -2059,6 +2106,10 @@ void compute_observations(Drive *env) {
             cars_seen++;
             obs_idx += 8; // Move to next observation slot
         }
+
+        // Free the temporary distance array
+        free(agent_distances);
+
         int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 8;
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;

@@ -331,9 +331,9 @@ def create_successor_predecessor_elements(road_network, roads, road_link_map):
 
                     if lane_link_obj.lane_section_index + 1 < len(lane_sections):
                         # Lane link in next lane section
-                        lane_link_obj.successor_lanes.append(
-                            road_link_object.lane_links_map[(successor_id, lane_link_obj.lane_section_index + 1)]
-                        )
+                        lane_key = (successor_id, lane_link_obj.lane_section_index + 1)
+                        if lane_key in road_link_object.lane_links_map:
+                            lane_link_obj.successor_lanes.append(road_link_object.lane_links_map[lane_key])
                     else:
                         # Lane link in successor roads
                         for road_succ in road_obj.road_xml.find("link").findall("successor"):
@@ -341,9 +341,9 @@ def create_successor_predecessor_elements(road_network, roads, road_link_map):
                                 succ_road_id = road_succ.attrib["elementId"]
                                 succ_road = road_link_map[succ_road_id]
                                 succ_lane_section_index = road_link_object.succ_lane_section_ids[succ_road_id]
-                                lane_link_obj.successor_lanes.append(
-                                    succ_road.lane_links_map[(successor_id, succ_lane_section_index)]
-                                )
+                                lane_key = (successor_id, succ_lane_section_index)
+                                if lane_key in succ_road.lane_links_map:
+                                    lane_link_obj.successor_lanes.append(succ_road.lane_links_map[lane_key])
                             else:
                                 # Junction case
                                 successor_is_junction = True
@@ -366,9 +366,10 @@ def create_successor_predecessor_elements(road_network, roads, road_link_map):
                             if succ_lane_section_index == -1:
                                 succ_lane_section_index = len(succ_road_obj.lane_sections) - 1
                             succ_lane_id = conn_lane["lane_id"]
-                            lane_link_obj.successor_lanes.append(
-                                succ_road.lane_links_map[(str(succ_lane_id), succ_lane_section_index)]
-                            )
+                            # Check if the lane link exists (only driving lanes are added)
+                            lane_key = (str(succ_lane_id), succ_lane_section_index)
+                            if lane_key in succ_road.lane_links_map:
+                                lane_link_obj.successor_lanes.append(succ_road.lane_links_map[lane_key])
                     else:
                         if lane_link_obj.forward_dir:
                             # Stopping point
@@ -386,9 +387,9 @@ def create_successor_predecessor_elements(road_network, roads, road_link_map):
 
                     if lane_link_obj.lane_section_index - 1 >= 0:
                         # Lane link in previous lane section
-                        lane_link_obj.predecessor_lanes.append(
-                            road_link_object.lane_links_map[(predecessor_id, lane_link_obj.lane_section_index - 1)]
-                        )
+                        lane_key = (predecessor_id, lane_link_obj.lane_section_index - 1)
+                        if lane_key in road_link_object.lane_links_map:
+                            lane_link_obj.predecessor_lanes.append(road_link_object.lane_links_map[lane_key])
                     else:
                         # Lane link in predecessor roads
                         for road_pred in road_obj.road_xml.find("link").findall("predecessor"):
@@ -396,9 +397,9 @@ def create_successor_predecessor_elements(road_network, roads, road_link_map):
                                 pred_id = road_pred.attrib["elementId"]
                                 pred_road = road_link_map[pred_id]
                                 pred_lane_section_index = road_link_object.pred_lane_section_ids[pred_id]
-                                lane_link_obj.predecessor_lanes.append(
-                                    pred_road.lane_links_map[(predecessor_id, pred_lane_section_index)]
-                                )
+                                lane_key = (predecessor_id, pred_lane_section_index)
+                                if lane_key in pred_road.lane_links_map:
+                                    lane_link_obj.predecessor_lanes.append(pred_road.lane_links_map[lane_key])
                             else:
                                 # Junction case
                                 predecessor_is_junction = True
@@ -421,9 +422,10 @@ def create_successor_predecessor_elements(road_network, roads, road_link_map):
                             if pred_lane_section_index == -1:
                                 pred_lane_section_index = len(pred_road_obj.lane_sections) - 1
                             pred_lane_id = conn_lane["lane_id"]
-                            lane_link_obj.predecessor_lanes.append(
-                                pred_road.lane_links_map[(str(pred_lane_id), pred_lane_section_index)]
-                            )
+                            # Check if the lane link exists (only driving lanes are added)
+                            lane_key = (str(pred_lane_id), pred_lane_section_index)
+                            if lane_key in pred_road.lane_links_map:
+                                lane_link_obj.predecessor_lanes.append(pred_road.lane_links_map[lane_key])
                     else:
                         if not lane_link_obj.forward_dir:
                             # Stopping case
@@ -916,7 +918,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--town_names",
         nargs="+",
-        default=["Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD"],
+        default=["Town13"],
         help="List of CARLA town names",
     )
     parser.add_argument(
@@ -928,15 +930,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_json_root_dir",
         type=str,
-        default="data/processed/carla_data",
+        default="data/processed/Town13moreAgents",
         help="Root directory for output JSON files",
     )
     parser.add_argument(
         "--carla_map_dir", type=str, default="data/CarlaXODRs", help="Directory containing CARLA XODR files"
     )
     parser.add_argument("--resolution", type=float, default=0.1, help="Resolution for road network processing")
-    parser.add_argument("--num_data_per_map", type=int, default=8, help="Number of data samples per map")
-    parser.add_argument("--num_objects", type=int, default=32, help="Number of objects per data sample")
+    parser.add_argument("--num_data_per_map", type=int, default=1, help="Number of data samples per map")
+    parser.add_argument("--num_objects", type=int, default=1024, help="Number of objects per data sample")
     parser.add_argument(
         "--make_only_first_agent_controllable", action="store_true", help="If set, only the first agent is controllable"
     )

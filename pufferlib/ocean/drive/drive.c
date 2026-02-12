@@ -88,13 +88,22 @@ void demo() {
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
-        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .map_name = "resources/drive/binaries/Town13moreAgents/map_000.bin",
         .reward_conditioning = 1,
     };
     allocate(&env);
+
+    printf("\n=== Map loaded: %s ===\n", env.map_name);
+    printf("Number of objects (agents): %d\n", env.num_objects);
+    printf("Number of roads: %d\n", env.num_roads);
+    printf("Active agent count: %d\n", env.active_agent_count);
+    printf("Grid cells: %d x %d = %d total\n", env.grid_map->grid_cols, env.grid_map->grid_rows,
+           env.grid_map->grid_cols * env.grid_map->grid_rows);
+    printf("========================\n\n");
+
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_resampling_speed_lane.bin");
+    Weights *weights = load_weights("resources/drive/puffer_drive_jerk.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;
