@@ -229,6 +229,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     fclose(policy_file);
 
     AgentSpawnSettings spawn_settings = {
+        .max_agents_in_sim = conf.max_agents_per_env,
         .min_w = conf.spawn_width_min,
         .max_w = conf.spawn_width_max,
         .min_l = conf.spawn_length_min,
