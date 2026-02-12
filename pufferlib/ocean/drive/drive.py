@@ -19,9 +19,13 @@ class Drive(pufferlib.PufferEnv):
         human_agent_idx=0,
         reward_vehicle_collision=-0.1,
         reward_offroad_collision=-0.1,
+        reward_lane_center=1,
+        reward_lane_align=1,
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
         goal_behavior=0,
+        reward_randomization=0,
+        reward_conditioning=0,
         goal_target_distance=10.0,
         goal_radius=2.0,
         goal_speed=20.0,
@@ -43,6 +47,39 @@ class Drive(pufferlib.PufferEnv):
         map_dir="resources/drive/binaries/training",
         use_all_maps=False,
         allow_fewer_maps=True,
+        # reward randomization bounds
+        reward_bound_goal_radius_min=2.0,
+        reward_bound_goal_radius_max=12.0,
+        reward_bound_collision_min=-3.0,
+        reward_bound_collision_max=0.0,
+        reward_bound_offroad_min=-3.0,
+        reward_bound_offroad_max=0.0,
+        reward_bound_comfort_min=-0.1,
+        reward_bound_comfort_max=0.0,
+        reward_bound_lane_align_min=0.00025,
+        reward_bound_lane_align_max=0.025,
+        reward_bound_lane_center_min=-0.0075,
+        reward_bound_lane_center_max=-0.00025,
+        reward_bound_velocity_min=0.0,
+        reward_bound_velocity_max=0.005,
+        reward_bound_traffic_light_min=-1.0,
+        reward_bound_traffic_light_max=0.0,
+        reward_bound_center_bias_min=-0.5,
+        reward_bound_center_bias_max=0.5,
+        reward_bound_vel_align_min=0.0,
+        reward_bound_vel_align_max=1.0,
+        reward_bound_overspeed_min=-1.0,
+        reward_bound_overspeed_max=0.0,
+        reward_bound_timestep_min=-0.00005,
+        reward_bound_timestep_max=0.0,
+        reward_bound_reverse_min=-0.0075,
+        reward_bound_reverse_max=-0.00025,
+        reward_bound_throttle_min=0.8,
+        reward_bound_throttle_max=1.25,
+        reward_bound_steer_min=0.8,
+        reward_bound_steer_max=1.25,
+        reward_bound_acc_min=0.666,
+        reward_bound_acc_max=1.5,
     ):
         # env
         self.dt = dt
@@ -51,11 +88,15 @@ class Drive(pufferlib.PufferEnv):
         self.report_interval = report_interval
         self.reward_vehicle_collision = reward_vehicle_collision
         self.reward_offroad_collision = reward_offroad_collision
+        self.reward_lane_align = reward_lane_align
+        self.reward_lane_center = reward_lane_center
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
         self.goal_speed = goal_speed
         self.goal_behavior = goal_behavior
+        self.reward_randomization = reward_randomization
+        self.reward_conditioning = reward_conditioning
         self.goal_target_distance = goal_target_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
@@ -64,11 +105,50 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        # reward randomization bounds
+        self.reward_bound_goal_radius_min = reward_bound_goal_radius_min
+        self.reward_bound_collision_min = reward_bound_collision_min
+        self.reward_bound_goal_radius_max = reward_bound_goal_radius_max
+        self.reward_bound_collision_max = reward_bound_collision_max
+        self.reward_bound_offroad_min = reward_bound_offroad_min
+        self.reward_bound_offroad_max = reward_bound_offroad_max
+        self.reward_bound_comfort_min = reward_bound_comfort_min
+        self.reward_bound_comfort_max = reward_bound_comfort_max
+        self.reward_bound_lane_align_min = reward_bound_lane_align_min
+        self.reward_bound_lane_align_max = reward_bound_lane_align_max
+        self.reward_bound_lane_center_min = reward_bound_lane_center_min
+        self.reward_bound_lane_center_max = reward_bound_lane_center_max
+        self.reward_bound_velocity_min = reward_bound_velocity_min
+        self.reward_bound_velocity_max = reward_bound_velocity_max
+        self.reward_bound_traffic_light_min = reward_bound_traffic_light_min
+        self.reward_bound_traffic_light_max = reward_bound_traffic_light_max
+        self.reward_bound_center_bias_min = reward_bound_center_bias_min
+        self.reward_bound_center_bias_max = reward_bound_center_bias_max
+        self.reward_bound_vel_align_min = reward_bound_vel_align_min
+        self.reward_bound_vel_align_max = reward_bound_vel_align_max
+        self.reward_bound_overspeed_min = reward_bound_overspeed_min
+        self.reward_bound_overspeed_max = reward_bound_overspeed_max
+        self.reward_bound_timestep_min = reward_bound_timestep_min
+        self.reward_bound_timestep_max = reward_bound_timestep_max
+        self.reward_bound_reverse_min = reward_bound_reverse_min
+        self.reward_bound_reverse_max = reward_bound_reverse_max
+        self.reward_bound_throttle_min = reward_bound_throttle_min
+        self.reward_bound_throttle_max = reward_bound_throttle_max
+        self.reward_bound_steer_min = reward_bound_steer_min
+        self.reward_bound_steer_max = reward_bound_steer_max
+        self.reward_bound_acc_min = reward_bound_acc_min
+        self.reward_bound_acc_max = reward_bound_acc_max
 
         # Observation space calculation
-        self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
-            dynamics_model
-        )
+        if self.reward_conditioning:
+            self.ego_features = {
+                "classic": binding.EGO_FEATURES_CLASSIC_CONDITIONING,
+                "jerk": binding.EGO_FEATURES_JERK_CONDITIONING,
+            }.get(dynamics_model)
+        else:
+            self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
+                dynamics_model
+            )
 
         # Extract observation shapes from constants
         # These need to be defined in C, since they determine the shape of the arrays
@@ -167,7 +247,41 @@ class Drive(pufferlib.PufferEnv):
             control_mode=self.control_mode,
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
+            reward_randomization=self.reward_randomization,
+            reward_conditioning=self.reward_conditioning,
             goal_target_distance=self.goal_target_distance,
+            reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
+            reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
+            reward_bound_collision_min=self.reward_bound_collision_min,
+            reward_bound_collision_max=self.reward_bound_collision_max,
+            reward_bound_offroad_min=self.reward_bound_offroad_min,
+            reward_bound_offroad_max=self.reward_bound_offroad_max,
+            reward_bound_comfort_min=self.reward_bound_comfort_min,
+            reward_bound_comfort_max=self.reward_bound_comfort_max,
+            reward_bound_lane_align_min=self.reward_bound_lane_align_min,
+            reward_bound_lane_align_max=self.reward_bound_lane_align_max,
+            reward_bound_lane_center_min=self.reward_bound_lane_center_min,
+            reward_bound_lane_center_max=self.reward_bound_lane_center_max,
+            reward_bound_velocity_min=self.reward_bound_velocity_min,
+            reward_bound_velocity_max=self.reward_bound_velocity_max,
+            reward_bound_traffic_light_min=self.reward_bound_traffic_light_min,
+            reward_bound_traffic_light_max=self.reward_bound_traffic_light_max,
+            reward_bound_center_bias_min=self.reward_bound_center_bias_min,
+            reward_bound_center_bias_max=self.reward_bound_center_bias_max,
+            reward_bound_vel_align_min=self.reward_bound_vel_align_min,
+            reward_bound_vel_align_max=self.reward_bound_vel_align_max,
+            reward_bound_overspeed_min=self.reward_bound_overspeed_min,
+            reward_bound_overspeed_max=self.reward_bound_overspeed_max,
+            reward_bound_timestep_min=self.reward_bound_timestep_min,
+            reward_bound_timestep_max=self.reward_bound_timestep_max,
+            reward_bound_reverse_min=self.reward_bound_reverse_min,
+            reward_bound_reverse_max=self.reward_bound_reverse_max,
+            reward_bound_throttle_min=self.reward_bound_throttle_min,
+            reward_bound_throttle_max=self.reward_bound_throttle_max,
+            reward_bound_steer_min=self.reward_bound_steer_min,
+            reward_bound_steer_max=self.reward_bound_steer_max,
+            reward_bound_acc_min=self.reward_bound_acc_min,
+            reward_bound_acc_max=self.reward_bound_acc_max,
             use_all_maps=use_all_maps,
         )
 
@@ -192,12 +306,49 @@ class Drive(pufferlib.PufferEnv):
                 human_agent_idx=human_agent_idx,
                 reward_vehicle_collision=reward_vehicle_collision,
                 reward_offroad_collision=reward_offroad_collision,
+                reward_lane_center=reward_lane_center,
+                reward_lane_align=reward_lane_align,
                 reward_goal=reward_goal,
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 goal_radius=goal_radius,
                 goal_speed=goal_speed,
                 goal_behavior=self.goal_behavior,
+                reward_randomization=self.reward_randomization,
+                reward_conditioning=self.reward_conditioning,
                 goal_target_distance=self.goal_target_distance,
+                # reward randomization bounds
+                reward_bound_collision_min=self.reward_bound_collision_min,
+                reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
+                reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
+                reward_bound_collision_max=self.reward_bound_collision_max,
+                reward_bound_offroad_min=self.reward_bound_offroad_min,
+                reward_bound_offroad_max=self.reward_bound_offroad_max,
+                reward_bound_comfort_min=self.reward_bound_comfort_min,
+                reward_bound_comfort_max=self.reward_bound_comfort_max,
+                reward_bound_lane_align_min=self.reward_bound_lane_align_min,
+                reward_bound_lane_align_max=self.reward_bound_lane_align_max,
+                reward_bound_lane_center_min=self.reward_bound_lane_center_min,
+                reward_bound_lane_center_max=self.reward_bound_lane_center_max,
+                reward_bound_velocity_min=self.reward_bound_velocity_min,
+                reward_bound_velocity_max=self.reward_bound_velocity_max,
+                reward_bound_traffic_light_min=self.reward_bound_traffic_light_min,
+                reward_bound_traffic_light_max=self.reward_bound_traffic_light_max,
+                reward_bound_center_bias_min=self.reward_bound_center_bias_min,
+                reward_bound_center_bias_max=self.reward_bound_center_bias_max,
+                reward_bound_vel_align_min=self.reward_bound_vel_align_min,
+                reward_bound_vel_align_max=self.reward_bound_vel_align_max,
+                reward_bound_overspeed_min=self.reward_bound_overspeed_min,
+                reward_bound_overspeed_max=self.reward_bound_overspeed_max,
+                reward_bound_timestep_min=self.reward_bound_timestep_min,
+                reward_bound_timestep_max=self.reward_bound_timestep_max,
+                reward_bound_reverse_min=self.reward_bound_reverse_min,
+                reward_bound_reverse_max=self.reward_bound_reverse_max,
+                reward_bound_throttle_min=self.reward_bound_throttle_min,
+                reward_bound_throttle_max=self.reward_bound_throttle_max,
+                reward_bound_steer_min=self.reward_bound_steer_min,
+                reward_bound_steer_max=self.reward_bound_steer_max,
+                reward_bound_acc_min=self.reward_bound_acc_min,
+                reward_bound_acc_max=self.reward_bound_acc_max,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
@@ -241,7 +392,42 @@ class Drive(pufferlib.PufferEnv):
                 control_mode=self.control_mode,
                 init_steps=self.init_steps,
                 goal_behavior=self.goal_behavior,
+                reward_randomization=self.reward_randomization,
+                reward_conditioning=self.reward_conditioning,
                 goal_target_distance=self.goal_target_distance,
+                # reward randomization bounds
+                reward_bound_collision_min=self.reward_bound_collision_min,
+                reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
+                reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
+                reward_bound_collision_max=self.reward_bound_collision_max,
+                reward_bound_offroad_min=self.reward_bound_offroad_min,
+                reward_bound_offroad_max=self.reward_bound_offroad_max,
+                reward_bound_comfort_min=self.reward_bound_comfort_min,
+                reward_bound_comfort_max=self.reward_bound_comfort_max,
+                reward_bound_lane_align_min=self.reward_bound_lane_align_min,
+                reward_bound_lane_align_max=self.reward_bound_lane_align_max,
+                reward_bound_lane_center_min=self.reward_bound_lane_center_min,
+                reward_bound_lane_center_max=self.reward_bound_lane_center_max,
+                reward_bound_velocity_min=self.reward_bound_velocity_min,
+                reward_bound_velocity_max=self.reward_bound_velocity_max,
+                reward_bound_traffic_light_min=self.reward_bound_traffic_light_min,
+                reward_bound_traffic_light_max=self.reward_bound_traffic_light_max,
+                reward_bound_center_bias_min=self.reward_bound_center_bias_min,
+                reward_bound_center_bias_max=self.reward_bound_center_bias_max,
+                reward_bound_vel_align_min=self.reward_bound_vel_align_min,
+                reward_bound_vel_align_max=self.reward_bound_vel_align_max,
+                reward_bound_overspeed_min=self.reward_bound_overspeed_min,
+                reward_bound_overspeed_max=self.reward_bound_overspeed_max,
+                reward_bound_timestep_min=self.reward_bound_timestep_min,
+                reward_bound_timestep_max=self.reward_bound_timestep_max,
+                reward_bound_reverse_min=self.reward_bound_reverse_min,
+                reward_bound_reverse_max=self.reward_bound_reverse_max,
+                reward_bound_throttle_min=self.reward_bound_throttle_min,
+                reward_bound_throttle_max=self.reward_bound_throttle_max,
+                reward_bound_steer_min=self.reward_bound_steer_min,
+                reward_bound_steer_max=self.reward_bound_steer_max,
+                reward_bound_acc_min=self.reward_bound_acc_min,
+                reward_bound_acc_max=self.reward_bound_acc_max,
                 use_all_maps=False,
             )
             self.agent_offsets = agent_offsets
@@ -263,12 +449,49 @@ class Drive(pufferlib.PufferEnv):
                     human_agent_idx=self.human_agent_idx,
                     reward_vehicle_collision=self.reward_vehicle_collision,
                     reward_offroad_collision=self.reward_offroad_collision,
+                    reward_lane_align=self.reward_lane_align,
+                    reward_lane_center=self.reward_lane_center,
                     reward_goal=self.reward_goal,
                     reward_goal_post_respawn=self.reward_goal_post_respawn,
                     goal_radius=self.goal_radius,
                     goal_behavior=self.goal_behavior,
+                    reward_randomization=self.reward_randomization,
+                    reward_conditioning=self.reward_conditioning,
                     goal_target_distance=self.goal_target_distance,
                     goal_speed=self.goal_speed,
+                    # reward randomization bounds
+                    reward_bound_collision_min=self.reward_bound_collision_min,
+                    reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
+                    reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
+                    reward_bound_collision_max=self.reward_bound_collision_max,
+                    reward_bound_offroad_min=self.reward_bound_offroad_min,
+                    reward_bound_offroad_max=self.reward_bound_offroad_max,
+                    reward_bound_comfort_min=self.reward_bound_comfort_min,
+                    reward_bound_comfort_max=self.reward_bound_comfort_max,
+                    reward_bound_lane_align_min=self.reward_bound_lane_align_min,
+                    reward_bound_lane_align_max=self.reward_bound_lane_align_max,
+                    reward_bound_lane_center_min=self.reward_bound_lane_center_min,
+                    reward_bound_lane_center_max=self.reward_bound_lane_center_max,
+                    reward_bound_velocity_min=self.reward_bound_velocity_min,
+                    reward_bound_velocity_max=self.reward_bound_velocity_max,
+                    reward_bound_traffic_light_min=self.reward_bound_traffic_light_min,
+                    reward_bound_traffic_light_max=self.reward_bound_traffic_light_max,
+                    reward_bound_center_bias_min=self.reward_bound_center_bias_min,
+                    reward_bound_center_bias_max=self.reward_bound_center_bias_max,
+                    reward_bound_vel_align_min=self.reward_bound_vel_align_min,
+                    reward_bound_vel_align_max=self.reward_bound_vel_align_max,
+                    reward_bound_overspeed_min=self.reward_bound_overspeed_min,
+                    reward_bound_overspeed_max=self.reward_bound_overspeed_max,
+                    reward_bound_timestep_min=self.reward_bound_timestep_min,
+                    reward_bound_timestep_max=self.reward_bound_timestep_max,
+                    reward_bound_reverse_min=self.reward_bound_reverse_min,
+                    reward_bound_reverse_max=self.reward_bound_reverse_max,
+                    reward_bound_throttle_min=self.reward_bound_throttle_min,
+                    reward_bound_throttle_max=self.reward_bound_throttle_max,
+                    reward_bound_steer_min=self.reward_bound_steer_min,
+                    reward_bound_steer_max=self.reward_bound_steer_max,
+                    reward_bound_acc_min=self.reward_bound_acc_min,
+                    reward_bound_acc_max=self.reward_bound_acc_max,
                     collision_behavior=self.collision_behavior,
                     offroad_behavior=self.offroad_behavior,
                     dt=self.dt,

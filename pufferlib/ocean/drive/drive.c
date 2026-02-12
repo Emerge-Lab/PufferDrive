@@ -18,7 +18,8 @@ void test_drivenet() {
 
     // Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights *weights = load_weights("puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC);
+    int reward_conditioning = 0;
+    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, reward_conditioning);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {
@@ -88,12 +89,13 @@ void demo() {
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .reward_conditioning = 1,
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    Weights *weights = load_weights("resources/drive/puffer_drive_resampling_speed_lane.bin");
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;
     int steer_delta = 2;

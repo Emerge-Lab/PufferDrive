@@ -86,7 +86,43 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
+    int reward_randomization = unpack(kwargs, "reward_randomization");
+    int reward_conditioning = unpack(kwargs, "reward_conditioning");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
+
+    float reward_bound_goal_radius_min = unpack(kwargs, "reward_bound_goal_radius_min");
+    float reward_bound_goal_radius_max = unpack(kwargs, "reward_bound_goal_radius_max");
+    float reward_bound_collision_min = unpack(kwargs, "reward_bound_collision_min");
+    float reward_bound_collision_max = unpack(kwargs, "reward_bound_collision_max");
+    float reward_bound_offroad_min = unpack(kwargs, "reward_bound_offroad_min");
+    float reward_bound_offroad_max = unpack(kwargs, "reward_bound_offroad_max");
+    float reward_bound_comfort_min = unpack(kwargs, "reward_bound_comfort_min");
+    float reward_bound_comfort_max = unpack(kwargs, "reward_bound_comfort_max");
+    float reward_bound_lane_align_min = unpack(kwargs, "reward_bound_lane_align_min");
+    float reward_bound_lane_align_max = unpack(kwargs, "reward_bound_lane_align_max");
+    float reward_bound_lane_center_min = unpack(kwargs, "reward_bound_lane_center_min");
+    float reward_bound_lane_center_max = unpack(kwargs, "reward_bound_lane_center_max");
+    float reward_bound_velocity_min = unpack(kwargs, "reward_bound_velocity_min");
+    float reward_bound_velocity_max = unpack(kwargs, "reward_bound_velocity_max");
+    float reward_bound_traffic_light_min = unpack(kwargs, "reward_bound_traffic_light_min");
+    float reward_bound_traffic_light_max = unpack(kwargs, "reward_bound_traffic_light_max");
+    float reward_bound_center_bias_min = unpack(kwargs, "reward_bound_center_bias_min");
+    float reward_bound_center_bias_max = unpack(kwargs, "reward_bound_center_bias_max");
+    float reward_bound_vel_align_min = unpack(kwargs, "reward_bound_vel_align_min");
+    float reward_bound_vel_align_max = unpack(kwargs, "reward_bound_vel_align_max");
+    float reward_bound_overspeed_min = unpack(kwargs, "reward_bound_overspeed_min");
+    float reward_bound_overspeed_max = unpack(kwargs, "reward_bound_overspeed_max");
+    float reward_bound_timestep_min = unpack(kwargs, "reward_bound_timestep_min");
+    float reward_bound_timestep_max = unpack(kwargs, "reward_bound_timestep_max");
+    float reward_bound_reverse_min = unpack(kwargs, "reward_bound_reverse_min");
+    float reward_bound_reverse_max = unpack(kwargs, "reward_bound_reverse_max");
+    float reward_bound_throttle_min = unpack(kwargs, "reward_bound_throttle_min");
+    float reward_bound_throttle_max = unpack(kwargs, "reward_bound_throttle_max");
+    float reward_bound_steer_min = unpack(kwargs, "reward_bound_steer_min");
+    float reward_bound_steer_max = unpack(kwargs, "reward_bound_steer_max");
+    float reward_bound_acc_min = unpack(kwargs, "reward_bound_acc_min");
+    float reward_bound_acc_max = unpack(kwargs, "reward_bound_acc_max");
+
     int use_all_maps = unpack(kwargs, "use_all_maps");
 
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -106,7 +142,35 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->control_mode = control_mode;
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
+        env->reward_randomization = reward_randomization;
+        env->reward_conditioning = reward_conditioning;
         env->goal_target_distance = goal_target_distance;
+        // reward randomization bounds
+        env->reward_bounds[REWARD_COEF_GOAL_RADIUS] =
+            (RewardBound){reward_bound_goal_radius_min, reward_bound_goal_radius_max};
+        env->reward_bounds[REWARD_COEF_COLLISION] =
+            (RewardBound){reward_bound_collision_min, reward_bound_collision_max};
+        env->reward_bounds[REWARD_COEF_OFFROAD] = (RewardBound){reward_bound_offroad_min, reward_bound_offroad_max};
+        env->reward_bounds[REWARD_COEF_COMFORT] = (RewardBound){reward_bound_comfort_min, reward_bound_comfort_max};
+        env->reward_bounds[REWARD_COEF_LANE_ALIGN] =
+            (RewardBound){reward_bound_lane_align_min, reward_bound_lane_align_max};
+        env->reward_bounds[REWARD_COEF_LANE_CENTER] =
+            (RewardBound){reward_bound_lane_center_min, reward_bound_lane_center_max};
+        env->reward_bounds[REWARD_COEF_VELOCITY] = (RewardBound){reward_bound_velocity_min, reward_bound_velocity_max};
+        env->reward_bounds[REWARD_COEF_TRAFFIC_LIGHT] =
+            (RewardBound){reward_bound_traffic_light_min, reward_bound_traffic_light_max};
+        env->reward_bounds[REWARD_COEF_CENTER_BIAS] =
+            (RewardBound){reward_bound_center_bias_min, reward_bound_center_bias_max};
+        env->reward_bounds[REWARD_COEF_VEL_ALIGN] =
+            (RewardBound){reward_bound_vel_align_min, reward_bound_vel_align_max};
+        env->reward_bounds[REWARD_COEF_OVERSPEED] =
+            (RewardBound){reward_bound_overspeed_min, reward_bound_overspeed_max};
+        env->reward_bounds[REWARD_COEF_TIMESTEP] = (RewardBound){reward_bound_timestep_min, reward_bound_timestep_max};
+        env->reward_bounds[REWARD_COEF_REVERSE] = (RewardBound){reward_bound_reverse_min, reward_bound_reverse_max};
+        env->reward_bounds[REWARD_COEF_THROTTLE] = (RewardBound){reward_bound_throttle_min, reward_bound_throttle_max};
+        env->reward_bounds[REWARD_COEF_STEER] = (RewardBound){reward_bound_steer_min, reward_bound_steer_max};
+        env->reward_bounds[REWARD_COEF_ACC] = (RewardBound){reward_bound_acc_min, reward_bound_acc_max};
+
         // Get map file path from Python list
         PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
         const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
@@ -215,6 +279,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
+    env->reward_lane_align = conf.reward_lane_align;
+    env->reward_lane_center = conf.reward_lane_center;
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
@@ -226,9 +292,47 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
+    env->reward_randomization = (int)unpack(kwargs, "reward_randomization");
+    env->reward_conditioning = (int)unpack(kwargs, "reward_conditioning");
     env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->goal_speed = (float)unpack(kwargs, "goal_speed");
+
+    // reward randomization bounds
+    env->reward_bounds[REWARD_COEF_GOAL_RADIUS] = (RewardBound){(float)unpack(kwargs, "reward_bound_goal_radius_min"),
+                                                                (float)unpack(kwargs, "reward_bound_goal_radius_max")};
+    env->reward_bounds[REWARD_COEF_COLLISION] = (RewardBound){(float)unpack(kwargs, "reward_bound_collision_min"),
+                                                              (float)unpack(kwargs, "reward_bound_collision_max")};
+    env->reward_bounds[REWARD_COEF_OFFROAD] = (RewardBound){(float)unpack(kwargs, "reward_bound_offroad_min"),
+                                                            (float)unpack(kwargs, "reward_bound_offroad_max")};
+    env->reward_bounds[REWARD_COEF_COMFORT] = (RewardBound){(float)unpack(kwargs, "reward_bound_comfort_min"),
+                                                            (float)unpack(kwargs, "reward_bound_comfort_max")};
+    env->reward_bounds[REWARD_COEF_LANE_ALIGN] = (RewardBound){(float)unpack(kwargs, "reward_bound_lane_align_min"),
+                                                               (float)unpack(kwargs, "reward_bound_lane_align_max")};
+    env->reward_bounds[REWARD_COEF_LANE_CENTER] = (RewardBound){(float)unpack(kwargs, "reward_bound_lane_center_min"),
+                                                                (float)unpack(kwargs, "reward_bound_lane_center_max")};
+    env->reward_bounds[REWARD_COEF_VELOCITY] = (RewardBound){(float)unpack(kwargs, "reward_bound_velocity_min"),
+                                                             (float)unpack(kwargs, "reward_bound_velocity_max")};
+    env->reward_bounds[REWARD_COEF_TRAFFIC_LIGHT] =
+        (RewardBound){(float)unpack(kwargs, "reward_bound_traffic_light_min"),
+                      (float)unpack(kwargs, "reward_bound_traffic_light_max")};
+    env->reward_bounds[REWARD_COEF_CENTER_BIAS] = (RewardBound){(float)unpack(kwargs, "reward_bound_center_bias_min"),
+                                                                (float)unpack(kwargs, "reward_bound_center_bias_max")};
+    env->reward_bounds[REWARD_COEF_VEL_ALIGN] = (RewardBound){(float)unpack(kwargs, "reward_bound_vel_align_min"),
+                                                              (float)unpack(kwargs, "reward_bound_vel_align_max")};
+    env->reward_bounds[REWARD_COEF_OVERSPEED] = (RewardBound){(float)unpack(kwargs, "reward_bound_overspeed_min"),
+                                                              (float)unpack(kwargs, "reward_bound_overspeed_max")};
+    env->reward_bounds[REWARD_COEF_TIMESTEP] = (RewardBound){(float)unpack(kwargs, "reward_bound_timestep_min"),
+                                                             (float)unpack(kwargs, "reward_bound_timestep_max")};
+    env->reward_bounds[REWARD_COEF_REVERSE] = (RewardBound){(float)unpack(kwargs, "reward_bound_reverse_min"),
+                                                            (float)unpack(kwargs, "reward_bound_reverse_max")};
+    env->reward_bounds[REWARD_COEF_THROTTLE] = (RewardBound){(float)unpack(kwargs, "reward_bound_throttle_min"),
+                                                             (float)unpack(kwargs, "reward_bound_throttle_max")};
+    env->reward_bounds[REWARD_COEF_STEER] =
+        (RewardBound){(float)unpack(kwargs, "reward_bound_steer_min"), (float)unpack(kwargs, "reward_bound_steer_max")};
+    env->reward_bounds[REWARD_COEF_ACC] =
+        (RewardBound){(float)unpack(kwargs, "reward_bound_acc_min"), (float)unpack(kwargs, "reward_bound_acc_max")};
+
     char *map_path = unpack_str(kwargs, "map_path");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");

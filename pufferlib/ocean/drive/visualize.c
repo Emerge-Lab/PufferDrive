@@ -234,12 +234,16 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_lane_align = conf.reward_lane_align,
+        .reward_lane_center = conf.reward_lane_center,
         .reward_goal = conf.reward_goal,
         .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .goal_radius = conf.goal_radius,
-        .goal_behavior = conf.goal_behavior,
-        .goal_target_distance = conf.goal_target_distance,
         .goal_speed = conf.goal_speed,
+        .goal_behavior = conf.goal_behavior,
+        .reward_randomization = conf.reward_randomization,
+        .reward_conditioning = conf.reward_conditioning,
+        .goal_target_distance = conf.goal_target_distance,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
@@ -248,6 +252,25 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
+        .reward_bounds =
+            {
+                {conf.reward_bound_collision_min, conf.reward_bound_goal_radius_min},
+                {conf.reward_bound_goal_radius_max, conf.reward_bound_collision_max},
+                {conf.reward_bound_offroad_min, conf.reward_bound_offroad_max},
+                {conf.reward_bound_comfort_min, conf.reward_bound_comfort_max},
+                {conf.reward_bound_lane_align_min, conf.reward_bound_lane_align_max},
+                {conf.reward_bound_lane_center_min, conf.reward_bound_lane_center_max},
+                {conf.reward_bound_velocity_min, conf.reward_bound_velocity_max},
+                {conf.reward_bound_traffic_light_min, conf.reward_bound_traffic_light_max},
+                {conf.reward_bound_center_bias_min, conf.reward_bound_center_bias_max},
+                {conf.reward_bound_vel_align_min, conf.reward_bound_vel_align_max},
+                {conf.reward_bound_overspeed_min, conf.reward_bound_overspeed_max},
+                {conf.reward_bound_timestep_min, conf.reward_bound_timestep_max},
+                {conf.reward_bound_reverse_min, conf.reward_bound_reverse_max},
+                {conf.reward_bound_throttle_min, conf.reward_bound_throttle_max},
+                {conf.reward_bound_steer_min, conf.reward_bound_steer_max},
+                {conf.reward_bound_acc_min, conf.reward_bound_acc_max},
+            },
         .map_name = (char *)map_name,
     };
 
@@ -298,7 +321,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     Weights *weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
     char filename_topdown[256];
