@@ -254,8 +254,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .control_mode = conf.control_mode,
         .reward_bounds =
             {
-                {conf.reward_bound_collision_min, conf.reward_bound_goal_radius_min},
-                {conf.reward_bound_goal_radius_max, conf.reward_bound_collision_max},
+                {conf.reward_bound_goal_radius_min, conf.reward_bound_goal_radius_max},
+                {conf.reward_bound_collision_min, conf.reward_bound_collision_max},
                 {conf.reward_bound_offroad_min, conf.reward_bound_offroad_max},
                 {conf.reward_bound_comfort_min, conf.reward_bound_comfort_max},
                 {conf.reward_bound_lane_align_min, conf.reward_bound_lane_align_max},
