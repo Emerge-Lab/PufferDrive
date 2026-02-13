@@ -244,6 +244,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .reward_randomization = conf.reward_randomization,
         .reward_conditioning = conf.reward_conditioning,
         .goal_target_distance = conf.goal_target_distance,
+        .goal_speed_tolerance = conf.goal_speed_tolerance,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
