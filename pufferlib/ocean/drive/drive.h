@@ -2194,27 +2194,6 @@ void c_step(Drive *env) {
         return;
     }
 
-    // Episode boundary after this step: treat time-limit and early-termination as truncation.
-    // `timestep` is incremented at step start, so truncate when `(timestep + 1) >= episode_length`.
-    int originals_remaining = 0;
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        if (env->entities[agent_idx].respawn_count == 0) {
-            originals_remaining = 1;
-            break;
-        }
-    }
-    int reached_time_limit = (env->timestep + 1) >= env->episode_length;
-    int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
-    if (reached_time_limit || reached_early_termination) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            env->truncations[i] = 1;
-        }
-        add_log(env);
-        c_reset(env);
-        return;
-    }
-
     compute_observations(env);
 }
 
