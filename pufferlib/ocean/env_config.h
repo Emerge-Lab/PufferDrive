@@ -120,7 +120,6 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->goal_radius = atof(value);
     } else if (MATCH("env", "goal_speed")) {
         env_config->goal_speed = atof(value);
-<<<<<<< HEAD
     } else if (MATCH("env", "reward_bound_collision_min")) {
         env_config->reward_bound_collision_min = atof(value);
     } else if (MATCH("env", "reward_bound_goal_radius_min")) {
@@ -185,10 +184,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_bound_acc_min = atof(value);
     } else if (MATCH("env", "reward_bound_acc_max")) {
         env_config->reward_bound_acc_max = atof(value);
-=======
     } else if (MATCH("env", "goal_speed_tolerance")) {
         env_config->goal_speed_tolerance = atof(value);
->>>>>>> 782b3242 (initial commit)
     } else if (MATCH("env", "collision_behavior")) {
         env_config->collision_behavior = atoi(value);
     } else if (MATCH("env", "offroad_behavior")) {
