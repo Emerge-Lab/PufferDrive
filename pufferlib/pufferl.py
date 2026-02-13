@@ -76,28 +76,34 @@ class PuffeRL:
         vecenv.async_reset(seed)
         obs_space = vecenv.single_observation_space
         atn_space = vecenv.single_action_space
+        # The number of concurrent agents running in the vectorized environments
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
 
         # Experience
-        if config["batch_size"] == "auto" and config["bptt_horizon"] == "auto":
-            raise pufferlib.APIUsageError("Must specify batch_size or bptt_horizon")
+        if config["batch_size"] == "auto" and config["rollout_horizon"] == "auto":
+            raise pufferlib.APIUsageError("Must specify batch_size or rollout_horizon")
         elif config["batch_size"] == "auto":
-            config["batch_size"] = total_agents * config["bptt_horizon"]
-        elif config["bptt_horizon"] == "auto":
-            config["bptt_horizon"] = config["batch_size"] // total_agents
+            config["batch_size"] = total_agents * config["rollout_horizon"]
+        elif config["rollout_horizon"] == "auto":
+            config["rollout_horizon"] = config["batch_size"] // total_agents
 
         batch_size = config["batch_size"]
-        horizon = config["bptt_horizon"]
-        segments = batch_size // horizon
+        rollout_horizon = config["rollout_horizon"]
+        bptt_horizon = config["rollout_horizon"]  # LSTM backprop horizon
+        config["bptt_horizon"] = bptt_horizon
+        segments = batch_size // rollout_horizon  # Use rollout_horizon
+
+        # Number of independent rollout sequences stored in the experience buffer
         self.segments = segments
+
         if total_agents > segments:
             raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
 
         device = config["device"]
         self.observations = torch.zeros(
             segments,
-            horizon,
+            rollout_horizon,
             *obs_space.shape,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
             pin_memory=device == "cuda" and config["cpu_offload"],
@@ -105,18 +111,18 @@ class PuffeRL:
         )
         self.actions = torch.zeros(
             segments,
-            horizon,
+            rollout_horizon,
             *atn_space.shape,
             device=device,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
         )
-        self.values = torch.zeros(segments, horizon, device=device)
-        self.logprobs = torch.zeros(segments, horizon, device=device)
-        self.rewards = torch.zeros(segments, horizon, device=device)
-        self.terminals = torch.zeros(segments, horizon, device=device)
-        self.truncations = torch.zeros(segments, horizon, device=device)
-        self.ratio = torch.ones(segments, horizon, device=device)
-        self.importance = torch.ones(segments, horizon, device=device)
+        self.values = torch.zeros(segments, rollout_horizon, device=device)
+        self.logprobs = torch.zeros(segments, rollout_horizon, device=device)
+        self.rewards = torch.zeros(segments, rollout_horizon, device=device)
+        self.terminals = torch.zeros(segments, rollout_horizon, device=device)
+        self.truncations = torch.zeros(segments, rollout_horizon, device=device)
+        self.ratio = torch.ones(segments, rollout_horizon, device=device)
+        self.importance = torch.ones(segments, rollout_horizon, device=device)
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
@@ -147,10 +153,10 @@ class PuffeRL:
 
         self.accumulate_minibatches = max(1, minibatch_size // max_minibatch_size)
         self.total_minibatches = int(config["update_epochs"] * batch_size / self.minibatch_size)
-        self.minibatch_segments = self.minibatch_size // horizon
-        if self.minibatch_segments * horizon != self.minibatch_size:
+        self.minibatch_segments = self.minibatch_size // rollout_horizon
+        if self.minibatch_segments * rollout_horizon != self.minibatch_size:
             raise pufferlib.APIUsageError(
-                f"minibatch_size {self.minibatch_size} must be divisible by bptt_horizon {horizon}"
+                f"minibatch_size {self.minibatch_size} must be divisible by bptt_horizon {rollout_horizon}"
             )
 
         # Torch compile
