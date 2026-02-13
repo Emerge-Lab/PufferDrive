@@ -100,7 +100,8 @@
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
-#ifndef MAX_AGENTS
+#ifndef MAX_AGENTS // Needs to be replaced with MAX_PARTNER_OBS(agents in obs_radius) throughout observations code and
+                   // with env->max_agents_in_sim throughout all agent for loops
 #define MAX_AGENTS 32
 #endif
 #define STOP_AGENT 1
@@ -251,7 +252,7 @@ struct Drive {
     unsigned char *terminals;
     Log log;
     Log *logs;
-    int num_agents;
+    int num_agents; // Max controlled agents
     int active_agent_count;
     int *active_agent_indices;
     int action_type;
@@ -260,11 +261,10 @@ struct Drive {
     RoadMapElement *road_elements;
     int *road_scenario_ids;
     TrafficControlElement *traffic_elements;
-    int num_total_agents; // or map to num_actors
-    int num_max_agents;
-    int num_road_elements; // or map to num_roads
+    int num_created_agents; // number of agents created in the sim
+    int max_agents_in_sim;  // max number of agents in sim(max Agent struct objects allocated)
+    int num_road_elements;  // or map to num_roads
     int num_traffic_elements;
-    int num_actors;
     int num_objects;
     int num_roads;
     int static_agent_count;
@@ -297,7 +297,6 @@ struct Drive {
     float reward_reverse;
     float goal_radius;
     float goal_speed;
-    int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
     float goal_target_distance;
@@ -885,6 +884,8 @@ void load_map_binary(const char *filename, Drive *env) {
     env->road_elements = (RoadMapElement *)calloc(env->num_roads, sizeof(RoadMapElement));
     env->road_scenario_ids = (int *)calloc(env->num_roads, sizeof(int));
 
+    env->max_agents_in_sim = MAX_AGENTS; // Needs to be handled for random agents init
+
     int total_entities = env->num_objects + env->num_roads;
     int agent_idx = 0;
     int road_idx = 0;
@@ -1200,11 +1201,11 @@ int collision_check(Drive *env, int agent_idx) {
     if (agent->respawn_timestep != -1)
         return car_collided_with_index; // Skip respawning entities
 
-    for (int i = 0; i < MAX_AGENTS; i++) {
+    for (int i = 0; i < env->max_agents_in_sim; i++) {
         int index = -1;
         if (i < env->active_agent_count) {
             index = env->active_agent_indices[i];
-        } else if (i < env->num_actors) {
+        } else if (i < env->num_created_agents) {
             index = env->static_agent_indices[i - env->active_agent_count];
         }
         if (index == -1)
@@ -1456,19 +1457,18 @@ void set_active_agents(Drive *env) {
     env->active_agent_count = 0;        // Policy-controlled agents
     env->static_agent_count = 0;        // Non-moving background agents
     env->expert_static_agent_count = 0; // Expert replay agents (non-controlled)
-    env->num_actors = 0;                // Total agents created
+    env->num_created_agents = 0;        // Total agents created
 
-    int active_agent_indices[MAX_AGENTS];
-    int static_agent_indices[MAX_AGENTS];
-    int expert_static_agent_indices[MAX_AGENTS];
+    int *active_agent_indices = (int *)malloc(env->max_agents_in_sim * sizeof(int));
+    int *static_agent_indices = (int *)malloc(env->max_agents_in_sim * sizeof(int));
+    int *expert_static_agent_indices = (int *)malloc(env->max_agents_in_sim * sizeof(int));
 
     if (env->num_agents == 0) {
-        env->num_agents = MAX_AGENTS;
+        env->num_agents = env->max_agents_in_sim;
     }
 
     // Iterate through entities to find agents to create and/or control
-    for (int i = 0; i < env->num_objects && env->num_actors < MAX_AGENTS; i++) {
-
+    for (int i = 0; i < env->num_objects && env->num_created_agents < env->max_agents_in_sim; i++) {
         Agent *entity = &env->agents[i];
 
         // Skip if not valid at initialization
@@ -1489,7 +1489,7 @@ void set_active_agents(Drive *env) {
         if (!should_create)
             continue;
 
-        env->num_actors++;
+        env->num_created_agents++;
 
         // Determine if this agent should be policy-controlled
         bool is_controlled = false;
@@ -1525,6 +1525,10 @@ void set_active_agents(Drive *env) {
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
+
+    free(active_agent_indices);
+    free(static_agent_indices);
+    free(expert_static_agent_indices);
 
     return;
 }
@@ -2005,7 +2009,7 @@ void compute_observations(Drive *env) {
             int index = -1;
             if (j < env->active_agent_count) {
                 index = env->active_agent_indices[j];
-            } else if (j < env->num_actors) {
+            } else if (j < env->num_created_agents) {
                 index = env->static_agent_indices[j - env->active_agent_count];
             }
             if (index == -1)

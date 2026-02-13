@@ -288,7 +288,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->termination_mode = conf.termination_mode;
     env->collision_behavior = conf.collision_behavior;
     env->offroad_behavior = conf.offroad_behavior;
-    env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
     env->dt = conf.dt;
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");

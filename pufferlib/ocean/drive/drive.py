@@ -39,7 +39,6 @@ class Drive(pufferlib.PufferEnv):
         num_agents=512,
         action_type="discrete",
         dynamics_model="classic",
-        max_controlled_agents=-1,
         buf=None,
         seed=1,
         init_steps=0,
@@ -238,7 +237,6 @@ class Drive(pufferlib.PufferEnv):
                     f"num_maps ({self.num_maps}) exceeds available maps in directory ({available_maps}). "
                     f"Please reduce num_maps, add more maps to {map_dir}, or set allow_fewer_maps=True."
                 )
-        self.max_controlled_agents = int(max_controlled_agents)
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
@@ -248,7 +246,6 @@ class Drive(pufferlib.PufferEnv):
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             init_steps=self.init_steps,
-            max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
             reward_conditioning=self.reward_conditioning,
@@ -357,7 +354,6 @@ class Drive(pufferlib.PufferEnv):
                 dt=dt,
                 episode_length=(int(episode_length) if episode_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
-                max_controlled_agents=self.max_controlled_agents,
                 map_path=self.map_files[map_ids[i]],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
@@ -395,7 +391,6 @@ class Drive(pufferlib.PufferEnv):
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
                 init_steps=self.init_steps,
-                max_controlled_agents=self.max_controlled_agents,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
                 reward_conditioning=self.reward_conditioning,
@@ -501,7 +496,6 @@ class Drive(pufferlib.PufferEnv):
                     offroad_behavior=self.offroad_behavior,
                     dt=self.dt,
                     episode_length=(int(self.episode_length) if self.episode_length is not None else None),
-                    max_controlled_agents=self.max_controlled_agents,
                     map_path=self.map_files[map_ids[i]],
                     max_agents=nxt - cur,
                     ini_file="pufferlib/config/ocean/drive.ini",
