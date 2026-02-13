@@ -268,6 +268,7 @@ class Drive(pufferlib.PufferEnv):
 
         binding.vec_reset(self.c_envs, seed)
         self.terminals[:] = 1
+        self.truncations[:] = 1
 
     def step(self, actions):
         self.terminals[:] = 0
@@ -283,9 +284,7 @@ class Drive(pufferlib.PufferEnv):
 
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.resample_maps()
-            binding.vec_reset(self.c_envs, seed)
-            # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
-            self.truncations[:] = 1
+
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):
