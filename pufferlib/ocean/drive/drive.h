@@ -82,8 +82,8 @@
 #define PARTNER_FEATURES 7
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 7
-#define EGO_FEATURES_JERK 10
+#define EGO_FEATURES_CLASSIC 8
+#define EGO_FEATURES_JERK 11
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -985,6 +985,11 @@ int collision_check(Drive *env, int agent_idx) {
     if (agent->x == INVALID_POSITION)
         return -1;
 
+    // Skip collision checking for pedestrians because they are often too
+    // close to other entities at initialization.
+    if (agent->type == PEDESTRIAN)
+        return -1;
+
     int car_collided_with_index = -1;
 
     if (agent->respawn_timestep != -1)
@@ -1135,8 +1140,8 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         Entity *entity;
         entity = &env->entities[entity_list[i].entity_idx];
 
-        // Check for offroad collision with road edges
-        if (entity->type == ROAD_EDGE) {
+        // Check for offroad collision with road edges (only for vehicles)
+        if (entity->type == ROAD_EDGE && agent->type == VEHICLE) {
             int geometry_idx = entity_list[i].geometry_idx;
             float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
             float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
@@ -1191,10 +1196,13 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         agent->metrics_array[LANE_ALIGNED_IDX] = lane_aligned;
     }
 
-    // Check for vehicle collisions
-    int car_collided_with_index = collision_check(env, agent_idx);
-    if (car_collided_with_index != -1)
-        collided = VEHICLE_COLLISION;
+    // Check for vehicle collisions (skip for pedestrians)
+    int car_collided_with_index = -1;
+    if (agent->type != PEDESTRIAN) {
+        car_collided_with_index = collision_check(env, agent_idx);
+        if (car_collided_with_index != -1)
+            collided = VEHICLE_COLLISION;
+    }
 
     agent->collision_state = collided;
 
@@ -1813,8 +1821,12 @@ void compute_observations(Drive *env) {
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
             obs[8] = ego_entity->a_lat / JERK_LAT[2];
             obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            // Add normalized entity type (VEHICLE=1, PEDESTRIAN=2, CYCLIST=3)
+            obs[10] = ego_entity->type / 3.0f;
         } else {
             obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            // Add normalized entity type (VEHICLE=1, PEDESTRIAN=2, CYCLIST=3)
+            obs[7] = ego_entity->type / 3.0f;
         }
 
         // Relative Pos of other cars
