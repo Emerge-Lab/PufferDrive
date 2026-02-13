@@ -22,6 +22,7 @@ class Drive(nn.Module):
         self.max_road_objects = env.max_road_objects
         self.road_features = env.road_features
         self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
+        self.actions_trajectory_length = 12  # env.actions_trajectory_length # TODO: remove hardcoded value
         # Determine ego dimension from environment's feature layout
         self.ego_dim = env.ego_features
 
@@ -57,7 +58,24 @@ class Drive(nn.Module):
         else:
             self.atn_dim = env.single_action_space.nvec.tolist()
 
-        self.actor = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, sum(self.atn_dim)), std=0.01)
+        self.action_tensor_shape = [sum(self.atn_dim)] + [self.actions_trajectory_length]
+
+        assert all(type(i) == int for i in self.action_tensor_shape)  # check that all entries are integers
+
+        self.previous_actions_trajectory = torch.zeros(
+            torch.prod(self.action_tensor_shape)
+        )  # TODO: remove, this is a temporary input
+
+        self.past_actions_encoder = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(torch.prod(self.action_tensor_shape), input_size)),
+            nn.LayerNorm(input_size),
+            # nn.ReLU(),
+            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+        )
+
+        self.actor = pufferlib.pytorch.layer_init(
+            nn.Linear(hidden_size, torch.prod(self.action_tensor_shape)), std=0.01
+        )
         self.value_fn = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, 1), std=1)
 
     def forward(self, observations, state=None):
@@ -75,6 +93,7 @@ class Drive(nn.Module):
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
+        past_actions_traj = torch.zeros((observations.shape[0], torch.prod(self.action_tensor_shape)))
 
         partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
 
@@ -86,8 +105,9 @@ class Drive(nn.Module):
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
         road_features, _ = self.road_encoder(road_objects).max(dim=1)
+        past_actions_features = self.past_actions_encoder(past_actions_traj)
 
-        concat_features = torch.cat([ego_features, road_features, partner_features], dim=1)
+        concat_features = torch.cat([ego_features, road_features, partner_features, past_actions_features], dim=1)
 
         # Pass through shared embedding
         embedding = F.relu(self.shared_embedding(concat_features))
