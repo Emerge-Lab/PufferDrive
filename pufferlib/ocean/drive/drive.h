@@ -466,6 +466,18 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
     }
 }
 
+static void sample_new_goal_radius(Drive *env, Agent *agent) {
+
+    if (env->reward_randomization) {
+        // Standard Uniform Randomization
+        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(
+            env->reward_bounds[REWARD_COEF_GOAL_RADIUS].min_val, env->reward_bounds[REWARD_COEF_GOAL_RADIUS].max_val);
+    } else {
+        // Fixed coefficients
+        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
+    }
+}
+
 static float normalize_reward_coef(float value, int coef_idx, Drive *env) {
     // NOTE: This prevents having coefficients outside of hardcoded bounds
     // What if we want to allow that?
@@ -2527,7 +2539,7 @@ void c_step(Drive *env) {
                                     env->agents[agent_idx].sim_vy * env->agents[agent_idx].sim_vy);
 
         // Reward agent if it is within X meters of goal and speed is within threshold from goal_speed
-        bool within_distance = distance_to_goal < env->goal_radius;
+        bool within_distance = distance_to_goal < env->agents[agent_idx].reward_coefs[REWARD_COEF_GOAL_RADIUS];
         bool within_speed = 1;
         if (env->max_goal_speed >= 0.0f) {
             within_speed = current_speed > env->min_goal_speed && current_speed < env->max_goal_speed;
@@ -2785,8 +2797,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
     if (mode == 0) {
         DrawSphere((Vector3){goal_x, goal_y, goal_z}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x, goal_y, goal_z}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
-                     Fade(LIGHTGREEN, 0.3f));
+        DrawCircle3D((Vector3){goal_x, goal_y, goal_z}, env->agents[active_idx].reward_coefs[REWARD_COEF_GOAL_RADIUS],
+                     (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
     }
 
     if (mode == 1) {
@@ -2794,7 +2806,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
         float goal_z_world = pz + goal_z;
         DrawSphere((Vector3){goal_x_world, goal_y_world, goal_z_world}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x_world, goal_y_world, goal_z_world}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
+        DrawCircle3D((Vector3){goal_x_world, goal_y_world, goal_z_world},
+                     env->agents[active_idx].reward_coefs[REWARD_COEF_GOAL_RADIUS], (Vector3){0, 0, 1}, 90.0f,
                      Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
@@ -3543,5 +3556,6 @@ void sample_new_goal(Drive *env, int agent_idx) {
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goal_position_z = best_z;
+    sample_new_goal_radius(env, agent);
     agent->goals_sampled_this_episode += 1.0f;
 }
