@@ -447,6 +447,8 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             entities[i].traj_vz = (float *)malloc(size * sizeof(float));
             entities[i].traj_heading = (float *)malloc(size * sizeof(float));
             entities[i].traj_valid = (int *)malloc(size * sizeof(int));
+            entities[i].expert_accel = (float *)malloc(size * sizeof(float));
+            entities[i].expert_steering = (float *)malloc(size * sizeof(float));
         } else {
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
@@ -454,6 +456,8 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             entities[i].traj_vz = NULL;
             entities[i].traj_heading = NULL;
             entities[i].traj_valid = NULL;
+            entities[i].expert_accel = NULL;
+            entities[i].expert_steering = NULL;
         }
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
@@ -466,6 +470,8 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             fread(entities[i].traj_vz, sizeof(float), size, file);
             fread(entities[i].traj_heading, sizeof(float), size, file);
             fread(entities[i].traj_valid, sizeof(int), size, file);
+            fread(entities[i].expert_accel, sizeof(float), size, file);
+            fread(entities[i].expert_steering, sizeof(float), size, file);
         }
         // Read remaining scalar fields
         fread(&entities[i].width, sizeof(float), 1, file);
@@ -2207,6 +2213,116 @@ void c_step(Drive *env) {
     }
 
     compute_observations(env);
+}
+
+void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_actions_continuous_out,
+                           float *expert_obs_out) {
+
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+
+    int original_timestep = env->timestep;
+
+    c_reset(env);
+
+    for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
+        // Get the current observations
+        int obs_offset = t * env->active_agent_count * max_obs;
+        memcpy(&expert_obs_out[obs_offset], env->observations, env->active_agent_count * max_obs * sizeof(float));
+
+        // Now set expert actions for this timestep
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            Entity *agent = &env->entities[agent_idx];
+
+            // Check bounds and validity
+            bool is_valid = (t < agent->array_size && agent->expert_accel && agent->expert_steering &&
+                             agent->expert_accel[t] != -1.0f && agent->expert_steering[t] != -1.0f);
+
+            if (is_valid) {
+                float continuous_accel = agent->expert_accel[t];
+                float continuous_steer = agent->expert_steering[t];
+
+                // Store continuous actions
+                int continuous_offset = t * env->active_agent_count * 2 + i * 2;
+                expert_actions_continuous_out[continuous_offset] = continuous_accel;
+                expert_actions_continuous_out[continuous_offset + 1] = continuous_steer;
+
+                // Discretize acceleration - find closest value in ACCELERATION_VALUES
+                int best_accel_idx = 0;
+                float min_accel_diff = fabsf(continuous_accel - ACCELERATION_VALUES[0]);
+                for (int j = 1; j < NUM_ACCEL_BINS; j++) {
+                    float diff = fabsf(continuous_accel - ACCELERATION_VALUES[j]);
+                    if (diff < min_accel_diff) {
+                        min_accel_diff = diff;
+                        best_accel_idx = j;
+                    }
+                }
+
+                // Discretize steering - find closest value in STEERING_VALUES
+                int best_steer_idx = 0;
+                float min_steer_diff = fabsf(continuous_steer - STEERING_VALUES[0]);
+                for (int j = 1; j < NUM_STEER_BINS; j++) {
+                    float diff = fabsf(continuous_steer - STEERING_VALUES[j]);
+                    if (diff < min_steer_diff) {
+                        min_steer_diff = diff;
+                        best_steer_idx = j;
+                    }
+                }
+
+                // Compute joint discrete action: action = accel_idx * num_steer + steer_idx
+                int joint_action = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
+
+                // Store joint discrete action
+                int discrete_offset = t * env->active_agent_count + i;
+                expert_actions_discrete_out[discrete_offset] = (float)joint_action;
+
+                // Apply the expert actions to env->actions so that c_step will use them
+                if (env->action_type == 1) { // continuous
+                    float (*action_array_f)[2] = (float (*)[2])env->actions;
+                    action_array_f[i][0] = continuous_accel / ACCEL_MAX;
+                    action_array_f[i][1] = continuous_steer / STEER_MAX; // Normalize
+                } else {
+                    int *action_array = (int *)env->actions;
+                    action_array[i] = joint_action;
+
+                    // printf("Timestep %d, Agent %d: VALID - Accel: %.3f, Steer: %.3f, Discrete: %d\n", t, i,
+                    //        continuous_accel, continuous_steer, joint_action);
+                }
+            } else {
+                // Invalid action: store -1.0 as placeholder
+                int continuous_offset = t * env->active_agent_count * 2 + i * 2;
+                expert_actions_continuous_out[continuous_offset] = -1.0f;
+                expert_actions_continuous_out[continuous_offset + 1] = -1.0f;
+
+                int discrete_offset = t * env->active_agent_count + i;
+                expert_actions_discrete_out[discrete_offset] = -1.0f;
+
+                // Apply "do nothing" action (zero acceleration and steering)
+                if (env->action_type == 1) { // continuous
+                    float (*action_array_f)[2] = (float (*)[2])env->actions;
+                    action_array_f[i][0] = 0.0f; // No acceleration
+                    action_array_f[i][1] = 0.0f; // No steering
+                } else {                         // discrete
+                    int *action_array = (int *)env->actions;
+                    // Apply "do nothing" action - middle acceleration (index 10) and straight steering (index 15)
+                    int do_nothing_accel_idx = NUM_ACCEL_BINS / 2; // Middle of range (should be 0 accel)
+                    int do_nothing_steer_idx = NUM_STEER_BINS / 2; // Middle of range (should be 0 steer)
+                    int do_nothing_action = do_nothing_accel_idx * NUM_STEER_BINS + do_nothing_steer_idx;
+                    action_array[i] = do_nothing_action;
+                }
+            }
+        }
+
+        // Step environment to get next observations
+        if (t < TRAJECTORY_LENGTH - 1) {
+            c_step(env);
+        }
+    }
+
+    // Restore original state
+    env->timestep = original_timestep;
+    c_reset(env);
 }
 
 typedef struct Client Client;

@@ -3,7 +3,10 @@ import gymnasium
 import json
 import struct
 import os
+
+import torch
 import pufferlib
+import math
 from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
@@ -42,6 +45,10 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
+        ini_file_path="pufferlib/config/ocean/drive.ini",
+        prepare_human_data=False,
+        uses_memory=False,
+        memory_size=0,
     ):
         # env
         self.dt = dt
@@ -63,6 +70,11 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.ini_file_path = ini_file_path
+        self.prepare_human_data = prepare_human_data
+        self.uses_memory = uses_memory
+        self.memory_size = memory_size
+        self.collected_human_data = False
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -190,7 +202,7 @@ class Drive(pufferlib.PufferEnv):
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
-                ini_file="pufferlib/config/ocean/drive.ini",
+                ini_file=self.ini_file_path,
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
@@ -199,6 +211,9 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
+
+        if self.prepare_human_data and not self.collected_human_data:
+            self._prepare_human_data()
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -257,7 +272,7 @@ class Drive(pufferlib.PufferEnv):
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
-                ini_file="pufferlib/config/ocean/drive.ini",
+                ini_file=self.ini_file_path,
                 init_steps=self.init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
@@ -266,11 +281,9 @@ class Drive(pufferlib.PufferEnv):
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
-
         binding.vec_reset(self.c_envs, seed)
         self.truncations[:] = 1
         self.terminals[:] = 1
-        self.truncations[:] = 1
 
     def step(self, actions):
         self.terminals[:] = 0
@@ -285,7 +298,13 @@ class Drive(pufferlib.PufferEnv):
                 info.append(log)
 
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+            # Resample batch of scenes used for training
             self.resample_maps()
+
+            # Resample the human demonstrations based on the new scenarios
+            self.collected_human_data = False
+            if self.prepare_human_data:
+                self._prepare_human_data()
 
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
@@ -361,6 +380,49 @@ class Drive(pufferlib.PufferEnv):
 
         return trajectories
 
+    def _prepare_human_data(self):
+        """Prepare human demonstrations."""
+
+        trajectory_length = 91
+
+        if self.dynamics_model == "classic":
+            expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 1), dtype=np.float32)
+            expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
+            expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
+
+            binding.vec_collect_expert_data(
+                self.c_envs, expert_actions_discrete, expert_actions_continuous, expert_observations_full
+            )
+
+            if self.uses_memory:
+                # TODO: Implement with LSTM memory: chunk data into sequences of length memory_size.
+                pass
+            else:
+                # For classic dynamics without memory (no LSTM), we can directly
+                # use the collected data as sequences. Just filter out the invalid timesteps
+                invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)
+
+                self.expert_actions_discrete = torch.Tensor(expert_actions_discrete[~invalid_action_mask])
+                self.expert_actions_continuous = torch.Tensor(expert_actions_continuous[~invalid_action_mask])
+                self.expert_observations_full = torch.Tensor(expert_observations_full[~invalid_action_mask])
+
+                self.total_num_samples = self.expert_actions_discrete.shape[0]
+
+        else:
+            raise NotImplementedError("Expert data collection is not yet implemented for classic jerk dynamics model. ")
+
+        self.collected_human_data = True
+
+    def sample_human_demonstrations(self, batch_size=128):
+        # get random indices between min and max
+        rand_idx = torch.randint(0, self.total_num_samples - 1, (batch_size,))
+
+        return (
+            self.expert_actions_discrete[rand_idx],
+            self.expert_actions_continuous[rand_idx],
+            self.expert_observations_full[rand_idx],
+        )
+
     def get_road_edge_polylines(self):
         """Get road edge polylines for all scenarios.
 
@@ -394,6 +456,92 @@ class Drive(pufferlib.PufferEnv):
 
     def close(self):
         binding.vec_close(self.c_envs)
+
+
+def infer_human_actions(obj):
+    """Infer expert actions (steer, accel) using inverse bicycle model."""
+    trajectory_length = 91
+
+    # Initialize expert actions arrays
+    expert_acceleration = []
+    expert_steering = []
+
+    positions = obj.get("position", [])
+    velocities = obj.get("velocity", [])
+    headings = obj.get("heading", [])
+    valids = obj.get("valid", [])
+
+    if len(positions) < 2 or len(velocities) < 2 or len(headings) < 2:
+        return [-1.0] * trajectory_length, [-1.0] * trajectory_length
+
+    dt = 0.1  # Discretization
+    vehicle_length = obj.get("length", 4.5)  # Default vehicle length
+
+    for t in range(trajectory_length):
+        # Check if we have enough data and both current and next timesteps are valid
+        if (
+            t >= len(positions)
+            or t >= len(velocities)
+            or t >= len(headings)
+            or t >= len(valids)
+            or not valids[t]
+            or t + 1 >= len(positions)
+            or t + 1 >= len(velocities)
+            or t + 1 >= len(headings)
+            or t + 1 >= len(valids)
+            or not valids[t + 1]
+        ):
+            expert_acceleration.append(-1.0)
+            expert_steering.append(-1.0)
+            continue
+
+        # Current state
+        vel_t = velocities[t]
+        heading_t = headings[t]
+        speed_t = math.sqrt(vel_t.get("x", 0.0) ** 2 + vel_t.get("y", 0.0) ** 2)
+
+        # Next state
+        vel_t1 = velocities[t + 1]
+        heading_t1 = headings[t + 1]
+        speed_t1 = math.sqrt(vel_t1.get("x", 0.0) ** 2 + vel_t1.get("y", 0.0) ** 2)
+
+        # Compute acceleration
+        acceleration = (speed_t1 - speed_t) / dt
+
+        # Normalize heading difference
+        heading_diff = heading_t1 - heading_t
+        while heading_diff > math.pi:
+            heading_diff -= 2 * math.pi
+        while heading_diff < -math.pi:
+            heading_diff += 2 * math.pi
+
+        # Compute yaw rate
+        yaw_rate = heading_diff / dt
+
+        # Compute steering using inverse bicycle model
+        steering = 0.0
+        if speed_t > 0.1:  # Avoid division by zero
+            # From bicycle model: yaw_rate = (v * cos(beta) * tan(delta)) / L
+            # Assuming beta ≈ 0: yaw_rate ≈ (v * tan(delta)) / L
+            tan_steering = (yaw_rate * vehicle_length) / speed_t
+            # Clamp tan_steering to avoid extreme values
+            tan_steering = max(-10.0, min(10.0, tan_steering))
+            steering = math.atan(tan_steering)
+
+        # Clamp values to reasonable ranges
+        acceleration = max(-10.0, min(10.0, acceleration))
+        steering = max(-2.0, min(2.0, steering))
+
+        expert_acceleration.append(acceleration)
+        expert_steering.append(steering)
+
+    # Ensure arrays are exactly trajectory_length (should already be, but just in case)
+    assert len(expert_acceleration) == trajectory_length, (
+        f"Expected {trajectory_length}, got {len(expert_acceleration)}"
+    )
+    assert len(expert_steering) == trajectory_length, f"Expected {trajectory_length}, got {len(expert_steering)}"
+
+    return expert_acceleration, expert_steering
 
 
 def calculate_area(p1, p2, p3):
@@ -526,6 +674,16 @@ def save_map_binary(map_data, output_file, unique_map_id):
                     *[int(valids[i]) if i < len(valids) else 0 for i in range(trajectory_length)],
                 )
             )
+
+            # Infer and write human actions
+            if obj_type in [1, 2, 3]:  # For vehicles, pedestrians, cyclists
+                human_accel, human_steering = infer_human_actions(obj)
+                f.write(struct.pack(f"{trajectory_length}f", *human_accel))
+                f.write(struct.pack(f"{trajectory_length}f", *human_steering))
+            else:
+                # Write zeros for non-vehicles
+                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
+                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
 
             # Write scalar fields
             f.write(struct.pack("f", float(obj.get("width", 0.0))))

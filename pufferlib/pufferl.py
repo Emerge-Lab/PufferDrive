@@ -430,6 +430,32 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
+            # Compute log likelihood loss of human actions under current policy.
+            # 1: Sample a batch of human actions and observations from dataset
+            # Shape: [num_samples, feature_dim]
+            discrete_human_actions, continuous_human_actions, human_observations = (
+                self.vecenv.driver_env.sample_human_demonstrations()
+            )
+
+            use_continuous = self.vecenv.driver_env._action_type_flag == 1
+            human_actions = continuous_human_actions if use_continuous else discrete_human_actions
+            human_actions = human_actions.reshape(-1, 1).to(device)
+            human_observations = human_observations.to(device)
+
+            # 2: Compute the log-likelihood of human actions under the current policy,
+            # given the corresponding human observations. A higher likelihood indicates
+            # that the policy behaves more like a human under the same observations.
+            human_state = dict(
+                lstm_h=None,
+                lstm_c=None,
+            )
+
+            human_logits, _ = self.policy(human_observations, human_state)
+
+            _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
+                logits=human_logits, action=human_actions
+            )
+
             adv = advantages[idx]
             adv = compute_puff_advantage(
                 mb_values,
@@ -456,6 +482,10 @@ class PuffeRL:
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
+            # Average and clip
+            human_log_prob = torch.clamp(human_log_prob, -10, 0).mean()
+            human_nll = -human_log_prob.mean()
+
             entropy_loss = entropy.mean()
 
             # Get current entropy coefficient
@@ -465,8 +495,12 @@ class PuffeRL:
             else:
                 current_ent_coef = config["ent_coef"]
 
-            loss = pg_loss + config["vf_coef"] * v_loss - current_ent_coef * entropy_loss
-
+            loss = (
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - current_ent_coef * entropy_loss
+                + config["human_ll_coef"] * human_nll
+            )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -481,6 +515,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["human_nll"] += human_nll / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
@@ -1014,6 +1049,13 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         print(f"rank: {local_rank}, MASTER_ADDR={master_addr}, MASTER_PORT={master_port}")
         torch.cuda.set_device(local_rank)
         os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
+
+    if args["rnn_name"] is None:
+        args["env"]["uses_memory"] = False
+        args["env"]["memory_size"] = 0
+    else:
+        args["env"]["uses_memory"] = True
+        args["env"]["memory_size"] = args["train"]["rollout_horizon"]
 
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
