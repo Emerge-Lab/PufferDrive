@@ -88,7 +88,7 @@ void demo() {
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
-        .map_name = "resources/drive/binaries/Town13moreAgents/map_000.bin",
+        .map_name = "resources/drive/binaries/training/map_243.bin",
         .reward_conditioning = 1,
     };
     allocate(&env);
@@ -103,7 +103,7 @@ void demo() {
 
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_jerk.bin");
+    Weights *weights = load_weights("resources/drive/puffer_drive_5B.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;

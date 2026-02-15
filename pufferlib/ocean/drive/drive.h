@@ -639,9 +639,18 @@ void init_grid_map(Drive *env) {
     // Calculate grid dimensions
     float grid_width = bottom_right_x - top_left_x;
     float grid_height = top_left_y - bottom_right_y;
+
+    printf("\n=== Grid Map Initialization ===\n");
+    printf("Map bounds: (%.2f, %.2f) to (%.2f, %.2f)\n", top_left_x, top_left_y, bottom_right_x, bottom_right_y);
+    printf("Grid dimensions: %.2f x %.2f meters\n", grid_width, grid_height);
+
     env->grid_map->grid_cols = ceil(grid_width / GRID_CELL_SIZE);
     env->grid_map->grid_rows = ceil(grid_height / GRID_CELL_SIZE);
     int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
+
+    printf("Grid cells: %d x %d = %d total\n", env->grid_map->grid_cols, env->grid_map->grid_rows, grid_cell_count);
+    printf("==============================\n\n");
+
     env->grid_map->cells = (GridMapEntity **)calloc(grid_cell_count, sizeof(GridMapEntity *));
     env->grid_map->cell_entities_count = (int *)calloc(grid_cell_count, sizeof(int));
 
