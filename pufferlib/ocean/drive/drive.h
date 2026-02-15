@@ -2530,7 +2530,7 @@ void c_step(Drive *env) {
         bool within_distance = distance_to_goal < env->goal_radius;
         bool within_speed = 1;
         if (env->max_goal_speed >= 0.0f) {
-            within_speed = current_speed > env->min_goal_speed & current_speed < env->max_goal_speed;
+            within_speed = current_speed > env->min_goal_speed && current_speed < env->max_goal_speed;
         }
 
         if (within_distance && within_speed && !env->agents[agent_idx].current_goal_reached) {
