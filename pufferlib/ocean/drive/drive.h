@@ -3246,7 +3246,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         agent->goal_position_y,
                         agent->goal_position_z,
                     },
-                    env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
+                    agent->reward_coefs[REWARD_COEF_GOAL_RADIUS], (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
             }
         }
     }
