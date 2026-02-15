@@ -762,37 +762,48 @@ class WOSACEvaluator:
 
 
 class HumanReplayEvaluator:
-    """Evaluates policies against human replays in PufferDrive."""
+    """Evaluates policies against human replays in PufferDrive.
 
-    def __init__(self, config: Dict):
+    Evaluate policy in two settings:
+    1. Self-play: All agents controlled by policy
+    2. Human replay: Only SDC controlled by policy, others replay human logs.
+
+    The delta between these modes provides an indication of how compatible
+    the policy is with human behavior.
+    """
+
+    def __init__(self, config: Dict, sp_env, hr_env):
         self.config = config
-        self.sim_steps = 91 - self.config["env"]["init_steps"]
+        self.sim_steps = 90
+        self.sp_env = sp_env
+        self.hr_env = hr_env
+        self.human_replay_stats = {}
+        self.self_play_stats = {}
 
-    def rollout(self, args, puffer_env, policy):
-        """Roll out policy in env with human replays. Store statistics.
-
-        In human replay mode, only the SDC (self-driving car) is controlled by the policy
-        while all other agents replay their human trajectories. This tests how compatible
-        the policy is with (static) human partners.
+    def rollout(self, args, policy, mode="self_play"):
+        """Roll out policy and collect episode statistics.
 
         Args:
-            args: Config dict with train settings (device, use_rnn, etc.)
-            puffer_env: PufferLib environment wrapper
-            policy: Trained policy to evaluate
+            args: Configuration dictionary
+            policy: Policy to evaluate
+            mode: Either "self_play" or "human_replay"
 
         Returns:
-            dict: Aggregated metrics including:
-                - avg_collisions_per_agent: Average collisions per agent
-                - avg_offroad_per_agent: Average offroad events per agent
+            Dictionary of aggregated statistics
         """
         import numpy as np
         import torch
         import pufferlib
 
-        num_agents = puffer_env.observation_space.shape[0]
+        env = self.sp_env if mode == "self_play" else self.hr_env
+
+        num_agents = env.observation_space.shape[0]
         device = args["train"]["device"]
 
-        obs, info = puffer_env.reset()
+        # Reset environment
+        obs, info = env.reset()
+
+        # Initialize RNN state if needed
         state = {}
         if args["train"]["use_rnn"]:
             state = dict(
@@ -800,19 +811,73 @@ class HumanReplayEvaluator:
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
+        # Rollout
         for time_idx in range(self.sim_steps):
-            # Step policy
+            # print(f"Time step: {time_idx}")
+            # Get action from policy
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
                 logits, value = policy.forward_eval(ob_tensor, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                action_np = action.cpu().numpy().reshape(env.action_space.shape)
 
+            # Clip continuous actions to valid range
             if isinstance(logits, torch.distributions.Normal):
-                action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
+                action_np = np.clip(action_np, env.action_space.low, env.action_space.high)
 
-            obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
+            # Step environment
+            obs, rewards, dones, truncs, info_list = env.step(action_np)
 
-            if len(info_list) > 0:  # Happens at the end of episode
-                results = info_list[0]
-                return results
+            if truncs.all():
+                # print(info_list)
+                break
+
+        # Aggregate final statistics
+        final_info = info_list[0] if info_list else {}
+
+        if mode == "human_replay":
+            self.human_replay_stats = final_info
+        else:
+            self.self_play_stats = final_info
+
+    def aggregate_stats(self):
+        """Aggregate statistics from both modes and compute deltas.
+
+        Returns:
+            Dictionary with self_play, human_replay, and delta statistics
+        """
+
+        if not self.self_play_stats or not self.human_replay_stats:
+            raise ValueError("Must run rollouts in both modes before aggregating stats")
+
+        # Extract metrics
+        sp = self.self_play_stats
+        hr = self.human_replay_stats
+
+        results = {
+            # Self-play metrics
+            "self_play": {
+                "collision_rate": sp["collision_rate"],
+                "offroad_rate": sp["offroad_rate"],
+                "completion_rate": sp["completion_rate"],
+                "score": sp["score"],
+                "num_agents": sp["n"],
+            },
+            # Human replay metrics
+            "human_replay": {
+                "collision_rate": hr["collision_rate"],
+                "offroad_rate": hr["offroad_rate"],
+                "completion_rate": hr["completion_rate"],
+                "score": hr["score"],
+                "num_agents": hr["n"],
+            },
+            # Delta metrics (self_play - human_replay)
+            "delta": {
+                "Δ_cr": sp["collision_rate"] - hr["collision_rate"],
+                "Δ_or": sp["offroad_rate"] - hr["offroad_rate"],
+                "Δ_comp": sp["completion_rate"] - hr["completion_rate"],
+                "Δ_score": sp["score"] - hr["score"],
+            },
+        }
+
+        return results

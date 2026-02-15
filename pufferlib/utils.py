@@ -52,18 +52,24 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
                 start = stdout.find("HUMAN_REPLAY_METRICS_START") + len("HUMAN_REPLAY_METRICS_START")
                 end = stdout.find("HUMAN_REPLAY_METRICS_END")
                 json_str = stdout[start:end].strip()
-                human_replay_metrics = json.loads(json_str)
+                metrics = json.loads(json_str)
 
                 # Log to wandb if available
                 if hasattr(logger, "wandb") and logger.wandb:
-                    logger.wandb.log(
-                        {
-                            "eval/human_replay_collision_rate": human_replay_metrics["collision_rate"],
-                            "eval/human_replay_offroad_rate": human_replay_metrics["offroad_rate"],
-                            "eval/human_replay_completion_rate": human_replay_metrics["completion_rate"],
-                        },
-                        step=global_step,
-                    )
+                    log_dict = {
+                        # Self-play metrics
+                        "eval/sp_collision_rate": metrics["self_play"]["collision_rate"],
+                        "eval/sp_score": metrics["self_play"]["score"],
+                        "eval/sp_hr_n": metrics["self_play"]["num_agents"],
+                        # Human replay metrics
+                        "eval/hr_collision_rate": metrics["human_replay"]["collision_rate"],
+                        "eval/hr_score": metrics["human_replay"]["score"],
+                        # Delta metrics (self_play - human_replay)
+                        "eval/Δ_cr": metrics["delta"]["Δ_cr"],
+                        "eval/Δ_score": metrics["delta"]["Δ_score"],
+                    }
+
+                    logger.wandb.log(log_dict, step=global_step)
         else:
             print(f"Human replay evaluation failed with exit code {result.returncode}: {result.stderr}")
 
