@@ -1120,6 +1120,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         return results_dict
 
     elif human_replay_enabled:
+        # Ensure the episode is only after a number of steps
+        args["env"]["termination_mode"] = 0
         args["env"]["map_dir"] = args["eval"]["map_dir"]
         dataset_name = args["env"]["map_dir"].split("/")[-1]
         print(f"Running human replay evaluation with {dataset_name} dataset.\n")
@@ -1130,26 +1132,39 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
 
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
         args["env"]["episode_length"] = 91  # WOMD scenario length
+        args["env"]["num_maps"] = args["eval"]["human_replay_num_agents"]
 
-        vecenv = vecenv or load_env(env_name, args)
-        policy = policy or load_policy(args, vecenv, env_name)
+        # Create two different envs
+        hr_args = args.copy()
+        hr_args["env"]["control_mode"] = "control_sdc_only"
+        hr_env = load_env(env_name, hr_args)
 
-        print(f"Effective number of scenarios used: {len(vecenv.driver_env.agent_offsets) - 1}")
+        sp_args = args.copy()
+        sp_args["env"]["control_mode"] = "control_vehicles"
+        sp_env = load_env(env_name, sp_args)
 
-        evaluator = HumanReplayEvaluator(args)
+        # Load policy
+        policy = policy or load_policy(args, sp_env, env_name)
 
-        # Run rollouts with human replays
-        results = evaluator.rollout(args, vecenv, policy)
+        # Create evaluator
+        evaluator = HumanReplayEvaluator(args, sp_env, hr_env)
 
+        # Run both rollouts
+        evaluator.rollout(args, policy, mode="self_play")
+        evaluator.rollout(args, policy, mode="human_replay")
+
+        # Get all stats including deltas
+        all_stats = evaluator.aggregate_stats()
+
+        # Log results
         import json
 
-        print("HUMAN_REPLAY_METRICS_START")
-        print(json.dumps(results))
+        print("\nHUMAN_REPLAY_METRICS_START")
+        print(json.dumps(all_stats, indent=2))
         print("HUMAN_REPLAY_METRICS_END")
+        return all_stats
 
-        return results
     else:  # Standard evaluation: Render
         backend = args["vec"]["backend"]
         if backend != "PufferEnv":
