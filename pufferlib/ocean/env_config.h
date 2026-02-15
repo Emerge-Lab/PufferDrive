@@ -18,8 +18,8 @@ typedef struct {
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     float goal_radius;
-    float goal_speed;
-    float goal_speed_tolerance;
+    float min_goal_speed;
+    float max_goal_speed;
     int collision_behavior;
     int offroad_behavior;
     int spawn_immunity_timer;
@@ -118,8 +118,10 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_vehicle_collision_post_respawn = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
-    } else if (MATCH("env", "goal_speed")) {
-        env_config->goal_speed = atof(value);
+    } else if (MATCH("env", "min_goal_speed")) {
+        env_config->min_goal_speed = atof(value);
+    } else if (MATCH("env", "max_goal_speed")) {
+        env_config->max_goal_speed = atof(value);
     } else if (MATCH("env", "reward_bound_collision_min")) {
         env_config->reward_bound_collision_min = atof(value);
     } else if (MATCH("env", "reward_bound_goal_radius_min")) {
@@ -184,8 +186,6 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_bound_acc_min = atof(value);
     } else if (MATCH("env", "reward_bound_acc_max")) {
         env_config->reward_bound_acc_max = atof(value);
-    } else if (MATCH("env", "goal_speed_tolerance")) {
-        env_config->goal_speed_tolerance = atof(value);
     } else if (MATCH("env", "collision_behavior")) {
         env_config->collision_behavior = atoi(value);
     } else if (MATCH("env", "offroad_behavior")) {

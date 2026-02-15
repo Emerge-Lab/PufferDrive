@@ -28,8 +28,8 @@ class Drive(pufferlib.PufferEnv):
         reward_conditioning=0,
         goal_target_distance=10.0,
         goal_radius=2.0,
-        goal_speed=None,
-        goal_speed_tolerance=0.0,
+        min_goal_speed=None,
+        max_goal_speed=None,
         collision_behavior=0,
         offroad_behavior=0,
         dt=0.1,
@@ -94,8 +94,8 @@ class Drive(pufferlib.PufferEnv):
         self.reward_goal = reward_goal
         self.reward_goal_post_respawn = reward_goal_post_respawn
         self.goal_radius = goal_radius
-        self.goal_speed = float(goal_speed) if goal_speed is not None else -1.0
-        self.goal_speed_tolerance = float(goal_speed_tolerance) if goal_speed_tolerance is not None else 0.0
+        self.min_goal_speed = float(min_goal_speed) if min_goal_speed is not None else -1.0
+        self.max_goal_speed = float(max_goal_speed) if max_goal_speed is not None else -1.0
         self.goal_behavior = goal_behavior
         self.reward_randomization = reward_randomization
         self.reward_conditioning = reward_conditioning
@@ -313,8 +313,8 @@ class Drive(pufferlib.PufferEnv):
                 reward_goal=reward_goal,
                 reward_goal_post_respawn=reward_goal_post_respawn,
                 goal_radius=goal_radius,
-                goal_speed=self.goal_speed,
-                goal_speed_tolerance=self.goal_speed_tolerance,
+                min_goal_speed=self.min_goal_speed,
+                max_goal_speed=self.max_goal_speed,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
                 reward_conditioning=self.reward_conditioning,
@@ -461,8 +461,8 @@ class Drive(pufferlib.PufferEnv):
                     reward_randomization=self.reward_randomization,
                     reward_conditioning=self.reward_conditioning,
                     goal_target_distance=self.goal_target_distance,
-                    goal_speed=self.goal_speed,
-                    goal_speed_tolerance=self.goal_speed_tolerance,
+                    min_goal_speed=self.min_goal_speed,
+                    max_goal_speed=self.max_goal_speed,
                     # reward randomization bounds
                     reward_bound_collision_min=self.reward_bound_collision_min,
                     reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
