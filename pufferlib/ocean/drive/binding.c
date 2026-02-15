@@ -191,6 +191,37 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "episode_length must be > 0 (set in INI or kwargs)");
         return -1;
     }
+
+// Allow all settings to be overridden via kwargs (ini provides defaults)
+#define OVERRIDE_INT(field)                                                                                            \
+    if (kwargs && PyDict_GetItemString(kwargs, #field)) {                                                              \
+        conf.field = (int)unpack(kwargs, #field);                                                                      \
+    }
+#define OVERRIDE_FLOAT(field)                                                                                          \
+    if (kwargs && PyDict_GetItemString(kwargs, #field)) {                                                              \
+        conf.field = (float)unpack(kwargs, #field);                                                                    \
+    }
+
+    OVERRIDE_INT(action_type);
+    OVERRIDE_INT(dynamics_model);
+    OVERRIDE_FLOAT(reward_vehicle_collision);
+    OVERRIDE_FLOAT(reward_offroad_collision);
+    OVERRIDE_FLOAT(reward_goal);
+    OVERRIDE_FLOAT(reward_goal_post_respawn);
+    OVERRIDE_INT(collision_behavior);
+    OVERRIDE_INT(offroad_behavior);
+    OVERRIDE_FLOAT(dt);
+    OVERRIDE_INT(termination_mode);
+    OVERRIDE_INT(init_mode);
+    OVERRIDE_INT(control_mode);
+    OVERRIDE_INT(goal_behavior);
+    OVERRIDE_FLOAT(goal_target_distance);
+    OVERRIDE_FLOAT(goal_radius);
+    OVERRIDE_FLOAT(goal_speed);
+
+#undef OVERRIDE_INT
+#undef OVERRIDE_FLOAT
+
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
