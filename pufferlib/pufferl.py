@@ -1126,6 +1126,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         dataset_name = args["env"]["map_dir"].split("/")[-1]
         print(f"Running human replay evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
+        import copy
 
         backend = args["eval"].get("backend", "PufferEnv")
         args["env"]["map_dir"] = args["eval"]["map_dir"]
@@ -1136,11 +1137,10 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         args["env"]["num_maps"] = args["eval"]["human_replay_num_agents"]
 
         # Create two different envs
-        hr_args = args.copy()
+        hr_args = copy.deepcopy(args)
         hr_args["env"]["control_mode"] = "control_sdc_only"
         hr_env = load_env(env_name, hr_args)
-
-        sp_args = args.copy()
+        sp_args = copy.deepcopy(args)
         sp_args["env"]["control_mode"] = "control_vehicles"
         sp_env = load_env(env_name, sp_args)
 
@@ -1156,6 +1156,8 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         # Get all stats including deltas
         all_stats = evaluator.aggregate_stats()
+        sp_env.close()
+        hr_env.close()
 
         # Log results
         import json

@@ -813,7 +813,7 @@ class HumanReplayEvaluator:
 
         # Rollout
         for time_idx in range(self.sim_steps):
-            print(f"Time step: {time_idx}")
+            # print(f"Time step: {time_idx}")
             # Get action from policy
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
@@ -829,7 +829,7 @@ class HumanReplayEvaluator:
             obs, rewards, dones, truncs, info_list = env.step(action_np)
 
             if truncs.all():
-                print(info_list)
+                # print(info_list)
                 break
 
         # Aggregate final statistics
