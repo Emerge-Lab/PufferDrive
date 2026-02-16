@@ -820,11 +820,12 @@ class WOSACEvaluator:
 class HumanReplayEvaluator:
     """Evaluates policies against human replays in PufferDrive.
 
-    Compares policy performance in two scenarios:
+    Evaluate policy in two settings:
     1. Self-play: All agents controlled by policy
-    2. Human replay: Only SDC controlled by policy, others replay human trajectories
+    2. Human replay: Only SDC controlled by policy, others replay human logs.
 
-    The delta between these modes indicates how well the policy adapts to human behavior.
+    The delta between these modes provides an indication of how compatible
+    the policy is with human behavior.
     """
 
     def __init__(self, config: Dict, sp_env, hr_env):
@@ -868,7 +869,7 @@ class HumanReplayEvaluator:
 
         # Rollout
         for time_idx in range(self.sim_steps):
-            print(f"Time step: {time_idx}")
+            # print(f"Time step: {time_idx}")
             # Get action from policy
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
@@ -884,7 +885,7 @@ class HumanReplayEvaluator:
             obs, rewards, dones, truncs, info_list = env.step(action_np)
 
             if truncs.all():
-                print(info_list)
+                # print(info_list)
                 break
 
         # Aggregate final statistics
@@ -905,7 +906,7 @@ class HumanReplayEvaluator:
         if not self.self_play_stats or not self.human_replay_stats:
             raise ValueError("Must run rollouts in both modes before aggregating stats")
 
-        # Extract metrics (assume they exist)
+        # Extract metrics
         sp = self.self_play_stats
         hr = self.human_replay_stats
 

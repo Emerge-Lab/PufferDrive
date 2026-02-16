@@ -221,6 +221,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
 
 #undef OVERRIDE_INT
 #undef OVERRIDE_FLOAT
+
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
