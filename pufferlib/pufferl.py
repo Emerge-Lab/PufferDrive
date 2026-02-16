@@ -229,6 +229,13 @@ class PuffeRL:
         self.last_stats = defaultdict(list)
         self.losses = {}
 
+        # Prepare human demonstration data if enabled
+        # We only do this for the driver env to save memory
+        if self.vecenv.driver_env.prepare_human_data:
+            self.vecenv.driver_env._prepare_human_data()
+
+        self.resample_freq_epoch = self.vecenv.driver_env.resample_frequency / self.vecenv.driver_env.episode_length
+
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
@@ -352,6 +359,13 @@ class PuffeRL:
         self.free_idx = self.total_agents
         self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
         self.ep_lengths.zero_()
+
+        # Occasionally resample human demonstrations in the driver environment.
+        # This follows the same logic used for map resampling.
+        if self.vecenv.driver_env.prepare_human_data and (self.epoch + 1) % self.resample_freq_epoch == 0:
+            print(f"resample human data: {self.epoch}")
+            self.vecenv.driver_env._prepare_human_data()
+
         profile.end()
         return self.stats
 
