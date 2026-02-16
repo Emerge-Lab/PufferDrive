@@ -417,7 +417,7 @@ class WOSACEvaluator:
         # Average Displacement Error (ADE) and minADE
         # Note: This metric is not included in the scoring meta-metric, as per WOSAC rules.
         ade, min_ade = metrics.compute_displacement_error(
-            eval_sim_x, eval_sim_y, eval_ref_x, eval_ref_y, eval_ref_valid, eval_dones, self.filter_out_post_done
+            eval_sim_x, eval_sim_y, eval_ref_x, eval_ref_y, eval_ref_valid
         )
 
         # Log-likelihood metrics
@@ -434,7 +434,6 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
-            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -449,7 +448,6 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
-            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -464,7 +462,6 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
-            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -479,7 +476,6 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
-            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -494,7 +490,6 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
-            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         min_val, max_val, num_bins, additive_smoothing, independent_timesteps = self._get_histogram_params(
@@ -509,7 +504,6 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
-            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         # Map-based features log-likelihoods
@@ -525,7 +519,6 @@ class WOSACEvaluator:
             num_bins=num_bins,
             additive_smoothing=additive_smoothing,
             sanity_check=False,
-            sim_valid=~eval_dones if self.filter_out_post_done else None,
         )
 
         speed_log_likelihood = metrics._reduce_average_with_validity(
