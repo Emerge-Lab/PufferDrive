@@ -265,7 +265,6 @@ struct Drive {
     Log log;
     Log *logs;
     int num_agents; // Max controlled agents
-    int num_agents; // Max controlled agents
     int active_agent_count;
     int *active_agent_indices;
     int action_type;
@@ -416,13 +415,6 @@ static float mixed_uniform(float a) {
 }
 
 // void compute_heading_diff(void){}
-
-static float random_uniform(float min_val, float max_val) {
-    float scale = (float)rand() / (float)RAND_MAX;
-    return min_val + scale * (max_val - min_val);
-}
-
-// void mixed_uniform(void){}
 
 // Generate per-agent reward conditioning coefficients
 // Full function, but wont be FULLY used as of yet - should be compatible for later iterations
@@ -1798,10 +1790,6 @@ void set_active_agents(Drive *env) {
     env->static_agent_count = 0;        // Non-moving background agents
     env->expert_static_agent_count = 0; // Expert replay agents (non-controlled)
     env->num_created_agents = 0;        // Total agents created
-
-    int *active_agent_indices = (int *)malloc(env->max_agents_in_sim * sizeof(int));
-    int *static_agent_indices = (int *)malloc(env->max_agents_in_sim * sizeof(int));
-    int *expert_static_agent_indices = (int *)malloc(env->max_agents_in_sim * sizeof(int));
 
     if (env->num_agents == 0) {
         printf("Warning: num_agents is 0, defaulting to max_agents_in_sim (%d)\n",
