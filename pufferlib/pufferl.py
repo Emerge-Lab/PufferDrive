@@ -430,10 +430,10 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
-            # Compute log likelihood loss of human actions under current policy.
-            # 1: Sample a batch of human actions and observations from dataset
-            # Shape: [num_samples, feature_dim]
             if self.vecenv.driver_env.prepare_human_data:
+                # Compute log likelihood loss of human actions under current policy.
+                # 1: Sample a batch of human actions and observations from dataset
+                # Shape: [num_samples, feature_dim]
                 discrete_human_actions, continuous_human_actions, human_observations = (
                     self.vecenv.driver_env.sample_human_demonstrations()
                 )
@@ -444,8 +444,8 @@ class PuffeRL:
                 human_observations = human_observations.to(device)
 
                 # 2: Compute the log-likelihood of human actions under the current policy,
-                # given the corresponding human observations. A higher likelihood indicates
-                # that the policy behaves more like a human under the same observations.
+                # given the corresponding human observations. Higher (less negative) log-likelihood
+                # indicates that the policy behaves more like a human under the same observations.
                 human_state = dict(
                     lstm_h=None,
                     lstm_c=None,
@@ -456,8 +456,12 @@ class PuffeRL:
                 _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
                     logits=human_logits, action=human_actions
                 )
+
+                # Average and clip
+                human_log_prob = torch.clamp(human_log_prob, -15, 0)
+                human_nll = -human_log_prob.mean()
             else:
-                human_log_prob = torch.tensor(0.0, device=device)
+                human_nll = torch.tensor(0.0, device=device)
 
             adv = advantages[idx]
             adv = compute_puff_advantage(
@@ -484,10 +488,6 @@ class PuffeRL:
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
-
-            # Average and clip
-            human_log_prob = torch.clamp(human_log_prob, -10, 0).mean()
-            human_nll = -human_log_prob.mean()
 
             entropy_loss = entropy.mean()
 
