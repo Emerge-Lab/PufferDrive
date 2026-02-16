@@ -917,7 +917,10 @@ void load_map_binary(const char *filename, Drive *env) {
     env->road_elements = (RoadMapElement *)calloc(env->num_roads, sizeof(RoadMapElement));
     env->road_scenario_ids = (int *)calloc(env->num_roads, sizeof(int));
 
-    env->max_agents_in_sim = env->num_objects; // Needs to be handled for random agents init
+    
+    if (env->init_mode != RANDOM_AGENTS) {
+        env->spawn_settings.max_agents_in_sim = MAX_AGENTS;
+    }
 
     int total_entities = env->num_objects + env->num_roads;
     int agent_idx = 0;
@@ -1802,7 +1805,7 @@ void set_active_agents(Drive *env) {
     env->num_created_agents = 0;        // Total agents created
 
     if (env->num_agents == 0) {
-        env->num_agents = env->max_agents_in_sim;
+        env->num_agents = env->spawn_settings.max_agents_in_sim;
     }
 
     // Iterate through entities to find agents to create and/or control
