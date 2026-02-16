@@ -75,6 +75,7 @@ class Drive(pufferlib.PufferEnv):
         self.uses_memory = uses_memory
         self.memory_size = memory_size
         self.collected_human_data = False
+        self.total_num_samples = 0
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(

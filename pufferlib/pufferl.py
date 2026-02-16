@@ -433,28 +433,31 @@ class PuffeRL:
             # Compute log likelihood loss of human actions under current policy.
             # 1: Sample a batch of human actions and observations from dataset
             # Shape: [num_samples, feature_dim]
-            discrete_human_actions, continuous_human_actions, human_observations = (
-                self.vecenv.driver_env.sample_human_demonstrations()
-            )
+            if self.vecenv.driver_env.prepare_human_data:
+                discrete_human_actions, continuous_human_actions, human_observations = (
+                    self.vecenv.driver_env.sample_human_demonstrations()
+                )
 
-            use_continuous = self.vecenv.driver_env._action_type_flag == 1
-            human_actions = continuous_human_actions if use_continuous else discrete_human_actions
-            human_actions = human_actions.reshape(-1, 1).to(device)
-            human_observations = human_observations.to(device)
+                use_continuous = self.vecenv.driver_env._action_type_flag == 1
+                human_actions = continuous_human_actions if use_continuous else discrete_human_actions
+                human_actions = human_actions.reshape(-1, 1).to(device)
+                human_observations = human_observations.to(device)
 
-            # 2: Compute the log-likelihood of human actions under the current policy,
-            # given the corresponding human observations. A higher likelihood indicates
-            # that the policy behaves more like a human under the same observations.
-            human_state = dict(
-                lstm_h=None,
-                lstm_c=None,
-            )
+                # 2: Compute the log-likelihood of human actions under the current policy,
+                # given the corresponding human observations. A higher likelihood indicates
+                # that the policy behaves more like a human under the same observations.
+                human_state = dict(
+                    lstm_h=None,
+                    lstm_c=None,
+                )
 
-            human_logits, _ = self.policy(human_observations, human_state)
+                human_logits, _ = self.policy(human_observations, human_state)
 
-            _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
-                logits=human_logits, action=human_actions
-            )
+                _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
+                    logits=human_logits, action=human_actions
+                )
+            else:
+                human_log_prob = torch.tensor(0.0, device=device)
 
             adv = advantages[idx]
             adv = compute_puff_advantage(
