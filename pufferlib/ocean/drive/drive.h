@@ -2215,15 +2215,38 @@ void c_step(Drive *env) {
     compute_observations(env);
 }
 
+void c_step_lightweight(Drive *env) {
+    env->timestep++;
+
+    // Move static experts
+    for (int i = 0; i < env->expert_static_agent_count; i++) {
+        int expert_idx = env->expert_static_agent_indices[i];
+        if (env->entities[expert_idx].x == INVALID_POSITION)
+            continue;
+        move_expert(env, env->actions, expert_idx);
+    }
+
+    // Apply dynamics to all active agents
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        env->entities[agent_idx].collision_state = 0;
+        move_dynamics(env, i, agent_idx);
+    }
+
+    // Update observations
+    compute_observations(env);
+}
+
 void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_actions_continuous_out,
                            float *expert_obs_out) {
-
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
-
     int original_timestep = env->timestep;
 
-    c_reset(env);
+    // Reset agents to start of trajectory
+    env->timestep = env->init_steps;
+    set_start_position(env);
+    compute_observations(env);
 
     for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
         // Get the current observations
@@ -2277,7 +2300,8 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 int discrete_offset = t * env->active_agent_count + i;
                 expert_actions_discrete_out[discrete_offset] = (float)joint_action;
 
-                // Apply the expert actions to env->actions so that c_step will use them
+                // Apply the expert actions to env->actions so that
+                // c_step_lightweight will use them
                 if (env->action_type == 1) { // continuous
                     float (*action_array_f)[2] = (float (*)[2])env->actions;
                     action_array_f[i][0] = continuous_accel / ACCEL_MAX;
@@ -2314,15 +2338,17 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
             }
         }
 
-        // Step environment to get next observations
+        // Step environment to get next observatiosns. This uses a separate,
+        // lightweight step function so that we don't distort the signal of training envs.
         if (t < TRAJECTORY_LENGTH - 1) {
-            c_step(env);
+            c_step_lightweight(env);
         }
     }
 
     // Restore original state
     env->timestep = original_timestep;
-    c_reset(env);
+    set_start_position(env);
+    compute_observations(env);
 }
 
 typedef struct Client Client;
