@@ -910,9 +910,6 @@ void load_map_binary(const char *filename, Drive *env) {
 
     
     if (env->init_mode != RANDOM_AGENTS) {
-        env->spawn_settings.max_agents_in_sim = env->num_objects;
-    }
-    else {
         env->spawn_settings.max_agents_in_sim = MAX_AGENTS;
     }
 
@@ -1792,8 +1789,6 @@ void set_active_agents(Drive *env) {
     env->num_created_agents = 0;        // Total agents created
 
     if (env->num_agents == 0) {
-        printf("Warning: num_agents is 0, defaulting to max_agents_in_sim (%d)\n",
-               env->spawn_settings.max_agents_in_sim);
         env->num_agents = env->spawn_settings.max_agents_in_sim;
     }
 
