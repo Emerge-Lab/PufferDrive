@@ -433,7 +433,7 @@ class PuffeRL:
             if self.vecenv.driver_env.prepare_human_data:
                 # Compute log likelihood loss of human actions under current policy.
                 # 1: Sample a batch of human actions and observations from dataset
-                # Shape: [num_samples, feature_dim]
+                # Shape: [num_samples, feature_dim] if not using LSTM, else [num_samples, bptt_horizon, feature_dim]
                 discrete_human_actions, continuous_human_actions, human_observations = (
                     self.vecenv.driver_env.sample_human_demonstrations()
                 )
@@ -1334,7 +1334,15 @@ def controlled_exp(env_name, args=None):
         if isinstance(section_config, dict):
             for param, param_config in section_config.items():
                 if isinstance(param_config, dict) and "values" in param_config:
-                    params[f"{section}.{param}"] = param_config["values"]
+                    # Process values list to handle both numeric and non-numeric types
+                    processed_values = []
+                    for val in param_config["values"]:
+                        # Handle string "None" -> Python None
+                        if isinstance(val, str) and val == "None":
+                            processed_values.append(None)
+                        else:
+                            processed_values.append(val)
+                    params[f"{section}.{param}"] = processed_values
 
     if not params:
         raise pufferlib.APIUsageError("No parameters with 'values' lists found in [controlled_exp.*] sections")
@@ -1355,7 +1363,23 @@ def controlled_exp(env_name, args=None):
             exp_args[section][param] = value
 
         # Create descriptive name
-        run_name_parts = [f"{key.split('.')[-1]}={value}" for key, value in zip(keys, combo)]
+        run_name_parts = []
+        for key, value in zip(keys, combo):
+            param_name = key.split(".")[-1]
+            # Handle None display
+            if value is None:
+                value_str = "None"
+            # Handle boolean display
+            elif isinstance(value, bool):
+                value_str = str(value)
+            # Handle numeric display
+            elif isinstance(value, (int, float)):
+                value_str = str(value)
+            # Handle string display
+            else:
+                value_str = str(value)
+            run_name_parts.append(f"{param_name}={value_str}")
+
         exp_name = "_".join(run_name_parts)
         exp_args["wandb_run_name"] = f"{exp_name}"
 
