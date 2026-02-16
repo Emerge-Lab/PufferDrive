@@ -18,7 +18,8 @@ void test_drivenet() {
 
     // Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights *weights = load_weights("puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC);
+    int reward_conditioning = 0;
+    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, reward_conditioning);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {
@@ -87,7 +88,8 @@ void demo() {
         .goal_radius = conf.goal_radius,
         .goal_behavior = conf.goal_behavior,
         .goal_target_distance = conf.goal_target_distance,
-        .goal_speed = conf.goal_speed,
+        .min_goal_speed = conf.min_goal_speed,
+        .max_goal_speed = conf.max_goal_speed,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
@@ -98,6 +100,7 @@ void demo() {
         .control_mode = conf.control_mode,
         .spawn_settings = spawn_settings,
         .map_name = "resources/drive/binaries/carla/carla_3D/map_000.bin",
+        .reward_conditioning = 1,
     };
 
     if (conf.init_mode == RANDOM_AGENTS) {
