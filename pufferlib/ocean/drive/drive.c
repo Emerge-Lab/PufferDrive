@@ -42,6 +42,9 @@ void demo() {
         exit(1);
     }
 
+    // Set different seed each time
+    srand(time(NULL));
+
     // Note: Use below hardcoded settings for 2.0 demo purposes. Since the policy was
     // trained with these exact settings, changing them may lead to
     // weird behavior.
@@ -101,6 +104,7 @@ void demo() {
         .control_mode = conf.control_mode,
         .spawn_settings = spawn_settings,
         .map_name = "resources/drive/binaries/carla/carla_3D/map_000.bin",
+        .reward_conditioning = conf.reward_conditioning,
     };
 
     if (conf.init_mode == RANDOM_AGENTS) {
@@ -110,8 +114,8 @@ void demo() {
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights_resampling_300.bin");
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    Weights *weights = load_weights("resources/drive/puffer_drive_zh9lo9pr.bin");
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;
     int steer_delta = 2;

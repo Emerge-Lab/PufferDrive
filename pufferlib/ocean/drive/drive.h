@@ -1507,7 +1507,7 @@ static bool check_spawn_offroad(Drive *env, float spawn_x, float spawn_y, float 
     return false;
 }
 
-static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check) {
+static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *drivable_lanes, int num_drivable) {
     Agent *agent = &env->agents[agent_idx];
 
     if (agent->route != NULL) {
@@ -1521,14 +1521,6 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check) {
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
 
-    // TODO: Pre-compute drivable lanes in env to speed up?
-    int drivable_lanes[env->num_roads];
-    int num_drivable = 0;
-    for (int i = 0; i < env->num_roads && num_drivable < env->num_roads; i++) {
-        if (env->road_elements[i].type == ROAD_LANE) {
-            drivable_lanes[num_drivable++] = i;
-        }
-    }
 
     if (num_drivable == 0)
         raise_error_with_message(ERROR_UNKNOWN,
@@ -1731,11 +1723,20 @@ int spawn_active_agents(Drive *env, int num_agents_to_create) {
 
     env->agents = (Agent *)calloc(num_agents_to_create, sizeof(Agent));
 
+    // Pre-compute drivable lanes
+    int drivable_lanes[env->num_roads];
+    int num_drivable = 0;
+    for (int i = 0; i < env->num_roads && num_drivable < env->num_roads; i++) {
+        if (env->road_elements[i].type == ROAD_LANE) {
+            drivable_lanes[num_drivable++] = i;
+        }
+    }
+
     int successfully_created = 0;
     for (int i = 0; i < num_agents_to_create; i++) {
         int created = 0;
         for (int attempt = 0; attempt < MAX_SPAWNS_ATTEMPTS_WITH_DIMENSION_CHANGES; attempt++) {
-            if (spawn_agent(env, i, successfully_created)) {
+            if (spawn_agent(env, i, successfully_created, drivable_lanes, num_drivable)) {
                 successfully_created++;
                 created = 1;
                 break;
