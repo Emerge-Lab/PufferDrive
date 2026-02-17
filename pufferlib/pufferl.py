@@ -294,7 +294,9 @@ class PuffeRL:
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
                 logits, value = self.policy.forward_eval(o_device, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(
+                    logits
+                )  # sample logits now accepts a length of actions_trajectory to only pick the first element for action sampling
                 r = torch.clamp(r, -1, 1)
 
             profile("eval_copy", epoch)
