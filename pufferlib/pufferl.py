@@ -462,6 +462,8 @@ class PuffeRL:
                 old_approx_kl = (-logratio).mean()
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
+                max_logits = logits[0].max().item()
+                min_logits = logits[0].min().item()
 
             adv = advantages[idx]
             adv = compute_puff_advantage(
@@ -531,6 +533,8 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["max_log_prob"] += max_logits / self.total_minibatches
+            losses["min_log_prob"] += min_logits / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
