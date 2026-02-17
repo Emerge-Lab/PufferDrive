@@ -2,6 +2,8 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 
+import numpy as np
+
 import pufferlib
 import pufferlib.models
 
@@ -49,7 +51,7 @@ class Drive(nn.Module):
 
         self.shared_embedding = nn.Sequential(
             nn.GELU(),
-            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, hidden_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(4 * input_size, hidden_size)),
         )
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
 
@@ -63,19 +65,17 @@ class Drive(nn.Module):
         assert all(type(i) == int for i in self.action_tensor_shape)  # check that all entries are integers
 
         self.previous_actions_trajectory = torch.zeros(
-            torch.prod(self.action_tensor_shape)
+            np.prod(self.action_tensor_shape)
         )  # TODO: remove, this is a temporary input
 
         self.past_actions_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(torch.prod(self.action_tensor_shape), input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(np.prod(self.action_tensor_shape), input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
-        self.actor = pufferlib.pytorch.layer_init(
-            nn.Linear(hidden_size, torch.prod(self.action_tensor_shape)), std=0.01
-        )
+        self.actor = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, np.prod(self.action_tensor_shape)), std=0.01)
         self.value_fn = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, 1), std=1)
 
     def forward(self, observations, state=None):
@@ -93,7 +93,7 @@ class Drive(nn.Module):
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
-        past_actions_traj = torch.zeros((observations.shape[0], torch.prod(self.action_tensor_shape)))
+        past_actions_traj = torch.zeros((observations.shape[0], np.prod(self.action_tensor_shape))).to(road_obs.device)
 
         partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
 
@@ -116,15 +116,21 @@ class Drive(nn.Module):
 
     def decode_actions(self, flat_hidden):
         if self.is_continuous:
-            parameters = self.actor(flat_hidden)
-            loc, scale = torch.split(parameters, self.atn_dim, dim=1)
+            parameters = self.actor(flat_hidden).reshape(
+                (flat_hidden.shape[0], self.actions_trajectory_length, sum(self.atn_dim))
+            )
+            loc, scale = torch.split(parameters, self.atn_dim, dim=2)
             std = torch.nn.functional.softplus(scale) + 1e-4
             action = torch.distributions.Normal(loc, std)
         else:
-            action = self.actor(flat_hidden)
+            action = self.actor(flat_hidden).reshape(
+                flat_hidden.shape[0] * self.actions_trajectory_length, sum(self.atn_dim)
+            )  # push the sequence length in the batch
             action = torch.split(action, self.atn_dim, dim=1)
 
-        value = self.value_fn(flat_hidden)
+        value = self.value_fn(
+            flat_hidden
+        )  # NOTE: there shouldn't be any difference if we pass the hidden state that is used for future actions
 
         return action, value
 
