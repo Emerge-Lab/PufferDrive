@@ -281,6 +281,21 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
     int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
 
+    const int MAX_WIDTH = 4096;
+    const int MAX_HEIGHT = 4096;
+    if (img_width > MAX_WIDTH || img_height > MAX_HEIGHT) {
+
+        printf("WARNING: Calculated window size (%dx%d) exceeds maximum (%dx%d)\n", img_width, img_height, MAX_WIDTH,
+               MAX_HEIGHT);
+        // Scale down proportionally to fit within max dimensions
+        float width_ratio = (float)MAX_WIDTH / img_width;
+        float height_ratio = (float)MAX_HEIGHT / img_height;
+        float min_ratio = (width_ratio < height_ratio) ? width_ratio : height_ratio;
+        img_width = (int)roundf(img_width * min_ratio / 2.0f) * 2;
+        img_height = (int)roundf(img_height * min_ratio / 2.0f) * 2;
+        printf("Resized window to: %dx%d\n", img_width, img_height);
+    }
+
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
