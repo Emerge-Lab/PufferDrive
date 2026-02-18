@@ -205,12 +205,13 @@ def sample_logits(logits, action=None, actions_trajectory_length=12):
             [l.transpose(0, 1) for l in logits], batch_first=False, padding_value=-torch.inf
         ).permute(1, 2, 0)
 
+    logits = logits.reshape(-1, actions_trajectory_length, logits.shape[-1])
+    logits_full = logits
+    logits = logits[:, 0, :]  # only the first item of the sequence is used to sample the actions
+
     # This can fail on nans etc
     normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
     probs = logits_to_probs(logits)
-    probs = probs.reshape(-1, actions_trajectory_length, probs.shape[-1])[
-        :, 0, :
-    ]  # sample actions from the first item of the sequence
 
     if action is None:
         probs = torch.nan_to_num(probs, 1e-8, 1e-8, 1e-8)
@@ -227,4 +228,4 @@ def sample_logits(logits, action=None, actions_trajectory_length=12):
     if is_discrete:
         return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0)
 
-    return action.T, logprob.sum(0), logits_entropy
+    return action.T, logprob.sum(0), logits_entropy, logits_full
