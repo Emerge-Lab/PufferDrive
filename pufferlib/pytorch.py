@@ -207,7 +207,7 @@ def sample_logits(logits, action=None, actions_trajectory_length=12):
 
     logits = logits.reshape(-1, actions_trajectory_length, logits.shape[-1])
     logits_full = logits
-    logits = logits[:, 0, :]  # only the first item of the sequence is used to sample the actions
+    logits = logits[:, [0], :]  # only the first item of the sequence is used to sample the actions
 
     # This can fail on nans etc
     normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
@@ -228,4 +228,4 @@ def sample_logits(logits, action=None, actions_trajectory_length=12):
     if is_discrete:
         return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0)
 
-    return action.T, logprob.sum(0), logits_entropy, logits_full
+    return action, logprob.sum(1), logits_entropy, logits_full

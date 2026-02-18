@@ -102,6 +102,7 @@ class PuffeRL:
 
         atn_traj_size = (12, sum(atn_space.nvec.tolist()))  # TODO: generalize to continuous case
         assert len(obs_space.shape) == 1
+        self.obs_len = obs_space.shape[0]
         obs_aug_shape = (
             obs_space.shape[0] + np.prod(atn_traj_size),
         )  # assumes obs_space is 1d and we flatten the action trajectory
@@ -126,7 +127,7 @@ class PuffeRL:
             total_agents,
             *atn_traj_size,
             device=device,
-            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
+            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
         )
 
         self.values = torch.zeros(segments, horizon, device=device)
@@ -315,7 +316,6 @@ class PuffeRL:
                     logits
                 )  # sample logits now accepts a length of actions_trajectory to only pick the first element for action sampling
 
-                test = "a"
                 # we store the full logits
                 self.prev_logits_traj[env_id.start : env_id.stop] = logits_full  # store the trajectory as previous traj
                 self.prev_logits_traj[env_id.start : env_id.stop][done_mask] = (
@@ -478,8 +478,10 @@ class PuffeRL:
 
             # Losses
             # action consistency diff
-            prev_probs = self.prev_logits_traj[:, 1:, :].softmax(dim=-1)  # [B, T-1, n_classes]
-            curr_probs = full_logits[:, :-1, :].softmax(dim=-1)  # [B, T-1, n_classes]
+            prev_traj = mb_obs[..., self.obs_len :].reshape(-1, 12, full_logits.shape[-1])
+
+            prev_probs = prev_traj[:, 1:, :].softmax(dim=-1)
+            curr_probs = full_logits[:, :-1, :].softmax(dim=-1)
             consistency_loss = (curr_probs - prev_probs).abs().mean()
 
             pg_loss1 = -adv * ratio
