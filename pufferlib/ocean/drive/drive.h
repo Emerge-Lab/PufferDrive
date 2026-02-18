@@ -890,6 +890,17 @@ GridMapEntity *checkNeighbors(Drive *env, float x, float y, const int (*local_of
 // Map Loading Functions
 // ========================================
 
+void allocate_agent_trajectories(Agent* agent) {
+    // Make sure trajectory length is valid before allocation
+    agent->log_trajectory_x = (float *)malloc(agent->trajectory_length * sizeof(float));
+    agent->log_trajectory_y = (float *)malloc(agent->trajectory_length * sizeof(float));
+    agent->log_trajectory_z = (float *)malloc(agent->trajectory_length * sizeof(float));
+    agent->log_velocity_x = (float *)malloc(agent->trajectory_length * sizeof(float));
+    agent->log_velocity_y = (float *)malloc(agent->trajectory_length * sizeof(float));
+    agent->log_heading = (float *)malloc(agent->trajectory_length * sizeof(float));
+    agent->log_valid = (int *)malloc(agent->trajectory_length * sizeof(int));
+}
+
 void load_map_binary(const char *filename, Drive *env) {
     FILE *file = fopen(filename, "rb");
     if (!file)
@@ -947,13 +958,7 @@ void load_map_binary(const char *filename, Drive *env) {
             agent->scenario_id = scenario_id;
             agent->trajectory_length = array_size;
 
-            agent->log_trajectory_x = (float *)malloc(array_size * sizeof(float));
-            agent->log_trajectory_y = (float *)malloc(array_size * sizeof(float));
-            agent->log_trajectory_z = (float *)malloc(array_size * sizeof(float));
-            agent->log_velocity_x = (float *)malloc(array_size * sizeof(float));
-            agent->log_velocity_y = (float *)malloc(array_size * sizeof(float));
-            agent->log_heading = (float *)malloc(array_size * sizeof(float));
-            agent->log_valid = (int *)malloc(array_size * sizeof(int));
+            allocate_agent_trajectories(agent);
 
             fread(agent->log_trajectory_x, sizeof(float), array_size, file);
             fread(agent->log_trajectory_y, sizeof(float), array_size, file);
@@ -1590,6 +1595,17 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
     agent->sim_speed = 0.0f;
     agent->sim_speed_signed = 0.0f;
 
+    // Add initial position for reset
+    agent->trajectory_length = 1;
+    allocate_agent_trajectories(agent);
+    agent->log_trajectory_x[0] = spawn_x;
+    agent->log_trajectory_y[0] = spawn_y;
+    agent->log_trajectory_z[0] = spawn_z;
+    agent->log_velocity_x[0] = 0.0f;
+    agent->log_velocity_y[0] = 0.0f;
+    agent->log_heading[0] = spawn_heading;
+    agent->log_valid[0] = 1;
+
     // Compute initial route
     // if (!compute_new_route(env, agent_idx, start_lane->id)) {
     //     printf("[GIGAFLOW WARNING] -> Failed to compute a new route for agent %d\n", agent->id);
@@ -1600,9 +1616,6 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
 }
 
 void set_start_position(Drive *env) {
-    if (env->init_mode == RANDOM_AGENTS) {
-        return;
-    }
     for (int i = 0; i < env->num_objects; i++) {
         int is_active = 0;
         for (int j = 0; j < env->active_agent_count; j++) {
@@ -1744,7 +1757,7 @@ int spawn_active_agents(Drive *env, int num_agents_to_create) {
         }
         if (!created) {
             // Failed spawn: ensure agent is properly invalidated
-            printf("WARNING: Failed to spawn agent %d after %d attempts with changed settings. Marking as removed.\n",
+            printf("WARNING: Failed to spawn agent %d after %d attempts with changed dimensions. Marking as removed.\n",
                    i, MAX_SPAWNS_ATTEMPTS_WITH_DIMENSION_CHANGES);
             env->agents[i].sim_x = INVALID_POSITION;
             env->agents[i].sim_y = INVALID_POSITION;
