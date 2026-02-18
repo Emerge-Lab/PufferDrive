@@ -336,6 +336,7 @@ void init_goal_positions(Drive *env);
 float clipSpeed(float speed);
 void sample_new_goal(Drive *env, int agent_idx);
 int check_lane_aligned(Agent *car, RoadMapElement *lane, int geometry_idx);
+void reset_goal_positions(Drive* env);
 
 // ========================================
 // Utility Functions
@@ -2768,7 +2769,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 void c_reset(Drive *env) {
     env->timestep = env->init_steps;
     set_start_position(env);
-    init_goal_positions(env);
+    reset_goal_positions(env);
     for (int x = 0; x < env->active_agent_count; x++) {
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];
@@ -3825,6 +3826,17 @@ float point_to_segment_distance_2d(float px, float py, float x1, float y1, float
 
     // Return the distance from p to the closest point
     return sqrtf((px - closestX) * (px - closestX) + (py - closestY) * (py - closestY));
+}
+
+void reset_goal_positions(Drive* env) {
+    for (int x = 0; x < env->active_agent_count; x++) {
+        int agent_idx = env->active_agent_indices[x];
+        Agent *agent = &env->agents[agent_idx];
+        agent->goal_position_x = agent->init_goal_x;
+        agent->goal_position_y = agent->init_goal_y;
+        agent->goal_position_z = agent->init_goal_z;
+        agent->goals_sampled_this_episode = 0.0f;
+    }
 }
 
 void init_goal_positions(Drive *env) {
