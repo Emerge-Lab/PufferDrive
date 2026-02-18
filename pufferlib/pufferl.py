@@ -99,10 +99,17 @@ class PuffeRL:
             raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
 
         device = config["device"]
+
+        atn_traj_size = (12, sum(atn_space.nvec.tolist()))  # TODO: generalize to continuous case
+        assert len(obs_space.shape) == 1
+        obs_aug_shape = (
+            obs_space.shape[0] + np.prod(atn_traj_size),
+        )  # assumes obs_space is 1d and we flatten the action trajectory
+
         self.observations = torch.zeros(
             segments,
             horizon,
-            *obs_space.shape,
+            *obs_aug_shape,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
             pin_memory=device == "cuda" and config["cpu_offload"],
             device="cpu" if config["cpu_offload"] else device,
@@ -114,6 +121,14 @@ class PuffeRL:
             device=device,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
         )
+
+        self.prev_logits_traj = torch.zeros(
+            total_agents,
+            *atn_traj_size,
+            device=device,
+            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
+        )
+
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
         self.rewards = torch.zeros(segments, horizon, device=device)
@@ -292,10 +307,20 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                logits, value = self.policy.forward_eval(o_device, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(
+                prev_traj = self.prev_logits_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1)
+                o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
+                logits, value = self.policy.forward_eval(o_device_aug, state)
+                action, logprob, _, logits_full = pufferlib.pytorch.sample_logits(
                     logits
                 )  # sample logits now accepts a length of actions_trajectory to only pick the first element for action sampling
+
+                test = "a"
+                # we store the full logits
+                self.prev_logits_traj[env_id.start : env_id.stop] = logits_full  # store the trajectory as previous traj
+                self.prev_logits_traj[env_id.start : env_id.stop][done_mask] = (
+                    0.0  # set the agents that are done to zero so that they incur in no loss
+                )
+
                 r = torch.clamp(r, -1, 1)
 
             profile("eval_copy", epoch)
@@ -309,9 +334,9 @@ class PuffeRL:
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
                 if config["cpu_offload"]:
-                    self.observations[batch_rows, l] = o
+                    self.observations[batch_rows, l] = o_device_aug.cpu()
                 else:
-                    self.observations[batch_rows, l] = o_device
+                    self.observations[batch_rows, l] = o_device_aug
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
@@ -405,7 +430,7 @@ class PuffeRL:
 
             profile("train_forward", epoch)
             if not config["use_rnn"]:
-                mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
+                mb_obs = mb_obs.reshape(-1, mb_obs.shape[-1])
 
             state = dict(
                 action=mb_actions,
@@ -414,7 +439,7 @@ class PuffeRL:
             )
 
             logits, newvalue = self.policy(mb_obs, state)
-            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+            actions, newlogprob, entropy, full_logits = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
 
             profile("train_misc", epoch)
             newlogprob = newlogprob.reshape(mb_logprobs.shape)
@@ -443,6 +468,11 @@ class PuffeRL:
             adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
             # Losses
+            # action consistency diff
+            prev_probs = self.prev_logits_traj[:, 1:, :].softmax(dim=-1)  # [B, T-1, n_classes]
+            curr_probs = full_logits[:, :-1, :].softmax(dim=-1)  # [B, T-1, n_classes]
+            consistency_loss = (curr_probs - prev_probs).abs().mean()
+
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
             pg_loss = torch.max(pg_loss1, pg_loss2).mean()
@@ -455,7 +485,7 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss + consistency_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -1278,7 +1308,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             with torch.no_grad():
                 ob = torch.as_tensor(ob).to(device)
                 logits, value = policy.forward_eval(ob, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action, logprob, _, _ = pufferlib.pytorch.sample_logits(logits)
                 action = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
             if isinstance(logits, torch.distributions.Normal):
