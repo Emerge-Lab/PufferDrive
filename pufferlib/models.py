@@ -26,6 +26,7 @@ class Default(nn.Module):
         self.hidden_size = hidden_size
         self.is_multidiscrete = isinstance(env.single_action_space, pufferlib.spaces.MultiDiscrete)
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
+        self.actionspace_size = sum(env.single_action_space.nvec.tolist()) * 12  # TODO pass the parameter
         try:
             self.is_dict_obs = isinstance(env.env.observation_space, pufferlib.spaces.Dict)
         except:
@@ -34,9 +35,9 @@ class Default(nn.Module):
         if self.is_dict_obs:
             self.dtype = pufferlib.pytorch.nativize_dtype(env.emulated)
             input_size = int(sum(np.prod(v.shape) for v in env.env.observation_space.values()))
-            self.encoder = nn.Linear(input_size, self.hidden_size)
+            self.encoder = nn.Linear(input_size + self.actionspace_size, self.hidden_size)
         else:
-            num_obs = np.prod(env.single_observation_space.shape)
+            num_obs = np.prod(env.single_observation_space.shape) + self.actionspace_size
             self.encoder = torch.nn.Sequential(
                 pufferlib.pytorch.layer_init(nn.Linear(num_obs, hidden_size)),
                 nn.GELU(),
@@ -100,7 +101,8 @@ class LSTMWrapper(nn.Module):
         Requires that your policy define encode_observations and decode_actions.
         See the Default policy for an example."""
         super().__init__()
-        self.obs_shape = env.single_observation_space.shape
+        atn_traj_flat = sum(env.single_action_space.nvec.tolist()) * 12  # must match Default
+        self.obs_shape = (env.single_observation_space.shape[0] + atn_traj_flat,)
 
         self.policy = policy
         self.input_size = input_size
