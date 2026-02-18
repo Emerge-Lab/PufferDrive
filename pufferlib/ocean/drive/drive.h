@@ -276,7 +276,7 @@ struct Drive {
     AgentSpawnSettings spawn_settings;
     int num_created_agents; // number of agents created in the sim
     int num_traffic_elements;
-    int num_objects;
+    int num_objects; // All agent objects allocated in the sim
     int num_roads;
     int static_agent_count;
     int *static_agent_indices;
@@ -1241,14 +1241,14 @@ int check_aabb_collision(Agent *car1, Agent *car2) {
     return 1; // Collision
 }
 
-// Note: added to support 2.5D
 int check_z_collision(Agent *car1, Agent *car2) {
-    float car1_bottom = car1->sim_z;
-    float car1_top = car1->sim_z + car1->sim_height;
-    float car2_bottom = car2->sim_z;
-    float car2_top = car2->sim_z + car2->sim_height;
-
-    // Check for overlap in the z-axis
+    // car z coord is the center of car
+    float car1_bottom = car1->sim_z - car1->sim_height * 0.5f;
+    float car1_top = car1->sim_z + car1->sim_height * 0.5f;
+    float car2_bottom = car2->sim_z - car2->sim_height * 0.5f;
+    float car2_top = car2->sim_z + car2->sim_height * 0.5f;
+    
+    // Check using overlapping intervals along the z-axis
     if (car1_top < car2_bottom || car2_top < car1_bottom) {
         return 0; // No collision
     }
@@ -1446,17 +1446,20 @@ void reset_agent_metrics(Drive *env, int agent_idx) {
 
 // void reset_agent_state(void){}
 
-static bool check_spawn_collision(Drive *env, int agents_to_check, float spawn_x, float spawn_y, float spawn_heading,
+static bool check_spawn_collision(Drive *env, int agents_to_check, float spawn_x, float spawn_y, float spawn_z, float spawn_heading,
                                   float spawn_length, float spawn_width) {
     // Create a temporary agent structure for collision checking
     Agent temp_agent;
     temp_agent.sim_x = spawn_x;
     temp_agent.sim_y = spawn_y;
+    temp_agent.sim_z = spawn_z;
     temp_agent.sim_heading = spawn_heading;
     temp_agent.sim_length = spawn_length;
     temp_agent.sim_width = spawn_width;
 
-    float min_safe_dist_sq = (spawn_length + GRID_CELL_SIZE) * (spawn_length + GRID_CELL_SIZE);
+    float max_dim = fmaxf(spawn_length, spawn_width);
+    float max_spawn_dim = fmaxf(env->spawn_settings.max_l, env->spawn_settings.max_w);
+    float min_safe_dist_sq = (max_dim + max_spawn_dim) * (max_dim + max_spawn_dim);
 
     for (int i = 0; i < agents_to_check; i++) {
         Agent *other = &env->agents[i];
@@ -1549,7 +1552,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
         spawn_z += spawn_height / 2.0f; // Adjust z to be at the center of the agent's height
 
         // Check for collision with existing/already-reset agents
-        if (check_spawn_collision(env, agents_to_check, spawn_x, spawn_y, spawn_heading, spawn_length, spawn_width))
+        if (check_spawn_collision(env, agents_to_check, spawn_x, spawn_y, spawn_z, spawn_heading, spawn_length, spawn_width))
             continue;
 
         // Check for offroad
@@ -1589,7 +1592,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
     agent->log_trajectory_z[0] = spawn_z;
     agent->log_velocity_x[0] = 0.0f;
     agent->log_velocity_y[0] = 0.0f;
-    agent->log_heading[0] = spawn_heading;
+    agent->log_heading[0] = agent->sim_heading;
     agent->log_valid[0] = 1;
 
     // Compute initial route
