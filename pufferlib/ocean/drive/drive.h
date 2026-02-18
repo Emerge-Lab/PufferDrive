@@ -1461,8 +1461,9 @@ void reset_agent_metrics(Drive *env, int agent_idx) {
 
 // void reset_agent_state(void){}
 
-static bool check_spawn_collision(Drive *env, int agents_to_check, float spawn_x, float spawn_y, float spawn_z, float spawn_heading,
-                                  float spawn_length, float spawn_width) {
+static bool check_spawn_collision(Drive *env, int agents_to_check, 
+                                  float spawn_x, float spawn_y, float spawn_z, float spawn_heading,
+                                  float spawn_length, float spawn_width, float spawn_height) {
     // Create a temporary agent structure for collision checking
     Agent temp_agent;
     temp_agent.sim_x = spawn_x;
@@ -1471,6 +1472,7 @@ static bool check_spawn_collision(Drive *env, int agents_to_check, float spawn_x
     temp_agent.sim_heading = spawn_heading;
     temp_agent.sim_length = spawn_length;
     temp_agent.sim_width = spawn_width;
+    temp_agent.sim_height = spawn_height;
 
     float max_dim = fmaxf(spawn_length, spawn_width);
     float max_spawn_dim = fmaxf(env->spawn_settings.max_l, env->spawn_settings.max_w);
@@ -1500,7 +1502,8 @@ static bool check_spawn_collision(Drive *env, int agents_to_check, float spawn_x
     return false;
 }
 
-static bool check_spawn_offroad(Drive *env, float spawn_x, float spawn_y, float spawn_z, float spawn_heading,
+static bool check_spawn_offroad(Drive *env, 
+                                float spawn_x, float spawn_y, float spawn_z, float spawn_heading,
                                 float spawn_length, float spawn_width, float spawn_height) {
     Agent temp_agent = {.sim_x = spawn_x,
                         .sim_y = spawn_y,
@@ -1567,11 +1570,15 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
         spawn_z += spawn_height / 2.0f; // Adjust z to be at the center of the agent's height
 
         // Check for collision with existing/already-reset agents
-        if (check_spawn_collision(env, agents_to_check, spawn_x, spawn_y, spawn_z, spawn_heading, spawn_length, spawn_width))
+        if (check_spawn_collision(env, agents_to_check, 
+            spawn_x, spawn_y, spawn_z, spawn_heading, 
+            spawn_length, spawn_width, spawn_height))
             continue;
 
         // Check for offroad
-        if (check_spawn_offroad(env, spawn_x, spawn_y, spawn_z, spawn_heading, spawn_length, spawn_width, spawn_height))
+        if (check_spawn_offroad(env, 
+            spawn_x, spawn_y, spawn_z, spawn_heading, 
+            spawn_length, spawn_width, spawn_height))
             continue;
 
         successfully_spawned = true;
