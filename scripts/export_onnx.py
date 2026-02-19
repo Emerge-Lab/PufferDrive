@@ -10,47 +10,7 @@ import pufferlib.vector
 import pufferlib.models
 
 from pufferlib.ocean.torch import Drive
-
-
-def load_config(env_name, config_dir=None):
-    # Minimal config loader based on pufferl.py
-    import configparser
-    import glob
-    from collections import defaultdict
-    import ast
-
-    if config_dir is None:
-        puffer_dir = os.path.dirname(os.path.realpath(pufferlib.__file__))
-    else:
-        puffer_dir = config_dir
-
-    puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
-    puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
-
-    found = False
-    for path in glob.glob(puffer_config_dir, recursive=True):
-        p = configparser.ConfigParser()
-        p.read([puffer_default_config, path])
-        if env_name in p["base"]["env_name"].split():
-            found = True
-            break
-
-    if not found:
-        raise ValueError(f"No config for env_name {env_name}")
-
-    def puffer_type(value):
-        try:
-            return ast.literal_eval(value)
-        except:
-            return value
-
-    args = defaultdict(dict)
-    for section in p.sections():
-        for key in p[section]:
-            value = puffer_type(p[section][key])
-            args[section][key] = value
-
-    return args
+from scripts.export_model import load_config
 
 
 class OnnxWrapper(torch.nn.Module):
@@ -194,7 +154,6 @@ def export_to_onnx(verify=True):
     # Determine output path
     if not args.output:
         args.output = os.path.splitext(args.checkpoint)[0] + ".onnx"
-    print(f"Exporting to {args.output}")
     # Ensure output directory exists
     output_dir = os.path.dirname(args.output)
     if output_dir:
@@ -252,7 +211,6 @@ def export_to_onnx(verify=True):
         # ONNX Runtime output
         ort_inputs = {"observation": dummy_obs.numpy(), "lstm_h_in": dummy_h.numpy(), "lstm_c_in": dummy_c.numpy()}
         ort_outs = ort_session.run(None, ort_inputs)
-        ort_logits, ort_value, ort_h, ort_c = ort_outs
 
         # Compare outputs
         def compare(name, torch_out, ort_out, atol=1e-5):

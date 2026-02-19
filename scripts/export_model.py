@@ -40,7 +40,7 @@ def load_config(env_name, config_dir=None):
     def puffer_type(value):
         try:
             return ast.literal_eval(value)
-        except:
+        except (ValueError, SyntaxError):
             return value
 
     args = defaultdict(dict)
@@ -59,7 +59,6 @@ def export_weights():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="/scratch/pm3881/PufferDrive/experiments/puffer_drive_ntski86s/models/model_puffer_drive_000100.pt",
         help="Path to .pt checkpoint",
     )
     parser.add_argument(
@@ -82,7 +81,6 @@ def export_weights():
 
     # Use valid dummy env to initialize policy
     # Ensure env args/kwargs are correctly passed as expected by make()
-    env_args = []
     env_kwargs = config["env"]
 
     vecenv = pufferlib.vector.make(make_env, env_kwargs=env_kwargs, backend=pufferlib.vector.Serial, num_envs=1)
