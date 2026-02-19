@@ -482,7 +482,11 @@ class PuffeRL:
 
             prev_probs = prev_traj[:, 1:, :].softmax(dim=-1)
             curr_probs = full_logits[:, :-1, :].softmax(dim=-1)
-            consistency_loss = (curr_probs - prev_probs).abs().mean()
+            consistency_loss = (curr_probs - prev_probs).abs()
+            discount_future_actions = 0.95 ** torch.arange(consistency_loss.shape[1], device=consistency_loss.device)
+            discount_future_actions = discount_future_actions.view(1, consistency_loss.shape[1], 1)
+            consistency_loss = consistency_loss * discount_future_actions
+            consistency_loss = consistency_loss.mean()
 
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
@@ -496,7 +500,7 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss + consistency_loss
+            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss  # + 0.1 * consistency_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
