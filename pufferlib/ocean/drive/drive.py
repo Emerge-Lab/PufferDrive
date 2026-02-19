@@ -144,15 +144,11 @@ class Drive(pufferlib.PufferEnv):
         self.reward_bound_acc_max = reward_bound_acc_max
 
         # Observation space calculation
-        if self.reward_conditioning:
-            self.ego_features = {
-                "classic": binding.EGO_FEATURES_CLASSIC_CONDITIONING,
-                "jerk": binding.EGO_FEATURES_JERK_CONDITIONING,
-            }.get(dynamics_model)
-        else:
-            self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
-                dynamics_model
-            )
+        self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
+            dynamics_model
+        )
+        
+        
 
         # Extract observation shapes from constants
         # These need to be defined in C, since they determine the shape of the arrays

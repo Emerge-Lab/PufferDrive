@@ -995,6 +995,6 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "EGO_FEATURES_JERK", EGO_FEATURES_JERK);
     PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC_CONDITIONING", EGO_FEATURES_CLASSIC + NUM_REWARD_COEFS);
     PyModule_AddIntConstant(m, "EGO_FEATURES_JERK_CONDITIONING", EGO_FEATURES_JERK + NUM_REWARD_COEFS);
-
+    PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
     return m;
 }
