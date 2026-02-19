@@ -311,7 +311,8 @@ struct Drive {
     float max_goal_speed;
     int logs_capacity;
     int goal_behavior;
-    float goal_target_distance;
+    float min_goal_distance;
+    float max_goal_distance;
     char *ini_file;
     char *scenario_id;
     int collision_behavior;
@@ -3881,9 +3882,9 @@ void sample_new_goal(Drive *env, int agent_idx) {
     float best_z = agent->sim_z;
     float best_distance_error = 1e30f;
 
-    // Sample points from all road lanes
-    for (int i = 0; i < env->num_roads; i++) {
-        RoadMapElement *lane = &env->road_elements[i];
+    // Sample points from randomly selected road lanes (with replacement)
+    for (int ri = 0; ri < env->num_roads; ri++) {
+        RoadMapElement *lane = &env->road_elements[rand() % env->num_roads];
         if (lane->type != ROAD_LANE)
             continue;
 
@@ -3909,9 +3910,19 @@ void sample_new_goal(Drive *env, int agent_idx) {
             // Calculate distance to point
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
 
-            // Find point closest to target distance
-            float distance_error = fabsf(distance - env->goal_target_distance);
-            if (distance_error < best_distance_error) {
+            // compute distance
+            float distance_error =
+                fmax(env->min_goal_distance - distance, fmax(0.0, distance - env->max_goal_distance));
+            // check if it's within the specified radius, if so set it as a goal
+            if (distance_error == 0) {
+                agent->goal_position_x = point_x;
+                agent->goal_position_y = point_y;
+                agent->goal_position_z = point_z;
+                sample_new_goal_radius(env, agent);
+                agent->goals_sampled_this_episode += 1.0f;
+                return;
+                // if not check whether is closer than the previous best alternative point
+            } else if (distance_error < best_distance_error) {
                 best_distance_error = distance_error;
                 best_x = point_x;
                 best_y = point_y;
