@@ -337,7 +337,7 @@ void init_goal_positions(Drive *env);
 float clipSpeed(float speed);
 void sample_new_goal(Drive *env, int agent_idx);
 int check_lane_aligned(Agent *car, RoadMapElement *lane, int geometry_idx);
-void reset_goal_positions(Drive* env);
+void reset_goal_positions(Drive *env);
 
 // ========================================
 // Utility Functions
@@ -883,7 +883,7 @@ GridMapEntity *checkNeighbors(Drive *env, float x, float y, const int (*local_of
 // Map Loading Functions
 // ========================================
 
-void allocate_agent_trajectories(Agent* agent) {
+void allocate_agent_trajectories(Agent *agent) {
     // Make sure trajectory length is valid before allocation
     agent->log_trajectory_x = (float *)malloc(agent->trajectory_length * sizeof(float));
     agent->log_trajectory_y = (float *)malloc(agent->trajectory_length * sizeof(float));
@@ -921,7 +921,6 @@ void load_map_binary(const char *filename, Drive *env) {
     env->road_elements = (RoadMapElement *)calloc(env->num_roads, sizeof(RoadMapElement));
     env->road_scenario_ids = (int *)calloc(env->num_roads, sizeof(int));
 
-    
     if (env->init_mode != RANDOM_AGENTS) {
         env->spawn_settings.max_agents_in_sim = MAX_AGENTS;
     }
@@ -1248,7 +1247,7 @@ int check_z_collision(Agent *car1, Agent *car2) {
     float car1_top = car1->sim_z + car1->sim_height * 0.5f;
     float car2_bottom = car2->sim_z - car2->sim_height * 0.5f;
     float car2_top = car2->sim_z + car2->sim_height * 0.5f;
-    
+
     // Check using overlapping intervals along the z-axis
     if (car1_top < car2_bottom || car2_top < car1_bottom) {
         return 0; // No collision
@@ -1447,9 +1446,8 @@ void reset_agent_metrics(Drive *env, int agent_idx) {
 
 // void reset_agent_state(void){}
 
-static bool check_spawn_collision(Drive *env, int agents_to_check, 
-                                  float spawn_x, float spawn_y, float spawn_z, float spawn_heading,
-                                  float spawn_length, float spawn_width, float spawn_height) {
+static bool check_spawn_collision(Drive *env, int agents_to_check, float spawn_x, float spawn_y, float spawn_z,
+                                  float spawn_heading, float spawn_length, float spawn_width, float spawn_height) {
     // Create a temporary agent structure for collision checking
     Agent temp_agent;
     temp_agent.sim_x = spawn_x;
@@ -1488,8 +1486,7 @@ static bool check_spawn_collision(Drive *env, int agents_to_check,
     return false;
 }
 
-static bool check_spawn_offroad(Drive *env, 
-                                float spawn_x, float spawn_y, float spawn_z, float spawn_heading,
+static bool check_spawn_offroad(Drive *env, float spawn_x, float spawn_y, float spawn_z, float spawn_heading,
                                 float spawn_length, float spawn_width, float spawn_height) {
     Agent temp_agent = {.sim_x = spawn_x,
                         .sim_y = spawn_y,
@@ -1518,7 +1515,6 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
     agent->type = VEHICLE;
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
-
 
     if (num_drivable == 0)
         raise_error_with_message(ERROR_UNKNOWN,
@@ -1556,15 +1552,12 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
         spawn_z += spawn_height / 2.0f; // Adjust z to be at the center of the agent's height
 
         // Check for collision with existing/already-reset agents
-        if (check_spawn_collision(env, agents_to_check, 
-            spawn_x, spawn_y, spawn_z, spawn_heading, 
-            spawn_length, spawn_width, spawn_height))
+        if (check_spawn_collision(env, agents_to_check, spawn_x, spawn_y, spawn_z, spawn_heading, spawn_length,
+                                  spawn_width, spawn_height))
             continue;
 
         // Check for offroad
-        if (check_spawn_offroad(env, 
-            spawn_x, spawn_y, spawn_z, spawn_heading, 
-            spawn_length, spawn_width, spawn_height))
+        if (check_spawn_offroad(env, spawn_x, spawn_y, spawn_z, spawn_heading, spawn_length, spawn_width, spawn_height))
             continue;
 
         successfully_spawned = true;
@@ -3839,7 +3832,7 @@ float point_to_segment_distance_2d(float px, float py, float x1, float y1, float
     return sqrtf((px - closestX) * (px - closestX) + (py - closestY) * (py - closestY));
 }
 
-void reset_goal_positions(Drive* env) {
+void reset_goal_positions(Drive *env) {
     for (int x = 0; x < env->active_agent_count; x++) {
         int agent_idx = env->active_agent_indices[x];
         Agent *agent = &env->agents[agent_idx];
