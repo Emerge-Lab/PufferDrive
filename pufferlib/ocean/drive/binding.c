@@ -296,7 +296,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->reward_randomization = (int)unpack(kwargs, "reward_randomization");
     env->reward_conditioning = (int)unpack(kwargs, "reward_conditioning");
-    env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
+    env->min_goal_distance = (float)unpack(kwargs, "min_goal_distance");
+    env->max_goal_distance = (float)unpack(kwargs, "max_goal_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->min_goal_speed = (float)unpack(kwargs, "min_goal_speed");
     env->max_goal_speed = (float)unpack(kwargs, "max_goal_speed");

@@ -3536,7 +3536,8 @@ void sample_new_goal(Drive *env, int agent_idx) {
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
 
             // Find point closest to target distance
-            float distance_error = fmax(env->min_goal_distance - distance, fmax(0.0, distance - env->max_goal_distance);
+            float distance_error =
+                fmax(env->min_goal_distance - distance, fmax(0.0, distance - env->max_goal_distance));
             if (distance_error == 0) {
                 agent->goal_position_x = best_x;
                 agent->goal_position_y = best_y;
