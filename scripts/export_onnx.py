@@ -10,7 +10,7 @@ import pufferlib.vector
 import pufferlib.models
 
 from pufferlib.ocean.torch import Drive
-from scripts.export_model import load_config
+from scripts.export_model_bin import load_config
 
 
 class OnnxWrapper(torch.nn.Module):
