@@ -3535,9 +3535,10 @@ void sample_new_goal(Drive *env, int agent_idx) {
             // Calculate distance to point
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
 
-            // Find point closest to target distance
+            // compute distance
             float distance_error =
                 fmax(env->min_goal_distance - distance, fmax(0.0, distance - env->max_goal_distance));
+            // check if it's within the specified radius, if so set it as a goal
             if (distance_error == 0) {
                 agent->goal_position_x = point_x;
                 agent->goal_position_y = point_y;
@@ -3545,6 +3546,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 sample_new_goal_radius(env, agent);
                 agent->goals_sampled_this_episode += 1.0f;
                 return;
+                // if not check whether is closer than the previous best alternative point
             } else if (distance_error < best_distance_error) {
                 best_distance_error = distance_error;
                 best_x = point_x;
