@@ -28,6 +28,7 @@ typedef struct {
     int init_steps;
     int init_mode;
     int control_mode;
+    int max_controlled_agents;
     char map_dir[256];
 } env_init_config;
 
@@ -104,6 +105,8 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->control_mode = 2;
         } else if (strcmp(value, "\"control_sdc_only\"") == 0 || strcmp(value, "control_sdc_only") == 0) {
             env_config->control_mode = 3;
+        } else if (strcmp(value, "\"control_mixed_play\"") == 0 || strcmp(value, "control_mixed_play") == 0) {
+            env_config->control_mode = 4;
         } else {
             printf("Warning: Unknown control_mode value '%s', defaulting to CONTROL_VEHICLES\n", value);
             env_config->control_mode = 0; // Default to CONTROL_VEHICLES
@@ -114,6 +117,8 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->map_dir[sizeof(env_config->map_dir) - 1] = '\0';
         }
         // printf("Parsed map_dir: '%s'\n", env_config->map_dir);
+    } else if (MATCH("env", "max_controlled_agents")) {
+        env_config->max_controlled_agents = atoi(value);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

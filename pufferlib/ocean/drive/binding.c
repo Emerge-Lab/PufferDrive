@@ -76,6 +76,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
+    int max_controlled_agents = unpack(kwargs, "max_controlled_agents");
 
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec); // Always use random sampling with replacement
@@ -104,8 +105,10 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
         env->goal_target_distance = goal_target_distance;
+        env->max_controlled_agents = max_controlled_agents;
         snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
         env->entities = load_map_binary(map_file, env);
+        // Count the number of controllable agents in map
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
@@ -218,6 +221,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     OVERRIDE_FLOAT(goal_target_distance);
     OVERRIDE_FLOAT(goal_radius);
     OVERRIDE_FLOAT(goal_speed);
+    OVERRIDE_INT(max_controlled_agents);
 
 #undef OVERRIDE_INT
 #undef OVERRIDE_FLOAT
@@ -264,6 +268,8 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
     assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
+    assign_to_dict(dict, "perc_controlled", log->perc_controlled);
+    assign_to_dict(dict, "perc_other", log->perc_other);
     assign_to_dict(dict, "offroad_per_agent", log->offroad_per_agent);
     assign_to_dict(dict, "collisions_per_agent", log->collisions_per_agent);
     assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);

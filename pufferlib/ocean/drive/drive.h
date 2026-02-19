@@ -39,6 +39,7 @@
 #define CONTROL_AGENTS 1
 #define CONTROL_WOSAC 2
 #define CONTROL_SDC_ONLY 3
+#define CONTROL_MIXED_PLAY 4
 
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
@@ -163,6 +164,8 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
+    float perc_controlled;
+    float perc_other;
 };
 
 typedef struct Entity Entity;
@@ -317,7 +320,6 @@ struct Drive {
     float reward_goal_post_respawn;
     float goal_radius;
     float goal_speed;
-    int max_controlled_agents;
     int logs_capacity;
     int goal_behavior;
     float goal_target_distance;
@@ -330,6 +332,7 @@ struct Drive {
     int *tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    int max_controlled_agents;
 };
 
 void add_log(Drive *env) {
@@ -374,6 +377,9 @@ void add_log(Drive *env) {
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
         env->log.static_agent_count += env->static_agent_count;
+        int total = env->active_agent_count + env->static_agent_count;
+        env->log.perc_controlled += (float)env->active_agent_count / (float)total;
+        env->log.perc_other += (float)env->static_agent_count / (float)total;
         env->log.n += 1;
     }
 }
@@ -1201,10 +1207,9 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     return;
 }
 
-bool should_control_agent(Drive *env, int agent_idx) {
-
+bool should_control_agent(Drive *env, int agent_idx, int control_limit) {
     // Check if we have room for more agents or are already at capacity
-    if (env->active_agent_count >= env->num_agents) {
+    if (env->active_agent_count >= control_limit) {
         return false;
     }
 
@@ -1267,6 +1272,13 @@ void set_active_agents(Drive *env) {
         env->num_agents = MAX_AGENTS;
     }
 
+    int control_limit;
+    if (env->control_mode == CONTROL_MIXED_PLAY) {
+        control_limit = (env->max_controlled_agents < env->num_agents) ? env->max_controlled_agents : env->num_agents;
+    } else {
+        control_limit = env->num_agents;
+    }
+
     // If we have a SDC index (WOMD), initialize it first:
     int sdc_index = env->sdc_track_index;
 
@@ -1310,7 +1322,7 @@ void set_active_agents(Drive *env) {
         // Determine if this agent should be policy-controlled
         bool is_controlled = false;
 
-        is_controlled = should_control_agent(env, i);
+        is_controlled = should_control_agent(env, i, control_limit);
 
         if (is_controlled) {
             active_agent_indices[env->active_agent_count] = i;
@@ -1318,9 +1330,9 @@ void set_active_agents(Drive *env) {
             env->entities[i].active_agent = 1;
         } else if (env->init_mode != INIT_ONLY_CONTROLLABLE_AGENTS) {
             static_agent_indices[env->static_agent_count] = i;
-            env->static_agent_count++;
+            env->static_agent_count++; // Includes expert replay and static agents
             env->entities[i].active_agent = 0;
-            if (env->entities[i].mark_as_expert == 1 || env->active_agent_count == env->num_agents) {
+            if (env->entities[i].mark_as_expert == 1 || env->active_agent_count == control_limit) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
                 env->entities[i].mark_as_expert = 1;
@@ -1341,6 +1353,9 @@ void set_active_agents(Drive *env) {
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
+    // printf("Total actors: %d, Active agents: %d, Static agents: %d, Expert static agents: %d\n", env->num_actors,
+    //        env->active_agent_count, env->static_agent_count, env->expert_static_agent_count);
+    // printf("Control mode: %d, max controlled agents: %d\n", env->control_mode, env->max_controlled_agents);
 
     return;
 }

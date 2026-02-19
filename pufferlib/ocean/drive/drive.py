@@ -35,12 +35,12 @@ class Drive(pufferlib.PufferEnv):
         num_agents=512,
         action_type="discrete",
         dynamics_model="classic",
-        max_controlled_agents=-1,
         buf=None,
         seed=1,
         init_steps=0,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        max_controlled_agents=32,
         map_dir="resources/drive/binaries/training",
     ):
         # env
@@ -63,6 +63,7 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.max_controlled_agents = max_controlled_agents
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -96,6 +97,8 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 2
         elif self.control_mode_str == "control_sdc_only":
             self.control_mode = 3
+        elif self.control_mode_str == "control_mixed_play":
+            self.control_mode = 4
         else:
             raise ValueError(
                 f"control_mode must be one of 'control_vehicles', 'control_wosac', or 'control_agents'. Got: {self.control_mode_str}"
@@ -140,7 +143,6 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
             )
-        self.max_controlled_agents = int(max_controlled_agents)
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
@@ -150,9 +152,9 @@ class Drive(pufferlib.PufferEnv):
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             init_steps=self.init_steps,
-            max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
+            max_controlled_agents=self.max_controlled_agents,
         )
 
         self.num_agents = agent_offsets[-1]
@@ -186,7 +188,6 @@ class Drive(pufferlib.PufferEnv):
                 dt=dt,
                 episode_length=(int(episode_length) if episode_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
-                max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
@@ -194,6 +195,7 @@ class Drive(pufferlib.PufferEnv):
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
                 map_dir=map_dir,
+                max_controlled_agents=self.max_controlled_agents,
             )
             env_ids.append(env_id)
 
@@ -218,11 +220,11 @@ class Drive(pufferlib.PufferEnv):
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             init_steps=self.init_steps,
-            max_controlled_agents=self.max_controlled_agents,
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
             goal_speed=self.goal_speed,
             map_dir=self.map_dir,
+            max_controlled_agents=self.max_controlled_agents,
         )
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -253,7 +255,6 @@ class Drive(pufferlib.PufferEnv):
                 offroad_behavior=self.offroad_behavior,
                 dt=self.dt,
                 episode_length=(int(self.episode_length) if self.episode_length is not None else None),
-                max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
@@ -262,6 +263,7 @@ class Drive(pufferlib.PufferEnv):
                 control_mode=self.control_mode,
                 map_dir=self.map_dir,
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
+                max_controlled_agents=self.max_controlled_agents,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
