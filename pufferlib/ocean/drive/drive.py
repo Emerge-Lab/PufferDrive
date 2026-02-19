@@ -47,8 +47,8 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
-        use_all_maps=False,
         allow_fewer_maps=True,
+        eval_batch_size=-1,
         # reward randomization bounds
         reward_bound_goal_radius_min=2.0,
         reward_bound_goal_radius_max=12.0,
@@ -109,6 +109,7 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.eval_batch_size = eval_batch_size
         # reward randomization bounds
         self.reward_bound_goal_radius_min = reward_bound_goal_radius_min
         self.reward_bound_collision_min = reward_bound_collision_min
@@ -242,6 +243,8 @@ class Drive(pufferlib.PufferEnv):
                     f"Please reduce num_maps, add more maps to {map_dir}, or set allow_fewer_maps=True."
                 )
 
+        # This is to track on which maps the evaluation is running
+        self.eval_map_counter = 0
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
@@ -255,6 +258,7 @@ class Drive(pufferlib.PufferEnv):
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
+            eval_batch_size=self.eval_batch_size,
             reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
             reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
             reward_bound_collision_min=self.reward_bound_collision_min,
@@ -287,14 +291,14 @@ class Drive(pufferlib.PufferEnv):
             reward_bound_steer_max=self.reward_bound_steer_max,
             reward_bound_acc_min=self.reward_bound_acc_min,
             reward_bound_acc_max=self.reward_bound_acc_max,
-            use_all_maps=use_all_maps,
         )
 
-        # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if use_all_maps
-        self.num_agents = num_agents if not use_all_maps else agent_offsets[-1]
+        self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
+        # NOTE: What will happen if the map_counter becomes higher than num_maps ?
+        self.eval_map_counter += num_envs
         super().__init__(buf=buf)
         env_ids = []
         for i in range(num_envs):
@@ -403,6 +407,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,
+                eval_batch_size=self.eval_batch_size,
                 # reward randomization bounds
                 reward_bound_collision_min=self.reward_bound_collision_min,
                 reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
@@ -436,11 +441,11 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_steer_max=self.reward_bound_steer_max,
                 reward_bound_acc_min=self.reward_bound_acc_min,
                 reward_bound_acc_max=self.reward_bound_acc_max,
-                use_all_maps=False,
             )
             self.agent_offsets = agent_offsets
             self.map_ids = map_ids
             self.num_envs = num_envs
+            self.eval_map_counter += num_envs
             env_ids = []
             seed = np.random.randint(0, 2**32 - 1)
             for i in range(num_envs):

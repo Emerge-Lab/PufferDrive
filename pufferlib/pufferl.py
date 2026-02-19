@@ -587,6 +587,12 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
+        # For now I add a 3rd eval function, goal is to later unify everything.
+        if self.config["eval"]["eval_batch"] and (
+            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+        ):
+            pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
+
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
         if not self.render_async or not hasattr(self, "render_queue"):

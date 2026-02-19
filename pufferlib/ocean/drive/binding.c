@@ -91,6 +91,10 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     float min_goal_distance = unpack(kwargs, "min_goal_distance");
     float max_goal_distance = unpack(kwargs, "max_goal_distance");
 
+    int eval_batch_size = unpack(kwargs, "eval_batch_size");
+    int eval_map_counter = unpack(kwargs, "eval_map_counter");
+    bool eval_mode = eval_batch_size > 0;
+
     float reward_bound_goal_radius_min = unpack(kwargs, "reward_bound_goal_radius_min");
     float reward_bound_goal_radius_max = unpack(kwargs, "reward_bound_goal_radius_max");
     float reward_bound_collision_min = unpack(kwargs, "reward_bound_collision_min");
@@ -124,20 +128,18 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     float reward_bound_acc_min = unpack(kwargs, "reward_bound_acc_min");
     float reward_bound_acc_max = unpack(kwargs, "reward_bound_acc_max");
 
-    int use_all_maps = unpack(kwargs, "use_all_maps");
-
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
     int total_agent_count = 0;
     int env_count = 0;
-    int max_envs = use_all_maps ? num_maps : num_agents;
-    int map_idx = 0;
+    int max_envs = eval_mode ? eval_batch_size : num_agents;
+    int map_idx = eval_map_counter;
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
     // getting env count
-    while (use_all_maps ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
-        int map_id = use_all_maps ? map_idx++ : rand() % num_maps;
+    while (total_agent_count < num_agents && env_count < max_envs) {
+        int map_id = eval_mode ? map_idx++ : rand() % num_maps;
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
@@ -181,7 +183,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            if (!use_all_maps) {
+            if (!eval_mode) {
                 maps_checked++;
 
                 // Safeguard: if we've checked all available maps and found no active agents, raise an error
@@ -248,7 +250,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     // printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count,
     // num_agents);
-    if (!use_all_maps && total_agent_count >= num_agents) {
+    // NOTE: even in eval we want a fixed value of num_agents now, else you cannot batch.
+    // I still need to think about what we do with the cropped scenario
+    if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
     PyObject *final_total_agent_count = PyLong_FromLong(total_agent_count);
