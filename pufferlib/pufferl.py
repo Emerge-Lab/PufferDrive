@@ -123,12 +123,12 @@ class PuffeRL:
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
         )
 
-        self.prev_logits_traj = torch.zeros(
+        self.prev_logits_traj = torch.ones(
             total_agents,
             *atn_traj_size,
             device=device,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
-        )
+        ).softmax(dim=-1)
 
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
@@ -317,10 +317,9 @@ class PuffeRL:
                 )  # sample logits now accepts a length of actions_trajectory to only pick the first element for action sampling
 
                 # we store the full logits
-                self.prev_logits_traj[env_id.start : env_id.stop] = logits_full  # store the trajectory as previous traj
-                self.prev_logits_traj[env_id.start : env_id.stop][done_mask] = (
-                    0.0  # set the agents that are done to zero so that they incur in no loss
-                )
+                self.prev_logits_traj[env_id.start : env_id.stop] = logits_full.squeeze(
+                    0
+                )  # store the trajectory as previous traj
 
                 r = torch.clamp(r, -1, 1)
 
@@ -480,8 +479,8 @@ class PuffeRL:
             # action consistency diff
             prev_traj = mb_obs[..., self.obs_len :].reshape(-1, 12, full_logits.shape[-1])
 
-            prev_probs = prev_traj[:, 1:, :].softmax(dim=-1)
-            curr_probs = full_logits[:, :-1, :].softmax(dim=-1)
+            prev_probs = prev_traj[:, 1:, :].softmax(dim=-1).detach()
+            curr_probs = full_logits.squeeze(0)[:, :-1, :].softmax(dim=-1)
             consistency_loss = (curr_probs - prev_probs).abs()
             discount_future_actions = 0.95 ** torch.arange(consistency_loss.shape[1], device=consistency_loss.device)
             discount_future_actions = discount_future_actions.view(1, consistency_loss.shape[1], 1)
@@ -500,7 +499,7 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss  # + 0.1 * consistency_loss
+            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss + 0.1 * consistency_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
