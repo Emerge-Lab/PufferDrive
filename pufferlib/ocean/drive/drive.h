@@ -1937,20 +1937,19 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         agent->metrics_array[VELOCITY_PROGRESS_IDX] = 0.0f;
     }
 
-     // Comfort metric (GIGAFLOW) - only for JERK dynamics, modified for CLASSIC (Custom)
+    // Comfort metric (GIGAFLOW) - only for JERK dynamics, modified for CLASSIC (Custom)
     const float COMFORT_ACCEL_THRESHOLD = 3.0f; // m/s²
     int accel_violation =
-            (fabsf(agent->a_long) > COMFORT_ACCEL_THRESHOLD) + (fabsf(agent->a_lat) > COMFORT_ACCEL_THRESHOLD);
-   
+        (fabsf(agent->a_long) > COMFORT_ACCEL_THRESHOLD) + (fabsf(agent->a_lat) > COMFORT_ACCEL_THRESHOLD);
+
     if (env->dynamics_model == JERK) {
-        
-        const float COMFORT_JERK_THRESHOLD = 5.0f;  // m/s³
+
+        const float COMFORT_JERK_THRESHOLD = 5.0f; // m/s³
         int jerk_violation =
             (fabsf(agent->jerk_long) > COMFORT_JERK_THRESHOLD || fabsf(agent->jerk_lat) > COMFORT_JERK_THRESHOLD) ? 1
                                                                                                                   : 0;
         agent->metrics_array[COMFORT_VIOLATION_IDX] = (float)(accel_violation + jerk_violation);
-    }
-    else{
+    } else {
         agent->metrics_array[COMFORT_VIOLATION_IDX] = (float)(accel_violation);
     }
 
@@ -2570,10 +2569,9 @@ void c_step(Drive *env) {
         if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION) {
                 float reward_collision;
-                if(env->reward_conditioning){
+                if (env->reward_conditioning) {
                     reward_collision = agent->reward_coefs[REWARD_COEF_COLLISION] - 0.1f * speed_magnitude;
-                }
-                else{
+                } else {
                     reward_collision = env->reward_vehicle_collision;
                 }
                 env->rewards[i] += reward_collision;
@@ -2581,11 +2579,10 @@ void c_step(Drive *env) {
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].collisions_per_agent += 1.0f;
             } else if (collision_state == OFFROAD) {
-                if(env->reward_conditioning){
+                if (env->reward_conditioning) {
                     env->rewards[i] += agent->reward_coefs[REWARD_COEF_OFFROAD];
                     env->logs[i].episode_return += agent->reward_coefs[REWARD_COEF_OFFROAD];
-                }
-                else{
+                } else {
                     env->rewards[i] = env->reward_offroad_collision;
                     env->logs[i].episode_return = env->reward_offroad_collision;
                 }
@@ -2630,36 +2627,36 @@ void c_step(Drive *env) {
             env->logs[i].speed_at_goal = current_speed;
         }
 
-        //Add values to logs first
+        // Add values to logs first
 
-        //Lane alignment
+        // Lane alignment
         int lane_aligned = env->agents[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
 
-        //Lane center distance
+        // Lane center distance
         float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
         env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
 
-        //Comfort violation Count
+        // Comfort violation Count
         float comfort_violations = agent->metrics_array[COMFORT_VIOLATION_IDX];
         env->logs[i].comfort_violation_count += comfort_violations;
 
-        //Velocity progress sum
+        // Velocity progress sum
         float velocity_progress = agent->metrics_array[VELOCITY_PROGRESS_IDX];
         env->logs[i].velocity_progress_sum += velocity_progress;
 
-        //Average speed per agent
+        // Average speed per agent
         env->logs[i].avg_speed_per_agent += speed_magnitude;
 
         // We only add lane level rewards when conditioning is turned on
-        if(env->reward_conditioning){
-        
+        if (env->reward_conditioning) {
+
             // Add lane rewards
             //  Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
             float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
             float theta_f = acosf(fminf(fmaxf(cos_theta, -1.0f), 1.0f)); // Get |θ_f| from cos
-            // env->logs[i].lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f; <- Commented
-            // becaue this is already catered by us
+            // env->logs[i].lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f; <-
+            // Commented becaue this is already catered by us
 
             // Rl-align (GIGAFLOW): min(cos,0) + vel_align*min(cos*v,0) + 0.0025*(1-|θ|/(π/2))
             float against_lane_penalty = fminf(cos_theta, 0.0f); // negative when >90 degrees off
@@ -2668,7 +2665,7 @@ void c_step(Drive *env) {
             float alignment_bonus = 0.0025f * (1.0f - theta_f / (M_PI / 2.0f));
 
             float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt *
-                                    (against_lane_penalty + vel_aligned_penalty + alignment_bonus);
+                                      (against_lane_penalty + vel_aligned_penalty + alignment_bonus);
 
             env->rewards[i] += lane_align_reward;
             env->logs[i].episode_return += lane_align_reward;
@@ -2676,14 +2673,14 @@ void c_step(Drive *env) {
             // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05/(exp(|x_f - bias| - 0.5))
             float adjusted_dist = fabsf(lane_center_distance - agent->reward_coefs[REWARD_COEF_CENTER_BIAS]);
             float exp_decay = 0.05f / expf(adjusted_dist - 0.5f);
-            float lane_center_reward =
-                agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
+            float lane_center_reward = agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt *
+                                       ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
 
             env->rewards[i] += lane_center_reward;
             env->logs[i].episode_return += lane_center_reward;
             // OTHER REWARDS (From Gigaflow)
 
-            // Red light violation reward (GIGAFLOW) - Omitted Right now
+            // Red light violation reward (GIGAFLOW) - OMITTED
 
             // Comfort reward (GIGAFLOW)
 
