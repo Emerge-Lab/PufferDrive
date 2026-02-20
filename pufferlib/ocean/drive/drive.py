@@ -462,9 +462,9 @@ class Drive(pufferlib.PufferEnv):
 
                 if len(self.expert_observations_full) > max_samples:
                     # Limit storage if needed (keep most recent samples)
-                    self.expert_observations_full = self.expert_observations_full[-max_samples:]
-                    self.expert_actions_discrete = self.expert_actions_discrete[-max_samples:]
-                    self.expert_actions_continuous = self.expert_actions_continuous[-max_samples:]
+                    self.expert_observations_full = self.expert_observations_full[:max_samples:]
+                    self.expert_actions_discrete = self.expert_actions_discrete[:max_samples:]
+                    self.expert_actions_continuous = self.expert_actions_continuous[:max_samples:]
 
                 self.total_num_samples = self.expert_actions_discrete.shape[0]
 
