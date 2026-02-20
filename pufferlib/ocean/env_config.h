@@ -221,6 +221,8 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->control_mode = 2;
         } else if (strcmp(value, "\"control_sdc_only\"") == 0 || strcmp(value, "control_sdc_only") == 0) {
             env_config->control_mode = 3;
+        } else if (strcmp(value, "\"control_mixed_play\"") == 0 || strcmp(value, "control_mixed_play") == 0) {
+            env_config->control_mode = 4;
         } else {
             printf("Warning: Unknown control_mode value '%s', defaulting to CONTROL_VEHICLES\n", value);
             env_config->control_mode = 0; // Default to CONTROL_VEHICLES

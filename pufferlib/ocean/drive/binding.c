@@ -318,6 +318,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     OVERRIDE_FLOAT(goal_target_distance);
     OVERRIDE_FLOAT(goal_radius);
     OVERRIDE_FLOAT(goal_speed);
+    OVERRIDE_INT(max_controlled_agents);
 
 #undef OVERRIDE_INT
 #undef OVERRIDE_FLOAT
@@ -403,6 +404,8 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
     assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
+    assign_to_dict(dict, "perc_controlled", log->perc_controlled);
+    assign_to_dict(dict, "perc_other", log->perc_other);
     assign_to_dict(dict, "offroad_per_agent", log->offroad_per_agent);
     assign_to_dict(dict, "collisions_per_agent", log->collisions_per_agent);
     assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);

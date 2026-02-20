@@ -59,6 +59,7 @@
 #define CONTROL_AGENTS 1
 #define CONTROL_WOSAC 2
 #define CONTROL_SDC_ONLY 3
+#define CONTROL_MIXED_PLAY 4
 
 // Lane selection scoring
 #define LANE_SELECTION_DISTANCE_WEIGHT 0.6f
@@ -213,6 +214,8 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
+    float perc_controlled;
+    float perc_other;
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -1412,10 +1415,9 @@ void set_start_position(Drive *env) {
     }
 }
 
-bool should_control_agent(Drive *env, int agent_idx) {
-
+bool should_control_agent(Drive *env, int agent_idx, int control_limit) {
     // Check if we have room for more agents or are already at capacity
-    if (env->active_agent_count >= env->num_agents) {
+    if (env->active_agent_count >= control_limit) {
         return false;
     }
 
@@ -1482,6 +1484,13 @@ void set_active_agents(Drive *env) {
         env->num_agents = env->max_agents_in_sim;
     }
 
+    int control_limit;
+    if (env->control_mode == CONTROL_MIXED_PLAY) {
+        control_limit = (env->max_controlled_agents < env->num_agents) ? env->max_controlled_agents : env->num_agents;
+    } else {
+        control_limit = env->num_agents;
+    }
+
     // If we have a SDC index (WOMD), initialize it first:
     int sdc_index = env->sdc_track_index;
 
@@ -1519,7 +1528,7 @@ void set_active_agents(Drive *env) {
         // Determine if this agent should be policy-controlled
         bool is_controlled = false;
 
-        is_controlled = should_control_agent(env, i);
+        is_controlled = should_control_agent(env, i, control_limit);
 
         if (is_controlled) {
             active_agent_indices[env->active_agent_count] = i;
@@ -1550,6 +1559,9 @@ void set_active_agents(Drive *env) {
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
+    // printf("Total actors: %d, Active agents: %d, Static agents: %d, Expert static agents: %d\n", env->num_actors,
+    //        env->active_agent_count, env->static_agent_count, env->expert_static_agent_count);
+    // printf("Control mode: %d, max controlled agents: %d\n", env->control_mode, env->max_controlled_agents);
 
     free(active_agent_indices);
     free(static_agent_indices);
