@@ -189,6 +189,7 @@ def entropy_probs(logits, probs):
 
 def sample_logits(logits, action=None, actions_trajectory_length=12):
     is_discrete = isinstance(logits, torch.Tensor)
+    logits_check = logits
     if isinstance(logits, torch.distributions.Normal):
         batch = logits.loc.shape[0]
         if action is None:
@@ -205,9 +206,9 @@ def sample_logits(logits, action=None, actions_trajectory_length=12):
             [l.transpose(0, 1) for l in logits], batch_first=False, padding_value=-torch.inf
         ).permute(1, 2, 0)
 
-    logits = logits.reshape(-1, actions_trajectory_length, logits.shape[-1])
+    logits = logits.reshape(1, -1, actions_trajectory_length, logits.shape[-1])
     logits_full = logits
-    logits = logits[:, [0], :]  # only the first item of the sequence is used to sample the actions
+    logits = logits[:, :, 0, :]  # only the first item of the sequence is used to sample the actions
 
     # This can fail on nans etc
     normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
@@ -228,4 +229,4 @@ def sample_logits(logits, action=None, actions_trajectory_length=12):
     if is_discrete:
         return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0)
 
-    return action, logprob.sum(1), logits_entropy, logits_full
+    return action.T, logprob.sum(0), logits_entropy, logits_full
