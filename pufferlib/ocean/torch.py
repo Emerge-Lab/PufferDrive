@@ -18,12 +18,15 @@ class Drive(nn.Module):
         self.hidden_size = hidden_size
         self.observation_size = env.single_observation_space.shape[0]
         self.max_partner_objects = env.max_partner_objects
-        self.partner_features = env.partner_features
         self.max_road_objects = env.max_road_objects
+
+        # Determine All encoder feature dimensions from env
+        self.ego_dim = env.ego_features
         self.road_features = env.road_features
         self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
-        # Determine ego dimension from environment's feature layout
-        self.ego_dim = env.ego_features
+        self.partner_features = env.partner_features
+        self.reward_features = env.reward_features
+        self.num_encoders = 3
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
@@ -46,9 +49,18 @@ class Drive(nn.Module):
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
+        if env.reward_conditioning:
+            self.reward_encoder = nn.Sequential(
+                pufferlib.pytorch.layer_init(nn.Linear(self.reward_features, input_size)),
+                nn.LayerNorm(input_size),
+                # nn.ReLU(),
+                pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+            )
+            self.num_encoders += 1
+
         self.shared_embedding = nn.Sequential(
             nn.GELU(),
-            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, hidden_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(self.num_encoders * input_size, hidden_size)),
         )
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
 
@@ -83,11 +95,24 @@ class Drive(nn.Module):
         road_categorical = road_objects[:, :, self.road_features - 1]
         road_onehot = F.one_hot(road_categorical.long(), num_classes=7)  # Shape: [batch, ROAD_MAX_OBJECTS, 7]
         road_objects = torch.cat([road_continuous, road_onehot], dim=2)
+
+        reward_obs = (
+            observations[:, ego_dim + partner_dim + road_dim : ego_dim + partner_dim + road_dim + self.reward_features]
+            if self.reward_features > 0
+            else None
+        )
+
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
         road_features, _ = self.road_encoder(road_objects).max(dim=1)
+        reward_features = (
+            self.reward_encoder(reward_obs) if self.reward_features > 0 else torch.zeros_like(ego_features)
+        )
 
-        concat_features = torch.cat([ego_features, road_features, partner_features], dim=1)
+        if self.reward_features > 0:
+            concat_features = torch.cat([ego_features, road_features, partner_features, reward_features], dim=1)
+        else:
+            concat_features = torch.cat([ego_features, road_features, partner_features], dim=1)
 
         # Pass through shared embedding
         embedding = F.relu(self.shared_embedding(concat_features))

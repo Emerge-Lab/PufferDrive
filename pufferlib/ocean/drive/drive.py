@@ -147,8 +147,6 @@ class Drive(pufferlib.PufferEnv):
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
             dynamics_model
         )
-        
-        
 
         # Extract observation shapes from constants
         # These need to be defined in C, since they determine the shape of the arrays
@@ -156,11 +154,13 @@ class Drive(pufferlib.PufferEnv):
         self.max_partner_objects = binding.MAX_AGENTS - 1
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
+        self.reward_features = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
         self.num_obs = (
             self.ego_features
-            + self.max_partner_objects * self.partner_features
             + self.max_road_objects * self.road_features
+            + self.max_partner_objects * self.partner_features
+            + self.reward_features
         )
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
