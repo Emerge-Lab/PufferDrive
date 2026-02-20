@@ -90,10 +90,13 @@ class Drive(nn.Module):
         ego_dim = self.ego_dim
         partner_dim = self.max_partner_objects * self.partner_features
         road_dim = self.max_road_objects * self.road_features
+        past_actions_dim = np.prod(self.action_tensor_shape)
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
-        past_actions_traj = torch.zeros((observations.shape[0], np.prod(self.action_tensor_shape))).to(road_obs.device)
+        past_actions_traj = observations[
+            :, ego_dim + partner_dim + road_dim : ego_dim + partner_dim + road_dim + past_actions_dim
+        ]
 
         partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
 
@@ -126,6 +129,7 @@ class Drive(nn.Module):
             action = self.actor(flat_hidden).reshape(
                 flat_hidden.shape[0] * self.actions_trajectory_length, sum(self.atn_dim)
             )  # push the sequence length in the batch
+            # repack the actions into n tuples where n is the number of kind of actions you can have (MultiDiscrete)
             action = torch.split(action, self.atn_dim, dim=1)
 
         value = self.value_fn(
