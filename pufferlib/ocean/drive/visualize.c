@@ -377,34 +377,49 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         }
     }
 
+// Helper: run forward() then populate predicted_traj_x/y for draw_scene to render.
+#define FORWARD_AND_TRAJ(net_, env_)                                                                                   \
+    do {                                                                                                               \
+        forward((net_), (env_)->observations, (int *)(env_)->actions);                                                 \
+        for (int _j = 0; _j < (env_)->active_agent_count; _j++) {                                                      \
+            rollout_trajectory((env_), _j, &(net_)->pred_actions_traj[_j * PREDICTED_TRAJ_LEN],                        \
+                               &(env_)->predicted_traj_x[_j * PREDICTED_TRAJ_LEN],                                     \
+                               &(env_)->predicted_traj_y[_j * PREDICTED_TRAJ_LEN]);                                    \
+        }                                                                                                              \
+    } while (0)
+
     if (render_topdown) {
         printf("Recording topdown view...\n");
         for (int i = 0; i < frame_count; i++) {
+            FORWARD_AND_TRAJ(net, &env);
             if (i % frame_skip == 0) {
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, show_human_logs, show_grid,
                                   img_width, img_height, zoom_in);
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            forward(net, env.observations, (int *)env.actions);
             c_step(&env);
         }
     }
 
     if (render_agent) {
         c_reset(&env);
+        // Clear recurrent state when env resets
+        memset(net->past_actions_traj, 0, net->num_agents * net->past_actions_dim * sizeof(float));
+        memset(net->lstm->state_h, 0, net->num_agents * NN_HIDDEN_SIZE * sizeof(float));
+        memset(net->lstm->state_c, 0, net->num_agents * NN_HIDDEN_SIZE * sizeof(float));
         printf("Recording agent view...\n");
         for (int i = 0; i < frame_count; i++) {
             int human_idx = env.active_agent_indices[env.human_agent_idx];
             if (env.agents[human_idx].respawn_count > 0) {
                 break;
             }
+            FORWARD_AND_TRAJ(net, &env);
             if (i % frame_skip == 0) {
                 renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
                 WriteFrame(&agent_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            forward(net, env.observations, (int *)env.actions);
             c_step(&env);
         }
     }

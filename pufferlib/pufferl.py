@@ -308,7 +308,7 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                prev_traj = self.prev_logits_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1)
+                prev_traj = self.prev_logits_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1).detach()
                 o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
                 logits, value = self.policy.forward_eval(o_device_aug, state)
                 action, logprob, _, logits_full = pufferlib.pytorch.sample_logits(
@@ -319,6 +319,15 @@ class PuffeRL:
                 self.prev_logits_traj[env_id.start : env_id.stop] = logits_full.squeeze(
                     0
                 )  # store the trajectory as previous traj
+
+                # Update predicted trajectory for live rendering (Serial / in-process envs only)
+                if hasattr(self.vecenv, "envs"):
+                    pred_actions = logits_full.squeeze(0).argmax(dim=-1).cpu().numpy().astype("int32")
+                    ptr = 0
+                    for env in self.vecenv.envs:
+                        n = env.num_agents
+                        env.set_predicted_trajectory(pred_actions[ptr : ptr + n])
+                        ptr += n
 
                 r = torch.clamp(r, -1, 1)
 
@@ -472,7 +481,7 @@ class PuffeRL:
 
             prev_probs = prev_traj[:, 1:, :].softmax(dim=-1).detach()
             curr_probs = full_logits.squeeze(0)[:, :-1, :].softmax(dim=-1)
-            consistency_loss = (curr_probs - prev_probs).abs()
+            consistency_loss = (curr_probs - prev_probs) ** 2
             discount_future_actions = 0.95 ** torch.arange(consistency_loss.shape[1], device=consistency_loss.device)
             discount_future_actions = discount_future_actions.view(1, consistency_loss.shape[1], 1)
             consistency_loss = consistency_loss * discount_future_actions
@@ -490,11 +499,15 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss + 0.1 * consistency_loss
+            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss + consistency_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
             self.values[idx] = newvalue.detach().float()
+
+            # R2 consitency
+            denom = ((curr_probs.detach() - curr_probs.mean().detach()) ** 2).mean()
+            r2 = consistency_loss.item() / denom.item()
 
             # Logging
             profile("train_misc", epoch)
@@ -505,6 +518,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["consistency_loss_r2"] += r2 / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)

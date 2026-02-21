@@ -2,7 +2,53 @@
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
+
+#include <Python.h>
+
+// Forward declaration — body defined after env_binding.h (needs VecEnv)
+static PyObject *vec_set_predicted_trajectory(PyObject *self, PyObject *args);
+
+#define MY_METHODS                                                                                                     \
+    {"vec_set_predicted_trajectory", vec_set_predicted_trajectory, METH_VARARGS,                                       \
+     "Set predicted action trajectory for rendering (int32 array shape [n_agents, traj_len])"}
+
 #include "../env_binding.h"
+
+// ---- implementation (VecEnv now defined) ----
+
+static PyObject *vec_set_predicted_trajectory(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_predicted_trajectory requires 2 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+
+    PyObject *pred_obj = PyTuple_GetItem(args, 1);
+    if (!PyArray_Check(pred_obj)) {
+        PyErr_SetString(PyExc_TypeError, "pred_actions must be a NumPy array");
+        return NULL;
+    }
+    PyArrayObject *pred_arr = (PyArrayObject *)pred_obj;
+    if (!PyArray_ISCONTIGUOUS(pred_arr)) {
+        PyErr_SetString(PyExc_ValueError, "pred_actions must be contiguous");
+        return NULL;
+    }
+    int *pred_data = (int *)PyArray_DATA(pred_arr);
+
+    int global_offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *env = (Drive *)vec->envs[i];
+        for (int j = 0; j < env->active_agent_count; j++) {
+            float *out_x = &env->predicted_traj_x[j * PREDICTED_TRAJ_LEN];
+            float *out_y = &env->predicted_traj_y[j * PREDICTED_TRAJ_LEN];
+            rollout_trajectory(env, j, &pred_data[(global_offset + j) * PREDICTED_TRAJ_LEN], out_x, out_y);
+        }
+        global_offset += env->active_agent_count;
+    }
+    Py_RETURN_NONE;
+}
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *obs = PyDict_GetItemString(kwargs, "observations");

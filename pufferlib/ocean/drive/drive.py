@@ -552,6 +552,16 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
+    def set_predicted_trajectory(self, pred_actions):
+        """Forward-simulate and store predicted trajectory for rendering.
+
+        Args:
+            pred_actions: int32 numpy array of shape (num_agents, PREDICTED_TRAJ_LEN)
+                          containing discrete action indices.
+        """
+        pred_actions = np.ascontiguousarray(pred_actions, dtype=np.int32)
+        binding.vec_set_predicted_trajectory(self.c_envs, pred_actions)
+
     def get_ground_truth_trajectories(self):
         """Get ground truth trajectories for all active agents.
 
