@@ -309,7 +309,7 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                prev_traj = self.prev_logits_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1)
+                prev_traj = self.prev_logits_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1).detach()
                 o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
                 logits, value = self.policy.forward_eval(o_device_aug, state)
                 action, logprob, _, logits_full = pufferlib.pytorch.sample_logits(
@@ -481,8 +481,10 @@ class PuffeRL:
 
             prev_probs = prev_traj[:, 1:, :].softmax(dim=-1).detach()
             curr_probs = full_logits.squeeze(0)[:, :-1, :].softmax(dim=-1)
-            consistency_loss = (curr_probs - prev_probs).abs()
-            discount_future_actions = 0.95 ** torch.arange(consistency_loss.shape[1], device=consistency_loss.device)
+            consistency_loss = (curr_probs - prev_probs) ** 2
+            discount_future_actions = config["action_pred_discount"] ** torch.arange(
+                consistency_loss.shape[1], device=consistency_loss.device
+            )
             discount_future_actions = discount_future_actions.view(1, consistency_loss.shape[1], 1)
             consistency_loss = consistency_loss * discount_future_actions
             consistency_loss = consistency_loss.mean()
@@ -499,7 +501,12 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss + 0.1 * consistency_loss
+            loss = (
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - config["ent_coef"] * entropy_loss
+                + config["action_pred_coef"] * consistency_loss
+            )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -514,6 +521,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["action_prediction"] += consistency_loss.item() / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
