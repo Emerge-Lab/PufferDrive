@@ -71,7 +71,7 @@ void free_configurator(drive_config *config) {
 }
 
 int test_values() {
-    drive_config config;
+    drive_config config = {0};
     if (ini_parse("test_drive.ini", handler, &config) < 0)
         return 1;
     assert(config.num_agents == 512);
@@ -84,7 +84,7 @@ int test_values() {
 }
 
 int test_full_line_comment() {
-    drive_config config;
+    drive_config config = {0};
     if (ini_parse("test_drive.ini", handler, &config) < 0)
         return 1;
     assert(config.key1 == 1);
@@ -96,7 +96,7 @@ int test_full_line_comment() {
 }
 
 int test_inline_comment() {
-    drive_config config;
+    drive_config config = {0};
     if (ini_parse("test_drive.ini", handler, &config) < 0)
         return 1;
     assert(strcmp(config.key5, "five") == 0);
@@ -106,7 +106,7 @@ int test_inline_comment() {
 }
 
 int test_problematic_inline_comment() {
-    drive_config config;
+    drive_config config = {0};
     if (ini_parse("test_drive.ini", handler, &config) < 0)
         return 1;
     // assert(strcmp(config.key4, "four") == 0); // should pass if comments where eluded
