@@ -68,6 +68,8 @@ static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
 }
 
 static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
+    // This function samples maps until we have enough agents to fill the batch.
+    // It returns a tuple of (agent_offsets, map_ids, env_count).
     char *map_dir = unpack_str(kwargs, "map_dir");
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
@@ -78,15 +80,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
     int max_controlled_agents = unpack(kwargs, "max_controlled_agents");
 
+    struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec); // Always use random sampling with replacement
 
     int total_agent_count = 0;
     int env_count = 0;
-
     int max_envs = num_agents;
-
     int maps_checked = 0;
+
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
 
@@ -94,7 +96,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     while (total_agent_count < num_agents && env_count < max_envs) {
         char map_file[512];
 
-        // Always sample randomly with replacement
+        // printf("Sampling map for env %d (total agents so far: %d)\n", env_count, total_agent_count);
+        //  Always sample randomly with replacement
         int map_id = rand() % num_maps;
 
         // printf("Sampling map_id: %d\n", map_id);
@@ -108,6 +111,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->max_controlled_agents = max_controlled_agents;
         snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", map_dir, map_id);
         env->entities = load_map_binary(map_file, env);
+
         // Count the number of controllable agents in map
         set_active_agents(env);
 

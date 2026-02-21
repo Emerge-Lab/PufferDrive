@@ -70,9 +70,8 @@ void CloseVideo(VideoRecorder *recorder) {
     waitpid(recorder->pid, NULL, 0);
 }
 
-void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int lasers, int trajectories,
-                       int frame_count, float *path, int show_human_logs, int show_grid, int img_width, int img_height,
-                       int zoom_in, int control) {
+void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int lasers, float *path,
+                       int show_human_logs, int show_grid, int img_width, int img_height, int zoom_in, int control) {
     BeginDrawing();
 
     // Top-down orthographic camera
@@ -99,39 +98,23 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
     BeginMode3D(camera);
     rlEnableDepthTest();
 
-    // Draw human replay trajectories if enabled
+    // Draw log replay trajectories for controlled agents
     if (show_human_logs) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int idx = env->active_agent_indices[i];
-            Vector3 prev_point = {0};
-            bool has_prev = false;
-
-            for (int j = 0; j < env->entities[idx].array_size; j++) {
-                float x = env->entities[idx].traj_x[j];
-                float y = env->entities[idx].traj_y[j];
-                float valid = env->entities[idx].traj_valid[j];
-
-                if (!valid) {
-                    has_prev = false;
-                    continue;
-                }
-
-                Vector3 curr_point = {x, y, 0.5f};
-
-                if (has_prev) {
-                    DrawLine3D(prev_point, curr_point, Fade(LIGHTGREEN, 0.6f));
-                }
-
-                prev_point = curr_point;
-                has_prev = true;
+            for (int t = env->init_steps; t < env->episode_length; t++) {
+                DrawSphere((Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], 0.3f}, 0.2f,
+                           LIGHTBLUE);
             }
         }
     }
 
-    // Draw agent trajs
-    if (trajectories) {
-        for (int i = 0; i < frame_count; i++) {
-            DrawSphere((Vector3){path[i * 2], path[i * 2 + 1], 0.8f}, 0.5f, YELLOW);
+    // Draw human-replay expert trajectories for static agents
+    for (int i = 0; i < env->expert_static_agent_count; i++) {
+        int idx = env->expert_static_agent_indices[i];
+        for (int t = env->init_steps; t < env->episode_length; t++) {
+            DrawSphere((Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], 0.2f}, 0.2f,
+                       EXPERT_REPLAY);
         }
     }
 
@@ -150,7 +133,7 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
         text_color = RED;
     } else {
         control_text = "Control: Policy actions";
-        text_color = YELLOW;
+        text_color = BLUE;
     }
 
     int text_width = MeasureText(control_text, 30);
@@ -227,6 +210,8 @@ static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
 
                 // Check if expert actions are invalid (-1 means no action available)
                 if (agent->expert_accel[timestep] == -1.0f && agent->expert_steering[timestep] == -1.0f) {
+                    printf("Warning: No expert action for agent %d at timestep %d. Applying zero action.\n", agent_idx,
+                           timestep);
                     // Do nothing - apply zero action
                     continue;
                 }
@@ -282,8 +267,8 @@ static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
 }
 
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
-             int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
-             const char *output_agent, int num_maps, int zoom_in, int control) {
+             int show_human_logs, const char *view_mode, const char *output_topdown, const char *output_agent,
+             int num_maps, int zoom_in, int control) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};
@@ -301,10 +286,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         map_name = map_buffer;
     }
 
-    if (frame_skip <= 0) {
-        frame_skip = 1;
-    }
-
     // Check if map file exists
     FILE *map_file = fopen(map_name, "rb");
     if (map_file == NULL) {
@@ -319,27 +300,26 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     fclose(policy_file);
 
     // Initialize environment with all config values from INI [env] section
-    Drive env = {
-        .action_type = conf.action_type,
-        .dynamics_model = conf.dynamics_model,
-        .reward_vehicle_collision = conf.reward_vehicle_collision,
-        .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_goal = conf.reward_goal,
-        .reward_goal_post_respawn = conf.reward_goal_post_respawn,
-        .goal_radius = conf.goal_radius,
-        .goal_behavior = conf.goal_behavior,
-        .goal_target_distance = conf.goal_target_distance,
-        .goal_speed = conf.goal_speed,
-        .dt = conf.dt,
-        .episode_length = conf.episode_length,
-        .termination_mode = conf.termination_mode,
-        .collision_behavior = conf.collision_behavior,
-        .offroad_behavior = conf.offroad_behavior,
-        .init_steps = conf.init_steps,
-        .init_mode = conf.init_mode,
-        .control_mode = conf.control_mode,
-        .map_name = (char *)map_name,
-    };
+    Drive env = {.action_type = conf.action_type,
+                 .dynamics_model = conf.dynamics_model,
+                 .reward_vehicle_collision = conf.reward_vehicle_collision,
+                 .reward_offroad_collision = conf.reward_offroad_collision,
+                 .reward_goal = conf.reward_goal,
+                 .reward_goal_post_respawn = conf.reward_goal_post_respawn,
+                 .goal_radius = conf.goal_radius,
+                 .goal_behavior = conf.goal_behavior,
+                 .goal_target_distance = conf.goal_target_distance,
+                 .goal_speed = conf.goal_speed,
+                 .dt = conf.dt,
+                 .episode_length = conf.episode_length,
+                 .termination_mode = conf.termination_mode,
+                 .collision_behavior = conf.collision_behavior,
+                 .offroad_behavior = conf.offroad_behavior,
+                 .init_steps = conf.init_steps,
+                 .init_mode = conf.init_mode,
+                 .control_mode = conf.control_mode,
+                 .map_name = (char *)map_name,
+                 .max_controlled_agents = conf.max_controlled_agents};
 
     allocate(&env);
 
@@ -395,7 +375,6 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
     }
 
-    int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
     char filename_topdown[256];
     char filename_agent[256];
 
@@ -449,33 +428,29 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     if (render_topdown) {
         printf("Recording topdown view...\n");
-        for (int i = 0; i < frame_count; i++) {
-            if (i % frame_skip == 0) {
-                renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, show_human_logs, show_grid,
-                                  img_width, img_height, zoom_in, control);
-                WriteFrame(&topdown_recorder, img_width, img_height);
-                rendered_frames++;
-            }
-            set_actions(&env, i, control, net);
+        for (int t = env.init_steps; t < env.episode_length; t++) {
+            set_actions(&env, t, control, net);
             c_step(&env);
+            renderTopDownView(&env, client, map_height, 0, 0, NULL, show_human_logs, show_grid, img_width, img_height,
+                              zoom_in, control);
+            WriteFrame(&topdown_recorder, img_width, img_height);
+            rendered_frames++;
         }
     }
 
     if (render_agent) {
         c_reset(&env);
         printf("Recording agent view...\n");
-        for (int i = 0; i < frame_count; i++) {
+        for (int t = env.init_steps; t < env.episode_length; t++) {
             int human_idx = env.active_agent_indices[env.human_agent_idx];
             if (env.entities[human_idx].respawn_count > 0) {
                 break;
             }
-            if (i % frame_skip == 0) {
-                renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
-                WriteFrame(&agent_recorder, img_width, img_height);
-                rendered_frames++;
-            }
-            set_actions(&env, i, control, net);
+            set_actions(&env, t, control, net);
             c_step(&env);
+            renderAgentView(&env, client, map_height, obs_only, lasers, show_grid);
+            WriteFrame(&agent_recorder, img_width, img_height);
+            rendered_frames++;
         }
     }
 
@@ -513,7 +488,6 @@ int main(int argc, char *argv[]) {
     int obs_only = 0;
     int lasers = 0;
     int show_human_logs = 1;
-    int frame_skip = 1;
     int zoom_in = 1;
     const char *view_mode = "topdown";
 
@@ -522,7 +496,7 @@ int main(int argc, char *argv[]) {
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
-    int num_maps = 100;
+    int num_maps = 2;
     int control = ACTIONS_FROM_POLICY; // ACTIONS_INFERRED_FROM_HUMAN;
 
     // Parse command line arguments
@@ -535,14 +509,6 @@ int main(int argc, char *argv[]) {
             lasers = 1;
         } else if (strcmp(argv[i], "--show-human-logs") == 0) {
             show_human_logs = 1;
-        } else if (strcmp(argv[i], "--frame-skip") == 0) {
-            if (i + 1 < argc) {
-                frame_skip = atoi(argv[i + 1]);
-                i++;
-                if (frame_skip <= 0) {
-                    frame_skip = 1;
-                }
-            }
         } else if (strcmp(argv[i], "--zoom-in") == 0) {
             zoom_in = 1;
         } else if (strcmp(argv[i], "--view") == 0) {
@@ -610,7 +576,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
+    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, view_mode, output_topdown,
              output_agent, num_maps, zoom_in, control);
     return 0;
 }

@@ -35,8 +35,7 @@ void test_drivenet() {
 }
 
 int demo(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers, int show_human_logs,
-         int frame_skip, const char *view_mode, const char *output_topdown, const char *output_agent, int num_maps,
-         int zoom_in) {
+         const char *view_mode, const char *output_topdown, const char *output_agent, int num_maps, int zoom_in) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};
@@ -208,7 +207,6 @@ int main(int argc, char *argv[]) {
     int obs_only = 0;
     int lasers = 0;
     int show_human_logs = 0;
-    int frame_skip = 1;
     int zoom_in = 0;
     const char *view_mode = "both";
 
@@ -229,14 +227,6 @@ int main(int argc, char *argv[]) {
             lasers = 1;
         } else if (strcmp(argv[i], "--log-trajectories") == 0) {
             show_human_logs = 1;
-        } else if (strcmp(argv[i], "--frame-skip") == 0) {
-            if (i + 1 < argc) {
-                frame_skip = atoi(argv[i + 1]);
-                i++;
-                if (frame_skip <= 0) {
-                    frame_skip = 1;
-                }
-            }
         } else if (strcmp(argv[i], "--zoom-in") == 0) {
             zoom_in = 1;
         } else if (strcmp(argv[i], "--view") == 0) {
@@ -287,8 +277,8 @@ int main(int argc, char *argv[]) {
     }
 
     // performance_test();
-    demo(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
-         output_agent, num_maps, zoom_in);
+    demo(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, view_mode, output_topdown, output_agent,
+         num_maps, zoom_in);
     // test_drivenet();
     return 0;
 }
