@@ -10,6 +10,7 @@ warnings.filterwarnings("error", category=RuntimeWarning)
 import os
 import sys
 import glob
+import json
 import ast
 import time
 import random
@@ -521,7 +522,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["action_prediction"] += consistency_loss.item() / self.total_minibatches
+            losses["action_prediction"] += config["action_pred_coef"] * consistency_loss.item() / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
@@ -562,6 +563,24 @@ class PuffeRL:
             if self.render and self.epoch % self.render_interval == 0:
                 model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
                 model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+
+                save_idxs = np.random.choice(self.observations.shape[0], 1000)
+                np.savez(
+                    f"{model_dir}_observation_{self.epoch:06d}.npz", self.observations.detach()[save_idxs, ...].cpu()
+                )
+                np.savez(
+                    f"{model_dir}_previous_action_probs_{self.epoch:06d}.npz", prev_probs.detach()[save_idxs, ...].cpu()
+                )
+                np.savez(f"{model_dir}_action_probs_{self.epoch:06d}.npz", curr_probs.detach()[save_idxs, ...].cpu())
+                with open(f"{model_dir}_shapes_{self.epoch:06d}.json", "w") as f:
+                    json.dump(
+                        {
+                            "observation": list(self.observations.shape),
+                            "previous_action_probs": list(prev_probs.shape),
+                            "action_probs": list(curr_probs.shape),
+                        },
+                        f,
+                    )
 
                 if model_files:
                     # Take the latest checkpoint
