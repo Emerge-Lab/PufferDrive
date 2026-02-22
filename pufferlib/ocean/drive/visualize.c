@@ -268,7 +268,7 @@ static void set_actions(Drive *env, int timestep, int control, DriveNet *net) {
 
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int show_human_logs, const char *view_mode, const char *output_topdown, const char *output_agent,
-             int num_maps, int zoom_in, int control) {
+             int num_maps, int zoom_in, int control, int control_mode, int max_controlled_agents) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};
@@ -276,6 +276,13 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     if (ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         return -1;
+    }
+
+    if (control_mode >= 0) {
+        conf.control_mode = control_mode;
+    }
+    if (max_controlled_agents >= 0) {
+        conf.max_controlled_agents = max_controlled_agents;
     }
 
     char map_buffer[100];
@@ -498,6 +505,8 @@ int main(int argc, char *argv[]) {
     const char *output_agent = NULL;
     int num_maps = 2;
     int control = ACTIONS_FROM_POLICY; // ACTIONS_INFERRED_FROM_HUMAN;
+    int control_mode = -1;
+    int max_controlled_agents = -1;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -566,17 +575,48 @@ int main(int argc, char *argv[]) {
                 } else if (strcmp(control_str, "random") == 0) {
                     control = ACTIONS_RANDOM;
                 } else {
-                    fprintf(stderr, "Error: --control must be 'policy' or 'inferred_human'\n");
+                    fprintf(stderr, "Error: --control must be 'policy', 'inferred_human', or 'random'\n");
                     return 1;
                 }
             } else {
-                fprintf(stderr, "Error: --control option requires a value (policy/inferred_human)\n");
+                fprintf(stderr, "Error: --control option requires a value (policy/inferred_human/random)\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--control-mode") == 0) {
+            if (i + 1 < argc) {
+                const char *mode_str = argv[i + 1];
+                i++;
+                if (strcmp(mode_str, "control_vehicles") == 0) {
+                    control_mode = 0;
+                } else if (strcmp(mode_str, "control_agents") == 0) {
+                    control_mode = 1;
+                } else if (strcmp(mode_str, "control_wosac") == 0) {
+                    control_mode = 2;
+                } else if (strcmp(mode_str, "control_sdc_only") == 0) {
+                    control_mode = 3;
+                } else if (strcmp(mode_str, "control_mixed_play") == 0) {
+                    control_mode = 4;
+                } else {
+                    fprintf(stderr, "Error: --control-mode option requires a value\n");
+                    return 1;
+                }
+            }
+        } else if (strcmp(argv[i], "--max-controlled-agents") == 0) {
+            if (i + 1 < argc) {
+                max_controlled_agents = atoi(argv[i + 1]);
+                if (max_controlled_agents < 1) {
+                    fprintf(stderr, "Error: --max-controlled-agents must be >= 1\n");
+                    return 1;
+                }
+                i++;
+            } else {
+                fprintf(stderr, "Error: --max-controlled-agents option requires a value\n");
                 return 1;
             }
         }
     }
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, view_mode, output_topdown,
-             output_agent, num_maps, zoom_in, control);
+             output_agent, num_maps, zoom_in, control, control_mode, max_controlled_agents);
     return 0;
 }
