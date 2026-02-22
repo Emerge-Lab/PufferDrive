@@ -3298,7 +3298,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         if (entity_type + 4 == ROAD_LANE) {
             lineColor = WHITE;
         } else if (entity_type + 4 == ROAD_EDGE) {
-        lineColor = PUFF_CYAN;
+            lineColor = PUFF_CYAN;
         }
         // For road segments, draw line between start and end points
         float x_middle = agent_obs[entity_idx] * 50;
@@ -3848,9 +3848,9 @@ void reset_goal_positions(Drive *env) {
 void init_goal_positions(Drive *env) {
     for (int x = 0; x < env->active_agent_count; x++) {
         int agent_idx = env->active_agent_indices[x];
-        if (env->init_mode == RANDOM_AGENTS) {
-            sample_new_goal(env, agent_idx);
-        }
+        // if (env->init_mode == RANDOM_AGENTS) {
+        sample_new_goal(env, agent_idx);
+        // }
         Agent *agent = &env->agents[agent_idx];
         agent->init_goal_x = agent->goal_position_x;
         agent->init_goal_y = agent->goal_position_y;
@@ -3876,6 +3876,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
     float best_y = agent->sim_y;
     float best_z = agent->sim_z;
     float best_distance_error = 1e30f;
+    float best_cos_theta = 1.0f;
 
     // Sample points from randomly selected road lanes (with replacement)
     for (int ri = 0; ri < env->num_roads; ri++) {
@@ -3896,14 +3897,17 @@ void sample_new_goal(Drive *env, int agent_idx) {
             // Check if point is ahead of agent
             float dot = to_point_x * agent->heading_x + to_point_y * agent->heading_y;
             float mod_to_pt = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
-            float mod_heading = atan2f(agent->heading_y, agent->heading_x);
+            float mod_heading = sqrtf(agent->heading_x * agent->heading_x + agent->heading_y * agent->heading_y);
             float cos_theta = dot / (mod_to_pt * mod_heading);
-            if (cos_theta <= 0.0f) // Maybe increase threshold to have points in the direction of travel but not
-                                   // necessarily perfectly ahead?
-                continue;
+            // if (cos_theta <= 0.0f) // Maybe increase threshold to have points in the direction of travel but not
+            //                        // necessarily perfectly ahead?
+            //     continue;
 
             // Calculate distance to point
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
+
+            if (distance < env->min_goal_distance || distance > env->max_goal_distance)
+                continue;
 
             // compute distance
             float distance_error =
@@ -3929,12 +3933,12 @@ void sample_new_goal(Drive *env, int agent_idx) {
     // If no valid goal found, use another agent's initial goal
     // raise_error_with_message(ERROR_UNHANDLED_CASE, "No valid goal found for agent %d at (x,y,z)=(%f,%f,%f), using
     // another agent's initial goal", agent_idx, agent->sim_x, agent->sim_y, agent->sim_z);
-    if (best_distance_error >= 1e30f && env->active_agent_count > 1) {
-        int other_idx = env->active_agent_indices[(agent_idx + 1) % env->active_agent_count];
-        best_x = env->agents[other_idx].init_goal_x;
-        best_y = env->agents[other_idx].init_goal_y;
-        best_z = env->agents[other_idx].init_goal_z;
-    }
+    // if (best_cos_theta == 0.0f && env->active_agent_count > 1) {
+    //     int other_idx = env->active_agent_indices[(agent_idx + 1) % env->active_agent_count];
+    //     best_x = env->agents[other_idx].init_goal_x;
+    //     best_y = env->agents[other_idx].init_goal_y;
+    //     best_z = env->agents[other_idx].init_goal_z;
+    // }
 
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
