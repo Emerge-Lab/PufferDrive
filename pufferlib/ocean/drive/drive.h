@@ -2413,11 +2413,13 @@ void compute_observations(Drive *env) {
             obs[obs_idx + 5] = rel_heading_x;
             obs[obs_idx + 6] = rel_heading_y;
             // relative speed
-            float other_speed_magnitude =
-                sqrtf(other_entity->sim_vx * other_entity->sim_vx + other_entity->sim_vy * other_entity->sim_vy);
-            float other_v_dot_heading = other_entity->sim_vx * other_cos + other_entity->sim_vy * other_sin;
-            float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
-            obs[obs_idx + 7] = other_signed_speed / MAX_SPEED;
+            float rel_vx = other_entity->sim_vx - ego_entity->sim_vx;
+            float rel_vy = other_entity->sim_vy - ego_entity->sim_vy;
+            float rel_speed_magnitude =
+                sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
+            float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
+            float rel_signed_speed = copysignf(rel_speed_magnitude, rel_v_dot_heading);
+            obs[obs_idx + 7] = rel_signed_speed / MAX_SPEED;
             cars_seen++;
             obs_idx += 8; // Move to next observation slot
         }
