@@ -2169,6 +2169,7 @@ void c_step(Drive *env) {
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
                 env->entities[agent_idx].goals_reached_this_episode += 1.0f;
+                env->entities[agent_idx].current_goal_reached = 1;
             }
             env->entities[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
             env->logs[i].speed_at_goal = current_speed;
