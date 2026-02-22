@@ -499,7 +499,12 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss + consistency_loss
+            loss = (
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - config["ent_coef"] * entropy_loss
+                + config["action_consistency_coef"] * consistency_loss
+            )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
