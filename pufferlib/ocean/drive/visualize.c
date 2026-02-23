@@ -317,7 +317,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             },
         .map_name = (char *)map_name,
     };
-    printf("Control Mode : %.2d", control_mode_int);
+    printf("Control Mode : %.2d\n", control_mode_int);
     allocate(&env);
 
     // Check if map has any active agents
@@ -365,7 +365,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     Weights *weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    printf("Static expoer agents in the map :%d\n", env.expert_static_agent_count);
+    printf("Static expert agents in the map :%d\n", env.expert_static_agent_count);
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
@@ -485,7 +485,7 @@ int main(int argc, char *argv[]) {
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
-    int show_human_logs = 1;
+    int show_human_logs = 0;
     int frame_skip = 1;
     int zoom_in = 0;
     const char *view_mode = "both";
@@ -493,7 +493,7 @@ int main(int argc, char *argv[]) {
 
     // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
-    const char *policy_name = "resources/drive/puffer_drive_256_resampling_300.bin";
+    const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
     int num_maps = conf.num_maps;
