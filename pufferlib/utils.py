@@ -343,3 +343,187 @@ def render_videos(
         # Clean up bin weights file
         if os.path.exists(bin_path):
             os.remove(bin_path)
+
+
+def render_eval_videos(
+    config, env_cfg, run_id, wandb_log, epoch, global_step, bin_path, render_async, render_queue=None, wandb_run=None
+):
+    """
+    Generate and log evaluation videos using C-based rendering with control_sdc_only mode.
+
+    This renders videos showing how the policy controls only the SDC (self-driving car)
+    while other agents replay their expert trajectories. Useful for visualizing
+    human replay evaluation behavior.
+
+    Args:
+        config: Configuration dictionary containing data_dir, env, and eval settings
+        env_cfg: Environment configuration object
+        run_id: Unique run identifier
+        wandb_log: Whether to log to wandb
+        epoch: Current training epoch
+        global_step: Current global training step
+        bin_path: Path to the exported .bin model weights file
+        render_async: Whether to render asynchronously
+        render_queue: Queue for async rendering
+        wandb_run: Wandb run object for logging
+
+    Returns:
+        None. Prints error messages if rendering fails.
+    """
+    if not os.path.exists(bin_path):
+        print(f"Binary weights file does not exist: {bin_path}")
+        return
+
+    model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
+    eval_config = config.get("eval", {})
+
+    try:
+        # Create output directory for eval videos
+        eval_video_output_dir = os.path.join(model_dir, "eval_videos")
+        os.makedirs(eval_video_output_dir, exist_ok=True)
+
+        # Suppress AddressSanitizer exit code (temp)
+        env_vars = os.environ.copy()
+        env_vars["ASAN_OPTIONS"] = "exitcode=0"
+
+        # Base command for eval rendering
+        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+
+        # Visualization flags for eval
+        if eval_config.get("show_grid", True):
+            base_cmd.append("--show-grid")
+        if eval_config.get("obs_only", True):
+            base_cmd.append("--obs-only")
+        if eval_config.get("show_lasers", False):
+            base_cmd.append("--lasers")
+        if eval_config.get("eval_render_show_human_logs", True):
+            base_cmd.append("--log-trajectories")
+        if eval_config.get("zoom_in", True):
+            base_cmd.append("--zoom-in")
+
+        # Frame skip for rendering performance
+        frame_skip = eval_config.get("frame_skip", 1)
+        if frame_skip > 1:
+            base_cmd.extend(["--frame-skip", str(frame_skip)])
+
+        # View mode: both topdown and agent views
+        base_cmd.extend(["--view", "both"])
+
+        # Get num_maps if available
+        if env_cfg is not None and getattr(env_cfg, "num_maps", None):
+            base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
+
+        base_cmd.extend(["--policy-name", bin_path])
+
+        # Get eval maps
+        num_eval_maps = eval_config.get("eval_render_num_maps", 3)
+        eval_map_dir = eval_config.get("map_dir", "resources/drive/binaries/training")
+
+        if os.path.isdir(eval_map_dir):
+            import random
+
+            bin_files = [f for f in os.listdir(eval_map_dir) if f.endswith(".bin")]
+            if bin_files:
+                # Select random maps for eval rendering
+                num_to_select = min(num_eval_maps, len(bin_files))
+                selected_maps = random.sample(bin_files, num_to_select)
+                eval_render_maps = [os.path.join(eval_map_dir, f) for f in selected_maps]
+            else:
+                print(f"Warning: No .bin files found in {eval_map_dir}, skipping eval render")
+                return
+        else:
+            print(f"Warning: eval map_dir not found ({eval_map_dir}), skipping eval render")
+            return
+
+        # Collect videos to log
+        videos_to_log_world = []
+        videos_to_log_agent = []
+        generated_videos = {"output_topdown": [], "output_agent": []}
+
+        for i, map_path in enumerate(eval_render_maps):
+            cmd = list(base_cmd)  # copy
+            cmd.extend(["--map-name", str(map_path)])
+
+            # Output paths with eval prefix
+            map_basename = os.path.basename(map_path).replace(".bin", "")
+            output_topdown_map = f"resources/drive/eval_topdown_{epoch}_map{i:02d}_{map_basename}.mp4"
+            output_agent_map = f"resources/drive/eval_agent_{epoch}_map{i:02d}_{map_basename}.mp4"
+
+            cmd.extend(["--output-topdown", output_topdown_map])
+            cmd.extend(["--output-agent", output_agent_map])
+
+            print(f"Rendering eval video {i + 1}/{len(eval_render_maps)}: {map_basename}")
+            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
+
+            vids_exist = os.path.exists(output_topdown_map) and os.path.exists(output_agent_map)
+
+            if result.returncode == 0 or (result.returncode == 1 and vids_exist):
+                videos = [
+                    (
+                        "output_topdown",
+                        output_topdown_map,
+                        f"eval_epoch_{epoch:06d}_map{i:02d}_{map_basename}_topdown.mp4",
+                    ),
+                    (
+                        "output_agent",
+                        output_agent_map,
+                        f"eval_epoch_{epoch:06d}_map{i:02d}_{map_basename}_agent.mp4",
+                    ),
+                ]
+
+                for vid_type, source_vid, target_filename in videos:
+                    if os.path.exists(source_vid):
+                        target_path = os.path.join(eval_video_output_dir, target_filename)
+                        shutil.move(source_vid, target_path)
+                        generated_videos[vid_type].append(target_path)
+                        if render_async:
+                            continue
+                        # Accumulate for wandb logging
+                        if wandb_log:
+                            import wandb
+
+                            if "topdown" in target_filename:
+                                videos_to_log_world.append(wandb.Video(target_path, format="mp4"))
+                            else:
+                                videos_to_log_agent.append(wandb.Video(target_path, format="mp4"))
+                    else:
+                        print(f"Eval video generation completed but {source_vid} not found")
+                        if result.stdout:
+                            print(f"StdOUT: {result.stdout}")
+                        if result.stderr:
+                            print(f"StdERR: {result.stderr}")
+            else:
+                print(f"C eval rendering failed (map index {i}) with exit code {result.returncode}")
+                if result.stdout:
+                    print(f"StdOUT: {result.stdout}")
+                if result.stderr:
+                    print(f"StdERR: {result.stderr}")
+
+        if render_async:
+            render_queue.put(
+                {
+                    "videos": generated_videos,
+                    "step": global_step,
+                    "eval": True,  # Mark as eval videos
+                }
+            )
+
+        # Log all eval videos at once
+        if wandb_log and (videos_to_log_world or videos_to_log_agent) and not render_async:
+            payload = {}
+            if videos_to_log_world:
+                payload["eval_render/world_state"] = videos_to_log_world
+            if videos_to_log_agent:
+                payload["eval_render/agent_view"] = videos_to_log_agent
+            wandb_run.log(payload, step=global_step)
+            print(
+                f"Logged {len(videos_to_log_world)} topdown and {len(videos_to_log_agent)} agent eval videos to wandb"
+            )
+
+    except subprocess.TimeoutExpired:
+        print("C eval rendering timed out")
+    except Exception as e:
+        print(f"Failed to generate eval videos: {e}")
+        import traceback
+
+        traceback.print_exc()

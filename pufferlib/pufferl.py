@@ -587,6 +587,69 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
+        # Render evaluation videos showing policy controlling only SDC with human replays
+        if self.config["eval"].get("eval_render_enabled", False) and (
+            self.epoch % self.config["eval"].get("eval_render_interval", 1000) == 0 or done_training
+        ):
+            model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+            model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+
+            if model_files:
+                # Take the latest checkpoint
+                latest_cpt = max(model_files, key=os.path.getctime)
+                bin_path = f"{model_dir}.bin"
+
+                # Export to .bin for rendering with raylib
+                try:
+                    export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
+
+                    export(
+                        args=export_args,
+                        env_name=self.config["env"],
+                        vecenv=self.vecenv,
+                        policy=self.uncompiled_policy,
+                        path=bin_path,
+                        silent=True,
+                    )
+
+                    bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
+                    shutil.copy2(bin_path, bin_path_epoch)
+
+                    env_cfg = getattr(self.vecenv, "driver_env", None)
+                    wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
+                    wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
+                    if self.render_async:
+                        render_proc = multiprocessing.Process(
+                            target=pufferlib.utils.render_eval_videos,
+                            args=(
+                                self.config,
+                                env_cfg,
+                                self.logger.run_id,
+                                wandb_log,
+                                self.epoch,
+                                self.global_step,
+                                bin_path,
+                                self.render_async,
+                                self.render_queue,
+                            ),
+                        )
+                        render_proc.start()
+                        self.render_processes.append(render_proc)
+                    else:
+                        pufferlib.utils.render_eval_videos(
+                            self.config,
+                            env_cfg,
+                            self.logger.run_id,
+                            wandb_log,
+                            self.epoch,
+                            self.global_step,
+                            bin_path,
+                            self.render_async,
+                            wandb_run=wandb_run,
+                        )
+                except Exception as e:
+                    print(f"Failed to render evaluation videos: {e}")
+
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
         if not self.render_async or not hasattr(self, "render_queue"):
@@ -597,21 +660,39 @@ class PuffeRL:
                 result = self.render_queue.get_nowait()
                 step = result["step"]
                 videos = result["videos"]
+                is_eval = result.get("eval", False)  # Check if these are eval videos
 
                 # Log to wandb if available
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
                     import wandb
 
                     payload = {}
-                    if videos["output_topdown"]:
-                        payload["render/world_state"] = [wandb.Video(p, format="mp4") for p in videos["output_topdown"]]
-                    if videos["output_agent"]:
-                        payload["render/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
+                    if is_eval:
+                        # Use eval_render namespace for eval videos
+                        if videos.get("output_topdown"):
+                            payload["eval_render/world_state"] = [
+                                wandb.Video(p, format="mp4") for p in videos["output_topdown"]
+                            ]
+                        if videos.get("output_agent"):
+                            payload["eval_render/agent_view"] = [
+                                wandb.Video(p, format="mp4") for p in videos["output_agent"]
+                            ]
+                    else:
+                        # Use render namespace for training videos
+                        if videos.get("output_topdown"):
+                            payload["render/world_state"] = [
+                                wandb.Video(p, format="mp4") for p in videos["output_topdown"]
+                            ]
+                        if videos.get("output_agent"):
+                            payload["render/agent_view"] = [
+                                wandb.Video(p, format="mp4") for p in videos["output_agent"]
+                            ]
 
                     if payload:
                         # Custom step for render logs to prevent monotonic logic wandb errors
                         payload["render_step"] = step
                         self.logger.wandb.log(payload)
+                        print(f"Logged async {'eval ' if is_eval else ''}render videos to wandb (step {step})")
 
         except queue.Empty:
             pass
