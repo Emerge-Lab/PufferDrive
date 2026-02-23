@@ -1050,7 +1050,6 @@ class WandbLogger:
             git_notes = (
                 "Error fetching git info. Make sure you're running this in a git repository and have git installed."
             )
-            pass
 
         wandb.init(
             id=load_id or wandb.util.generate_id(),
