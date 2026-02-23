@@ -140,8 +140,10 @@
 // Offsets
 #define COLLISION_RANGE 5
 #define Z_RANGE 3
-#define Z_BUFFER 4.0f     // 4.0m buffer for different z level checking
-#define SPEED_LIMIT 20.0f // Hardcoded speed limit value
+#define Z_BUFFER 4.0f                // 4.0m buffer for different z level checking
+#define SPEED_LIMIT 20.0f            // Hardcoded speed limit value
+#define COMFORT_JERK_THRESHOLD 5.0f  // For JERK model comfort
+#define COMFORT_ACCEL_THRESHOLD 3.0f // For JERK and CLASSIC model comfort
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
@@ -1938,13 +1940,11 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     }
 
     // Comfort metric (GIGAFLOW) - only for JERK dynamics, modified for CLASSIC (Custom)
-    const float COMFORT_ACCEL_THRESHOLD = 3.0f; // m/s²
     int accel_violation =
         (fabsf(agent->a_long) > COMFORT_ACCEL_THRESHOLD) + (fabsf(agent->a_lat) > COMFORT_ACCEL_THRESHOLD);
 
     if (env->dynamics_model == JERK) {
 
-        const float COMFORT_JERK_THRESHOLD = 5.0f; // m/s³
         int jerk_violation =
             (fabsf(agent->jerk_long) > COMFORT_JERK_THRESHOLD || fabsf(agent->jerk_lat) > COMFORT_JERK_THRESHOLD) ? 1
                                                                                                                   : 0;
@@ -2583,7 +2583,7 @@ void c_step(Drive *env) {
                     env->rewards[i] += agent->reward_coefs[REWARD_COEF_OFFROAD];
                     env->logs[i].episode_return += agent->reward_coefs[REWARD_COEF_OFFROAD];
                 } else {
-                    env->rewards[i] = env->reward_offroad_collision;
+                    env->rewards[i] += env->reward_offroad_collision;
                     env->logs[i].episode_return = env->reward_offroad_collision;
                 }
                 env->logs[i].offroad_rate = 1.0f;
