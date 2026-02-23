@@ -1045,7 +1045,7 @@ class WandbLogger:
             git_commit_message = subprocess.check_output(["git", "log", "-1", "--pretty=%B"], text=True).strip()
 
             # Format notes for the overview section
-            git_notes = f"**Github Repo State**\n\n\n Branch Name: {git_branch} \n\nLatest Commit Id: {git_commit}\n\nLatest Commit Message: {git_commit_message}"
+            git_notes = f"**GitHub Repo State**\n\nBranch Name: {git_branch}\n\nLatest Commit Id: {git_commit}\n\nLatest Commit Message: {git_commit_message}"
         except:
             git_notes = (
                 "Error fetching git info. Make sure you're running this in a git repository and have git installed."
