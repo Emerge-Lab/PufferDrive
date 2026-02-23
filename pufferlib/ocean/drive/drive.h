@@ -1518,7 +1518,8 @@ void set_active_agents(Drive *env) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->agents[i].active_agent = 0;
-            if (env->agents[i].mark_as_expert == 1 || env->active_agent_count == env->num_agents) {
+            if (env->control_mode == CONTROL_SDC_ONLY || env->agents[i].mark_as_expert == 1 ||
+                env->active_agent_count == env->num_agents) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
                 env->agents[i].mark_as_expert = 1;

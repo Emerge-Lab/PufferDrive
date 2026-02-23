@@ -36,8 +36,6 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
             "False",
             "--eval.human-replay-eval",
             "True",
-            "--eval.human-replay-num-agents",
-            str(eval_config["human_replay_num_agents"]),
             "--eval.human-replay-control-mode",
             str(eval_config["human_replay_control_mode"]),
         ]
@@ -212,7 +210,7 @@ def render_videos(
         if config.get("show_lasers", False):
             base_cmd.append("--lasers")
         if config.get("show_human_logs", False):
-            base_cmd.append("--show-human-logs")
+            base_cmd.append("--log-trajectories")
         if config.get("zoom_in", False):
             base_cmd.append("--zoom-in")
 
@@ -348,28 +346,6 @@ def render_videos(
 def render_eval_videos(
     config, env_cfg, run_id, wandb_log, epoch, global_step, bin_path, render_async, render_queue=None, wandb_run=None
 ):
-    """
-    Generate and log evaluation videos using C-based rendering with control_sdc_only mode.
-
-    This renders videos showing how the policy controls only the SDC (self-driving car)
-    while other agents replay their expert trajectories. Useful for visualizing
-    human replay evaluation behavior.
-
-    Args:
-        config: Configuration dictionary containing data_dir, env, and eval settings
-        env_cfg: Environment configuration object
-        run_id: Unique run identifier
-        wandb_log: Whether to log to wandb
-        epoch: Current training epoch
-        global_step: Current global training step
-        bin_path: Path to the exported .bin model weights file
-        render_async: Whether to render asynchronously
-        render_queue: Queue for async rendering
-        wandb_run: Wandb run object for logging
-
-    Returns:
-        None. Prints error messages if rendering fails.
-    """
     if not os.path.exists(bin_path):
         print(f"Binary weights file does not exist: {bin_path}")
         return
@@ -388,6 +364,10 @@ def render_eval_videos(
 
         # Base command for eval rendering
         base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+
+        # IMPORTANT: Override control mode to ensure control_sdc_only for eval renders
+        eval_control_mode = eval_config.get("human_replay_control_mode", "control_sdc_only")
+        base_cmd.extend(["--control-mode", eval_control_mode])
 
         # Visualization flags for eval
         if eval_config.get("show_grid", True):
@@ -524,6 +504,8 @@ def render_eval_videos(
         print("C eval rendering timed out")
     except Exception as e:
         print(f"Failed to generate eval videos: {e}")
-        import traceback
 
-        traceback.print_exc()
+    finally:
+        # Clean up bin weights file
+        if os.path.exists(bin_path):
+            os.remove(bin_path)

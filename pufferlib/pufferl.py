@@ -1774,7 +1774,7 @@ def render(env_name, args=None):
         if render_configs.get("show_lasers", False):
             cmd.append("--lasers")
         if render_configs.get("show_human_logs", False):
-            cmd.append("--show-human-logs")
+            base_cmd.append("--log-trajectories")
         if render_configs.get("zoom_in", False):
             cmd.append("--zoom-in")
         cmd.extend(["--view", view_mode])

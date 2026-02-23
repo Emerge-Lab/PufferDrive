@@ -122,6 +122,32 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
                 has_prev = true;
             }
         }
+        for (int i = 0; i < env->expert_static_agent_count; i++) {
+            int idx = env->expert_static_agent_indices[i];
+            Vector3 prev_point = {0};
+            bool has_prev = false;
+
+            Agent *agent = &env->agents[idx];
+            for (int j = 0; j < agent->trajectory_length; j++) {
+                float x = agent->log_trajectory_x[j];
+                float y = agent->log_trajectory_y[j];
+                float valid = agent->log_valid[j];
+
+                if (!valid) {
+                    has_prev = false;
+                    continue;
+                }
+
+                Vector3 curr_point = {x, y, 0.5f};
+
+                if (has_prev) {
+                    DrawLine3D(prev_point, curr_point, Fade(LIGHTGREEN, 0.6f));
+                }
+
+                prev_point = curr_point;
+                has_prev = true;
+            }
+        }
     }
 
     // Draw agent trajs
@@ -193,7 +219,7 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
 
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
-             const char *output_agent, int num_maps, int zoom_in) {
+             const char *output_agent, int num_maps, int zoom_in, const char *control_mode_override) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};
@@ -228,6 +254,22 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
     fclose(policy_file);
 
+    // Override control_mode if specified via CLI
+    int control_mode_int = conf.control_mode;
+    if (control_mode_override != NULL) {
+        if (strcmp(control_mode_override, "control_vehicles") == 0) {
+            control_mode_int = 0;
+        } else if (strcmp(control_mode_override, "control_agents") == 0) {
+            control_mode_int = 1;
+        } else if (strcmp(control_mode_override, "control_wosac") == 0) {
+            control_mode_int = 2;
+        } else if (strcmp(control_mode_override, "control_sdc_only") == 0) {
+            control_mode_int = 3;
+        } else {
+            fprintf(stderr, "Warning: Unknown control mode '%s', using config value\n", control_mode_override);
+        }
+    }
+
     // Initialize environment with all config values from INI [env] section
     Drive env = {
         .action_type = conf.action_type,
@@ -253,7 +295,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .offroad_behavior = conf.offroad_behavior,
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
-        .control_mode = conf.control_mode,
+        .control_mode = control_mode_int, // Use overridden or config value
         .reward_bounds =
             {
                 {conf.reward_bound_goal_radius_min, conf.reward_bound_goal_radius_max},
@@ -275,7 +317,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
             },
         .map_name = (char *)map_name,
     };
-
+    printf("Control Mode : %.2d", control_mode_int);
     allocate(&env);
 
     // Check if map has any active agents
@@ -323,6 +365,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     Weights *weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
+    printf("Static expoer agents in the map :%d\n", env.expert_static_agent_count);
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
@@ -442,14 +485,15 @@ int main(int argc, char *argv[]) {
     int show_grid = 0;
     int obs_only = 0;
     int lasers = 0;
-    int show_human_logs = 0;
+    int show_human_logs = 1;
     int frame_skip = 1;
     int zoom_in = 0;
     const char *view_mode = "both";
+    const char *control_mode_override = NULL;
 
     // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
-    const char *policy_name = "resources/drive/puffer_drive_weights.bin";
+    const char *policy_name = "resources/drive/puffer_drive_256_resampling_300.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
     int num_maps = conf.num_maps;
@@ -518,10 +562,18 @@ int main(int argc, char *argv[]) {
                 num_maps = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--control-mode") == 0) {
+            if (i + 1 < argc) {
+                control_mode_override = argv[i + 1];
+                i++;
+            } else {
+                fprintf(stderr, "Error: --control-mode option requires a value\n");
+                return 1;
+            }
         }
     }
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
-             output_agent, num_maps, zoom_in);
+             output_agent, num_maps, zoom_in, control_mode_override);
     return 0;
 }
