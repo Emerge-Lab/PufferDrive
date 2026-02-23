@@ -597,10 +597,22 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
 
     float n = aggregate.n;
 
+    // The following metrics I don't want to aplly them the division by n
+    float target_episode_return = aggregate.target_episode_return;
+    float did_target_collide = aggregate.did_target_collide;
+    float did_target_offroad = aggregate.did_target_offroad;
+    float did_target_fail = aggregate.did_target_fail;
+
     // Average across agents
     for (int i = 0; i < num_keys; i++) {
         ((float *)&aggregate)[i] /= n;
     }
+
+    // Cancel the division
+    aggregate.did_target_collide = did_target_collide;
+    aggregate.did_target_offroad = did_target_offroad;
+    aggregate.did_target_fail = did_target_fail;
+    aggregate.target_episode_return = target_episode_return;
 
     // Compute completion_rate from aggregated counts
     aggregate.completion_rate = aggregate.goals_reached_this_episode / aggregate.goals_sampled_this_episode;

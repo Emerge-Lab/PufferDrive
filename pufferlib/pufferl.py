@@ -1297,6 +1297,124 @@ def render_adversarial(env_name, args=None, vecenv=None, policy=None, target_pol
             plt.close(fig)
 
 
+def eval_adversarial(env_name, args=None, vecenv=None, policy=None, target_policy=None):
+    args = args or load_config(env_name)
+
+    args["env"]["map_dir"] = args["eval"]["map_dir"]
+    args["env"]["num_maps"] = args["eval"]["num_maps"]
+    args["env"]["use_all_maps"] = True
+
+    args["env"]["init_mode"] = "create_all_valid"
+    args["env"]["control_mode"] = "control_vehicles"
+
+    args["env"]["goal_behavior"] = 1  # Generate new goals
+    args["env"]["collision_behavior"] = 0  # Stop after collision (we'll see if its a bad idea)
+    args["env"]["offroad_behavior"] = 1  # For now let's authorize them to go offroad (we'll see as well)
+
+    backend = args["vec"]["backend"]
+    if backend != "PufferEnv":
+        backend = "Serial"
+
+    args["vec"] = dict(backend=backend, num_envs=1)
+    vecenv = vecenv or load_env(env_name, args)
+    policy = policy or load_policy(args, vecenv, env_name)
+
+    target_args = args.copy()
+    target_args["load_model_path"] = target_args["train"]["target_policy"]
+    target_args["policy_name"] = "TargetDrive"
+
+    target_policy = load_policy(target_args, vecenv, env_name)
+
+    driver = vecenv.driver_env
+
+    num_agents = vecenv.observation_space.shape[0]
+    sim_steps = 91
+    device = args["train"]["device"]
+
+    trajectories = {
+        "x": np.zeros((num_agents, sim_steps), dtype=np.float32),
+        "y": np.zeros((num_agents, sim_steps), dtype=np.float32),
+        "z": np.zeros((num_agents, sim_steps), dtype=np.float32),
+        "heading": np.zeros((num_agents, sim_steps), dtype=np.float32),
+        "id": np.zeros((num_agents, sim_steps), dtype=np.float32),
+        "is_sdc": np.zeros((num_agents, sim_steps), dtype=np.int32),
+    }
+
+    print("\n Collecting trajectories")
+
+    obs, info = vecenv.reset()
+    state = {}
+
+    # Read plotting info from the env
+
+    agent_state = driver.get_global_agent_state()
+    agent_length = agent_state["length"]
+    agent_width = agent_state["width"]
+    road_edge_polylines = driver.get_road_edge_polylines()
+
+    # Tells me who belongs to which map
+    scenario_ids = (driver.get_ground_truth_trajectories())["scenario_id"][:, 0]
+
+    if args["train"]["use_rnn"]:
+        state = dict(
+            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        )
+
+        target_state = dict(
+            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        )
+
+        for time_idx in range(sim_steps):
+            # Get global state
+            agent_state = driver.get_global_agent_state()
+            trajectories["x"][:, time_idx] = agent_state["x"]
+            trajectories["y"][:, time_idx] = agent_state["y"]
+            trajectories["z"][:, time_idx] = agent_state["z"]
+            trajectories["heading"][:, time_idx] = agent_state["heading"]
+            trajectories["id"][:, time_idx] = agent_state["id"]
+
+            sdc_indices = info[0]["agent_offsets"][:-1]
+            trajectories["is_sdc"][sdc_indices, time_idx] = 1
+
+            # Step policy
+            with torch.no_grad():
+                ob_tensor = torch.as_tensor(obs).to(device)
+
+                logits, value = policy.forward_eval(ob_tensor, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+
+                target_logits, target_value = target_policy.forward_eval(ob_tensor, target_state)
+                target_action, target_logprob, _ = pufferlib.pytorch.sample_logits(target_logits)
+
+                target_mask = torch.zeros_like(action[:, 0], dtype=bool)
+                agent_offsets = info[0].get("agent_offsets")
+
+                target_mask[agent_offsets[:-1]] = 1
+
+                action = torch.where(target_mask[:, None], target_action, action)
+
+                action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+            if isinstance(logits, torch.distributions.Normal):
+                action_np = np.clip(action_np, vecenv.action_space.low, vecenv.action_space.high)
+
+            obs, _, _, _, info = vecenv.step(action_np)
+            if len(info) > 1:
+                target_collide_count = int(info[0]["did_target_collide"])
+                target_offroad_count = int(info[0]["did_target_offroad"])
+                target_fail_count = int(info[0]["did_target_fail"])
+
+                print("Eval complete:")
+                print(f"On {args['eval']['num_maps']} maps, the target failed {target_fail_count} times:")
+                print(f"{target_fail_count - target_offroad_count} times due to  a Collision")
+                print(f"{target_fail_count - target_collide_count} times due to an Offroad")
+                print(
+                    f"{target_collide_count + target_offroad_count - target_fail_count} times due to an Offroad followed by a Collision"
+                )
+
+
 def eval(env_name, args=None, vecenv=None, policy=None):
     """Evaluate a policy."""
 
@@ -1810,6 +1928,8 @@ def main():
         eval(env_name=env_name)
     elif mode == "render_adversarial":
         render_adversarial(env_name=env_name)
+    elif mode == "eval_adversarial":
+        eval_adversarial(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":

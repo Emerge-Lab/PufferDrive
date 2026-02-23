@@ -164,6 +164,9 @@ struct Log {
     float expert_static_agent_count;
     float static_agent_count;
     float target_episode_return;
+    float did_target_collide;
+    float did_target_offroad;
+    float did_target_fail;
 };
 
 typedef struct Entity Entity;
@@ -374,13 +377,15 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
-        env->log.target_episode_return += env->logs[i].target_episode_return;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
         env->log.static_agent_count += env->static_agent_count;
         env->log.n += 1;
     }
+    env->log.did_target_collide += env->logs[0].did_target_collide;
+    env->log.did_target_offroad += env->logs[0].did_target_offroad;
+    env->log.did_target_fail += env->logs[0].did_target_fail;
 }
 
 Entity *load_map_binary(const char *filename, Drive *env) {
@@ -2122,8 +2127,15 @@ void c_step(Drive *env) {
         env->logs[i].lane_alignment_rate = lane_aligned;
 
         // Here, after all rewards for the agents are computed, I give them minus the reward of agent 0
-        // Also log the target episode return
-        env->logs[i].target_episode_return = env->logs[0].episode_return;
+        if (i == 0) {
+            if (collision_state == VEHICLE_COLLISION) {
+                env->logs[i].did_target_collide = 1.0f;
+                env->logs[i].did_target_fail = 1.0f;
+            } else if (collision_state == OFFROAD) {
+                env->logs[i].did_target_offroad = 1.0f;
+                env->logs[i].did_target_fail = 1.0f;
+            }
+        }
         if (i > 0) {
             float sdc_reward = env->rewards[0];
 
