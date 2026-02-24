@@ -396,8 +396,13 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self, view_mode: RenderView = RenderView.FULL_SIM_STATE, env_id=0):
-        binding.vec_render(self.c_envs, int(view_mode), env_id)
+    def render(
+        self, 
+        view_mode: RenderView = RenderView.FULL_SIM_STATE, 
+        draw_traces: bool = True,
+        env_id: int = 0
+    ):
+        binding.vec_render(self.c_envs, int(view_mode), draw_traces, env_id)
 
     def close(self):
         binding.vec_close(self.c_envs)

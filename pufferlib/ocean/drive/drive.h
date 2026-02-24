@@ -2283,7 +2283,7 @@ Client *make_client(Drive *env) {
         snprintf(size_str, sizeof(size_str), "%dx%d", (int)client->width, (int)client->height);
 
         char filename[256];
-        snprintf(filename, sizeof(filename), "renders/%s_topdown.mp4", env->scenario_id);
+        snprintf(filename, sizeof(filename), "renders/%s.mp4", env->scenario_id);
 
         client->recorder_pid = fork();
         if (client->recorder_pid == -1) {
@@ -2732,10 +2732,14 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     car_color = BLUE; // Policy-controlled
                 if (is_active_agent && env->entities[i].collision_state > 0)
                     car_color = RED;
-                rlSetLineWidth(3.0f);
-                for (int j = 0; j < 4; j++) {
-                    DrawLine3D(corners[j], corners[(j + 1) % 4], car_color);
-                }
+                
+                rlPushMatrix();
+                    rlTranslatef(position.x, position.y, position.z);
+                    rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f);
+                    DrawCube((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, Fade(car_color, 0.4f));
+                    DrawCubeWires((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, car_color);
+                rlPopMatrix();
+                            
                 // Draw a heading arrow pointing forward
                 Vector3 arrowStart = position;
                 Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
@@ -2898,7 +2902,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     }
 }
 
-void c_render(Drive *env, int view_mode) {
+void c_render(Drive *env, int view_mode, int draw_traces) {
     
     // Create client on first render call
     if (env->client == NULL) {
@@ -2913,11 +2917,11 @@ void c_render(Drive *env, int view_mode) {
 
         Camera3D camera = {0};
 
-        printf(view_mode == VIEW_MODE_BEV ? "Rendering in BEV mode\n" :
+        printf(view_mode == VIEW_MODE_SIM_STATE ? "Rendering in Full Sim State mode\n" :
                view_mode == VIEW_MODE_BEV_AGENT_OBS ? "Rendering in Agent-Centric mode\n" :
                "Rendering in First-person mode\n");
 
-        if (view_mode == VIEW_MODE_BEV) {
+        if (view_mode == VIEW_MODE_SIM_STATE) {
             // Orthographic bird's-eye view over the entire map (fully observable)
             camera.position   = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 400.0f};
             camera.target     = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0.0f};
@@ -2928,6 +2932,23 @@ void c_render(Drive *env, int view_mode) {
             BeginDrawing();
             ClearBackground(ROAD_COLOR);
             BeginMode3D(camera);
+
+            if (draw_traces) { // Show logged trajectories of active agents and expert static agents
+                for (int i = 0; i < env->active_agent_count; i++) {
+                    int idx = env->active_agent_indices[i];
+                    for (int t = env->init_steps; t < env->episode_length; t++) {
+                        DrawSphere((Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], 0.3f}, 0.2f, LIGHTBLUE);
+                    }
+                }
+                
+                for (int i = 0; i < env->expert_static_agent_count; i++) {
+                    int idx = env->expert_static_agent_indices[i];
+                    for (int t = env->init_steps; t < env->episode_length; t++) {
+                        DrawSphere((Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], 0.2f}, 0.2f, EXPERT_REPLAY);
+                    }
+                }
+            }
+
             draw_scene(env, client, 1, 0, 0, 0);
 
         } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
