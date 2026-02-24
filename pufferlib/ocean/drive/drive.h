@@ -386,6 +386,7 @@ void add_log(Drive *env) {
     env->log.did_target_collide += env->logs[0].did_target_collide;
     env->log.did_target_offroad += env->logs[0].did_target_offroad;
     env->log.did_target_fail += env->logs[0].did_target_fail;
+    env->log.target_episode_return += env->logs[0].episode_return;
 }
 
 Entity *load_map_binary(const char *filename, Drive *env) {

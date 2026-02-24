@@ -608,11 +608,11 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         ((float *)&aggregate)[i] /= n;
     }
 
-    // Cancel the division
-    aggregate.did_target_collide = did_target_collide;
-    aggregate.did_target_offroad = did_target_offroad;
-    aggregate.did_target_fail = did_target_fail;
-    aggregate.target_episode_return = target_episode_return;
+    // Cancel the division, rather giver per map rates for the failures (makes more sense in training)
+    aggregate.did_target_collide = did_target_collide / vec->num_envs;
+    aggregate.did_target_offroad = did_target_offroad / vec->num_envs;
+    aggregate.did_target_fail = did_target_fail / vec->num_envs;
+    aggregate.target_episode_return = target_episode_return / vec->num_envs;
 
     // Compute completion_rate from aggregated counts
     aggregate.completion_rate = aggregate.goals_reached_this_episode / aggregate.goals_sampled_this_episode;
