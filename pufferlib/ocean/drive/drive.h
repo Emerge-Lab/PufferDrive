@@ -144,6 +144,9 @@ const Color LIGHTGREEN = (Color){152, 255, 152, 255};
 const Color LIGHTYELLOW = (Color){255, 255, 152, 255};
 const Color SOFT_YELLOW = (Color){245, 245, 220, 255};
 const Color ROAD_COLOR = (Color){35, 35, 37, 255};
+const Color EXPERT_REPLAY = (Color){162, 220, 183, 255};
+const Color LIGHTBLUE = (Color){167, 204, 255, 255};
+const Color DEEPBLUE = (Color){45, 112, 226, 255};
 
 struct timespec ts;
 
@@ -2197,7 +2200,7 @@ struct Client {
     Model cyclist;
     Model pedestrian;
     ModelAnimation *cycle_anim;
-    int car_assignments[MAX_AGENTS]; // To keep car model assignments consistent per vehicle
+    int car_assignments[MAX_AGENTS];
     Vector3 default_camera_position;
     Vector3 default_camera_target;
     int recorder_pipefd[2];
@@ -2402,17 +2405,15 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float goal_x = agent_obs[0] * 200;
     float goal_y = agent_obs[1] * 200;
     if (mode == 0) {
-        DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
-                     Fade(LIGHTGREEN, 0.3f));
+        DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTBLUE);
+        DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTBLUE, 0.3f));
     }
 
     if (mode == 1) {
         float goal_x_world = px + (goal_x * heading_self_x - goal_y * heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
-        DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
-                     Fade(LIGHTGREEN, 0.3f));
+        DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTBLUE);
+        DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,Fade(LIGHTBLUE, 0.3f));
     }
     // First draw other agent observations
     int obs_idx = ego_dim; // Start after ego obs
@@ -2659,13 +2660,21 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     break;
                 }
             }
+            
+            for (int j = 0; j < env->expert_static_agent_count; j++) {
+                if (env->expert_static_agent_indices[j] == i) {
+                    is_static_agent = true;
+                    break;
+                }
+            }
+
             for (int j = 0; j < env->static_agent_count; j++) {
                 if (env->static_agent_indices[j] == i) {
                     is_static_agent = true;
                     break;
                 }
             }
-            // HIDE CARS ON RESPAWN - IMPORTANT TO KNOW VISUAL SETTING
+            
             if ((!is_active_agent && !is_static_agent) || env->entities[i].respawn_timestep != -1) {
                 continue;
             }
@@ -2673,6 +2682,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             float heading;
             position = (Vector3){env->entities[i].x, env->entities[i].y, 1.1};
             heading = env->entities[i].heading;
+            
             // Create size vector
             Vector3 size = {env->entities[i].length, env->entities[i].width, env->entities[i].height};
 
@@ -2709,19 +2719,19 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     continue;
                 }
 
-                // --- Draw the car  ---
-                Color car_color = GRAY; // default for static
+                // Draw the agent bounding boxes
+                Color car_color = GRAY;
                 if (is_expert)
-                    car_color = GOLD; // expert replay
+                    car_color = EXPERT_REPLAY;
                 if (is_active_agent)
-                    car_color = BLUE; // policy-controlled
+                    car_color = BLUE; // Policy-controlled
                 if (is_active_agent && env->entities[i].collision_state > 0)
                     car_color = RED;
                 rlSetLineWidth(3.0f);
                 for (int j = 0; j < 4; j++) {
                     DrawLine3D(corners[j], corners[(j + 1) % 4], car_color);
                 }
-                // --- Draw a heading arrow pointing forward ---
+                // Draw a heading arrow pointing forward
                 Vector3 arrowStart = position;
                 Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
                                     position.y + sin_heading * half_len * 1.5f, position.z};
@@ -2761,10 +2771,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 Vector3 model_size = {bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y,
                                       bounds.max.z - bounds.min.z};
                 Vector3 scale = {size.x / model_size.x, size.y / model_size.y, size.z / model_size.z};
-                // if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
-                //     rlPopMatrix();
-                //     continue;
-                // }
+              
                 if (env->entities[i].type == CYCLIST) {
                     scale = (Vector3){0.01, 0.01, 0.01};
                     car_model = client->cyclist;
@@ -2783,11 +2790,11 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         (Vector3){-half_len, half_width, 0},  // Back-right
                         (Vector3){-half_len, -half_width, 0}, // Back-left
                     };
-                    Color wire_color = GRAY; // static
+                    Color wire_color = GRAY;
                     if (!is_active_agent && env->entities[i].mark_as_expert == 1)
-                        wire_color = GOLD; // expert replay
+                        wire_color = EXPERT_REPLAY;
                     if (is_active_agent)
-                        wire_color = BLUE; // policy
+                        wire_color = BLUE; // Policy-controlled
                     if (is_active_agent && env->entities[i].collision_state > 0)
                         wire_color = RED;
                     rlSetLineWidth(2.0f);
@@ -2820,10 +2827,10 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
                 DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 1}, 0.5f,
-                           DARKGREEN);
+                           DEEPBLUE);
 
                 DrawCircle3D((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 0.1f},
-                             env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.9f));
+                             env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(DEEPBLUE, 0.9f));
             }
         }
         // Draw road elements
@@ -2902,7 +2909,7 @@ void c_render(Drive *env) {
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
 
         Camera3D camera = {0};
-        camera.position = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 500.0f};
+        camera.position = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 400.0f};
         camera.target = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0.0f};
         camera.up = (Vector3){0.0f, -1.0f, 0.0f};
         camera.projection = CAMERA_ORTHOGRAPHIC;
