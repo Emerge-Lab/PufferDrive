@@ -1,10 +1,12 @@
 import numpy as np
-import math
 import gymnasium
 import json
 import struct
 import os
+
+import torch
 import pufferlib
+import math
 from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
@@ -44,6 +46,10 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
         use_all_maps=False,
+        ini_file_path="pufferlib/config/ocean/drive.ini",
+        prepare_human_data=False,
+        uses_memory=False,
+        memory_size=0,
     ):
         # env
         self.dt = dt
@@ -65,6 +71,11 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
+        self.ini_file_path = ini_file_path
+        self.prepare_human_data = prepare_human_data
+        self.uses_memory = uses_memory
+        self.memory_size = memory_size
+        self.total_num_samples = 0
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -114,7 +125,8 @@ class Drive(pufferlib.PufferEnv):
         if action_type == "discrete":
             if dynamics_model == "classic":
                 # Joint action space (assume dependence)
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 13])
+                self.joint_action_space_size = binding.NUM_ACCEL_BINS * binding.NUM_STEER_BINS
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([self.joint_action_space_size])
                 # Multi discrete (assume independence)
                 # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
             elif dynamics_model == "jerk":
@@ -193,7 +205,7 @@ class Drive(pufferlib.PufferEnv):
                 max_controlled_agents=self.max_controlled_agents,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
-                ini_file="pufferlib/config/ocean/drive.ini",
+                ini_file=self.ini_file_path,
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
@@ -353,6 +365,114 @@ class Drive(pufferlib.PufferEnv):
         trajectories["scenario_id"] = trajectories["scenario_id"].astype(str)
 
         return trajectories
+
+    def _prepare_human_data(self, max_samples=16_384):
+        """Prepare human demonstrations."""
+
+        trajectory_length = 91
+
+        if self.dynamics_model == "classic":
+            expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 1), dtype=np.float32)
+            expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
+            expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
+
+            binding.vec_collect_expert_data(
+                self.c_envs, expert_actions_discrete, expert_actions_continuous, expert_observations_full
+            )
+
+            if np.all(expert_actions_discrete == -1):
+                raise ValueError("No valid human demonstrations could be collected. Please check the data format.")
+
+            if self.uses_memory:
+                # LSTM is conditioned on the memory_size last observations.
+                # Adapt the human data collection to chunk trajectories into
+                # sequences of length memory_size: (feature_dim, memory_size)
+
+                # Filter out invalid timesteps first
+                invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)  # (T, N)
+
+                sequences_obs = []
+                sequences_actions_discrete = []
+                sequences_actions_continuous = []
+
+                # Calculate max sequences to collect
+                max_sequences = max_samples // self.memory_size
+
+                # Process each agent's trajectory
+                for agent_idx in range(self.num_agents):
+                    # Early exit if we have enough sequences
+                    if len(sequences_obs) >= max_sequences:
+                        break
+
+                    # Get valid timesteps for this agent
+                    valid_mask = ~invalid_action_mask[:, agent_idx]
+                    valid_timesteps = np.where(valid_mask)[0]
+
+                    if len(valid_timesteps) < self.memory_size:
+                        # Skip agents with insufficient valid data
+                        continue
+
+                    # Extract valid data for this agent
+                    agent_obs = expert_observations_full[valid_mask, agent_idx, :]
+                    agent_actions_discrete = expert_actions_discrete[valid_mask, agent_idx, :]
+                    agent_actions_continuous = expert_actions_continuous[valid_mask, agent_idx, :]
+
+                    # Chunk into sequences of memory_size
+                    num_sequences = len(agent_obs) - self.memory_size + 1
+                    for start_idx in range(num_sequences):
+                        # Check if we've collected enough
+                        if len(sequences_obs) >= max_sequences:
+                            break
+
+                        end_idx = start_idx + self.memory_size
+                        sequences_obs.append(agent_obs[start_idx:end_idx])
+                        sequences_actions_discrete.append(agent_actions_discrete[start_idx:end_idx])
+                        sequences_actions_continuous.append(agent_actions_continuous[start_idx:end_idx])
+
+                if len(sequences_obs) == 0:
+                    raise ValueError("No valid sequences could be created. Check memory_size and trajectory validity.")
+
+                # Stack all sequences: [num_sequences, memory_size, feature_dim]
+                self.expert_observations_full = torch.tensor(np.stack(sequences_obs, axis=0), dtype=torch.float32)
+                self.expert_actions_discrete = torch.tensor(
+                    np.stack(sequences_actions_discrete, axis=0), dtype=torch.float32
+                )
+                self.expert_actions_continuous = torch.tensor(
+                    np.stack(sequences_actions_continuous, axis=0), dtype=torch.float32
+                )
+
+                self.total_num_samples = self.expert_actions_discrete.shape[0]
+            else:
+                # For classic dynamics without memory (no LSTM), we can directly
+                # use the collected data as sequences. Just filter out the invalid timesteps
+                invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)
+
+                # Shape: [num_samples, feature_dim]
+                self.expert_actions_discrete = torch.Tensor(expert_actions_discrete[~invalid_action_mask])
+                self.expert_actions_continuous = torch.Tensor(expert_actions_continuous[~invalid_action_mask])
+                self.expert_observations_full = torch.Tensor(expert_observations_full[~invalid_action_mask])
+
+                if len(self.expert_observations_full) > max_samples:
+                    # Limit storage if needed (keep most recent samples)
+                    self.expert_observations_full = self.expert_observations_full[:max_samples:]
+                    self.expert_actions_discrete = self.expert_actions_discrete[:max_samples:]
+                    self.expert_actions_continuous = self.expert_actions_continuous[:max_samples:]
+
+                self.total_num_samples = self.expert_actions_discrete.shape[0]
+
+        else:
+            raise NotImplementedError(
+                "Expert data collection is currently only implemented for the classic dynamics model. "
+            )
+
+    def sample_human_demonstrations(self, batch_size=128):
+        # get random indices between min and max
+        rand_idx = torch.randint(0, self.total_num_samples - 1, (batch_size,))
+        return (
+            self.expert_actions_discrete[rand_idx],
+            self.expert_actions_continuous[rand_idx],
+            self.expert_observations_full[rand_idx],
+        )
 
     def get_road_edge_polylines(self):
         """Get road edge polylines for all scenarios.

@@ -437,6 +437,7 @@ Entity *load_map_binary(const char *filename, Drive *env) {
     fread(&env->num_roads, sizeof(int), 1, file);
     env->num_entities = env->num_objects + env->num_roads;
     Entity *entities = (Entity *)malloc(env->num_entities * sizeof(Entity));
+
     for (int i = 0; i < env->num_entities; i++) {
         // Read base entity data
         fread(&entities[i].scenario_id, sizeof(int), 1, file);
