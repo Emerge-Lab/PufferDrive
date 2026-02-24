@@ -183,6 +183,8 @@ struct Entity {
     float *traj_vz;
     float *traj_heading;
     int *traj_valid;
+    float *expert_accel;
+    float *expert_steering;
     float width;
     float length;
     float height;
@@ -435,6 +437,8 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             entities[i].traj_vz = (float *)malloc(size * sizeof(float));
             entities[i].traj_heading = (float *)malloc(size * sizeof(float));
             entities[i].traj_valid = (int *)malloc(size * sizeof(int));
+            entities[i].expert_accel = (float *)malloc(size * sizeof(float));
+            entities[i].expert_steering = (float *)malloc(size * sizeof(float));
         } else {
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
@@ -442,6 +446,8 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             entities[i].traj_vz = NULL;
             entities[i].traj_heading = NULL;
             entities[i].traj_valid = NULL;
+            entities[i].expert_accel = NULL;
+            entities[i].expert_steering = NULL;
         }
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
@@ -454,6 +460,8 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             fread(entities[i].traj_vz, sizeof(float), size, file);
             fread(entities[i].traj_heading, sizeof(float), size, file);
             fread(entities[i].traj_valid, sizeof(int), size, file);
+            fread(entities[i].expert_accel, sizeof(float), size, file);
+            fread(entities[i].expert_steering, sizeof(float), size, file);
         }
         // Read remaining scalar fields
         fread(&entities[i].width, sizeof(float), 1, file);
