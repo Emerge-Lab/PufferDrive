@@ -678,7 +678,16 @@ class PuffeRL:
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
-        path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}.pt")
+        project_name = "puffer_drive"
+        group_name = ""
+
+        if hasattr(self.logger, "wandb"):
+            run = self.logger.wandb.run
+            project_name = run.project or project_name
+            group_name = run.group or ""
+
+        file_name = "_".join([name for name in [run_id, project_name, group_name] if name]) + ".pt"
+        path = os.path.join(self.config["data_dir"], file_name)
         shutil.copy(model_path, path)
         return path
 
