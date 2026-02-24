@@ -88,8 +88,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int goal_behavior = unpack(kwargs, "goal_behavior");
     int reward_randomization = unpack(kwargs, "reward_randomization");
     int reward_conditioning = unpack(kwargs, "reward_conditioning");
-    float min_goal_distance = unpack(kwargs, "min_goal_distance");
-    float max_goal_distance = unpack(kwargs, "max_goal_distance");
+    float goal_target_distance = unpack(kwargs, "goal_target_distance");
 
     float reward_bound_goal_radius_min = unpack(kwargs, "reward_bound_goal_radius_min");
     float reward_bound_goal_radius_max = unpack(kwargs, "reward_bound_goal_radius_max");
@@ -189,8 +188,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->goal_behavior = goal_behavior;
         env->reward_randomization = reward_randomization;
         env->reward_conditioning = reward_conditioning;
-        env->min_goal_distance = min_goal_distance;
-        env->max_goal_distance = max_goal_distance;
+        env->goal_target_distance = goal_target_distance;
         // reward randomization bounds
         env->reward_bounds[REWARD_COEF_GOAL_RADIUS] =
             (RewardBound){reward_bound_goal_radius_min, reward_bound_goal_radius_max};
@@ -340,8 +338,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->reward_randomization = (int)unpack(kwargs, "reward_randomization");
     env->reward_conditioning = (int)unpack(kwargs, "reward_conditioning");
-    env->min_goal_distance = (float)unpack(kwargs, "min_goal_distance");
-    env->max_goal_distance = (float)unpack(kwargs, "max_goal_distance");
+    env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->min_goal_speed = (float)unpack(kwargs, "min_goal_speed");
     env->max_goal_speed = (float)unpack(kwargs, "max_goal_speed");

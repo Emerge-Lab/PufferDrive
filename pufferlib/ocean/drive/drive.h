@@ -311,8 +311,7 @@ struct Drive {
     float max_goal_speed;
     int logs_capacity;
     int goal_behavior;
-    float min_goal_distance;
-    float max_goal_distance;
+    float goal_target_distance;
     char *ini_file;
     char *scenario_id;
     int collision_behavior;
@@ -1573,6 +1572,8 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
     agent->sim_y = spawn_y;
     agent->sim_z = spawn_z;
     agent->sim_heading = spawn_heading;
+    agent->heading_x = cosf(spawn_heading);
+    agent->heading_y = sinf(spawn_heading);
     agent->sim_length = spawn_length;
     agent->sim_width = spawn_width;
     agent->sim_height = spawn_height;
@@ -3298,7 +3299,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         if (entity_type + 4 == ROAD_LANE) {
             lineColor = WHITE;
         } else if (entity_type + 4 == ROAD_EDGE) {
-        lineColor = PUFF_CYAN;
+            lineColor = PUFF_CYAN;
         }
         // For road segments, draw line between start and end points
         float x_middle = agent_obs[entity_idx] * 50;
@@ -3895,29 +3896,15 @@ void sample_new_goal(Drive *env, int agent_idx) {
 
             // Check if point is ahead of agent
             float dot = to_point_x * agent->heading_x + to_point_y * agent->heading_y;
-            float mod_to_pt = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
-            float mod_heading = atan2f(agent->heading_y, agent->heading_x);
-            float cos_theta = dot / (mod_to_pt * mod_heading);
-            if (cos_theta <= 0.0f) // Maybe increase threshold to have points in the direction of travel but not
-                                   // necessarily perfectly ahead?
+            if (dot <= 0.0f)
                 continue;
 
             // Calculate distance to point
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
 
-            // compute distance
-            float distance_error =
-                fmax(env->min_goal_distance - distance, fmax(0.0, distance - env->max_goal_distance));
-            // check if it's within the specified radius, if so set it as a goal
-            if (distance_error == 0) {
-                agent->goal_position_x = point_x;
-                agent->goal_position_y = point_y;
-                agent->goal_position_z = point_z;
-                sample_new_goal_radius(env, agent);
-                agent->goals_sampled_this_episode += 1.0f;
-                return;
-                // if not check whether is closer than the previous best alternative point
-            } else if (distance_error < best_distance_error) {
+            // Find point closest to target distance
+            float distance_error = fabsf(distance - env->goal_target_distance);
+            if (distance_error < best_distance_error) {
                 best_distance_error = distance_error;
                 best_x = point_x;
                 best_y = point_y;
