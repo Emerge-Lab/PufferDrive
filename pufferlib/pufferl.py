@@ -1173,17 +1173,16 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             backend = "Serial"
 
         args["vec"] = dict(backend=backend, num_envs=1)
+
+        # Create environment and policy
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
 
+        # Reset environment
         ob, info = vecenv.reset()
         driver = vecenv.driver_env
         num_agents = vecenv.observation_space.shape[0]
         device = args["train"]["device"]
-
-        # Rebuild visualize binary if saving frames (for C-based rendering)
-        if args["save_frames"] > 0:
-            ensure_drive_binary()
 
         state = {}
         if args["train"]["use_rnn"]:
@@ -1192,23 +1191,12 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
-        frames = []
-        while True:
-            render = driver.render()
-            if len(frames) < args["save_frames"]:
-                frames.append(render)
+        if driver.render_mode == 1:
+            max_frames = 91
+            frame_count = 0
 
-            # Screenshot Ocean envs with F12, gifs with control + F12
-            if driver.render_mode == "ansi":
-                print("\033[0;0H" + render + "\n")
-                time.sleep(1 / args["fps"])
-            elif driver.render_mode == "rgb_array":
-                pass
-                # import cv2
-                # render = cv2.cvtColor(render, cv2.COLOR_RGB2BGR)
-                # cv2.imshow('frame', render)
-                # cv2.waitKey(1)
-                # time.sleep(1/args['fps'])
+        while True:
+            driver.render()
 
             with torch.no_grad():
                 ob = torch.as_tensor(ob).to(device)
@@ -1219,14 +1207,14 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             if isinstance(logits, torch.distributions.Normal):
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
-            ob = vecenv.step(action)[0]
+            ob, reward, done, truncated, info = vecenv.step(action)
 
-            if len(frames) > 0 and len(frames) == args["save_frames"]:
-                import imageio
+            if driver.render_mode == 1:
+                frame_count += 1
+                if frame_count >= max_frames or done.all() or truncated.all():
+                    break
 
-                imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
-                frames.append("Done")
-
+        vecenv.close()
 
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)
