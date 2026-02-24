@@ -78,8 +78,7 @@ void demo() {
         .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .goal_radius = conf.goal_radius,
         .goal_behavior = conf.goal_behavior,
-        .min_goal_distance = conf.min_goal_distance,
-        .max_goal_distance = conf.max_goal_distance,
+        .goal_target_distance = conf.goal_target_distance,
         .min_goal_speed = conf.min_goal_speed,
         .max_goal_speed = conf.max_goal_speed,
         .dt = conf.dt,
@@ -91,12 +90,12 @@ void demo() {
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
-        .reward_conditioning = 1,
+        .reward_conditioning = conf.reward_conditioning,
     };
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_resampling_speed_lane.bin");
+    Weights *weights = load_weights("resources/drive/puffer_drive_weights_resampling_300.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;

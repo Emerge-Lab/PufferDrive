@@ -26,8 +26,7 @@ class Drive(pufferlib.PufferEnv):
         goal_behavior=0,
         reward_randomization=0,
         reward_conditioning=0,
-        min_goal_distance=5.0,
-        max_goal_distance=20.0,
+        goal_target_distance=30.0,
         goal_radius=2.0,
         min_goal_speed=None,
         max_goal_speed=None,
@@ -100,8 +99,7 @@ class Drive(pufferlib.PufferEnv):
         self.goal_behavior = goal_behavior
         self.reward_randomization = reward_randomization
         self.reward_conditioning = reward_conditioning
-        self.min_goal_distance = min_goal_distance
-        self.max_goal_distance = max_goal_distance
+        self.goal_target_distance = goal_target_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.human_agent_idx = human_agent_idx
@@ -253,8 +251,7 @@ class Drive(pufferlib.PufferEnv):
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
             reward_conditioning=self.reward_conditioning,
-            min_goal_distance=self.min_goal_distance,
-            max_goal_distance=self.max_goal_distance,
+            goal_target_distance=self.goal_target_distance,
             reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
             reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
             reward_bound_collision_min=self.reward_bound_collision_min,
@@ -321,8 +318,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
                 reward_conditioning=self.reward_conditioning,
-                min_goal_distance=self.min_goal_distance,
-                max_goal_distance=self.max_goal_distance,
+                goal_target_distance=self.goal_target_distance,
                 # reward randomization bounds
                 reward_bound_collision_min=self.reward_bound_collision_min,
                 reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
@@ -401,8 +397,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
                 reward_conditioning=self.reward_conditioning,
-                min_goal_distance=self.min_goal_distance,
-                max_goal_distance=self.max_goal_distance,
+                goal_target_distance=self.goal_target_distance,
                 # reward randomization bounds
                 reward_bound_collision_min=self.reward_bound_collision_min,
                 reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
@@ -465,8 +460,7 @@ class Drive(pufferlib.PufferEnv):
                     goal_behavior=self.goal_behavior,
                     reward_randomization=self.reward_randomization,
                     reward_conditioning=self.reward_conditioning,
-                    min_goal_distance=self.min_goal_distance,
-                    max_goal_distance=self.max_goal_distance,
+                    goal_target_distance=self.goal_target_distance,
                     min_goal_speed=self.min_goal_speed,
                     max_goal_speed=self.max_goal_speed,
                     # reward randomization bounds

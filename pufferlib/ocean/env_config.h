@@ -27,8 +27,6 @@ typedef struct {
     int goal_behavior;
     int reward_randomization;
     int reward_conditioning;
-    float min_goal_distance;
-    float max_goal_distance;
 
     float reward_bound_collision_min;
     float reward_bound_goal_radius_min;
@@ -101,10 +99,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_randomization = atoi(value);
     } else if (MATCH("env", "reward_conditioning")) {
         env_config->reward_conditioning = atoi(value);
-    } else if (MATCH("env", "min_goal_distance")) {
-        env_config->min_goal_distance = atof(value);
-    } else if (MATCH("env", "max_goal_distance")) {
-        env_config->max_goal_distance = atof(value);
+    } else if (MATCH("env", "goal_target_distance")) {
+        env_config->goal_target_distance = atof(value);
     } else if (MATCH("env", "reward_lane_center")) {
         env_config->reward_lane_center = atof(value);
     } else if (MATCH("env", "reward_lane_align")) {
