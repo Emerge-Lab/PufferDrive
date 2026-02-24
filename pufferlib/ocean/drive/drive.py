@@ -12,7 +12,7 @@ from tqdm import tqdm
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
-        render_mode=None,
+        render_mode=1,
         report_interval=1,
         width=1280,
         height=1024,
@@ -196,6 +196,7 @@ class Drive(pufferlib.PufferEnv):
                 control_mode=self.control_mode,
                 map_dir=map_dir,
                 max_controlled_agents=self.max_controlled_agents,
+                render_mode=render_mode,
             )
             env_ids.append(env_id)
 
@@ -264,6 +265,7 @@ class Drive(pufferlib.PufferEnv):
                 map_dir=self.map_dir,
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
+                render_mode=self.render_mode,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
