@@ -27,6 +27,7 @@ typedef struct {
     int goal_behavior;
     int reward_randomization;
     int reward_conditioning;
+    float goal_target_distance;
 
     float reward_bound_collision_min;
     float reward_bound_goal_radius_min;
