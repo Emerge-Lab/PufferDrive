@@ -660,7 +660,7 @@ class PuffeRL:
             project_name = run.project or project_name
             group_name = run.group or ""
 
-        file_name = "_".join([name for name in [run, project_name, group_name] if name]) + ".pt"
+        file_name = "_".join([name for name in [run_id, project_name, group_name] if name]) + ".pt"
         path = os.path.join(self.config["data_dir"], file_name)
         shutil.copy(model_path, path)
         return path
