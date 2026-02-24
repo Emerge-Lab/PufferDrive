@@ -129,9 +129,6 @@ class PuffeRL:
         self.render = config["render"]
         self.render_interval = config["render_interval"]
 
-        if self.render:
-            ensure_drive_binary()
-
         # LSTM
         if config["use_rnn"]:
             n = vecenv.agents_per_batch

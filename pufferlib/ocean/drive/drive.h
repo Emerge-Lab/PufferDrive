@@ -16,6 +16,11 @@
 #define RENDER_WINDOW 0
 #define RENDER_HEADLESS 1
 
+// View modes
+#define VIEW_MODE_SIM_STATE 0
+#define VIEW_MODE_BEV_AGENT_OBS 1
+#define VIEW_MODE_AGENT_PERSP 2
+
 // Entity Types
 #define NONE 0
 #define VEHICLE 1
@@ -2231,7 +2236,7 @@ Client *make_client(Drive *env) {
         client->camera.up = (Vector3){0.0f, -1.0f, 0.0f}; // Y is up
         client->camera.fovy = 45.0f;
         client->camera.projection = CAMERA_PERSPECTIVE;
-        client->camera_zoom = 1.0f;
+        
 
     } else { // Headless rendering
         SetConfigFlags(FLAG_WINDOW_HIDDEN);
@@ -2893,7 +2898,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     }
 }
 
-void c_render(Drive *env) {
+void c_render(Drive *env, int view_mode) {
     
     // Create client on first render call
     if (env->client == NULL) {
@@ -2903,23 +2908,64 @@ void c_render(Drive *env) {
     Client *client = env->client;
 
     if (env->render_mode == RENDER_HEADLESS) { // Headless rendering via ffmpeg
-        
-        // Set the camera to a fixed top-down view
         float map_width  = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
 
         Camera3D camera = {0};
-        camera.position = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 400.0f};
-        camera.target = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0.0f};
-        camera.up = (Vector3){0.0f, -1.0f, 0.0f};
-        camera.projection = CAMERA_ORTHOGRAPHIC;
-        camera.fovy = 2*map_height;
-                
-        BeginDrawing();
-        ClearBackground(ROAD_COLOR);
-        BeginMode3D(camera);
-        draw_scene(env, client, 1, 0, 0, 0) ;
-        EndMode3D();
+
+        printf(view_mode == VIEW_MODE_BEV ? "Rendering in BEV mode\n" :
+               view_mode == VIEW_MODE_BEV_AGENT_OBS ? "Rendering in Agent-Centric mode\n" :
+               "Rendering in First-person mode\n");
+
+        if (view_mode == VIEW_MODE_BEV) {
+            // Orthographic bird's-eye view over the entire map (fully observable)
+            camera.position   = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 400.0f};
+            camera.target     = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0.0f};
+            camera.up         = (Vector3){0.0f, -1.0f, 0.0f};
+            camera.projection = CAMERA_ORTHOGRAPHIC;
+            camera.fovy       = 2.0f * map_height;
+
+            BeginDrawing();
+            ClearBackground(ROAD_COLOR);
+            BeginMode3D(camera);
+            draw_scene(env, client, 1, 0, 0, 0);
+
+        } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
+            // Orthographic bird's-eye view centered on the selected agent, 
+            // showing only that agent's observations
+            int agent_idx = env->active_agent_indices[env->human_agent_idx];
+            Entity *agent = &env->entities[agent_idx];
+
+            Camera3D camera = {0};
+            camera.position   = (Vector3){agent->x, agent->y, 400.0f};
+            camera.target     = (Vector3){agent->x, agent->y, 0.0f};
+            camera.up         = (Vector3){0.0f, -1.0f, 0.0f};
+            camera.projection = CAMERA_ORTHOGRAPHIC;
+            camera.fovy = env->grid_map->vision_range * GRID_CELL_SIZE * 2.0f;
+
+            BeginDrawing();
+            ClearBackground(ROAD_COLOR);
+            BeginMode3D(camera);
+            draw_scene(env, client, 1, 1, 0, 0);
+
+        } else { // First-person perspective from a selected agent
+            int agent_idx = env->active_agent_indices[env->human_agent_idx];
+            Entity *agent = &env->entities[agent_idx];
+
+            Camera3D camera = {0};
+            // Position camera behind and above the agent
+            camera.position = (Vector3){agent->x - (40.0f * cosf(agent->heading)), agent->y - (40.0f * sinf(agent->heading)), 25.0f};
+            camera.target   = (Vector3){agent->x + 40.0f * cosf(agent->heading), agent->y + 40.0f * sinf(agent->heading), 1.0f};
+            camera.up       = (Vector3){0.0f, 0.0f, 1.0f};
+            camera.fovy     = 60.0f;
+            camera.projection = CAMERA_PERSPECTIVE;
+
+            BeginDrawing();
+            ClearBackground(ROAD_COLOR);
+            BeginMode3D(camera);
+            draw_scene(env, client, 0, 0, 0, 1);
+        }
+
         EndDrawing();
 
         unsigned char *screen_data = rlReadScreenPixels((int)client->width, (int)client->height);
@@ -2975,7 +3021,6 @@ void c_render(Drive *env) {
             DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, action_color);
         }
 
-        // Show key press status
         int status_y = 150;
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
             DrawText("[shift pressed]", 10, status_y, 20, YELLOW);
@@ -2990,7 +3035,6 @@ void c_render(Drive *env) {
             status_y += 20;
         }
 
-        // Controls help
         DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10,
                 client->height - 30, 20, PUFF_WHITE);
         DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, status_y, 20, PUFF_WHITE);

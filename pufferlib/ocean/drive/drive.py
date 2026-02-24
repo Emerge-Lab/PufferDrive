@@ -4,15 +4,20 @@ import json
 import struct
 import os
 import pufferlib
+from enum import IntEnum
 from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
+class RenderView(IntEnum):
+    FULL_SIM_STATE = 0  # Orthographic top-down, fully observable simulator state
+    BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
+    AGENT_PERSP = 2  # Third-person perspective following selected agent
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
-        render_mode=1,
+        render_mode=RenderView.FULL_SIM_STATE,
         report_interval=1,
         width=1280,
         height=1024,
@@ -391,8 +396,8 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self):
-        binding.vec_render(self.c_envs, 0)
+    def render(self, view_mode: RenderView = RenderView.FULL_SIM_STATE, env_id=0):
+        binding.vec_render(self.c_envs, int(view_mode), env_id)
 
     def close(self):
         binding.vec_close(self.c_envs)

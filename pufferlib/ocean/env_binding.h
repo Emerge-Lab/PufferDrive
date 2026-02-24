@@ -198,13 +198,27 @@ static PyObject *env_step(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-// Python function to step the environment
+// Python function to render the environment
 static PyObject *env_render(PyObject *self, PyObject *args) {
+    int num_args = PyTuple_Size(args);
+    if (num_args != 2) {
+        PyErr_SetString(PyExc_TypeError, "env_render requires 2 arguments (env_handle, view_mode)");
+        return NULL;
+    }
+
     Env *env = unpack_env(args);
     if (!env) {
         return NULL;
     }
-    c_render(env);
+
+    PyObject *view_mode_arg = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(view_mode_arg, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
+        return NULL;
+    }
+    int view_mode = PyLong_AsLong(view_mode_arg);
+
+    c_render(env, view_mode);
     Py_RETURN_NONE;
 }
 
@@ -519,8 +533,8 @@ static PyObject *vec_step(PyObject *self, PyObject *arg) {
 
 static PyObject *vec_render(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
-    if (num_args != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_render requires 2 arguments");
+    if (num_args != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_render requires 3 arguments");
         return NULL;
     }
 
@@ -535,9 +549,15 @@ static PyObject *vec_render(PyObject *self, PyObject *args) {
         PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
         return NULL;
     }
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 2), &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
+        return NULL;
+    }
     int env_id = PyLong_AsLong(env_id_arg);
+    PyObject *view_mode_arg = PyTuple_GetItem(args, 2);
+    int view_mode = PyLong_AsLong(view_mode_arg);
 
-    c_render(vec->envs[env_id]);
+    c_render(vec->envs[env_id], view_mode);
     Py_RETURN_NONE;
 }
 
