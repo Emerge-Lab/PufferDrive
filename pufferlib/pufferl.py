@@ -1151,14 +1151,12 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         evaluator = HumanReplayEvaluator(args, sp_env, hr_env)
 
         # Run both rollouts
-        evaluator.rollout(args, policy, mode="self_play")
-        evaluator.rollout(args, policy, mode="human_replay")
+        evaluator.rollout(args, policy, mode="self_play", render=True)
+        evaluator.rollout(args, policy, mode="human_replay", render=True)
 
         # Get all stats including deltas
         all_stats = evaluator.aggregate_stats()
-        sp_env.close()
-        hr_env.close()
-
+      
         # Log results
         import json
 
@@ -1401,27 +1399,6 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
     if not silent:
         print(f"Saved {len(weights)} weights to {path}")
-
-
-def ensure_drive_binary():
-    """Delete existing visualize binary and rebuild it. This ensures the
-    binary is always up-to-date with the latest code changes.
-    """
-    if os.path.exists("./visualize"):
-        os.remove("./visualize")
-
-    try:
-        result = subprocess.run(
-            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
-        )
-
-        if result.returncode != 0:
-            print(f"Build failed: {result.stderr}")
-            raise RuntimeError("Failed to build visualize binary for rendering")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Build timed out")
-    except Exception as e:
-        raise RuntimeError(f"Build error: {e}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):

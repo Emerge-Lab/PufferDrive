@@ -780,7 +780,7 @@ class HumanReplayEvaluator:
         self.human_replay_stats = {}
         self.self_play_stats = {}
 
-    def rollout(self, args, policy, mode="self_play"):
+    def rollout(self, args, policy, mode="self_play", render=False):
         """Roll out policy and collect episode statistics.
 
         Args:
@@ -796,6 +796,7 @@ class HumanReplayEvaluator:
         import pufferlib
 
         env = self.sp_env if mode == "self_play" else self.hr_env
+        driver = env.driver_env # Render env
 
         num_agents = env.observation_space.shape[0]
         device = args["train"]["device"]
@@ -813,6 +814,8 @@ class HumanReplayEvaluator:
 
         # Rollout
         for time_idx in range(self.sim_steps):
+            if render:
+                driver.render()
             # print(f"Time step: {time_idx}")
             # Get action from policy
             with torch.no_grad():
@@ -840,6 +843,8 @@ class HumanReplayEvaluator:
         else:
             self.self_play_stats = final_info
 
+        env.close()
+        
     def aggregate_stats(self):
         """Aggregate statistics from both modes and compute deltas.
 
