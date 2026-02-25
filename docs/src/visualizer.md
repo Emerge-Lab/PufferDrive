@@ -1,69 +1,50 @@
 # Visualizer
 
-PufferDrive ships a Raylib-based visualizer for replaying scenes, exporting videos, and debugging policies.
+PufferDrive uses [Raylib](https://www.raylib.com/) for rendering the environment. Rendering is driven from Python using the torch policy directly. No separate binary or weight export is required.
 
 ## Dependencies
-Install the minimal system packages for headless render/export:
 
+For headless rendering, we need ffmpeg and xvfb.
 ```bash
-sudo apt update
-sudo apt install ffmpeg xvfb
+sudo apt update && sudo apt install ffmpeg xvfb
 ```
 
-On environments without sudo, install them into your conda/venv:
+## Render Modes
 
-```bash
-conda install -c conda-forge xorg-x11-server-xvfb-cos6-x86_64 ffmpeg
+Configure `render_mode` in `pufferlib/config/ocean/drive.ini`:
+
+```ini
+; 0 = pop-up window (requires display)
+; 1 = headless (pipes frames to ffmpeg, recommended for servers/training)
+render_mode = 1
 ```
 
-## Build
-Compile the visualizer binary from the repo root:
+## Rendering once
 
 ```bash
-bash scripts/build_ocean.sh visualize local
+puffer eval puffer_drive
 ```
 
-If you need to force a rebuild, remove the cached binary first (`rm ./visualize`).
+This runs a short rollout, calls `env.render()` each step, and finalizes the video on `vecenv.close()`. Use `render_mode` to determine whether the video shows up as a pop-up window, or whether it is stored as an mp4.
 
-## Rendering a Video
-Launch the visualizer with a virtual display and export an `.mp4` for the binary scenario:
+## View modes
 
-```bash
-xvfb-run -s "-screen 0 1280x720x24" ./visualize
+Control what is rendered via the `view_mode` argument to `env.render()`:
+
+```python
+class RenderView(IntEnum):
+    FULL_SIM_STATE = 0  # Top-down, fully observable
+    BEV_AGENT_OBS  = 1  # Top-down, selected agent's observations only
+    AGENT_PERSP    = 2  # Third-person perspective following selected agent
+
+env.render(view_mode=RenderView.FULL_SIM_STATE, draw_traces=True, env_id=0)
 ```
 
-Adjust the screen size and color depth as needed. The `xvfb-run` wrapper allows Raylib to render without an attached display, which is convenient for servers and CI jobs.
+## Training-time evaluation
 
-## Arguments & Configuration
+Rendering during training is controlled by the `[eval]` section of `drive.ini`. See that file for available options (`human_replay_eval`, `self_play_eval`, `eval_interval`, etc.).
 
-The `visualize` tool supports several CLI arguments to control the rendering output. It also reads the `pufferlib/config/ocean/drive.ini` file for default environment settings(For more details on these settings, refer to [Configuration](simulator.md#configuration)).
+## Sharp edges
 
-### Command Line Arguments
-
-| Argument | Description | Default |
-| :--- | :--- | :--- |
-| `--map-name <path>` | Path to the map binary file (e.g., `resources/drive/binaries/training/map_000.bin`). If omitted, picks a random map out of `num_maps` from `map_dir` in `drive.ini`. | Random |
-| `--policy-name <path>` | Path to the policy weights file (`.bin`). | `resources/drive/puffer_drive_weights.bin` |
-| `--view <mode>` | Selects which views to render: `agent`, `topdown`, or `both`. | `both` |
-| `--output-agent <path>` | Output filename for agent view video. | `<policy>_agent.mp4` |
-| `--output-topdown <path>` | Output filename for top-down view video. | `<policy>_topdown.mp4` |
-| `--frame-skip <n>` | Renders every Nth frame to speed up generation (framerate remains 30fps). | `1` |
-| `--num-maps <n>` | Overrides the number of maps to sample from if `--map-name` is not set. | `drive.ini` value |
-
-### Visualization Flags
-
-| Flag | Description |
-| :--- | :--- |
-| `--show-grid` | Draws the underlying nav-graph/grid on the map. |
-| `--obs-only` | Hides objects not currently visible to the agent's sensors (fog of war). |
-| `--lasers` | Visualizes the raycast sensor lines from the agent. |
-| `--log-trajectories` | Draws the ground-truth "human" expert trajectories as green lines. |
-| `--zoom-in` | Zooms the camera mainly on the active region rather than the full map bounds. |
-
-### Key `drive.ini` Settings
-The visualizer initializes the environment using `pufferlib/config/ocean/drive.ini`. Important settings include:
-
-- `[env] dynamics_model`: `classic` or `jerk`. Must match the trained policy.
-- `[env] episode_length`: Duration of the playback. defaults to 91 if set to 0.
-- `[env] control_mode`: Determines which agents are active (`control_vehicles` vs `control_sdc_only`).
-- `[env] goal_behavior`: Defines agent behavior upon reaching goals (respawn vs stop).
+- **Raylib is not thread-safe.** If you create two separate render envs, always call `env1.close()` before calling `env2.render()`.
+- Headless mode derives window dimensions from map bounds automatically; no manual resolution configuration is needed.
