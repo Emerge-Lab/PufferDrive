@@ -2281,7 +2281,7 @@ Client *make_client(Drive *env) {
 
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        float scale = 8.0f; // Controls the resolution of the output video
+        float scale = 6.0f; // Controls the resolution of the output video
         int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
         int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
 
