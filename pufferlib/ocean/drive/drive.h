@@ -2274,7 +2274,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Update position
         float dx = new_vx * env->dt;
         float dy = new_vy * env->dt;
-        float dheading = heading + yaw_rate * env->dt;
+        float dheading = yaw_rate * env->dt;
 
         // Apply updates to the agent's state
         agent->sim_x += dx;
