@@ -1,4 +1,5 @@
 """WOSAC evaluation class for PufferDrive."""
+
 import copy
 import torch
 import numpy as np
@@ -764,7 +765,7 @@ class WOSACEvaluator:
 
 class Evaluator:
     """Evaluates policies in self_play or human_replay mode, with optional rendering.
-    
+
     Initializes the eval envs needed based on eval config flags:
     - human_replay_eval: creates sp_env + hr_env
     - render_eval: creates sp_env (if not already created)
@@ -782,11 +783,9 @@ class Evaluator:
         self._unpack_eval_configs(configs)
 
     def _unpack_eval_configs(self, configs):
-
         eval_config = copy.deepcopy(configs)
         # Create separate evaluation environments based on specified configs
         eval_config["env"]["termination_mode"] = 0
-        eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
         backend = eval_config["eval"].get("backend", "PufferEnv")
         eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
         eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
@@ -801,9 +800,7 @@ class Evaluator:
         self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
         self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
 
-
     def rollout(self, policy, mode="self_play", render_rollout=False):
-        
         env = self.hr_env if mode == "human_replay" else self.sp_env
         render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
         driver = env.driver_env
@@ -851,7 +848,7 @@ class Evaluator:
             self.self_play_stats = final_info
         elif mode == "human_replay":
             self.human_replay_stats = final_info
-        
+
     def aggregate_stats(self):
         if not self.self_play_stats or not self.human_replay_stats:
             raise ValueError("Must run rollouts in both modes before aggregating stats")
@@ -861,49 +858,50 @@ class Evaluator:
 
         return {
             "self_play": {
-                "collision_rate":  sp["collision_rate"],
-                "offroad_rate":    sp["offroad_rate"],
+                "collision_rate": sp["collision_rate"],
+                "offroad_rate": sp["offroad_rate"],
                 "completion_rate": sp["completion_rate"],
-                "score":           sp["score"],
-                "num_agents":      sp["n"],
+                "score": sp["score"],
+                "num_agents": sp["n"],
             },
             "human_replay": {
-                "collision_rate":  hr["collision_rate"],
-                "offroad_rate":    hr["offroad_rate"],
+                "collision_rate": hr["collision_rate"],
+                "offroad_rate": hr["offroad_rate"],
                 "completion_rate": hr["completion_rate"],
-                "score":           hr["score"],
-                "num_agents":      hr["n"],
+                "score": hr["score"],
+                "num_agents": hr["n"],
             },
             "delta": {
-                "Δ_cr":    sp["collision_rate"]  - hr["collision_rate"],
-                "Δ_or":    sp["offroad_rate"]    - hr["offroad_rate"],
-                "Δ_comp":  sp["completion_rate"] - hr["completion_rate"],
-                "Δ_score": sp["score"]           - hr["score"],
+                "Δ_cr": sp["collision_rate"] - hr["collision_rate"],
+                "Δ_or": sp["offroad_rate"] - hr["offroad_rate"],
+                "Δ_comp": sp["completion_rate"] - hr["completion_rate"],
+                "Δ_score": sp["score"] - hr["score"],
             },
         }
 
     def log_videos(self, eval_mode, epoch):
-        """Log all mp4s in renders/ to wandb after env close has flushed ffmpeg pipes."""
+        """Log all mp4s in local path to wandb after env close has flushed ffmpeg pipes."""
         import os
         import glob
 
         if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
             # Still clean up even if not logging
-            for p in glob.glob("renders/*.mp4"):
+            for p in glob.glob("*.mp4"):
                 os.remove(p)
             return
 
         import wandb
-        video_files = glob.glob("renders/*.mp4")
+
+        video_files = glob.glob("*.mp4")
         if not video_files:
-            print("Warning: no render videos found in renders/")
+            print("Warning: no render videos found in local path")
             return
-        
+
         for p in video_files:
             scenario_id = os.path.splitext(os.path.basename(p))[0]
-            self.logger.wandb.log({
-                f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=f"scene_{scenario_id}_epoch_{epoch}")
-            })
+            self.logger.wandb.log(
+                {f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=f"scene_{scenario_id}_epoch_{epoch}")}
+            )
 
         for p in video_files:
             os.remove(p)
@@ -913,15 +911,15 @@ class Evaluator:
             return
 
         log_dict = {
-            "eval/sp_collision_rate":  stats["self_play"]["collision_rate"],
-            "eval/sp_score":           stats["self_play"]["score"],
-            "eval/sp_n":               stats["self_play"]["num_agents"],
-            "eval/hr_collision_rate":  stats["human_replay"]["collision_rate"],
-            "eval/hr_score":           stats["human_replay"]["score"],
-            "eval/hr_n":               stats["human_replay"]["num_agents"],
-            "eval/delta_cr":           stats["delta"]["Δ_cr"],
-            "eval/delta_score":        stats["delta"]["Δ_score"],
-            "eval/delta_offroad":      stats["delta"]["Δ_or"],
-            "eval/delta_completion":   stats["delta"]["Δ_comp"],
+            "eval/sp_collision_rate": stats["self_play"]["collision_rate"],
+            "eval/sp_score": stats["self_play"]["score"],
+            "eval/sp_n": stats["self_play"]["num_agents"],
+            "eval/hr_collision_rate": stats["human_replay"]["collision_rate"],
+            "eval/hr_score": stats["human_replay"]["score"],
+            "eval/hr_n": stats["human_replay"]["num_agents"],
+            "eval/delta_cr": stats["delta"]["Δ_cr"],
+            "eval/delta_score": stats["delta"]["Δ_score"],
+            "eval/delta_offroad": stats["delta"]["Δ_or"],
+            "eval/delta_completion": stats["delta"]["Δ_comp"],
         }
         self.logger.wandb.log(log_dict)
