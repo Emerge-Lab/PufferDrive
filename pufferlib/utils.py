@@ -234,12 +234,10 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
             base_cmd.append("--show-human-logs")
         if config.get("zoom_in", False):
             base_cmd.append("--zoom-in")
-
-        # Frame skip for rendering performance
-        frame_skip = config.get("frame_skip", 1)
-        if frame_skip > 1:
-            base_cmd.extend(["--frame-skip", str(frame_skip)])
-
+        if getattr(vecenv.driver_env, "control_mode_str", None):
+            base_cmd.extend(["--control-mode", str(vecenv.driver_env.control_mode_str)])
+        if getattr(vecenv.driver_env, "max_controlled_agents", None):
+            base_cmd.extend(["--max-controlled-agents", str(vecenv.driver_env.max_controlled_agents)])
         # View mode
         view_mode = config.get("view_mode", "both")
         base_cmd.extend(["--view", view_mode])

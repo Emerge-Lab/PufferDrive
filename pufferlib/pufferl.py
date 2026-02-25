@@ -228,11 +228,23 @@ class PuffeRL:
         self.stats = defaultdict(list)
         self.last_stats = defaultdict(list)
         self.losses = {}
+        self.sanity = {
+            "policy_actions": [],
+            "human_actions": [],
+            "human_log_prob_obs": [],
+            "human_entropy_obs": [],
+            "relative_entropy": [],
+            "human_obs_importance": [],
+        }
+        self.data = {}
 
         # Prepare human demonstration data if enabled
         # We only do this for the driver env to save memory
         if self.vecenv.driver_env.prepare_human_data:
-            self.vecenv.driver_env._prepare_human_data()
+            total_samples, unique_samples = self.vecenv.driver_env._prepare_human_data()
+            self.data["data/total_human_samples"] = total_samples
+            self.data["data/unique_human_samples"] = unique_samples
+            self.data["data/perc_unique_human_samples"] = (unique_samples / total_samples) * 100
 
         self.resample_freq_epoch = self.vecenv.driver_env.resample_frequency / self.vecenv.driver_env.episode_length
 
@@ -363,8 +375,10 @@ class PuffeRL:
         # Occasionally resample human demonstrations in the driver environment.
         # This follows the same logic used for map resampling.
         if self.vecenv.driver_env.prepare_human_data and (self.epoch + 1) % self.resample_freq_epoch == 0:
-            print(f"resample human data: {self.epoch}")
-            self.vecenv.driver_env._prepare_human_data()
+            total_samples, unique_samples = self.vecenv.driver_env._prepare_human_data()
+            self.data["data/total_human_samples"] = total_samples
+            self.data["data/unique_human_samples"] = unique_samples
+            self.data["data/perc_unique_human_samples"] = (unique_samples / total_samples) * 100
 
         profile.end()
         return self.stats
@@ -471,6 +485,27 @@ class PuffeRL:
                     logits=human_logits, action=human_actions
                 )
 
+                with torch.no_grad():
+                    # Policy actions and corresponding entropy at human observations
+                    policy_actions, _, policy_entropy = pufferlib.pytorch.sample_logits(human_logits)
+                    self.sanity["policy_actions"].extend(policy_actions.flatten().tolist())
+                    self.sanity["human_actions"].extend(human_actions.flatten().tolist())
+
+                    # Estimate how off-policy the human observations are relative to the on-policy samples.
+                    # The assumption is that if the human observations are very off-policy,
+                    # then the entropy of sampled actions conditioned on the human observation is higher than
+                    # the entropy at the on-policy collected observations, since the policy is more uncertain about which action to take.
+                    _, human_log_prob_obs, human_entropy_obs = pufferlib.pytorch.sample_logits(logits=human_logits)
+
+                    relative_entropy = human_entropy_obs.mean() - entropy.mean()
+                    logratio_human_data = human_log_prob_obs - mb_logprobs[: human_log_prob_obs.shape[0], 0]
+                    human_obs_importance = logratio_human_data.exp()
+
+                    self.sanity["human_log_prob_obs"].extend(human_log_prob_obs.flatten().tolist())
+                    self.sanity["human_entropy_obs"].extend(human_entropy_obs.flatten().tolist())
+                    self.sanity["relative_entropy"].append(relative_entropy.item())
+                    self.sanity["human_obs_importance"].append(human_obs_importance.mean().item())
+
                 # Average and clip
                 human_log_prob = torch.clamp(human_log_prob, -15, 0)
                 human_nll = -human_log_prob.mean()
@@ -511,6 +546,8 @@ class PuffeRL:
                 current_ent_coef = 0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
             else:
                 current_ent_coef = config["ent_coef"]
+
+            # loss = config["human_ll_coef"] * human_nll
 
             loss = (
                 pg_loss
@@ -601,24 +638,38 @@ class PuffeRL:
             self.stats[k] = v
 
         device = config["device"]
+
+        eval_logs = {}
+
+        policy_actions = self.sanity["policy_actions"]
+        human_actions = self.sanity["human_actions"]
+        if policy_actions and human_actions:
+            accuracy = (np.array(policy_actions) == np.array(human_actions)).mean() * 100
+            eval_logs["eval/action_accuracy"] = accuracy
+
+        if self.sanity["relative_entropy"]:
+            eval_logs["eval/relative_entropy"] = np.mean(self.sanity["relative_entropy"])
+            eval_logs["eval/human_obs_importance"] = np.mean(self.sanity["human_obs_importance"])
+
         agent_steps = int(dist_sum(self.global_step, device))
+        ent_coef = (
+            0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
+            if config["anneal_entropy"]
+            else config["ent_coef"]
+        )
+
         logs = {
             "SPS": dist_sum(self.sps, device),
             "agent_steps": agent_steps,
             "uptime": time.time() - self.start_time,
             "epoch": int(dist_sum(self.epoch, device)),
             "learning_rate": self.optimizer.param_groups[0]["lr"],
-            "ent_coef": (
-                0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
-                if config["anneal_entropy"]
-                else config["ent_coef"]
-            ),
+            "ent_coef": ent_coef,
             **{f"environment/{k}": v for k, v in self.stats.items()},
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
-            # **{f'environment/{k}': dist_mean(v, device) for k, v in self.stats.items()},
-            # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
-            # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
+            **eval_logs,
+            "data/perc_unique_human_samples": self.data.get("data/perc_unique_human_samples", 0),
         }
 
         if torch.distributed.is_initialized():
@@ -629,6 +680,15 @@ class PuffeRL:
                 return None
 
         self.logger.log(logs, agent_steps)
+
+        self.sanity = {
+            "policy_actions": [],
+            "human_actions": [],
+            "human_log_prob_obs": [],
+            "human_entropy_obs": [],
+            "relative_entropy": [],
+            "human_obs_importance": [],
+        }
         return logs
 
     def close(self):

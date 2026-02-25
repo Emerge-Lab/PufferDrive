@@ -374,6 +374,9 @@ class Drive(pufferlib.PufferEnv):
 
         return trajectories
 
+    def _hash_pair(self, obs, act):
+        return hash((obs.round(3).tobytes(), act.round(2).tobytes()))
+
     def _prepare_human_data(self, max_samples=16_384):
         """Prepare human demonstrations."""
 
@@ -466,14 +469,20 @@ class Drive(pufferlib.PufferEnv):
                     self.expert_actions_discrete = self.expert_actions_discrete[:max_samples:]
                     self.expert_actions_continuous = self.expert_actions_continuous[:max_samples:]
 
+                # Count unique number of (observation, action) pairs. This gives
+                # an idea of the diversity and coverage of the human demonstrations.
+                obs_np = self.expert_observations_full.numpy()
+                act_np = self.expert_actions_discrete.numpy()
+                self.total_unique_samples = len({self._hash_pair(obs_np[i], act_np[i]) for i in range(len(obs_np))})
                 self.total_num_samples = self.expert_actions_discrete.shape[0]
 
+                return self.total_num_samples, self.total_unique_samples
         else:
             raise NotImplementedError(
                 "Expert data collection is currently only implemented for the classic dynamics model. "
             )
 
-    def sample_human_demonstrations(self, batch_size=128):
+    def sample_human_demonstrations(self, batch_size=512):
         # get random indices between min and max
         rand_idx = torch.randint(0, self.total_num_samples - 1, (batch_size,))
         return (
@@ -909,7 +918,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/processed/selected")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
