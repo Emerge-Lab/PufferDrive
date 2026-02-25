@@ -100,7 +100,7 @@
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
 #ifndef MAX_AGENTS // TODO: Needs to be replaced with MAX_PARTNER_OBS(agents in obs_radius) throughout observations code
                    // and with env->max_agents_in_sim throughout all agent for loops
-#define MAX_AGENTS 64
+#define MAX_AGENTS 128
 #endif
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
@@ -3875,7 +3875,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
     float best_x = agent->sim_x;
     float best_y = agent->sim_y;
     float best_z = agent->sim_z;
-    float best_distance_error = 1e30f;
+    float best_heading_error = 5.0f;
 
     // Sample points from randomly selected road lanes (with replacement)
     for (int ri = 0; ri < env->num_roads; ri++) {
@@ -3898,18 +3898,17 @@ void sample_new_goal(Drive *env, int agent_idx) {
             float mod_to_pt = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
             float mod_heading = atan2f(agent->heading_y, agent->heading_x);
             float cos_theta = dot / (mod_to_pt * mod_heading);
-            if (cos_theta <= 0.0f) // Maybe increase threshold to have points in the direction of travel but not
-                                   // necessarily perfectly ahead?
-                continue;
 
             // Calculate distance to point
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
 
+            if (distance < env->min_goal_distance || distance > env->max_goal_distance)
+                continue;
+
             // compute distance
-            float distance_error =
-                fmax(env->min_goal_distance - distance, fmax(0.0, distance - env->max_goal_distance));
+            float heading_error = (cos_theta - 1) * (cos_theta - 1); // 0 when perfectly aligned, increases as it deviates
             // check if it's within the specified radius, if so set it as a goal
-            if (distance_error == 0) {
+            if (heading_error == 0) {
                 agent->goal_position_x = point_x;
                 agent->goal_position_y = point_y;
                 agent->goal_position_z = point_z;
@@ -3917,8 +3916,8 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 agent->goals_sampled_this_episode += 1.0f;
                 return;
                 // if not check whether is closer than the previous best alternative point
-            } else if (distance_error < best_distance_error) {
-                best_distance_error = distance_error;
+            } else if (heading_error < best_heading_error) {
+                best_heading_error = heading_error;
                 best_x = point_x;
                 best_y = point_y;
                 best_z = point_z;
@@ -3929,12 +3928,12 @@ void sample_new_goal(Drive *env, int agent_idx) {
     // If no valid goal found, use another agent's initial goal
     // raise_error_with_message(ERROR_UNHANDLED_CASE, "No valid goal found for agent %d at (x,y,z)=(%f,%f,%f), using
     // another agent's initial goal", agent_idx, agent->sim_x, agent->sim_y, agent->sim_z);
-    if (best_distance_error >= 1e30f && env->active_agent_count > 1) {
-        int other_idx = env->active_agent_indices[(agent_idx + 1) % env->active_agent_count];
-        best_x = env->agents[other_idx].init_goal_x;
-        best_y = env->agents[other_idx].init_goal_y;
-        best_z = env->agents[other_idx].init_goal_z;
-    }
+    // if (best_distance_error >= 1e30f && env->active_agent_count > 1) {
+    //     int other_idx = env->active_agent_indices[(agent_idx + 1) % env->active_agent_count];
+    //     best_x = env->agents[other_idx].init_goal_x;
+    //     best_y = env->agents[other_idx].init_goal_y;
+    //     best_z = env->agents[other_idx].init_goal_z;
+    // }
 
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
