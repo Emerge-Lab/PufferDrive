@@ -852,9 +852,6 @@ class Evaluator:
         elif mode == "human_replay":
             self.human_replay_stats = final_info
         
-        #env.close()
-        #driver.close()
-                
     def aggregate_stats(self):
         if not self.self_play_stats or not self.human_replay_stats:
             raise ValueError("Must run rollouts in both modes before aggregating stats")
@@ -885,7 +882,7 @@ class Evaluator:
             },
         }
 
-    def log_videos(self, eval_mode):
+    def log_videos(self, eval_mode, epoch):
         """Log all mp4s in renders/ to wandb after env close has flushed ffmpeg pipes."""
         import os
         import glob
@@ -901,11 +898,12 @@ class Evaluator:
         if not video_files:
             print("Warning: no render videos found in renders/")
             return
-
-        self.logger.wandb.log({
-            f"render/{eval_mode}_{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, format="mp4")
-            for p in video_files
-        })
+        
+        for p in video_files:
+            scenario_id = os.path.splitext(os.path.basename(p))[0]
+            self.logger.wandb.log({
+                f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=f"scene_{scenario_id}_epoch_{epoch}")
+            })
 
         for p in video_files:
             os.remove(p)

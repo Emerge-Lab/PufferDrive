@@ -525,12 +525,12 @@ class PuffeRL:
                 self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
                 self.evaluator.rollout(self.uncompiled_policy, mode="human_replay")
                 self.evaluator.hr_env.close()
-                self.evaluator.log_videos(eval_mode="human_replay")
+                self.evaluator.log_videos(eval_mode="human_replay", epoch=self.epoch)
             if self_play_eval:
                 self.evaluator.sp_env = load_env("puffer_drive", self.evaluator.sp_eval_config)
                 self.evaluator.rollout(self.uncompiled_policy, mode="self_play")
                 self.evaluator.sp_env.close()
-                self.evaluator.log_videos(eval_mode="self_play")
+                self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
             if human_replay_eval and self_play_eval:
                 all_stats = self.evaluator.aggregate_stats()
                 self.evaluator.log_stats(all_stats)
