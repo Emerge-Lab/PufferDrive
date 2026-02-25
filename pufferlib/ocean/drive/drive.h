@@ -155,9 +155,12 @@ const Color LIGHTGREEN = (Color){152, 255, 152, 255};
 const Color LIGHTYELLOW = (Color){255, 255, 152, 255};
 const Color SOFT_YELLOW = (Color){245, 245, 220, 255};
 const Color ROAD_COLOR = (Color){35, 35, 37, 255};
-const Color EXPERT_REPLAY = (Color){162, 220, 183, 255};
 const Color LIGHTBLUE = (Color){167, 204, 255, 255};
 const Color DEEPBLUE = (Color){45, 112, 226, 255};
+const Color EXPERT_REPLAY = (Color){162, 220, 183, 255};
+const Color EXPERT_REPLAY_SMALL = (Color){118, 137, 118, 255};
+const Color LIGHT_ORANGE = (Color){255, 160, 80, 255};
+const Color LIGHT_PURPLE    = (Color){204, 204, 255, 255}; 
 
 struct timespec ts;
 
@@ -2421,16 +2424,23 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     // draw goal
     float goal_x = agent_obs[0] * 200;
     float goal_y = agent_obs[1] * 200;
-    if (mode == 0) {
-        DrawSphere((Vector3){goal_x, goal_y, Z_AGENT_DETAILS}, 0.5f, LIGHTBLUE);
-        DrawCircle3D((Vector3){goal_x, goal_y, Z_AGENT_DETAILS}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTBLUE, 0.3f));
+
+    int agent_type = env->entities[active_idx].type;
+    Color goal_color = LIGHTBLUE;
+    if (agent_type == PEDESTRIAN) goal_color = LIGHT_ORANGE;
+    else if (agent_type == CYCLIST) goal_color = LIGHT_PURPLE;
+
+    if (mode == 0) { // agent-relative coordinates
+        DrawSphere((Vector3){goal_x, goal_y, Z_AGENT_DETAILS}, 0.5f, goal_color);
+        DrawCircle3D((Vector3){goal_x, goal_y, Z_AGENT_DETAILS}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(goal_color, 0.3f));
     }
 
-    if (mode == 1) {
+    if (mode == 1) { // world coordinates
+        
         float goal_x_world = px + (goal_x * heading_self_x - goal_y * heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
-        DrawSphere((Vector3){goal_x_world, goal_y_world, Z_AGENT_DETAILS}, 0.5f, LIGHTBLUE);
-        DrawCircle3D((Vector3){goal_x_world, goal_y_world, Z_AGENT_DETAILS}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,Fade(LIGHTBLUE, 0.3f));
+        DrawSphere((Vector3){goal_x_world, goal_y_world, Z_AGENT_DETAILS}, 0.5f, goal_color);
+        DrawCircle3D((Vector3){goal_x_world, goal_y_world, Z_AGENT_DETAILS}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(goal_color, 0.3f));
     }
     // First draw other agent observations
     int obs_idx = ego_dim; // Start after ego obs
@@ -2737,19 +2747,24 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 }
 
                 // Draw the agent bounding boxes
-                Color car_color = GRAY;
-                if (is_expert)
-                    car_color = EXPERT_REPLAY;
-                if (is_active_agent)
-                    car_color = BLUE; // Policy-controlled
+                Color agent_color = GRAY;
+                if (is_expert) {
+                    if (env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST) agent_color = EXPERT_REPLAY_SMALL;
+                    else agent_color = EXPERT_REPLAY;
+                }
+                if (is_active_agent) {
+                    if (env->entities[i].type == PEDESTRIAN) agent_color = LIGHT_ORANGE;
+                    else if (env->entities[i].type == CYCLIST) agent_color = LIGHT_PURPLE;
+                    else agent_color = BLUE;
+                }
                 if (is_active_agent && env->entities[i].collision_state > 0)
-                    car_color = RED;
+                    agent_color = RED;
                 
                 rlPushMatrix();
                     rlTranslatef(position.x, position.y, position.z);
                     rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f);
-                    DrawCube((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, Fade(car_color, 0.5f));
-                    DrawCubeWires((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, car_color);
+                    DrawCube((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, Fade(agent_color, 0.5f));
+                    DrawCubeWires((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, agent_color);
                 rlPopMatrix();
                             
                 // Draw a heading arrow pointing forward
@@ -2757,8 +2772,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
                                     position.y + sin_heading * half_len * 1.5f, position.z};
 
-                DrawLine3D(arrowStart, arrowEnd, car_color);
-                DrawSphere(arrowEnd, 0.2f, car_color); // arrow tip
+                DrawLine3D(arrowStart, arrowEnd, agent_color);
+                DrawSphere(arrowEnd, 0.2f, agent_color); // arrow tip
 
             } else { // Agent view
                 rlPushMatrix();
@@ -2847,11 +2862,14 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 continue;
             }
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-                DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, Z_AGENT_DETAILS}, 0.5f,
-                           DEEPBLUE);
+                Color goal_color = DEEPBLUE;
+                if (env->entities[i].type == PEDESTRIAN) goal_color = LIGHT_ORANGE;
+                else if (env->entities[i].type == CYCLIST) goal_color = LIGHT_PURPLE;
 
+                DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, Z_AGENT_DETAILS},
+                        0.5f, goal_color);
                 DrawCircle3D((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, Z_AGENT_DETAILS},
-                             env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(DEEPBLUE, 0.9f));
+                            env->goal_radius, (Vector3){0, 0, Z_AGENT_DETAILS}, 90.0f, Fade(goal_color, 0.9f));
             }
         }
         // Draw road elements
@@ -2929,10 +2947,6 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
         Camera3D camera = {0};
 
-        printf(view_mode == VIEW_MODE_SIM_STATE ? "Rendering in Full Sim State mode\n" :
-               view_mode == VIEW_MODE_BEV_AGENT_OBS ? "Rendering in Agent-Centric mode\n" :
-               "Rendering in First-person mode\n");
-
         if (view_mode == VIEW_MODE_SIM_STATE) {
             // Orthographic bird's-eye view over the entire map (fully observable)
             camera.position   = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 400.0f};
@@ -2949,14 +2963,20 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                 for (int i = 0; i < env->active_agent_count; i++) {
                     int idx = env->active_agent_indices[i];
                     for (int t = env->init_steps; t < env->episode_length; t++) {
-                        DrawSphere((Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], 0.3f}, 0.2f, LIGHTBLUE);
+                        Color agent_color = LIGHTBLUE;
+                        if (env->entities[idx].type == PEDESTRIAN) {
+                            agent_color = LIGHT_ORANGE;
+                        } else if (env->entities[idx].type == CYCLIST) {
+                            agent_color = LIGHT_PURPLE;
+                        }
+                        DrawSphere((Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], Z_AGENT_DETAILS}, 0.15f, agent_color);
                     }
                 }
                 
                 for (int i = 0; i < env->expert_static_agent_count; i++) {
                     int idx = env->expert_static_agent_indices[i];
                     for (int t = env->init_steps; t < env->episode_length; t++) {
-                        DrawSphere((Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], 0.2f}, 0.2f, EXPERT_REPLAY);
+                        DrawSphere((Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], Z_AGENT_DETAILS}, 0.15f, EXPERT_REPLAY);
                     }
                 }
             }
