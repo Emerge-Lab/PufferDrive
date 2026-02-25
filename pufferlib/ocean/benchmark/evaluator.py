@@ -801,6 +801,8 @@ class Evaluator:
         self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
 
     def rollout(self, policy, mode="self_play", render_rollout=False):
+        """Roll out the given policy in the specified eval env and collect statistics."""
+
         env = self.hr_env if mode == "human_replay" else self.sp_env
         render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
         driver = env.driver_env
@@ -822,7 +824,7 @@ class Evaluator:
         for time_idx in range(self.sim_steps):
             if render_rollout or render_eval:
                 driver.render()
-            # print(f"Time step: {time_idx}")
+
             # Get action from policy
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
@@ -838,7 +840,6 @@ class Evaluator:
             obs, rewards, dones, truncs, info_list = env.step(action_np)
 
             if truncs.all():
-                # print(info_list)
                 break
 
         # Aggregate final statistics
@@ -913,13 +914,8 @@ class Evaluator:
         log_dict = {
             "eval/sp_collision_rate": stats["self_play"]["collision_rate"],
             "eval/sp_score": stats["self_play"]["score"],
-            "eval/sp_n": stats["self_play"]["num_agents"],
             "eval/hr_collision_rate": stats["human_replay"]["collision_rate"],
             "eval/hr_score": stats["human_replay"]["score"],
-            "eval/hr_n": stats["human_replay"]["num_agents"],
-            "eval/delta_cr": stats["delta"]["Δ_cr"],
-            "eval/delta_score": stats["delta"]["Δ_score"],
-            "eval/delta_offroad": stats["delta"]["Δ_or"],
-            "eval/delta_completion": stats["delta"]["Δ_comp"],
+            "eval/n": stats["self_play"]["num_agents"],
         }
         self.logger.wandb.log(log_dict)

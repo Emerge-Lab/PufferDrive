@@ -2983,7 +2983,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
         if (view_mode == VIEW_MODE_SIM_STATE) {
             // Orthographic bird's-eye view over the entire map (fully observable)
-            camera.position = (Vector3){0.0, 0.0, 500.0f}; // Above the scene
+            camera.position = (Vector3){0.0, 0.0, 400.0f}; // Above the scene
             camera.target = (Vector3){0.0, 0.0, 0.0};      // Look at origin
             camera.up = (Vector3){0.0f, -1.0f, 0.0f};
             camera.projection = CAMERA_ORTHOGRAPHIC;
