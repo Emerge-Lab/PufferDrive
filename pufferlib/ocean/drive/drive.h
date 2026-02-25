@@ -210,6 +210,7 @@ struct Log {
     float n;
     float lane_alignment_rate;
     float speed_at_goal;
+    float distance_without_collision;
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
@@ -1319,6 +1320,7 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        env->log.distance_without_collision += env->logs[i].distance_without_collision;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
@@ -1341,6 +1343,7 @@ void reset_agent_metrics(Drive *env, int agent_idx) {
     agent->metrics_array[LANE_DIST_IDX] = 0.0f;    // distance from lane center
     agent->collision_state = 0;
     agent->aabb_collision_state = 0;
+    agent->cumulative_displacement = 0.0f;
 }
 
 // void reset_agent_state(void){}
@@ -2245,8 +2248,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         }
 
         // Current state
-        float x = agent->sim_x;
-        float y = agent->sim_y;
         float heading = agent->sim_heading;
         float vx = agent->sim_vx;
         float vy = agent->sim_vy;
@@ -2270,18 +2271,19 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float new_vy = signed_speed * sinf(heading + beta);
 
         // Update position
-        x = x + (new_vx * env->dt);
-        y = y + (new_vy * env->dt);
-        heading = heading + yaw_rate * env->dt;
+        float dx = new_vx * env->dt;
+        float dy = new_vy * env->dt;
+        float dheading = heading + yaw_rate * env->dt;
 
         // Apply updates to the agent's state
-        agent->sim_x = x;
-        agent->sim_y = y;
-        agent->sim_heading = heading;
+        agent->sim_x += dx;
+        agent->sim_y += dy;
+        agent->sim_heading += dheading;
         agent->heading_x = cosf(heading);
         agent->heading_y = sinf(heading);
         agent->sim_vx = new_vx;
         agent->sim_vy = new_vy;
+        agent->cumulative_displacement += sqrtf(dx * dx + dy * dy);
     } else {
         // JERK dynamics model
         // Extract action components
@@ -2382,6 +2384,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->sim_vx = v_new * agent->heading_x;
         agent->sim_vy = v_new * agent->heading_y;
         agent->steering_angle = new_steering_angle;
+        agent->cumulative_displacement += sqrtf(dx * dx + dy * dy);
     }
 
     // To update agent's z-coordinate based on road elevation of 20 nearest elements
@@ -2443,6 +2446,7 @@ void c_reset(Drive *env) {
         agent->metrics_array[LANE_DIST_IDX] = 0.0f;  // distance from lane center
         agent->stopped = 0;
         agent->removed = 0;
+        agent->cumulative_displacement = 0.0f;
         generate_reward_coefs(env, agent);
 
         if (env->goal_behavior == GOAL_GENERATE_NEW) {
@@ -2514,6 +2518,9 @@ void c_step(Drive *env) {
         env->agents[agent_idx].aabb_collision_state = 0;
         compute_agent_metrics(env, agent_idx);
         int collision_state = env->agents[agent_idx].collision_state;
+        if (collision_state == 0) {
+            env->logs[i].distance_without_collision = agent->cumulative_displacement;
+        }
 
         if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION) {
