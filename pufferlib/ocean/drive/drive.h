@@ -2280,8 +2280,8 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->sim_x += dx;
         agent->sim_y += dy;
         agent->sim_heading += dheading;
-        agent->heading_x = cosf(heading);
-        agent->heading_y = sinf(heading);
+        agent->heading_x = cosf(agent->sim_heading);
+        agent->heading_y = sinf(agent->sim_heading);
         agent->sim_vx = new_vx;
         agent->sim_vy = new_vy;
         agent->cumulative_displacement += sqrtf(dx * dx + dy * dy);
