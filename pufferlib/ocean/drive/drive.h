@@ -3485,6 +3485,7 @@ void init_goal_positions(Drive *env) {
     for (int x = 0; x < env->active_agent_count; x++) {
         int agent_idx = env->active_agent_indices[x];
         Agent *agent = &env->agents[agent_idx];
+        sample_new_goal(env, agent_idx);
         agent->init_goal_x = agent->goal_position_x;
         agent->init_goal_y = agent->goal_position_y;
         agent->init_goal_z = agent->goal_position_z;
