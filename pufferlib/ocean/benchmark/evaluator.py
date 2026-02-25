@@ -1,5 +1,5 @@
 """WOSAC evaluation class for PufferDrive."""
-
+import copy
 import torch
 import numpy as np
 import pandas as pd
@@ -8,8 +8,9 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import configparser
 import os
-
 import pufferlib
+
+# WOSAC eval
 from pufferlib.ocean.benchmark import metrics
 from pufferlib.ocean.benchmark import estimators
 
@@ -761,52 +762,60 @@ class WOSACEvaluator:
             plt.savefig(f"trajectory_comparison_agent_{agent_idx}.png")
 
 
-class HumanReplayEvaluator:
-    """Evaluates policies against human replays in PufferDrive.
-
-    Evaluate policy in two settings:
-    1. Self-play: All agents controlled by policy
-    2. Human replay: Only SDC controlled by policy, others replay human logs.
-
-    The delta between these modes provides an indication of how compatible
-    the policy is with human behavior.
+class Evaluator:
+    """Evaluates policies in self_play or human_replay mode, with optional rendering.
+    
+    Initializes the eval envs needed based on eval config flags:
+    - human_replay_eval: creates sp_env + hr_env
+    - render_eval: creates sp_env (if not already created)
     """
 
-    def __init__(self, config: Dict, sp_env, hr_env):
-        self.config = config
+    def __init__(self, configs, logger=None):
+        self.configs = configs
+        self.logger = logger
         self.sim_steps = 90
-        self.sp_env = sp_env
-        self.hr_env = hr_env
-        self.human_replay_stats = {}
         self.self_play_stats = {}
+        self.human_replay_stats = {}
+        self.sp_env = None
+        self.hr_env = None
 
-    def rollout(self, args, policy, mode="self_play", render=False):
-        """Roll out policy and collect episode statistics.
+        self._unpack_eval_configs(configs)
 
-        Args:
-            args: Configuration dictionary
-            policy: Policy to evaluate
-            mode: Either "self_play" or "human_replay"
+    def _unpack_eval_configs(self, configs):
 
-        Returns:
-            Dictionary of aggregated statistics
-        """
-        import numpy as np
-        import torch
-        import pufferlib
+        eval_config = copy.deepcopy(configs)
+        # Create separate evaluation environments based on specified configs
+        eval_config["env"]["termination_mode"] = 0
+        eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
+        backend = eval_config["eval"].get("backend", "PufferEnv")
+        eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
+        eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
+        eval_config["env"]["episode_length"] = 91  # WOMD scenario length
+        eval_config["vec"] = dict(backend=backend, num_envs=1)
 
-        env = self.sp_env if mode == "self_play" else self.hr_env
-        driver = env.driver_env # Render env
+        self.hr_eval_config = copy.deepcopy(eval_config)
+        self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
+        self.sp_eval_config = copy.deepcopy(eval_config)
+        self.sp_eval_config["env"]["control_mode"] = "control_agents"
 
+        self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
+        self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
+
+
+    def rollout(self, policy, mode="self_play", render_rollout=False):
+        
+        env = self.hr_env if mode == "human_replay" else self.sp_env
+        render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
+        driver = env.driver_env
         num_agents = env.observation_space.shape[0]
-        device = args["train"]["device"]
+        device = self.configs["train"]["device"]
 
         # Reset environment
         obs, info = env.reset()
 
         # Initialize RNN state if needed
         state = {}
-        if args["train"]["use_rnn"]:
+        if self.configs["train"]["use_rnn"]:
             state = dict(
                 lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
@@ -814,7 +823,7 @@ class HumanReplayEvaluator:
 
         # Rollout
         for time_idx in range(self.sim_steps):
-            if render:
+            if render_rollout or render_eval:
                 driver.render()
             # print(f"Time step: {time_idx}")
             # Get action from policy
@@ -838,51 +847,83 @@ class HumanReplayEvaluator:
         # Aggregate final statistics
         final_info = info_list[0] if info_list else {}
 
-        if mode == "human_replay":
-            self.human_replay_stats = final_info
-        else:
+        if mode == "self_play":
             self.self_play_stats = final_info
-
-        env.close()
+        elif mode == "human_replay":
+            self.human_replay_stats = final_info
         
+        #env.close()
+        #driver.close()
+                
     def aggregate_stats(self):
-        """Aggregate statistics from both modes and compute deltas.
-
-        Returns:
-            Dictionary with self_play, human_replay, and delta statistics
-        """
-
         if not self.self_play_stats or not self.human_replay_stats:
             raise ValueError("Must run rollouts in both modes before aggregating stats")
 
-        # Extract metrics
         sp = self.self_play_stats
         hr = self.human_replay_stats
 
-        results = {
-            # Self-play metrics
+        return {
             "self_play": {
-                "collision_rate": sp["collision_rate"],
-                "offroad_rate": sp["offroad_rate"],
+                "collision_rate":  sp["collision_rate"],
+                "offroad_rate":    sp["offroad_rate"],
                 "completion_rate": sp["completion_rate"],
-                "score": sp["score"],
-                "num_agents": sp["n"],
+                "score":           sp["score"],
+                "num_agents":      sp["n"],
             },
-            # Human replay metrics
             "human_replay": {
-                "collision_rate": hr["collision_rate"],
-                "offroad_rate": hr["offroad_rate"],
+                "collision_rate":  hr["collision_rate"],
+                "offroad_rate":    hr["offroad_rate"],
                 "completion_rate": hr["completion_rate"],
-                "score": hr["score"],
-                "num_agents": hr["n"],
+                "score":           hr["score"],
+                "num_agents":      hr["n"],
             },
-            # Delta metrics (self_play - human_replay)
             "delta": {
-                "Δ_cr": sp["collision_rate"] - hr["collision_rate"],
-                "Δ_or": sp["offroad_rate"] - hr["offroad_rate"],
-                "Δ_comp": sp["completion_rate"] - hr["completion_rate"],
-                "Δ_score": sp["score"] - hr["score"],
+                "Δ_cr":    sp["collision_rate"]  - hr["collision_rate"],
+                "Δ_or":    sp["offroad_rate"]    - hr["offroad_rate"],
+                "Δ_comp":  sp["completion_rate"] - hr["completion_rate"],
+                "Δ_score": sp["score"]           - hr["score"],
             },
         }
 
-        return results
+    def log_videos(self, eval_mode):
+        """Log all mp4s in renders/ to wandb after env close has flushed ffmpeg pipes."""
+        import os
+        import glob
+
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            # Still clean up even if not logging
+            for p in glob.glob("renders/*.mp4"):
+                os.remove(p)
+            return
+
+        import wandb
+        video_files = glob.glob("renders/*.mp4")
+        if not video_files:
+            print("Warning: no render videos found in renders/")
+            return
+
+        self.logger.wandb.log({
+            f"render/{eval_mode}_{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, format="mp4")
+            for p in video_files
+        })
+
+        for p in video_files:
+            os.remove(p)
+
+    def log_stats(self, stats):
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            return
+
+        log_dict = {
+            "eval/sp_collision_rate":  stats["self_play"]["collision_rate"],
+            "eval/sp_score":           stats["self_play"]["score"],
+            "eval/sp_n":               stats["self_play"]["num_agents"],
+            "eval/hr_collision_rate":  stats["human_replay"]["collision_rate"],
+            "eval/hr_score":           stats["human_replay"]["score"],
+            "eval/hr_n":               stats["human_replay"]["num_agents"],
+            "eval/delta_cr":           stats["delta"]["Δ_cr"],
+            "eval/delta_score":        stats["delta"]["Δ_score"],
+            "eval/delta_offroad":      stats["delta"]["Δ_or"],
+            "eval/delta_completion":   stats["delta"]["Δ_comp"],
+        }
+        self.logger.wandb.log(log_dict)

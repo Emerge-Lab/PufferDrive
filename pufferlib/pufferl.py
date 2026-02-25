@@ -36,6 +36,8 @@ import pufferlib.vector
 import pufferlib.pytorch
 import pufferlib.utils
 
+from pufferlib.ocean.benchmark.evaluator import Evaluator
+
 try:
     from pufferlib import _C
 except ImportError:
@@ -60,7 +62,8 @@ ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None):
+    def __init__(self, config, vecenv, policy, logger=None, full_args=None):
+        self.full_args = full_args
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
@@ -126,8 +129,6 @@ class PuffeRL:
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
-        self.render = config["render"]
-        self.render_interval = config["render_interval"]
 
         # LSTM
         if config["use_rnn"]:
@@ -515,43 +516,27 @@ class PuffeRL:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
-            if self.render and self.epoch % self.render_interval == 0:
-                model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-                model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+        if (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training:
+            human_replay_eval = self.config["eval"]["human_replay_eval"]
+            self_play_eval = self.config["eval"]["self_play_eval"]
 
-                if model_files:
-                    # Take the latest checkpoint
-                    latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
+            self.evaluator = Evaluator(self.full_args, self.logger)
+            if human_replay_eval:
+                self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
+                self.evaluator.rollout(self.uncompiled_policy, mode="human_replay")
+                self.evaluator.hr_env.close()
+                self.evaluator.log_videos(eval_mode="human_replay")
+            if self_play_eval:
+                self.evaluator.sp_env = load_env("puffer_drive", self.evaluator.sp_eval_config)
+                self.evaluator.rollout(self.uncompiled_policy, mode="self_play")
+                self.evaluator.sp_env.close()
+                self.evaluator.log_videos(eval_mode="self_play")
+            if human_replay_eval and self_play_eval:
+                all_stats = self.evaluator.aggregate_stats()
+                self.evaluator.log_stats(all_stats)
 
-                    # Export to .bin for rendering with raylib
-                    try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
-
-                        export(
-                            args=export_args,
-                            env_name=self.config["env"],
-                            vecenv=self.vecenv,
-                            policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
-                        )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
-
-                    except Exception as e:
-                        print(f"Failed to export model weights: {e}")
-
-        if self.config["eval"]["wosac_realism_eval"] and (
-            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
-        ):
+        if self.config["eval"]["wosac_realism_eval"]:
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
-
-        if self.config["eval"]["human_replay_eval"] and (
-            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
-        ):
-            pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
     def mean_and_log(self):
         config = self.config
@@ -1025,7 +1010,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         logger = WandbLogger(args)
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    pufferl = PuffeRL(train_config, vecenv, policy, logger, full_args=args)
 
     all_logs = []
     while pufferl.global_step < train_config["total_timesteps"]:
@@ -1115,52 +1100,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print("WOSAC_METRICS_END")
         vecenv.close()
         return results_dict
-
-    elif human_replay_enabled:
-        # Ensure the episode is only after a number of steps
-        args["env"]["termination_mode"] = 0
-        args["env"]["map_dir"] = args["eval"]["map_dir"]
-        dataset_name = args["env"]["map_dir"].split("/")[-1]
-        print(f"Running human replay evaluation with {dataset_name} dataset.\n")
-        from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
-        import copy
-
-        backend = args["eval"].get("backend", "PufferEnv")
-        args["env"]["map_dir"] = args["eval"]["map_dir"]
-        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
-
-        args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["episode_length"] = 91  # WOMD scenario length
-        args["env"]["num_maps"] = args["eval"]["human_replay_num_agents"]
-
-        # Create two different envs
-        hr_args = copy.deepcopy(args)
-        hr_args["env"]["control_mode"] = "control_sdc_only"
-        hr_env = load_env(env_name, hr_args)
-        sp_args = copy.deepcopy(args)
-        sp_args["env"]["control_mode"] = "control_vehicles"
-        sp_env = load_env(env_name, sp_args)
-
-        # Load policy
-        policy = policy or load_policy(args, sp_env, env_name)
-
-        # Create evaluator
-        evaluator = HumanReplayEvaluator(args, sp_env, hr_env)
-
-        # Run both rollouts
-        evaluator.rollout(args, policy, mode="self_play", render=True)
-        evaluator.rollout(args, policy, mode="human_replay", render=True)
-
-        # Get all stats including deltas
-        all_stats = evaluator.aggregate_stats()
-      
-        # Log results
-        import json
-
-        print("\nHUMAN_REPLAY_METRICS_START")
-        print(json.dumps(all_stats, indent=2))
-        print("HUMAN_REPLAY_METRICS_END")
-        return all_stats
 
     else:  # Standard evaluation: Render
         backend = args["vec"]["backend"]

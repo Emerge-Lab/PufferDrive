@@ -407,6 +407,10 @@ class Drive(pufferlib.PufferEnv):
     def close(self):
         binding.vec_close(self.c_envs)
 
+    @property
+    def scenario_ids(self) -> list[str]:
+        """Return scenario ID string for each env, stripping null padding."""
+        return [s.rstrip('\x00') for s in binding.vec_get_scenario_ids(self.c_envs)]
 
 def calculate_area(p1, p2, p3):
     # Calculate the area of the triangle using the determinant method

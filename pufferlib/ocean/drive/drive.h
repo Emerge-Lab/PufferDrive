@@ -21,6 +21,12 @@
 #define VIEW_MODE_BEV_AGENT_OBS 1
 #define VIEW_MODE_AGENT_PERSP 2
 
+// Order of entities in rendering (lower is rendered first)
+#define Z_ROAD_SURFACE   0.0f
+#define Z_ROAD_MARKINGS  0.05f   // Lane lines, road lines, traces
+#define Z_AGENT_DETAILS  0.4f    // Arrow, goal markers, obs overlays
+#define Z_AGENTS         0.6f    // Vehicles, cyclists, pedestrians
+
 // Entity Types
 #define NONE 0
 #define VEHICLE 1
@@ -1452,7 +1458,13 @@ void init(Drive *env) {
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
 }
 
+void close_client(Client *client);
+
 void c_close(Drive *env) {
+    if (env->client != NULL) {
+        close_client(env->client);
+        env->client = NULL;
+    }
     for (int i = 0; i < env->num_entities; i++) {
         free_entity(&env->entities[i]);
     }
@@ -2244,7 +2256,7 @@ Client *make_client(Drive *env) {
 
         float map_width  = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        float scale = 6.0f;
+        float scale = 8.0f; // Controls the resolution of the output video 
         int img_width  = (int)roundf(map_width  * scale / 2.0f) * 2;
         int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
 
@@ -2410,15 +2422,15 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float goal_x = agent_obs[0] * 200;
     float goal_y = agent_obs[1] * 200;
     if (mode == 0) {
-        DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTBLUE);
-        DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTBLUE, 0.3f));
+        DrawSphere((Vector3){goal_x, goal_y, Z_AGENT_DETAILS}, 0.5f, LIGHTBLUE);
+        DrawCircle3D((Vector3){goal_x, goal_y, Z_AGENT_DETAILS}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTBLUE, 0.3f));
     }
 
     if (mode == 1) {
         float goal_x_world = px + (goal_x * heading_self_x - goal_y * heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
-        DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTBLUE);
-        DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,Fade(LIGHTBLUE, 0.3f));
+        DrawSphere((Vector3){goal_x_world, goal_y_world, Z_AGENT_DETAILS}, 0.5f, LIGHTBLUE);
+        DrawCircle3D((Vector3){goal_x_world, goal_y_world, Z_AGENT_DETAILS}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,Fade(LIGHTBLUE, 0.3f));
     }
     // First draw other agent observations
     int obs_idx = ego_dim; // Start after ego obs
@@ -2431,13 +2443,13 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float x = agent_obs[obs_idx] * 50;
         float y = agent_obs[obs_idx + 1] * 50;
         if (lasers && mode == 0) {
-            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x, y, 1}, ORANGE);
+            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x, y, Z_AGENT_DETAILS}, ORANGE);
         }
 
         float partner_x = px + (x * heading_self_x - y * heading_self_y);
         float partner_y = py + (x * heading_self_y + y * heading_self_x);
         if (lasers && mode == 1) {
-            DrawLine3D((Vector3){px, py, 1}, (Vector3){partner_x, partner_y, 1}, ORANGE);
+            DrawLine3D((Vector3){px, py, Z_AGENT_DETAILS}, (Vector3){partner_x, partner_y, Z_AGENT_DETAILS}, ORANGE);
         }
 
         float half_width = 0.5 * agent_obs[obs_idx + 2] * MAX_VEH_WIDTH;
@@ -2449,13 +2461,13 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float sin_heading = sinf(partner_angle);
         Vector3 corners[4] = {
             (Vector3){x + (half_len * cos_heading - half_width * sin_heading),
-                      y + (half_len * sin_heading + half_width * cos_heading), 1},
+                      y + (half_len * sin_heading + half_width * cos_heading), Z_AGENT_DETAILS},
             (Vector3){x + (half_len * cos_heading + half_width * sin_heading),
-                      y + (half_len * sin_heading - half_width * cos_heading), 1},
+                      y + (half_len * sin_heading - half_width * cos_heading), Z_AGENT_DETAILS},
             (Vector3){x + (-half_len * cos_heading + half_width * sin_heading),
-                      y + (-half_len * sin_heading - half_width * cos_heading), 1},
+                      y + (-half_len * sin_heading - half_width * cos_heading), Z_AGENT_DETAILS},
             (Vector3){x + (-half_len * cos_heading - half_width * sin_heading),
-                      y + (-half_len * sin_heading + half_width * cos_heading), 1},
+                      y + (-half_len * sin_heading + half_width * cos_heading), Z_AGENT_DETAILS},
         };
 
         if (mode == 0) {
@@ -2486,12 +2498,12 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float arrow_x_world;
         float arrow_y_world;
         if (mode == 0) {
-            DrawLine3D((Vector3){x, y, 0.0}, (Vector3){arrow_x, arrow_y, 0.0}, PUFF_WHITE);
+            DrawLine3D((Vector3){x, y, Z_AGENT_DETAILS}, (Vector3){arrow_x, arrow_y, Z_AGENT_DETAILS}, PUFF_WHITE);
         }
         if (mode == 1) {
             arrow_x_world = px + (arrow_x * heading_self_x - arrow_y * heading_self_y);
             arrow_y_world = py + (arrow_x * heading_self_y + arrow_y * heading_self_x);
-            DrawLine3D((Vector3){partner_x, partner_y, 1}, (Vector3){arrow_x_world, arrow_y_world, 1}, PUFF_WHITE);
+            DrawLine3D((Vector3){partner_x, partner_y, Z_AGENT_DETAILS}, (Vector3){arrow_x_world, arrow_y_world, Z_AGENT_DETAILS}, PUFF_WHITE);
         }
         // Calculate perpendicular offsets for arrow head
         float arrow_size = 0.3f; // Size of the arrow head
@@ -2685,7 +2697,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
             Vector3 position;
             float heading;
-            position = (Vector3){env->entities[i].x, env->entities[i].y, 1.1};
+            position = (Vector3){env->entities[i].x, env->entities[i].y, Z_AGENTS};
             heading = env->entities[i].heading;
             
             // Create size vector
@@ -2736,7 +2748,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 rlPushMatrix();
                     rlTranslatef(position.x, position.y, position.z);
                     rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f);
-                    DrawCube((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, Fade(car_color, 0.4f));
+                    DrawCube((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, Fade(car_color, 0.5f));
                     DrawCubeWires((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, car_color);
                 rlPopMatrix();
                             
@@ -2835,10 +2847,10 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 continue;
             }
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-                DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 1}, 0.5f,
+                DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, Z_AGENT_DETAILS}, 0.5f,
                            DEEPBLUE);
 
-                DrawCircle3D((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, 0.1f},
+                DrawCircle3D((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, Z_AGENT_DETAILS},
                              env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(DEEPBLUE, 0.9f));
             }
         }
@@ -2847,8 +2859,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             continue;
         }
         for (int j = 0; j < env->entities[i].array_size - 1; j++) {
-            Vector3 start = {env->entities[i].traj_x[j], env->entities[i].traj_y[j], 1};
-            Vector3 end = {env->entities[i].traj_x[j + 1], env->entities[i].traj_y[j + 1], 1};
+            Vector3 start = {env->entities[i].traj_x[j], env->entities[i].traj_y[j], Z_ROAD_MARKINGS};
+            Vector3 end = {env->entities[i].traj_x[j + 1], env->entities[i].traj_y[j + 1], Z_ROAD_MARKINGS};
             Color lineColor = GRAY;
             if (env->entities[i].type == ROAD_LANE)
                 lineColor = Fade(SOFT_YELLOW, 0.25f);
@@ -3072,7 +3084,6 @@ void close_client(Client *client) {
     for (int i = 0; i < 6; i++) {
         UnloadModel(client->cars[i]);
     }
-    UnloadTexture(client->puffers);
     CloseWindow();
     free(client);
 }
