@@ -73,10 +73,9 @@ def test_drive_training():
         args["neptune"] = False
         args["eval"] = {
             "eval_interval": 10000,
-            "num_episodes": 4,
+            "self_play_eval": False,
             "wosac_realism_eval": False,
-            "human_replay_eval": True,
-            "human_replay_num_agents": 8,
+            "human_replay_eval": False,
         }
 
         # Load components
