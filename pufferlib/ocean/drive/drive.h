@@ -2269,8 +2269,11 @@ Client *make_client(Drive *env) {
         }
 
         setenv("DISPLAY", ":99", 1);
+        // Xvfb starts asynchronously after fork(), so we poll until it creates its
+        // lock file (max 2s) then wait an extra 200ms for GLX to finish initializing.
+        // Without this, raylib's InitWindow() would try to connect before Xvfb is ready.
         for (int i = 0; i < 20 && access("/tmp/.X99-lock", F_OK) != 0; i++)
-            usleep(100000); // Give Xvfb 500ms to start
+            usleep(100000);
         usleep(200000);
     }
 
