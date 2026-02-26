@@ -775,8 +775,8 @@ class Evaluator:
         self.configs = configs
         self.logger = logger
         self.sim_steps = 90
-        self.self_play_stats = {}
-        self.human_replay_stats = {}
+        self.self_play_stats = None
+        self.human_replay_stats = None
         self.sp_env = None
         self.hr_env = None
 
@@ -850,36 +850,6 @@ class Evaluator:
         elif mode == "human_replay":
             self.human_replay_stats = final_info
 
-    def aggregate_stats(self):
-        if not self.self_play_stats or not self.human_replay_stats:
-            raise ValueError("Must run rollouts in both modes before aggregating stats")
-
-        sp = self.self_play_stats
-        hr = self.human_replay_stats
-
-        return {
-            "self_play": {
-                "collision_rate": sp["collision_rate"],
-                "offroad_rate": sp["offroad_rate"],
-                "completion_rate": sp["completion_rate"],
-                "score": sp["score"],
-                "num_agents": sp["n"],
-            },
-            "human_replay": {
-                "collision_rate": hr["collision_rate"],
-                "offroad_rate": hr["offroad_rate"],
-                "completion_rate": hr["completion_rate"],
-                "score": hr["score"],
-                "num_agents": hr["n"],
-            },
-            "delta": {
-                "Δ_cr": sp["collision_rate"] - hr["collision_rate"],
-                "Δ_or": sp["offroad_rate"] - hr["offroad_rate"],
-                "Δ_comp": sp["completion_rate"] - hr["completion_rate"],
-                "Δ_score": sp["score"] - hr["score"],
-            },
-        }
-
     def log_videos(self, eval_mode, epoch):
         """Log all mp4s in local path to wandb after env close has flushed ffmpeg pipes."""
         import os
@@ -907,15 +877,20 @@ class Evaluator:
         for p in video_files:
             os.remove(p)
 
-    def log_stats(self, stats):
+    def log_stats(self):
         if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
             return
+        
+        eval_stats = {}
 
-        log_dict = {
-            "eval/sp_collision_rate": stats["self_play"]["collision_rate"],
-            "eval/sp_score": stats["self_play"]["score"],
-            "eval/hr_collision_rate": stats["human_replay"]["collision_rate"],
-            "eval/hr_score": stats["human_replay"]["score"],
-            "eval/n": stats["self_play"]["num_agents"],
-        }
-        self.logger.wandb.log(log_dict)
+        if self.human_replay_stats is not None:
+            eval_stats['eval/hr_collision_rate'] = self.human_replay_stats["human_replay"]["collision_rate"]
+            eval_stats["eval/hr_score"] = self.human_replay_stats["human_replay"]["score"]
+        if self.self_play_stats is not None:
+            eval_stats['eval/hr_collision_rate'] = self.human_replay_stats["human_replay"]["collision_rate"]
+            eval_stats["eval/hr_score"] = self.human_replay_stats["human_replay"]["score"]
+            eval_stats["eval/n"] = self.human_replay_stats["human_replay"]["num_agents"]
+        else:
+            return
+
+        self.logger.wandb.log(eval_stats)

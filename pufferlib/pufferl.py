@@ -531,9 +531,8 @@ class PuffeRL:
                 self.evaluator.rollout(self.uncompiled_policy, mode="self_play")
                 self.evaluator.sp_env.close()
                 self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
-            if human_replay_eval and self_play_eval:
-                all_stats = self.evaluator.aggregate_stats()
-                self.evaluator.log_stats(all_stats)
+            if human_replay_eval or self_play_eval:
+                self.evaluator.log_stats()
 
         if self.config["eval"]["wosac_realism_eval"]:
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
@@ -565,9 +564,6 @@ class PuffeRL:
             **{f"environment/{k}": v for k, v in self.stats.items()},
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
-            # **{f'environment/{k}': dist_mean(v, device) for k, v in self.stats.items()},
-            # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
-            # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
 
         if torch.distributed.is_initialized():
