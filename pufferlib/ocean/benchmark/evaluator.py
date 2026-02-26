@@ -880,14 +880,14 @@ class Evaluator:
     def log_stats(self):
         if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
             return
-        
+
         eval_stats = {}
 
         if self.human_replay_stats is not None:
-            eval_stats['eval/hr_collision_rate'] = self.human_replay_stats["human_replay"]["collision_rate"]
+            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["human_replay"]["collision_rate"]
             eval_stats["eval/hr_score"] = self.human_replay_stats["human_replay"]["score"]
         if self.self_play_stats is not None:
-            eval_stats['eval/hr_collision_rate'] = self.human_replay_stats["human_replay"]["collision_rate"]
+            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["human_replay"]["collision_rate"]
             eval_stats["eval/hr_score"] = self.human_replay_stats["human_replay"]["score"]
             eval_stats["eval/n"] = self.human_replay_stats["human_replay"]["num_agents"]
         else:

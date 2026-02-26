@@ -9,10 +9,12 @@ from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
+
 class RenderView(IntEnum):
     FULL_SIM_STATE = 0  # Orthographic top-down, fully observable simulator state
     BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
     AGENT_PERSP = 2  # Third-person perspective following selected agent
+
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
@@ -396,12 +398,7 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(
-        self, 
-        view_mode: RenderView = RenderView.FULL_SIM_STATE, 
-        draw_traces: bool = True,
-        env_id: int = 0
-    ):
+    def render(self, view_mode: RenderView = RenderView.FULL_SIM_STATE, draw_traces: bool = True, env_id: int = 0):
         binding.vec_render(self.c_envs, int(view_mode), draw_traces, env_id)
 
     def close(self):
@@ -410,7 +407,8 @@ class Drive(pufferlib.PufferEnv):
     @property
     def scenario_ids(self) -> list[str]:
         """Return scenario ID string for each env, stripping null padding."""
-        return [s.rstrip('\x00') for s in binding.vec_get_scenario_ids(self.c_envs)]
+        return [s.rstrip("\x00") for s in binding.vec_get_scenario_ids(self.c_envs)]
+
 
 def calculate_area(p1, p2, p3):
     # Calculate the area of the triangle using the determinant method

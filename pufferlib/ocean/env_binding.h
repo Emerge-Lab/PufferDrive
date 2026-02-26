@@ -659,7 +659,8 @@ static PyObject *vec_close(PyObject *self, PyObject *args) {
 
 static PyObject *vec_get_scenario_ids(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
-    if (!vec) return NULL;
+    if (!vec)
+        return NULL;
 
     PyObject *list = PyList_New(vec->num_envs);
     for (int i = 0; i < vec->num_envs; i++) {
