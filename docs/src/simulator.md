@@ -230,7 +230,6 @@ mid_x, mid_y, length, width, dir_cos, dir_sin, type
 - `drive.h`: Main simulator (stepping, observations, collisions)
 - `drive.c`: Demo and testing
 - `binding.c`: Python interface
-- `visualize.c`: Raylib renderer
 - `drivenet.h`: C inference network
 
 ### Python

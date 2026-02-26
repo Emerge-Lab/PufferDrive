@@ -25,7 +25,7 @@ python setup.py build_ext --inplace --force
 Run this with your virtual environment activated so the compiled extension links against the correct Python.
 
 ### When to rebuild the extension
-- Re-run `python setup.py build_ext --inplace --force` after changing any C/Raylib sources in `pufferlib/ocean/drive` (e.g., `drive.c`, `drive.h`, `binding.c`, `visualize.c`) or after pulling upstream changes that touch those files. This regenerates the `binding.cpython-*.so` used by `Drive`.
+- Re-run `python setup.py build_ext --inplace --force` after changing any C/Raylib sources in `pufferlib/ocean/drive` (e.g., `drive.c`, `drive.h`, `binding.c`) or after pulling upstream changes that touch those files. This regenerates the `binding.cpython-*.so` used by `Drive`.
 - Pure Python edits (training scripts, docs, data utilities) do not require a rebuild; just restart your Python process.
 
 ## Verify the setup

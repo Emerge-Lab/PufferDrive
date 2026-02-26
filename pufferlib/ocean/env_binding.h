@@ -198,13 +198,34 @@ static PyObject *env_step(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-// Python function to step the environment
+// Python function to render the environment
 static PyObject *env_render(PyObject *self, PyObject *args) {
+    int num_args = PyTuple_Size(args);
+    if (num_args != 3) {
+        PyErr_SetString(PyExc_TypeError, "env_render requires 3 arguments (env_handle, view_mode, draw_traces)");
+        return NULL;
+    }
+
     Env *env = unpack_env(args);
     if (!env) {
         return NULL;
     }
-    c_render(env);
+
+    PyObject *view_mode_arg = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(view_mode_arg, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
+        return NULL;
+    }
+    int view_mode = PyLong_AsLong(view_mode_arg);
+
+    PyObject *show_traces_arg = PyTuple_GetItem(args, 2);
+    if (!PyObject_TypeCheck(show_traces_arg, &PyBool_Type)) {
+        PyErr_SetString(PyExc_TypeError, "draw_traces must be a boolean");
+        return NULL;
+    }
+    bool draw_traces = PyObject_IsTrue(show_traces_arg);
+
+    c_render(env, view_mode, draw_traces);
     Py_RETURN_NONE;
 }
 
@@ -519,8 +540,8 @@ static PyObject *vec_step(PyObject *self, PyObject *arg) {
 
 static PyObject *vec_render(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
-    if (num_args != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_render requires 2 arguments");
+    if (num_args != 4) {
+        PyErr_SetString(PyExc_TypeError, "vec_render requires 4 arguments");
         return NULL;
     }
 
@@ -530,14 +551,23 @@ static PyObject *vec_render(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    PyObject *env_id_arg = PyTuple_GetItem(args, 1);
-    if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 1), &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
+        return NULL;
+    }
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 2), &PyBool_Type)) {
+        PyErr_SetString(PyExc_TypeError, "draw_traces must be a boolean");
+        return NULL;
+    }
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 3), &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
         return NULL;
     }
-    int env_id = PyLong_AsLong(env_id_arg);
+    int view_mode = PyLong_AsLong(PyTuple_GetItem(args, 1));
+    bool draw_traces = PyObject_IsTrue(PyTuple_GetItem(args, 2));
+    int env_id = PyLong_AsLong(PyTuple_GetItem(args, 3));
 
-    c_render(vec->envs[env_id]);
+    c_render(vec->envs[env_id], view_mode, draw_traces);
     Py_RETURN_NONE;
 }
 
@@ -625,6 +655,19 @@ static PyObject *vec_close(PyObject *self, PyObject *args) {
     free(vec->envs);
     free(vec);
     Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_scenario_ids(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+
+    PyObject *list = PyList_New(vec->num_envs);
+    for (int i = 0; i < vec->num_envs; i++) {
+        // scenario_id is char[16], may not be null-terminated at byte 16
+        PyList_SET_ITEM(list, i, PyUnicode_FromStringAndSize(vec->envs[i]->scenario_id, 16));
+    }
+    return list;
 }
 
 static PyObject *get_global_agent_state(PyObject *self, PyObject *args) {
@@ -973,6 +1016,7 @@ static PyMethodDef methods[] = {
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
+    {"vec_get_scenario_ids", vec_get_scenario_ids, METH_VARARGS, "Get scenario IDs for all envs"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},

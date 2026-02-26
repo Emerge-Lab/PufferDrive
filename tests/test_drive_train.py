@@ -73,10 +73,13 @@ def test_drive_training():
         args["neptune"] = False
         args["eval"] = {
             "eval_interval": 10000,
-            "num_episodes": 4,
+            "self_play_eval": False,
             "wosac_realism_eval": False,
-            "human_replay_eval": True,
-            "human_replay_num_agents": 8,
+            "human_replay_eval": False,
+            "render_self_play_eval": False,
+            "render_human_replay_eval": False,
+            "num_eval_agents": 8,
+            "map_dir": "resources/drive/binaries",
         }
 
         # Load components
@@ -86,7 +89,7 @@ def test_drive_training():
 
         # Initialize training
         train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
-        pufferl = PuffeRL(train_config, vecenv, policy, logger=None)
+        pufferl = PuffeRL(train_config, vecenv, policy, logger=None, full_args=args)
 
         # Train until reaching 50K steps
         target_steps = 50000
