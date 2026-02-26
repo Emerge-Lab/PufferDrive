@@ -210,6 +210,7 @@ struct Log {
     float n;
     float lane_alignment_rate;
     float speed_at_goal;
+    float distance_without_collision;
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
@@ -1319,6 +1320,7 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        env->log.distance_without_collision += env->logs[i].distance_without_collision;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
@@ -1387,6 +1389,7 @@ void set_start_position(Drive *env) {
         e->heading_x = cosf(e->sim_heading);
         e->heading_y = sinf(e->sim_heading);
         e->sim_valid = e->log_valid[env->init_steps];
+        e->cumulative_displacement = 0.0f;
         e->collision_state = 0;
         e->aabb_collision_state = 0;
         e->metrics_array[COLLISION_IDX] = 0.0f;    // vehicle collision
@@ -2171,6 +2174,7 @@ void respawn_agent(Drive *env, int agent_idx) {
 
     agent->respawn_timestep = env->timestep;
     agent->collided_before_goal = 0;
+    agent->cumulative_displacement = 0.0f;
     agent->stopped = 0;
     agent->removed = 0;
     agent->a_long = 0.0f;
@@ -2245,8 +2249,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         }
 
         // Current state
-        float x = agent->sim_x;
-        float y = agent->sim_y;
         float heading = agent->sim_heading;
         float vx = agent->sim_vx;
         float vy = agent->sim_vy;
@@ -2270,18 +2272,19 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float new_vy = signed_speed * sinf(heading + beta);
 
         // Update position
-        x = x + (new_vx * env->dt);
-        y = y + (new_vy * env->dt);
-        heading = heading + yaw_rate * env->dt;
+        float dx = new_vx * env->dt;
+        float dy = new_vy * env->dt;
+        float dheading = yaw_rate * env->dt;
 
         // Apply updates to the agent's state
-        agent->sim_x = x;
-        agent->sim_y = y;
-        agent->sim_heading = heading;
-        agent->heading_x = cosf(heading);
-        agent->heading_y = sinf(heading);
+        agent->sim_x += dx;
+        agent->sim_y += dy;
+        agent->sim_heading += dheading;
+        agent->heading_x = cosf(agent->sim_heading);
+        agent->heading_y = sinf(agent->sim_heading);
         agent->sim_vx = new_vx;
         agent->sim_vy = new_vy;
+        agent->cumulative_displacement += sqrtf(dx * dx + dy * dy);
     } else {
         // JERK dynamics model
         // Extract action components
@@ -2382,6 +2385,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->sim_vx = v_new * agent->heading_x;
         agent->sim_vy = v_new * agent->heading_y;
         agent->steering_angle = new_steering_angle;
+        agent->cumulative_displacement += sqrtf(dx * dx + dy * dy);
     }
 
     // To update agent's z-coordinate based on road elevation of 20 nearest elements
@@ -2510,10 +2514,13 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
-        env->agents[agent_idx].collision_state = 0;
-        env->agents[agent_idx].aabb_collision_state = 0;
+        agent->collision_state = 0;
+        agent->aabb_collision_state = 0;
         compute_agent_metrics(env, agent_idx);
-        int collision_state = env->agents[agent_idx].collision_state;
+        int collision_state = agent->collision_state;
+        if (collision_state == NO_COLLISION) {
+            env->logs[i].distance_without_collision = agent->cumulative_displacement;
+        }
 
         if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION) {
@@ -2528,46 +2535,43 @@ void c_step(Drive *env) {
                 env->logs[i].offroad_per_agent += 1.0f;
             }
 
-            env->agents[agent_idx].collided_before_goal = 1;
+            agent->collided_before_goal = 1;
         }
 
-        float distance_to_goal =
-            relative_distance_3d(env->agents[agent_idx].sim_x, env->agents[agent_idx].sim_y,
-                                 env->agents[agent_idx].sim_z, env->agents[agent_idx].goal_position_x,
-                                 env->agents[agent_idx].goal_position_y, env->agents[agent_idx].goal_position_z);
+        float distance_to_goal = relative_distance_3d(agent->sim_x, agent->sim_y, agent->sim_z, agent->goal_position_x,
+                                                      agent->goal_position_y, agent->goal_position_z);
 
-        float current_speed = sqrtf(env->agents[agent_idx].sim_vx * env->agents[agent_idx].sim_vx +
-                                    env->agents[agent_idx].sim_vy * env->agents[agent_idx].sim_vy);
+        float current_speed = sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy);
 
         // Reward agent if it is within X meters of goal and speed is within threshold from goal_speed
-        bool within_distance = distance_to_goal < env->agents[agent_idx].reward_coefs[REWARD_COEF_GOAL_RADIUS];
+        bool within_distance = distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS];
         bool within_speed = 1;
         if (env->max_goal_speed >= 0.0f) {
             within_speed = current_speed > env->min_goal_speed && current_speed < env->max_goal_speed;
         }
 
-        if (within_distance && within_speed && !env->agents[agent_idx].current_goal_reached) {
-            if (env->goal_behavior == GOAL_RESPAWN && env->agents[agent_idx].respawn_timestep != -1) {
+        if (within_distance && within_speed && !agent->current_goal_reached) {
+            if (env->goal_behavior == GOAL_RESPAWN && agent->respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
-                env->agents[agent_idx].current_goal_reached = 1;
-            } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!env->agents[agent_idx].current_goal_reached)) {
+                agent->current_goal_reached = 1;
+            } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!agent->current_goal_reached)) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
                 sample_new_goal(env, agent_idx);
-                env->agents[agent_idx].current_goal_reached = 0;
-                env->agents[agent_idx].goals_reached_this_episode += 1.0f;
+                agent->current_goal_reached = 0;
+                agent->goals_reached_this_episode += 1.0f;
             } else { // Zero out the velocity so that the agent stops at the goal
                 env->rewards[i] = env->reward_goal;
                 env->logs[i].episode_return = env->reward_goal;
-                env->agents[agent_idx].stopped = 1;
-                env->agents[agent_idx].sim_vx = env->agents[agent_idx].sim_vy = 0.0f;
-                env->agents[agent_idx].goals_reached_this_episode += 1.0f;
+                agent->stopped = 1;
+                agent->sim_vx = agent->sim_vy = 0.0f;
+                agent->goals_reached_this_episode += 1.0f;
             }
-            env->agents[agent_idx].metrics_array[REACHED_GOAL_IDX] = 1.0f;
+            agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
             env->logs[i].speed_at_goal = current_speed;
         }
-        int lane_aligned = env->agents[agent_idx].metrics_array[LANE_ALIGNED_IDX];
+        int lane_aligned = agent->metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
 
         // Add lane rewards
