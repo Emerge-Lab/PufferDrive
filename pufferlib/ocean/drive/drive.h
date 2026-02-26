@@ -1,3 +1,4 @@
+#include <signal.h>
 #include <sys/types.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -2237,6 +2238,8 @@ struct Client {
     Vector3 default_camera_target;
     int recorder_pipefd[2];
     pid_t recorder_pid;
+    pid_t xvfb_pid;
+    int xvfb_display_num;
 };
 
 Client *make_client(Drive *env) {
@@ -2244,14 +2247,34 @@ Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
 
     if (env->render_mode == RENDER_HEADLESS && getenv("DISPLAY") == NULL) {
-        // Start Xvfb and set DISPLAY
-        pid_t xvfb_pid = fork();
-        if (xvfb_pid == 0) {
-            execlp("Xvfb", "Xvfb", ":99", "-screen", "0", "1x1x24", NULL);
+        // Hardcode to single display because we only run this in one process at once
+        client->xvfb_display_num = 99;
+
+        // Clean up stale lock if process is dead
+        FILE *f = fopen("/tmp/.X99-lock", "r");
+        if (f) {
+            pid_t pid = -1;
+            fscanf(f, "%d", &pid);
+            fclose(f);
+            if (pid > 0 && kill(pid, 0) != 0)
+                unlink("/tmp/.X99-lock");
+        }
+
+        client->xvfb_pid = fork();
+        if (client->xvfb_pid == 0) {
+            close(STDOUT_FILENO);
+            close(STDERR_FILENO);
+            execlp("Xvfb", "Xvfb", ":99", "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac", "-noreset", NULL);
             _exit(1);
         }
+
         setenv("DISPLAY", ":99", 1);
-        usleep(500000); // Give Xvfb 500ms to start
+        // Xvfb starts asynchronously after fork(), so we poll until it creates its
+        // lock file (max 2s) then wait an extra 200ms for GLX to finish initializing.
+        // Without this, raylib's InitWindow() would try to connect before Xvfb is ready.
+        for (int i = 0; i < 20 && access("/tmp/.X99-lock", F_OK) != 0; i++)
+            usleep(100000);
+        usleep(200000);
     }
 
     if (env->render_mode == RENDER_WINDOW) {
@@ -3140,9 +3163,17 @@ void close_client(Client *client) {
         close(client->recorder_pipefd[1]);
         waitpid(client->recorder_pid, NULL, 0);
     }
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 6; i++)
         UnloadModel(client->cars[i]);
-    }
+    UnloadModel(client->cyclist);
+    UnloadModel(client->pedestrian);
     CloseWindow();
+    if (client->xvfb_pid > 0) {
+        kill(client->xvfb_pid, SIGTERM);
+        waitpid(client->xvfb_pid, NULL, 0);
+        unlink("/tmp/.X99-lock");
+        unsetenv("DISPLAY");
+    }
+
     free(client);
 }
