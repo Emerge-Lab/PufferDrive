@@ -38,7 +38,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f7ab028c.js";
+            window.path_to_searchindex_js = "searchindex-964f3250.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8d227c1c.js"></script>
@@ -201,7 +201,7 @@ uv pip install -e .
 <p>Run this with your virtual environment activated so the compiled extension links against the correct Python.</p>
 <h3 id="when-to-rebuild-the-extension"><a class="header" href="#when-to-rebuild-the-extension">When to rebuild the extension</a></h3>
 <ul>
-<li>Re-run <code>python setup.py build_ext --inplace --force</code> after changing any C/Raylib sources in <code>pufferlib/ocean/drive</code> (e.g., <code>drive.c</code>, <code>drive.h</code>, <code>binding.c</code>, <code>visualize.c</code>) or after pulling upstream changes that touch those files. This regenerates the <code>binding.cpython-*.so</code> used by <code>Drive</code>.</li>
+<li>Re-run <code>python setup.py build_ext --inplace --force</code> after changing any C/Raylib sources in <code>pufferlib/ocean/drive</code> (e.g., <code>drive.c</code>, <code>drive.h</code>, <code>binding.c</code>) or after pulling upstream changes that touch those files. This regenerates the <code>binding.cpython-*.so</code> used by <code>Drive</code>.</li>
 <li>Pure Python edits (training scripts, docs, data utilities) do not require a rebuild; just restart your Python process.</li>
 </ul>
 <h2 id="verify-the-setup"><a class="header" href="#verify-the-setup">Verify the setup</a></h2>
