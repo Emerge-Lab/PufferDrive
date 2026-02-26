@@ -884,12 +884,12 @@ class Evaluator:
         eval_stats = {}
 
         if self.human_replay_stats is not None:
-            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["human_replay"]["collision_rate"]
-            eval_stats["eval/hr_score"] = self.human_replay_stats["human_replay"]["score"]
+            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["collision_rate"]
+            eval_stats["eval/hr_score"] = self.human_replay_stats["score"]
         if self.self_play_stats is not None:
-            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["human_replay"]["collision_rate"]
-            eval_stats["eval/hr_score"] = self.human_replay_stats["human_replay"]["score"]
-            eval_stats["eval/n"] = self.human_replay_stats["human_replay"]["num_agents"]
+            eval_stats["eval/sp_collision_rate"] = self.self_play_stats["collision_rate"]
+            eval_stats["eval/sp_score"] = self.self_play_stats["score"]
+            eval_stats["eval/num_agents"] = self.self_play_stats["n"]
         else:
             return
 
