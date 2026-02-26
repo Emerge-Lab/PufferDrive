@@ -7,15 +7,22 @@ import os
 import torch
 import pufferlib
 import math
+from enum import IntEnum
 from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
 
+class RenderView(IntEnum):
+    FULL_SIM_STATE = 0  # Orthographic top-down, fully observable simulator state
+    BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
+    AGENT_PERSP = 2  # Third-person perspective following selected agent
+
+
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
-        render_mode=None,
+        render_mode=RenderView.FULL_SIM_STATE,
         report_interval=1,
         width=1280,
         height=1024,
@@ -209,6 +216,7 @@ class Drive(pufferlib.PufferEnv):
                 control_mode=self.control_mode,
                 map_dir=map_dir,
                 max_controlled_agents=self.max_controlled_agents,
+                render_mode=render_mode,
             )
             env_ids.append(env_id)
 
@@ -277,6 +285,7 @@ class Drive(pufferlib.PufferEnv):
                 map_dir=self.map_dir,
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
+                render_mode=self.render_mode,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
@@ -519,8 +528,8 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self):
-        binding.vec_render(self.c_envs, 0)
+    def render(self, view_mode: RenderView = RenderView.FULL_SIM_STATE, draw_traces: bool = True, env_id: int = 0):
+        binding.vec_render(self.c_envs, int(view_mode), draw_traces, env_id)
 
     def close(self):
         binding.vec_close(self.c_envs)
@@ -610,6 +619,11 @@ def infer_human_actions(obj):
     assert len(expert_steering) == trajectory_length, f"Expected {trajectory_length}, got {len(expert_steering)}"
 
     return expert_acceleration, expert_steering
+
+    @property
+    def scenario_ids(self) -> list[str]:
+        """Return scenario ID string for each env, stripping null padding."""
+        return [s.rstrip("\x00") for s in binding.vec_get_scenario_ids(self.c_envs)]
 
 
 def calculate_area(p1, p2, p3):

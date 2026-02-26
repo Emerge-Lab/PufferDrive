@@ -11,6 +11,13 @@
 #define NN_INPUT_SIZE 64
 #define NN_HIDDEN_SIZE 256
 
+// Note: This C neural network implementation is designed specifically for lightweight
+// browser demos and is not intended for training purposes.
+//
+// For development and experimentation, it is recommended to use the render structure
+// defined in eval() inside pufferl.py, since it uses the torch net. This makes modifying,
+// testing, and iterating on the model easier and less error-prone.
+
 typedef struct DriveNet DriveNet;
 struct DriveNet {
     int num_agents;

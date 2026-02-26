@@ -209,6 +209,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         conf.field = (float)unpack(kwargs, #field);                                                                    \
     }
 
+    OVERRIDE_INT(render_mode);
     OVERRIDE_INT(action_type);
     OVERRIDE_INT(dynamics_model);
     OVERRIDE_FLOAT(reward_vehicle_collision);
@@ -248,6 +249,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->goal_speed = (float)unpack(kwargs, "goal_speed");
+    env->render_mode = (int)unpack(kwargs, "render_mode");
     char *map_dir = unpack_str(kwargs, "map_dir");
     int map_id = unpack(kwargs, "map_id");
     int max_agents = unpack(kwargs, "max_agents");

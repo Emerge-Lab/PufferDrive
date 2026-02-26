@@ -36,6 +36,8 @@ import pufferlib.vector
 import pufferlib.pytorch
 import pufferlib.utils
 
+from pufferlib.ocean.benchmark.evaluator import Evaluator
+
 try:
     from pufferlib import _C
 except ImportError:
@@ -60,7 +62,8 @@ ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None):
+    def __init__(self, config, vecenv, policy, logger=None, full_args=None):
+        self.full_args = full_args
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
@@ -126,11 +129,6 @@ class PuffeRL:
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
-        self.render = config["render"]
-        self.render_interval = config["render_interval"]
-
-        if self.render:
-            ensure_drive_binary()
 
         # LSTM
         if config["use_rnn"]:
@@ -607,24 +605,26 @@ class PuffeRL:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
-            if self.render and (self.epoch - 1) % self.render_interval == 0:
-                bin_path = self._export_to_bin()
-                if bin_path:
-                    pufferlib.utils.render_videos(
-                        self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                    )
-        if self.config["eval"]["wosac_realism_eval"] and (
-            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
-        ):
+        if (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training:
+            human_replay_eval = self.config["eval"]["human_replay_eval"]
+            self_play_eval = self.config["eval"]["self_play_eval"]
+
+            self.evaluator = Evaluator(self.full_args, self.logger)
+            if human_replay_eval:
+                self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
+                self.evaluator.rollout(self.uncompiled_policy, mode="human_replay")
+                self.evaluator.hr_env.close()
+                self.evaluator.log_videos(eval_mode="human_replay", epoch=self.epoch)
+            if self_play_eval:
+                self.evaluator.sp_env = load_env("puffer_drive", self.evaluator.sp_eval_config)
+                self.evaluator.rollout(self.uncompiled_policy, mode="self_play")
+                self.evaluator.sp_env.close()
+                self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
+            if human_replay_eval or self_play_eval:
+                self.evaluator.log_stats()
+
+        if self.config["eval"]["wosac_realism_eval"]:
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
-
-        if self.config["eval"]["human_replay_eval"] and (
-            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
-        ):
-            pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
-
-        if done_training:  # Export latest checkpoint to .bin
-            self._export_to_bin()
 
     def mean_and_log(self):
         config = self.config
@@ -1155,7 +1155,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         logger = WandbLogger(args)
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    pufferl = PuffeRL(train_config, vecenv, policy, logger, full_args=args)
 
     all_logs = []
     while pufferl.global_step < train_config["total_timesteps"]:
@@ -1246,71 +1246,22 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         vecenv.close()
         return results_dict
 
-    elif human_replay_enabled:
-        # Ensure the episode is only after a number of steps
-        args["env"]["termination_mode"] = 0
-        args["env"]["map_dir"] = args["eval"]["map_dir"]
-        dataset_name = args["env"]["map_dir"].split("/")[-1]
-        print(f"Running human replay evaluation with {dataset_name} dataset.\n")
-        from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
-        import copy
-
-        backend = args["eval"].get("backend", "PufferEnv")
-        args["env"]["map_dir"] = args["eval"]["map_dir"]
-        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
-
-        args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["episode_length"] = 91  # WOMD scenario length
-        args["env"]["num_maps"] = args["eval"]["human_replay_num_agents"]
-
-        # Create two different envs
-        hr_args = copy.deepcopy(args)
-        hr_args["env"]["control_mode"] = "control_sdc_only"
-        hr_env = load_env(env_name, hr_args)
-        sp_args = copy.deepcopy(args)
-        sp_args["env"]["control_mode"] = "control_vehicles"
-        sp_env = load_env(env_name, sp_args)
-
-        # Load policy
-        policy = policy or load_policy(args, sp_env, env_name)
-
-        # Create evaluator
-        evaluator = HumanReplayEvaluator(args, sp_env, hr_env)
-
-        # Run both rollouts
-        evaluator.rollout(args, policy, mode="self_play")
-        evaluator.rollout(args, policy, mode="human_replay")
-
-        # Get all stats including deltas
-        all_stats = evaluator.aggregate_stats()
-        sp_env.close()
-        hr_env.close()
-
-        # Log results
-        import json
-
-        print("\nHUMAN_REPLAY_METRICS_START")
-        print(json.dumps(all_stats, indent=2))
-        print("HUMAN_REPLAY_METRICS_END")
-        return all_stats
-
     else:  # Standard evaluation: Render
         backend = args["vec"]["backend"]
         if backend != "PufferEnv":
             backend = "Serial"
 
         args["vec"] = dict(backend=backend, num_envs=1)
+
+        # Create environment and policy
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
 
+        # Reset environment
         ob, info = vecenv.reset()
         driver = vecenv.driver_env
         num_agents = vecenv.observation_space.shape[0]
         device = args["train"]["device"]
-
-        # Rebuild visualize binary if saving frames (for C-based rendering)
-        if args["save_frames"] > 0:
-            ensure_drive_binary()
 
         state = {}
         if args["train"]["use_rnn"]:
@@ -1319,23 +1270,12 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
-        frames = []
-        while True:
-            render = driver.render()
-            if len(frames) < args["save_frames"]:
-                frames.append(render)
+        if driver.render_mode == 1:
+            max_frames = 91
+            frame_count = 0
 
-            # Screenshot Ocean envs with F12, gifs with control + F12
-            if driver.render_mode == "ansi":
-                print("\033[0;0H" + render + "\n")
-                time.sleep(1 / args["fps"])
-            elif driver.render_mode == "rgb_array":
-                pass
-                # import cv2
-                # render = cv2.cvtColor(render, cv2.COLOR_RGB2BGR)
-                # cv2.imshow('frame', render)
-                # cv2.waitKey(1)
-                # time.sleep(1/args['fps'])
+        while True:
+            driver.render()
 
             with torch.no_grad():
                 ob = torch.as_tensor(ob).to(device)
@@ -1346,13 +1286,14 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             if isinstance(logits, torch.distributions.Normal):
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
-            ob = vecenv.step(action)[0]
+            ob, reward, done, truncated, info = vecenv.step(action)
 
-            if len(frames) > 0 and len(frames) == args["save_frames"]:
-                import imageio
+            if driver.render_mode == 1:
+                frame_count += 1
+                if frame_count >= max_frames or done.all() or truncated.all():
+                    break
 
-                imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
-                frames.append("Done")
+        vecenv.close()
 
 
 def sweep(args=None, env_name=None):
@@ -1569,27 +1510,6 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
     if not silent:
         print(f"Saved {len(weights)} weights to {path}")
-
-
-def ensure_drive_binary():
-    """Delete existing visualize binary and rebuild it. This ensures the
-    binary is always up-to-date with the latest code changes.
-    """
-    if os.path.exists("./visualize"):
-        os.remove("./visualize")
-
-    try:
-        result = subprocess.run(
-            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
-        )
-
-        if result.returncode != 0:
-            print(f"Build failed: {result.stderr}")
-            raise RuntimeError("Failed to build visualize binary for rendering")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Build timed out")
-    except Exception as e:
-        raise RuntimeError(f"Build error: {e}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
