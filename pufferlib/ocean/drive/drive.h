@@ -2919,7 +2919,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             else if (env->entities[i].type == ROAD_LINE)
                 lineColor = WHITE;
             else if (env->entities[i].type == ROAD_EDGE)
-                lineColor = WHITE;
+                lineColor = Fade(WHITE, 0.7f);
             else if (env->entities[i].type == DRIVEWAY)
                 lineColor = RED;
 
