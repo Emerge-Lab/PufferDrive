@@ -1296,23 +1296,19 @@ void add_log(Drive *env) {
 
         float frac_goal_reached = agent->goals_reached_this_episode / agent->goals_sampled_this_episode;
 
-        // Update score, which is an aggregate measure whether the agent fully solved its task
-        // Note: When resampling goals, performance is relative to the number of goals sampled
-        float threshold = 0.99f; // Default threshold for 1 goal
-        if (agent->goals_sampled_this_episode == 2.0f) {
-            threshold = 0.5f; // Require ≥50% completion for 2 goals
-        } else if (agent->goals_sampled_this_episode < 5.0f) {
-            threshold = 0.8f; // Require ≥80% completion for 3-4 goals
-        } else {
-            threshold = 0.9f; // Require ≥90% completion for 5+ goals
+        // Score related computation
+        float score = 0.0f;
+        if (env->goal_behavior == GOAL_RESPAWN || env->goal_behavior == GOAL_STOP) {
+            if (agent->current_goal_reached && !agent->collided_before_goal) {
+                score = 1.0f;
+            }
+        } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
+            score = env->logs[i].score / agent->goals_sampled_this_episode; // score accumulated in c_step
         }
+        env->log.score += score;
 
-        int collision_occurred =
-            (env->goal_behavior == GOAL_RESPAWN) ? agent->collided_before_goal : env->logs[i].collision_rate;
-        if (frac_goal_reached > threshold && !collision_occurred) {
-            env->log.score += 1.0f;
-        }
         if (!offroad && !collided && frac_goal_reached < 1.0f) {
+            // TODO: handle only last goal segment case
             env->log.dnf_rate += 1.0f;
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
@@ -1381,6 +1377,7 @@ void set_start_position(Drive *env) {
             e->sim_vx = 0;
             e->sim_vy = 0;
             e->collided_before_goal = 0;
+            e->score_for_current_goal = 0.0f;
         } else {
             e->sim_vx = e->log_velocity_x[env->init_steps];
             e->sim_vy = e->log_velocity_y[env->init_steps];
@@ -2435,6 +2432,7 @@ void c_reset(Drive *env) {
         agent->respawn_timestep = -1;
         agent->respawn_count = 0;
         agent->collided_before_goal = 0;
+        agent->score_for_current_goal = 0.0f;
         agent->goals_reached_this_episode = 0.0f;
         // Initialize to 1 because there is one goal in the data file
         agent->goals_sampled_this_episode = 1.0f;
@@ -2490,7 +2488,6 @@ void c_step(Drive *env) {
     }
     // Process actions for all active agents
     for (int i = 0; i < env->active_agent_count; i++) {
-        env->logs[i].score = 0.0f;
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
         env->agents[agent_idx].collision_state = 0;
@@ -2558,6 +2555,17 @@ void c_step(Drive *env) {
             } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!agent->current_goal_reached)) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
+
+                // Compute score for this goal segment
+                if (!agent->collided_before_goal) {
+                    agent->score_for_current_goal = 1.0f;
+                } else {
+                    agent->score_for_current_goal = 0.0f;
+                    agent->collided_before_goal = 0; // Reset for next goal
+                }
+                env->logs[i].score += agent->score_for_current_goal;
+                agent->score_for_current_goal = 0.0f;
+
                 sample_new_goal(env, agent_idx);
                 agent->current_goal_reached = 0;
                 agent->goals_reached_this_episode += 1.0f;

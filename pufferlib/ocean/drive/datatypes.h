@@ -202,6 +202,7 @@ struct Agent {
     int mark_as_expert;
     float cumulative_displacement;
     int displacement_sample_count;
+    float score_for_current_goal;
 
     // Goal positions (N sequential waypoints)
     float goal_positions_x[MAX_TARGET_WAYPOINTS];
