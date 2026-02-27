@@ -114,7 +114,7 @@ void demo() {
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_zh9lo9pr.bin");
+    Weights *weights = load_weights("resources/drive/model_puffer_drive_003815.pt");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;

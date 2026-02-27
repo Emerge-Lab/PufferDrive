@@ -902,6 +902,16 @@ void allocate_agent_trajectories(Agent *agent) {
     agent->log_valid = (int *)malloc(agent->trajectory_length * sizeof(int));
 }
 
+void compute_polyline_length(RoadMapElement *road) {
+    float length = 0.0f;
+    for (int i = 1; i < road->segment_length; i++) {
+        float dx = road->x[i] - road->x[i - 1];
+        float dy = road->y[i] - road->y[i - 1];
+        length += sqrtf(dx * dx + dy * dy);
+    }
+    road->polyline_length = length;
+}
+
 void load_map_binary(const char *filename, Drive *env) {
     FILE *file = fopen(filename, "rb");
     if (!file)
@@ -1016,6 +1026,8 @@ void load_map_binary(const char *filename, Drive *env) {
 
             env->road_scenario_ids[road_idx] = scenario_id;
             road_idx++;
+
+            compute_polyline_length(road);
         }
     }
 
@@ -1516,7 +1528,8 @@ static bool check_spawn_offroad(Drive *env, float spawn_x, float spawn_y, float 
     return false;
 }
 
-static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *drivable_lanes, int num_drivable) {
+static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *drivable_lanes, int num_drivable,
+                        float *lane_lengths, float total_lane_length) {
     Agent *agent = &env->agents[agent_idx];
 
     if (agent->route != NULL) {
@@ -1557,8 +1570,18 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
 
     // Sampling rejection loop
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
-        // TODO: Uniform sampling can lead to clustering in small lanes
-        start_lane_idx = drivable_lanes[rand() % num_drivable];
+        // Length-weighted lane selection: longer polylines are proportionally more likely
+        float r = ((float)rand() / (float)RAND_MAX) * total_lane_length;
+        float cumulative = 0.0f;
+        int selected = num_drivable - 1; // fallback to last lane
+        for (int k = 0; k < num_drivable; k++) {
+            cumulative += lane_lengths[k];
+            if (r < cumulative) {
+                selected = k;
+                break;
+            }
+        }
+        start_lane_idx = drivable_lanes[selected];
         start_lane = &env->road_elements[start_lane_idx];
 
         get_random_point_on_lane(start_lane, &spawn_x, &spawn_y, &spawn_z, &spawn_heading);
@@ -1742,10 +1765,15 @@ int spawn_active_agents(Drive *env, int num_agents_to_create) {
 
     // Pre-compute drivable lanes
     int drivable_lanes[env->num_roads];
+    float lane_lengths[env->num_roads];
     int num_drivable = 0;
+    float total_lane_length = 0.0f;
     for (int i = 0; i < env->num_roads && num_drivable < env->num_roads; i++) {
-        if (env->road_elements[i].type == ROAD_LANE) {
-            drivable_lanes[num_drivable++] = i;
+        if (env->road_elements[i].type == ROAD_LANE && env->road_elements[i].polyline_length > 0.0f) {
+            drivable_lanes[num_drivable] = i;
+            lane_lengths[num_drivable] = env->road_elements[i].polyline_length;
+            total_lane_length += lane_lengths[num_drivable];
+            num_drivable++;
         }
     }
 
@@ -1753,7 +1781,8 @@ int spawn_active_agents(Drive *env, int num_agents_to_create) {
     for (int i = 0; i < num_agents_to_create; i++) {
         int created = 0;
         for (int attempt = 0; attempt < MAX_SPAWNS_ATTEMPTS_WITH_DIMENSION_CHANGES; attempt++) {
-            if (spawn_agent(env, i, successfully_created, drivable_lanes, num_drivable)) {
+            if (spawn_agent(env, i, successfully_created, drivable_lanes, num_drivable, lane_lengths,
+                            total_lane_length)) {
                 successfully_created++;
                 created = 1;
                 break;

@@ -238,6 +238,7 @@ struct RoadMapElement {
     float *x;
     float *y;
     float *z;
+    float polyline_length; // Total length of the polyline
 
     // Lane specific info
     int num_entries;
