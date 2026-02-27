@@ -684,7 +684,16 @@ class PuffeRL:
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
-        path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}.pt")
+        project_name = "puffer_drive"
+        group_name = ""
+
+        if hasattr(self.logger, "wandb"):
+            run = self.logger.wandb.run
+            project_name = run.project or project_name
+            group_name = run.group or ""
+
+        file_name = "_".join([name for name in [project_name, group_name, run_id] if name]) + ".pt"
+        path = os.path.join(self.config["data_dir"], file_name)
         shutil.copy(model_path, path)
         return path
 
@@ -1044,6 +1053,19 @@ class WandbLogger:
     def __init__(self, args, load_id=None, resume="allow"):
         import wandb
 
+        try:
+            git_branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
+            git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+            # Get the latest commit message (subject and body)
+            git_commit_message = subprocess.check_output(["git", "log", "-1", "--pretty=%B"], text=True).strip()
+
+            # Format notes for the overview section
+            git_notes = f"**GitHub Repo State**\n\nBranch Name: {git_branch}\n\nLatest Commit Id: {git_commit}\n\nLatest Commit Message: {git_commit_message}"
+        except:
+            git_notes = (
+                "Error fetching git info. Make sure you're running this in a git repository and have git installed."
+            )
+
         wandb.init(
             id=load_id or wandb.util.generate_id(),
             project=args["wandb_project"],
@@ -1053,6 +1075,7 @@ class WandbLogger:
             resume=resume,
             config=args,
             name=args.get("wandb_name"),
+            notes=git_notes,
             tags=[args["tag"]] if args["tag"] is not None else [],
         )
         self.wandb = wandb
