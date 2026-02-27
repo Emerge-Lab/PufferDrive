@@ -5,7 +5,6 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions.categorical import Categorical
 import numpy as np
-import matplotlib.pyplot as plt
 from pufferlib.pufferl import load_config, load_env
 
 CHECKPOINT_PATH = "models"
@@ -24,7 +23,7 @@ class BCPolicy(nn.Module):
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
         )
-        # We map the observation to a single joint discrete action 
+        # We map the observation to a single joint discrete action
         self.heads = nn.ModuleList([nn.Linear(hidden_size, output_size)])
 
     def dist(self, obs):
@@ -45,58 +44,71 @@ class BCPolicy(nn.Module):
     def get_action_dist_logits(self, obs):
         """Get the action distribution logits conditioned on the observation."""
         return self.dist(obs)[0].logits
-    
+
     def _log_prob(self, obs, expert_actions):
         pred_action_dist = self.dist(obs)
         log_prob = pred_action_dist[0].log_prob(expert_actions.squeeze(-1).long()).mean()
         return log_prob
 
 
-def prep_offline_data(env, max_expert_sequences=512):
-    """Step 1: Extract and process human demonstration data"""
-    print("Preparing human data...")
+def load_data(driver_env):
+    """Resample maps and prepare a fresh batch of human demonstrations."""
+    driver_env.resample_maps()
+    total_samples, unique_samples = driver_env._prepare_human_data()
+    print(f"Resampled: {total_samples} samples ({unique_samples} unique)")
+    wandb.log({"data/total_samples": total_samples, "data/unique_samples": unique_samples})
+    return TensorDataset(
+        driver_env.expert_observations_full.float(),
+        driver_env.expert_actions_discrete.long(),
+    )
 
-    total_num_samples, total_unique_samples = env._prepare_human_data()
 
-    # Access the raw expert data collected by the environment
-    expert_actions_discrete = env.expert_actions_discrete # Shape: (N*T, 1)
-    expert_observations = env.expert_observations_full # Shape: (N*T, obs_dim)
+if __name__ == "__main__":
+    args = load_config("puffer_drive")
+    args["vec"]["backend"] = "Serial"
+    args["env"]["num_maps"] = 100  # 10_000
+    args["env"]["map_dir"] = "resources/drive/binaries/training"
+    args["env"]["reg_mode"] = "log_prob_direct"
+    args["base"]["rnn_name"] = "none"
 
-    return expert_observations, expert_actions_discrete, total_num_samples, total_unique_samples
+    config = {
+        "batch_size": 512,
+        "hidden_size": 1024,
+        "num_actions": 21 * 31,
+        "learning_rate": 1e-4,
+        "epochs": 1000,
+        "minibatches": 64,
+        "resample_every_n_epochs": 10,
+    }
 
-def train_bc_policy(obs, actions, config):
-    """Step 2: Train behavioral cloning policy"""
-    print("Training BC policy...")
+    env = load_env("puffer_drive", args)
+    driver_env = env.driver_env
 
-    # Initialize wandb
     wandb.init(project="kl_anchor", tags=["bc_policy"], config=config)
 
-    wandb.log({"dataset_size": obs.shape[0]})
-
-    # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    obs_tensor = obs.float()
-    actions_tensor = actions.long()
+    print(f"Using device: {device}")
 
-    dataset = TensorDataset(obs_tensor, actions_tensor)
-    dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True)
-    data_iter = iter(dataloader)
-
-    # Create model
     policy = BCPolicy(
-        input_size=obs.shape[-1],
+        input_size=driver_env.num_obs,
         hidden_size=config["hidden_size"],
         output_size=config["num_actions"],
     ).to(device)
 
     optimizer = Adam(policy.parameters(), lr=config["learning_rate"])
 
-    # Training loop
-    losses = []
-    global_step = 0
+    dataset = load_data(driver_env)
+    dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True)
+    data_iter = iter(dataloader)
 
+    global_step = 0
     for epoch in range(config["epochs"]):
+        if epoch > 0 and epoch % config["resample_every_n_epochs"] == 0:
+            dataset = load_data(driver_env)
+            dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True)
+            data_iter = iter(dataloader)
+
         epoch_losses = []
 
         for i in range(config["minibatches"]):
@@ -123,57 +135,19 @@ def train_bc_policy(obs, actions, config):
                 pred_action = policy(batch_obs, deterministic=True)
                 accuracy = (batch_actions.squeeze(-1) == pred_action).float().mean()
 
-            # Log
-            loss_val = loss.item()
-            epoch_losses.append(loss_val)
-            losses.append(loss_val)
-
-            wandb.log({"global_step": global_step, "loss": loss_val, "accuracy": accuracy.item(), "epoch": epoch})
-
+            epoch_losses.append(loss.item())
+            wandb.log({"loss": loss.item(), "accuracy": accuracy.item(), "epoch": epoch, "global_step": global_step})
             global_step += 1
 
-        avg_epoch_loss = np.mean(epoch_losses)
+        avg_loss = np.mean(epoch_losses)
+        print(f"Epoch {epoch + 1}/{config['epochs']}: Loss = {avg_loss:.4f}")
 
-        if avg_epoch_loss < 0.001:
-            print(f"Early stopping at epoch {epoch + 1} with loss {avg_epoch_loss:.6f}")
+        if avg_loss < 0.001:
+            print(f"Early stopping at epoch {epoch + 1}")
             break
-        else:
-            print(f"Epoch {epoch + 1}/{config['epochs']}: Loss = {avg_epoch_loss:.4f}")
 
-    return losses, policy
-
-
-if __name__ == "__main__":
-    # Load configuration
-    args = load_config("puffer_drive")
-    args["vec"]["backend"] = "Serial"
-    args["env"]["num_maps"] = 2
-    args["env"]["map_dir"] = "pufferlib/resources/drive/binaries/selected"
-    args["base"]["rnn_name"] = "none"  # No RNN for BC policy
-
-    config = {
-        "batch_size": 512,
-        "hidden_size": 1024,
-        "num_actions": 21 * 31,  # TODO: Do not hardcode
-        "learning_rate": 1e-4,
-        "epochs": 1000,
-        "minibatches": 4,
-    }
-
-    env = load_env("puffer_drive", args)
-
-    # Step 1: Prepare human data (o_t, a_t) tuples
-    human_obs, human_actions, total_num_samples, total_unique_samples = prep_offline_data(env.driver_env)
-
-    print(f"Data shapes - Obs: {human_obs.shape}, Actions: {human_actions.shape}")
-    print(f"Total samples: {total_num_samples}, Total unique samples: {total_unique_samples}")
-
-    # Step 2: Train BC policy
-    losses, policy = train_bc_policy(human_obs, human_actions, config)
-
-    # Store the trained model
     torch.save(policy.state_dict(), f"{CHECKPOINT_PATH}/bc_policy.pt")
+    print(f"Saved BC policy to {CHECKPOINT_PATH}/bc_policy.pt")
 
     env.close()
-
     wandb.finish()
