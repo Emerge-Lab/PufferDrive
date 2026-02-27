@@ -545,14 +545,14 @@ class PuffeRL:
             else:
                 current_ent_coef = config["ent_coef"]
 
-            loss = config["human_ll_coef"] * human_nll
+            # loss = config["human_ll_coef"] * human_nll
 
-            # loss = (
-            #     pg_loss
-            #     + config["vf_coef"] * v_loss
-            #     - current_ent_coef * entropy_loss
-            #     + config["human_ll_coef"] * human_nll
-            # )
+            loss = (
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - current_ent_coef * entropy_loss
+                + config["human_ll_coef"] * human_nll
+            )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -669,6 +669,8 @@ class PuffeRL:
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
             **eval_logs,
+            "data/total_human_samples": self.data.get("data/total_human_samples", 0),
+            "data/unique_human_samples": self.data.get("data/unique_human_samples", 0),
             "data/perc_unique_human_samples": self.data.get("data/perc_unique_human_samples", 0),
         }
 

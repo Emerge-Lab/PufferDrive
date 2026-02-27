@@ -2426,6 +2426,13 @@ Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
 
     if (env->render_mode == RENDER_HEADLESS && getenv("DISPLAY") == NULL) {
+
+        // Kill any existing Xvfb first
+        system("pkill -9 Xvfb");
+        usleep(200000);
+        unlink("/tmp/.X99-lock");
+        unlink("/tmp/.X11-unix/X99");
+
         // Hardcode to single display because we only run this in one process at once
         client->xvfb_display_num = 99;
 
@@ -3291,11 +3298,11 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             int *action_array = (int *)env->actions;
             int action_val = action_array[env->human_agent_idx];
 
-        if (env->dynamics_model == CLASSIC) {
-            int accel_idx = action_val / NUM_STEER_BINS;
-            int steer_idx = action_val % NUM_STEER_BINS;
-            float accel_value = ACCELERATION_VALUES[accel_idx];
-            float steer_value = STEERING_VALUES[steer_idx];
+            if (env->dynamics_model == CLASSIC) {
+                int accel_idx = action_val / NUM_STEER_BINS;
+                int steer_idx = action_val % NUM_STEER_BINS;
+                float accel_value = ACCELERATION_VALUES[accel_idx];
+                float steer_value = STEERING_VALUES[steer_idx];
 
                 DrawText(TextFormat("Acceleration: %.2f m/s^2", accel_value), 10, 110, 20, action_color);
                 DrawText(TextFormat("Steering: %.3f", steer_value), 10, 130, 20, action_color);
