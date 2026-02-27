@@ -495,11 +495,6 @@ static void sample_new_goal_radius(Drive *env, Agent *agent) {
 static float normalize_reward_coef(float value, int coef_idx, Drive *env) {
     // NOTE: This prevents having coefficients outside of hardcoded bounds
     // What if we want to allow that?
-    // RETURNING 0 COEF FOR NON LANE REWARDS - TO BE REMOVED ONCE ALL REWARD CONDITIONING IS IMPLEMENTED
-    if (!(coef_idx == REWARD_COEF_LANE_ALIGN || coef_idx == REWARD_COEF_LANE_CENTER ||
-          coef_idx == REWARD_COEF_VEL_ALIGN || coef_idx == REWARD_COEF_CENTER_BIAS)) {
-        return 0;
-    }
     //
     float min_v = env->reward_bounds[coef_idx].min_val;
     float max_v = env->reward_bounds[coef_idx].max_val;
