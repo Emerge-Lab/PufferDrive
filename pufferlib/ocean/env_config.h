@@ -30,7 +30,8 @@ typedef struct {
     int init_mode;
     int control_mode;
     int max_controlled_agents;
-    char map_dir[256];
+    char map_dir[256];    
+    int reg_mode;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -112,6 +113,18 @@ static int handler(void *config, const char *section, const char *name, const ch
             printf("Warning: Unknown control_mode value '%s', defaulting to CONTROL_VEHICLES\n", value);
             env_config->control_mode = 0; // Default to CONTROL_VEHICLES
         }
+    } else if (MATCH("env", "reg_mode")) {
+    if (strcmp(value, "\"None\"") == 0 || strcmp(value, "None") == 0 ||
+        strcmp(value, "\"none\"") == 0 || strcmp(value, "none") == 0) {
+        env_config->reg_mode = 0; // NONE
+    } else if (strcmp(value, "\"log_prob_direct\"") == 0 || strcmp(value, "log_prob_direct") == 0) {
+        env_config->reg_mode = 1; // LOG_PROB_DIRECT
+    } else if (strcmp(value, "\"kl_anchor\"") == 0 || strcmp(value, "kl_anchor") == 0) {
+        env_config->reg_mode = 2; // KL_ANCHOR
+    } else {
+        printf("Warning: Unknown reg_mode value '%s', defaulting to NONE\n", value);
+        env_config->reg_mode = 0; // Default to NONE
+    }
     } else if (MATCH("env", "map_dir")) {
         if (sscanf(value, "\"%255[^\"]\"", env_config->map_dir) != 1) {
             strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);

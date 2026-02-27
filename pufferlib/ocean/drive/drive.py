@@ -18,6 +18,10 @@ class RenderView(IntEnum):
     BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
     AGENT_PERSP = 2  # Third-person perspective following selected agent
 
+class RegMode(IntEnum):
+    NONE = 0
+    LOG_PROB_DIRECT = 1
+    KL_ANCHOR = 2
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
@@ -53,7 +57,7 @@ class Drive(pufferlib.PufferEnv):
         max_controlled_agents=32,
         map_dir="resources/drive/binaries/training",
         ini_file_path="pufferlib/config/ocean/drive.ini",
-        prepare_human_data=False,
+        reg_mode=None,
         uses_memory=False,
         memory_size=0,
     ):
@@ -78,7 +82,6 @@ class Drive(pufferlib.PufferEnv):
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
         self.ini_file_path = ini_file_path
-        self.prepare_human_data = prepare_human_data
         self.uses_memory = uses_memory
         self.memory_size = memory_size
         self.total_num_samples = 0
@@ -107,6 +110,12 @@ class Drive(pufferlib.PufferEnv):
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
         self.map_dir = map_dir
+        str_to_reg_mode = {
+            "None": RegMode.NONE,
+            "log_prob_direct": RegMode.LOG_PROB_DIRECT,
+            "kl_anchor": RegMode.KL_ANCHOR,
+        }
+        self.reg_mode = str_to_reg_mode.get(reg_mode.strip('"'), RegMode.NONE)
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
@@ -385,6 +394,33 @@ class Drive(pufferlib.PufferEnv):
 
     def _hash_pair(self, obs, act):
         return hash((obs.round(3).tobytes(), act.round(2).tobytes()))
+    
+    def _init_regularization_strategy(self, device='cuda', bc_hidden_size=1024, bc_checkpoint_path="models/bc_policy.pt"):
+        bc_anchor = None
+        data = {}
+
+        if self.reg_mode == RegMode.KL_ANCHOR:
+            from examples.train_bc_policy import BCPolicy
+            bc_policy = BCPolicy(
+                input_size=self.num_obs,
+                hidden_size=bc_hidden_size,
+                output_size=self.joint_action_space_size,
+            ).to(device)
+            bc_policy.load_state_dict(torch.load(bc_checkpoint_path, map_location=device))
+            bc_policy.eval()
+            for p in bc_policy.parameters():
+                p.requires_grad = False
+            bc_anchor = bc_policy
+            print(f"Loaded BC anchor policy from {bc_checkpoint_path}")
+
+        elif self.reg_mode == RegMode.LOG_PROB_DIRECT:
+            total_samples, unique_samples = self._prepare_human_data()
+            data["data/total_human_samples"] = total_samples
+            data["data/unique_human_samples"] = unique_samples
+            data["data/perc_unique_human_samples"] = (unique_samples / total_samples) * 100
+            print(f"Prepared {total_samples} human demonstrations ({unique_samples} unique)")
+
+        return bc_anchor, data
 
     def _prepare_human_data(self, max_samples=16_384):
         """Prepare human demonstrations."""
@@ -534,6 +570,12 @@ class Drive(pufferlib.PufferEnv):
     def close(self):
         binding.vec_close(self.c_envs)
 
+    @property
+    def scenario_ids(self) -> list[str]:
+        """Return scenario ID string for each env, stripping null padding."""
+        return [s.rstrip("\x00") for s in binding.vec_get_scenario_ids(self.c_envs)]
+
+
 
 def infer_human_actions(obj):
     """Infer expert actions (steer, accel) using inverse bicycle model."""
@@ -619,11 +661,6 @@ def infer_human_actions(obj):
     assert len(expert_steering) == trajectory_length, f"Expected {trajectory_length}, got {len(expert_steering)}"
 
     return expert_acceleration, expert_steering
-
-    @property
-    def scenario_ids(self) -> list[str]:
-        """Return scenario ID string for each env, stripping null padding."""
-        return [s.rstrip("\x00") for s in binding.vec_get_scenario_ids(self.c_envs)]
 
 
 def calculate_area(p1, p2, p3):

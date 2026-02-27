@@ -236,14 +236,9 @@ class PuffeRL:
         }
         self.data = {}
 
-        # Prepare human demonstration data if enabled
         # We only do this for the driver env to save memory
-        if self.vecenv.driver_env.prepare_human_data:
-            total_samples, unique_samples = self.vecenv.driver_env._prepare_human_data()
-            self.data["data/total_human_samples"] = total_samples
-            self.data["data/unique_human_samples"] = unique_samples
-            self.data["data/perc_unique_human_samples"] = (unique_samples / total_samples) * 100
-
+        self.reg_mode = full_args["env"]["reg_mode"]
+        self.bc_anchor, self.data = self.vecenv.driver_env._init_regularization_strategy(device=config["device"])
         self.resample_freq_epoch = self.vecenv.driver_env.resample_frequency / self.vecenv.driver_env.episode_length
 
         # Dashboard
@@ -370,13 +365,13 @@ class PuffeRL:
         self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
         self.ep_lengths.zero_()
 
-        # Occasionally resample human demonstrations in the driver environment.
-        # This follows the same logic used for map resampling.
-        if self.vecenv.driver_env.prepare_human_data and (self.epoch + 1) % self.resample_freq_epoch == 0:
-            total_samples, unique_samples = self.vecenv.driver_env._prepare_human_data()
-            self.data["data/total_human_samples"] = total_samples
-            self.data["data/unique_human_samples"] = unique_samples
-            self.data["data/perc_unique_human_samples"] = (unique_samples / total_samples) * 100
+        if self.reg_mode == "log_prob_direct" and (self.epoch + 1) % self.resample_freq_epoch == 0:
+            # Occasionally resample human demonstrations in the driver environment.
+            # This follows the same logic used for map resampling.
+            _, self.data = self.vecenv.driver_env._init_regularization_strategy(
+                reg_mode=self.reg_mode,
+                device=config["device"],
+            )
 
         profile.end()
         return self.stats
@@ -455,15 +450,36 @@ class PuffeRL:
                 old_approx_kl = (-logratio).mean()
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
+            
+            if self.reg_mode == "kl_anchor":
+                # Flatten the batch and time dimensions for feeding into the BC anchor policy
+                # -> [B, obs_dim]
+                anchor_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
+                
+                with torch.no_grad():
+                    anchor_log_probs = torch.log_softmax(
+                        self.bc_anchor.get_action_dist_logits(anchor_obs), dim=-1
+                    )
+                
+                cur_log_probs = torch.log_softmax(
+                    logits[0].reshape(-1, logits[0].shape[-1]), dim=-1
+                )
 
-            if self.vecenv.driver_env.prepare_human_data:
-                # Compute log likelihood loss of human actions under current policy.
-                # 1: Sample a batch of human actions and observations from dataset
-                # Shape: [num_samples, feature_dim] if not using LSTM, else [num_samples, bptt_horizon, feature_dim]
+                reg_loss = torch.nn.functional.kl_div(
+                    cur_log_probs,
+                    anchor_log_probs,
+                    reduction="batchmean",
+                    log_target=True,
+                )
+
+                with torch.no_grad():
+                    anchor_entropy = pufferlib.pytorch.entropy(anchor_log_probs).mean().item()
+                    self.data["data/anchor_entropy"] = anchor_entropy
+
+            elif self.reg_mode == "log_prob_direct":
                 discrete_human_actions, continuous_human_actions, human_observations = (
                     self.vecenv.driver_env.sample_human_demonstrations()
                 )
-
                 use_continuous = self.vecenv.driver_env._action_type_flag == 1
                 human_actions = continuous_human_actions if use_continuous else discrete_human_actions
                 human_actions = human_actions.reshape(-1, 1).to(device)
@@ -478,7 +494,6 @@ class PuffeRL:
                 )
 
                 human_logits, _ = self.policy(human_observations, human_state)
-
                 _, human_log_prob, human_entropy = pufferlib.pytorch.sample_logits(
                     logits=human_logits, action=human_actions
                 )
@@ -506,9 +521,10 @@ class PuffeRL:
 
                 # Average and clip
                 human_log_prob = torch.clamp(human_log_prob, -15, 0)
-                human_nll = -human_log_prob.mean()
+                reg_loss = -human_log_prob.mean()
+
             else:
-                human_nll = torch.tensor(0.0, device=device)
+                reg_loss = torch.tensor(0.0, device=device)
 
             adv = advantages[idx]
             adv = compute_puff_advantage(
@@ -545,13 +561,11 @@ class PuffeRL:
             else:
                 current_ent_coef = config["ent_coef"]
 
-            # loss = config["human_ll_coef"] * human_nll
-
             loss = (
-                pg_loss
-                + config["vf_coef"] * v_loss
-                - current_ent_coef * entropy_loss
-                + config["human_ll_coef"] * human_nll
+                # pg_loss
+                # + config["vf_coef"] * v_loss
+                # - current_ent_coef * entropy_loss
+                + config["human_ll_coef"] * reg_loss
             )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
@@ -567,7 +581,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["human_nll"] += human_nll / self.total_minibatches
+            losses["reg_loss"] += reg_loss / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
@@ -672,6 +686,7 @@ class PuffeRL:
             "data/total_human_samples": self.data.get("data/total_human_samples", 0),
             "data/unique_human_samples": self.data.get("data/unique_human_samples", 0),
             "data/perc_unique_human_samples": self.data.get("data/perc_unique_human_samples", 0),
+            "data/anchor_entropy": self.data.get("data/anchor_entropy", 0),
         }
 
         if torch.distributed.is_initialized():
