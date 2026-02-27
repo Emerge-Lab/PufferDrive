@@ -2250,6 +2250,12 @@ Client *make_client(Drive *env) {
         // Hardcode to single display because we only run this in one process at once
         client->xvfb_display_num = 99;
 
+        // Kill any existing Xvfb first
+        system("pkill -9 Xvfb");
+        usleep(200000);
+        unlink("/tmp/.X99-lock");
+        unlink("/tmp/.X11-unix/X99");
+
         // Clean up stale lock if process is dead
         FILE *f = fopen("/tmp/.X99-lock", "r");
         if (f) {
