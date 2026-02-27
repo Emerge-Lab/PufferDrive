@@ -103,7 +103,7 @@ void demo() {
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .spawn_settings = spawn_settings,
-        .map_name = "resources/drive/binaries/carla/carla_3D/map_000.bin",
+        .map_name = "resources/drive/binaries/carla_2D/map_000.bin",
         .reward_conditioning = conf.reward_conditioning,
     };
 
@@ -114,7 +114,7 @@ void demo() {
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/model_puffer_drive_003815.pt");
+    Weights *weights = load_weights("best_policy_with_reward_conditioning.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;
