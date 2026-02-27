@@ -30,7 +30,8 @@ typedef struct {
     int init_mode;
     int control_mode;
     int max_controlled_agents;
-    char map_dir[256];    
+    char map_dir[256];
+    char anchor_policy_path[256];
     int reg_mode;
 } env_init_config;
 
@@ -114,17 +115,17 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->control_mode = 0; // Default to CONTROL_VEHICLES
         }
     } else if (MATCH("env", "reg_mode")) {
-    if (strcmp(value, "\"None\"") == 0 || strcmp(value, "None") == 0 ||
-        strcmp(value, "\"none\"") == 0 || strcmp(value, "none") == 0) {
-        env_config->reg_mode = 0; // NONE
-    } else if (strcmp(value, "\"log_prob_direct\"") == 0 || strcmp(value, "log_prob_direct") == 0) {
-        env_config->reg_mode = 1; // LOG_PROB_DIRECT
-    } else if (strcmp(value, "\"kl_anchor\"") == 0 || strcmp(value, "kl_anchor") == 0) {
-        env_config->reg_mode = 2; // KL_ANCHOR
-    } else {
-        printf("Warning: Unknown reg_mode value '%s', defaulting to NONE\n", value);
-        env_config->reg_mode = 0; // Default to NONE
-    }
+        if (strcmp(value, "\"None\"") == 0 || strcmp(value, "None") == 0 || strcmp(value, "\"none\"") == 0 ||
+            strcmp(value, "none") == 0) {
+            env_config->reg_mode = 0; // NONE
+        } else if (strcmp(value, "\"log_prob_direct\"") == 0 || strcmp(value, "log_prob_direct") == 0) {
+            env_config->reg_mode = 1; // LOG_PROB_DIRECT
+        } else if (strcmp(value, "\"kl_anchor\"") == 0 || strcmp(value, "kl_anchor") == 0) {
+            env_config->reg_mode = 2; // KL_ANCHOR
+        } else {
+            printf("Warning: Unknown reg_mode value '%s', defaulting to NONE\n", value);
+            env_config->reg_mode = 0; // Default to NONE
+        }
     } else if (MATCH("env", "map_dir")) {
         if (sscanf(value, "\"%255[^\"]\"", env_config->map_dir) != 1) {
             strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);
@@ -133,6 +134,11 @@ static int handler(void *config, const char *section, const char *name, const ch
         // printf("Parsed map_dir: '%s'\n", env_config->map_dir);
     } else if (MATCH("env", "max_controlled_agents")) {
         env_config->max_controlled_agents = atoi(value);
+    } else if (MATCH("env", "anchor_policy_path")) {
+        if (sscanf(value, "\"%255[^\"]\"", env_config->anchor_policy_path) != 1) {
+            strncpy(env_config->anchor_policy_path, value, sizeof(env_config->anchor_policy_path) - 1);
+            env_config->anchor_policy_path[sizeof(env_config->anchor_policy_path) - 1] = '\0';
+        }
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

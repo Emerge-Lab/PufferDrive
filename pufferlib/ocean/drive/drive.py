@@ -18,10 +18,12 @@ class RenderView(IntEnum):
     BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
     AGENT_PERSP = 2  # Third-person perspective following selected agent
 
+
 class RegMode(IntEnum):
     NONE = 0
     LOG_PROB_DIRECT = 1
     KL_ANCHOR = 2
+
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
@@ -58,6 +60,7 @@ class Drive(pufferlib.PufferEnv):
         map_dir="resources/drive/binaries/training",
         ini_file_path="pufferlib/config/ocean/drive.ini",
         reg_mode=None,
+        anchor_cpt_path=None,
         uses_memory=False,
         memory_size=0,
     ):
@@ -86,6 +89,7 @@ class Drive(pufferlib.PufferEnv):
         self.memory_size = memory_size
         self.total_num_samples = 0
         self.max_controlled_agents = max_controlled_agents
+        self.anchor_cpt_path = anchor_cpt_path
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -394,24 +398,25 @@ class Drive(pufferlib.PufferEnv):
 
     def _hash_pair(self, obs, act):
         return hash((obs.round(3).tobytes(), act.round(2).tobytes()))
-    
-    def _init_regularization_strategy(self, device='cuda', bc_hidden_size=1024, bc_checkpoint_path="models/bc_policy.pt"):
+
+    def _init_regularization_strategy(self, device="cuda", bc_hidden_size=1024):
         bc_anchor = None
         data = {}
 
         if self.reg_mode == RegMode.KL_ANCHOR:
             from examples.train_bc_policy import BCPolicy
+
             bc_policy = BCPolicy(
                 input_size=self.num_obs,
                 hidden_size=bc_hidden_size,
                 output_size=self.joint_action_space_size,
             ).to(device)
-            bc_policy.load_state_dict(torch.load(bc_checkpoint_path, map_location=device))
+            bc_policy.load_state_dict(torch.load(self.anchor_cpt_path, map_location=device))
             bc_policy.eval()
             for p in bc_policy.parameters():
                 p.requires_grad = False
             bc_anchor = bc_policy
-            print(f"Loaded BC anchor policy from {bc_checkpoint_path}")
+            print(f"Loaded BC anchor policy from {self.anchor_cpt_path}")
 
         elif self.reg_mode == RegMode.LOG_PROB_DIRECT:
             total_samples, unique_samples = self._prepare_human_data()
@@ -574,7 +579,6 @@ class Drive(pufferlib.PufferEnv):
     def scenario_ids(self) -> list[str]:
         """Return scenario ID string for each env, stripping null padding."""
         return [s.rstrip("\x00") for s in binding.vec_get_scenario_ids(self.c_envs)]
-
 
 
 def infer_human_actions(obj):

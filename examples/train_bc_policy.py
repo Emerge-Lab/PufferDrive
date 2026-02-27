@@ -66,7 +66,7 @@ def load_data(driver_env):
 if __name__ == "__main__":
     args = load_config("puffer_drive")
     args["vec"]["backend"] = "Serial"
-    args["env"]["num_maps"] = 100  # 10_000
+    args["env"]["num_maps"] = 1000
     args["env"]["map_dir"] = "resources/drive/binaries/training"
     args["env"]["reg_mode"] = "log_prob_direct"
     args["base"]["rnn_name"] = "none"
@@ -76,15 +76,16 @@ if __name__ == "__main__":
         "hidden_size": 1024,
         "num_actions": 21 * 31,
         "learning_rate": 1e-4,
-        "epochs": 1000,
+        "epochs": 3000,
         "minibatches": 64,
         "resample_every_n_epochs": 10,
+        "num_maps": args["env"]["num_maps"],
     }
 
     env = load_env("puffer_drive", args)
     driver_env = env.driver_env
 
-    wandb.init(project="kl_anchor", tags=["bc_policy"], config=config)
+    wandb.init(project="kl_anchor", tags=["bc_policy"], name=f"bc_policy_maps_{config['num_maps']}", config=config)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -146,8 +147,8 @@ if __name__ == "__main__":
             print(f"Early stopping at epoch {epoch + 1}")
             break
 
-    torch.save(policy.state_dict(), f"{CHECKPOINT_PATH}/bc_policy.pt")
-    print(f"Saved BC policy to {CHECKPOINT_PATH}/bc_policy.pt")
+    torch.save(policy.state_dict(), f"{CHECKPOINT_PATH}/bc_policy_{config['num_maps']}.pt")
+    print(f"Saved BC policy to {CHECKPOINT_PATH}/bc_policy_{config['num_maps']}.pt")
 
     env.close()
     wandb.finish()

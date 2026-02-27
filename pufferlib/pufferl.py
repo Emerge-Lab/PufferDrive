@@ -450,20 +450,16 @@ class PuffeRL:
                 old_approx_kl = (-logratio).mean()
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
-            
+
             if self.reg_mode == "kl_anchor":
                 # Flatten the batch and time dimensions for feeding into the BC anchor policy
                 # -> [B, obs_dim]
                 anchor_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
-                
+
                 with torch.no_grad():
-                    anchor_log_probs = torch.log_softmax(
-                        self.bc_anchor.get_action_dist_logits(anchor_obs), dim=-1
-                    )
-                
-                cur_log_probs = torch.log_softmax(
-                    logits[0].reshape(-1, logits[0].shape[-1]), dim=-1
-                )
+                    anchor_log_probs = torch.log_softmax(self.bc_anchor.get_action_dist_logits(anchor_obs), dim=-1)
+
+                cur_log_probs = torch.log_softmax(logits[0].reshape(-1, logits[0].shape[-1]), dim=-1)
 
                 reg_loss = torch.nn.functional.kl_div(
                     cur_log_probs,
@@ -560,11 +556,10 @@ class PuffeRL:
                 current_ent_coef = 0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
             else:
                 current_ent_coef = config["ent_coef"]
-
             loss = (
-                # pg_loss
-                # + config["vf_coef"] * v_loss
-                # - current_ent_coef * entropy_loss
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - current_ent_coef * entropy_loss
                 + config["human_ll_coef"] * reg_loss
             )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
