@@ -603,7 +603,12 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     }
 
     // Compute completion_rate from aggregated counts
-    aggregate.completion_rate = aggregate.goals_reached_this_episode / aggregate.goals_attempted_this_episode;
+    if (aggregate.goals_attempted_this_episode > 0.0f) {
+        aggregate.completion_rate = aggregate.goals_reached_this_episode / aggregate.goals_attempted_this_episode;
+    } else {
+        // Define completion_rate as 0.0 when there were no attempts
+        aggregate.completion_rate = 0.0f;
+    }
 
     // User populates dict
     my_log(dict, &aggregate);
