@@ -3924,11 +3924,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
 
             // Check if point is ahead of agent
             float dot = to_point_x * agent->heading_x + to_point_y * agent->heading_y;
-            float mod_to_pt = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
-            float mod_heading = atan2f(agent->heading_y, agent->heading_x);
-            float cos_theta = dot / (mod_to_pt * mod_heading);
-            if (cos_theta <= 0.0f) // Maybe increase threshold to have points in the direction of travel but not
-                                   // necessarily perfectly ahead?
+            if (dot <= 0.0f)
                 continue;
 
             // Calculate distance to point
@@ -3956,8 +3952,6 @@ void sample_new_goal(Drive *env, int agent_idx) {
     }
 
     // If no valid goal found, use another agent's initial goal
-    // raise_error_with_message(ERROR_UNHANDLED_CASE, "No valid goal found for agent %d at (x,y,z)=(%f,%f,%f), using
-    // another agent's initial goal", agent_idx, agent->sim_x, agent->sim_y, agent->sim_z);
     if (best_distance_error >= 1e30f && env->active_agent_count > 1) {
         int other_idx = env->active_agent_indices[(agent_idx + 1) % env->active_agent_count];
         best_x = env->agents[other_idx].init_goal_x;
