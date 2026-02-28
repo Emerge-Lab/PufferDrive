@@ -132,14 +132,21 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     srand(ts.tv_nsec);
     int total_agent_count = 0;
     int env_count = 0;
-    int max_envs = eval_mode ? eval_batch_size : num_agents;
+    int max_envs = num_agents;
+
+    // The following lines should be modified when we want to do eval in GIGAFLOW
+    if (eval_mode) {
+        int remaining_maps = num_maps - eval_map_counter;
+        max_envs = eval_batch_size < remaining_maps ? eval_batch_size : remaining_maps;
+    }
+
     int map_idx = eval_map_counter;
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
     // getting env count
     while (total_agent_count < num_agents && env_count < max_envs) {
-        int map_id = eval_mode ? map_idx++ : rand() % num_maps;
+        int map_id = (eval_mode ? map_idx++ : rand()) % num_maps;
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;

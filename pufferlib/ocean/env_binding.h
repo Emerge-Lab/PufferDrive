@@ -556,8 +556,8 @@ static int assign_to_dict(PyObject *dict, char *key, float value) {
 }
 
 static PyObject *vec_log(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_log requires 2 arguments");
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_log requires 3 arguments");
         return NULL;
     }
 
@@ -566,13 +566,54 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         return NULL;
     }
 
+    PyObject *eval_mode_arg = PyTuple_GetItem(args, 2);
+    int eval_mode = PyObject_IsTrue(eval_mode_arg);
+
     // Iterates over logs one float at a time. Will break
     // horribly if Log has non-float data.
     PyObject *num_agents_arg = PyTuple_GetItem(args, 1);
     float num_agents = (float)PyLong_AsLong(num_agents_arg);
 
-    Log aggregate = {0};
     int num_keys = sizeof(Log) / sizeof(float);
+
+    // Core Idea: In train we want aggregated metrics, in eval we want them per-episode
+    if (eval_mode) {
+        if (vec->envs[0]->log.n == 0) {
+            return PyDict_New();
+        }
+
+        PyObject *list = PyList_New(vec->num_envs);
+
+        for (int i = 0; i < vec->num_envs; i++) {
+            PyObject *dict = PyDict_New();
+            Env *curr_env = vec->envs[i];
+            float n = curr_env->log.n;
+
+            for (int j = 0; j < num_keys; j++) {
+                ((float *)&curr_env->log)[j] /= n;
+            }
+
+            curr_env->log.completion_rate =
+                curr_env->log.goals_reached_this_episode / curr_env->log.goals_sampled_this_episode;
+
+            my_log(dict, &curr_env->log);
+            assign_to_dict(dict, "n", n);
+
+            // For now I use the map_name like map_123.bin, in further commit I'll add the actual name
+            if (curr_env->map_name) {
+                PyObject *s = PyUnicode_FromString(curr_env->map_name);
+                if (s != NULL) {
+                    PyDict_SetItemString(dict, "map_name", s);
+                    Py_DECREF(s);
+                }
+            }
+
+            PyList_SetItem(list, i, dict);
+        }
+        return list;
+    }
+
+    Log aggregate = {0};
     for (int i = 0; i < vec->num_envs; i++) {
         Env *env = vec->envs[i];
         for (int j = 0; j < num_keys; j++) {

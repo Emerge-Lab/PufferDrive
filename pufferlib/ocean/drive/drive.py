@@ -110,6 +110,7 @@ class Drive(pufferlib.PufferEnv):
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
         self.eval_batch_size = eval_batch_size
+        self.eval_mode = eval_batch_size > 0
         # reward randomization bounds
         self.reward_bound_goal_radius_min = reward_bound_goal_radius_min
         self.reward_bound_collision_min = reward_bound_collision_min
@@ -259,6 +260,7 @@ class Drive(pufferlib.PufferEnv):
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
             eval_batch_size=self.eval_batch_size,
+            eval_map_counter=self.eval_map_counter,
             reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
             reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
             reward_bound_collision_min=self.reward_bound_collision_min,
@@ -388,10 +390,13 @@ class Drive(pufferlib.PufferEnv):
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs, self.num_agents)
+            log = binding.vec_log(self.c_envs, self.num_agents, self.eval_mode)
             if log:
                 info.append(log)
                 # print(log)
+            # In eval mode, I don't want to resample after the last batch (womd specific)
+            if self.eval_mode and self.eval_map_counter >= self.num_maps:
+                self.resample_frequency = 0
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
             binding.vec_close(self.c_envs)
@@ -408,6 +413,7 @@ class Drive(pufferlib.PufferEnv):
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,
                 eval_batch_size=self.eval_batch_size,
+                eval_map_counter=self.eval_map_counter,
                 # reward randomization bounds
                 reward_bound_collision_min=self.reward_bound_collision_min,
                 reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,

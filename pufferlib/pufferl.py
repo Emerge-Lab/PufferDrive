@@ -587,12 +587,6 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
-        # For now I add a 3rd eval function, goal is to later unify everything.
-        if self.config["eval"]["eval_batch"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
-        ):
-            pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
-
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
         if not self.render_async or not hasattr(self, "render_queue"):
@@ -1320,6 +1314,67 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 frames.append("Done")
 
 
+def eval_womd(env_name, args=None, vecenv=None, policy=None):
+    args = args or load_config(env_name)
+
+    backend = args["eval"].get("backend", "PufferEnv")
+    args["vec"] = dict(backend=backend, num_envs=1)
+    args["env"]["control_mode"] = args["eval"]["control_mode"]
+    args["env"]["episode_length"] = 91  # WOMD scenario length
+    args["env"]["resample_frequency"] = 91
+
+    args["env"]["eval_batch_size"] = args["eval"]["eval_batch_size"]
+    args["env"]["map_dir"] = args["eval"]["map_dir"]
+
+    # For now you set num_maps in drive.ini and you will evaluate on all the num_maps
+    # This is specific to WOMD, when we will also include GIGAFLOW we
+    num_maps = args["eval"]["num_maps"]
+    args["env"]["num_maps"] = args["eval"]["num_maps"]
+
+    vecenv = vecenv or load_env(env_name, args)
+    policy = policy or load_policy(args, vecenv, env_name)
+
+    num_agents = vecenv.observation_space.shape[0]
+    device = args["train"]["device"]
+
+    global_infos = {}
+    eval_batch_size = args["eval"]["eval_batch_size"]
+
+    for batch_start_idx in range(0, num_maps, eval_batch_size):
+        state = {}
+        if args["train"]["use_rnn"]:
+            state = dict(
+                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+            )
+
+        obs, _ = vecenv.reset()
+
+        for timestep in range(args["env"]["episode_length"]):
+            with torch.no_grad():
+                ob_tensor = torch.as_tensor(obs).to(device)
+                logits, value = policy.forward_eval(ob_tensor, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+            if isinstance(logits, torch.distributions.Normal):
+                action_np = np.clip(action_np, vecenv.action_space.low, vecenv.action_space.high)
+
+            obs, rewards, dones, truncs, info_list = vecenv.step(action_np)
+
+            if len(info_list) > 0:
+                for result in info_list[0]:
+                    # Identify the binary map, and just keep the name
+                    result["map_name"] = result["map_name"].split("/")[-1].split(".")[0]
+
+                    for k, v in result.items():
+                        if k not in global_infos:
+                            global_infos[k] = []
+                        global_infos[k].append(v)
+
+    print(global_infos)
+
+
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)
     if not args["wandb"] and not args["neptune"]:
@@ -1763,6 +1818,8 @@ def main():
         train(env_name=env_name)
     elif mode == "eval":
         eval(env_name=env_name)
+    elif mode == "eval_womd":
+        eval_womd(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":
