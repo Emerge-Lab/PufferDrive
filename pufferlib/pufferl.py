@@ -129,6 +129,10 @@ class PuffeRL:
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
+        # Post-terminal masking for multi-agent envs
+        # Tracks which agents have hit a terminal and should be ignored until world reset
+        self.agent_dead = torch.zeros(total_agents, device=device, dtype=torch.bool)
+        self.masks = torch.ones(segments, rollout_horizon, device=device)
 
         # LSTM
         if config["use_rnn"]:
@@ -308,6 +312,21 @@ class PuffeRL:
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
+
+                # The terminal timestep itself is valid; everything after is not.
+                # We store the mask before updating agent_dead so the terminal step is included.
+                terminal_flag = (d > 0) & (t == 0)  # true terminal (not truncation)
+                truncation_flag = t > 0  # world-level reset
+
+                valid = (~self.agent_dead[env_id]).float()
+                self.masks[batch_rows, l] = valid
+
+                # Mark agents dead for all future timesteps in this segment
+                self.agent_dead[env_id] = self.agent_dead[env_id] | terminal_flag.bool()
+
+                # World reset clears dead status
+                self.agent_dead[env_id] = self.agent_dead[env_id] & ~truncation_flag.bool()
+
                 # Truncation bootstrap hack for auto-reset envs.
                 # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
                 # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
@@ -350,6 +369,23 @@ class PuffeRL:
         self.free_idx = self.total_agents
         self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
         self.ep_lengths.zero_()
+
+        # --- Apply post-terminal mask to buffers before training ---
+        # Zero rewards and values for invalid (post-terminal) timesteps
+        self.rewards *= self.masks
+        self.values *= self.masks
+        # Force dones=1 for invalid timesteps so advantage propagation is cut
+        self.terminals[self.masks == 0] = 1.0
+
+        self.perc_transitions_trained_on = self.masks.mean().item()
+
+        # Reset agent_dead for next rollout
+        self.agent_dead.zero_()
+
+        # # TEMP
+        # self.masks.fill_(1.0)
+        # self.perc_transitions_trained_on = 1.0
+
         profile.end()
         return self.stats
 
@@ -403,6 +439,7 @@ class PuffeRL:
             mb_values = self.values[idx]
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
+            mb_masks = self.masks[idx]
 
             profile("train_forward", epoch)
             if not config["use_rnn"]:
@@ -441,9 +478,20 @@ class PuffeRL:
                 config["vtrace_c_clip"],
             )
             adv = mb_advantages
-            adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
+            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
-            # Losses
+            # --- Masked advantage normalization ---
+            # Only compute mean/std over valid timesteps
+            valid_adv = adv[mb_masks == 1]
+            if valid_adv.numel() > 0:
+                adv_mean = valid_adv.mean()
+                adv_std = valid_adv.std() + 1e-8
+            else:
+                adv_mean = adv.mean()
+                adv_std = adv.std() + 1e-8
+            adv = (adv - adv_mean) / adv_std
+            adv = adv * mb_masks  # zero out invalid timesteps
+
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
             pg_loss = torch.max(pg_loss1, pg_loss2).mean()
@@ -553,6 +601,7 @@ class PuffeRL:
         logs = {
             "SPS": dist_sum(self.sps, device),
             "agent_steps": agent_steps,
+            "environment/perc_transitions_used": self.perc_transitions_trained_on,
             "uptime": time.time() - self.start_time,
             "epoch": int(dist_sum(self.epoch, device)),
             "learning_rate": self.optimizer.param_groups[0]["lr"],
@@ -941,15 +990,16 @@ class WandbLogger:
     def __init__(self, args, load_id=None, resume="allow"):
         import wandb
 
+        run_name = args.get("wandb_run_name", None)
         wandb.init(
             id=load_id or wandb.util.generate_id(),
+            name=run_name,
             project=args["wandb_project"],
             group=args["wandb_group"],
             allow_val_change=True,
             save_code=False,
             resume=resume,
             config=args,
-            name=args.get("wandb_name"),
             tags=[args["tag"]] if args["tag"] is not None else [],
         )
         self.wandb = wandb
@@ -1200,7 +1250,15 @@ def controlled_exp(env_name, args=None):
         if isinstance(section_config, dict):
             for param, param_config in section_config.items():
                 if isinstance(param_config, dict) and "values" in param_config:
-                    params[f"{section}.{param}"] = param_config["values"]
+                    # Process values list to handle both numeric and non-numeric types
+                    processed_values = []
+                    for val in param_config["values"]:
+                        # Handle string "None" -> Python None
+                        if isinstance(val, str) and val == "None":
+                            processed_values.append(None)
+                        else:
+                            processed_values.append(val)
+                    params[f"{section}.{param}"] = processed_values
 
     if not params:
         raise pufferlib.APIUsageError("No parameters with 'values' lists found in [controlled_exp.*] sections")
@@ -1219,6 +1277,27 @@ def controlled_exp(env_name, args=None):
         for key, value in zip(keys, combo):
             section, param = key.split(".")
             exp_args[section][param] = value
+
+        # Create descriptive name
+        run_name_parts = []
+        for key, value in zip(keys, combo):
+            param_name = key.split(".")[-1]
+            # Handle None display
+            if value is None:
+                value_str = "None"
+            # Handle boolean display
+            elif isinstance(value, bool):
+                value_str = str(value)
+            # Handle numeric display
+            elif isinstance(value, (int, float)):
+                value_str = str(value)
+            # Handle string display
+            else:
+                value_str = str(value)
+            run_name_parts.append(f"{param_name}={value_str}")
+
+        exp_name = "_".join(run_name_parts)
+        exp_args["wandb_run_name"] = f"{exp_name}"
 
         print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
 
