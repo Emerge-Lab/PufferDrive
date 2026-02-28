@@ -286,6 +286,7 @@ struct Drive {
     RoadMapElement *road_elements;
     int *road_scenario_ids;
     TrafficControlElement *traffic_elements;
+    AgentSpawnSettings spawn_settings;
     int num_created_agents; // number of agents created in the sim
     int max_agents_in_sim;  // max number of agents in sim(max Agent struct objects allocated)
     int num_road_elements;  // or map to num_roads
@@ -322,6 +323,8 @@ struct Drive {
     float reward_reverse;
     float goal_radius;
     float goal_speed;
+    float min_goal_speed;
+    float max_goal_speed;
     int logs_capacity;
     int goal_behavior;
     float min_goal_distance;
@@ -1286,7 +1289,7 @@ int collision_check(Drive *env, int agent_idx) {
     if (agent->respawn_timestep != -1)
         return car_collided_with_index; // Skip respawning entities
 
-    for (int i = 0; i < env->max_agents_in_sim; i++) {
+    for (int i = 0; i < env->spawn_settings.max_agents_in_sim; i++) {
         int index = -1;
         if (i < env->active_agent_count) {
             index = env->active_agent_indices[i];
@@ -1855,8 +1858,19 @@ void set_active_agents(Drive *env) {
         env->num_agents = env->spawn_settings.max_agents_in_sim;
     }
 
+    if (env->init_mode == RANDOM_AGENTS) {
+        spawn_agents_with_counts(env);
+        env->num_objects = env->num_created_agents;
+        return;
+    }
+
+    // For other modes(agents from data)
+    int *active_agent_indices = (int *)malloc(env->spawn_settings.max_agents_in_sim * sizeof(int));
+    int *static_agent_indices = (int *)malloc(env->spawn_settings.max_agents_in_sim * sizeof(int));
+    int *expert_static_agent_indices = (int *)malloc(env->spawn_settings.max_agents_in_sim * sizeof(int));
+
     // Iterate through entities to find agents to create and/or control
-    for (int i = 0; i < env->num_objects && env->num_created_agents < env->max_agents_in_sim; i++) {
+    for (int i = 0; i < env->num_objects && env->num_created_agents < env->spawn_settings.max_agents_in_sim; i++) {
         Agent *entity = &env->agents[i];
 
         // Skip if not valid at initialization
@@ -2654,6 +2668,8 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         }
 
         // Current state
+        float x = agent->sim_x;
+        float y = agent->sim_y;
         float heading = agent->sim_heading;
         float vx = agent->sim_vx;
         float vy = agent->sim_vy;
