@@ -189,8 +189,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         load_map_binary(map_file_path, env);
         set_active_agents(env);
 
+        // In eval mode, we want all the active agents in the env (no cropped last env)
+        int uncomplete_last_env = eval_mode && (total_agent_count + env->active_agent_count > num_agents);
+
         // Skip map if it doesn't contain any controllable agents
-        if (env->active_agent_count == 0) {
+        if (env->active_agent_count == 0 || uncomplete_last_env) {
             if (!eval_mode) {
                 maps_checked++;
 
@@ -231,6 +234,12 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
             free(env);
+            // In a case a map has more than num_agents the eval will break
+            // I don't put an assert here, but I think in a coming PR we should set MAX_AGENTS directly in python
+            // And we will add an assert to avoid this.
+            if (uncomplete_last_env) {
+                break;
+            }
             continue;
         }
 
@@ -258,8 +267,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     // printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count,
     // num_agents);
-    // NOTE: even in eval we want a fixed value of num_agents now, else you cannot batch.
-    // I still need to think about what we do with the cropped scenario
     if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }

@@ -1337,6 +1337,8 @@ def eval_womd(env_name, args=None, vecenv=None, policy=None):
 
     # Multiprocessing logic (Distribute maps across workers)
     num_workers = args["vec"]["num_workers"]
+    args["vec"]["batch_size"] = num_workers
+
     if num_workers > num_maps:
         raise pufferlib.APIUsageError(
             f"You requested to use {num_workers} workers for evaluating on only {num_maps} maps"

@@ -1481,9 +1481,23 @@ void set_active_agents(Drive *env) {
         env->num_agents = env->max_agents_in_sim;
     }
 
+    // If we have a SDC index (WOMD), initialize it first:
+    int sdc_index = env->sdc_track_index;
+    if (sdc_index >= 0) {
+        active_agent_indices[0] = sdc_index;
+        env->num_created_agents++;
+        env->active_agent_count++;
+        env->agents[sdc_index].active_agent = 1;
+    }
+
     // Iterate through entities to find agents to create and/or control
     for (int i = 0; i < env->num_objects && env->num_created_agents < env->max_agents_in_sim; i++) {
         Agent *entity = &env->agents[i];
+
+        // Skip if its the SDC
+        if (i == sdc_index) {
+            continue;
+        }
 
         // Skip if not valid at initialization
         if (entity->log_valid[env->init_steps] != 1) {
