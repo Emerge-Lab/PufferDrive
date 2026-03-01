@@ -1236,7 +1236,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         backend = args["eval"].get("backend", "PufferEnv")
         args["vec"] = dict(backend=backend, num_envs=1)
-        args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
+        args["env"]["control_mode"] = args["eval"]["control_mode"]
         args["env"]["episode_length"] = 91  # WOMD scenario length
 
         vecenv = vecenv or load_env(env_name, args)
@@ -1316,7 +1316,10 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
 def eval_womd(env_name, args=None, vecenv=None, policy=None):
     import copy
+    import time
+    import pandas as pd
 
+    t0 = time.time()
     args = args or load_config(env_name)
 
     args["env"]["control_mode"] = args["eval"]["control_mode"]
@@ -1401,8 +1404,24 @@ def eval_womd(env_name, args=None, vecenv=None, policy=None):
                             global_infos[k].append(v)
                         maps_processed += 1
 
-    print(global_infos)
     vecenv.close()
+    t1 = time.time()
+    print(f"It took {t1 - t0}s to evaluate {num_maps} maps in {args['env']['control_mode']} mode.")
+
+    # Log the results and print the mean
+    df = pd.DataFrame(global_infos)
+    cols = ["map_name"] + [col for col in df.columns if col != "map_name"]
+    df = df[cols]
+
+    # For now I do that, but ofc we should think at a way to manage files properly
+    df.to_csv("results.csv")
+
+    # Average only the numbers
+    df_num = df.select_dtypes(include=["number"])
+    df_num = df_num.mean()
+
+    print("Average metrics: ")
+    print(df_num.to_string())
 
 
 def sweep(args=None, env_name=None):
