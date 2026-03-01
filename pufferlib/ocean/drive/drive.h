@@ -100,7 +100,7 @@
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
 #ifndef MAX_AGENTS // TODO: Needs to be replaced with MAX_PARTNER_OBS(agents in obs_radius) throughout observations code
                    // and with env->max_agents_in_sim throughout all agent for loops
-#define MAX_AGENTS 32
+#define MAX_AGENTS 128
 #endif
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
