@@ -16,29 +16,31 @@ Usage:
         --data_folder data/processed/training \
         --top_k 500
 
-    # With visualization of top 20
+    # With visualization of top 50
     python examples/find_interactive_scenes.py \
         --data_folder data/processed/training \
-        --top_k 500 \
+        --top_k 100 \
         --visualize \
-        --vis_top_k 20
+        --vis_top_k 50
+        --prioritize_intersections
 
     # Cap file count for quick testing
     python examples/find_interactive_scenes.py \
         --data_folder data/processed/training \
         --top_k 100 \
-        --max_files 100 \
+        --max_files 1000 \
         --visualize
 """
 
 import json
 import shutil
 import argparse
-import numpy as np
+import math
 from pathlib import Path
 from multiprocessing import Pool, cpu_count
 
 import pandas as pd
+import numpy as np
 from tqdm import tqdm
 
 import matplotlib
@@ -97,19 +99,49 @@ def traj_to_segments(traj):
     return segs
 
 
-def count_intersections(traj_a, traj_b):
-    """Count segment-segment intersections between two trajectories."""
+def segment_angle(ax, ay, bx, by, cx, cy, dx, dy):
+    """Return the acute angle (radians) between segments AB and CD."""
+    # Direction vectors
+    ux, uy = bx - ax, by - ay
+    vx, vy = dx - cx, dy - cy
+    dot = ux * vx + uy * vy
+    mag_u = math.sqrt(ux * ux + uy * uy)
+    mag_v = math.sqrt(vx * vx + vy * vy)
+    if mag_u < 1e-9 or mag_v < 1e-9:
+        return 0.0
+    cos_theta = max(-1.0, min(1.0, dot / (mag_u * mag_v)))
+    angle = math.acos(abs(cos_theta))  # acute angle in [0, pi/2]
+    return angle
+
+
+def score_intersections(traj_a, traj_b, angle_threshold_rad=0.0):
+    """Score intersections between two trajectories.
+
+    Returns:
+        raw_count:      total segment-segment intersections
+        angled_count:   intersections where the acute angle >= angle_threshold_rad
+    """
     segs_a = traj_to_segments(traj_a)
     segs_b = traj_to_segments(traj_b)
-    count = 0
+    raw_count = 0
+    angled_count = 0
     for (ax, ay), (bx, by) in segs_a:
         for (cx, cy), (dx, dy) in segs_b:
             if segments_intersect(ax, ay, bx, by, cx, cy, dx, dy):
-                count += 1
-    return count
+                raw_count += 1
+                angle = segment_angle(ax, ay, bx, by, cx, cy, dx, dy)
+                if angle >= angle_threshold_rad:
+                    angled_count += 1
+    return raw_count, angled_count
 
 
 # ── scoring worker ───────────────────────────────────────────────────────────
+
+# Default angle threshold: 15 degrees. Intersections below this are
+# considered near-parallel (e.g. highway lane changes) and won't count
+# as "angled" intersections.
+ANGLE_THRESHOLD_DEG = 15
+ANGLE_THRESHOLD_RAD = math.radians(ANGLE_THRESHOLD_DEG)
 
 
 def process_scenario(filepath):
@@ -124,20 +156,23 @@ def process_scenario(filepath):
         objects = data.get("objects", [])
 
         if sdc_idx < 0 or sdc_idx >= len(objects):
-            return (str(filepath.name), 0, len(objects), sdc_idx, None)
+            return (str(filepath.name), 0, 0, len(objects), sdc_idx, None)
 
         sdc_traj = extract_trajectory(objects[sdc_idx])
 
-        total_intersections = 0
+        total_raw = 0
+        total_angled = 0
         for i, obj in enumerate(objects):
             if i == sdc_idx:
                 continue
-            total_intersections += count_intersections(sdc_traj, extract_trajectory(obj))
+            raw, angled = score_intersections(sdc_traj, extract_trajectory(obj), ANGLE_THRESHOLD_RAD)
+            total_raw += raw
+            total_angled += angled
 
-        return (str(filepath.name), total_intersections, len(objects), sdc_idx, None)
+        return (str(filepath.name), total_raw, total_angled, len(objects), sdc_idx, None)
 
     except Exception as e:
-        return (str(filepath.name), -1, 0, -1, str(e))
+        return (str(filepath.name), -1, 0, 0, -1, str(e))
 
 
 # ── visualization ────────────────────────────────────────────────────────────
@@ -289,12 +324,23 @@ def main():
     parser.add_argument(
         "--dataframe_path",
         type=str,
-        default="data/processed/interactive_ranking.csv",
+        default="data/meta_info/interactive_ranking.csv",
         help="Path to save the full ranking dataframe (csv or parquet)",
     )
     parser.add_argument("--top_k", type=int, default=500, help="Number of most interactive scenarios to copy")
     parser.add_argument("--max_files", type=int, default=None, help="Cap on number of source files to process")
     parser.add_argument("--num_workers", type=int, default=None)
+    parser.add_argument(
+        "--prioritize_intersections",
+        action="store_true",
+        help="Rank scenarios with angled trajectory crossings above all others",
+    )
+    parser.add_argument(
+        "--angle_threshold",
+        type=float,
+        default=5.0,
+        help="Min acute angle (degrees) to count as an angled intersection (default: 15)",
+    )
 
     # Visualization
     parser.add_argument("--visualize", action="store_true", help="Generate plots for the top scenarios")
@@ -309,6 +355,10 @@ def main():
     args = parser.parse_args()
     num_workers = args.num_workers or cpu_count()
 
+    # Override the module-level angle threshold with CLI arg
+    global ANGLE_THRESHOLD_RAD
+    ANGLE_THRESHOLD_RAD = math.radians(args.angle_threshold)
+
     # ── 1. Score all scenarios ───────────────────────────────────────────────
     data_dir = Path(args.data_folder)
     json_files = sorted(data_dir.glob("*.json"))
@@ -316,7 +366,12 @@ def main():
         json_files = json_files[: args.max_files]
 
     print(f"Found {len(json_files)} scenario files in {data_dir}")
-    print(f"Using {num_workers} workers\n")
+    print(f"Using {num_workers} workers")
+    print(f"Angle threshold: {args.angle_threshold}°")
+    if args.prioritize_intersections:
+        print("Prioritizing scenarios with angled intersections\n")
+    else:
+        print()
 
     with Pool(num_workers) as pool:
         results = list(
@@ -328,21 +383,30 @@ def main():
             )
         )
 
-    # Separate successes / failures
-    successes = [r for r in results if r[4] is None]
-    failures = [r for r in results if r[4] is not None]
+    # Separate successes / failures (error is last element)
+    successes = [r for r in results if r[5] is None]
+    failures = [r for r in results if r[5] is not None]
 
     if failures:
         print(f"\n{len(failures)} files failed:")
         for entry in failures[:20]:
-            print(f"  {entry[0]}: {entry[4]}")
+            print(f"  {entry[0]}: {entry[5]}")
 
     # ── 2. Build & save dataframe ────────────────────────────────────────────
     df = pd.DataFrame(
-        [(name, ixn, n_agents, sdc_idx) for name, ixn, n_agents, sdc_idx, _ in successes],
-        columns=["filename", "sdc_intersections", "num_agents", "sdc_track_index"],
+        [(name, raw, angled, n_agents, sdc_idx) for name, raw, angled, n_agents, sdc_idx, _ in successes],
+        columns=["filename", "sdc_intersections", "angled_intersections", "num_agents", "sdc_track_index"],
     )
-    df = df.sort_values("sdc_intersections", ascending=False).reset_index(drop=True)
+
+    # Sort: if prioritize_intersections, put all scenes with angled crossings
+    # first (sorted by raw count within that group), then the rest by raw count.
+    # Otherwise just sort by raw count.
+    if args.prioritize_intersections:
+        df["has_angled"] = (df["angled_intersections"] > 0).astype(int)
+        df = df.sort_values(["has_angled", "sdc_intersections"], ascending=[False, False]).reset_index(drop=True)
+        df = df.drop(columns=["has_angled"])
+    else:
+        df = df.sort_values("sdc_intersections", ascending=False).reset_index(drop=True)
 
     df_path = Path(args.dataframe_path)
     df_path.parent.mkdir(parents=True, exist_ok=True)
@@ -355,63 +419,61 @@ def main():
 
     # Summary stats
     counts = df["sdc_intersections"]
-    print(f"  Max intersections:  {counts.iloc[0]}")
-    print(f"  Median:             {counts.median():.0f}")
-    print(f"  Mean:               {counts.mean():.1f}")
-    print(f"  Zero-intersection:  {(counts == 0).sum()}")
+    angled = df["angled_intersections"]
+    print(f"  Raw intersections    — max: {counts.max()},  median: {counts.median():.0f},  mean: {counts.mean():.1f}")
+    print(f"  Angled intersections — max: {angled.max()},  median: {angled.median():.0f},  mean: {angled.mean():.1f}")
+    print(f"  Zero-intersection:     {(counts == 0).sum()}")
+    print(f"  Has angled (>0):       {(angled > 0).sum()}")
 
     # ── 2b. Plot interactivity distribution ─────────────────────────────────
     plot_dir = Path(args.plot_folder)
     plot_dir.mkdir(parents=True, exist_ok=True)
 
-    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
-    fig.set_facecolor("#111111")
-    fig.suptitle("SDC Trajectory Intersection Distribution", color="white", fontsize=14, y=1.02)
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig.set_facecolor("white")
+    fig.suptitle("SDC Trajectory Intersection Distribution", color="black", fontsize=14, y=1.02)
 
-    # Histogram (full)
+    # (0) Histogram — raw intersection count
     ax = axes[0]
-    ax.hist(counts, bins=60, color="#6699FF", edgecolor="#334466", alpha=0.85)
-    ax.axvline(counts.median(), color="#FF6666", linestyle="--", linewidth=1.5, label=f"Median ({counts.median():.0f})")
-    ax.axvline(counts.mean(), color="#66FF66", linestyle="--", linewidth=1.5, label=f"Mean ({counts.mean():.1f})")
-    ax.set_xlabel("Intersection count", color="white")
-    ax.set_ylabel("Number of scenarios", color="white")
-    ax.set_title("Full distribution", color="white")
-    ax.legend(fontsize=8, facecolor="#222", edgecolor="#444", labelcolor="white")
+    ax.hist(counts, bins=60, color="#4A86C8", edgecolor="#2A5680", alpha=0.85)
+    ax.axvline(counts.median(), color="#E04040", linestyle="--", linewidth=1.5, label=f"Median ({counts.median():.0f})")
+    ax.axvline(counts.mean(), color="#2EA82E", linestyle="--", linewidth=1.5, label=f"Mean ({counts.mean():.1f})")
+    ax.set_xlabel("Raw intersection count")
+    ax.set_ylabel("Number of scenarios")
+    ax.set_title("Raw intersections (all)")
+    ax.legend(fontsize=8)
 
-    # Histogram (non-zero only, log scale)
+    # (1) Histogram — angled intersection count
     ax = axes[1]
-    nonzero = counts[counts > 0]
-    if len(nonzero) > 0:
-        ax.hist(nonzero, bins=60, color="#66FF66", edgecolor="#336633", alpha=0.85)
-        ax.set_yscale("log")
-    ax.set_xlabel("Intersection count", color="white")
-    ax.set_ylabel("Number of scenarios (log)", color="white")
-    ax.set_title(f"Non-zero only ({len(nonzero)}/{len(counts)})", color="white")
+    angled_nonzero = angled[angled > 0]
+    if len(angled_nonzero) > 0:
+        ax.hist(angled_nonzero, bins=60, color="#D4952A", edgecolor="#8B6420", alpha=0.85)
+    ax.set_xlabel(f"Angled intersection count (>={args.angle_threshold}°)")
+    ax.set_ylabel("Number of scenarios")
+    ax.set_title(f"Angled intersections — non-zero ({len(angled_nonzero)}/{len(angled)})")
 
-    # CDF
+    # (2) Scatter — raw count vs angled count
     ax = axes[2]
-    sorted_counts = counts.sort_values().values
-    cdf = np.arange(1, len(sorted_counts) + 1) / len(sorted_counts)
-    ax.plot(sorted_counts, cdf, color="#DDAA33", linewidth=2)
-    ax.set_xlabel("Intersection count", color="white")
-    ax.set_ylabel("Cumulative fraction", color="white")
-    ax.set_title("CDF", color="white")
-    if args.top_k and args.top_k < len(df):
-        threshold = df.iloc[args.top_k - 1]["sdc_intersections"]
-        ax.axvline(
-            threshold,
-            color="#FF6666",
-            linestyle="--",
-            linewidth=1.5,
-            label=f"Top-{args.top_k} cutoff ({threshold:.0f})",
-        )
-        ax.legend(fontsize=8, facecolor="#222", edgecolor="#444", labelcolor="white")
+    ax.scatter(counts, angled, s=4, alpha=0.4, color="#2EA82E", edgecolors="none")
+    ax.plot(
+        [0, counts.max()],
+        [0, counts.max()],
+        color="#E04040",
+        linestyle="--",
+        linewidth=1,
+        alpha=0.5,
+        label="y=x (all angled)",
+    )
+    ax.set_xlabel("Raw intersection count")
+    ax.set_ylabel("Angled intersection count")
+    ax.set_title("Raw vs Angled")
+    ax.legend(fontsize=8)
 
     for ax in axes:
-        ax.set_facecolor("#1a1a1a")
-        ax.tick_params(colors="white", labelsize=8)
+        ax.set_facecolor("white")
+        ax.tick_params(colors="black", labelsize=8)
         for spine in ax.spines.values():
-            spine.set_color("#333")
+            spine.set_color("#CCCCCC")
 
     plt.tight_layout()
     dist_path = plot_dir / "interactivity_distribution.png"
@@ -437,7 +499,10 @@ def main():
     # Print top 10
     print("\nTop 10 most interactive scenarios:")
     for _, row in top_df.head(10).iterrows():
-        print(f"  {row['filename']:>55s}  intersections={row['sdc_intersections']:4d}  agents={row['num_agents']}")
+        print(
+            f"  {row['filename']:>55s}  raw={row['sdc_intersections']:4d}  "
+            f"angled={row['angled_intersections']:4d}  agents={row['num_agents']}"
+        )
 
     # ── 4. Visualize (optional) ──────────────────────────────────────────────
     if args.visualize:

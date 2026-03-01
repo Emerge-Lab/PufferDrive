@@ -66,9 +66,9 @@ def load_data(driver_env):
 if __name__ == "__main__":
     args = load_config("puffer_drive")
     args["vec"]["backend"] = "Serial"
-    args["env"]["num_maps"] = 1000
-    args["env"]["map_dir"] = "resources/drive/binaries/training"
-    args["env"]["reg_mode"] = "log_prob_direct"
+    args["env"]["num_maps"] = 100
+    args["env"]["map_dir"] = "resources/drive/binaries/interactive_data_training_100"
+    args["env"]["reg_mode"] = "log_prob_direct"  # To get the data
     args["base"]["rnn_name"] = "none"
 
     config = {
@@ -76,7 +76,7 @@ if __name__ == "__main__":
         "hidden_size": 1024,
         "num_actions": 21 * 31,
         "learning_rate": 1e-4,
-        "epochs": 3000,
+        "epochs": 1500,
         "minibatches": 64,
         "resample_every_n_epochs": 10,
         "num_maps": args["env"]["num_maps"],
