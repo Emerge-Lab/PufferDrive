@@ -26,7 +26,7 @@
 // Order of entities in rendering (lower is rendered first)
 #define Z_ROAD_SURFACE 0.0f
 #define Z_ROAD_MARKINGS 0.05f // Lane lines, road lines, traces
-#define Z_AGENT_DETAILS 0.4f  // Arrow, goal markers, obs overlays
+#define Z_AGENT_DETAILS 0.2f  // Arrow, goal markers, obs overlays
 #define Z_AGENTS 0.6f         // Vehicles, cyclists, pedestrians
 
 // Entity Types
@@ -2487,17 +2487,21 @@ Client *make_client(Drive *env) {
         client->camera.projection = CAMERA_PERSPECTIVE;
 
     } else { // Headless rendering
-        SetConfigFlags(FLAG_WINDOW_HIDDEN);
-        SetTargetFPS(6000);
+        if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
+            // Fix to square around target agent
+            client->width = 720;
+            client->height = 720;
+        } else {
+            // Full map size
+            float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
+            float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+            float scale = 6.0f; // Controls the resolution of the output video
+            int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
+            int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
 
-        float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
-        float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        float scale = 6.0f; // Controls the resolution of the output video
-        int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
-        int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
-
-        client->width = img_width;
-        client->height = img_height;
+            client->width = img_width;
+            client->height = img_height;
+        }
     }
 
     SetTraceLogLevel(LOG_WARNING); // Only show warnings and errors
@@ -3147,34 +3151,27 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
     EndMode3D();
 
-    // Draw agent ids
-    // Mode 1: Bird's eye view
     if (mode == 1) {
-        float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        float pixels_per_world_unit = client->height / map_height;
+        float cam_x = 0.0f, cam_y = 0.0f;
+        float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+        if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
+            cam_x = env->entities[env->sdc_track_index].x;
+            cam_y = env->entities[env->sdc_track_index].y;
+            fovy = 150.0f;
+        }
+        float scale = client->height / fovy;
 
         for (int i = 0; i < env->active_agent_count; i++) {
-            // Ignore respawned agents
-            if (env->entities[i].respawn_timestep != -1) {
+            int idx = env->active_agent_indices[i];
+            if (env->entities[idx].respawn_timestep != -1)
                 continue;
-            }
-
-            int agent_idx = env->active_agent_indices[i];
-            float raw_x = -env->entities[agent_idx].x * pixels_per_world_unit;
-            float raw_y = env->entities[agent_idx].y * pixels_per_world_unit;
-            int screen_x = (int)raw_x + client->width / 2 + 20;
-            int screen_y = (int)raw_y + client->height / 2 - 25;
-
-            if (screen_x >= 0 && screen_x <= client->width && screen_y >= 0 && screen_y <= client->height) {
-                char text[32];
-                if (env->control_mode == CONTROL_WOSAC) {
-                    snprintf(text, sizeof(text), "%d", env->tracks_to_predict_indices[i]);
-                } else {
-                    snprintf(text, sizeof(text), "%d", agent_idx);
-                }
-                int text_width = MeasureText(text, 20);
-                DrawText(text, screen_x - text_width / 2, screen_y, 20, PUFF_WHITE);
-            }
+            int sx = (int)(-(env->entities[idx].x - cam_x) * scale) + client->width / 2 + 20;
+            int sy = (int)((env->entities[idx].y - cam_y) * scale) + client->height / 2 - 25;
+            if (sx < 0 || sx > client->width || sy < 0 || sy > client->height)
+                continue;
+            char text[32];
+            snprintf(text, sizeof(text), idx == env->sdc_track_index ? "sdc" : "%d", idx);
+            DrawText(text, sx - MeasureText(text, 20) / 2, sy, 20, PUFF_WHITE);
         }
     }
 }
@@ -3195,13 +3192,22 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         Camera3D camera = {0};
 
         if (view_mode == VIEW_MODE_SIM_STATE) {
-            // Orthographic bird's-eye view over the entire map (fully observable)
-            camera.position = (Vector3){0.0, 0.0, 400.0f}; // Above the scene
-            camera.target = (Vector3){0.0, 0.0, 0.0};      // Look at origin
-            camera.up = (Vector3){0.0f, -1.0f, 0.0f};
-            camera.projection = CAMERA_ORTHOGRAPHIC;
-            camera.fovy = map_height;
-
+            if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
+                // Follow the SDC agent
+                Entity *sdc = &env->entities[env->sdc_track_index];
+                camera.position = (Vector3){sdc->x, sdc->y, 400.0f};
+                camera.target = (Vector3){sdc->x, sdc->y, 0.0f};
+                camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+                camera.projection = CAMERA_ORTHOGRAPHIC;
+                camera.fovy = 100.0f;
+            } else {
+                // Orthographic bird's-eye view over the entire map (fully observable)
+                camera.position = (Vector3){0.0, 0.0, 400.0f};
+                camera.target = (Vector3){0.0, 0.0, 0.0};
+                camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+                camera.projection = CAMERA_ORTHOGRAPHIC;
+                camera.fovy = map_height;
+            }
             BeginDrawing();
             ClearBackground(ROAD_COLOR);
             BeginMode3D(camera);
