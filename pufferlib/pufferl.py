@@ -1415,6 +1415,9 @@ def eval_womd(env_name, args=None, vecenv=None, policy=None):
     cols = ["map_name"] + [col for col in df.columns if col != "map_name"]
     df = df[cols]
 
+    num_unique_maps = len(df["map_name"].unique())
+    print(f"The logs contain {num_unique_maps} unique maps.")
+
     # For now I do that, but ofc we should think at a way to manage files properly
     df.to_csv("results.csv")
 
