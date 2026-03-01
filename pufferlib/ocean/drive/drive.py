@@ -391,6 +391,11 @@ class Drive(pufferlib.PufferEnv):
     def step(self, actions):
         self.terminals[:] = 0
         self.actions[:] = actions
+
+        # If an eval worker already finished its job we want to skip
+        if self.eval_mode and self.resample_frequency == 0 and self.tick >= self.episode_length:
+            return (self.observations, self.rewards, self.terminals, self.truncations, [])
+
         binding.vec_step(self.c_envs)
         self.tick += 1
         info = []
