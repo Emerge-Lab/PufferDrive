@@ -1315,10 +1315,10 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
 
 def eval_womd(env_name, args=None, vecenv=None, policy=None):
+    import copy
+
     args = args or load_config(env_name)
 
-    backend = args["eval"].get("backend", "PufferEnv")
-    args["vec"] = dict(backend=backend, num_envs=1)
     args["env"]["control_mode"] = args["eval"]["control_mode"]
     args["env"]["episode_length"] = 91  # WOMD scenario length
     args["env"]["resample_frequency"] = 91
@@ -1330,25 +1330,52 @@ def eval_womd(env_name, args=None, vecenv=None, policy=None):
     # This is specific to WOMD, when we will also include GIGAFLOW we
     num_maps = args["eval"]["num_maps"]
     args["env"]["num_maps"] = args["eval"]["num_maps"]
+    args["env"]["num_agents"] = args["eval"]["num_agents"]
 
-    vecenv = vecenv or load_env(env_name, args)
+    # Multiprocessing logic (Distribute maps across workers)
+    num_workers = args["vec"]["num_workers"]
+    if num_workers > num_maps:
+        raise pufferlib.APIUsageError(
+            f"You requested to use {num_workers} workers for evaluating on only {num_maps} maps"
+        )
+    env_kwargs = []
+    maps_per_worker = num_maps // num_workers
+    remainder = num_maps % num_workers
+    current_start = 0
+    for i in range(num_workers):
+        worker_kwargs = copy.deepcopy(args["env"])
+        # Give one extra scenario to the first remainder workers
+        worker_num_maps = maps_per_worker + (1 if i < remainder else 0)
+
+        worker_kwargs["eval_starting_map"] = current_start
+        worker_kwargs["eval_num_maps_to_process"] = worker_num_maps
+        env_kwargs.append(worker_kwargs)
+
+        current_start += worker_num_maps
+
+    # Instantiate each env with its own kwargs
+    env_module = importlib.import_module("pufferlib.ocean")
+    make_env = env_module.env_creator("puffer_drive")
+    env_creators = [make_env] * num_workers
+    env_args = [[]] * num_workers
+
+    vecenv = pufferlib.vector.make(env_creators, env_args=env_args, env_kwargs=env_kwargs, **args["vec"])
     policy = policy or load_policy(args, vecenv, env_name)
 
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
     global_infos = {}
-    eval_batch_size = args["eval"]["eval_batch_size"]
+    maps_processed = 0
+    obs, _ = vecenv.reset()
 
-    for batch_start_idx in range(0, num_maps, eval_batch_size):
+    while maps_processed < num_maps:
         state = {}
         if args["train"]["use_rnn"]:
             state = dict(
                 lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
-
-        obs, _ = vecenv.reset()
 
         for timestep in range(args["env"]["episode_length"]):
             with torch.no_grad():
@@ -1360,19 +1387,22 @@ def eval_womd(env_name, args=None, vecenv=None, policy=None):
             if isinstance(logits, torch.distributions.Normal):
                 action_np = np.clip(action_np, vecenv.action_space.low, vecenv.action_space.high)
 
-            obs, rewards, dones, truncs, info_list = vecenv.step(action_np)
+            obs, _, _, _, info_list = vecenv.step(action_np)
 
             if len(info_list) > 0:
-                for result in info_list[0]:
-                    # Identify the binary map, and just keep the name
-                    result["map_name"] = result["map_name"].split("/")[-1].split(".")[0]
+                for info_worker in info_list:
+                    for result in info_worker:
+                        # Identify the binary map, and just keep the name
+                        result["map_name"] = result["map_name"].split("/")[-1].split(".")[0]
 
-                    for k, v in result.items():
-                        if k not in global_infos:
-                            global_infos[k] = []
-                        global_infos[k].append(v)
+                        for k, v in result.items():
+                            if k not in global_infos:
+                                global_infos[k] = []
+                            global_infos[k].append(v)
+                        maps_processed += 1
 
     print(global_infos)
+    vecenv.close()
 
 
 def sweep(args=None, env_name=None):

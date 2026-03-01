@@ -49,6 +49,8 @@ class Drive(pufferlib.PufferEnv):
         map_dir="resources/drive/binaries/training",
         allow_fewer_maps=True,
         eval_batch_size=-1,
+        eval_starting_map=0,
+        eval_num_maps_to_process=1,
         # reward randomization bounds
         reward_bound_goal_radius_min=2.0,
         reward_bound_goal_radius_max=12.0,
@@ -245,7 +247,9 @@ class Drive(pufferlib.PufferEnv):
                 )
 
         # This is to track on which maps the evaluation is running
-        self.eval_map_counter = 0
+        self.eval_map_counter = eval_starting_map
+        self.eval_num_maps_to_process = eval_num_maps_to_process
+        self.eval_last_map = eval_starting_map + eval_num_maps_to_process
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
@@ -261,6 +265,7 @@ class Drive(pufferlib.PufferEnv):
             max_goal_distance=self.max_goal_distance,
             eval_batch_size=self.eval_batch_size,
             eval_map_counter=self.eval_map_counter,
+            eval_last_map=self.eval_last_map,
             reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
             reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
             reward_bound_collision_min=self.reward_bound_collision_min,
@@ -394,9 +399,9 @@ class Drive(pufferlib.PufferEnv):
             if log:
                 info.append(log)
                 # print(log)
-            # In eval mode, I don't want to resample after the last batch (womd specific)
-            if self.eval_mode and self.eval_map_counter >= self.num_maps:
-                self.resample_frequency = 0
+        # In eval mode, I don't want to resample after the last batch (womd specific)
+        if self.eval_mode and self.eval_map_counter >= self.eval_last_map:
+            self.resample_frequency = 0
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
             binding.vec_close(self.c_envs)
@@ -414,6 +419,7 @@ class Drive(pufferlib.PufferEnv):
                 max_goal_distance=self.max_goal_distance,
                 eval_batch_size=self.eval_batch_size,
                 eval_map_counter=self.eval_map_counter,
+                eval_last_map=self.eval_last_map,
                 # reward randomization bounds
                 reward_bound_collision_min=self.reward_bound_collision_min,
                 reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
