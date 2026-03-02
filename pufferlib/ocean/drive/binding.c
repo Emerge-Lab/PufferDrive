@@ -147,7 +147,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 // Ensure last env can still meet min_agents_per_env requirement
                 int upper = (remaining - max_agents_per_env < min_agents_per_env) ? remaining - min_agents_per_env
                                                                                   : max_agents_per_env;
-                count = min_agents_per_env + rand() % (upper - min_agents_per_env + 1);
+                if (upper - min_agents_per_env + 1 == 0) {
+                    count = min_agents_per_env;
+                } else {
+                    count = min_agents_per_env + rand() % (upper - min_agents_per_env + 1);
+                }
             }
             agent_counts[env_count++] = count;
             remaining -= count;

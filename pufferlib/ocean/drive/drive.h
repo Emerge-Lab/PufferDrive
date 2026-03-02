@@ -1563,7 +1563,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
     // Design Choice(we don't have wide vehicles on roads)
     if (spawn_width > spawn_length)
         spawn_width = spawn_length;
-    float spawn_height = 1.5f; // Design Choice: Doesn't matter as we don't have flying cars in 2026
+    float spawn_height = spawn_settings.h; // Design Choice: Doesn't matter as we don't have flying cars in 2026
 
     // Set spawn position on start lane
     float spawn_x, spawn_y, spawn_z, spawn_heading;
