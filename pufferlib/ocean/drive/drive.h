@@ -47,6 +47,9 @@
 
 #define INVALID_POSITION -10000.0f
 
+// Trajectory Length
+#define TRAJECTORY_LENGTH 91
+
 // Initialization modes
 #define INIT_ALL_VALID 0
 #define INIT_ONLY_CONTROLLABLE_AGENTS 1
