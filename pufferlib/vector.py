@@ -231,8 +231,8 @@ def _worker_process(
 
         start = time.time()
         if sem == RESET:
-            seed = recv_pipe.recv()
-            _, infos = envs.reset(seed=seed)
+            seed, parameters = recv_pipe.recv()
+            _, infos = envs.reset(seed=seed, parameters=parameters)
         elif sem == STEP:
             _, _, _, _, infos = envs.step(atn_arr)
         elif sem == CLOSE:
@@ -503,7 +503,7 @@ class Multiprocessing:
         self.actions[idxs] = actions
         self.buf["semaphores"][idxs] = STEP
 
-    def async_reset(self, seed=0):
+    def async_reset(self, seed=0, parameters=None):
         # Flush any waiting workers
         while self.waiting_workers:
             worker = self.waiting_workers.pop(0)
@@ -528,7 +528,7 @@ class Multiprocessing:
         for i in range(self.num_workers):
             start = i * self.envs_per_worker
             end = (i + 1) * self.envs_per_worker
-            self.send_pipes[i].send(seed + i)
+            self.send_pipes[i].send((seed + i, parameters))
 
     def notify(self):
         self.buf["notify"][:] = True

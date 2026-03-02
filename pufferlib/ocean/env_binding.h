@@ -473,15 +473,70 @@ static PyObject *vectorize(PyObject *self, PyObject *args) {
     return PyLong_FromVoidPtr(vec);
 }
 
+void apply_parameters(VecEnv *vec, PyObject *params_dict) {
+    if (params_dict == NULL || !PyDict_Check(params_dict)) {
+        return;
+    }
+
+// Helper to extract float parameter and apply to all envs
+#define APPLY_REWARD_BOUND(param_min_name, param_max_name, coef_index)                                                 \
+    {                                                                                                                  \
+        PyObject *val_min = PyDict_GetItemString(params_dict, param_min_name);                                         \
+        PyObject *val_max = PyDict_GetItemString(params_dict, param_max_name);                                         \
+        if (val_min != NULL && PyFloat_Check(val_min)) {                                                               \
+            for (int i = 0; i < vec->num_envs; i++) {                                                                  \
+                Drive *drive = (Drive *)vec->envs[i];                                                                  \
+                drive->reward_bounds[coef_index].min_val = (float)PyFloat_AsDouble(val_min);                           \
+            }                                                                                                          \
+        }                                                                                                              \
+        if (val_max != NULL && PyFloat_Check(val_max)) {                                                               \
+            for (int i = 0; i < vec->num_envs; i++) {                                                                  \
+                Drive *drive = (Drive *)vec->envs[i];                                                                  \
+                drive->reward_bounds[coef_index].max_val = (float)PyFloat_AsDouble(val_max);                           \
+            }                                                                                                          \
+        }                                                                                                              \
+    }
+
+    APPLY_REWARD_BOUND("reward_bound_goal_radius_min", "reward_bound_goal_radius_max", REWARD_COEF_GOAL_RADIUS);
+    APPLY_REWARD_BOUND("reward_bound_collision_min", "reward_bound_collision_max", REWARD_COEF_COLLISION);
+    APPLY_REWARD_BOUND("reward_bound_offroad_min", "reward_bound_offroad_max", REWARD_COEF_OFFROAD);
+    APPLY_REWARD_BOUND("reward_bound_comfort_min", "reward_bound_comfort_max", REWARD_COEF_COMFORT);
+    APPLY_REWARD_BOUND("reward_bound_lane_align_min", "reward_bound_lane_align_max", REWARD_COEF_LANE_ALIGN);
+    APPLY_REWARD_BOUND("reward_bound_lane_center_min", "reward_bound_lane_center_max", REWARD_COEF_LANE_CENTER);
+    APPLY_REWARD_BOUND("reward_bound_velocity_min", "reward_bound_velocity_max", REWARD_COEF_VELOCITY);
+    APPLY_REWARD_BOUND("reward_bound_traffic_light_min", "reward_bound_traffic_light_max", REWARD_COEF_TRAFFIC_LIGHT);
+    APPLY_REWARD_BOUND("reward_bound_center_bias_min", "reward_bound_center_bias_max", REWARD_COEF_CENTER_BIAS);
+    APPLY_REWARD_BOUND("reward_bound_vel_align_min", "reward_bound_vel_align_max", REWARD_COEF_VEL_ALIGN);
+    APPLY_REWARD_BOUND("reward_bound_overspeed_min", "reward_bound_overspeed_max", REWARD_COEF_OVERSPEED);
+    APPLY_REWARD_BOUND("reward_bound_timestep_min", "reward_bound_timestep_max", REWARD_COEF_TIMESTEP);
+    APPLY_REWARD_BOUND("reward_bound_reverse_min", "reward_bound_reverse_max", REWARD_COEF_REVERSE);
+    APPLY_REWARD_BOUND("reward_bound_throttle_min", "reward_bound_throttle_max", REWARD_COEF_THROTTLE);
+    APPLY_REWARD_BOUND("reward_bound_steer_min", "reward_bound_steer_max", REWARD_COEF_STEER);
+    APPLY_REWARD_BOUND("reward_bound_acc_min", "reward_bound_acc_max", REWARD_COEF_ACC);
+
+#undef APPLY_REWARD_BOUND
+}
+
 static PyObject *vec_reset(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_reset requires 2 arguments");
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_reset requires 3 arguments");
         return NULL;
     }
 
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
+    }
+
+    PyObject *params = PyTuple_GetItem(args, 2);
+
+    if (params == Py_None) {
+        // skip parameter logic
+    } else if (!PyDict_Check(params)) {
+        PyErr_SetString(PyExc_TypeError, "parameters must be dict or None");
+        return NULL;
+    } else {
+        apply_parameters(vec, params);
     }
 
     PyObject *seed_arg = PyTuple_GetItem(args, 1);
