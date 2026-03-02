@@ -849,6 +849,7 @@ class Evaluator:
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
+        self.hr_eval_config["env"]["goal_behavior"] = 2  # Stop and terminate
         self.sp_eval_config = copy.deepcopy(eval_config)
         self.sp_eval_config["env"]["control_mode"] = "control_agents"
 
@@ -878,6 +879,7 @@ class Evaluator:
 
         # Rollout
         for time_idx in range(self.sim_steps):
+            print(time_idx)
             if render_rollout or render_eval:
                 if mode == "human_replay":
                     if not terminals[self.render_env_idx]:
@@ -899,6 +901,8 @@ class Evaluator:
 
             # Step environment
             obs, rewards, terminals, truncated, info_list = env.step(action_np)
+
+            print(terminals[self.render_env_idx])
 
             if truncated.all():
                 break
