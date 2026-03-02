@@ -6,10 +6,11 @@ import numpy as np
 import pandas as pd
 from typing import Dict
 import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
 from tqdm import tqdm
 import configparser
 import os
-from tqdm import tqdm
 import pufferlib
 
 # WOSAC eval
@@ -829,6 +830,8 @@ class Evaluator:
         self.sp_env = None
         self.hr_env = None
         self.render_env_idx = 0  # Which of the vecenvs to use for rendering
+        self.inference_lambda_values = [0.0, 0.01, 0.05, 0.1, 0.15]
+        self.lambda_sweep_results = {}  # {lambda_val: collision_rate}
 
         self._unpack_eval_configs(configs)
 
@@ -853,14 +856,20 @@ class Evaluator:
         self.sp_eval_config = copy.deepcopy(eval_config)
         self.sp_eval_config["env"]["control_mode"] = "control_agents"
 
-        self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
-        self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
+        # Check if lambda conditioning is enabled
+        self.lambda_conditioning = configs["env"]["human_reg_weight_max"] > 0.0
 
-    def rollout(self, policy, mode="self_play", render_rollout=False):
-        """Roll out the given policy in the specified eval env and collect statistics."""
+    def rollout(self, policy, mode="self_play", render_rollout=False, lambda_override=None):
+        """Roll out the given policy in the specified eval env and collect statistics.
+
+        Args:
+            policy: The policy to evaluate.
+            mode: "self_play" or "human_replay".
+            render_rollout: Whether to render during rollout.
+            lambda_override: If not None, set all agents to this lambda value after reset.
+        """
 
         env = self.hr_env if mode == "human_replay" else self.sp_env
-        render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
         driver = env.driver_env
         num_agents = env.observation_space.shape[0]
         device = self.configs["train"]["device"]
@@ -868,6 +877,12 @@ class Evaluator:
         # Reset environment
         obs, info = env.reset()
         terminals = np.zeros_like((num_agents, 1))
+
+        # Override lambda for all agents after reset (reset calls _set_lambdas which randomizes)
+        if lambda_override is not None and self.lambda_conditioning:
+            uniform_lambdas = np.full(num_agents, lambda_override, dtype=np.float32)
+            env._set_lambdas(uniform_lambdas)
+            obs = env.observations
 
         # Initialize RNN state if needed
         state = {}
@@ -879,7 +894,7 @@ class Evaluator:
 
         # Rollout
         for time_idx in range(self.sim_steps):
-            if render_rollout or render_eval:
+            if render_rollout:
                 if mode == "human_replay":
                     if not terminals[self.render_env_idx]:
                         # Stop rendering when SDC is done
@@ -901,6 +916,10 @@ class Evaluator:
             # Step environment
             obs, rewards, terminals, truncated, info_list = env.step(action_np)
 
+            # Verify lambdas
+            # print(obs[:,0])
+            # breakpoint()
+
             if truncated.all():
                 break
 
@@ -911,6 +930,58 @@ class Evaluator:
             self.self_play_stats = final_info
         elif mode == "human_replay":
             self.human_replay_stats = final_info
+
+    def run_lambda_sweep(self, policy, load_env_fn):
+        """Run human replay rollouts across inference lambda values and collect stats.
+
+        Args:
+            policy: The policy to evaluate.
+            load_env_fn: Callable that creates a new hr_env, e.g.
+                         lambda: load_env("puffer_drive", self.hr_eval_config)
+        """
+        self.lambda_sweep_results = {}
+        for lam in self.inference_lambda_values:
+            self.hr_env = load_env_fn()
+            self.rollout(policy, mode="human_replay", lambda_override=lam)
+            self.hr_env.close()
+
+            if self.human_replay_stats is not None:
+                self.lambda_sweep_results[lam] = {
+                    "collision_rate": self.human_replay_stats.get("collision_rate", 0.0),
+                    "score": self.human_replay_stats.get("score", 0.0),
+                }
+            else:
+                self.lambda_sweep_results[lam] = {"collision_rate": 0.0, "score": 0.0}
+
+    def log_lambda_sweep(self, epoch):
+        """Log the lambda sweep results as scalar metrics and a seaborn swarmplot to wandb."""
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            return
+        if not self.lambda_sweep_results:
+            return
+        import wandb
+
+        df = pd.DataFrame(self.lambda_sweep_results).T
+        df.index.name = "lambda"
+
+        fig, ax = plt.subplots(1, 1, figsize=(4, 4), dpi=150)
+        ax.set_title(f"Effect of λ (regularization strength) \n Epoch {epoch}")
+        sns.lineplot(data=df, x="lambda", y="collision_rate", marker="s", color="tab:blue", ax=ax)
+        ax.set_ylabel("Human-replay collision rate", color="tab:blue")
+        ax.tick_params(axis="y", labelcolor="tab:blue")
+        ax.set_xlabel(r"$λ$")
+        ax.set_ylim(0, 0.5)
+
+        ax2 = ax.twinx()
+        sns.lineplot(data=df, x="lambda", y="score", marker="o", color="tab:orange", ax=ax2)
+        ax2.set_ylabel("Score", color="tab:orange")
+        ax2.tick_params(axis="y", labelcolor="tab:orange")
+        ax2.set_ylim(0, 1)
+
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        self.logger.wandb.log({"eval/lambda_effect": wandb.Image(fig)})
+        plt.close(fig)
 
     def log_videos(self, eval_mode, epoch):
         """Log all mp4s in local path to wandb after env close has flushed ffmpeg pipes."""

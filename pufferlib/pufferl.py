@@ -677,16 +677,32 @@ class PuffeRL:
             self.evaluator = Evaluator(self.full_args, self.logger)
             if human_replay_eval:
                 self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
-                self.evaluator.rollout(self.uncompiled_policy, mode="human_replay")
+                self.evaluator.rollout(
+                    self.uncompiled_policy,
+                    mode="human_replay",
+                    render_rollout=self.config["eval"]["render_human_replay_eval"],
+                )
                 self.evaluator.hr_env.close()
                 self.evaluator.log_videos(eval_mode="human_replay", epoch=self.epoch)
             if self_play_eval:
                 self.evaluator.sp_env = load_env("puffer_drive", self.evaluator.sp_eval_config)
-                self.evaluator.rollout(self.uncompiled_policy, mode="self_play")
+                self.evaluator.rollout(
+                    self.uncompiled_policy,
+                    mode="self_play",
+                    render_rollout=self.config["eval"]["render_self_play_eval"],
+                )
                 self.evaluator.sp_env.close()
                 self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
             if human_replay_eval or self_play_eval:
                 self.evaluator.log_stats()
+
+            # Lambda conditioning sweep
+            if human_replay_eval and self.lambda_conditioning:
+                self.evaluator.run_lambda_sweep(
+                    self.uncompiled_policy,
+                    load_env_fn=lambda: load_env("puffer_drive", self.evaluator.hr_eval_config),
+                )
+                self.evaluator.log_lambda_sweep(epoch=self.epoch)
 
         if self.config["eval"]["wosac_realism_eval"]:
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
