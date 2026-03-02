@@ -828,6 +828,7 @@ class Evaluator:
         self.human_replay_stats = None
         self.sp_env = None
         self.hr_env = None
+        self.render_env_idx = 0  # Which of the vecenvs to use for rendering
 
         self._unpack_eval_configs(configs)
 
@@ -840,6 +841,11 @@ class Evaluator:
         eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
         eval_config["env"]["episode_length"] = 91  # WOMD scenario length
         eval_config["vec"] = dict(backend=backend, num_envs=1)
+        if configs["env"]["human_reg_weight_max"] > 0.0:
+            # If lambda conditioning, set to a nice fixed weight for all agents
+            # TODO: Determine the value here.
+            eval_config["env"]["human_reg_weight_min"] = 0.05
+            eval_config["env"]["human_reg_weight_max"] = 0.05
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
@@ -860,6 +866,7 @@ class Evaluator:
 
         # Reset environment
         obs, info = env.reset()
+        terminals = np.zeros_like((num_agents, 1))
 
         # Initialize RNN state if needed
         state = {}
@@ -872,7 +879,12 @@ class Evaluator:
         # Rollout
         for time_idx in range(self.sim_steps):
             if render_rollout or render_eval:
-                driver.render()
+                if mode == "human_replay":
+                    if not terminals[self.render_env_idx]:
+                        # Stop rendering when SDC is done
+                        driver.render(env_id=self.render_env_idx)
+                else:
+                    driver.render(env_id=self.render_env_idx)
 
             # Get action from policy
             with torch.no_grad():
@@ -886,9 +898,9 @@ class Evaluator:
                 action_np = np.clip(action_np, env.action_space.low, env.action_space.high)
 
             # Step environment
-            obs, rewards, dones, truncs, info_list = env.step(action_np)
+            obs, rewards, terminals, truncated, info_list = env.step(action_np)
 
-            if truncs.all():
+            if truncated.all():
                 break
 
         # Aggregate final statistics
