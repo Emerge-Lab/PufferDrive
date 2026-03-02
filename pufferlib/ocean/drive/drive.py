@@ -206,20 +206,13 @@ class Drive(pufferlib.PufferEnv):
 
         self.min_agents_per_env = int(min_agents_per_env)
         self.max_agents_per_env = int(max_agents_per_env)
-        if self.max_agents_per_env < self.min_agents_per_env:
-            raise ValueError(
-                f"max_agents_per_env ({self.max_agents_per_env}) must be >= min_agents_per_env ({self.min_agents_per_env})"
-            )
-        if self.max_agents_per_env > binding.MAX_AGENTS:
-            # TODO: Check needs to be removed once MAX_PARTNER_OBS deprecates MAX_AGENTS
-            raise ValueError(
-                f"max_agents_per_env ({self.max_agents_per_env}) cannot exceed MAX_AGENTS ({binding.MAX_AGENTS}) defined in C code."
-            )
         self.spawn_width_min = float(spawn_width_min)
         self.spawn_width_max = float(spawn_width_max)
         self.spawn_length_min = float(spawn_length_min)
         self.spawn_length_max = float(spawn_length_max)
         self.spawn_height = float(spawn_height)
+
+        self._validate_agent_dimensions()
 
         if action_type == "discrete":
             if dynamics_model == "classic":
@@ -566,6 +559,31 @@ class Drive(pufferlib.PufferEnv):
             binding.vec_reset(self.c_envs, seed)
             self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+    def _validate_agent_dimensions(self):
+        if self.max_agents_per_env < self.min_agents_per_env:
+            raise ValueError(
+                f"max_agents_per_env ({self.max_agents_per_env}) must be >= min_agents_per_env ({self.min_agents_per_env})"
+            )
+        if self.max_agents_per_env > binding.MAX_AGENTS:
+            # TODO: Check needs to be removed once MAX_PARTNER_OBS deprecates MAX_AGENTS
+            raise ValueError(
+                f"max_agents_per_env ({self.max_agents_per_env}) cannot exceed MAX_AGENTS ({binding.MAX_AGENTS}) defined in C code."
+            )
+        if self.spawn_width_min < 0.0:
+            raise ValueError(f"spawn_width_min ({self.spawn_width_min}) must be non-negative")
+        if self.spawn_width_max < self.spawn_width_min:
+            raise ValueError(
+                f"spawn_width_max ({self.spawn_width_max}) must be >= spawn_width_min ({self.spawn_width_min})"
+            )
+        if self.spawn_length_min < 0.0:
+            raise ValueError(f"spawn_length_min ({self.spawn_length_min}) must be non-negative")
+        if self.spawn_length_max < self.spawn_length_min:
+            raise ValueError(
+                f"spawn_length_max ({self.spawn_length_max}) must be >= spawn_length_min ({self.spawn_length_min})"
+            )
+        if self.spawn_height < 0.0:
+            raise ValueError(f"spawn_height ({self.spawn_height}) must be non-negative")
 
     def get_global_agent_state(self):
         """Get current global state of all active agents.
