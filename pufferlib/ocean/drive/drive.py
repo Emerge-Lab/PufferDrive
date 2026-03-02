@@ -63,6 +63,8 @@ class Drive(pufferlib.PufferEnv):
         anchor_cpt_path=None,
         uses_memory=False,
         memory_size=0,
+        human_reg_weight_min=0.0,
+        human_reg_weight_max=0.5,
     ):
         # env
         self.dt = dt
@@ -90,6 +92,8 @@ class Drive(pufferlib.PufferEnv):
         self.total_num_samples = 0
         self.max_controlled_agents = max_controlled_agents
         self.anchor_cpt_path = anchor_cpt_path
+        self.human_reg_weight_min = human_reg_weight_min
+        self.human_reg_weight_max = human_reg_weight_max
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -235,8 +239,17 @@ class Drive(pufferlib.PufferEnv):
 
         self.c_envs = binding.vectorize(*env_ids)
 
+        # Per-agent lambda vector for conditioning
+        self.lambda_obs_idx = binding.LAMBDA_CONDITIONING_IDX
+        self.agent_lambdas = np.zeros(self.num_agents, dtype=np.float32)
+        self.lambda_conditioning = self.human_reg_weight_max > 0.0
+        if self.lambda_conditioning:
+            self._sample_lambdas()
+
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
+        if self.lambda_conditioning:
+            self._sample_lambdas()
         self.tick = 0
         self.truncations[:] = 0
         return self.observations, []
@@ -306,11 +319,25 @@ class Drive(pufferlib.PufferEnv):
         self.truncations[:] = 1
         self.terminals[:] = 1
 
+        # Resample lambda values
+        if self.lambda_conditioning:
+            self._sample_lambdas()
+
+    def _sample_lambdas(self):
+        """Sample new per-agent lambda values."""
+        self.agent_lambdas = np.random.uniform(
+            self.human_reg_weight_min,
+            self.human_reg_weight_max,
+            size=self.num_agents,
+        ).astype(np.float32)
+        self.observations[:, self.lambda_obs_idx] = self.agent_lambdas
+
     def step(self, actions):
         self.terminals[:] = 0
         self.truncations[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
+        self.observations[:, self.lambda_obs_idx] = self.agent_lambdas
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:

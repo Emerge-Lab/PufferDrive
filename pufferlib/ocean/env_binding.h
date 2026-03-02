@@ -1153,6 +1153,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "MAX_ENTITIES_PER_CELL", MAX_ENTITIES_PER_CELL);
     PyModule_AddIntConstant(m, "NUM_ACCEL_BINS", NUM_ACCEL_BINS);
     PyModule_AddIntConstant(m, "NUM_STEER_BINS", NUM_STEER_BINS);
+    PyModule_AddIntConstant(m, "LAMBDA_CONDITIONING_IDX", LAMBDA_CONDITIONING_IDX);
 
     PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);

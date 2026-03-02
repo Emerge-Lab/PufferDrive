@@ -245,6 +245,10 @@ class PuffeRL:
         self.bc_anchor, self.data = self.vecenv.driver_env._init_regularization_strategy(device=config["device"])
         self.resample_freq_epoch = self.vecenv.driver_env.resample_frequency / self.vecenv.driver_env.episode_length
 
+        # Lambda conditioning
+        self.lambda_conditioning = self.vecenv.driver_env.lambda_conditioning
+        self.lambda_obs_idx = self.vecenv.driver_env.lambda_obs_idx
+
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
@@ -491,18 +495,23 @@ class PuffeRL:
                 # Flatten the batch and time dimensions for feeding into the BC anchor policy
                 # -> [B, obs_dim]
                 anchor_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
+                # Set all conditioning weights to zero because that is what we train the anchor with.
+                # lambda conditioning only has a meaning for the self-play RL training and policy.
+                bc_anchor_obs = anchor_obs.clone()
+                bc_anchor_obs[:, self.lambda_obs_idx] = 0.0
 
                 with torch.no_grad():
-                    anchor_log_probs = torch.log_softmax(self.bc_anchor.get_action_dist_logits(anchor_obs), dim=-1)
+                    anchor_log_probs = torch.log_softmax(self.bc_anchor.get_action_dist_logits(bc_anchor_obs), dim=-1)
 
                 cur_log_probs = torch.log_softmax(logits[0].reshape(-1, logits[0].shape[-1]), dim=-1)
+                sampled_lambdas = anchor_obs[:, self.lambda_obs_idx].unsqueeze(-1)  # [B, 1]
 
-                reg_loss = torch.nn.functional.kl_div(
-                    cur_log_probs,
-                    anchor_log_probs,
-                    reduction="batchmean",
-                    log_target=True,
+                reg_losses = torch.nn.functional.kl_div(
+                    cur_log_probs, anchor_log_probs, reduction="none", log_target=True
                 )
+                # Sum over action dim to get per-sample KL, then weight by lambda to get batch average
+                per_sample_kl = reg_losses.sum(dim=-1)  # [B]
+                reg_loss = (per_sample_kl * sampled_lambdas.squeeze(-1)).mean()
 
                 with torch.no_grad():
                     anchor_entropy = pufferlib.pytorch.entropy(anchor_log_probs).mean().item()
@@ -607,7 +616,7 @@ class PuffeRL:
                 pg_loss
                 + config["vf_coef"] * v_loss
                 - current_ent_coef * entropy_loss
-                + config["human_ll_coef"] * reg_loss
+                + (1.0 if self.lambda_conditioning else 0.0) * reg_loss
             )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
@@ -726,11 +735,21 @@ class PuffeRL:
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
             **eval_logs,
-            "data/total_human_samples": self.data.get("data/total_human_samples", 0),
-            "data/unique_human_samples": self.data.get("data/unique_human_samples", 0),
-            "data/perc_unique_human_samples": self.data.get("data/perc_unique_human_samples", 0),
             "data/anchor_entropy": self.data.get("data/anchor_entropy", 0),
         }
+
+        if self.lambda_conditioning:
+            logs["data/lambda_mean"] = float(self.vecenv.driver_env.agent_lambdas.mean())
+            logs["data/lambda_std"] = float(self.vecenv.driver_env.agent_lambdas.std())
+            if isinstance(self.logger, WandbLogger):
+                import wandb
+
+                logs["data/population_diversity"] = wandb.Histogram(self.vecenv.driver_env.agent_lambdas)
+
+        if self.reg_mode == "log_prob_direct":
+            logs["data/total_human_samples"] = self.data.get("data/total_human_samples", 0)
+            logs["data/unique_human_samples"] = self.data.get("data/unique_human_samples", 0)
+            logs["data/perc_unique_human_samples"] = self.data.get("data/perc_unique_human_samples", 0)
 
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() != 0:

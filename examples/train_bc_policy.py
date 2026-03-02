@@ -57,6 +57,7 @@ def load_data(driver_env):
     total_samples, unique_samples = driver_env._prepare_human_data()
     print(f"Resampled: {total_samples} samples ({unique_samples} unique)")
     wandb.log({"data/total_samples": total_samples, "data/unique_samples": unique_samples})
+
     return TensorDataset(
         driver_env.expert_observations_full.float(),
         driver_env.expert_actions_discrete.long(),
@@ -70,6 +71,10 @@ if __name__ == "__main__":
     args["env"]["map_dir"] = "resources/drive/binaries/interactive_data_training_100"
     args["env"]["reg_mode"] = "log_prob_direct"  # To get the data
     args["base"]["rnn_name"] = "none"
+
+    # Make sure the lambdas are always zero here, we don't use it for the BC anchor policy
+    args["train"]["human_weight_min"] = 0.0
+    args["train"]["human_weight_min"] = 0.0
 
     config = {
         "batch_size": 512,

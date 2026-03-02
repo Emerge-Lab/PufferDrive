@@ -100,8 +100,10 @@
 #define PARTNER_FEATURES 7
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 8
-#define EGO_FEATURES_JERK 11
+#define EGO_FEATURES_CLASSIC 9
+#define EGO_FEATURES_JERK 12
+
+#define LAMBDA_CONDITIONING_IDX 0
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -1861,25 +1863,29 @@ void compute_observations(Drive *env) {
         float rel_goal_x = goal_x * cos_heading + goal_y * sin_heading;
         float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
 
-        obs[0] = rel_goal_x * 0.005f;
-        obs[1] = rel_goal_y * 0.005f;
-        obs[2] = signed_speed / MAX_SPEED;
-        obs[3] = ego_entity->width / MAX_VEH_WIDTH;
-        obs[4] = ego_entity->length / MAX_VEH_LEN;
-        obs[5] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
+        // Placeholder for reg coefficient (can be overwritten from Python)
+        obs[LAMBDA_CONDITIONING_IDX] = 0.0f;
+
+        // Other ego features
+        obs[1] = rel_goal_x * 0.005f;
+        obs[2] = rel_goal_y * 0.005f;
+        obs[3] = signed_speed / MAX_SPEED;
+        obs[4] = ego_entity->width / MAX_VEH_WIDTH;
+        obs[5] = ego_entity->length / MAX_VEH_LEN;
+        obs[6] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
 
         if (env->dynamics_model == JERK) {
-            obs[6] = ego_entity->steering_angle / M_PI;
+            obs[7] = ego_entity->steering_angle / M_PI;
             // Asymmetric normalization for a_long to match action space
-            obs[7] =
+            obs[8] =
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
-            obs[8] = ego_entity->a_lat / JERK_LAT[2];
-            obs[9] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[9] = ego_entity->a_lat / JERK_LAT[2];
+            obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
             // Add normalized entity type (VEHICLE=1, PEDESTRIAN=2, CYCLIST=3)
-            obs[10] = ego_entity->type / 3.0f;
+            obs[11] = ego_entity->type / 3.0f;
         } else {
-            obs[6] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[7] = ego_entity->type / 3.0f;
+            obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[8] = ego_entity->type / 3.0f;
         }
 
         // Relative Pos of other cars
