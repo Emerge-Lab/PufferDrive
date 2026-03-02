@@ -48,8 +48,7 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
         allow_fewer_maps=True,
-        eval_batch_size=-1,
-        eval_starting_map=0,
+        eval_starting_map=-1,
         eval_num_maps_to_process=1,
         # reward randomization bounds
         reward_bound_goal_radius_min=2.0,
@@ -111,8 +110,7 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
-        self.eval_batch_size = eval_batch_size
-        self.eval_mode = eval_batch_size > 0
+        self.eval_mode = eval_starting_map >= 0
         # reward randomization bounds
         self.reward_bound_goal_radius_min = reward_bound_goal_radius_min
         self.reward_bound_collision_min = reward_bound_collision_min
@@ -263,7 +261,6 @@ class Drive(pufferlib.PufferEnv):
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
-            eval_batch_size=self.eval_batch_size,
             eval_map_counter=self.eval_map_counter,
             eval_last_map=self.eval_last_map,
             reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
@@ -424,7 +421,6 @@ class Drive(pufferlib.PufferEnv):
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,
-                eval_batch_size=self.eval_batch_size,
                 eval_map_counter=self.eval_map_counter,
                 eval_last_map=self.eval_last_map,
                 # reward randomization bounds

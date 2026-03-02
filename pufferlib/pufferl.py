@@ -1335,7 +1335,6 @@ def eval_womd(env_name, args=None, vecenv=None, policy=None):
     args["env"]["episode_length"] = 91  # WOMD scenario length
     args["env"]["resample_frequency"] = 91
 
-    args["env"]["eval_batch_size"] = args["eval"]["eval_batch_size"]
     args["env"]["map_dir"] = args["eval"]["map_dir"]
 
     # For now you set num_maps in drive.ini and you will evaluate on all the num_maps

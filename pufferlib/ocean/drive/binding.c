@@ -91,10 +91,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     float min_goal_distance = unpack(kwargs, "min_goal_distance");
     float max_goal_distance = unpack(kwargs, "max_goal_distance");
 
-    int eval_batch_size = unpack(kwargs, "eval_batch_size");
     int eval_map_counter = unpack(kwargs, "eval_map_counter");
     int eval_last_map = unpack(kwargs, "eval_last_map");
-    bool eval_mode = eval_batch_size > 0;
+    bool eval_mode = eval_map_counter >= 0;
 
     float reward_bound_goal_radius_min = unpack(kwargs, "reward_bound_goal_radius_min");
     float reward_bound_goal_radius_max = unpack(kwargs, "reward_bound_goal_radius_max");
@@ -138,7 +137,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // The following lines should be modified when we want to do eval in GIGAFLOW
     if (eval_mode) {
         int remaining_maps = eval_last_map - eval_map_counter;
-        max_envs = eval_batch_size < remaining_maps ? eval_batch_size : remaining_maps;
+        max_envs = num_agents < remaining_maps ? num_agents : remaining_maps;
     }
 
     int map_idx = eval_map_counter;
