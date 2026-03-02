@@ -3006,13 +3006,30 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 DrawCubeWires((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, agent_color);
                 rlPopMatrix();
 
-                // Draw a heading arrow pointing forward
-                Vector3 arrowStart = position;
-                Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
-                                    position.y + sin_heading * half_len * 1.5f, position.z};
+                // Draw a heading arrow pointing forward, scaled by speed so we can see how fast the agent is going
+                float agent_speed =
+                    sqrtf(env->entities[i].vx * env->entities[i].vx + env->entities[i].vy * env->entities[i].vy);
+                float speed_frac = fminf(agent_speed / MAX_SPEED, 1.0f);
+                float arrow_len = half_len * 1.5f + speed_frac * 15.0f;
+                float arrow_head_size = 0.85f;
 
+                Vector3 arrowStart = position;
+                Vector3 arrowEnd = {position.x + cos_heading * arrow_len, position.y + sin_heading * arrow_len,
+                                    position.z};
+
+                rlSetLineWidth(2.5f);
                 DrawLine3D(arrowStart, arrowEnd, agent_color);
-                DrawSphere(arrowEnd, 0.2f, agent_color); // arrow tip
+
+                // Arrowhead wings
+                float perp_x = -sin_heading * arrow_head_size;
+                float perp_y = cos_heading * arrow_head_size;
+                Vector3 wing1 = {arrowEnd.x - cos_heading * arrow_head_size + perp_x,
+                                 arrowEnd.y - sin_heading * arrow_head_size + perp_y, position.z};
+                Vector3 wing2 = {arrowEnd.x - cos_heading * arrow_head_size - perp_x,
+                                 arrowEnd.y - sin_heading * arrow_head_size - perp_y, position.z};
+                DrawLine3D(arrowEnd, wing1, agent_color);
+                DrawLine3D(arrowEnd, wing2, agent_color);
+                rlSetLineWidth(1.0f);
 
             } else { // Agent view
                 rlPushMatrix();
@@ -3228,7 +3245,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                     for (int t = env->init_steps; t < env->episode_length; t++) {
                         DrawSphere(
                             (Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], Z_AGENT_DETAILS},
-                            0.15f, EXPERT_REPLAY);
+                            0.15f, Fade(EXPERT_REPLAY, 0.5));
                     }
                 }
             }

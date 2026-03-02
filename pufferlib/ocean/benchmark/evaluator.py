@@ -879,7 +879,6 @@ class Evaluator:
 
         # Rollout
         for time_idx in range(self.sim_steps):
-            print(time_idx)
             if render_rollout or render_eval:
                 if mode == "human_replay":
                     if not terminals[self.render_env_idx]:
@@ -901,8 +900,6 @@ class Evaluator:
 
             # Step environment
             obs, rewards, terminals, truncated, info_list = env.step(action_np)
-
-            print(terminals[self.render_env_idx])
 
             if truncated.all():
                 break
