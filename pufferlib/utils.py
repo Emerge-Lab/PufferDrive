@@ -275,7 +275,7 @@ def render_videos(
             cmd.extend(["--output-topdown", output_topdown_map])
             cmd.extend(["--output-agent", output_agent_map])
 
-            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
+            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1200, env=env_vars)
 
             vids_exist = os.path.exists(output_topdown_map) and os.path.exists(output_agent_map)
 
