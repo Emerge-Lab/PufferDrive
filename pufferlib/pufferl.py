@@ -697,7 +697,7 @@ class PuffeRL:
                 self.evaluator.log_stats()
 
             # Lambda conditioning sweep
-            if human_replay_eval and self.lambda_conditioning:
+            if human_replay_eval and self.lambda_conditioning and (self.epoch - 1) % 500:
                 self.evaluator.run_lambda_sweep(
                     self.uncompiled_policy,
                     load_env_fn=lambda: load_env("puffer_drive", self.evaluator.hr_eval_config),
