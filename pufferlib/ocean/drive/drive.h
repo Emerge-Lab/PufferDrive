@@ -2572,7 +2572,7 @@ void c_step(Drive *env) {
                     env->logs[i].episode_return += agent->reward_coefs[REWARD_COEF_OFFROAD];
                 } else {
                     env->rewards[i] += env->reward_offroad_collision;
-                    env->logs[i].episode_return = env->reward_offroad_collision;
+                    env->logs[i].episode_return += env->reward_offroad_collision;
                 }
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].offroad_per_agent += 1.0f;
