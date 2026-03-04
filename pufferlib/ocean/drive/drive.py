@@ -255,10 +255,7 @@ class Drive(pufferlib.PufferEnv):
         return self.observations, []
 
     def resample_maps(self):
-        """Resample environment maps.
-        Args:
-
-        """
+        """Resample environment maps."""
         self.tick = 0
         binding.vec_close(self.c_envs)
         agent_offsets, map_ids, num_envs = binding.shared(
