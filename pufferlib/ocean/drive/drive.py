@@ -375,10 +375,12 @@ class Drive(pufferlib.PufferEnv):
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
+        self.truncations[:] = 0
         return self.observations, []
 
     def step(self, actions):
         self.terminals[:] = 0
+        self.truncations[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
