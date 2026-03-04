@@ -133,7 +133,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     int max_envs = use_all_maps ? num_maps : num_agents;
 
-    if (init_mode == RANDOM_AGENTS) {
+    if (init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         // Training mode: random agent counts per env
         int agent_counts[max_envs];
         int remaining = num_agents;
@@ -400,7 +400,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->spawn_settings = spawn_settings;
 
     env->num_agents = max_agents;
-    if (env->init_mode == RANDOM_AGENTS) {
+    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         env->spawn_settings.max_agents_in_sim = max_agents_per_env; // Random Agents only supports controlled agents
     }
     env->map_name = map_path;

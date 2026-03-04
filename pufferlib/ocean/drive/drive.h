@@ -53,7 +53,7 @@
 // Initialization modes
 #define INIT_ALL_VALID 0
 #define INIT_ONLY_CONTROLLABLE_AGENTS 1
-#define RANDOM_AGENTS 2
+#define INIT_VARIABLE_AGENT_NUMBER 2
 
 // Control modes
 #define CONTROL_VEHICLES 0
@@ -538,7 +538,7 @@ void set_means(Drive *env) {
     int64_t point_count = 0;
 
     // Compute single mean for all agents and road elements
-    if (env->init_mode != RANDOM_AGENTS) {
+    if (env->init_mode != INIT_VARIABLE_AGENT_NUMBER) {
         for (int i = 0; i < env->num_objects; i++) {
             Agent *agent = &env->agents[i];
             for (int j = 0; j < agent->trajectory_length; j++) {
@@ -563,7 +563,7 @@ void set_means(Drive *env) {
     env->world_mean_x = mean_x;
     env->world_mean_y = mean_y;
     env->world_mean_z = mean_z;
-    if (env->init_mode != RANDOM_AGENTS) {
+    if (env->init_mode != INIT_VARIABLE_AGENT_NUMBER) {
         for (int i = 0; i < env->num_objects; i++) {
             Agent *agent = &env->agents[i];
             for (int j = 0; j < agent->trajectory_length; j++) {
@@ -942,7 +942,7 @@ void load_map_binary(const char *filename, Drive *env) {
     env->road_elements = (RoadMapElement *)calloc(env->num_roads, sizeof(RoadMapElement));
     env->road_scenario_ids = (int *)calloc(env->num_roads, sizeof(int));
 
-    if (env->init_mode != RANDOM_AGENTS) {
+    if (env->init_mode != INIT_VARIABLE_AGENT_NUMBER) {
         env->spawn_settings.max_agents_in_sim = MAX_AGENTS;
     }
 
@@ -1525,10 +1525,7 @@ static bool check_spawn_offroad(Drive *env, float spawn_x, float spawn_y, float 
                         .sim_width = spawn_width,
                         .sim_height = spawn_height};
 
-    if (check_offroad(env, &temp_agent)) {
-        return true;
-    }
-    return false;
+    return check_offroad(env, &temp_agent);
 }
 
 static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *drivable_lanes, int num_drivable,
@@ -1858,7 +1855,7 @@ void set_active_agents(Drive *env) {
         env->num_agents = env->spawn_settings.max_agents_in_sim;
     }
 
-    if (env->init_mode == RANDOM_AGENTS) {
+    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         spawn_agents_with_counts(env);
         env->num_objects = env->num_created_agents;
         return;
@@ -1941,7 +1938,7 @@ void remove_bad_trajectories(Drive *env) {
         return; // Leave all trajectories in WOSAC control mode
     }
 
-    if (env->init_mode == RANDOM_AGENTS) {
+    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         return; // No trajectories in random agents mode
     }
 
@@ -2568,13 +2565,6 @@ void compute_observations(Drive *env) {
 }
 
 void respawn_agent(Drive *env, int agent_idx) {
-
-    if (env->init_mode == RANDOM_AGENTS) {
-        // TODO: Needs to be handled later if we want GOAL_RESPAWN for random agents
-        spawn_agents_with_counts(env);
-        return;
-    }
-
     Agent *agent = &env->agents[agent_idx];
     agent->sim_x = agent->log_trajectory_x[0];
     agent->sim_y = agent->log_trajectory_y[0];
@@ -4008,7 +3998,7 @@ void reset_goal_positions(Drive *env) {
 void init_goal_positions(Drive *env) {
     for (int x = 0; x < env->active_agent_count; x++) {
         int agent_idx = env->active_agent_indices[x];
-        if (env->init_mode == RANDOM_AGENTS) {
+        if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
             sample_new_goal(env, agent_idx);
         }
         Agent *agent = &env->agents[agent_idx];

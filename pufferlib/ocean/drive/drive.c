@@ -107,7 +107,7 @@ void demo() {
         .reward_conditioning = conf.reward_conditioning,
     };
 
-    if (conf.init_mode == RANDOM_AGENTS) {
+    if (conf.init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         env.num_agents = conf.min_agents_per_env + rand() % (conf.max_agents_per_env - conf.min_agents_per_env + 1);
     }
 

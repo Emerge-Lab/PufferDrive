@@ -286,7 +286,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .map_name = (char *)map_name,
     };
 
-    if (conf.init_mode == RANDOM_AGENTS) {
+    if (conf.init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         env.num_agents = conf.min_agents_per_env + rand() % (conf.max_agents_per_env - conf.min_agents_per_env + 1);
     }
 

@@ -197,11 +197,11 @@ class Drive(pufferlib.PufferEnv):
             self.init_mode = 0
         elif self.init_mode_str == "create_only_controlled":
             self.init_mode = 1
-        elif self.init_mode_str == "random_agents":
+        elif self.init_mode_str == "init_variable_agent_number":
             self.init_mode = 2
         else:
             raise ValueError(
-                f"init_mode must be one of 'create_all_valid', 'create_only_controlled', or 'random_agents'. Got: {self.init_mode_str}"
+                f"init_mode must be one of 'create_all_valid', 'create_only_controlled', or 'init_variable_agent_number'. Got: {self.init_mode_str}"
             )
 
         self.min_agents_per_env = int(min_agents_per_env)

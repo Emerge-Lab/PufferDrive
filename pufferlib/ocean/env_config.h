@@ -215,7 +215,8 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->init_mode = 0;
         } else if (strcmp(value, "\"create_only_controlled\"") == 0 || strcmp(value, "create_only_controlled") == 0) {
             env_config->init_mode = 1;
-        } else if (strcmp(value, "\"random_agents\"") == 0 || strcmp(value, "random_agents") == 0) {
+        } else if (strcmp(value, "\"init_variable_agent_number\"") == 0 ||
+                   strcmp(value, "init_variable_agent_number") == 0) {
             env_config->init_mode = 2;
         } else {
             printf("Warning: Unknown init_mode value '%s', defaulting to create_all_valid\n", value);
