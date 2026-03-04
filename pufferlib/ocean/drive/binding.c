@@ -124,6 +124,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 free(env->active_agent_indices);
                 free(env->static_agent_indices);
                 free(env->expert_static_agent_indices);
+                free(env->tracks_to_predict_indices);
                 free(env);
                 Py_DECREF(agent_offsets);
                 Py_DECREF(map_ids);
@@ -140,6 +141,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env->active_agent_indices);
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
+            free(env->tracks_to_predict_indices);
             free(env);
             continue;
         }
@@ -158,6 +160,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env->entities);
         free(env->active_agent_indices);
         free(env->static_agent_indices);
+        free(env->tracks_to_predict_indices);
         free(env->expert_static_agent_indices);
         free(env);
     }
