@@ -830,7 +830,7 @@ class Evaluator:
         self.sp_env = None
         self.hr_env = None
         self.render_env_idx = 0  # Which of the vecenvs to use for rendering
-        self.inference_lambda_values = [0.0, 0.001, 0.05, 0.1, 0.2]
+        self.inference_lambda_values = [0.0, 0.01, 0.05, 0.2]
         self.lambda_sweep_results = {}  # {lambda_val: collision_rate}
 
         self._unpack_eval_configs(configs)
@@ -844,11 +844,8 @@ class Evaluator:
         eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
         eval_config["env"]["episode_length"] = 91  # WOMD scenario length
         eval_config["vec"] = dict(backend=backend, num_envs=1)
-        if configs["env"]["human_reg_weight_max"] > 0.0:
-            # If lambda conditioning, set to a nice fixed weight for all agents
-            # TODO: Determine the value here.
-            eval_config["env"]["human_reg_weight_min"] = 0.05
-            eval_config["env"]["human_reg_weight_max"] = 0.05
+        eval_config["env"]["fix_lambdas"] = True
+        eval_config["env"]["lambda_value"] = 0.05
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
@@ -856,10 +853,7 @@ class Evaluator:
         self.sp_eval_config = copy.deepcopy(eval_config)
         self.sp_eval_config["env"]["control_mode"] = "control_agents"
 
-        # Check if lambda conditioning is enabled
-        self.lambda_conditioning = configs["env"]["human_reg_weight_max"] > 0.0
-
-    def rollout(self, policy, mode="self_play", render_rollout=False, lambda_override=None):
+    def rollout(self, policy, mode="self_play", render_rollout=False):
         """Roll out the given policy in the specified eval env and collect statistics.
 
         Args:
@@ -877,12 +871,6 @@ class Evaluator:
         # Reset environment
         obs, info = env.reset()
         terminals = np.zeros_like((num_agents, 1))
-
-        # Override lambda for all agents after reset (reset calls _set_lambdas which randomizes)
-        if lambda_override is not None and self.lambda_conditioning:
-            uniform_lambdas = np.full(num_agents, lambda_override, dtype=np.float32)
-            env._set_lambdas(uniform_lambdas)
-            obs = env.observations
 
         # Initialize RNN state if needed
         state = {}
@@ -942,7 +930,8 @@ class Evaluator:
         self.lambda_sweep_results = {}
         for lam in self.inference_lambda_values:
             self.hr_env = load_env_fn()
-            self.rollout(policy, mode="human_replay", lambda_override=lam)
+            self.hr_env.driver_env.set_fixed_lambdas(lam)
+            self.rollout(policy, mode="human_replay")
             self.hr_env.close()
 
             if self.human_replay_stats is not None:

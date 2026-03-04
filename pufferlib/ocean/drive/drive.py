@@ -59,12 +59,14 @@ class Drive(pufferlib.PufferEnv):
         max_controlled_agents=32,
         map_dir="resources/drive/binaries/training",
         ini_file_path="pufferlib/config/ocean/drive.ini",
-        reg_mode=None,
+        reg_mode="None",
         anchor_cpt_path=None,
         uses_memory=False,
         memory_size=0,
-        human_reg_weight_min=0.0,
-        human_reg_weight_max=0.5,
+        lambda_min=0.0,
+        lambda_max=0.5,
+        fix_lambdas=False,
+        lambda_value=0.05,
     ):
         # env
         self.dt = dt
@@ -92,8 +94,10 @@ class Drive(pufferlib.PufferEnv):
         self.total_num_samples = 0
         self.max_controlled_agents = max_controlled_agents
         self.anchor_cpt_path = anchor_cpt_path
-        self.human_reg_weight_min = human_reg_weight_min
-        self.human_reg_weight_max = human_reg_weight_max
+        self.lambda_min = lambda_min
+        self.lambda_max = lambda_max
+        self.fix_lambdas = fix_lambdas
+        self.lambda_value = lambda_value
 
         # Observation space calculation
         self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
@@ -123,7 +127,7 @@ class Drive(pufferlib.PufferEnv):
             "log_prob_direct": RegMode.LOG_PROB_DIRECT,
             "kl_anchor": RegMode.KL_ANCHOR,
         }
-        self.reg_mode = str_to_reg_mode.get(reg_mode.strip('"'), RegMode.NONE)
+        self.reg_mode = str_to_reg_mode.get(reg_mode.strip('"'))
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
@@ -239,19 +243,20 @@ class Drive(pufferlib.PufferEnv):
 
         self.c_envs = binding.vectorize(*env_ids)
 
-        # Per-agent lambda vector for conditioning
+        # Per-agent lambda value for conditioning
         self.lambda_obs_idx = binding.LAMBDA_CONDITIONING_IDX
-        self.agent_lambdas = np.zeros(self.num_agents, dtype=np.float32)
-        self.lambda_conditioning = self.human_reg_weight_max > 0.0
-        if self.lambda_conditioning:
-            self._set_lambdas()
+        # We randomize the values in C unless fix lambdas is True
+        self._fixed_lambdas = None
+        if self.fix_lambdas:
+            self.set_fixed_lambdas(self.lambda_value)
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
-        if self.lambda_conditioning:
-            self._set_lambdas()
         self.tick = 0
         self.truncations[:] = 0
+        # If fixed lambdas are set, overwrite the C-sampled values
+        if self._fixed_lambdas is not None:
+            self.observations[:, self.lambda_obs_idx] = self._fixed_lambdas
         return self.observations, []
 
     def resample_maps(self):
@@ -313,31 +318,40 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
         binding.vec_reset(self.c_envs, seed)
+        # Re-apply fixed lambdas after map resample
+        if self._fixed_lambdas is not None:
+            self.observations[:, self.lambda_obs_idx] = self._fixed_lambdas
         self.truncations[:] = 1
         self.terminals[:] = 1
 
-        # Resample lambda values
-        if self.lambda_conditioning:
-            self._set_lambdas()
+    def set_fixed_lambdas(self, value):
+        """Fix lambda conditioning to a constant value for all agents (e.g. for eval/during inference).
 
-    def _set_lambdas(self, lambda_values=None):
-        """Set per-agent lambda values."""
-        if lambda_values is not None:
-            self.agent_lambdas = np.asarray(lambda_values, dtype=np.float32)
+        Args:
+            value: float scalar applied to all agents, or array of per-agent values,
+                or None to revert to random sampling from C.
+        """
+        if value is None:
+            self._fixed_lambdas = None
+        elif np.isscalar(value):
+            self._fixed_lambdas = np.full(self.num_agents, value, dtype=np.float32)
         else:
-            self.agent_lambdas = np.random.uniform(
-                self.human_reg_weight_min,
-                self.human_reg_weight_max,
-                size=self.num_agents,
-            ).astype(np.float32)
-        self.observations[:, self.lambda_obs_idx] = self.agent_lambdas
+            self._fixed_lambdas = np.asarray(value, dtype=np.float32)
+        # Apply immediately to current observations
+        if self._fixed_lambdas is not None:
+            self.observations[:, self.lambda_obs_idx] = self._fixed_lambdas
 
     def step(self, actions):
         self.terminals[:] = 0
         self.truncations[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
-        self.observations[:, self.lambda_obs_idx] = self.agent_lambdas
+
+        # If fixed lambdas are set, overwrite after every step
+        # (C recomputes observations each step, so we must re-apply)
+        if self._fixed_lambdas is not None:
+            self.observations[:, self.lambda_obs_idx] = self._fixed_lambdas
+
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
@@ -967,7 +981,7 @@ def process_all_maps(
                 print(f"  {name}: {error}")
 
 
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
+def test_performance(timeout=10, atn_cache=12, num_agents=12):
     import time
 
     env = Drive(
@@ -975,6 +989,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         num_maps=1,
         control_mode="control_vehicles",
         init_mode="create_all_valid",
+        map_dir="resources/drive/binaries/interactive_data_training_100",
         init_steps=0,
         episode_length=91,
     )
@@ -991,6 +1006,9 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
         atn = actions[tick % atn_cache]
         env.step(atn)
         tick += 1
+        print(tick)
+        if tick > 4:
+            break
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
 

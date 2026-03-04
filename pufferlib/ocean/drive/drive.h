@@ -250,14 +250,13 @@ struct Entity {
     int active_agent;
     int stopped;
     int removed;
-
-    // Jerk dynamics
     float a_long;
     float a_lat;
     float jerk_long;
     float jerk_lat;
     float steering_angle;
     float wheelbase;
+    float lambda;
 };
 
 void free_entity(Entity *entity) {
@@ -1866,8 +1865,8 @@ void compute_observations(Drive *env) {
         float rel_goal_x = goal_x * cos_heading + goal_y * sin_heading;
         float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
 
-        // Placeholder for reg coefficient (can be overwritten from Python)
-        obs[LAMBDA_CONDITIONING_IDX] = 0.0f;
+        // Regularization coefficient
+        obs[LAMBDA_CONDITIONING_IDX] = ego_entity->lambda;
 
         // Other ego features
         obs[1] = rel_goal_x * 0.005f;
@@ -2091,6 +2090,9 @@ void c_reset(Drive *env) {
             env->entities[agent_idx].goal_position_x = env->entities[agent_idx].init_goal_x;
             env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
         }
+
+        // Sample lambda conditioning value ~ U(0, 1)
+        env->entities[agent_idx].lambda = (float)rand() / (float)RAND_MAX * 0.5;
 
         compute_agent_metrics(env, agent_idx);
     }

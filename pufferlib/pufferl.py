@@ -246,7 +246,6 @@ class PuffeRL:
         self.resample_freq_epoch = self.vecenv.driver_env.resample_frequency / self.vecenv.driver_env.episode_length
 
         # Lambda conditioning
-        self.lambda_conditioning = self.vecenv.driver_env.lambda_conditioning
         self.lambda_obs_idx = self.vecenv.driver_env.lambda_obs_idx
 
         # Dashboard
@@ -504,14 +503,14 @@ class PuffeRL:
                     anchor_log_probs = torch.log_softmax(self.bc_anchor.get_action_dist_logits(bc_anchor_obs), dim=-1)
 
                 cur_log_probs = torch.log_softmax(logits[0].reshape(-1, logits[0].shape[-1]), dim=-1)
-                sampled_lambdas = anchor_obs[:, self.lambda_obs_idx].unsqueeze(-1)  # [B, 1]
+                self.sampled_lambdas = anchor_obs[:, self.lambda_obs_idx].unsqueeze(-1)  # [B, 1]
 
                 reg_losses = torch.nn.functional.kl_div(
                     cur_log_probs, anchor_log_probs, reduction="none", log_target=True
                 )
                 # Sum over action dim to get per-sample KL, then weight by lambda to get batch average
                 per_sample_kl = reg_losses.sum(dim=-1)  # [B]
-                reg_loss = (per_sample_kl * sampled_lambdas.squeeze(-1)).mean()
+                reg_loss = (per_sample_kl * self.sampled_lambdas.squeeze(-1)).mean()
 
                 with torch.no_grad():
                     anchor_entropy = pufferlib.pytorch.entropy(anchor_log_probs).mean().item()
@@ -612,12 +611,7 @@ class PuffeRL:
                 current_ent_coef = 0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
             else:
                 current_ent_coef = config["ent_coef"]
-            loss = (
-                pg_loss
-                + config["vf_coef"] * v_loss
-                - current_ent_coef * entropy_loss
-                + (1.0 if self.lambda_conditioning else 0.0) * reg_loss
-            )
+            loss = pg_loss + config["vf_coef"] * v_loss - current_ent_coef * entropy_loss + reg_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -697,7 +691,7 @@ class PuffeRL:
                 self.evaluator.log_stats()
 
             # Lambda conditioning sweep
-            if human_replay_eval and self.lambda_conditioning and (self.epoch - 1) % 500:
+            if human_replay_eval and (self.epoch - 1) % 500:
                 self.evaluator.run_lambda_sweep(
                     self.uncompiled_policy,
                     load_env_fn=lambda: load_env("puffer_drive", self.evaluator.hr_eval_config),
@@ -756,13 +750,12 @@ class PuffeRL:
             "data/anchor_entropy": self.data.get("data/anchor_entropy", 0),
         }
 
-        if self.lambda_conditioning:
-            logs["data/lambda_mean"] = float(self.vecenv.driver_env.agent_lambdas.mean())
-            logs["data/lambda_std"] = float(self.vecenv.driver_env.agent_lambdas.std())
-            if isinstance(self.logger, WandbLogger):
-                import wandb
+        logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
+        logs["data/lambda_std"] = float(self.sampled_lambdas.std())
+        if isinstance(self.logger, WandbLogger):
+            import wandb
 
-                logs["data/population_diversity"] = wandb.Histogram(self.vecenv.driver_env.agent_lambdas)
+            logs["data/population_diversity"] = wandb.Histogram(self.sampled_lambdas.cpu().numpy())
 
         if self.reg_mode == "log_prob_direct":
             logs["data/total_human_samples"] = self.data.get("data/total_human_samples", 0)
