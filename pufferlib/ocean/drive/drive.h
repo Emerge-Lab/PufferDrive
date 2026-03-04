@@ -2572,7 +2572,7 @@ void c_step(Drive *env) {
                     env->logs[i].episode_return += agent->reward_coefs[REWARD_COEF_OFFROAD];
                 } else {
                     env->rewards[i] += env->reward_offroad_collision;
-                    env->logs[i].episode_return = env->reward_offroad_collision;
+                    env->logs[i].episode_return += env->reward_offroad_collision;
                 }
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].offroad_per_agent += 1.0f;
@@ -2610,7 +2610,7 @@ void c_step(Drive *env) {
                 agent->goals_reached_this_episode += 1.0f;
             } else { // Zero out the velocity so that the agent stops at the goal
                 env->rewards[i] = env->reward_goal;
-                env->logs[i].episode_return = env->reward_goal;
+                env->logs[i].episode_return += env->reward_goal;
                 agent->stopped = 1;
                 agent->sim_vx = agent->sim_vy = 0.0f;
                 agent->goals_reached_this_episode += 1.0f;
