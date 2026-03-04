@@ -270,6 +270,8 @@ void free_entity(Entity *entity) {
     free(entity->traj_vz);
     free(entity->traj_heading);
     free(entity->traj_valid);
+    free(entity->expert_accel);
+    free(entity->expert_steering);
 }
 
 // Utility functions
