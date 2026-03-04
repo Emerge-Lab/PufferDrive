@@ -534,6 +534,8 @@ class PuffeRL:
             if human_replay_eval or self_play_eval:
                 self.evaluator.log_stats()
 
+            del self.evaluator
+
         if self.config["eval"]["wosac_realism_eval"]:
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 

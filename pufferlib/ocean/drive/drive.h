@@ -1502,6 +1502,8 @@ void c_close(Drive *env) {
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
     free(env->ini_file);
+    free(env->tracks_to_predict_indices);
+    env->tracks_to_predict_indices = NULL;
 }
 
 void allocate(Drive *env) {
@@ -2247,6 +2249,13 @@ Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
 
     if (env->render_mode == RENDER_HEADLESS && getenv("DISPLAY") == NULL) {
+
+        // Kill any existing Xvfb first
+        system("pkill -9 Xvfb");
+        usleep(200000);
+        unlink("/tmp/.X99-lock");
+        unlink("/tmp/.X11-unix/X99");
+
         // Hardcode to single display because we only run this in one process at once
         client->xvfb_display_num = 99;
 
