@@ -1,3 +1,13 @@
+"""Export a trained PufferDrive policy checkpoint (.pt) to ONNX format.
+
+The exported ONNX model accepts an observation vector (see in torch.py for the exact layout),
+plus LSTM hidden states, and produces action logits,
+a value estimate, and updated LSTM states.
+
+Usage:
+    python -m scripts.export_onnx --checkpoint <path/to/model.pt> [--output <path.onnx>]
+"""
+
 import argparse
 import os
 import torch
