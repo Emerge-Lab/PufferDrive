@@ -704,6 +704,8 @@ class PuffeRL:
                 )
                 self.evaluator.log_lambda_sweep(epoch=self.epoch)
 
+            del self.evaluator
+
         if self.config["eval"]["wosac_realism_eval"]:
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
@@ -1263,7 +1265,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
 
         if logs is not None:
             if pufferl.global_step > 0.20 * train_config["total_timesteps"]:
-                all_logs.append(logs)
+                all_logs = [logs]
 
     # Final eval. You can reset the env here, but depending on
     # your env, this can skew data (i.e. you only collect the shortest

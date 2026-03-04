@@ -830,7 +830,7 @@ class Evaluator:
         self.sp_env = None
         self.hr_env = None
         self.render_env_idx = 0  # Which of the vecenvs to use for rendering
-        self.inference_lambda_values = [0.0, 0.01, 0.05, 0.1, 0.15]
+        self.inference_lambda_values = [0.0, 0.001, 0.05, 0.1, 0.2]
         self.lambda_sweep_results = {}  # {lambda_val: collision_rate}
 
         self._unpack_eval_configs(configs)
