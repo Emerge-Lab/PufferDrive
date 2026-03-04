@@ -1,7 +1,8 @@
 """Export a trained PufferDrive policy checkpoint (.pt) to ONNX format.
 
-The exported ONNX model accepts an observation vector (see in torch.py for the exact layout),
-plus LSTM hidden states, and produces action logits,
+The exported ONNX model accepts an observation vector (see
+observation_spec() in torch.py for the exact layout and feature
+descriptions), plus LSTM hidden states, and produces action logits,
 a value estimate, and updated LSTM states.
 
 Usage:
@@ -117,36 +118,27 @@ def export_to_onnx(verify=True):
         drive_policy = policy
 
     if hasattr(drive_policy, "ego_dim"):
-        # Construct valid dummy observation for Drive policy
-        # Retrieve needed dimensions
-        ego_dim = drive_policy.ego_dim
-        max_partner_objects = drive_policy.max_partner_objects
-        partner_features = drive_policy.partner_features
-        max_road_objects = drive_policy.max_road_objects
-        road_features = drive_policy.road_features
+        # Build a physically valid structured observation using binding constants
+        dummy_obs = drive_policy.build_structured_observation(
+            dynamics_model=config["env"].get("dynamics_model", "classic"),
+            reward_conditioning=bool(config["env"].get("reward_conditioning", 0)),
+            batch_size=batch_size,
+        )
 
-        partner_dim = max_partner_objects * partner_features
-        road_dim = max_road_objects * road_features
-
-        # Random parts
-        dummy_ego = torch.randn(batch_size, ego_dim)
-        dummy_partner = torch.randn(batch_size, partner_dim)
-
-        # Road part: continuous features + categorical feature
-        road_cont_dim = road_features - 1
-
-        # (Batch, MaxObjects, Feats-1)
-        dummy_road_cont = torch.randn(batch_size, max_road_objects, road_cont_dim)
-
-        # (Batch, MaxObjects, 1) - valid categorical values [0, 6]
-        # Ensure it's 0-6 range. 7 is num_classes.
-        dummy_road_cat = torch.randint(0, 7, (batch_size, max_road_objects, 1)).float()
-
-        # Concatenate and flatten
-        dummy_road_objs = torch.cat([dummy_road_cont, dummy_road_cat], dim=2)
-        dummy_road = dummy_road_objs.view(batch_size, -1)
-
-        dummy_obs = torch.cat([dummy_ego, dummy_partner, dummy_road], dim=1)
+        # Print observation spec for reference
+        spec = drive_policy.observation_spec()
+        print(f"\nObservation layout: {spec['layout']}")
+        print(f"  Ego:      offset={spec['ego']['offset']}, dim={spec['ego']['total_dim']}")
+        if spec.get("reward_conditioning"):
+            rc = spec["reward_conditioning"]
+            print(f"  Conditioning: offset={rc['offset']}, dim={rc['total_dim']}")
+        print(
+            f"  Partners: offset={spec['partners']['offset']}, dim={spec['partners']['total_dim']} ({spec['partners']['count']}x{spec['partners']['features_per_object']})"
+        )
+        print(
+            f"  Road:     offset={spec['road_segments']['offset']}, dim={spec['road_segments']['total_dim']} ({spec['road_segments']['count']}x{spec['road_segments']['features_per_object']})"
+        )
+        print(f"  Total:    {spec['total_dim']}")
     else:
         print("Warning: Could not determine Drive policy structure. Using random observation.")
         dummy_obs = torch.randn(batch_size, obs_dim)
