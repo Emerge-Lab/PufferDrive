@@ -2610,7 +2610,7 @@ void c_step(Drive *env) {
                 agent->goals_reached_this_episode += 1.0f;
             } else { // Zero out the velocity so that the agent stops at the goal
                 env->rewards[i] = env->reward_goal;
-                env->logs[i].episode_return = env->reward_goal;
+                env->logs[i].episode_return += env->reward_goal;
                 agent->stopped = 1;
                 agent->sim_vx = agent->sim_vy = 0.0f;
                 agent->goals_reached_this_episode += 1.0f;
