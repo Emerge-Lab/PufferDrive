@@ -145,6 +145,10 @@
 #define COMFORT_JERK_THRESHOLD 5.0f  // For JERK model comfort
 #define COMFORT_ACCEL_THRESHOLD 3.0f // For JERK and CLASSIC model comfort
 
+// Metrics Heuristics
+#define MIN_GOAL_SEGMENT_TIME_TO_ANALYZE_AGENT 1.0f
+#define MIN_AVG_SPEED_TO_CONSIDER_AS_ATTEMPTING_GOAL 2.0f
+
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
@@ -204,6 +208,7 @@ struct Log {
     float score;
     float goals_reached_this_episode;
     float goals_sampled_this_episode;
+    float goals_attempted_this_episode;
     float offroad_rate;
     float collision_rate;
     float red_light_violation_rate; // placeholder for later
@@ -327,6 +332,7 @@ struct Drive {
     int reward_randomization;
     int reward_conditioning;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
+    float min_avg_speed_to_consider_goal_attempt;
 };
 
 // ========================================
@@ -1284,14 +1290,56 @@ bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2])
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
+void compute_metrics_for_last_goal_segment(Drive *env) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        Agent *agent = &env->agents[agent_idx];
+        agent->goals_attempted_this_episode = agent->goals_reached_this_episode;
+        if (env->goal_behavior != GOAL_GENERATE_NEW) {
+            agent->goals_attempted_this_episode = agent->goals_sampled_this_episode; // Every goal is an attempt
+            continue;
+        }
+
+        if (agent->collided_before_goal) {
+            agent->goals_attempted_this_episode += 1; // Bad Attempt
+            continue;
+        }
+        float time_since_last_goal = (env->timestep - agent->last_goal_reached_timestep) * env->dt;
+        if (time_since_last_goal < MIN_GOAL_SEGMENT_TIME_TO_ANALYZE_AGENT) {
+            continue;
+        }
+
+        agent->goals_attempted_this_episode += 1; // Count as attempt if agent had enough time
+        float displacement_from_last_goal =
+            sqrtf((agent->sim_x - agent->prev_goal_x) * (agent->sim_x - agent->prev_goal_x) +
+                  (agent->sim_y - agent->prev_goal_y) * (agent->sim_y - agent->prev_goal_y) +
+                  (agent->sim_z - agent->prev_goal_z) * (agent->sim_z - agent->prev_goal_z));
+        float avg_speed_current_segment = agent->cumulative_displacement_since_last_goal / (float)time_since_last_goal;
+        float min_displacement_to_consider_attempting_goal =
+            env->min_avg_speed_to_consider_goal_attempt * time_since_last_goal;
+
+        // Agent should have moved a minimum distance with a minimum avg speed
+        if (displacement_from_last_goal > min_displacement_to_consider_attempting_goal &&
+            avg_speed_current_segment > env->min_avg_speed_to_consider_goal_attempt) {
+            // Give Benefit of the doubt to the agent
+            env->logs[i].score += 0.5f;
+            agent->goals_reached_this_episode += 1;
+            continue;
+        }
+    }
+}
+
 void add_log(Drive *env) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
+    compute_metrics_for_last_goal_segment(env);
+
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
 
         env->log.goals_reached_this_episode += agent->goals_reached_this_episode;
         env->log.goals_sampled_this_episode += agent->goals_sampled_this_episode;
+        env->log.goals_attempted_this_episode += agent->goals_attempted_this_episode;
 
         int offroad = env->logs[i].offroad_rate;
         env->log.offroad_rate += offroad;
@@ -1303,25 +1351,21 @@ void add_log(Drive *env) {
         env->log.collisions_per_agent += collisions_per_agent;
         float avg_speed_per_agent = env->logs[i].avg_speed_per_agent;
         env->log.avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
-        float frac_goal_reached = agent->goals_reached_this_episode / agent->goals_sampled_this_episode;
+        float frac_goal_reached = agent->goals_reached_this_episode / agent->goals_attempted_this_episode;
 
-        // Update score, which is an aggregate measure whether the agent fully solved its task
-        // Note: When resampling goals, performance is relative to the number of goals sampled
-        float threshold = 0.99f; // Default threshold for 1 goal
-        if (agent->goals_sampled_this_episode == 2.0f) {
-            threshold = 0.5f; // Require ≥50% completion for 2 goals
-        } else if (agent->goals_sampled_this_episode < 5.0f) {
-            threshold = 0.8f; // Require ≥80% completion for 3-4 goals
-        } else {
-            threshold = 0.9f; // Require ≥90% completion for 5+ goals
+        // Score related computation
+        float score = 0.0f;
+        if (env->goal_behavior == GOAL_RESPAWN || env->goal_behavior == GOAL_STOP) {
+            if (agent->current_goal_reached && !agent->collided_before_goal) {
+                score = 1.0f;
+            }
+        } else if (env->goal_behavior == GOAL_GENERATE_NEW) {
+            score = env->logs[i].score / agent->goals_attempted_this_episode; // score accumulated in c_step
         }
+        env->log.score += score;
 
-        int collision_occurred =
-            (env->goal_behavior == GOAL_RESPAWN) ? agent->collided_before_goal : env->logs[i].collision_rate;
-        if (frac_goal_reached > threshold && !collision_occurred) {
-            env->log.score += 1.0f;
-        }
         if (!offroad && !collided && frac_goal_reached < 1.0f) {
+            // TODO: handle only last goal segment case
             env->log.dnf_rate += 1.0f;
         }
         int lane_aligned = env->logs[i].lane_alignment_rate;
@@ -1393,6 +1437,7 @@ void set_start_position(Drive *env) {
             e->sim_vx = 0;
             e->sim_vy = 0;
             e->collided_before_goal = 0;
+            e->score_for_current_goal = 0.0f;
         } else {
             e->sim_vx = e->log_velocity_x[env->init_steps];
             e->sim_vy = e->log_velocity_y[env->init_steps];
@@ -1402,6 +1447,7 @@ void set_start_position(Drive *env) {
         e->heading_y = sinf(e->sim_heading);
         e->sim_valid = e->log_valid[env->init_steps];
         e->cumulative_displacement = 0.0f;
+        e->cumulative_displacement_since_last_goal = 0.0f;
         e->collision_state = 0;
         e->aabb_collision_state = 0;
         e->metrics_array[COLLISION_IDX] = 0.0f;    // vehicle collision
@@ -2212,6 +2258,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->respawn_timestep = env->timestep;
     agent->collided_before_goal = 0;
     agent->cumulative_displacement = 0.0f;
+    agent->cumulative_displacement_since_last_goal = 0.0f;
     agent->stopped = 0;
     agent->removed = 0;
     agent->a_long = 0.0f;
@@ -2423,6 +2470,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->sim_vy = v_new * agent->heading_y;
         agent->steering_angle = new_steering_angle;
         agent->cumulative_displacement += sqrtf(dx * dx + dy * dy);
+        agent->cumulative_displacement_since_last_goal += sqrtf(dx * dx + dy * dy);
     }
 
     // To update agent's z-coordinate based on road elevation of 20 nearest elements
@@ -2470,12 +2518,17 @@ void c_reset(Drive *env) {
         int agent_idx = env->active_agent_indices[x];
         Agent *agent = &env->agents[agent_idx];
         agent->respawn_timestep = -1;
+        agent->last_goal_reached_timestep = 0;
         agent->respawn_count = 0;
         agent->collided_before_goal = 0;
+        agent->score_for_current_goal = 0.0f;
         agent->goals_reached_this_episode = 0.0f;
         // Initialize to 1 because there is one goal in the data file
         agent->goals_sampled_this_episode = 1.0f;
+        agent->goals_attempted_this_episode = 0.0f;
         agent->current_goal_reached = 0;
+        agent->cumulative_displacement = 0.0f;
+        agent->cumulative_displacement_since_last_goal = 0.0f;
         agent->metrics_array[COLLISION_IDX] = 0.0f;
         agent->metrics_array[OFFROAD_IDX] = 0.0f;
         agent->metrics_array[REACHED_GOAL_IDX] = 0.0f;
@@ -2484,6 +2537,9 @@ void c_reset(Drive *env) {
         agent->metrics_array[LANE_DIST_IDX] = 0.0f;  // distance from lane center
         agent->stopped = 0;
         agent->removed = 0;
+        agent->prev_goal_x = agent->sim_x;
+        agent->prev_goal_y = agent->sim_y;
+        agent->prev_goal_z = agent->sim_z;
         generate_reward_coefs(env, agent);
 
         if (env->goal_behavior == GOAL_GENERATE_NEW) {
@@ -2512,7 +2568,6 @@ void c_step(Drive *env) {
     }
     // Process actions for all active agents
     for (int i = 0; i < env->active_agent_count; i++) {
-        env->logs[i].score = 0.0f;
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
         env->agents[agent_idx].collision_state = 0;
@@ -2605,9 +2660,26 @@ void c_step(Drive *env) {
             } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!agent->current_goal_reached)) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
+
+                // Compute score for this goal segment
+                if (!agent->collided_before_goal) {
+                    agent->score_for_current_goal = 1.0f;
+                } else {
+                    agent->score_for_current_goal = 0.0f;
+                    agent->collided_before_goal = 0; // Reset for next goal
+                }
+                env->logs[i].score += agent->score_for_current_goal;
+                agent->score_for_current_goal = 0.0f;
+
+                agent->prev_goal_x = agent->goal_position_x;
+                agent->prev_goal_y = agent->goal_position_y;
+                agent->prev_goal_z = agent->goal_position_z;
+
                 sample_new_goal(env, agent_idx);
                 agent->current_goal_reached = 0;
                 agent->goals_reached_this_episode += 1.0f;
+                agent->last_goal_reached_timestep = env->timestep;
+                agent->cumulative_displacement_since_last_goal = 0.0f;
             } else { // Zero out the velocity so that the agent stops at the goal
                 env->rewards[i] = env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
@@ -3617,6 +3689,10 @@ void init_goal_positions(Drive *env) {
         agent->init_goal_x = agent->goal_position_x;
         agent->init_goal_y = agent->goal_position_y;
         agent->init_goal_z = agent->goal_position_z;
+
+        agent->prev_goal_x = agent->sim_x;
+        agent->prev_goal_y = agent->sim_y;
+        agent->prev_goal_z = agent->sim_z;
     }
 }
 

@@ -82,6 +82,7 @@ class Drive(pufferlib.PufferEnv):
         reward_bound_steer_max=1.25,
         reward_bound_acc_min=0.666,
         reward_bound_acc_max=1.5,
+        min_avg_speed_to_consider_goal_attempt=2.0,
     ):
         # env
         self.dt = dt
@@ -142,6 +143,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_bound_steer_max = reward_bound_steer_max
         self.reward_bound_acc_min = reward_bound_acc_min
         self.reward_bound_acc_max = reward_bound_acc_max
+        self.min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt
 
         # Observation space calculation
         if self.reward_conditioning:
@@ -287,6 +289,7 @@ class Drive(pufferlib.PufferEnv):
             reward_bound_steer_max=self.reward_bound_steer_max,
             reward_bound_acc_min=self.reward_bound_acc_min,
             reward_bound_acc_max=self.reward_bound_acc_max,
+            min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
             use_all_maps=use_all_maps,
         )
 
@@ -356,6 +359,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_steer_max=self.reward_bound_steer_max,
                 reward_bound_acc_min=self.reward_bound_acc_min,
                 reward_bound_acc_max=self.reward_bound_acc_max,
+                min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
@@ -438,6 +442,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_steer_max=self.reward_bound_steer_max,
                 reward_bound_acc_min=self.reward_bound_acc_min,
                 reward_bound_acc_max=self.reward_bound_acc_max,
+                min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                 use_all_maps=False,
             )
             self.agent_offsets = agent_offsets
@@ -504,6 +509,7 @@ class Drive(pufferlib.PufferEnv):
                     reward_bound_steer_max=self.reward_bound_steer_max,
                     reward_bound_acc_min=self.reward_bound_acc_min,
                     reward_bound_acc_max=self.reward_bound_acc_max,
+                    min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                     collision_behavior=self.collision_behavior,
                     offroad_behavior=self.offroad_behavior,
                     dt=self.dt,

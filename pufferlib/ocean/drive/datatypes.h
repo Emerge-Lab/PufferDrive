@@ -190,9 +190,9 @@ struct Agent {
     int current_lane_index;
     int current_lane_geometry_idx;
     int reached_goal_this_episode;
-    int num_goals_reached;
     float goals_reached_this_episode;
     float goals_sampled_this_episode;
+    float goals_attempted_this_episode; // goals reached + last goal(if this segment can be judged as an attempt)
     int current_goal_reached;
     int collided_before_goal;
     float init_goal_x;
@@ -202,6 +202,9 @@ struct Agent {
     int mark_as_expert;
     float cumulative_displacement;
     int displacement_sample_count;
+    float cumulative_displacement_since_last_goal;
+    int last_goal_reached_timestep;
+    float score_for_current_goal;
 
     // Goal positions (N sequential waypoints)
     float goal_positions_x[MAX_TARGET_WAYPOINTS];
@@ -210,6 +213,9 @@ struct Agent {
     float goal_position_y; // alias = goal_positions_y[current_goal_idx]
     float goal_position_z; // from binary file, unused
     int current_goal_idx;  // index of next goal to reach (0..N-1)
+    float prev_goal_x;
+    float prev_goal_y;
+    float prev_goal_z;
 
     // Respawn tracking
     int respawn_timestep;
