@@ -95,13 +95,13 @@ class Default(nn.Module):
 
 
 class LSTMWrapper(nn.Module):
-    def __init__(self, env, policy, input_size=128, hidden_size=128):
+    def __init__(self, env, policy, input_size=128, hidden_size=128, actions_trajectory_length=80):
         """Wraps your policy with an LSTM without letting you shoot yourself in the
         foot with bad transpose and shape operations. This saves much pain.
         Requires that your policy define encode_observations and decode_actions.
         See the Default policy for an example."""
         super().__init__()
-        atn_traj_flat = sum(env.single_action_space.nvec.tolist()) * 12  # must match Default
+        atn_traj_flat = sum(env.single_action_space.nvec.tolist()) * actions_trajectory_length
         self.obs_shape = (env.single_observation_space.shape[0] + atn_traj_flat,)
 
         self.policy = policy

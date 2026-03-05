@@ -24,7 +24,7 @@ class Drive(nn.Module):
         self.max_road_objects = env.max_road_objects
         self.road_features = env.road_features
         self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
-        self.actions_trajectory_length = 12  # env.actions_trajectory_length # TODO: remove hardcoded value
+        self.actions_trajectory_length = kwargs.get("actions_trajectory_length", 80)
         # Determine ego dimension from environment's feature layout
         self.ego_dim = env.ego_features
 
