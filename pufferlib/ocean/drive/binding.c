@@ -230,6 +230,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     OVERRIDE_FLOAT(goal_radius);
     OVERRIDE_FLOAT(goal_speed);
     OVERRIDE_INT(max_controlled_agents);
+    OVERRIDE_INT(fix_rewards);
+    OVERRIDE_INT(fix_lambdas);
+    OVERRIDE_FLOAT(lambda_value);
 
 #undef OVERRIDE_INT
 #undef OVERRIDE_FLOAT
@@ -240,6 +243,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
+    env->fix_rewards = conf.fix_rewards;
+    env->fix_lambdas = conf.fix_lambdas;
+    env->lambda_value = conf.lambda_value;
     env->episode_length = conf.episode_length;
     env->termination_mode = conf.termination_mode;
     env->collision_behavior = conf.collision_behavior;

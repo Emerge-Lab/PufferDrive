@@ -845,7 +845,9 @@ class Evaluator:
         eval_config["env"]["episode_length"] = 91  # WOMD scenario length
         eval_config["vec"] = dict(backend=backend, num_envs=1)
         eval_config["env"]["fix_lambdas"] = True
-        eval_config["env"]["lambda_value"] = 0.05
+        eval_config["env"]["fix_rewards"] = True  # Fix to the ini file ones for all agents
+        # eval_config["env"]["lambda_value"] = 0.05
+        # TODO: Find a solution to this
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
@@ -919,18 +921,20 @@ class Evaluator:
         elif mode == "human_replay":
             self.human_replay_stats = final_info
 
-    def run_lambda_sweep(self, policy, load_env_fn):
+    def run_lambda_sweep(self, policy, load_env_fn_from_config):
         """Run human replay rollouts across inference lambda values and collect stats.
 
         Args:
             policy: The policy to evaluate.
-            load_env_fn: Callable that creates a new hr_env, e.g.
-                         lambda: load_env("puffer_drive", self.hr_eval_config)
+            load_env_fn_from_config: Callable(config) that creates a new hr_env.
         """
         self.lambda_sweep_results = {}
         for lam in self.inference_lambda_values:
-            self.hr_env = load_env_fn()
-            self.hr_env.driver_env.set_fixed_lambdas(lam)
+            config = copy.deepcopy(self.hr_eval_config)
+            config["env"]["fix_lambdas"] = True
+            config["env"]["lambda_value"] = lam
+
+            self.hr_env = load_env_fn_from_config(config)
             self.rollout(policy, mode="human_replay")
             self.hr_env.close()
 
@@ -970,6 +974,57 @@ class Evaluator:
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         self.logger.wandb.log({"eval/lambda_effect": wandb.Image(fig)})
+        plt.close(fig)
+
+    def run_collision_reward_sweep(self, policy, load_env_fn_from_config):
+        """Run human replay rollouts across collision reward values and collect stats.
+
+        Args:
+            policy: The policy to evaluate.
+            load_env_fn_from_config: Callable(config) that creates a new hr_env.
+        """
+        self.collision_reward_sweep_results = {}
+        self.inference_collision_reward_values = [0.1, 0.0, -0.1, -0.5]
+
+        for reward_val in self.inference_collision_reward_values:
+            config = copy.deepcopy(self.hr_eval_config)
+            config["env"]["fix_rewards"] = True
+            config["env"]["reward_vehicle_collision"] = reward_val
+
+            self.hr_env = load_env_fn_from_config(config)
+            self.rollout(policy, mode="human_replay")
+            self.hr_env.close()
+
+            if self.human_replay_stats is not None:
+                self.collision_reward_sweep_results[reward_val] = {
+                    "collision_rate": self.human_replay_stats.get("collision_rate", 0.0),
+                    "score": self.human_replay_stats.get("score", 0.0),
+                }
+            else:
+                self.collision_reward_sweep_results[reward_val] = {"collision_rate": 0.0, "score": 0.0}
+
+    def log_collision_reward_sweep(self, epoch):
+        """Log the collision reward sweep results as a plot to wandb."""
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            return
+        if not self.collision_reward_sweep_results:
+            return
+        import wandb
+
+        df = pd.DataFrame(self.collision_reward_sweep_results).T
+        df.index.name = "collision_reward"
+
+        fig, ax = plt.subplots(1, 1, figsize=(4, 4), dpi=150)
+        ax.set_title(f"Effect of collision penalty conditioning\nEpoch {epoch}")
+        sns.lineplot(data=df, x="collision_reward", y="collision_rate", marker="s", color="tab:purple", ax=ax)
+        ax.set_ylabel("Human-replay collision rate", color="tab:purple")
+        ax.tick_params(axis="y")
+        ax.set_xlabel("Collision penalty (conditioning value)")
+        ax.set_ylim(0, 1.0)
+
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        self.logger.wandb.log({"eval/collision_reward_effect": wandb.Image(fig)})
         plt.close(fig)
 
     def log_videos(self, eval_mode, epoch):

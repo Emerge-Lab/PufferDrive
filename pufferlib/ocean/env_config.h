@@ -11,6 +11,9 @@ typedef struct {
     int render_mode;
     int action_type;
     int dynamics_model;
+    bool fix_rewards;
+    bool fix_lambdas;
+    float lambda_value;
     float reward_vehicle_collision;
     float reward_offroad_collision;
     float reward_goal;
@@ -139,6 +142,12 @@ static int handler(void *config, const char *section, const char *name, const ch
             strncpy(env_config->anchor_policy_path, value, sizeof(env_config->anchor_policy_path) - 1);
             env_config->anchor_policy_path[sizeof(env_config->anchor_policy_path) - 1] = '\0';
         }
+    } else if (MATCH("env", "fix_rewards")) {
+        env_config->fix_rewards = (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+    } else if (MATCH("env", "fix_lambdas")) {
+        env_config->fix_lambdas = (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+    } else if (MATCH("env", "lambda_value")) {
+        env_config->lambda_value = atof(value);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

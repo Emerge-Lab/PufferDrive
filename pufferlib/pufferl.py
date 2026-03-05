@@ -247,6 +247,9 @@ class PuffeRL:
 
         # Lambda conditioning
         self.lambda_obs_idx = self.vecenv.driver_env.lambda_obs_idx
+        self.reward_veh_obs_idx = self.vecenv.driver_env.reward_veh_obs_idx
+        self.reward_offroad_obs_idx = self.vecenv.driver_env.reward_offroad_obs_idx
+        self.reward_goal_obs_idx = self.vecenv.driver_env.reward_goal_obs_idx
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -498,12 +501,16 @@ class PuffeRL:
                 # lambda conditioning only has a meaning for the self-play RL training and policy.
                 bc_anchor_obs = anchor_obs.clone()
                 bc_anchor_obs[:, self.lambda_obs_idx] = 0.0
+                bc_anchor_obs[:, self.reward_veh_obs_idx] = 0.0
+                bc_anchor_obs[:, self.reward_offroad_obs_idx] = 0.0
+                bc_anchor_obs[:, self.reward_goal_obs_idx] = 0.0
 
                 with torch.no_grad():
                     anchor_log_probs = torch.log_softmax(self.bc_anchor.get_action_dist_logits(bc_anchor_obs), dim=-1)
 
                 cur_log_probs = torch.log_softmax(logits[0].reshape(-1, logits[0].shape[-1]), dim=-1)
                 self.sampled_lambdas = anchor_obs[:, self.lambda_obs_idx].unsqueeze(-1)  # [B, 1]
+                self.sampled_collision_rewards = anchor_obs[:, self.reward_veh_obs_idx].unsqueeze(-1)  # [B, 1]
 
                 reg_losses = torch.nn.functional.kl_div(
                     cur_log_probs, anchor_log_probs, reduction="none", log_target=True
@@ -690,13 +697,20 @@ class PuffeRL:
             if human_replay_eval or self_play_eval:
                 self.evaluator.log_stats()
 
-            # Lambda conditioning sweep
-            if human_replay_eval and (self.epoch - 1) % 500:
-                self.evaluator.run_lambda_sweep(
+            if human_replay_eval:
+                # # Lambda conditioning sweep
+                # self.evaluator.run_lambda_sweep(
+                #     self.uncompiled_policy,
+                #     load_env_fn_from_config=lambda cfg: load_env("puffer_drive", cfg),
+                # )
+                # self.evaluator.log_lambda_sweep(epoch=self.epoch)
+
+                # Reward conditioning
+                self.evaluator.run_collision_reward_sweep(
                     self.uncompiled_policy,
-                    load_env_fn=lambda: load_env("puffer_drive", self.evaluator.hr_eval_config),
+                    load_env_fn_from_config=lambda cfg: load_env("puffer_drive", cfg),
                 )
-                self.evaluator.log_lambda_sweep(epoch=self.epoch)
+                self.evaluator.log_collision_reward_sweep(epoch=self.epoch)
 
             del self.evaluator
 
@@ -752,10 +766,12 @@ class PuffeRL:
 
         logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
         logs["data/lambda_std"] = float(self.sampled_lambdas.std())
+
         if isinstance(self.logger, WandbLogger):
             import wandb
 
-            logs["data/population_diversity"] = wandb.Histogram(self.sampled_lambdas.cpu().numpy())
+            logs["data/lambda_distrib"] = wandb.Histogram(self.sampled_lambdas.cpu().numpy())
+            logs["data/collision_reward_distrib"] = wandb.Histogram(self.sampled_collision_rewards.cpu().numpy())
 
         if self.reg_mode == "log_prob_direct":
             logs["data/total_human_samples"] = self.data.get("data/total_human_samples", 0)

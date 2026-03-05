@@ -33,8 +33,8 @@ class Drive(pufferlib.PufferEnv):
         width=1280,
         height=1024,
         human_agent_idx=0,
-        reward_vehicle_collision=-0.1,
-        reward_offroad_collision=-0.1,
+        reward_vehicle_collision=-0.5,
+        reward_offroad_collision=-0.5,
         reward_goal=1.0,
         reward_goal_post_respawn=0.5,
         goal_behavior=0,
@@ -63,10 +63,9 @@ class Drive(pufferlib.PufferEnv):
         anchor_cpt_path=None,
         uses_memory=False,
         memory_size=0,
-        lambda_min=0.0,
-        lambda_max=0.5,
-        fix_lambdas=False,
-        lambda_value=0.05,
+        fix_rewards=False,
+        fix_lambdas=True,
+        lambda_value=0.0,
     ):
         # env
         self.dt = dt
@@ -94,8 +93,7 @@ class Drive(pufferlib.PufferEnv):
         self.total_num_samples = 0
         self.max_controlled_agents = max_controlled_agents
         self.anchor_cpt_path = anchor_cpt_path
-        self.lambda_min = lambda_min
-        self.lambda_max = lambda_max
+        self.fix_rewards = fix_rewards
         self.fix_lambdas = fix_lambdas
         self.lambda_value = lambda_value
 
@@ -238,6 +236,9 @@ class Drive(pufferlib.PufferEnv):
                 map_dir=map_dir,
                 max_controlled_agents=self.max_controlled_agents,
                 render_mode=render_mode,
+                fix_rewards=int(self.fix_rewards),
+                fix_lambdas=int(self.fix_lambdas),
+                lambda_value=self.lambda_value,
             )
             env_ids.append(env_id)
 
@@ -245,18 +246,14 @@ class Drive(pufferlib.PufferEnv):
 
         # Per-agent lambda value for conditioning
         self.lambda_obs_idx = binding.LAMBDA_CONDITIONING_IDX
-        # We randomize the values in C unless fix lambdas is True
-        self._fixed_lambdas = None
-        if self.fix_lambdas:
-            self.set_fixed_lambdas(self.lambda_value)
+        self.reward_veh_obs_idx = binding.REWARD_COLLISION_IDX
+        self.reward_offroad_obs_idx = binding.REWARD_OFFROAD_COLLISION_IDX
+        self.reward_goal_obs_idx = binding.REWARD_GOAL_IDX
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
         self.truncations[:] = 0
-        # If fixed lambdas are set, overwrite the C-sampled values
-        if self._fixed_lambdas is not None:
-            self.observations[:, self.lambda_obs_idx] = self._fixed_lambdas
         return self.observations, []
 
     def resample_maps(self):
@@ -314,43 +311,21 @@ class Drive(pufferlib.PufferEnv):
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
                 render_mode=self.render_mode,
+                fix_rewards=int(self.fix_rewards),
+                fix_lambdas=int(self.fix_lambdas),
+                lambda_value=self.lambda_value,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
         binding.vec_reset(self.c_envs, seed)
-        # Re-apply fixed lambdas after map resample
-        if self._fixed_lambdas is not None:
-            self.observations[:, self.lambda_obs_idx] = self._fixed_lambdas
         self.truncations[:] = 1
         self.terminals[:] = 1
-
-    def set_fixed_lambdas(self, value):
-        """Fix lambda conditioning to a constant value for all agents (e.g. for eval/during inference).
-
-        Args:
-            value: float scalar applied to all agents, or array of per-agent values,
-                or None to revert to random sampling from C.
-        """
-        if value is None:
-            self._fixed_lambdas = None
-        elif np.isscalar(value):
-            self._fixed_lambdas = np.full(self.num_agents, value, dtype=np.float32)
-        else:
-            self._fixed_lambdas = np.asarray(value, dtype=np.float32)
-        # Apply immediately to current observations
-        if self._fixed_lambdas is not None:
-            self.observations[:, self.lambda_obs_idx] = self._fixed_lambdas
 
     def step(self, actions):
         self.terminals[:] = 0
         self.truncations[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
-
-        # If fixed lambdas are set, overwrite after every step
-        # (C recomputes observations each step, so we must re-apply)
-        if self._fixed_lambdas is not None:
-            self.observations[:, self.lambda_obs_idx] = self._fixed_lambdas
 
         self.tick += 1
         info = []
@@ -992,6 +967,9 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
         map_dir="resources/drive/binaries/interactive_data_training_100",
         init_steps=0,
         episode_length=91,
+        fix_lambdas=True,
+        fix_rewards=False,
+        lambda_value=0.0,
     )
 
     env.reset()
@@ -1004,9 +982,14 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
     start = time.time()
     while time.time() - start < timeout:
         atn = actions[tick % atn_cache]
-        env.step(atn)
+        obs, rewards, terminals, truncated, info_list = env.step(atn)
+        print(obs[:, 0])
+        print(obs[:, 1])
+        print(obs[:, 2])
+        print(obs[:, 3])
         tick += 1
         print(tick)
+
         if tick > 4:
             break
 
@@ -1016,9 +999,9 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 
 
 if __name__ == "__main__":
-    # test_performance()
+    test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/interactive_data_training_100")
+    # process_all_maps(data_folder="data/processed/interactive_data_training_100")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

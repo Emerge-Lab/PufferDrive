@@ -58,10 +58,17 @@ def load_data(driver_env):
     print(f"Resampled: {total_samples} samples ({unique_samples} unique)")
     wandb.log({"data/total_samples": total_samples, "data/unique_samples": unique_samples})
 
-    return TensorDataset(
-        driver_env.expert_observations_full.float(),
-        driver_env.expert_actions_discrete.long(),
-    )
+    obs = driver_env.expert_observations_full.float()
+    actions = driver_env.expert_actions_discrete.long()
+
+    # Zero out conditioning slots for BC training —
+    # the BC/anchor policy should not depend on these values
+    obs[:, driver_env.lambda_obs_idx] = 0.0
+    obs[:, driver_env.reward_veh_obs_idx] = 0.0
+    obs[:, driver_env.reward_offroad_obs_idx] = 0.0
+    obs[:, driver_env.reward_goal_obs_idx] = 0.0
+
+    return TensorDataset(obs, actions)
 
 
 if __name__ == "__main__":
@@ -71,10 +78,9 @@ if __name__ == "__main__":
     args["env"]["map_dir"] = "resources/drive/binaries/interactive_data_training_100"
     args["env"]["reg_mode"] = "log_prob_direct"  # To get the data
     args["base"]["rnn_name"] = "none"
-
-    # Make sure the lambdas are always zero here, we don't use it for the BC anchor policy
-    args["train"]["human_weight_min"] = 0.0
-    args["train"]["human_weight_min"] = 0.0
+    args["env"]["fix_lambdas"] = True
+    args["env"]["fix_rewards"] = True
+    args["env"]["lambda_value"] = 0.0
 
     config = {
         "batch_size": 512,

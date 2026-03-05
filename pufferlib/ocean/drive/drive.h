@@ -100,10 +100,13 @@
 #define PARTNER_FEATURES 7
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 9
-#define EGO_FEATURES_JERK 12
+#define EGO_FEATURES_CLASSIC 12
+#define EGO_FEATURES_JERK 15
 
 #define LAMBDA_CONDITIONING_IDX 0
+#define REWARD_COLLISION_IDX 1
+#define REWARD_OFFROAD_COLLISION_IDX 2
+#define REWARD_GOAL_IDX 3
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -256,7 +259,12 @@ struct Entity {
     float jerk_lat;
     float steering_angle;
     float wheelbase;
+    // Lambda conditioning (human regularization)
     float lambda;
+    // Reward conditioning
+    float reward_collision_cond;
+    float reward_offroad_cond;
+    float reward_goal_cond;
 };
 
 void free_entity(Entity *entity) {
@@ -348,14 +356,17 @@ struct Drive {
     int *neighbor_offsets;
     int episode_length;
     int termination_mode;
-    float reward_vehicle_collision;
-    float reward_offroad_collision;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
     float dt;
+    int fix_rewards;
     float reward_goal;
     float reward_goal_post_respawn;
+    float reward_vehicle_collision;
+    float reward_offroad_collision;
+    int fix_lambdas;
+    float lambda_value;
     float goal_radius;
     float goal_speed;
     int logs_capacity;
@@ -1865,31 +1876,33 @@ void compute_observations(Drive *env) {
         float rel_goal_x = goal_x * cos_heading + goal_y * sin_heading;
         float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
 
-        // Regularization coefficient
+        // Conditioning observations (idx 0-3)
         obs[LAMBDA_CONDITIONING_IDX] = ego_entity->lambda;
+        obs[REWARD_COLLISION_IDX] = ego_entity->reward_collision_cond;
+        obs[REWARD_OFFROAD_COLLISION_IDX] = ego_entity->reward_offroad_cond;
+        obs[REWARD_GOAL_IDX] = ego_entity->reward_goal_cond;
 
         // Other ego features
-        obs[1] = rel_goal_x * 0.005f;
-        obs[2] = rel_goal_y * 0.005f;
-        obs[3] = signed_speed / MAX_SPEED;
-        obs[4] = ego_entity->width / MAX_VEH_WIDTH;
-        obs[5] = ego_entity->length / MAX_VEH_LEN;
-        obs[6] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
+        obs[4] = rel_goal_x * 0.005f;
+        obs[5] = rel_goal_y * 0.005f;
+        obs[6] = signed_speed / MAX_SPEED;
+        obs[7] = ego_entity->width / MAX_VEH_WIDTH;
+        obs[8] = ego_entity->length / MAX_VEH_LEN;
+        obs[9] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
 
         if (env->dynamics_model == JERK) {
-            obs[7] = ego_entity->steering_angle / M_PI;
+            obs[10] = ego_entity->steering_angle / M_PI;
             // Asymmetric normalization for a_long to match action space
-            obs[8] =
+            obs[11] =
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
-            obs[9] = ego_entity->a_lat / JERK_LAT[2];
-            obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[12] = ego_entity->a_lat / JERK_LAT[2];
+            obs[13] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
             // Add normalized entity type (VEHICLE=1, PEDESTRIAN=2, CYCLIST=3)
-            obs[11] = ego_entity->type / 3.0f;
+            obs[14] = ego_entity->type / 3.0f;
         } else {
-            obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[8] = ego_entity->type / 3.0f;
+            obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            obs[11] = ego_entity->type / 3.0f;
         }
-
         // Relative Pos of other cars
         int obs_idx = ego_dim;
         int cars_seen = 0;
@@ -2091,9 +2104,27 @@ void c_reset(Drive *env) {
             env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
         }
 
-        // Sample lambda conditioning value ~ U(0, 1)
-        env->entities[agent_idx].lambda = (float)rand() / (float)RAND_MAX * 0.5;
+        // Conditioning
+        if (env->fix_lambdas) {
+            env->entities[agent_idx].lambda = env->lambda_value;
+        } else {
+            env->entities[agent_idx].lambda = (float)rand() / (float)RAND_MAX * 0.5;
+        }
 
+        if (env->fix_rewards) {
+            env->entities[agent_idx].reward_collision_cond = env->reward_vehicle_collision;
+            env->entities[agent_idx].reward_offroad_cond = env->reward_offroad_collision;
+            env->entities[agent_idx].reward_goal_cond = env->reward_goal;
+        } else {
+            float u = (float)rand() / (float)RAND_MAX;
+            float range = 0.1f - env->reward_vehicle_collision;
+            env->entities[agent_idx].reward_collision_cond = env->reward_vehicle_collision + u * range;
+
+            u = (float)rand() / (float)RAND_MAX;
+            range = 0.1f - env->reward_offroad_collision;
+            env->entities[agent_idx].reward_offroad_cond = env->reward_offroad_collision + u * range;
+            env->entities[agent_idx].reward_goal_cond = env->reward_goal;
+        }
         compute_agent_metrics(env, agent_idx);
     }
     compute_observations(env);
@@ -2167,13 +2198,15 @@ void c_step(Drive *env) {
 
         if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION) {
-                env->rewards[i] += env->reward_vehicle_collision;
-                env->logs[i].episode_return += env->reward_vehicle_collision;
+                float r_collision = env->entities[agent_idx].reward_collision_cond;
+                env->rewards[i] += r_collision;
+                env->logs[i].episode_return += r_collision;
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].collisions_per_agent += 1.0f;
             } else if (collision_state == OFFROAD) {
-                env->rewards[i] += env->reward_offroad_collision;
-                env->logs[i].episode_return += env->reward_offroad_collision;
+                float r_off = env->entities[agent_idx].reward_offroad_cond;
+                env->rewards[i] += r_off;
+                env->logs[i].episode_return += r_off;
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].offroad_per_agent += 1.0f;
             }
@@ -2193,20 +2226,22 @@ void c_step(Drive *env) {
         bool within_speed = current_speed <= env->goal_speed;
 
         if (within_distance && within_speed && !env->entities[agent_idx].current_goal_reached) {
+            float r_goal = env->entities[agent_idx].reward_goal_cond;
+
             if (env->goal_behavior == GOAL_RESPAWN && env->entities[agent_idx].respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
                 env->entities[agent_idx].current_goal_reached = 1;
             } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!env->entities[agent_idx].current_goal_reached)) {
-                env->rewards[i] += env->reward_goal;
-                env->logs[i].episode_return += env->reward_goal;
+                env->rewards[i] += r_goal;
+                env->logs[i].episode_return += r_goal;
                 sample_new_goal(env, agent_idx);
                 env->entities[agent_idx].current_goal_reached = 0;
                 env->entities[agent_idx].goals_reached_this_episode += 1.0f;
             } else if (env->entities[agent_idx].current_goal_reached != 1) {
                 // Stop: Zero out the velocity so that the agent stops at the goal
-                env->rewards[i] = env->reward_goal;
-                env->logs[i].episode_return = env->reward_goal;
+                env->rewards[i] = r_goal;
+                env->logs[i].episode_return = r_goal;
                 env->entities[agent_idx].stopped = 1;
                 env->entities[agent_idx].vx = env->entities[agent_idx].vy = 0.0f;
                 env->entities[agent_idx].goals_reached_this_episode += 1.0f;
