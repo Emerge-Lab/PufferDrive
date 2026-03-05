@@ -111,7 +111,9 @@ class WOSACEvaluator:
                 with torch.no_grad():
                     ob_tensor = torch.as_tensor(obs).to(device)
                     logits, value = policy.forward_eval(ob_tensor, state)
-                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                    action, logprob, _ = pufferlib.pytorch.sample_logits(
+                        logits, actions_trajectory_length=args["train"].get("actions_trajectory_length", 80)
+                    )
                     action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
                 if isinstance(logits, torch.distributions.Normal):
@@ -664,7 +666,9 @@ class HumanReplayEvaluator:
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
                 logits, value = policy.forward_eval(ob_tensor, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(
+                    logits, actions_trajectory_length=args["train"].get("actions_trajectory_length", 80)
+                )
                 action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
             if isinstance(logits, torch.distributions.Normal):
