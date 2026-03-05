@@ -124,6 +124,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     float reward_bound_acc_min = unpack(kwargs, "reward_bound_acc_min");
     float reward_bound_acc_max = unpack(kwargs, "reward_bound_acc_max");
 
+    float min_avg_speed_to_consider_goal_attempt = unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");
+
     int use_all_maps = unpack(kwargs, "use_all_maps");
 
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -147,6 +149,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->reward_conditioning = reward_conditioning;
         env->min_goal_distance = min_goal_distance;
         env->max_goal_distance = max_goal_distance;
+        env->min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt;
         // reward randomization bounds
         env->reward_bounds[REWARD_COEF_GOAL_RADIUS] =
             (RewardBound){reward_bound_goal_radius_min, reward_bound_goal_radius_max};
@@ -301,6 +304,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->min_goal_speed = (float)unpack(kwargs, "min_goal_speed");
     env->max_goal_speed = (float)unpack(kwargs, "max_goal_speed");
+    env->min_avg_speed_to_consider_goal_attempt = (float)unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");
 
     // reward randomization bounds
     env->reward_bounds[REWARD_COEF_GOAL_RADIUS] = (RewardBound){(float)unpack(kwargs, "reward_bound_goal_radius_min"),

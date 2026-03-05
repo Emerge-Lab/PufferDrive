@@ -332,6 +332,7 @@ struct Drive {
     int reward_randomization;
     int reward_conditioning;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
+    float min_avg_speed_to_consider_goal_attempt;
 };
 
 // ========================================
@@ -1315,11 +1316,11 @@ void compute_metrics_for_last_goal_segment(Drive *env) {
                   (agent->sim_z - agent->prev_goal_z) * (agent->sim_z - agent->prev_goal_z));
         float avg_speed_current_segment = agent->cumulative_displacement_since_last_goal / (float)time_since_last_goal;
         float min_displacement_to_consider_attempting_goal =
-            MIN_AVG_SPEED_TO_CONSIDER_AS_ATTEMPTING_GOAL * time_since_last_goal;
+            env->min_avg_speed_to_consider_goal_attempt * time_since_last_goal;
 
         // Agent should have moved a minimum distance with a minimum avg speed
         if (displacement_from_last_goal > min_displacement_to_consider_attempting_goal &&
-            avg_speed_current_segment > MIN_AVG_SPEED_TO_CONSIDER_AS_ATTEMPTING_GOAL) {
+            avg_speed_current_segment > env->min_avg_speed_to_consider_goal_attempt) {
             // Give Benefit of the doubt to the agent
             env->logs[i].score += 0.5f;
             agent->goals_reached_this_episode += 1;
