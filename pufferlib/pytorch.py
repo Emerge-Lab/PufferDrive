@@ -187,7 +187,7 @@ def entropy_probs(logits, probs):
     return -p_log_p.sum(-1)
 
 
-def sample_logits(logits, action=None, actions_trajectory_length=12):
+def sample_logits(logits, action=None, actions_trajectory_length=80):
     is_discrete = isinstance(logits, torch.Tensor)
     logits_check = logits
     if isinstance(logits, torch.distributions.Normal):

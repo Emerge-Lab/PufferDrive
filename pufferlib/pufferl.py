@@ -101,7 +101,11 @@ class PuffeRL:
 
         device = config["device"]
 
-        atn_traj_size = (12, sum(atn_space.nvec.tolist()))  # TODO: generalize to continuous case
+        self.actions_trajectory_length = config.get("actions_trajectory_length", 80)
+        atn_traj_size = (
+            self.actions_trajectory_length,
+            sum(atn_space.nvec.tolist()),
+        )  # TODO: generalize to continuous case
         assert len(obs_space.shape) == 1
         self.obs_len = obs_space.shape[0]
         obs_aug_shape = (
@@ -314,7 +318,7 @@ class PuffeRL:
                 o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
                 logits, value = self.policy.forward_eval(o_device_aug, state)
                 action, logprob, _, logits_full = pufferlib.pytorch.sample_logits(
-                    logits
+                    logits, actions_trajectory_length=self.actions_trajectory_length
                 )  # sample logits now accepts a length of actions_trajectory to only pick the first element for action sampling
 
                 # we store the full logits
@@ -448,7 +452,9 @@ class PuffeRL:
             )
 
             logits, newvalue = self.policy(mb_obs, state)
-            actions, newlogprob, entropy, full_logits = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+            actions, newlogprob, entropy, full_logits = pufferlib.pytorch.sample_logits(
+                logits, action=mb_actions, actions_trajectory_length=self.actions_trajectory_length
+            )
 
             profile("train_misc", epoch)
             newlogprob = newlogprob.reshape(mb_logprobs.shape)
@@ -478,7 +484,7 @@ class PuffeRL:
 
             # Losses
             # action consistency diff
-            prev_traj = mb_obs[..., self.obs_len :].reshape(-1, 12, full_logits.shape[-1])
+            prev_traj = mb_obs[..., self.obs_len :].reshape(-1, self.actions_trajectory_length, full_logits.shape[-1])
 
             prev_probs = prev_traj[:, 1:, :].softmax(dim=-1).detach()
             curr_probs = full_logits.squeeze(0)[:, :-1, :].softmax(dim=-1)
@@ -1371,7 +1377,9 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             with torch.no_grad():
                 ob = torch.as_tensor(ob).to(device)
                 logits, value = policy.forward_eval(ob, state)
-                action, logprob, _, _ = pufferlib.pytorch.sample_logits(logits)
+                action, logprob, _, _ = pufferlib.pytorch.sample_logits(
+                    logits, actions_trajectory_length=args["train"].get("actions_trajectory_length", 80)
+                )
                 action = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
             if isinstance(logits, torch.distributions.Normal):
@@ -1617,13 +1625,14 @@ def load_policy(args, vecenv, env_name=""):
     env_module = importlib.import_module(module_name)
 
     device = args["train"]["device"]
+    actions_trajectory_length = args["train"].get("actions_trajectory_length", 80)
     policy_cls = getattr(env_module.torch, args["policy_name"])
-    policy = policy_cls(vecenv.driver_env, **args["policy"])
+    policy = policy_cls(vecenv.driver_env, **args["policy"], actions_trajectory_length=actions_trajectory_length)
 
     rnn_name = args["rnn_name"]
     if rnn_name is not None:
         rnn_cls = getattr(env_module.torch, args["rnn_name"])
-        policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"])
+        policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"], actions_trajectory_length=actions_trajectory_length)
 
     policy = policy.to(device)
 
