@@ -58,24 +58,18 @@ def export_to_onnx(verify=True):
 
     args = parser.parse_args()
 
-    # Load configuration
+    # Load environment
     config = load_config(args.env)
-
-    # Load environment to get observation/action spaces
     package = config["base"]["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
     make_env = env_module.env_creator(args.env)
-
-    # Ensure env args/kwargs are correctly passed
     env_kwargs = config["env"]
-
     vecenv = pufferlib.vector.make(make_env, env_kwargs=env_kwargs, backend=pufferlib.vector.Serial, num_envs=1)
 
     # Initialize Policy
     print("Initializing Policy...")
     policy = Drive(vecenv.driver_env, **config["policy"])
-
     if config["base"]["rnn_name"]:
         print("Wrapping with LSTM...")
         policy = pufferlib.models.LSTMWrapper(vecenv.driver_env, policy, **config["rnn"])
@@ -106,13 +100,11 @@ def export_to_onnx(verify=True):
     batch_size = 1
 
     obs_space = vecenv.single_observation_space
-    # Flatten observation if needed, Drive policy handles flattening internally usually but check vecenv
     # The LSTMWrapper expects (B, ObsDim)
     obs_dim = np.prod(obs_space.shape)
 
     # Create Dummy Observation
     if config["base"]["rnn_name"]:
-        # If wrapped, access the internal Drive policy
         drive_policy = policy.policy
     else:
         drive_policy = policy
@@ -201,7 +193,6 @@ def export_to_onnx(verify=True):
         sess_options.inter_op_num_threads = 1
         ort_session = ort.InferenceSession(args.output, sess_options)
 
-        # PyTorch output
         with torch.no_grad():
             torch_logits, torch_value, torch_h, torch_c = onnx_policy(*dummy_inputs)
 
