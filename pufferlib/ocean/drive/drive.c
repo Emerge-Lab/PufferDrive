@@ -96,7 +96,7 @@ void demo() {
     allocate(&env);
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_resampling_speed_lane.bin");
+    Weights *weights = load_weights("pufferlib/resources/drive/Policy_2D_actions_trajectory.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;
