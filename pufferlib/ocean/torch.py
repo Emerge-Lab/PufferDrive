@@ -145,7 +145,11 @@ class Drive(nn.Module):
         This is the single source of truth for building input adapters.
 
         The flat observation vector is laid out as:
-            [ego_features | reward_conditioning (optional) | partner_features | road_features]
+            [ego_features | reward_conditioning (optional) | partner_features | road_features | past_actions_trajectory]
+
+        The past_actions_trajectory section (appended by LSTMWrapper) contains
+        the flattened previous action logits: shape (sum(atn_dim) * actions_trajectory_length,).
+        At the first timestep this is all zeros.
         """
         import math
 
@@ -387,9 +391,12 @@ class Drive(nn.Module):
             },
         ]
 
+        past_actions_dim = np.prod(self.action_tensor_shape)
+
         return {
-            "layout": "[ego | reward_conditioning? | partners | road_segments]",
-            "total_dim": self.observation_size,
+            "layout": "[ego | reward_conditioning? | partners | road_segments | past_actions_trajectory]",
+            "base_obs_dim": self.observation_size,
+            "total_dim": self.observation_size + past_actions_dim,
             "ego": {
                 "offset": 0,
                 "count": 1,
@@ -419,6 +426,16 @@ class Drive(nn.Module):
                 "total_dim": self.max_road_objects * self.road_features,
                 "features": road_spec,
             },
+            "past_actions_trajectory": {
+                "offset": self.ego_dim
+                + self.max_partner_objects * self.partner_features
+                + self.max_road_objects * self.road_features,
+                "trajectory_length": self.actions_trajectory_length,
+                "actions_per_step": sum(self.atn_dim),
+                "total_dim": past_actions_dim,
+                "desc": f"Flattened previous action logits: ({sum(self.atn_dim)} actions × "
+                f"{self.actions_trajectory_length} timesteps). Zeros at first timestep.",
+            },
         }
 
     def action_spec(self):
@@ -428,14 +445,20 @@ class Drive(nn.Module):
         into sub-action indices, and the physical values (with units) each index maps to.
         This is the single source of truth for interpreting model outputs on the deployment side.
 
-        The network produces:
-            logits:   (batch, joint_action_size)  — unnormalized log-probabilities
+        The network produces an action trajectory of T timesteps:
+            logits:   tuple of (batch * T, joint_action_size) tensors (multi-discrete from torch.split)
+                      — T = actions_trajectory_length (default 80)
+                      — during training, only timestep t=0 is sampled for the env step;
+                        future timesteps provide an action-prediction training signal.
+                      — for ONNX export, these are flattened to (batch, joint_action_size * T).
             value:    (batch, 1)                  — critic estimate (unbounded)
             lstm_h:   (batch, hidden_size)        — LSTM hidden state
             lstm_c:   (batch, hidden_size)        — LSTM cell state
 
         Deployment post-processing (discrete, deterministic):
-            joint_action = argmax(logits)
+            # Reshape ONNX flat logits back to trajectory:
+            logits = logits.reshape(batch, T, joint_action_size)
+            joint_action = argmax(logits[:, 0, :])   # use t=0 for env step
             primary_idx  = joint_action // num_secondary
             secondary_idx = joint_action %  num_secondary
             physical_primary   = PRIMARY_VALUES[primary_idx]
@@ -477,10 +500,14 @@ class Drive(nn.Module):
             f"action_spec joint_size={joint_size} != model atn_dim sum={sum(self.atn_dim)}"
         )
 
+        T = self.actions_trajectory_length
+
         return {
             "mode": "discrete",
             "dynamics_model": dynamics_model,
             "joint_action_size": joint_size,
+            "trajectory_length": T,
+            "flat_logits_dim": joint_size * T,
             "decomposition": f"joint_action = {primary_name}_idx * {num_secondary} + {secondary_name}_idx",
             "primary": {
                 "name": primary_name,
@@ -500,9 +527,11 @@ class Drive(nn.Module):
             },
             "outputs": {
                 "logits": {
-                    "shape": f"(batch, {joint_size})",
-                    "desc": "Unnormalized log-probabilities over the joint action space. "
-                    "Apply softmax for probabilities or argmax for greedy action.",
+                    "shape": f"(batch, {joint_size * T})  — flatten of (batch, {T}, {joint_size})",
+                    "desc": f"Unnormalized log-probabilities for {T} future timesteps. "
+                    f"Reshape to (batch, {T}, {joint_size}). "
+                    "During training only t=0 is sampled; remaining timesteps "
+                    "provide an action-prediction training signal.",
                 },
                 "value": {
                     "shape": "(batch, 1)",
@@ -518,8 +547,10 @@ class Drive(nn.Module):
                 },
             },
             "post_processing": {
-                "deterministic": "joint_action = argmax(logits, dim=-1)",
-                "stochastic": "joint_action = Categorical(logits=logits).sample()",
+                "reshape": f"logits = logits.reshape(batch, {T}, {joint_size})",
+                "deterministic": "joint_action = argmax(logits[:, 0, :], dim=-1)  # t=0 for env step",
+                "stochastic": "joint_action = Categorical(logits=logits[:, 0, :]).sample()  # t=0",
+                "all_timesteps": f"joint_actions = argmax(logits, dim=-1)  # (batch, {T}) trajectory",
                 "decompose": (
                     f"{primary_name}_idx = joint_action // {num_secondary}; "
                     f"{secondary_name}_idx = joint_action % {num_secondary}"
@@ -532,34 +563,52 @@ class Drive(nn.Module):
         }
 
     @staticmethod
-    def construct_action_output(logits, dynamics_model="classic"):
+    def construct_action_output(logits, dynamics_model="classic", actions_trajectory_length=80):
         """Decode raw network logits into physical action values for the discrete joint action space.
 
         Uses pufferlib.pytorch.sample_logits — the same function used during training —
-        to ensure identical sampling behaviour.
+        to ensure identical sampling behaviour.  Handles action trajectories:
+        the network outputs logits for T future timesteps, but only t=0 is
+        sampled for the current env step (matching training).
+
+        Also decodes *all* T timesteps via argmax so the deployment side can
+        inspect the full planned trajectory.
+
         Mirrors the C-side action decoding in move_dynamics() (drive.h).
         This is the output-side counterpart of build_structured_observation().
 
         Args:
             logits: Raw logits as returned by decode_actions() — a tuple of tensors
-                    for multi-discrete, or a single tensor for discrete.
+                    each of shape (batch * T, joint_size) for multi-discrete.
             dynamics_model: "classic" or "jerk"
+            actions_trajectory_length: number of future timesteps T (default 80)
 
         Returns:
             dict with keys:
-                joint_action:       (batch,) int tensor — flat joint action index
-                primary_idx:        (batch,) int tensor — primary sub-action index
-                secondary_idx:      (batch,) int tensor — secondary sub-action index
-                primary_physical:   (batch,) float tensor — physical primary value
-                secondary_physical: (batch,) float tensor — physical secondary value
-                log_prob:           (batch,) float tensor — log-probability of the sampled action
-                entropy:            (batch,) float tensor — categorical entropy over joint actions
-                metadata:           dict — action names, units, value tables
+                # --- t=0 sampled action (matches training) ---
+                joint_action:       (batch,) int  — sampled joint action at t=0
+                primary_idx:        (batch,) int  — primary sub-action index at t=0
+                secondary_idx:      (batch,) int  — secondary sub-action index at t=0
+                primary_physical:   (batch,) float — physical primary value at t=0
+                secondary_physical: (batch,) float — physical secondary value at t=0
+                log_prob:           (batch,) float — log-probability of sampled t=0 action
+                entropy:            (batch,) float — categorical entropy at t=0
+                # --- full trajectory (all T timesteps, argmax) ---
+                trajectory_logits:    (batch, T, joint_size) — reshaped logits
+                trajectory_joint:     (batch, T) int — argmax joint action per timestep
+                trajectory_primary:   (batch, T) float — physical primary per timestep
+                trajectory_secondary: (batch, T) float — physical secondary per timestep
+                # --- metadata ---
+                metadata:           dict — action names, units, value tables, trajectory_length
         """
         import pufferlib.pytorch
 
-        # --- Sample using the exact same function as training ---
-        action, log_prob, entropy = pufferlib.pytorch.sample_logits(logits)
+        T = actions_trajectory_length
+
+        # --- Sample t=0 using the exact same function as training ---
+        sample_result = pufferlib.pytorch.sample_logits(logits, actions_trajectory_length=T)
+        # sample_logits returns (action, log_prob, entropy, logits_full) for multi-discrete
+        action, log_prob, entropy_val = sample_result[0], sample_result[1], sample_result[2]
         joint_action = action.squeeze(-1).int()
 
         # --- Action value tables matching C defines ---
@@ -581,23 +630,39 @@ class Drive(nn.Module):
             secondary_unit = "rad"
 
         num_secondary = len(secondary_values)
+        joint_size = len(primary_values) * num_secondary
 
-        # Decompose joint action: a = primary_idx * num_secondary + secondary_idx
+        # --- Decompose t=0 sampled action ---
         primary_idx = joint_action // num_secondary
         secondary_idx = joint_action % num_secondary
-
-        # Look up physical values
         primary_physical = primary_values[primary_idx.long()]
         secondary_physical = secondary_values[secondary_idx.long()]
 
+        # --- Decode full trajectory (all T timesteps) via argmax ---
+        # logits_full from sample_logits: (1, num_splits, T, joint_size)
+        logits_full = sample_result[3]  # 4th return for multi-discrete
+        # Squeeze num_splits=1 → (batch, T, joint_size)
+        traj_logits = logits_full.squeeze(1)
+        traj_joint = traj_logits.argmax(dim=-1).int()  # (batch, T)
+        traj_primary_idx = traj_joint // num_secondary
+        traj_secondary_idx = traj_joint % num_secondary
+        traj_primary_phys = primary_values[traj_primary_idx.long()]
+        traj_secondary_phys = secondary_values[traj_secondary_idx.long()]
+
         return {
+            # t=0 sampled action (matches training)
             "joint_action": joint_action,
             "primary_idx": primary_idx,
             "secondary_idx": secondary_idx,
             f"{primary_name}": primary_physical,
             f"{secondary_name}": secondary_physical,
             "log_prob": log_prob,
-            "entropy": entropy,
+            "entropy": entropy_val,
+            # Full trajectory (all T timesteps, argmax)
+            "trajectory_logits": traj_logits,
+            "trajectory_joint": traj_joint,
+            f"trajectory_{primary_name}": traj_primary_phys,
+            f"trajectory_{secondary_name}": traj_secondary_phys,
             "metadata": {
                 "dynamics_model": dynamics_model,
                 "primary_name": primary_name,
@@ -607,6 +672,8 @@ class Drive(nn.Module):
                 "secondary_unit": secondary_unit,
                 "secondary_values": secondary_values.tolist(),
                 "decomposition": f"joint = {primary_name}_idx * {num_secondary} + {secondary_name}_idx",
+                "trajectory_length": T,
+                "joint_action_size": joint_size,
             },
         }
 
@@ -714,5 +781,15 @@ class Drive(nn.Module):
             roads[:, base + 6] = math.sin(angle)  # sin_angle
             roads[:, base + 7] = 0.0  # road_type: lane (type 4 - 4 = 0)
 
-        obs = torch.cat([ego, partners, roads], dim=1)
+        # --- Past actions trajectory (appended by LSTMWrapper) ---
+        # At initial state (first timestep) these are all zeros.
+        # Shape: (batch, sum(atn_dim) * actions_trajectory_length)
+        # For classic: 91 * 80 = 7280, for jerk: 12 * 80 = 960
+        num_accel = 7 if not is_jerk else 4
+        num_steer = 13 if not is_jerk else 3
+        atn_dim_sum = num_accel * num_steer  # joint action size
+        past_actions_flat = atn_dim_sum * 80  # default trajectory length
+        past_actions = torch.zeros(batch_size, past_actions_flat)
+
+        obs = torch.cat([ego, partners, roads, past_actions], dim=1)
         return obs

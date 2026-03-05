@@ -25,9 +25,17 @@ from scripts.export_model_bin import load_config
 
 
 class OnnxWrapper(torch.nn.Module):
-    def __init__(self, policy):
+    """Wraps the LSTM policy for ONNX export.
+
+    The network's decode_actions returns a tuple of tensors for multi-discrete,
+    each of shape (batch * T, joint_size).  ONNX needs a single flat tensor,
+    so we concatenate and reshape to (batch, joint_size * T).
+    """
+
+    def __init__(self, policy, actions_trajectory_length=80):
         super().__init__()
         self.policy = policy
+        self.T = actions_trajectory_length
 
     def forward(self, observation, h, c):
         # Reconstruct the state dictionary expected by LSTMWrapper
@@ -41,6 +49,16 @@ class OnnxWrapper(torch.nn.Module):
         new_h = state["lstm_h"]
         new_c = state["lstm_c"]
 
+        # Flatten tuple logits for ONNX: (batch*T, joint_size) → (batch, joint_size*T)
+        if isinstance(logits, tuple):
+            # Multi-discrete: single element tuple of (batch*T, joint_size)
+            flat = logits[0]  # (batch*T, joint_size)
+            batch = observation.shape[0]
+            joint_size = flat.shape[-1]
+            # Reshape: (batch*T, joint_size) → (batch, T, joint_size) → (batch, T*joint_size)
+            flat = flat.reshape(batch, self.T, joint_size).reshape(batch, self.T * joint_size)
+            logits = flat
+
         return logits, value, new_h, new_c
 
 
@@ -50,7 +68,7 @@ def export_to_onnx(verify=True):
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="model_puffer_drive_003000.pt",
+        default="model_puffer_drive_000250.pt",
         help="Path to .pt checkpoint",
     )
     parser.add_argument("--output", type=str, help="Output .onnx file path")
@@ -69,10 +87,16 @@ def export_to_onnx(verify=True):
 
     # Initialize Policy
     print("Initializing Policy...")
-    policy = Drive(vecenv.driver_env, **config["policy"])
+    actions_trajectory_length = int(config["train"].get("actions_trajectory_length", 80))
+    policy = Drive(vecenv.driver_env, actions_trajectory_length=actions_trajectory_length, **config["policy"])
     if config["base"]["rnn_name"]:
         print("Wrapping with LSTM...")
-        policy = pufferlib.models.LSTMWrapper(vecenv.driver_env, policy, **config["rnn"])
+        policy = pufferlib.models.LSTMWrapper(
+            vecenv.driver_env,
+            policy,
+            actions_trajectory_length=actions_trajectory_length,
+            **config["rnn"],
+        )
 
     # Load Checkpoint
     print(f"Loading checkpoint from {args.checkpoint}...")
@@ -130,7 +154,14 @@ def export_to_onnx(verify=True):
         print(
             f"  Road:     offset={spec['road_segments']['offset']}, dim={spec['road_segments']['total_dim']} ({spec['road_segments']['count']}x{spec['road_segments']['features_per_object']})"
         )
-        print(f"  Total:    {spec['total_dim']}")
+        pa = spec.get("past_actions_trajectory", {})
+        if pa:
+            print(
+                f"  PastAct:  offset={pa['offset']}, dim={pa['total_dim']} "
+                f"({pa['actions_per_step']}x{pa['trajectory_length']})"
+            )
+        print(f"  Base obs: {spec['base_obs_dim']}")
+        print(f"  Total:    {spec['total_dim']}  (base_obs + past_actions_trajectory)")
     else:
         print("Warning: Could not determine Drive policy structure. Using random observation.")
         dummy_obs = torch.randn(batch_size, obs_dim)
@@ -142,7 +173,7 @@ def export_to_onnx(verify=True):
     dummy_c = torch.zeros(batch_size, hidden_size)
 
     # Wrap policy for export
-    onnx_policy = OnnxWrapper(policy)
+    onnx_policy = OnnxWrapper(policy, actions_trajectory_length=actions_trajectory_length)
     onnx_policy.eval()
 
     # Determine output path
@@ -196,22 +227,22 @@ def export_to_onnx(verify=True):
         with torch.no_grad():
             torch_logits, torch_value, torch_h, torch_c = onnx_policy(*dummy_inputs)
 
+        # OnnxWrapper already flattens tuple → (batch, joint_size*T)
+        T = actions_trajectory_length
+        joint_size = sum(drive_policy.atn_dim)
+        print(f"\nLogits shape (flat): {torch_logits.shape}  (batch, {joint_size}×{T} = {joint_size * T})")
+
         # Output .pt files for testing
         print(f"Saving test inputs/outputs to {output_dir}")
         torch.save(dummy_inputs, os.path.join(output_dir, "test_inputs.pt"))
-        torch.save((torch_logits, torch_value, torch_h, torch_c), os.path.join(output_dir, "test_outputs.pt"))
+        torch.save((torch_logits, torch_value, torch_h, torch_c), os.path.join(output_dir, "test_outputs_raw.pt"))
 
         # ONNX Runtime output
         ort_inputs = {"observation": dummy_obs.numpy(), "lstm_h_in": dummy_h.numpy(), "lstm_c_in": dummy_c.numpy()}
         ort_outs = ort_session.run(None, ort_inputs)
 
-        # Compare outputs
+        # Compare outputs (logits is now a single flat tensor, not a tuple)
         def compare(name, torch_out, ort_out, atol=1e-5):
-            if isinstance(torch_out, tuple):
-                for i, (t_out, o_out) in enumerate(zip(torch_out, ort_out)):
-                    compare(f"{name}_{i}", t_out, o_out, atol)
-                return
-
             try:
                 np.testing.assert_allclose(torch_out.detach().numpy(), ort_out, rtol=1e-03, atol=atol)
                 print(f"✔ {name} match")
@@ -219,18 +250,10 @@ def export_to_onnx(verify=True):
                 print(f"✘ {name} mismatch")
                 print(e)
 
-        # Unpack ONNX outputs if logits was a tuple
-        if isinstance(torch_logits, tuple):
-            num_logits = len(torch_logits)
-            ort_logits = ort_outs[:num_logits]
-            ort_value = ort_outs[num_logits]
-            ort_h = ort_outs[num_logits + 1]
-            ort_c = ort_outs[num_logits + 2]
-        else:
-            ort_logits = ort_outs[0]
-            ort_value = ort_outs[1]
-            ort_h = ort_outs[2]
-            ort_c = ort_outs[3]
+        ort_logits = ort_outs[0]
+        ort_value = ort_outs[1]
+        ort_h = ort_outs[2]
+        ort_c = ort_outs[3]
 
         compare("Logits", torch_logits, ort_logits)
         compare("Value", torch_value, ort_value)
@@ -240,13 +263,25 @@ def export_to_onnx(verify=True):
         # --- Construct and save decoded action outputs ---
         dynamics_model = config["env"].get("dynamics_model", "classic")
 
-        # Decode from PyTorch logits
-        action_output = Drive.construct_action_output(torch_logits, dynamics_model=dynamics_model)
+        # Reconstruct the tuple logits format that construct_action_output expects
+        # OnnxWrapper flattened (batch*T, joint_size) → (batch, joint_size*T)
+        # Undo: (batch, joint_size*T) → (batch, T, joint_size) → (batch*T, joint_size) → tuple
+        logits_for_decode = torch_logits.reshape(batch_size, T, joint_size)
+        logits_for_decode = logits_for_decode.reshape(batch_size * T, joint_size)
+        logits_tuple = (logits_for_decode,)  # multi-discrete single-element tuple
+
+        action_output = Drive.construct_action_output(
+            logits_tuple,
+            dynamics_model=dynamics_model,
+            actions_trajectory_length=T,
+        )
 
         # Print action spec for reference
         atn_spec = drive_policy.action_spec()
         print(f"\nAction spec ({atn_spec['dynamics_model']}, {atn_spec['mode']}):")
         print(f"  Joint action size: {atn_spec['joint_action_size']}")
+        print(f"  Trajectory length: {atn_spec['trajectory_length']}")
+        print(f"  Flat logits dim:   {atn_spec['flat_logits_dim']}")
         print(f"  Decomposition: {atn_spec['decomposition']}")
         p = atn_spec["primary"]
         s = atn_spec["secondary"]
@@ -255,7 +290,7 @@ def export_to_onnx(verify=True):
 
         # Print decoded action for the dummy input
         meta = action_output["metadata"]
-        print(f"\nDecoded action (categorical sample) for test observation:")
+        print(f"\nDecoded action (categorical sample at t=0) for test observation:")
         print(f"  Joint action index: {action_output['joint_action'].item()}")
         print(
             f"  {meta['primary_name']}_idx: {action_output['primary_idx'].item()}"
@@ -265,15 +300,19 @@ def export_to_onnx(verify=True):
             f"  {meta['secondary_name']}_idx: {action_output['secondary_idx'].item()}"
             f"  → {action_output[meta['secondary_name']].item():.3f} {meta['secondary_unit']}"
         )
+        print(f"\nFull trajectory ({T} timesteps, argmax):")
+        print(f"  trajectory_joint shape: {action_output['trajectory_joint'].shape}")
+        print(f"  trajectory_joint[0,:5]: {action_output['trajectory_joint'][0, :5].tolist()} ...")
 
-        # Save complete output checkpoint: raw network outputs + decoded actions
+        # Save complete output checkpoint: raw network outputs + decoded actions + trajectory
         output_checkpoint = {
             # Raw network outputs
-            "logits": torch_logits if isinstance(torch_logits, torch.Tensor) else torch.cat(torch_logits, dim=-1),
+            "logits_flat": torch_logits,  # (batch, joint_size*T)
+            "logits_trajectory": action_output["trajectory_logits"],  # (batch, T, joint_size)
             "value": torch_value,
             "lstm_h": torch_h,
             "lstm_c": torch_c,
-            # Decoded discrete actions (categorical sampling, matches training)
+            # Decoded discrete actions at t=0 (categorical sampling, matches training)
             "joint_action": action_output["joint_action"],
             "primary_idx": action_output["primary_idx"],
             "secondary_idx": action_output["secondary_idx"],
@@ -281,12 +320,16 @@ def export_to_onnx(verify=True):
             f"{meta['secondary_name']}": action_output[meta["secondary_name"]],
             "log_prob": action_output["log_prob"],
             "entropy": action_output["entropy"],
+            # Full trajectory (all T timesteps, argmax)
+            "trajectory_joint": action_output["trajectory_joint"],
+            f"trajectory_{meta['primary_name']}": action_output[f"trajectory_{meta['primary_name']}"],
+            f"trajectory_{meta['secondary_name']}": action_output[f"trajectory_{meta['secondary_name']}"],
             # Metadata for the deployment side to reconstruct decoding
             "action_metadata": action_output["metadata"],
         }
         output_path = os.path.join(output_dir, "test_outputs.pt")
         torch.save(output_checkpoint, output_path)
-        print(f"\n✔ Saved output checkpoint (raw + decoded) to {output_path}")
+        print(f"\n✔ Saved output checkpoint (raw + decoded + trajectory) to {output_path}")
 
 
 if __name__ == "__main__":
