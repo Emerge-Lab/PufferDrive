@@ -50,7 +50,7 @@ def export_to_onnx(verify=True):
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="experiments/puffer_drive_73kbtsi5/model_puffer_drive_000200.pt",
+        default="model_puffer_drive_003000.pt",
         help="Path to .pt checkpoint",
     )
     parser.add_argument("--output", type=str, help="Output .onnx file path")
@@ -237,7 +237,56 @@ def export_to_onnx(verify=True):
         compare("LSTM h", torch_h, ort_h)
         compare("LSTM c", torch_c, ort_c)
 
-        # Export example input and output to .pt files
+        # --- Construct and save decoded action outputs ---
+        dynamics_model = config["env"].get("dynamics_model", "classic")
+
+        # Decode from PyTorch logits
+        action_output = Drive.construct_action_output(torch_logits, dynamics_model=dynamics_model)
+
+        # Print action spec for reference
+        atn_spec = drive_policy.action_spec()
+        print(f"\nAction spec ({atn_spec['dynamics_model']}, {atn_spec['mode']}):")
+        print(f"  Joint action size: {atn_spec['joint_action_size']}")
+        print(f"  Decomposition: {atn_spec['decomposition']}")
+        p = atn_spec["primary"]
+        s = atn_spec["secondary"]
+        print(f"  Primary:   {p['name']} ({p['unit']}), {p['num_actions']} values: {p['values']}")
+        print(f"  Secondary: {s['name']} ({s['unit']}), {s['num_actions']} values: {s['values']}")
+
+        # Print decoded action for the dummy input
+        meta = action_output["metadata"]
+        print(f"\nDecoded action (categorical sample) for test observation:")
+        print(f"  Joint action index: {action_output['joint_action'].item()}")
+        print(
+            f"  {meta['primary_name']}_idx: {action_output['primary_idx'].item()}"
+            f"  → {action_output[meta['primary_name']].item():.3f} {meta['primary_unit']}"
+        )
+        print(
+            f"  {meta['secondary_name']}_idx: {action_output['secondary_idx'].item()}"
+            f"  → {action_output[meta['secondary_name']].item():.3f} {meta['secondary_unit']}"
+        )
+
+        # Save complete output checkpoint: raw network outputs + decoded actions
+        output_checkpoint = {
+            # Raw network outputs
+            "logits": torch_logits if isinstance(torch_logits, torch.Tensor) else torch.cat(torch_logits, dim=-1),
+            "value": torch_value,
+            "lstm_h": torch_h,
+            "lstm_c": torch_c,
+            # Decoded discrete actions (categorical sampling, matches training)
+            "joint_action": action_output["joint_action"],
+            "primary_idx": action_output["primary_idx"],
+            "secondary_idx": action_output["secondary_idx"],
+            f"{meta['primary_name']}": action_output[meta["primary_name"]],
+            f"{meta['secondary_name']}": action_output[meta["secondary_name"]],
+            "log_prob": action_output["log_prob"],
+            "entropy": action_output["entropy"],
+            # Metadata for the deployment side to reconstruct decoding
+            "action_metadata": action_output["metadata"],
+        }
+        output_path = os.path.join(output_dir, "test_outputs.pt")
+        torch.save(output_checkpoint, output_path)
+        print(f"\n✔ Saved output checkpoint (raw + decoded) to {output_path}")
 
 
 if __name__ == "__main__":

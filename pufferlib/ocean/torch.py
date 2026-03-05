@@ -391,6 +391,195 @@ class Drive(nn.Module):
             },
         }
 
+    def action_spec(self):
+        """Return structured action/output specification for the discrete joint action space.
+
+        Documents the network output layout, how to decompose the joint action integer
+        into sub-action indices, and the physical values (with units) each index maps to.
+        This is the single source of truth for interpreting model outputs on the deployment side.
+
+        The network produces:
+            logits:   (batch, joint_action_size)  — unnormalized log-probabilities
+            value:    (batch, 1)                  — critic estimate (unbounded)
+            lstm_h:   (batch, hidden_size)        — LSTM hidden state
+            lstm_c:   (batch, hidden_size)        — LSTM cell state
+
+        Deployment post-processing (discrete, deterministic):
+            joint_action = argmax(logits)
+            primary_idx  = joint_action // num_secondary
+            secondary_idx = joint_action %  num_secondary
+            physical_primary   = PRIMARY_VALUES[primary_idx]
+            physical_secondary = SECONDARY_VALUES[secondary_idx]
+        """
+        from pufferlib.ocean.drive import binding
+
+        dynamics_model = (
+            "jerk"
+            if (self.ego_dim == binding.EGO_FEATURES_JERK or self.ego_dim == binding.EGO_FEATURES_JERK_CONDITIONING)
+            else "classic"
+        )
+        is_jerk = dynamics_model == "jerk"
+
+        # --- Action value arrays matching C defines in drive.h ---
+        if is_jerk:
+            # JERK_LONG[4] and JERK_LAT[3]
+            primary_values = [-15.0, -4.0, 0.0, 4.0]
+            primary_unit = "m/s³"
+            primary_name = "longitudinal_jerk"
+            secondary_values = [-4.0, 0.0, 4.0]
+            secondary_unit = "m/s³"
+            secondary_name = "lateral_jerk"
+        else:
+            # ACCELERATION_VALUES[7] and STEERING_VALUES[13]
+            primary_values = [-4.0, -2.667, -1.333, 0.0, 1.333, 2.667, 4.0]
+            primary_unit = "m/s²"
+            primary_name = "acceleration"
+            secondary_values = [-1.0, -0.833, -0.667, -0.5, -0.333, -0.167, 0.0, 0.167, 0.333, 0.5, 0.667, 0.833, 1.0]
+            secondary_unit = "rad"
+            secondary_name = "steering"
+
+        num_primary = len(primary_values)
+        num_secondary = len(secondary_values)
+        joint_size = num_primary * num_secondary
+
+        # Verify consistency with the model's atn_dim
+        assert sum(self.atn_dim) == joint_size, (
+            f"action_spec joint_size={joint_size} != model atn_dim sum={sum(self.atn_dim)}"
+        )
+
+        return {
+            "mode": "discrete",
+            "dynamics_model": dynamics_model,
+            "joint_action_size": joint_size,
+            "decomposition": f"joint_action = {primary_name}_idx * {num_secondary} + {secondary_name}_idx",
+            "primary": {
+                "name": primary_name,
+                "num_actions": num_primary,
+                "values": primary_values,
+                "unit": primary_unit,
+                "index_formula": f"joint_action // {num_secondary}",
+                "desc": f"{primary_name} sub-action index (row of the joint grid)",
+            },
+            "secondary": {
+                "name": secondary_name,
+                "num_actions": num_secondary,
+                "values": secondary_values,
+                "unit": secondary_unit,
+                "index_formula": f"joint_action % {num_secondary}",
+                "desc": f"{secondary_name} sub-action index (column of the joint grid)",
+            },
+            "outputs": {
+                "logits": {
+                    "shape": f"(batch, {joint_size})",
+                    "desc": "Unnormalized log-probabilities over the joint action space. "
+                    "Apply softmax for probabilities or argmax for greedy action.",
+                },
+                "value": {
+                    "shape": "(batch, 1)",
+                    "desc": "State-value estimate V(s). Unbounded scalar, no activation.",
+                },
+                "lstm_h": {
+                    "shape": f"(batch, {self.hidden_size})",
+                    "desc": "LSTM hidden state to feed back at next timestep.",
+                },
+                "lstm_c": {
+                    "shape": f"(batch, {self.hidden_size})",
+                    "desc": "LSTM cell state to feed back at next timestep.",
+                },
+            },
+            "post_processing": {
+                "deterministic": "joint_action = argmax(logits, dim=-1)",
+                "stochastic": "joint_action = Categorical(logits=logits).sample()",
+                "decompose": (
+                    f"{primary_name}_idx = joint_action // {num_secondary}; "
+                    f"{secondary_name}_idx = joint_action % {num_secondary}"
+                ),
+                "lookup": (
+                    f"physical_{primary_name} = {primary_name}_values[{primary_name}_idx]; "
+                    f"physical_{secondary_name} = {secondary_name}_values[{secondary_name}_idx]"
+                ),
+            },
+        }
+
+    @staticmethod
+    def construct_action_output(logits, dynamics_model="classic"):
+        """Decode raw network logits into physical action values for the discrete joint action space.
+
+        Uses pufferlib.pytorch.sample_logits — the same function used during training —
+        to ensure identical sampling behaviour.
+        Mirrors the C-side action decoding in move_dynamics() (drive.h).
+        This is the output-side counterpart of build_structured_observation().
+
+        Args:
+            logits: Raw logits as returned by decode_actions() — a tuple of tensors
+                    for multi-discrete, or a single tensor for discrete.
+            dynamics_model: "classic" or "jerk"
+
+        Returns:
+            dict with keys:
+                joint_action:       (batch,) int tensor — flat joint action index
+                primary_idx:        (batch,) int tensor — primary sub-action index
+                secondary_idx:      (batch,) int tensor — secondary sub-action index
+                primary_physical:   (batch,) float tensor — physical primary value
+                secondary_physical: (batch,) float tensor — physical secondary value
+                log_prob:           (batch,) float tensor — log-probability of the sampled action
+                entropy:            (batch,) float tensor — categorical entropy over joint actions
+                metadata:           dict — action names, units, value tables
+        """
+        import pufferlib.pytorch
+
+        # --- Sample using the exact same function as training ---
+        action, log_prob, entropy = pufferlib.pytorch.sample_logits(logits)
+        joint_action = action.squeeze(-1).int()
+
+        # --- Action value tables matching C defines ---
+        if dynamics_model == "jerk":
+            primary_values = torch.tensor([-15.0, -4.0, 0.0, 4.0])
+            primary_name = "longitudinal_jerk"
+            primary_unit = "m/s³"
+            secondary_values = torch.tensor([-4.0, 0.0, 4.0])
+            secondary_name = "lateral_jerk"
+            secondary_unit = "m/s³"
+        else:
+            primary_values = torch.tensor([-4.0, -2.667, -1.333, 0.0, 1.333, 2.667, 4.0])
+            primary_name = "acceleration"
+            primary_unit = "m/s²"
+            secondary_values = torch.tensor(
+                [-1.0, -0.833, -0.667, -0.5, -0.333, -0.167, 0.0, 0.167, 0.333, 0.5, 0.667, 0.833, 1.0]
+            )
+            secondary_name = "steering"
+            secondary_unit = "rad"
+
+        num_secondary = len(secondary_values)
+
+        # Decompose joint action: a = primary_idx * num_secondary + secondary_idx
+        primary_idx = joint_action // num_secondary
+        secondary_idx = joint_action % num_secondary
+
+        # Look up physical values
+        primary_physical = primary_values[primary_idx.long()]
+        secondary_physical = secondary_values[secondary_idx.long()]
+
+        return {
+            "joint_action": joint_action,
+            "primary_idx": primary_idx,
+            "secondary_idx": secondary_idx,
+            f"{primary_name}": primary_physical,
+            f"{secondary_name}": secondary_physical,
+            "log_prob": log_prob,
+            "entropy": entropy,
+            "metadata": {
+                "dynamics_model": dynamics_model,
+                "primary_name": primary_name,
+                "primary_unit": primary_unit,
+                "primary_values": primary_values.tolist(),
+                "secondary_name": secondary_name,
+                "secondary_unit": secondary_unit,
+                "secondary_values": secondary_values.tolist(),
+                "decomposition": f"joint = {primary_name}_idx * {num_secondary} + {secondary_name}_idx",
+            },
+        }
+
     @staticmethod
     def build_structured_observation(dynamics_model="classic", reward_conditioning=False, batch_size=1):
         """Build a physically valid dummy observation tensor for export/testing.
