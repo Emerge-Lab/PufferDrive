@@ -401,7 +401,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
 
     env->num_agents = max_agents;
     if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
-        env->spawn_settings.max_agents_in_sim = max_agents_per_env; // Random Agents only supports controlled agents
+        env->spawn_settings.max_agents_in_sim =
+            max_agents_per_env; // INIT_VARIABLE_AGENT_NUMBER only supports controlled agents
     }
     env->map_name = map_path;
     env->init_steps = init_steps;
