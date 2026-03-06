@@ -846,7 +846,7 @@ class Evaluator:
         eval_config["vec"] = dict(backend=backend, num_envs=1)
         eval_config["env"]["fix_lambdas"] = True
         eval_config["env"]["fix_rewards"] = True  # Fix to the ini file ones for all agents
-        # eval_config["env"]["lambda_value"] = 0.05
+        eval_config["env"]["lambda_value"] = 0.05
         # TODO: Find a solution to this
 
         self.hr_eval_config = copy.deepcopy(eval_config)
@@ -940,7 +940,7 @@ class Evaluator:
 
             if self.human_replay_stats is not None:
                 self.lambda_sweep_results[lam] = {
-                    "collision_rate": self.human_replay_stats.get("collision_rate", 0.0),
+                    "collision_rate": self.human_replay_stats.get("collision_rate_valid", 0.0),
                     "score": self.human_replay_stats.get("score", 0.0),
                 }
             else:
@@ -984,7 +984,7 @@ class Evaluator:
             load_env_fn_from_config: Callable(config) that creates a new hr_env.
         """
         self.collision_reward_sweep_results = {}
-        self.inference_collision_reward_values = [0.1, 0.0, -0.1, -0.5]
+        self.inference_collision_reward_values = [0.1, 0.0, -0.1, -0.3]
 
         for reward_val in self.inference_collision_reward_values:
             config = copy.deepcopy(self.hr_eval_config)
@@ -997,7 +997,7 @@ class Evaluator:
 
             if self.human_replay_stats is not None:
                 self.collision_reward_sweep_results[reward_val] = {
-                    "collision_rate": self.human_replay_stats.get("collision_rate", 0.0),
+                    "collision_rate": self.human_replay_stats["collision_rate_valid"],
                     "score": self.human_replay_stats.get("score", 0.0),
                 }
             else:
@@ -1061,7 +1061,7 @@ class Evaluator:
         eval_stats = {}
 
         if self.human_replay_stats is not None:
-            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["collision_rate"]
+            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["collision_rate_valid"]
             eval_stats["eval/hr_score"] = self.human_replay_stats["score"]
         if self.self_play_stats is not None:
             eval_stats["eval/sp_collision_rate"] = self.self_play_stats["collision_rate"]

@@ -192,6 +192,7 @@ struct Log {
     float goals_sampled_this_episode;
     float offroad_rate;
     float collision_rate;
+    float collision_rate_valid;
     float completion_rate;
     float offroad_per_agent;
     float collisions_per_agent;
@@ -396,6 +397,8 @@ void add_log(Drive *env) {
         env->log.offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
         env->log.collision_rate += collided;
+        int collided_valid = env->logs[i].collision_rate_valid;
+        env->log.collision_rate_valid += collided_valid;
         float offroad_per_agent = env->logs[i].offroad_per_agent;
         env->log.offroad_per_agent += offroad_per_agent;
         float collisions_per_agent = env->logs[i].collisions_per_agent;
@@ -2121,7 +2124,7 @@ void c_reset(Drive *env) {
             env->entities[agent_idx].reward_collision_cond = env->reward_vehicle_collision + u * range;
 
             u = (float)rand() / (float)RAND_MAX;
-            range = 0.1f - env->reward_offroad_collision;
+            range = 0.001f - env->reward_offroad_collision;
             env->entities[agent_idx].reward_offroad_cond = env->reward_offroad_collision + u * range;
             env->entities[agent_idx].reward_goal_cond = env->reward_goal;
         }
@@ -2203,6 +2206,10 @@ void c_step(Drive *env) {
                 env->logs[i].episode_return += r_collision;
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].collisions_per_agent += 1.0f;
+
+                if (!env->entities[agent_idx].current_goal_reached) {
+                    env->logs[i].collision_rate_valid = 1.0f;
+                }
             } else if (collision_state == OFFROAD) {
                 float r_off = env->entities[agent_idx].reward_offroad_cond;
                 env->rewards[i] += r_off;
