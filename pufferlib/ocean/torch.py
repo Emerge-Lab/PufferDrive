@@ -14,6 +14,17 @@ from pufferlib.models import Convolutional as Conv  # noqa: F401
 Recurrent = pufferlib.models.LSTMWrapper
 
 
+class ResBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.net = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(channels, channels)), nn.LayerNorm(channels), nn.GELU()
+        )
+
+    def forward(self, x):
+        return x + self.net(x)
+
+
 class Drive(nn.Module):
     def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
         super().__init__()
@@ -50,8 +61,14 @@ class Drive(nn.Module):
         )
 
         self.shared_embedding = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(4 * input_size, 512)),
+            nn.LayerNorm(512),
             nn.GELU(),
-            pufferlib.pytorch.layer_init(nn.Linear(4 * input_size, hidden_size)),
+            ResBlock(512),
+            ResBlock(512),
+            pufferlib.pytorch.layer_init(nn.Linear(512, hidden_size)),
+            nn.LayerNorm(hidden_size),
+            nn.GELU(),
         )
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
 
@@ -68,11 +85,18 @@ class Drive(nn.Module):
             np.prod(self.action_tensor_shape)
         )  # TODO: remove, this is a temporary input
 
+        past_act_dim = np.prod(self.action_tensor_shape)
         self.past_actions_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(np.prod(self.action_tensor_shape), input_size)),
-            nn.LayerNorm(input_size),
-            # nn.ReLU(),
-            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(past_act_dim, 1024)),
+            nn.LayerNorm(1024),
+            nn.GELU(),
+            pufferlib.pytorch.layer_init(nn.Linear(1024, 512)),
+            nn.LayerNorm(512),
+            nn.GELU(),
+            pufferlib.pytorch.layer_init(nn.Linear(512, 256)),
+            nn.LayerNorm(256),
+            nn.GELU(),
+            pufferlib.pytorch.layer_init(nn.Linear(256, input_size)),
         )
 
         self.actor = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, np.prod(self.action_tensor_shape)), std=0.01)
@@ -113,8 +137,7 @@ class Drive(nn.Module):
         concat_features = torch.cat([ego_features, road_features, partner_features, past_actions_features], dim=1)
 
         # Pass through shared embedding
-        embedding = F.relu(self.shared_embedding(concat_features))
-        # embedding = self.shared_embedding(concat_features)
+        embedding = self.shared_embedding(concat_features)
         return embedding
 
     def decode_actions(self, flat_hidden):
