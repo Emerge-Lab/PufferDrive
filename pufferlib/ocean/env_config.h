@@ -57,9 +57,11 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->dynamics_model = 0; // CLASSIC
         } else if (strcmp(value, "\"jerk\"") == 0 || strcmp(value, "jerk") == 0) {
             env_config->dynamics_model = 1; // JERK
+        } else if (strcmp(value, "\"delta_local\"") == 0 || strcmp(value, "delta_local") == 0) {
+            env_config->dynamics_model = 2; // DELTA_LOCAL
         } else {
-            printf("Warning: Unknown dynamics_model value '%s', defaulting to JERK\n", value);
-            env_config->dynamics_model = 1; // Default to JERK
+            printf("Warning: Unknown dynamics_model value '%s', defaulting to CLASSIC\n", value);
+            env_config->dynamics_model = 0; // Default to CLASSIC
         }
     } else if (MATCH("env", "goal_behavior")) {
         env_config->goal_behavior = atoi(value);

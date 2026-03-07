@@ -1409,8 +1409,7 @@ def verify(env_name, args=None, vecenv=None):
     args = args or load_config(env_name)
     args["env"]["termination_mode"] = 0
     # Options: "expert_replay", "inferred_expert_actions"
-    args["env"]["control_mode"] = "expert_replay" 
-    args["env"]["dynamics_model"] = "classic"
+    args["env"]["control_mode"] = "inferred_expert_actions" 
 
     backend = args["vec"]["backend"]
     if backend != "PufferEnv":

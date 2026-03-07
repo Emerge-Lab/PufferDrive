@@ -66,9 +66,10 @@
 // Actions
 #define NOOP 0
 
-// Dynamics Models
+// Dynamics models
 #define CLASSIC 0
 #define JERK 1
+#define DELTA_LOCAL 2
 
 // Collision state
 #define NO_COLLISION 0
@@ -102,7 +103,7 @@
 #define PARTNER_FEATURES 7
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 12
+#define EGO_FEATURES 12
 #define EGO_FEATURES_JERK 15
 
 #define LAMBDA_CONDITIONING_IDX 0
@@ -142,9 +143,18 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define NUM_STEER_BINS 31
 #define STEER_MIN -1.0f // radians
 #define STEER_MAX 1.0f
+#define NUM_DX_BINS 21
+#define NUM_DY_BINS 21
+#define NUM_YAW_BINS 127
+#define DELTA_MAX_DX 2.0f
+#define DELTA_MAX_DY 2.0f
+#define DELTA_MAX_DYAW 3.14159265/4.0
 
 static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
 static float STEERING_VALUES[NUM_STEER_BINS];
+static float DELTA_DX_VALUES[NUM_DX_BINS];
+static float DELTA_DY_VALUES[NUM_DY_BINS];
+static float DELTA_YAW_VALUES[NUM_YAW_BINS];
 
 static const float offsets[4][2] = {
     {-1, 1}, // top-left
@@ -225,6 +235,9 @@ struct Entity {
     int *traj_valid;
     float *expert_accel;
     float *expert_steering;
+    float *expert_delta_x;
+    float *expert_delta_y;
+    float *expert_delta_yaw;
     float width;
     float length;
     float height;
@@ -282,6 +295,9 @@ void free_entity(Entity *entity) {
     free(entity->traj_valid);
     free(entity->expert_accel);
     free(entity->expert_steering);
+    free(entity->expert_delta_x);
+    free(entity->expert_delta_y);
+    free(entity->expert_delta_yaw);
 }
 
 // Utility functions
@@ -440,6 +456,7 @@ void add_log(Drive *env) {
 }
 
 void init_action_space() {
+    // Classic discrete action space
     float accel_step = (ACCEL_MAX - ACCEL_MIN) / (NUM_ACCEL_BINS - 1);
     for (int i = 0; i < NUM_ACCEL_BINS; i++) {
         ACCELERATION_VALUES[i] = ACCEL_MIN + i * accel_step;
@@ -449,6 +466,20 @@ void init_action_space() {
     for (int i = 0; i < NUM_STEER_BINS; i++) {
         STEERING_VALUES[i] = STEER_MIN + i * steer_step;
     }
+    // Delta-local discrete action space
+    float dx_step = (2.0f * DELTA_MAX_DX) / (NUM_DX_BINS - 1);
+    for (int i = 0; i < NUM_DX_BINS; i++) {
+        DELTA_DX_VALUES[i] = -DELTA_MAX_DX + i * dx_step;
+    }
+    float dy_step = (2.0f * DELTA_MAX_DY) / (NUM_DY_BINS - 1);
+    for (int i = 0; i < NUM_DY_BINS; i++) {
+        DELTA_DY_VALUES[i] = -DELTA_MAX_DY + i * dy_step;
+    }
+    float yaw_step = (2.0f * DELTA_MAX_DYAW) / (NUM_YAW_BINS - 1);
+    for (int i = 0; i < NUM_YAW_BINS; i++) {
+        DELTA_YAW_VALUES[i] = -DELTA_MAX_DYAW + i * yaw_step;
+    }
+
 }
 
 Entity *load_map_binary(const char *filename, Drive *env) {
@@ -500,6 +531,9 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             entities[i].traj_valid = (int *)malloc(size * sizeof(int));
             entities[i].expert_accel = (float *)malloc(size * sizeof(float));
             entities[i].expert_steering = (float *)malloc(size * sizeof(float));
+            entities[i].expert_delta_x = (float *)malloc(size * sizeof(float));
+            entities[i].expert_delta_y = (float *)malloc(size * sizeof(float));
+            entities[i].expert_delta_yaw = (float *)malloc(size * sizeof(float));
         } else {
             // Roads don't use these arrays
             entities[i].traj_vx = NULL;
@@ -509,6 +543,9 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             entities[i].traj_valid = NULL;
             entities[i].expert_accel = NULL;
             entities[i].expert_steering = NULL;
+            entities[i].expert_delta_x = NULL;
+            entities[i].expert_delta_y = NULL;
+            entities[i].expert_delta_yaw = NULL;
         }
         // Read array data
         fread(entities[i].traj_x, sizeof(float), size, file);
@@ -523,6 +560,9 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             fread(entities[i].traj_valid, sizeof(int), size, file);
             fread(entities[i].expert_accel, sizeof(float), size, file);
             fread(entities[i].expert_steering, sizeof(float), size, file);
+            fread(entities[i].expert_delta_x, sizeof(float), size, file);
+            fread(entities[i].expert_delta_y, sizeof(float), size, file);
+            fread(entities[i].expert_delta_yaw, sizeof(float), size, file);
         }
         // Read remaining scalar fields
         fread(&entities[i].width, sizeof(float), 1, file);
@@ -1562,10 +1602,20 @@ void c_close(Drive *env) {
 
 void allocate(Drive *env) {
     init(env);
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float *)calloc(env->active_agent_count * max_obs, sizeof(float));
-    env->actions = (float *)calloc(env->active_agent_count * 2, sizeof(float));
+    
+    // All discrete models use a single int per agent (cast to float storage)
+    // All continuous models use action_dim floats per agent
+    if (env->action_type == 1) { // continuous
+        int action_dim = (env->dynamics_model == DELTA_LOCAL) ? 3 : 2;
+        env->actions = (float *)calloc(env->active_agent_count * action_dim, sizeof(float));
+    } else { // discrete
+        int actions_per_agent = (env->dynamics_model == DELTA_LOCAL) ? 3 : 1;
+        env->actions = (float *)calloc(env->active_agent_count * actions_per_agent, sizeof(int));
+    }
+
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
     env->terminals = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
     env->truncations = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
@@ -1671,6 +1721,45 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->heading_y = sinf(heading);
         agent->vx = new_vx;
         agent->vy = new_vy;
+
+    } else if (env->dynamics_model == DELTA_LOCAL) {
+        float action_dx, action_dy, action_dyaw;
+
+        if (env->action_type == 1) { // continuous
+            float *action_base = (float *)env->actions;
+            action_dx   = action_base[action_idx * 3 + 0] * DELTA_MAX_DX;
+            action_dy   = action_base[action_idx * 3 + 1] * DELTA_MAX_DY;
+            action_dyaw = action_base[action_idx * 3 + 2] * DELTA_MAX_DYAW;
+        } else { // discrete — independent MultiDiscrete: 3 ints per agent
+            int *action_array = (int *)env->actions;
+            int dx_idx  = action_array[action_idx * 3 + 0];
+            int dy_idx  = action_array[action_idx * 3 + 1];
+            int yaw_idx = action_array[action_idx * 3 + 2];
+            if (dx_idx < 0 || dx_idx >= NUM_DX_BINS) dx_idx = NUM_DX_BINS / 2;
+            if (dy_idx < 0 || dy_idx >= NUM_DY_BINS) dy_idx = NUM_DY_BINS / 2;
+            if (yaw_idx < 0 || yaw_idx >= NUM_YAW_BINS) yaw_idx = NUM_YAW_BINS / 2;
+            
+            action_dx   = DELTA_DX_VALUES[dx_idx];
+            action_dy   = DELTA_DY_VALUES[dy_idx];
+            action_dyaw = DELTA_YAW_VALUES[yaw_idx];
+        }
+
+        action_dx   = clip(action_dx,   -DELTA_MAX_DX,   DELTA_MAX_DX);
+        action_dy   = clip(action_dy,   -DELTA_MAX_DY,   DELTA_MAX_DY);
+        action_dyaw = normalize_heading(action_dyaw);
+
+        float cos_h = agent->heading_x;
+        float sin_h = agent->heading_y;
+        float global_dx = cos_h * action_dx - sin_h * action_dy;
+        float global_dy = sin_h * action_dx + cos_h * action_dy;
+
+        agent->x += global_dx;
+        agent->y += global_dy;
+        agent->heading = normalize_heading(agent->heading + action_dyaw);
+        agent->heading_x = cosf(agent->heading);
+        agent->heading_y = sinf(agent->heading);
+        agent->vx = global_dx / env->dt;
+        agent->vy = global_dy / env->dt;
     } else {
         // JERK dynamics model
         // Extract action components
@@ -1861,7 +1950,7 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 }
 
 void compute_observations(Drive *env) {
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
@@ -2167,44 +2256,87 @@ void respawn_agent(Drive *env, int agent_idx) {
 // accel/steering values at the current timestep. Used by
 // CONTROL_INFERRED_EXPERT_ACTIONS mode.
 static void override_action_with_expert(Drive *env, int action_idx, int agent_idx) {
-    if (env->dynamics_model != CLASSIC) {
-        return; // Only classic dynamics has expert accel/steering; other models TBD
-    }
 
     Entity *agent = &env->entities[agent_idx];
     int t = env->timestep;
-    if (t < 0 || t >= agent->array_size)
-        return;
-    if (agent->expert_accel == NULL || agent->expert_steering == NULL)
-        return;
-    if (agent->expert_accel[t] == -1.0f || agent->expert_steering[t] == -1.0f)
-        return;
+    
+    if (env->dynamics_model == CLASSIC) {
+        if (t < 0 || t >= agent->array_size)
+            return;
+        if (agent->expert_accel == NULL || agent->expert_steering == NULL)
+            return;
+        if (agent->expert_accel[t] == -1.0f || agent->expert_steering[t] == -1.0f)
+            return;
 
-    if (env->action_type == 1) { // continuous
-        float (*action_array_f)[2] = (float (*)[2])env->actions;
-        action_array_f[action_idx][0] = agent->expert_accel[t] / ACCEL_MAX;
-        action_array_f[action_idx][1] = agent->expert_steering[t] / STEER_MAX;
-    } else { // discrete
-        int best_accel_idx = 0;
-        float min_accel_diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[0]);
-        for (int j = 1; j < NUM_ACCEL_BINS; j++) {
-            float diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[j]);
-            if (diff < min_accel_diff) {
-                min_accel_diff = diff;
-                best_accel_idx = j;
+        if (env->action_type == 1) { // continuous
+            float (*action_array_f)[2] = (float (*)[2])env->actions;
+            action_array_f[action_idx][0] = agent->expert_accel[t] / ACCEL_MAX;
+            action_array_f[action_idx][1] = agent->expert_steering[t] / STEER_MAX;
+        } else { // discrete
+            int best_accel_idx = 0;
+            float min_accel_diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[0]);
+            for (int j = 1; j < NUM_ACCEL_BINS; j++) {
+                float diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[j]);
+                if (diff < min_accel_diff) {
+                    min_accel_diff = diff;
+                    best_accel_idx = j;
+                }
             }
-        }
-        int best_steer_idx = 0;
-        float min_steer_diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[0]);
-        for (int j = 1; j < NUM_STEER_BINS; j++) {
-            float diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[j]);
-            if (diff < min_steer_diff) {
-                min_steer_diff = diff;
-                best_steer_idx = j;
+            int best_steer_idx = 0;
+            float min_steer_diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[0]);
+            for (int j = 1; j < NUM_STEER_BINS; j++) {
+                float diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[j]);
+                if (diff < min_steer_diff) {
+                    min_steer_diff = diff;
+                    best_steer_idx = j;
+                }
             }
+            int *action_array = (int *)env->actions;
+            action_array[action_idx] = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
         }
-        int *action_array = (int *)env->actions;
-        action_array[action_idx] = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
+    } else if (env->dynamics_model == DELTA_LOCAL) {
+        if (agent->expert_delta_x == NULL ||
+            agent->expert_delta_y == NULL ||
+            agent->expert_delta_yaw == NULL)
+            return;
+
+        if (env->action_type == 1) { // continuous
+            float *action_base = (float *)env->actions;
+            action_base[action_idx * 3 + 0] = agent->expert_delta_x[t]   / DELTA_MAX_DX;
+            action_base[action_idx * 3 + 1] = agent->expert_delta_y[t]   / DELTA_MAX_DY;
+            action_base[action_idx * 3 + 2] = agent->expert_delta_yaw[t] / DELTA_MAX_DYAW;
+        } else { // discrete: find closest bin for each axis
+            float dx_val  = agent->expert_delta_x[t];
+            float dy_val  = agent->expert_delta_y[t];
+            float yaw_val = agent->expert_delta_yaw[t];
+
+            // if (action_idx == 0 && (t % 10 == 0)) {
+            //     printf("DELTA t=%d dx=%.4f dy=%.4f dyaw=%.4f heading=%.4f x=%.2f y=%.2f\n",
+            //         t, dx_val, dy_val, yaw_val, agent->heading, agent->x, agent->y);
+            // }
+
+            int best_dx = 0;
+            for (int j = 1; j < NUM_DX_BINS; j++) {
+                if (fabsf(dx_val - DELTA_DX_VALUES[j]) < fabsf(dx_val - DELTA_DX_VALUES[best_dx]))
+                    best_dx = j;
+            }
+            int best_dy = 0;
+            for (int j = 1; j < NUM_DY_BINS; j++) {
+                if (fabsf(dy_val - DELTA_DY_VALUES[j]) < fabsf(dy_val - DELTA_DY_VALUES[best_dy]))
+                    best_dy = j;
+            }
+            int best_yaw = 0;
+            for (int j = 1; j < NUM_YAW_BINS; j++) {
+                if (fabsf(yaw_val - DELTA_YAW_VALUES[j]) < fabsf(yaw_val - DELTA_YAW_VALUES[best_yaw]))
+                    best_yaw = j;
+            }
+
+            int *action_array = (int *)env->actions;
+            action_array[action_idx * 3 + 0] = best_dx;
+            action_array[action_idx * 3 + 1] = best_dy;
+            action_array[action_idx * 3 + 2] = best_yaw;
+        }
+        return;
     }
 }
 
@@ -2398,11 +2530,18 @@ void c_step_lightweight(Drive *env) {
     compute_observations(env);
 }
 
-void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_actions_continuous_out,
+void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out,
+                           float *expert_actions_continuous_out,
                            float *expert_obs_out) {
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
+    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) +
+                  ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     int original_timestep = env->timestep;
+    int is_delta = (env->dynamics_model == DELTA_LOCAL);
+
+    // Action dimensions per agent
+    int action_dim_continuous = is_delta ? 3 : 2;
+    int action_dim_discrete  = is_delta ? 3 : 1;
 
     // Reset agents to start of trajectory
     env->timestep = env->init_steps;
@@ -2410,97 +2549,138 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
     compute_observations(env);
 
     for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
-        // Get the current observations
+        // Copy current observations
         int obs_offset = t * env->active_agent_count * max_obs;
-        memcpy(&expert_obs_out[obs_offset], env->observations, env->active_agent_count * max_obs * sizeof(float));
+        memcpy(&expert_obs_out[obs_offset], env->observations,
+               env->active_agent_count * max_obs * sizeof(float));
 
-        // Now set expert actions for this timestep
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             Entity *agent = &env->entities[agent_idx];
 
-            // Check bounds and validity
-            bool is_valid = (t < agent->array_size && agent->expert_accel && agent->expert_steering &&
-                             agent->expert_accel[t] != -1.0f && agent->expert_steering[t] != -1.0f);
+            int cont_off = t * env->active_agent_count * action_dim_continuous +
+                           i * action_dim_continuous;
+            int disc_off = t * env->active_agent_count * action_dim_discrete +
+                           i * action_dim_discrete;
 
-            if (is_valid) {
-                float continuous_accel = agent->expert_accel[t];
-                float continuous_steer = agent->expert_steering[t];
+            if (is_delta) {
+                bool is_valid = (t < agent->array_size &&
+                                 agent->expert_delta_x != NULL &&
+                                 agent->expert_delta_y != NULL &&
+                                 agent->expert_delta_yaw != NULL);
 
-                // Store continuous actions
-                int continuous_offset = t * env->active_agent_count * 2 + i * 2;
-                expert_actions_continuous_out[continuous_offset] = continuous_accel;
-                expert_actions_continuous_out[continuous_offset + 1] = continuous_steer;
+                if (is_valid) {
+                    float dx   = agent->expert_delta_x[t];
+                    float dy   = agent->expert_delta_y[t];
+                    float dyaw = agent->expert_delta_yaw[t];
 
-                // Discretize acceleration - find closest value in ACCELERATION_VALUES
-                int best_accel_idx = 0;
-                float min_accel_diff = fabsf(continuous_accel - ACCELERATION_VALUES[0]);
-                for (int j = 1; j < NUM_ACCEL_BINS; j++) {
-                    float diff = fabsf(continuous_accel - ACCELERATION_VALUES[j]);
-                    if (diff < min_accel_diff) {
-                        min_accel_diff = diff;
-                        best_accel_idx = j;
+                    // Store continuous actions
+                    expert_actions_continuous_out[cont_off + 0] = dx;
+                    expert_actions_continuous_out[cont_off + 1] = dy;
+                    expert_actions_continuous_out[cont_off + 2] = dyaw;
+
+                    // Discretize each axis independently
+                    int best_dx = 0, best_dy = 0, best_yaw = 0;
+                    for (int j = 1; j < NUM_DX_BINS; j++) {
+                        if (fabsf(dx - DELTA_DX_VALUES[j]) < fabsf(dx - DELTA_DX_VALUES[best_dx]))
+                            best_dx = j;
                     }
-                }
-
-                // Discretize steering - find closest value in STEERING_VALUES
-                int best_steer_idx = 0;
-                float min_steer_diff = fabsf(continuous_steer - STEERING_VALUES[0]);
-                for (int j = 1; j < NUM_STEER_BINS; j++) {
-                    float diff = fabsf(continuous_steer - STEERING_VALUES[j]);
-                    if (diff < min_steer_diff) {
-                        min_steer_diff = diff;
-                        best_steer_idx = j;
+                    for (int j = 1; j < NUM_DY_BINS; j++) {
+                        if (fabsf(dy - DELTA_DY_VALUES[j]) < fabsf(dy - DELTA_DY_VALUES[best_dy]))
+                            best_dy = j;
                     }
-                }
+                    for (int j = 1; j < NUM_YAW_BINS; j++) {
+                        if (fabsf(dyaw - DELTA_YAW_VALUES[j]) < fabsf(dyaw - DELTA_YAW_VALUES[best_yaw]))
+                            best_yaw = j;
+                    }
 
-                // Compute joint discrete action: action = accel_idx * num_steer + steer_idx
-                int joint_action = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
+                    expert_actions_discrete_out[disc_off + 0] = (float)best_dx;
+                    expert_actions_discrete_out[disc_off + 1] = (float)best_dy;
+                    expert_actions_discrete_out[disc_off + 2] = (float)best_yaw;
 
-                // Store joint discrete action
-                int discrete_offset = t * env->active_agent_count + i;
-                expert_actions_discrete_out[discrete_offset] = (float)joint_action;
-
-                // Apply the expert actions to env->actions so that
-                // c_step_lightweight will use them
-                if (env->action_type == 1) { // continuous
-                    float (*action_array_f)[2] = (float (*)[2])env->actions;
-                    action_array_f[i][0] = continuous_accel / ACCEL_MAX;
-                    action_array_f[i][1] = continuous_steer / STEER_MAX; // Normalize
+                    // Write into env->actions for c_step_lightweight
+                    if (env->action_type == 1) {
+                        float *ab = (float *)env->actions;
+                        ab[i * 3 + 0] = dx   / DELTA_MAX_DX;
+                        ab[i * 3 + 1] = dy   / DELTA_MAX_DY;
+                        ab[i * 3 + 2] = dyaw / DELTA_MAX_DYAW;
+                    } else {
+                        int *ai = (int *)env->actions;
+                        ai[i * 3 + 0] = best_dx;
+                        ai[i * 3 + 1] = best_dy;
+                        ai[i * 3 + 2] = best_yaw;
+                    }
                 } else {
-                    int *action_array = (int *)env->actions;
-                    action_array[i] = joint_action;
-
-                    // printf("Timestep %d, Agent %d: VALID - Accel: %.3f, Steer: %.3f, Discrete: %d\n", t, i,
-                    //        continuous_accel, continuous_steer, joint_action);
+                    // Invalid timestep: mark outputs and apply do-nothing
+                    for (int k = 0; k < 3; k++) {
+                        expert_actions_continuous_out[cont_off + k] = -1.0f;
+                        expert_actions_discrete_out[disc_off + k]   = -1.0f;
+                    }
+                    if (env->action_type == 1) {
+                        float *ab = (float *)env->actions;
+                        ab[i * 3 + 0] = ab[i * 3 + 1] = ab[i * 3 + 2] = 0.0f;
+                    } else {
+                        int *ai = (int *)env->actions;
+                        ai[i * 3 + 0] = NUM_DX_BINS / 2;
+                        ai[i * 3 + 1] = NUM_DY_BINS / 2;
+                        ai[i * 3 + 2] = NUM_YAW_BINS / 2;
+                    }
                 }
+
             } else {
-                // Invalid action: store -1.0 as placeholder
-                int continuous_offset = t * env->active_agent_count * 2 + i * 2;
-                expert_actions_continuous_out[continuous_offset] = -1.0f;
-                expert_actions_continuous_out[continuous_offset + 1] = -1.0f;
+                // Classic dynamics: joint accel × steer action
+                bool is_valid = (t < agent->array_size &&
+                                 agent->expert_accel != NULL &&
+                                 agent->expert_steering != NULL &&
+                                 agent->expert_accel[t] != -1.0f &&
+                                 agent->expert_steering[t] != -1.0f);
 
-                int discrete_offset = t * env->active_agent_count + i;
-                expert_actions_discrete_out[discrete_offset] = -1.0f;
+                if (is_valid) {
+                    float accel = agent->expert_accel[t];
+                    float steer = agent->expert_steering[t];
 
-                // Apply "do nothing" action (zero acceleration and steering)
-                if (env->action_type == 1) { // continuous
-                    float (*action_array_f)[2] = (float (*)[2])env->actions;
-                    action_array_f[i][0] = 0.0f; // No acceleration
-                    action_array_f[i][1] = 0.0f; // No steering
-                } else {                         // discrete
-                    int *action_array = (int *)env->actions;
-                    // Apply "do nothing" action - middle acceleration (index 10) and straight steering (index 15)
-                    int do_nothing_accel_idx = NUM_ACCEL_BINS / 2; // Middle of range (should be 0 accel)
-                    int do_nothing_steer_idx = NUM_STEER_BINS / 2; // Middle of range (should be 0 steer)
-                    int do_nothing_action = do_nothing_accel_idx * NUM_STEER_BINS + do_nothing_steer_idx;
-                    action_array[i] = do_nothing_action;
+                    expert_actions_continuous_out[cont_off + 0] = accel;
+                    expert_actions_continuous_out[cont_off + 1] = steer;
+
+                    // Find closest discrete bins
+                    int best_a = 0, best_s = 0;
+                    for (int j = 1; j < NUM_ACCEL_BINS; j++) {
+                        if (fabsf(accel - ACCELERATION_VALUES[j]) <
+                            fabsf(accel - ACCELERATION_VALUES[best_a]))
+                            best_a = j;
+                    }
+                    for (int j = 1; j < NUM_STEER_BINS; j++) {
+                        if (fabsf(steer - STEERING_VALUES[j]) <
+                            fabsf(steer - STEERING_VALUES[best_s]))
+                            best_s = j;
+                    }
+
+                    int joint = best_a * NUM_STEER_BINS + best_s;
+                    expert_actions_discrete_out[disc_off] = (float)joint;
+
+                    if (env->action_type == 1) {
+                        float (*af)[2] = (float (*)[2])env->actions;
+                        af[i][0] = accel / ACCEL_MAX;
+                        af[i][1] = steer / STEER_MAX;
+                    } else {
+                        ((int *)env->actions)[i] = joint;
+                    }
+                } else {
+                    expert_actions_continuous_out[cont_off + 0] = -1.0f;
+                    expert_actions_continuous_out[cont_off + 1] = -1.0f;
+                    expert_actions_discrete_out[disc_off] = -1.0f;
+
+                    if (env->action_type == 1) {
+                        float (*af)[2] = (float (*)[2])env->actions;
+                        af[i][0] = af[i][1] = 0.0f;
+                    } else {
+                        int noop = (NUM_ACCEL_BINS / 2) * NUM_STEER_BINS + (NUM_STEER_BINS / 2);
+                        ((int *)env->actions)[i] = noop;
+                    }
                 }
             }
         }
 
-        // Step environment to get next observatiosns. This uses a separate,
-        // lightweight step function so that we don't distort the signal of training envs.
         if (t < TRAJECTORY_LENGTH - 1) {
             c_step_lightweight(env);
         }
@@ -2757,7 +2937,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     float *agent_obs = &observations[agent_index][0];
@@ -3458,12 +3638,18 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
         }
 
-        DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
-        DrawText(TextFormat("Controlling agent: %d \n", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
+        DrawText(TextFormat("Timestep: %d", env->timestep), 10, 65, 20, PUFF_WHITE);
+        DrawText(TextFormat("Controlling agent: %d \n", env->human_agent_idx), 10, 85, 20, PUFF_WHITE);
         if (env->control_mode == CONTROL_REPLAY_LOGS) {
             DrawText("Mode: Replay logs", 10, 20, 20, EXPERT_REPLAY);
         } else if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
             DrawText("Mode: Inferred expert actions", 10, 20, 20, LIGHT_PURPLE);
+            if (env->dynamics_model == DELTA_LOCAL) {
+                DrawText("Delta-local dynamics model", 10, 45, 20, LIGHT_PURPLE);
+            }
+            else if (env->dynamics_model == CLASSIC) {
+                DrawText("Classic dynamics model", 10, 45, 20, LIGHT_PURPLE);
+            }
         }
 
         int human_idx = env->active_agent_indices[env->human_agent_idx];

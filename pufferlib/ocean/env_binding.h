@@ -1049,17 +1049,18 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
     }
 
     int trajectory_length = PyArray_DIM(expert_actions_discrete, 0);
-    int max_obs =
-        EGO_FEATURES_CLASSIC + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs = EGO_FEATURES + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
 
     // Process data for each vectorized environment
     int agent_offset = 0;
     for (int i = 0; i < vec->num_envs; i++) {
         Env *env = vec->envs[i];
         int num_agents = env->active_agent_count;
+        int continuous_action_dim = (env->dynamics_model == DELTA_LOCAL) ? 3 : 2;
+        int discrete_action_dim = (env->dynamics_model == DELTA_LOCAL) ? 3 : 1;
 
-        float *env_actions_discrete = (float *)malloc(trajectory_length * num_agents * 1 * sizeof(float));
-        float *env_actions_continuous = (float *)malloc(trajectory_length * num_agents * 2 * sizeof(float));
+        float *env_actions_discrete = (float *)malloc(trajectory_length * num_agents * discrete_action_dim * sizeof(float));
+        float *env_actions_continuous = (float *)malloc(trajectory_length * num_agents * continuous_action_dim * sizeof(float));
         float *env_obs = (float *)malloc(trajectory_length * num_agents * max_obs * sizeof(float));
 
         if (!env_actions_discrete || !env_actions_continuous || !env_obs) {
@@ -1075,17 +1076,23 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
         // Copy results back to Python arrays
         for (int t = 0; t < trajectory_length; t++) {
             for (int a = 0; a < num_agents; a++) {
-                // Copy discrete actions
-                float *discrete_action_src = &env_actions_discrete[t * num_agents + a];
-                float *discrete_action_dst = (float *)PyArray_GETPTR3(expert_actions_discrete, t, agent_offset + a, 0);
-                discrete_action_dst[0] = discrete_action_src[0];
+                // Copy discrete actions (1 value for classic, 3 for delta_local)
+                float *discrete_action_src = &env_actions_discrete[
+                    t * num_agents * discrete_action_dim + a * discrete_action_dim];
+                float *discrete_action_dst = (float *)PyArray_GETPTR3(
+                    expert_actions_discrete, t, agent_offset + a, 0);
+                for (int d = 0; d < discrete_action_dim; d++) {
+                    discrete_action_dst[d] = discrete_action_src[d];
+                }
 
-                // Copy continuous actions
-                float *continuous_action_src = &env_actions_continuous[t * num_agents * 2 + a * 2];
-                float *continuous_action_dst =
-                    (float *)PyArray_GETPTR3(expert_actions_continuous, t, agent_offset + a, 0);
-                continuous_action_dst[0] = continuous_action_src[0];
-                continuous_action_dst[1] = continuous_action_src[1];
+                // Copy continuous actions (2 values for classic, 3 for delta_local)
+                float *continuous_action_src = &env_actions_continuous[
+                    t * num_agents * continuous_action_dim + a * continuous_action_dim];
+                float *continuous_action_dst = (float *)PyArray_GETPTR3(
+                    expert_actions_continuous, t, agent_offset + a, 0);
+                for (int d = 0; d < continuous_action_dim; d++) {
+                    continuous_action_dst[d] = continuous_action_src[d];
+                }
 
                 // Copy observations
                 float *obs_src = &env_obs[t * num_agents * max_obs + a * max_obs];
@@ -1153,6 +1160,9 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "MAX_ENTITIES_PER_CELL", MAX_ENTITIES_PER_CELL);
     PyModule_AddIntConstant(m, "NUM_ACCEL_BINS", NUM_ACCEL_BINS);
     PyModule_AddIntConstant(m, "NUM_STEER_BINS", NUM_STEER_BINS);
+    PyModule_AddIntConstant(m, "NUM_DX_BINS", NUM_DX_BINS);
+    PyModule_AddIntConstant(m, "NUM_DY_BINS", NUM_DY_BINS);
+    PyModule_AddIntConstant(m, "NUM_YAW_BINS", NUM_YAW_BINS);
     PyModule_AddIntConstant(m, "LAMBDA_CONDITIONING_IDX", LAMBDA_CONDITIONING_IDX);
     PyModule_AddIntConstant(m, "REWARD_COLLISION_IDX", REWARD_COLLISION_IDX);
     PyModule_AddIntConstant(m, "REWARD_OFFROAD_COLLISION_IDX", REWARD_OFFROAD_COLLISION_IDX);
@@ -1160,7 +1170,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
 
     PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
-    PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC", EGO_FEATURES_CLASSIC);
+    PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES); // Default
     PyModule_AddIntConstant(m, "EGO_FEATURES_JERK", EGO_FEATURES_JERK);
 
     return m;

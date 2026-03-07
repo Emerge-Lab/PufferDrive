@@ -24,6 +24,7 @@ class RegMode(IntEnum):
     LOG_PROB_DIRECT = 1
     KL_ANCHOR = 2
 
+DYNAMICS_MODEL_MAP = {"classic": 0, "jerk": 1, "delta_local": 2}
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
@@ -96,11 +97,10 @@ class Drive(pufferlib.PufferEnv):
         self.fix_rewards = fix_rewards
         self.fix_lambdas = fix_lambdas
         self.lambda_value = lambda_value
+        self._dynamics_model_flag = DYNAMICS_MODEL_MAP[dynamics_model]
 
         # Observation space calculation
-        self.ego_features = {"classic": binding.EGO_FEATURES_CLASSIC, "jerk": binding.EGO_FEATURES_JERK}.get(
-            dynamics_model
-        )
+        self.ego_features = binding.EGO_FEATURES_JERK if dynamics_model == "jerk" else binding.EGO_FEATURES
 
         # Extract observation shapes from constants
         # These need to be defined in C, since they determine the shape of the arrays
@@ -161,11 +161,15 @@ class Drive(pufferlib.PufferEnv):
                 self.single_action_space = gymnasium.spaces.MultiDiscrete([self.joint_action_space_size])
                 # Multi discrete (assume independence)
                 # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+            elif dynamics_model == "delta_local":
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([
+                    binding.NUM_DX_BINS, binding.NUM_DY_BINS, binding.NUM_YAW_BINS
+                ])
             elif dynamics_model == "jerk":
                 # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
                 self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
             else:
-                raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+                raise ValueError(f"dynamics_model must be 'classic', 'delta_local' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         else:
@@ -243,6 +247,7 @@ class Drive(pufferlib.PufferEnv):
                 fix_rewards=int(self.fix_rewards),
                 fix_lambdas=int(self.fix_lambdas),
                 lambda_value=self.lambda_value,
+                dynamics_model=self._dynamics_model_flag
             )
             env_ids.append(env_id)
 
@@ -318,6 +323,7 @@ class Drive(pufferlib.PufferEnv):
                 fix_rewards=int(self.fix_rewards),
                 fix_lambdas=int(self.fix_lambdas),
                 lambda_value=self.lambda_value,
+                dynamics_model=self._dynamics_model_flag,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
@@ -426,11 +432,17 @@ class Drive(pufferlib.PufferEnv):
         if self.reg_mode == RegMode.KL_ANCHOR:
             from examples.train_bc_policy import BCPolicy
 
+            if self.dynamics_model == "delta_local":
+                output_sizes = [binding.NUM_DX_BINS, binding.NUM_DY_BINS, binding.NUM_YAW_BINS]
+            else:
+                output_sizes = [self.joint_action_space_size]
+
             bc_policy = BCPolicy(
                 input_size=self.num_obs,
                 hidden_size=bc_hidden_size,
-                output_size=self.joint_action_space_size,
-            ).to(device)
+                output_sizes=output_sizes,
+            )
+
             bc_policy.load_state_dict(torch.load(self.anchor_cpt_path, map_location=device))
             bc_policy.eval()
             for p in bc_policy.parameters():
@@ -449,108 +461,101 @@ class Drive(pufferlib.PufferEnv):
 
     def _prepare_human_data(self, max_samples=16_384):
         """Prepare human demonstrations."""
-
         trajectory_length = 91
 
-        if self.dynamics_model == "classic":
-            expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, 1), dtype=np.float32)
-            expert_actions_continuous = np.zeros((trajectory_length, self.num_agents, 2), dtype=np.float32)
-            expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
+        if self.dynamics_model == "delta_local":
+            continuous_action_dim = 3
+            discrete_action_dim = 3
+        else: # Classic dynamics model
+            continuous_action_dim = 2
+            discrete_action_dim = 1
 
-            binding.vec_collect_expert_data(
-                self.c_envs, expert_actions_discrete, expert_actions_continuous, expert_observations_full
-            )
+        expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, discrete_action_dim), dtype=np.float32)
 
-            if np.all(expert_actions_discrete == -1):
-                raise ValueError("No valid human demonstrations could be collected. Please check the data format.")
+        expert_actions_continuous = np.zeros(
+            (trajectory_length, self.num_agents, continuous_action_dim), dtype=np.float32
+        )
+        expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
 
-            if self.uses_memory:
-                # LSTM is conditioned on the memory_size last observations.
-                # Adapt the human data collection to chunk trajectories into
-                # sequences of length memory_size: (feature_dim, memory_size)
+        binding.vec_collect_expert_data(
+            self.c_envs, expert_actions_discrete, expert_actions_continuous, expert_observations_full
+        )
 
-                # Filter out invalid timesteps first
-                invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)  # (T, N)
+        if np.all(expert_actions_discrete == -1):
+            raise ValueError("No valid human demonstrations could be collected. Please check the data format.")
 
-                sequences_obs = []
-                sequences_actions_discrete = []
-                sequences_actions_continuous = []
+        if self.uses_memory:
+            # LSTM is conditioned on the memory_size last observations.
+            # Adapt the human data collection to chunk trajectories into
+            # sequences of length memory_size: (feature_dim, memory_size)
 
-                # Calculate max sequences to collect
-                max_sequences = max_samples // self.memory_size
+            # Filter out invalid timesteps first
+            invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)  # (T, N)
 
-                # Process each agent's trajectory
-                for agent_idx in range(self.num_agents):
-                    # Early exit if we have enough sequences
+            sequences_obs = []
+            sequences_actions_discrete = []
+            sequences_actions_continuous = []
+            max_sequences = max_samples // self.memory_size
+
+            for agent_idx in range(self.num_agents):
+                if len(sequences_obs) >= max_sequences:
+                    break
+
+                valid_mask = ~invalid_action_mask[:, agent_idx]
+                valid_timesteps = np.where(valid_mask)[0]
+
+                if len(valid_timesteps) < self.memory_size:
+                    continue
+
+                agent_obs = expert_observations_full[valid_mask, agent_idx, :]
+                agent_actions_discrete = expert_actions_discrete[valid_mask, agent_idx, :]
+                agent_actions_continuous = expert_actions_continuous[valid_mask, agent_idx, :]
+
+                num_sequences = len(agent_obs) - self.memory_size + 1
+                for start_idx in range(num_sequences):
                     if len(sequences_obs) >= max_sequences:
                         break
+                    end_idx = start_idx + self.memory_size
+                    sequences_obs.append(agent_obs[start_idx:end_idx])
+                    sequences_actions_discrete.append(agent_actions_discrete[start_idx:end_idx])
+                    sequences_actions_continuous.append(agent_actions_continuous[start_idx:end_idx])
 
-                    # Get valid timesteps for this agent
-                    valid_mask = ~invalid_action_mask[:, agent_idx]
-                    valid_timesteps = np.where(valid_mask)[0]
+            if len(sequences_obs) == 0:
+                raise ValueError("No valid sequences could be created.")
 
-                    if len(valid_timesteps) < self.memory_size:
-                        # Skip agents with insufficient valid data
-                        continue
-
-                    # Extract valid data for this agent
-                    agent_obs = expert_observations_full[valid_mask, agent_idx, :]
-                    agent_actions_discrete = expert_actions_discrete[valid_mask, agent_idx, :]
-                    agent_actions_continuous = expert_actions_continuous[valid_mask, agent_idx, :]
-
-                    # Chunk into sequences of memory_size
-                    num_sequences = len(agent_obs) - self.memory_size + 1
-                    for start_idx in range(num_sequences):
-                        # Check if we've collected enough
-                        if len(sequences_obs) >= max_sequences:
-                            break
-
-                        end_idx = start_idx + self.memory_size
-                        sequences_obs.append(agent_obs[start_idx:end_idx])
-                        sequences_actions_discrete.append(agent_actions_discrete[start_idx:end_idx])
-                        sequences_actions_continuous.append(agent_actions_continuous[start_idx:end_idx])
-
-                if len(sequences_obs) == 0:
-                    raise ValueError("No valid sequences could be created. Check memory_size and trajectory validity.")
-
-                # Stack all sequences: [num_sequences, memory_size, feature_dim]
-                self.expert_observations_full = torch.tensor(np.stack(sequences_obs, axis=0), dtype=torch.float32)
-                self.expert_actions_discrete = torch.tensor(
-                    np.stack(sequences_actions_discrete, axis=0), dtype=torch.float32
-                )
-                self.expert_actions_continuous = torch.tensor(
-                    np.stack(sequences_actions_continuous, axis=0), dtype=torch.float32
-                )
-
-                self.total_num_samples = self.expert_actions_discrete.shape[0]
+            self.expert_observations_full = torch.tensor(np.stack(sequences_obs, axis=0), dtype=torch.float32)
+            self.expert_actions_discrete = torch.tensor(
+                np.stack(sequences_actions_discrete, axis=0), dtype=torch.float32
+            )
+            self.expert_actions_continuous = torch.tensor(
+                np.stack(sequences_actions_continuous, axis=0), dtype=torch.float32
+            )
+            self.total_num_samples = self.expert_actions_discrete.shape[0]
+        else:
+            if self.dynamics_model == "delta_local":
+                # Any dimension being -1 means the timestep is invalid
+                invalid_action_mask = (expert_actions_discrete[:, :, 0] == -1.0)
             else:
-                # For classic dynamics without memory (no LSTM), we can directly
-                # use the collected data as sequences. Just filter out the invalid timesteps
                 invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)
 
-                # Shape: [num_samples, feature_dim]
-                self.expert_actions_discrete = torch.Tensor(expert_actions_discrete[~invalid_action_mask])
-                self.expert_actions_continuous = torch.Tensor(expert_actions_continuous[~invalid_action_mask])
-                self.expert_observations_full = torch.Tensor(expert_observations_full[~invalid_action_mask])
+            self.expert_actions_discrete = torch.Tensor(expert_actions_discrete[~invalid_action_mask])
+            self.expert_actions_continuous = torch.Tensor(expert_actions_continuous[~invalid_action_mask])
+            self.expert_observations_full = torch.Tensor(expert_observations_full[~invalid_action_mask])
 
-                if len(self.expert_observations_full) > max_samples:
-                    # Limit storage if needed (keep most recent samples)
-                    self.expert_observations_full = self.expert_observations_full[:max_samples:]
-                    self.expert_actions_discrete = self.expert_actions_discrete[:max_samples:]
-                    self.expert_actions_continuous = self.expert_actions_continuous[:max_samples:]
+            if len(self.expert_observations_full) > max_samples:
+                # Limit storage if needed (keep most recent samples)
+                self.expert_observations_full = self.expert_observations_full[:max_samples:]
+                self.expert_actions_discrete = self.expert_actions_discrete[:max_samples:]
+                self.expert_actions_continuous = self.expert_actions_continuous[:max_samples:]
 
-                # Count unique number of (observation, action) pairs. This gives
-                # an idea of the diversity and coverage of the human demonstrations.
-                obs_np = self.expert_observations_full.numpy()
-                act_np = self.expert_actions_discrete.numpy()
-                self.total_unique_samples = len({self._hash_pair(obs_np[i], act_np[i]) for i in range(len(obs_np))})
-                self.total_num_samples = self.expert_actions_discrete.shape[0]
+            # Count unique number of (observation, action) pairs. This gives
+            # an idea of the diversity and coverage of the human demonstrations.
+            obs_np = self.expert_observations_full.numpy()
+            act_np = self.expert_actions_discrete.numpy()
+            self.total_unique_samples = len({self._hash_pair(obs_np[i], act_np[i]) for i in range(len(obs_np))})
+            self.total_num_samples = self.expert_actions_discrete.shape[0]
 
-                return self.total_num_samples, self.total_unique_samples
-        else:
-            raise NotImplementedError(
-                "Expert data collection is currently only implemented for the classic dynamics model. "
-            )
+            return self.total_num_samples, self.total_unique_samples
 
     def sample_human_demonstrations(self, batch_size=512):
         # get random indices between min and max
@@ -602,12 +607,22 @@ class Drive(pufferlib.PufferEnv):
 
 
 def infer_human_actions(obj):
-    """Infer expert actions (steer, accel) using inverse bicycle model."""
+    """Infer expert actions using inverse bicycle model and delta-local displacements.
+
+    Returns:
+        (expert_acceleration, expert_steering,
+         expert_delta_x, expert_delta_y, expert_delta_yaw)
+        Each is a list of length trajectory_length (91).
+        -1.0 is the placeholder for invalid timesteps (accel/steering).
+        0.0 is used for invalid delta timesteps.
+    """
     trajectory_length = 91
 
-    # Initialize expert actions arrays
     expert_acceleration = []
     expert_steering = []
+    expert_delta_x = []
+    expert_delta_y = []
+    expert_delta_yaw = []
 
     positions = obj.get("position", [])
     velocities = obj.get("velocity", [])
@@ -615,76 +630,111 @@ def infer_human_actions(obj):
     valids = obj.get("valid", [])
 
     if len(positions) < 2 or len(velocities) < 2 or len(headings) < 2:
-        return [-1.0] * trajectory_length, [-1.0] * trajectory_length
+        return (
+            [-1.0] * trajectory_length,
+            [-1.0] * trajectory_length,
+            [0.0] * trajectory_length,
+            [0.0] * trajectory_length,
+            [0.0] * trajectory_length,
+        )
 
-    dt = 0.1  # Discretization
-    vehicle_length = obj.get("length", 4.5)  # Default vehicle length
+    dt = 0.1
+    vehicle_length = obj.get("length", 4.5)
+    wheelbase = 0.6 * vehicle_length
 
     for t in range(trajectory_length):
-        # Check if we have enough data and both current and next timesteps are valid
-        if (
-            t >= len(positions)
-            or t >= len(velocities)
-            or t >= len(headings)
-            or t >= len(valids)
-            or not valids[t]
-            or t + 1 >= len(positions)
-            or t + 1 >= len(velocities)
-            or t + 1 >= len(headings)
-            or t + 1 >= len(valids)
-            or not valids[t + 1]
-        ):
+        # Check validity for both current and next timestep
+        valid_pair = (
+            t < len(positions)
+            and t < len(velocities)
+            and t < len(headings)
+            and t < len(valids)
+            and valids[t]
+            and t + 1 < len(positions)
+            and t + 1 < len(velocities)
+            and t + 1 < len(headings)
+            and t + 1 < len(valids)
+            and valids[t + 1]
+        )
+
+        if not valid_pair:
             expert_acceleration.append(-1.0)
             expert_steering.append(-1.0)
+            expert_delta_x.append(0.0)
+            expert_delta_y.append(0.0)
+            expert_delta_yaw.append(0.0)
             continue
 
-        # Current state
+        # Current and next state
+        pos_t = positions[t]
+        pos_t1 = positions[t + 1]
         vel_t = velocities[t]
-        heading_t = headings[t]
-        speed_t = math.sqrt(vel_t.get("x", 0.0) ** 2 + vel_t.get("y", 0.0) ** 2)
-
-        # Next state
         vel_t1 = velocities[t + 1]
+        heading_t = headings[t]
         heading_t1 = headings[t + 1]
+
+        speed_t = math.sqrt(vel_t.get("x", 0.0) ** 2 + vel_t.get("y", 0.0) ** 2)
         speed_t1 = math.sqrt(vel_t1.get("x", 0.0) ** 2 + vel_t1.get("y", 0.0) ** 2)
 
-        # Compute acceleration
+        # Classic inverse bicycle model (accel + steering)
         acceleration = (speed_t1 - speed_t) / dt
 
-        # Normalize heading difference
         heading_diff = heading_t1 - heading_t
         while heading_diff > math.pi:
             heading_diff -= 2 * math.pi
         while heading_diff < -math.pi:
             heading_diff += 2 * math.pi
 
-        # Compute yaw rate
         yaw_rate = heading_diff / dt
 
-        # Compute steering using inverse bicycle model
         steering = 0.0
-        if speed_t > 0.1:  # Avoid division by zero
-            # From bicycle model: yaw_rate = (v * cos(beta) * tan(delta)) / L
-            # Assuming beta ≈ 0: yaw_rate ≈ (v * tan(delta)) / L
-            tan_steering = (yaw_rate * vehicle_length) / speed_t
-            # Clamp tan_steering to avoid extreme values
+        if speed_t > 0.1:
+            tan_steering = (yaw_rate * wheelbase) / speed_t
             tan_steering = max(-10.0, min(10.0, tan_steering))
             steering = math.atan(tan_steering)
 
-        # Clamp values to reasonable ranges
         acceleration = max(-10.0, min(10.0, acceleration))
         steering = max(-2.0, min(2.0, steering))
 
         expert_acceleration.append(acceleration)
         expert_steering.append(steering)
 
-    # Ensure arrays are exactly trajectory_length (should already be, but just in case)
-    assert len(expert_acceleration) == trajectory_length, (
-        f"Expected {trajectory_length}, got {len(expert_acceleration)}"
-    )
-    assert len(expert_steering) == trajectory_length, f"Expected {trajectory_length}, got {len(expert_steering)}"
+        # Delta-local: (dx, dy, dyaw) in agent's local frame 
+        global_dx = pos_t1.get("x", 0.0) - pos_t.get("x", 0.0)
+        global_dy = pos_t1.get("y", 0.0) - pos_t.get("y", 0.0)
 
-    return expert_acceleration, expert_steering
+        # Rotate global displacement into agent's local frame at time t
+        cos_h = math.cos(heading_t)
+        sin_h = math.sin(heading_t)
+        local_dx = cos_h * global_dx + sin_h * global_dy
+        local_dy = -sin_h * global_dx + cos_h * global_dy
+
+        # Clip to bounds
+        local_dx = max(-6.0, min(6.0, local_dx))
+        local_dy = max(-6.0, min(6.0, local_dy))
+
+        expert_delta_x.append(local_dx)
+        expert_delta_y.append(local_dy)
+        expert_delta_yaw.append(heading_diff)  # already wrapped above
+
+    # Pad/truncate to exact trajectory_length
+    for arr, pad_val in [
+        (expert_acceleration, -1.0),
+        (expert_steering, -1.0),
+        (expert_delta_x, 0.0),
+        (expert_delta_y, 0.0),
+        (expert_delta_yaw, 0.0),
+    ]:
+        while len(arr) < trajectory_length:
+            arr.append(pad_val)
+
+    expert_acceleration = expert_acceleration[:trajectory_length]
+    expert_steering = expert_steering[:trajectory_length]
+    expert_delta_x = expert_delta_x[:trajectory_length]
+    expert_delta_y = expert_delta_y[:trajectory_length]
+    expert_delta_yaw = expert_delta_yaw[:trajectory_length]
+
+    return expert_acceleration, expert_steering, expert_delta_x, expert_delta_y, expert_delta_yaw
 
 
 def calculate_area(p1, p2, p3):
@@ -819,14 +869,17 @@ def save_map_binary(map_data, output_file, unique_map_id):
             )
 
             # Infer and write human actions
-            if obj_type in [1, 2, 3]:  # For vehicles, pedestrians, cyclists
-                human_accel, human_steering = infer_human_actions(obj)
+            if obj_type in [1, 2, 3]:
+                human_accel, human_steering, human_dx, human_dy, human_dyaw = infer_human_actions(obj)
                 f.write(struct.pack(f"{trajectory_length}f", *human_accel))
                 f.write(struct.pack(f"{trajectory_length}f", *human_steering))
+                f.write(struct.pack(f"{trajectory_length}f", *human_dx))
+                f.write(struct.pack(f"{trajectory_length}f", *human_dy))
+                f.write(struct.pack(f"{trajectory_length}f", *human_dyaw))
             else:
-                # Write zeros for non-vehicles
-                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
-                f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
+                # accel, steering, delta_x, delta_y, delta_yaw
+                for _ in range(5):
+                    f.write(struct.pack(f"{trajectory_length}f", *[0.0] * trajectory_length))
 
             # Write scalar fields
             f.write(struct.pack("f", float(obj.get("width", 0.0))))
@@ -1005,7 +1058,7 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 if __name__ == "__main__":
     #test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/selected")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
