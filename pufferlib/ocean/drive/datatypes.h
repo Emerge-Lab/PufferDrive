@@ -223,6 +223,11 @@ struct Agent {
 
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set
+    int freeze_updates; // 0/1 -> Freeze metrics/reward updates when agent is stopped
+
+    // Previous velocity (for jerk penalty across loop boundaries)
+    float prev_vx;
+    float prev_vy;
 
     // Jerk dynamics
     float a_long;

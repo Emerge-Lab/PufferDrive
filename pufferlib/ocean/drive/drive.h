@@ -1739,6 +1739,7 @@ void set_start_position(Drive *env) {
         e->respawn_timestep = -1;
         e->stopped = 0;
         e->removed = 0;
+        e->freeze_updates=0;
         e->respawn_count = 0;
 
         // Dynamics
@@ -2636,6 +2637,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->cumulative_displacement_since_last_goal = 0.0f;
     agent->stopped = 0;
     agent->removed = 0;
+    agent->freeze_updates = 0;
     agent->a_long = 0.0f;
     agent->a_lat = 0.0f;
     agent->jerk_long = 0.0f;
@@ -2944,29 +2946,24 @@ void c_step(Drive *env) {
     }
     // Process actions for all active agents
     for (int i = 0; i < env->active_agent_count; i++) {
-        env->logs[i].episode_length += 1;
+        
         int agent_idx = env->active_agent_indices[i];
         env->agents[agent_idx].collision_state = 0;
         env->agents[agent_idx].aabb_collision_state = 0;
-        float prev_vx = env->agents[agent_idx].sim_vx;
-        float prev_vy = env->agents[agent_idx].sim_vy;
+        env->agents[agent_idx].prev_vx = env->agents[agent_idx].sim_vx;
+        env->agents[agent_idx].prev_vy = env->agents[agent_idx].sim_vy;
 
         move_dynamics(env, i, agent_idx);
-
-        // Tiny jerk penalty for smoothness
-        if (env->dynamics_model == CLASSIC) {
-            float delta_vx = env->agents[agent_idx].sim_vx - prev_vx;
-            float delta_vy = env->agents[agent_idx].sim_vy - prev_vy;
-            float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
-            env->rewards[i] += jerk_penalty;
-            env->logs[i].episode_return += jerk_penalty;
-        }
     }
 
-    // COMPUTE REWARDS
+    // COMPUTE REWARDS AND UPDATE LOGS
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
+        if(agent->freeze_updates){
+            continue;
+        }
+        env->logs[i].episode_length += 1;
         agent->collision_state = 0;
         agent->aabb_collision_state = 0;
         compute_agent_metrics(env, agent_idx);
@@ -2980,7 +2977,7 @@ void c_step(Drive *env) {
         float v_dot_heading = agent->sim_vx * cos_heading + agent->sim_vy * sin_heading;
         float signed_speed = copysignf(speed_magnitude, v_dot_heading);
 
-        if (collision_state > 0 && !agent->stopped) {
+        if (collision_state > 0) {
             if (collision_state == VEHICLE_COLLISION) {
                 float reward_collision;
                 if (env->reward_conditioning) {
@@ -3014,6 +3011,15 @@ void c_step(Drive *env) {
             }
 
             agent->collided_before_goal = 1;
+        }
+
+        // Tiny jerk penalty for smoothness
+        if (env->dynamics_model == CLASSIC) {
+            float delta_vx = env->agents[agent_idx].sim_vx - env->agents[agent_idx].prev_vx;
+            float delta_vy = env->agents[agent_idx].sim_vy - env->agents[agent_idx].prev_vy;
+            float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
+            env->rewards[i] += jerk_penalty;
+            env->logs[i].episode_return += jerk_penalty;
         }
 
         float distance_to_goal = relative_distance_3d(agent->sim_x, agent->sim_y, agent->sim_z, agent->goal_position_x,
@@ -3159,6 +3165,11 @@ void c_step(Drive *env) {
             env->rewards[i] += speed_reward;
             env->logs[i].episode_return += speed_reward;
         }
+
+        if(agent->stopped){
+                agent->freeze_updates = 1;
+        }
+
     }
 
     if (env->goal_behavior == GOAL_RESPAWN) {
