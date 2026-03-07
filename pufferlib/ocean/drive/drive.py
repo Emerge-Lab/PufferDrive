@@ -82,6 +82,7 @@ class Drive(pufferlib.PufferEnv):
         reward_bound_steer_max=1.25,
         reward_bound_acc_min=0.666,
         reward_bound_acc_max=1.5,
+        min_avg_speed_to_consider_goal_attempt=2.0,
         # spawn settings
         min_agents_per_env=32,
         max_agents_per_env=64,
@@ -150,6 +151,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_bound_steer_max = reward_bound_steer_max
         self.reward_bound_acc_min = reward_bound_acc_min
         self.reward_bound_acc_max = reward_bound_acc_max
+        self.min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt
 
         # Observation space calculation
         if self.reward_conditioning:
@@ -309,6 +311,7 @@ class Drive(pufferlib.PufferEnv):
             reward_bound_steer_max=self.reward_bound_steer_max,
             reward_bound_acc_min=self.reward_bound_acc_min,
             reward_bound_acc_max=self.reward_bound_acc_max,
+            min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
             use_all_maps=self.use_all_maps,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
@@ -380,6 +383,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_steer_max=self.reward_bound_steer_max,
                 reward_bound_acc_min=self.reward_bound_acc_min,
                 reward_bound_acc_max=self.reward_bound_acc_max,
+                min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 dt=dt,
@@ -468,6 +472,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_steer_max=self.reward_bound_steer_max,
                 reward_bound_acc_min=self.reward_bound_acc_min,
                 reward_bound_acc_max=self.reward_bound_acc_max,
+                min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                 use_all_maps=self.use_all_maps,
                 min_agents_per_env=self.min_agents_per_env,
                 max_agents_per_env=self.max_agents_per_env,
@@ -536,6 +541,7 @@ class Drive(pufferlib.PufferEnv):
                     reward_bound_steer_max=self.reward_bound_steer_max,
                     reward_bound_acc_min=self.reward_bound_acc_min,
                     reward_bound_acc_max=self.reward_bound_acc_max,
+                    min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                     collision_behavior=self.collision_behavior,
                     offroad_behavior=self.offroad_behavior,
                     dt=self.dt,
