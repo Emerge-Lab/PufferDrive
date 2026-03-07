@@ -83,6 +83,14 @@ class Drive(pufferlib.PufferEnv):
         reward_bound_acc_min=0.666,
         reward_bound_acc_max=1.5,
         min_avg_speed_to_consider_goal_attempt=2.0,
+        # spawn settings
+        min_agents_per_env=32,
+        max_agents_per_env=64,
+        spawn_width_min=1.5,
+        spawn_width_max=2.5,
+        spawn_length_min=2.0,
+        spawn_length_max=5.5,
+        spawn_height=1.5,
     ):
         # env
         self.dt = dt
@@ -191,10 +199,22 @@ class Drive(pufferlib.PufferEnv):
             self.init_mode = 0
         elif self.init_mode_str == "create_only_controlled":
             self.init_mode = 1
+        elif self.init_mode_str == "init_variable_agent_number":
+            self.init_mode = 2
         else:
             raise ValueError(
-                f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
+                f"init_mode must be one of 'create_all_valid', 'create_only_controlled', or 'init_variable_agent_number'. Got: {self.init_mode_str}"
             )
+
+        self.min_agents_per_env = int(min_agents_per_env)
+        self.max_agents_per_env = int(max_agents_per_env)
+        self.spawn_width_min = float(spawn_width_min)
+        self.spawn_width_max = float(spawn_width_max)
+        self.spawn_length_min = float(spawn_length_min)
+        self.spawn_length_max = float(spawn_length_max)
+        self.spawn_height = float(spawn_height)
+
+        self._validate_agent_dimensions()
 
         if action_type == "discrete":
             if dynamics_model == "classic":
@@ -244,6 +264,8 @@ class Drive(pufferlib.PufferEnv):
                     f"Please reduce num_maps, add more maps to {map_dir}, or set allow_fewer_maps=True."
                 )
 
+        self.use_all_maps = use_all_maps
+
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
@@ -290,7 +312,9 @@ class Drive(pufferlib.PufferEnv):
             reward_bound_acc_min=self.reward_bound_acc_min,
             reward_bound_acc_max=self.reward_bound_acc_max,
             min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
-            use_all_maps=use_all_maps,
+            use_all_maps=self.use_all_maps,
+            min_agents_per_env=self.min_agents_per_env,
+            max_agents_per_env=self.max_agents_per_env,
         )
 
         # agent_offsets[-1] works in both cases, just making it explicit that num_agents is ignored if use_all_maps
@@ -371,6 +395,12 @@ class Drive(pufferlib.PufferEnv):
                 init_steps=init_steps,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
+                max_agents_per_env=self.max_agents_per_env,
+                spawn_width_min=self.spawn_width_min,
+                spawn_width_max=self.spawn_width_max,
+                spawn_length_min=self.spawn_length_min,
+                spawn_length_max=self.spawn_length_max,
+                spawn_height=self.spawn_height,
             )
             env_ids.append(env_id)
 
@@ -443,7 +473,9 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_acc_min=self.reward_bound_acc_min,
                 reward_bound_acc_max=self.reward_bound_acc_max,
                 min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
-                use_all_maps=False,
+                use_all_maps=self.use_all_maps,
+                min_agents_per_env=self.min_agents_per_env,
+                max_agents_per_env=self.max_agents_per_env,
             )
             self.agent_offsets = agent_offsets
             self.map_ids = map_ids
@@ -520,6 +552,12 @@ class Drive(pufferlib.PufferEnv):
                     init_steps=self.init_steps,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
+                    max_agents_per_env=self.max_agents_per_env,
+                    spawn_width_min=self.spawn_width_min,
+                    spawn_width_max=self.spawn_width_max,
+                    spawn_length_min=self.spawn_length_min,
+                    spawn_length_max=self.spawn_length_max,
+                    spawn_height=self.spawn_height,
                 )
                 env_ids.append(env_id)
             self.c_envs = binding.vectorize(*env_ids)
@@ -527,6 +565,31 @@ class Drive(pufferlib.PufferEnv):
             binding.vec_reset(self.c_envs, seed)
             self.terminals[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+    def _validate_agent_dimensions(self):
+        if self.max_agents_per_env < self.min_agents_per_env:
+            raise ValueError(
+                f"max_agents_per_env ({self.max_agents_per_env}) must be >= min_agents_per_env ({self.min_agents_per_env})"
+            )
+        if self.max_agents_per_env > binding.MAX_AGENTS:
+            # TODO: Check needs to be removed once MAX_PARTNER_OBS deprecates MAX_AGENTS
+            raise ValueError(
+                f"max_agents_per_env ({self.max_agents_per_env}) cannot exceed MAX_AGENTS ({binding.MAX_AGENTS}) defined in C code."
+            )
+        if self.spawn_width_min < 0.0:
+            raise ValueError(f"spawn_width_min ({self.spawn_width_min}) must be non-negative")
+        if self.spawn_width_max < self.spawn_width_min:
+            raise ValueError(
+                f"spawn_width_max ({self.spawn_width_max}) must be >= spawn_width_min ({self.spawn_width_min})"
+            )
+        if self.spawn_length_min < 0.0:
+            raise ValueError(f"spawn_length_min ({self.spawn_length_min}) must be non-negative")
+        if self.spawn_length_max < self.spawn_length_min:
+            raise ValueError(
+                f"spawn_length_max ({self.spawn_length_max}) must be >= spawn_length_min ({self.spawn_length_min})"
+            )
+        if self.spawn_height < 0.0:
+            raise ValueError(f"spawn_height ({self.spawn_height}) must be non-negative")
 
     def get_global_agent_state(self):
         """Get current global state of all active agents.

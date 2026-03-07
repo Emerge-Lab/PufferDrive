@@ -244,6 +244,7 @@ struct RoadMapElement {
     float *x;
     float *y;
     float *z;
+    float polyline_length; // Total length of the polyline
 
     // Lane specific info
     int num_entries;
@@ -279,6 +280,13 @@ void free_agent(struct Agent *agent) {
     free(agent->log_valid);
     free(agent->route);
     free(agent->path);
+}
+
+void free_agents(struct Agent *agents, int num_agents) {
+    for (int i = 0; i < num_agents; i++) {
+        free_agent(&agents[i]);
+    }
+    free(agents);
 }
 
 void free_road_element(struct RoadMapElement *element) {
