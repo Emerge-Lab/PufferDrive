@@ -2980,7 +2980,7 @@ void c_step(Drive *env) {
         float v_dot_heading = agent->sim_vx * cos_heading + agent->sim_vy * sin_heading;
         float signed_speed = copysignf(speed_magnitude, v_dot_heading);
 
-        if (collision_state > 0) {
+        if (collision_state > 0 && !agent->stopped) {
             if (collision_state == VEHICLE_COLLISION) {
                 float reward_collision;
                 if (env->reward_conditioning) {
