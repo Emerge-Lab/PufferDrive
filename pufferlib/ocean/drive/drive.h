@@ -1498,7 +1498,10 @@ void add_log(Drive *env) {
         env->log.static_agent_count += env->static_agent_count;
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
         env->log.n += 1;
+        printf("At timestep %.2d, agent %.2d has an episode return of %.2f\n", env->timestep, i,
+               env->logs[i].episode_return);
     }
+    printf("\n");
 }
 
 // ========================================
