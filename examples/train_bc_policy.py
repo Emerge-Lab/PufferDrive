@@ -104,6 +104,7 @@ def load_data(driver_env):
 
     return TensorDataset(obs, actions)
 
+
 def compute_accuracy(policy, batch_obs, batch_actions):
     """Compute per-head and overall accuracy."""
     with torch.no_grad():
@@ -150,7 +151,7 @@ if __name__ == "__main__":
         "hidden_size": 1024,
         "output_sizes": output_sizes,
         "learning_rate": 1e-4,
-        "epochs": 1500,
+        "epochs": 200,
         "minibatches": 64,
         "resample_every_n_epochs": 10,
         "num_maps": args["env"]["num_maps"],

@@ -506,22 +506,33 @@ class PuffeRL:
                 bc_anchor_obs[:, self.reward_goal_obs_idx] = 0.0
 
                 with torch.no_grad():
-                    anchor_log_probs = torch.log_softmax(self.bc_anchor.get_action_dist_logits(bc_anchor_obs), dim=-1)
+                    # Returns a list of tensors, one per action head
+                    # Classic: [logits_joint]. Delta_local: [logits_dx, logits_dy, logits_yaw].
+                    anchor_logits_list = self.bc_anchor.get_action_dist_logits(bc_anchor_obs)
 
-                cur_log_probs = torch.log_softmax(logits[0].reshape(-1, logits[0].shape[-1]), dim=-1)
+                # Compute per-sample KL summed across all independent action heads
+                num_heads = len(anchor_logits_list)
+                per_sample_kl = torch.zeros(anchor_obs.shape[0], device=device)
+                anchor_entropy_accum = 0.0
+
+                for h in range(num_heads):
+                    with torch.no_grad():
+                        anchor_lp = torch.log_softmax(anchor_logits_list[h], dim=-1)
+                        anchor_entropy_accum += pufferlib.pytorch.entropy(anchor_lp).mean().item()
+
+                    cur_lp = torch.log_softmax(logits[h].reshape(-1, logits[h].shape[-1]), dim=-1)
+                    per_sample_kl = per_sample_kl + torch.nn.functional.kl_div(
+                        cur_lp, anchor_lp, reduction="none", log_target=True
+                    ).sum(dim=-1)
+
                 self.sampled_lambdas = anchor_obs[:, self.lambda_obs_idx].unsqueeze(-1)  # [B, 1]
                 self.sampled_collision_rewards = anchor_obs[:, self.reward_veh_obs_idx].unsqueeze(-1)  # [B, 1]
 
-                reg_losses = torch.nn.functional.kl_div(
-                    cur_log_probs, anchor_log_probs, reduction="none", log_target=True
-                )
-                # Sum over action dim to get per-sample KL, then weight by lambda to get batch average
-                per_sample_kl = reg_losses.sum(dim=-1)  # [B]
+                # Weight by lambda to get batch average
                 reg_loss = (per_sample_kl * self.sampled_lambdas.squeeze(-1)).mean()
 
                 with torch.no_grad():
-                    anchor_entropy = pufferlib.pytorch.entropy(anchor_log_probs).mean().item()
-                    self.data["data/anchor_entropy"] = anchor_entropy
+                    self.data["data/anchor_entropy"] = anchor_entropy_accum / num_heads
 
             elif self.reg_mode == "log_prob_direct":
                 discrete_human_actions, continuous_human_actions, human_observations = (
@@ -1386,7 +1397,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 ob = torch.as_tensor(ob).to(device)
                 logits, value = policy.forward_eval(ob, state)
 
-                
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
 
                 action = action.cpu().numpy().reshape(vecenv.action_space.shape)
@@ -1403,13 +1413,14 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         vecenv.close()
 
+
 def verify(env_name, args=None, vecenv=None):
     """Verify human demonstrations."""
 
     args = args or load_config(env_name)
     args["env"]["termination_mode"] = 0
     # Options: "expert_replay", "inferred_expert_actions"
-    args["env"]["control_mode"] = "inferred_expert_actions" 
+    args["env"]["control_mode"] = "inferred_expert_actions"
 
     backend = args["vec"]["backend"]
     if backend != "PufferEnv":
@@ -1433,7 +1444,7 @@ def verify(env_name, args=None, vecenv=None):
 
         # Note: This does not have an effect when control_mode is "inferred_expert_actions" or "expert_replay"
         placeholder_action = vecenv.action_space.sample()
-        
+
         ob, reward, done, truncated, info = vecenv.step(placeholder_action)
 
         if driver.render_mode == 1:
@@ -1442,6 +1453,7 @@ def verify(env_name, args=None, vecenv=None):
                 break
 
     vecenv.close()
+
 
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)

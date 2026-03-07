@@ -24,7 +24,9 @@ class RegMode(IntEnum):
     LOG_PROB_DIRECT = 1
     KL_ANCHOR = 2
 
+
 DYNAMICS_MODEL_MAP = {"classic": 0, "jerk": 1, "delta_local": 2}
+
 
 class Drive(pufferlib.PufferEnv):
     def __init__(
@@ -162,9 +164,9 @@ class Drive(pufferlib.PufferEnv):
                 # Multi discrete (assume independence)
                 # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
             elif dynamics_model == "delta_local":
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([
-                    binding.NUM_DX_BINS, binding.NUM_DY_BINS, binding.NUM_YAW_BINS
-                ])
+                self.single_action_space = gymnasium.spaces.MultiDiscrete(
+                    [binding.NUM_DX_BINS, binding.NUM_DY_BINS, binding.NUM_YAW_BINS]
+                )
             elif dynamics_model == "jerk":
                 # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
                 self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
@@ -247,7 +249,7 @@ class Drive(pufferlib.PufferEnv):
                 fix_rewards=int(self.fix_rewards),
                 fix_lambdas=int(self.fix_lambdas),
                 lambda_value=self.lambda_value,
-                dynamics_model=self._dynamics_model_flag
+                dynamics_model=self._dynamics_model_flag,
             )
             env_ids.append(env_id)
 
@@ -441,7 +443,7 @@ class Drive(pufferlib.PufferEnv):
                 input_size=self.num_obs,
                 hidden_size=bc_hidden_size,
                 output_sizes=output_sizes,
-            )
+            ).to(device)
 
             bc_policy.load_state_dict(torch.load(self.anchor_cpt_path, map_location=device))
             bc_policy.eval()
@@ -466,7 +468,7 @@ class Drive(pufferlib.PufferEnv):
         if self.dynamics_model == "delta_local":
             continuous_action_dim = 3
             discrete_action_dim = 3
-        else: # Classic dynamics model
+        else:  # Classic dynamics model
             continuous_action_dim = 2
             discrete_action_dim = 1
 
@@ -534,7 +536,7 @@ class Drive(pufferlib.PufferEnv):
         else:
             if self.dynamics_model == "delta_local":
                 # Any dimension being -1 means the timestep is invalid
-                invalid_action_mask = (expert_actions_discrete[:, :, 0] == -1.0)
+                invalid_action_mask = expert_actions_discrete[:, :, 0] == -1.0
             else:
                 invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)
 
@@ -699,7 +701,7 @@ def infer_human_actions(obj):
         expert_acceleration.append(acceleration)
         expert_steering.append(steering)
 
-        # Delta-local: (dx, dy, dyaw) in agent's local frame 
+        # Delta-local: (dx, dy, dyaw) in agent's local frame
         global_dx = pos_t1.get("x", 0.0) - pos_t.get("x", 0.0)
         global_dy = pos_t1.get("y", 0.0) - pos_t.get("y", 0.0)
 
@@ -1056,9 +1058,9 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 
 
 if __name__ == "__main__":
-    #test_performance()
+    # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/selected")
+    process_all_maps(data_folder="data/processed/interactive_data_training_100")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
