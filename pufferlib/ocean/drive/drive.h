@@ -1498,10 +1498,7 @@ void add_log(Drive *env) {
         env->log.static_agent_count += env->static_agent_count;
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
         env->log.n += 1;
-        printf("At timestep %.2d, agent %.2d has an episode return of %.2f\n", env->timestep, i,
-               env->logs[i].episode_return);
     }
-    printf("\n");
 }
 
 // ========================================
@@ -1739,7 +1736,7 @@ void set_start_position(Drive *env) {
         e->respawn_timestep = -1;
         e->stopped = 0;
         e->removed = 0;
-        e->freeze_updates=0;
+        e->freeze_updates = 0;
         e->respawn_count = 0;
 
         // Dynamics
@@ -2946,7 +2943,7 @@ void c_step(Drive *env) {
     }
     // Process actions for all active agents
     for (int i = 0; i < env->active_agent_count; i++) {
-        
+
         int agent_idx = env->active_agent_indices[i];
         env->agents[agent_idx].collision_state = 0;
         env->agents[agent_idx].aabb_collision_state = 0;
@@ -2960,7 +2957,7 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
-        if(agent->freeze_updates){
+        if (agent->freeze_updates) {
             continue;
         }
         env->logs[i].episode_length += 1;
@@ -3166,10 +3163,9 @@ void c_step(Drive *env) {
             env->logs[i].episode_return += speed_reward;
         }
 
-        if(agent->stopped){
-                agent->freeze_updates = 1;
+        if (agent->stopped) {
+            agent->freeze_updates = 1;
         }
-
     }
 
     if (env->goal_behavior == GOAL_RESPAWN) {
