@@ -1302,7 +1302,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     args["env"]["termination_mode"] = 0
 
     wosac_enabled = args["eval"]["wosac_realism_eval"]
-    human_replay_enabled = args["eval"]["human_replay_eval"]
 
     if wosac_enabled:
         args["env"]["map_dir"] = args["eval"]["map_dir"]
@@ -1386,7 +1385,10 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             with torch.no_grad():
                 ob = torch.as_tensor(ob).to(device)
                 logits, value = policy.forward_eval(ob, state)
+
+                
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+
                 action = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
             if isinstance(logits, torch.distributions.Normal):
@@ -1401,6 +1403,46 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         vecenv.close()
 
+def verify(env_name, args=None, vecenv=None):
+    """Verify human demonstrations."""
+
+    args = args or load_config(env_name)
+    args["env"]["termination_mode"] = 0
+    # Options: "expert_replay", "inferred_expert_actions"
+    args["env"]["control_mode"] = "expert_replay" 
+    args["env"]["dynamics_model"] = "classic"
+
+    backend = args["vec"]["backend"]
+    if backend != "PufferEnv":
+        backend = "Serial"
+
+    args["vec"] = dict(backend=backend, num_envs=1)
+
+    vecenv = vecenv or load_env(env_name, args)
+
+    ob, info = vecenv.reset()
+    driver = vecenv.driver_env
+    num_agents = vecenv.observation_space.shape[0]
+    device = args["train"]["device"]
+
+    if driver.render_mode == 1:
+        max_frames = 91
+        frame_count = 0
+
+    while True:
+        driver.render(draw_traces=True)
+
+        # Note: This does not have an effect when control_mode is "inferred_expert_actions" or "expert_replay"
+        placeholder_action = vecenv.action_space.sample()
+        
+        ob, reward, done, truncated, info = vecenv.step(placeholder_action)
+
+        if driver.render_mode == 1:
+            frame_count += 1
+            if frame_count >= max_frames or done.all() or truncated.all():
+                break
+
+    vecenv.close()
 
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)
@@ -1771,6 +1813,8 @@ def main():
         train(env_name=env_name)
     elif mode == "eval":
         eval(env_name=env_name)
+    elif mode == "verify":
+        verify(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":

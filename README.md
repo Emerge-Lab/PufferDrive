@@ -216,3 +216,14 @@ If you use PufferDrive in your research, please cite:
   year = {2025},
 }
 ```
+
+
+## Features
+
+### Verify human data
+
+Run
+```
+puffer verify puffer_drive --env.render-mode 0
+```
+with `control_mode` set to `expert_replay` or `inferred_`. Note: Currently only supported with classic dynamics model.

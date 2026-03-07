@@ -137,6 +137,10 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 3
         elif self.control_mode_str == "control_mixed_play":
             self.control_mode = 4
+        elif self.control_mode_str == "inferred_expert_actions":
+            self.control_mode = 5
+        elif self.control_mode_str == "expert_replay":
+            self.control_mode = 6
         else:
             raise ValueError(
                 f"control_mode must be one of 'control_vehicles', 'control_wosac', 'control_agents' or 'control_mixed_play'. Got: {self.control_mode_str}"
@@ -999,9 +1003,9 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 
 
 if __name__ == "__main__":
-    test_performance()
+    #test_performance()
     # Process the train dataset
-    # process_all_maps(data_folder="data/processed/interactive_data_training_100")
+    process_all_maps(data_folder="data/processed/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

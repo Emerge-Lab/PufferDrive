@@ -57,6 +57,8 @@
 #define CONTROL_WOSAC 2
 #define CONTROL_SDC_ONLY 3
 #define CONTROL_MIXED_PLAY 4
+#define CONTROL_INFERRED_EXPERT_ACTIONS 5
+#define CONTROL_REPLAY_LOGS 6
 
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
@@ -1305,6 +1307,8 @@ bool should_control_agent(Drive *env, int agent_idx, int control_limit) {
 
     switch (env->control_mode) {
     case CONTROL_WOSAC:
+    case CONTROL_INFERRED_EXPERT_ACTIONS:
+    case CONTROL_REPLAY_LOGS:
         // Valid types only, ignore expert flag and goal distance
         return (is_vehicle || is_ped_or_bike);
 
@@ -1442,8 +1446,10 @@ void set_active_agents(Drive *env) {
 
 void remove_bad_trajectories(Drive *env) {
 
-    if (env->control_mode != CONTROL_WOSAC) {
-        return; // Leave all trajectories in WOSAC control mode
+    if (env->control_mode != CONTROL_WOSAC &&
+        env->control_mode != CONTROL_INFERRED_EXPERT_ACTIONS &&
+        env->control_mode != CONTROL_REPLAY_LOGS) {
+        return;
     }
 
     set_start_position(env);
@@ -2157,6 +2163,51 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].steering_angle = 0.0f;
 }
 
+// Override the action buffer for a given agent index with expert
+// accel/steering values at the current timestep. Used by
+// CONTROL_INFERRED_EXPERT_ACTIONS mode.
+static void override_action_with_expert(Drive *env, int action_idx, int agent_idx) {
+    if (env->dynamics_model != CLASSIC) {
+        return; // Only classic dynamics has expert accel/steering; other models TBD
+    }
+
+    Entity *agent = &env->entities[agent_idx];
+    int t = env->timestep;
+    if (t < 0 || t >= agent->array_size)
+        return;
+    if (agent->expert_accel == NULL || agent->expert_steering == NULL)
+        return;
+    if (agent->expert_accel[t] == -1.0f || agent->expert_steering[t] == -1.0f)
+        return;
+
+    if (env->action_type == 1) { // continuous
+        float (*action_array_f)[2] = (float (*)[2])env->actions;
+        action_array_f[action_idx][0] = agent->expert_accel[t] / ACCEL_MAX;
+        action_array_f[action_idx][1] = agent->expert_steering[t] / STEER_MAX;
+    } else { // discrete
+        int best_accel_idx = 0;
+        float min_accel_diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[0]);
+        for (int j = 1; j < NUM_ACCEL_BINS; j++) {
+            float diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[j]);
+            if (diff < min_accel_diff) {
+                min_accel_diff = diff;
+                best_accel_idx = j;
+            }
+        }
+        int best_steer_idx = 0;
+        float min_steer_diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[0]);
+        for (int j = 1; j < NUM_STEER_BINS; j++) {
+            float diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[j]);
+            if (diff < min_steer_diff) {
+                min_steer_diff = diff;
+                best_steer_idx = j;
+            }
+        }
+        int *action_array = (int *)env->actions;
+        action_array[action_idx] = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
+    }
+}
+
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
@@ -2170,6 +2221,7 @@ void c_step(Drive *env) {
             continue;
         move_expert(env, env->actions, expert_idx);
     }
+    
     // Process actions for all active agents
     for (int i = 0; i < env->active_agent_count; i++) {
         env->logs[i].score = 0.0f;
@@ -2179,15 +2231,23 @@ void c_step(Drive *env) {
         float prev_vx = env->entities[agent_idx].vx;
         float prev_vy = env->entities[agent_idx].vy;
 
-        move_dynamics(env, i, agent_idx);
+        if (env->control_mode == CONTROL_REPLAY_LOGS) {
+            // Teleport agents along their logged trajectories; ignore policy actions
+            move_expert(env, env->actions, agent_idx);
+        } else {
+            if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+                override_action_with_expert(env, i, agent_idx);
+            }
+            move_dynamics(env, i, agent_idx);
 
-        // Tiny jerk penalty for smoothness
-        if (env->dynamics_model == CLASSIC) {
-            float delta_vx = env->entities[agent_idx].vx - prev_vx;
-            float delta_vy = env->entities[agent_idx].vy - prev_vy;
-            float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
-            env->rewards[i] += jerk_penalty;
-            env->logs[i].episode_return += jerk_penalty;
+            // Tiny jerk penalty for smoothness
+            if (env->dynamics_model == CLASSIC) {
+                float delta_vx = env->entities[agent_idx].vx - prev_vx;
+                float delta_vy = env->entities[agent_idx].vy - prev_vy;
+                float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
+                env->rewards[i] += jerk_penalty;
+                env->logs[i].episode_return += jerk_penalty;
+            }
         }
     }
 
@@ -2323,7 +2383,15 @@ void c_step_lightweight(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         env->entities[agent_idx].collision_state = 0;
-        move_dynamics(env, i, agent_idx);
+
+        if (env->control_mode == CONTROL_REPLAY_LOGS) {
+            move_expert(env, env->actions, agent_idx);
+        } else {
+            if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+                override_action_with_expert(env, i, agent_idx);
+            }
+            move_dynamics(env, i, agent_idx);
+        }
     }
 
     // Update observations
@@ -2954,6 +3022,28 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
     }
 
+    // Draw expert trajectories for verification modes
+    if (env->control_mode == CONTROL_REPLAY_LOGS || env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+        Color traj_color = (env->control_mode == CONTROL_REPLAY_LOGS) ? EXPERT_REPLAY : LIGHT_PURPLE;
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int idx = env->active_agent_indices[i];
+            Entity *e = &env->entities[idx];
+            for (int t = env->init_steps; t < e->array_size - 1; t++) {
+                if (e->traj_valid[t] && e->traj_valid[t + 1]) {
+                    DrawLine3D(
+                        (Vector3){e->traj_x[t], e->traj_y[t], Z_ROAD_MARKINGS},
+                        (Vector3){e->traj_x[t + 1], e->traj_y[t + 1], Z_ROAD_MARKINGS},
+                        Fade(traj_color, 0.4f));
+                }
+                if (e->traj_valid[t]) {
+                    DrawSphere(
+                        (Vector3){e->traj_x[t], e->traj_y[t], Z_ROAD_MARKINGS},
+                        0.15f, traj_color);
+                }
+            }
+        }
+    }
+
     for (int i = 0; i < env->num_entities; i++) {
         // Draw objects
         if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN ||
@@ -3037,7 +3127,11 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         agent_color = EXPERT_REPLAY;
                 }
                 if (is_active_agent) {
-                    if (env->entities[i].type == PEDESTRIAN)
+                    if (env->control_mode == CONTROL_REPLAY_LOGS)
+                        agent_color = EXPERT_REPLAY;
+                    else if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS)
+                        agent_color = LIGHT_PURPLE;
+                    else if (env->entities[i].type == PEDESTRIAN)
                         agent_color = LIGHT_ORANGE;
                     else if (env->entities[i].type == CYCLIST)
                         agent_color = LIGHT_PURPLE;
@@ -3088,14 +3182,14 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 // Select car model (skip index 0)
                 Model car_model = client->cars[(i % 5) + 1]; // Cycles through indices 1-5
 
-                if (agent_index == env->human_agent_idx) {
-                    car_model = client->cars[0]; // Ego agent always uses red car
+                if (env->control_mode == CONTROL_REPLAY_LOGS || env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+                    car_model = client->cars[1]; // White car for verification modes
+                } else if (agent_index == env->human_agent_idx) {
+                    car_model = client->cars[0];
                 } else if (is_active_agent) {
-
                     car_model = client->cars[(i % 5) + 1];
-
                     if (env->entities[i].collision_state > 0) {
-                        car_model = client->cars[0]; // Collided agents use red
+                        car_model = client->cars[0];
                     }
                 }
                 // Draw obs for selected agent index
@@ -3133,8 +3227,14 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     Color wire_color = GRAY;
                     if (!is_active_agent && env->entities[i].mark_as_expert == 1)
                         wire_color = EXPERT_REPLAY;
-                    if (is_active_agent)
-                        wire_color = BLUE; // Policy-controlled
+                    if (is_active_agent) {
+                        if (env->control_mode == CONTROL_REPLAY_LOGS)
+                            wire_color = EXPERT_REPLAY;
+                        else if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS)
+                            wire_color = LIGHT_PURPLE;
+                        else
+                            wire_color = BLUE;  // Policy-controlled
+                    }
                     if (is_active_agent && env->entities[i].collision_state > 0)
                         wire_color = RED;
                     rlSetLineWidth(2.0f);
@@ -3165,7 +3265,9 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             if (!is_active_agent || env->entities[i].valid == 0) {
                 continue;
             }
-            if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
+            if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0 &&
+                env->control_mode != CONTROL_REPLAY_LOGS &&
+                env->control_mode != CONTROL_INFERRED_EXPERT_ACTIONS) {
                 Color goal_color = DEEPBLUE;
                 if (env->entities[i].type == PEDESTRIAN)
                     goal_color = LIGHT_ORANGE;
@@ -3357,7 +3459,13 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         }
 
         DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
-        DrawText(TextFormat("Controlling agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
+        DrawText(TextFormat("Controlling agent: %d \n", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
+        if (env->control_mode == CONTROL_REPLAY_LOGS) {
+            DrawText("Mode: Replay logs", 10, 20, 20, EXPERT_REPLAY);
+        } else if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+            DrawText("Mode: Inferred expert actions", 10, 20, 20, LIGHT_PURPLE);
+        }
+
         int human_idx = env->active_agent_indices[env->human_agent_idx];
 
         Color action_color = IsKeyDown(KEY_LEFT_SHIFT) ? YELLOW : PUFF_WHITE;
@@ -3366,7 +3474,9 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             int *action_array = (int *)env->actions;
             int action_val = action_array[env->human_agent_idx];
 
-            if (env->dynamics_model == CLASSIC) {
+            bool can_take_control = !(env->control_mode != CONTROL_REPLAY_LOGS || env->control_mode != CONTROL_INFERRED_EXPERT_ACTIONS);
+
+            if (env->dynamics_model == CLASSIC && can_take_control) {
                 int accel_idx = action_val / NUM_STEER_BINS;
                 int steer_idx = action_val % NUM_STEER_BINS;
                 float accel_value = ACCELERATION_VALUES[accel_idx];
@@ -3393,15 +3503,15 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
         int status_y = 150;
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
-            DrawText("[shift pressed]", 10, status_y, 20, YELLOW);
+            DrawText("[shift pressed]", 10, status_y, 20, PUFF_WHITE);
             status_y += 20;
         }
         if (IsKeyDown(KEY_SPACE)) {
-            DrawText("[space pressed]", 10, status_y, 20, YELLOW);
+            DrawText("[space pressed]", 10, status_y, 20, PUFF_WHITE);
             status_y += 20;
         }
         if (IsKeyDown(KEY_LEFT_CONTROL)) {
-            DrawText("[ctrl pressed]", 10, status_y, 20, YELLOW);
+            DrawText("[ctrl pressed]", 10, status_y, 20, PUFF_WHITE);
             status_y += 20;
         }
 
