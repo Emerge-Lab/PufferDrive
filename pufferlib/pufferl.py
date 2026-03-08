@@ -545,11 +545,6 @@ class PuffeRL:
                         run_safe_eval = safe_eval_config.get("safe_eval", False)
                         safe_eval_interval = safe_eval_config.get("safe_eval_interval", self.render_interval)
                         should_safe_eval = run_safe_eval and self.epoch % safe_eval_interval == 0
-                        bin_path_safe = None
-                        if should_safe_eval:
-                            # Copy bin before render_videos deletes it
-                            bin_path_safe = f"{bin_path_epoch}.safe_eval.bin"
-                            shutil.copy2(bin_path_epoch, bin_path_safe)
 
                         if self.render_async:
                             # Clean up finished processes
@@ -592,7 +587,7 @@ class PuffeRL:
                                 wandb_run=wandb_run,
                             )
 
-                        # Run safe eval using the copied bin (reuses the already-exported model)
+                        # Run safe eval using the same bin (reuses the already-exported model)
                         if should_safe_eval:
                             safe_ini_path = None
                             try:
@@ -600,7 +595,7 @@ class PuffeRL:
                                 pufferlib.utils.render_videos(
                                     self.config, env_cfg, self.logger.run_id,
                                     wandb_log, self.epoch, self.global_step,
-                                    bin_path_safe, False,
+                                    bin_path_epoch, False,
                                     wandb_run=wandb_run,
                                     config_path=safe_ini_path,
                                     wandb_prefix="eval",
@@ -614,11 +609,14 @@ class PuffeRL:
                             finally:
                                 if safe_ini_path and os.path.exists(safe_ini_path):
                                     os.remove(safe_ini_path)
-                                if bin_path_safe and os.path.exists(bin_path_safe):
-                                    os.remove(bin_path_safe)
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
+                    finally:
+                        if os.path.exists(bin_path):
+                            os.remove(bin_path)
+                        if os.path.exists(bin_path_epoch):
+                            os.remove(bin_path_epoch)
 
         if self.config["eval"]["wosac_realism_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training

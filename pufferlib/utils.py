@@ -300,10 +300,6 @@ def render_videos(
     except Exception as e:
         print(f"Failed to generate videos: {e}")
 
-    finally:
-        if os.path.exists(bin_path):
-            os.remove(bin_path)
-
 
 def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/ocean/drive.ini"):
     """Generate a temporary ini file with safe/law-abiding reward conditioning values.
