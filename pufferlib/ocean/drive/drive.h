@@ -2150,7 +2150,7 @@ void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_o
         y_out[i] = agent->sim_y + env->world_mean_y;
         z_out[i] = agent->sim_z + env->world_mean_z;
         heading_out[i] = agent->sim_heading;
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        id_out[i] = agent->id;
         length_out[i] = agent->sim_length;
         width_out[i] = agent->sim_width;
     }

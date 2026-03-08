@@ -256,63 +256,48 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 PyErr_SetString(PyExc_ValueError, error_msg);
                 return NULL;
             }
-        }
 
-        for (int j = 0; j < env->num_objects; j++) {
-            free_agent(&env->agents[j]);
+            // Store map_id
+            PyObject *map_id_obj = PyLong_FromLong(map_id);
+            PyList_SetItem(map_ids, env_count, map_id_obj);
+            // Store agent offset
+            PyObject *offset = PyLong_FromLong(total_agent_count);
+            PyList_SetItem(agent_offsets, env_count, offset);
+            total_agent_count += env->active_agent_count;
+            env_count++;
+            for (int j = 0; j < env->num_objects; j++) {
+                free_agent(&env->agents[j]);
+            }
+            for (int j = 0; j < env->num_roads; j++) {
+                free_road_element(&env->road_elements[j]);
+            }
+            free(env->agents);
+            free(env->road_elements);
+            free(env->road_scenario_ids);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env);
+            continue;
         }
-        for (int j = 0; j < env->num_roads; j++) {
-            free_road_element(&env->road_elements[j]);
-        }
-        free(env->agents);
-        free(env->road_elements);
-        free(env->road_scenario_ids);
-        free(env->active_agent_indices);
-        free(env->static_agent_indices);
-        free(env->expert_static_agent_indices);
-        free(env);
-        continue;
     }
 
-    // Store map_id
-    PyObject *map_id_obj = PyLong_FromLong(map_id);
-    PyList_SetItem(map_ids, env_count, map_id_obj);
-    // Store agent offset
-    PyObject *offset = PyLong_FromLong(total_agent_count);
-    PyList_SetItem(agent_offsets, env_count, offset);
-    total_agent_count += env->active_agent_count;
-    env_count++;
-    for (int j = 0; j < env->num_objects; j++) {
-        free_agent(&env->agents[j]);
+    if (total_agent_count >= num_agents) {
+        total_agent_count = num_agents;
     }
-    for (int j = 0; j < env->num_roads; j++) {
-        free_road_element(&env->road_elements[j]);
-    }
-    free(env->agents);
-    free(env->road_elements);
-    free(env->road_scenario_ids);
-    free(env->active_agent_indices);
-    free(env->static_agent_indices);
-    free(env->expert_static_agent_indices);
-    free(env);
-}
 
-if (total_agent_count >= num_agents) {
-    total_agent_count = num_agents;
-}
+    PyObject *final_total_agent_count = PyLong_FromLong(total_agent_count);
+    PyList_SetItem(agent_offsets, env_count, final_total_agent_count);
+    PyObject *final_env_count = PyLong_FromLong(env_count);
 
-PyObject *final_total_agent_count = PyLong_FromLong(total_agent_count);
-PyList_SetItem(agent_offsets, env_count, final_total_agent_count);
-PyObject *final_env_count = PyLong_FromLong(env_count);
-
-// resize lists
-PyObject *resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
-PyObject *resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-PyObject *tuple = PyTuple_New(3);
-PyTuple_SetItem(tuple, 0, resized_agent_offsets);
-PyTuple_SetItem(tuple, 1, resized_map_ids);
-PyTuple_SetItem(tuple, 2, final_env_count);
-return tuple;
+    // resize lists
+    PyObject *resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
+    PyObject *resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
+    PyObject *tuple = PyTuple_New(3);
+    PyTuple_SetItem(tuple, 0, resized_agent_offsets);
+    PyTuple_SetItem(tuple, 1, resized_map_ids);
+    PyTuple_SetItem(tuple, 2, final_env_count);
+    return tuple;
 }
 
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {

@@ -47,6 +47,7 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir="resources/drive/binaries/training",
+        use_all_maps=False,
         allow_fewer_maps=True,
         # reward randomization bounds
         reward_bound_goal_radius_min=2.0,
