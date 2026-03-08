@@ -463,3 +463,8 @@ blockquote {
   margin: 1rem 0;
   border-radius: 0 8px 8px 0;
 }
+
+/* Fix table visibility - remove alternating row colors */
+table tr:nth-child(2n) {
+  background-color: transparent !important;
+}

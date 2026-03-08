@@ -2,7 +2,7 @@ name: perf-ci
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ 2.0 ]
 
 jobs:
   test-performance:

@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from typing import Dict
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 import configparser
 import os
 
@@ -36,10 +37,105 @@ class WOSACEvaluator:
         self.sim_steps = self.num_steps - self.init_steps
         self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
         self.device = config.get("train", {}).get("device", "cuda")
+        self.eval_mode = config.get("eval", {}).get("wosac_eval_mode", "policy")
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
         self.metrics_config.read(wosac_metrics_path)
+
+    def evaluate(self, args, vecenv, policy=None, drop_scene_duplicates=True):
+        """Run full WOSAC evaluation with batched iteration over target scenarios.
+
+        Args:
+            args: Configuration dictionary
+            vecenv: Vectorized environment
+            policy: Policy to evaluate
+            drop_scene_duplicates: Whether to drop duplicate scenarios
+
+        Returns:
+            DataFrame: Full results aggregated by scenario.
+        """
+        num_target_maps = args["eval"]["wosac_target_scenarios"]
+        max_batches = args["eval"].get("wosac_max_batches", 100)
+
+        unique_files_sampled = set()
+        combined_results = []
+
+        with tqdm(total=100, desc="Processing batches", unit="%", colour="cyan") as pbar:
+            batch_idx = 0
+            while batch_idx < max_batches:
+                # Resample maps for each batch (except first)
+                if batch_idx > 0:
+                    vecenv.driver_env.resample_maps()
+
+                # Obtain ground truth trajectories
+                gt_trajectories = self.collect_ground_truth_trajectories(vecenv)
+
+                # Collect simulated trajectories
+                if policy is not None and self.eval_mode == "policy":
+                    simulated_trajectories = self.collect_simulated_trajectories(args, vecenv, policy)
+                elif self.eval_mode == "ground_truth":
+                    # Create fake simulated trajectories by repeating ground truth
+                    simulated_trajectories = gt_trajectories.copy()
+                    for key in ["x", "y", "heading", "id"]:
+                        simulated_trajectories[key] = np.repeat(
+                            gt_trajectories[key], args["eval"]["wosac_num_rollouts"], axis=1
+                        )
+                    simulated_trajectories["id"] = simulated_trajectories["id"][..., np.newaxis]
+                else:
+                    raise ValueError(f"Policy is None or unknown evaluation mode: {self.eval_mode}")
+
+                # Compute metrics for this batch
+                agent_state = vecenv.driver_env.get_global_agent_state()
+                road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+                batch_results = self.compute_metrics(
+                    gt_trajectories,
+                    simulated_trajectories,
+                    agent_state,
+                    road_edge_polylines,
+                    aggregate_results=False,
+                )
+
+                # Optional: sanity check on first batch
+                if args["eval"].get("wosac_sanity_check", False) and batch_idx == 0:
+                    self._quick_sanity_check(gt_trajectories, simulated_trajectories)
+
+                # Track coverage
+                unique_files_sampled.update(str(s) for s in np.unique(gt_trajectories["scenario_id"]))
+                combined_results.append(batch_results)
+
+                # Update progress
+                coverage = len(unique_files_sampled) / num_target_maps
+                pbar.n = int(coverage * 100)
+                pbar.set_postfix({"n": len(unique_files_sampled), "batch": batch_idx + 1})
+                pbar.refresh()
+
+                batch_idx += 1
+
+                # Stop if we've covered all target scenarios
+                if len(unique_files_sampled) >= num_target_maps:
+                    break
+
+            # Check if we didn't reach target coverage
+            if len(unique_files_sampled) < num_target_maps:
+                print(
+                    f"\nWarning: Only covered {len(unique_files_sampled)}/{num_target_maps} scenarios after {batch_idx} batches"
+                )
+
+            # Combine batch results into single dataframe
+            df_combined = pd.concat(combined_results)
+
+            # Optionally drop duplicate scenarios (keep first occurrence)
+            if drop_scene_duplicates:
+                initial_count = len(df_combined)
+                df_combined = df_combined[~df_combined.index.duplicated(keep="first")]
+                dropped = initial_count - len(df_combined)
+                if dropped > 0:
+                    print(f"\nDropped {dropped} duplicate scenarios.")
+
+            print(f"\nCollected {len(df_combined)} agent records from {batch_idx} batches")
+
+            return df_combined
 
     def _compute_metametric(self, metrics: pd.Series) -> float:
         metametric = 0.0
@@ -48,9 +144,7 @@ class WOSACEvaluator:
             weight = self.metrics_config.getfloat(field_name, "metametric_weight")
             metric_score = metrics[likelihood_field_name]
             metametric += weight * metric_score
-
-        weight_sum = sum(self.metrics_config.getfloat(fn, "metametric_weight") for fn in _METRIC_FIELD_NAMES)
-        return metametric / weight_sum
+        return metametric
 
     def _get_histogram_params(self, metric_name: str):
         return (
@@ -121,6 +215,53 @@ class WOSACEvaluator:
 
         return trajectories
 
+    def collect_wosac_random_baseline(self, puffer_env):
+        """
+        Random Baseline from Wosac 2023 paper
+        """
+        driver = puffer_env.driver_env
+        num_agents = puffer_env.observation_space.shape[0]
+
+        trajectories = {
+            "x": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "y": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "heading": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
+            "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
+        }
+
+        for rollout_idx in range(self.num_rollouts):
+            obs, info = puffer_env.reset()
+
+            # Do Initialization
+            agent_state = driver.get_global_agent_state()
+            trajectories["x"][:, rollout_idx, 0] = agent_state["x"]
+            trajectories["y"][:, rollout_idx, 0] = agent_state["y"]
+            trajectories["heading"][:, rollout_idx, 0] = agent_state["heading"]
+            trajectories["id"][:, rollout_idx, 0] = agent_state["id"]
+
+            # Update using Gaussian:
+            samples = np.random.normal(loc=1, scale=0.1, size=(num_agents, self.sim_steps, 3))
+            for time_idx in range(1, self.sim_steps):
+                dx, dy, d_heading = samples[:, time_idx, 0], samples[:, time_idx, 1], samples[:, time_idx, 2]
+                x, y, heading = (
+                    trajectories["x"][:, rollout_idx, time_idx - 1],
+                    trajectories["y"][:, rollout_idx, time_idx - 1],
+                    trajectories["heading"][:, rollout_idx, time_idx - 1],
+                )
+
+                cos_h = np.cos(heading)
+                sin_h = np.sin(heading)
+
+                x += dx * cos_h - dy * sin_h
+                y += dx * sin_h + dy * cos_h
+                heading += d_heading
+
+                trajectories["x"][:, rollout_idx, time_idx] = x
+                trajectories["y"][:, rollout_idx, time_idx] = y
+                trajectories["heading"][:, rollout_idx, time_idx] = heading
+
+        return trajectories
+
     def compute_metrics(
         self,
         ground_truth_trajectories: Dict,
@@ -147,7 +288,7 @@ class WOSACEvaluator:
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
-        eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
+        eval_mask = ground_truth_trajectories["is_track_to_predict"][:, 0]
 
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
@@ -159,7 +300,10 @@ class WOSACEvaluator:
         ref_valid = ground_truth_trajectories["valid"]
         agent_length = agent_state["length"]
         agent_width = agent_state["width"]
+        is_vehicle = ground_truth_trajectories["is_vehicle"]
         scenario_ids = ground_truth_trajectories["scenario_id"]
+
+        last_scenario_id = str(scenario_ids[-1][0])
 
         # We evaluate the metrics only for the Tracks to Predict.
         eval_sim_x = sim_x[eval_mask]
@@ -172,6 +316,7 @@ class WOSACEvaluator:
         eval_agent_length = agent_length[eval_mask]
         eval_agent_width = agent_width[eval_mask]
         eval_scenario_ids = scenario_ids[eval_mask]
+        eval_is_vehicle = is_vehicle[eval_mask]
 
         # Compute features
         # Kinematics-related features
@@ -337,60 +482,48 @@ class WOSACEvaluator:
             sanity_check=False,
         )
 
-        speed_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                linear_speed_log_likelihood,
-                speed_validity[:, 0, :],
-                axis=1,
-            )
+        speed_log_likelihood = metrics._reduce_average_with_validity(
+            linear_speed_log_likelihood,
+            speed_validity[:, 0, :],
+            axis=1,
         )
 
-        accel_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                linear_accel_log_likelihood,
-                acceleration_validity[:, 0, :],
-                axis=1,
-            )
+        accel_log_likelihood = metrics._reduce_average_with_validity(
+            linear_accel_log_likelihood,
+            acceleration_validity[:, 0, :],
+            axis=1,
         )
 
-        angular_speed_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                angular_speed_log_likelihood,
-                speed_validity[:, 0, :],
-                axis=1,
-            )
+        angular_speed_log_likelihood = metrics._reduce_average_with_validity(
+            angular_speed_log_likelihood,
+            speed_validity[:, 0, :],
+            axis=1,
         )
 
-        angular_accel_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                angular_accel_log_likelihood,
-                acceleration_validity[:, 0, :],
-                axis=1,
-            )
+        angular_accel_log_likelihood = metrics._reduce_average_with_validity(
+            angular_accel_log_likelihood,
+            acceleration_validity[:, 0, :],
+            axis=1,
         )
 
-        distance_to_nearest_object_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                distance_to_nearest_object_log_likelihood,
-                eval_ref_valid[:, 0, :],
-                axis=1,
-            )
+        distance_to_nearest_object_log_likelihood = metrics._reduce_average_with_validity(
+            distance_to_nearest_object_log_likelihood,
+            eval_ref_valid[:, 0, :],
+            axis=1,
         )
 
-        time_to_collision_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                time_to_collision_log_likelihood,
-                eval_ref_valid[:, 0, :],
-                axis=1,
-            )
+        # TTC is computed only for vehicles
+        ttc_valid = eval_ref_valid & eval_is_vehicle[..., None]
+        time_to_collision_log_likelihood = metrics._reduce_average_with_validity(
+            time_to_collision_log_likelihood,
+            ttc_valid[:, 0, :],
+            axis=1,
         )
 
-        distance_to_road_edge_likelihood = np.exp(
-            metrics._reduce_average_with_validity(
-                distance_to_road_edge_log_likelihood,
-                eval_ref_valid[:, 0, :],
-                axis=1,
-            )
+        distance_to_road_edge_log_likelihood = metrics._reduce_average_with_validity(
+            distance_to_road_edge_log_likelihood,
+            eval_ref_valid[:, 0, :],
+            axis=1,
         )
 
         # Collision likelihood is computed by aggregating in time. For invalid objects
@@ -400,8 +533,8 @@ class WOSACEvaluator:
         sim_collision_indication = np.any(np.where(eval_ref_valid, sim_collision_per_step, False), axis=2)
         ref_collision_indication = np.any(np.where(eval_ref_valid, ref_collision_per_step, False), axis=2)
 
-        sim_num_collisions = np.sum(sim_collision_indication, axis=1)
-        ref_num_collisions = np.sum(ref_collision_indication, axis=1)
+        sim_num_collisions = np.mean(sim_collision_indication, axis=1)
+        ref_num_collisions = np.mean(ref_collision_indication, axis=1)
 
         collision_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_collision_indication[:, 0],
@@ -411,14 +544,13 @@ class WOSACEvaluator:
             num_bins=2,
             use_bernoulli=True,
         )
-        collision_likelihood = np.exp(collision_log_likelihood)
 
         # Offroad likelihood (same pattern as collision)
         sim_offroad_indication = np.any(np.where(eval_ref_valid, sim_offroad_per_step, False), axis=2)
         ref_offroad_indication = np.any(np.where(eval_ref_valid, ref_offroad_per_step, False), axis=2)
 
-        sim_num_offroad = np.sum(sim_offroad_indication, axis=1)
-        ref_num_offroad = np.sum(ref_offroad_indication, axis=1)
+        sim_num_offroad = np.mean(sim_offroad_indication, axis=1)
+        ref_num_offroad = np.mean(ref_offroad_indication, axis=1)
 
         offroad_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_offroad_indication[:, 0],
@@ -428,7 +560,6 @@ class WOSACEvaluator:
             num_bins=2,
             use_bernoulli=True,
         )
-        offroad_likelihood = np.exp(offroad_log_likelihood)
 
         # Get agent IDs
         eval_agent_ids = ground_truth_trajectories["id"][eval_mask]
@@ -443,60 +574,70 @@ class WOSACEvaluator:
                 "num_offroad_ref": ref_num_offroad.flatten(),
                 "ade": ade,
                 "min_ade": min_ade,
-                "likelihood_linear_speed": speed_likelihood,
-                "likelihood_linear_acceleration": accel_likelihood,
-                "likelihood_angular_speed": angular_speed_likelihood,
-                "likelihood_angular_acceleration": angular_accel_likelihood,
-                "likelihood_distance_to_nearest_object": distance_to_nearest_object_likelihood,
-                "likelihood_time_to_collision": time_to_collision_likelihood,
-                "likelihood_collision_indication": collision_likelihood,
-                "likelihood_distance_to_road_edge": distance_to_road_edge_likelihood,
-                "likelihood_offroad_indication": offroad_likelihood,
+                "likelihood_linear_speed": speed_log_likelihood,
+                "likelihood_linear_acceleration": accel_log_likelihood,
+                "likelihood_angular_speed": angular_speed_log_likelihood,
+                "likelihood_angular_acceleration": angular_accel_log_likelihood,
+                "likelihood_distance_to_nearest_object": distance_to_nearest_object_log_likelihood,
+                "likelihood_time_to_collision": time_to_collision_log_likelihood,
+                "likelihood_collision_indication": collision_log_likelihood,
+                "likelihood_distance_to_road_edge": distance_to_road_edge_log_likelihood,
+                "likelihood_offroad_indication": offroad_log_likelihood,
             }
         )
 
-        scene_level_results = df.groupby("scenario_id")[
-            [
-                "ade",
-                "min_ade",
-                "num_collisions_sim",
-                "num_collisions_ref",
-                "num_offroad_sim",
-                "num_offroad_ref",
-                "likelihood_linear_speed",
-                "likelihood_linear_acceleration",
-                "likelihood_angular_speed",
-                "likelihood_angular_acceleration",
-                "likelihood_distance_to_nearest_object",
-                "likelihood_time_to_collision",
-                "likelihood_collision_indication",
-                "likelihood_distance_to_road_edge",
-                "likelihood_offroad_indication",
-            ]
-        ].mean()
+        # Aggregate along agent dimenision: Obtain one score per scenario
+        df_scene_level = df.groupby("scenario_id", as_index=True).mean().drop(columns=["agent_id"]).dropna()
 
-        scene_level_results["realism_meta_score"] = scene_level_results.apply(self._compute_metametric, axis=1)
-        scene_level_results["num_agents"] = df.groupby("scenario_id").size()
-        scene_level_results = scene_level_results[
-            ["num_agents"] + [col for col in scene_level_results.columns if col != "num_agents"]
-        ]
+        # Exponentiate the averaged log-likelihoods to get final likelihoods
+        likelihood_columns = [col for col in df_scene_level.columns if col.startswith("likelihood_")]
+        df_scene_level[likelihood_columns] = np.exp(df_scene_level[likelihood_columns])
+
+        df_scene_level["realism_meta_score"] = df_scene_level.apply(self._compute_metametric, axis=1)
+        df_scene_level["num_agents_per_scene"] = df.groupby("scenario_id").size()
+        df_scene_level = df_scene_level.round(3)
+
+        # Get group summary metrics
+        kinematic_metrics = np.mean(
+            [
+                df_scene_level["likelihood_linear_speed"],
+                df_scene_level["likelihood_linear_acceleration"],
+                df_scene_level["likelihood_angular_speed"],
+                df_scene_level["likelihood_angular_acceleration"],
+            ]
+        )
+
+        interactive_metrics = np.mean(
+            [
+                df_scene_level["likelihood_collision_indication"],
+                df_scene_level["likelihood_distance_to_nearest_object"],
+                df_scene_level["likelihood_time_to_collision"],
+            ]
+        )
+
+        map_metrics = np.mean(
+            [
+                df_scene_level["likelihood_distance_to_road_edge"],
+                df_scene_level["likelihood_offroad_indication"],
+            ]
+        )
+
+        df_scene_level["kinematic_metrics"] = kinematic_metrics
+        df_scene_level["interactive_metrics"] = interactive_metrics
+        df_scene_level["map_based_metrics"] = map_metrics
+
+        # Safety: drop the last scenario (potentially incomplete) from the scene-level results
+        if last_scenario_id in df_scene_level.index:
+            df_scene_level = df_scene_level.drop(last_scenario_id)
 
         if aggregate_results:
-            aggregate_metrics = scene_level_results.mean().to_dict()
-            aggregate_metrics["total_num_agents"] = scene_level_results["num_agents"].sum()
-            # Convert numpy types to Python native types
-            return {k: v.item() if hasattr(v, "item") else v for k, v in aggregate_metrics.items()}
+            # Aggregate over scenarios
+            aggregate_metrics = df_scene_level.mean().to_dict()
+            aggregate_metrics["total_num_agents"] = df_scene_level["num_agents_per_scene"].sum()
+            aggregate_metrics["realism_score_std"] = df_scene_level["realism_meta_score"].std()
+            return aggregate_metrics
         else:
-            print("\n Scene-level results:\n")
-            print(scene_level_results)
-
-            print(f"\n Overall realism meta score: {scene_level_results['realism_meta_score'].mean():.4f}")
-            print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
-            print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
-
-            # print(f"\n Full agent-level results:\n")
-            # print(df)
-            return scene_level_results
+            return df_scene_level
 
     def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None, max_agents_to_plot=10):
         if agent_idx is None:

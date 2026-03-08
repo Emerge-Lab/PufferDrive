@@ -224,7 +224,18 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->init_mode = 0; // Default to create_all_valid
         }
     } else if (MATCH("env", "control_mode")) {
-        env_config->control_mode = atoi(value);
+        if (strcmp(value, "\"control_vehicles\"") == 0 || strcmp(value, "control_vehicles") == 0) {
+            env_config->control_mode = 0;
+        } else if (strcmp(value, "\"control_agents\"") == 0 || strcmp(value, "control_agents") == 0) {
+            env_config->control_mode = 1;
+        } else if (strcmp(value, "\"control_wosac\"") == 0 || strcmp(value, "control_wosac") == 0) {
+            env_config->control_mode = 2;
+        } else if (strcmp(value, "\"control_sdc_only\"") == 0 || strcmp(value, "control_sdc_only") == 0) {
+            env_config->control_mode = 3;
+        } else {
+            printf("Warning: Unknown control_mode value '%s', defaulting to CONTROL_VEHICLES\n", value);
+            env_config->control_mode = 0; // Default to CONTROL_VEHICLES
+        }
     } else if (MATCH("env", "map_dir")) {
         if (sscanf(value, "\"%255[^\"]\"", env_config->map_dir) != 1) {
             strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);
