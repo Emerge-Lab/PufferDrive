@@ -4,185 +4,155 @@ import glob
 import shutil
 import subprocess
 import json
+import configparser
+import tempfile
+
+# Mapping from safe_eval config keys to (reward_bound_min, reward_bound_max) pairs.
+# Used by both generate_safe_eval_ini (underscore form) and the metrics subprocess (hyphen form).
+SAFE_EVAL_BOUND_KEYS = [
+    ("safe_eval_collision", "collision"),
+    ("safe_eval_offroad", "offroad"),
+    ("safe_eval_overspeed", "overspeed"),
+    ("safe_eval_traffic_light", "traffic_light"),
+    ("safe_eval_reverse", "reverse"),
+    ("safe_eval_comfort", "comfort"),
+    ("safe_eval_goal_radius", "goal_radius"),
+    ("safe_eval_lane_align", "lane_align"),
+    ("safe_eval_lane_center", "lane_center"),
+    ("safe_eval_velocity", "velocity"),
+    ("safe_eval_center_bias", "center_bias"),
+    ("safe_eval_vel_align", "vel_align"),
+    ("safe_eval_timestep", "timestep"),
+    ("safe_eval_throttle", "throttle"),
+    ("safe_eval_steer", "steer"),
+    ("safe_eval_acc", "acc"),
+]
+
+
+def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_name, wandb_keys=None):
+    """Run an evaluation subprocess and log metrics to wandb.
+
+    Args:
+        config: Training config dict (must have data_dir, env)
+        logger: Logger with run_id and optional wandb attribute
+        global_step: Current global training step
+        mode: pufferl mode to run (e.g. "eval", "safe_eval")
+        extra_args: List of extra CLI args appended to the base command
+        marker_name: Marker prefix for JSON extraction (e.g. "WOSAC" looks for WOSAC_METRICS_START/END)
+        wandb_keys: If dict, maps metric keys to wandb keys. If None, logs all as eval/<key>.
+    """
+    eval_name = marker_name.lower().replace("_", " ")
+    try:
+        run_id = logger.run_id
+        model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
+        model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+
+        if not model_files:
+            print(f"No model files found for {eval_name} evaluation")
+            return
+
+        latest_cpt = max(model_files, key=os.path.getctime)
+
+        cmd = [
+            sys.executable, "-m", "pufferlib.pufferl",
+            mode, config["env"],
+            "--load-model-path", latest_cpt,
+        ] + extra_args
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
+
+        start_marker = f"{marker_name}_METRICS_START"
+        end_marker = f"{marker_name}_METRICS_END"
+
+        if result.returncode == 0:
+            stdout = result.stdout
+            if start_marker in stdout and end_marker in stdout:
+                start = stdout.find(start_marker) + len(start_marker)
+                end = stdout.find(end_marker)
+                metrics = json.loads(stdout[start:end].strip())
+
+                if hasattr(logger, "wandb") and logger.wandb:
+                    if wandb_keys is not None:
+                        payload = {wandb_keys[k]: metrics[k] for k in wandb_keys if k in metrics}
+                    else:
+                        payload = {f"eval/{k}": v for k, v in metrics.items()}
+                    if payload:
+                        logger.wandb.log(payload, step=global_step)
+        else:
+            print(f"{eval_name} evaluation failed with exit code {result.returncode}: {result.stderr[:500]}")
+
+    except subprocess.TimeoutExpired:
+        print(f"{eval_name} evaluation timed out")
+    except Exception as e:
+        print(f"Failed to run {eval_name} evaluation: {e}")
 
 
 def run_human_replay_eval_in_subprocess(config, logger, global_step):
-    """
-    Run human replay evaluation in a subprocess and log metrics to wandb.
-
-    """
-    try:
-        run_id = logger.run_id
-        model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
-        model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
-
-        if not model_files:
-            print("No model files found for human replay evaluation")
-            return
-
-        latest_cpt = max(model_files, key=os.path.getctime)
-
-        # Prepare evaluation command
-        eval_config = config["eval"]
-        cmd = [
-            sys.executable,
-            "-m",
-            "pufferlib.pufferl",
-            "eval",
-            config["env"],
-            "--load-model-path",
-            latest_cpt,
-            "--eval.wosac-realism-eval",
-            "False",
-            "--eval.human-replay-eval",
-            "True",
-            "--eval.human-replay-num-agents",
-            str(eval_config["human_replay_num_agents"]),
-            "--eval.human-replay-control-mode",
-            str(eval_config["human_replay_control_mode"]),
-        ]
-
-        # Run human replay evaluation in subprocess
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
-
-        if result.returncode == 0:
-            # Extract JSON from stdout between markers
-            stdout = result.stdout
-            if "HUMAN_REPLAY_METRICS_START" in stdout and "HUMAN_REPLAY_METRICS_END" in stdout:
-                start = stdout.find("HUMAN_REPLAY_METRICS_START") + len("HUMAN_REPLAY_METRICS_START")
-                end = stdout.find("HUMAN_REPLAY_METRICS_END")
-                json_str = stdout[start:end].strip()
-                human_replay_metrics = json.loads(json_str)
-
-                # Log to wandb if available
-                if hasattr(logger, "wandb") and logger.wandb:
-                    logger.wandb.log(
-                        {
-                            "eval/human_replay_collision_rate": human_replay_metrics["collision_rate"],
-                            "eval/human_replay_offroad_rate": human_replay_metrics["offroad_rate"],
-                            "eval/human_replay_completion_rate": human_replay_metrics["completion_rate"],
-                        },
-                        step=global_step,
-                    )
-        else:
-            print(f"Human replay evaluation failed with exit code {result.returncode}: {result.stderr}")
-
-    except subprocess.TimeoutExpired:
-        print("Human replay evaluation timed out")
-    except Exception as e:
-        print(f"Failed to run human replay evaluation: {e}")
+    eval_config = config["eval"]
+    _run_eval_subprocess(
+        config, logger, global_step,
+        mode="eval",
+        extra_args=[
+            "--eval.wosac-realism-eval", "False",
+            "--eval.human-replay-eval", "True",
+            "--eval.human-replay-num-agents", str(eval_config["human_replay_num_agents"]),
+            "--eval.human-replay-control-mode", str(eval_config["human_replay_control_mode"]),
+        ],
+        marker_name="HUMAN_REPLAY",
+        wandb_keys={
+            "collision_rate": "eval/human_replay_collision_rate",
+            "offroad_rate": "eval/human_replay_offroad_rate",
+            "completion_rate": "eval/human_replay_completion_rate",
+        },
+    )
 
 
 def run_wosac_eval_in_subprocess(config, logger, global_step):
-    """
-    Run WOSAC evaluation in a subprocess and log metrics to wandb.
-
-    Args:
-        config: Configuration dictionary containing data_dir, env, and wosac settings
-        logger: Logger object with run_id and optional wandb attribute
-        epoch: Current training epoch
-        global_step: Current global training step
-
-    Returns:
-        None. Prints error messages if evaluation fails.
-    """
-    try:
-        run_id = logger.run_id
-        model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
-        model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
-
-        if not model_files:
-            print("No model files found for WOSAC evaluation")
-            return
-
-        latest_cpt = max(model_files, key=os.path.getctime)
-
-        # Prepare evaluation command
-        eval_config = config.get("eval", {})
-        cmd = [
-            sys.executable,
-            "-m",
-            "pufferlib.pufferl",
-            "eval",
-            config["env"],
-            "--load-model-path",
-            latest_cpt,
-            "--eval.wosac-realism-eval",
-            "True",
-            "--eval.wosac-num-agents",
-            str(eval_config.get("wosac_num_agents", 256)),
-            "--eval.wosac-init-mode",
-            str(eval_config.get("wosac_init_mode", "create_all_valid")),
-            "--eval.wosac-control-mode",
-            str(eval_config.get("wosac_control_mode", "control_wosac")),
-            "--eval.wosac-init-steps",
-            str(eval_config.get("wosac_init_steps", 10)),
-            "--eval.wosac-goal-behavior",
-            str(eval_config.get("wosac_goal_behavior", 2)),
-            "--eval.wosac-goal-radius",
-            str(eval_config.get("wosac_goal_radius", 2.0)),
-            "--eval.wosac-sanity-check",
-            str(eval_config.get("wosac_sanity_check", False)),
-            "--eval.wosac-aggregate-results",
-            str(eval_config.get("wosac_aggregate_results", True)),
-        ]
-
-        # Run WOSAC evaluation in subprocess
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
-
-        if result.returncode == 0:
-            # Extract JSON from stdout between markers
-            stdout = result.stdout
-            if "WOSAC_METRICS_START" in stdout and "WOSAC_METRICS_END" in stdout:
-                start = stdout.find("WOSAC_METRICS_START") + len("WOSAC_METRICS_START")
-                end = stdout.find("WOSAC_METRICS_END")
-                json_str = stdout[start:end].strip()
-                wosac_metrics = json.loads(json_str)
-
-                # Log to wandb if available
-                if hasattr(logger, "wandb") and logger.wandb:
-                    logger.wandb.log(
-                        {
-                            "eval/wosac_realism_meta_score": wosac_metrics["realism_meta_score"],
-                            "eval/wosac_ade": wosac_metrics["ade"],
-                            "eval/wosac_min_ade": wosac_metrics["min_ade"],
-                            "eval/wosac_total_num_agents": wosac_metrics["total_num_agents"],
-                        },
-                        step=global_step,
-                    )
-        else:
-            print(f"WOSAC evaluation failed with exit code {result.returncode}")
-            print(f"Error: {result.stderr}")
-
-            # Check for memory issues
-            stderr_lower = result.stderr.lower()
-            if "out of memory" in stderr_lower or "cuda out of memory" in stderr_lower:
-                print("GPU out of memory. Skipping this WOSAC evaluation.")
-
-    except subprocess.TimeoutExpired:
-        print("WOSAC evaluation timed out after 600 seconds")
-    except MemoryError as e:
-        print(f"WOSAC evaluation ran out of memory. Skipping this evaluation: {e}")
-    except Exception as e:
-        print(f"Failed to run WOSAC evaluation: {type(e).__name__}: {e}")
+    eval_config = config.get("eval", {})
+    _run_eval_subprocess(
+        config, logger, global_step,
+        mode="eval",
+        extra_args=[
+            "--eval.wosac-realism-eval", "True",
+            "--eval.wosac-num-agents", str(eval_config.get("wosac_num_agents", 256)),
+            "--eval.wosac-init-mode", str(eval_config.get("wosac_init_mode", "create_all_valid")),
+            "--eval.wosac-control-mode", str(eval_config.get("wosac_control_mode", "control_wosac")),
+            "--eval.wosac-init-steps", str(eval_config.get("wosac_init_steps", 10)),
+            "--eval.wosac-goal-behavior", str(eval_config.get("wosac_goal_behavior", 2)),
+            "--eval.wosac-goal-radius", str(eval_config.get("wosac_goal_radius", 2.0)),
+            "--eval.wosac-sanity-check", str(eval_config.get("wosac_sanity_check", False)),
+            "--eval.wosac-aggregate-results", str(eval_config.get("wosac_aggregate_results", True)),
+        ],
+        marker_name="WOSAC",
+        wandb_keys={
+            "realism_meta_score": "eval/wosac_realism_meta_score",
+            "ade": "eval/wosac_ade",
+            "min_ade": "eval/wosac_min_ade",
+            "total_num_agents": "eval/wosac_total_num_agents",
+        },
+    )
 
 
 def render_videos(
-    config, env_cfg, run_id, wandb_log, epoch, global_step, bin_path, render_async, render_queue=None, wandb_run=None
+    config, env_cfg, run_id, wandb_log, epoch, global_step, bin_path, render_async,
+    render_queue=None, wandb_run=None, config_path=None, wandb_prefix="render",
 ):
     """
     Generate and log training videos using C-based rendering.
 
     Args:
         config: Configuration dictionary containing data_dir, env, and render settings
-        vecenv: Vectorized environment with driver_env attribute
-        logger: Logger object with run_id and optional wandb attribute
+        env_cfg: Environment config object (driver_env) with map_dir, num_maps, etc.
+        run_id: Wandb/Neptune run identifier
+        wandb_log: Whether to log videos to wandb
         epoch: Current training epoch
         global_step: Current global training step
         bin_path: Path to the exported .bin model weights file
-
-    Returns:
-        None. Prints error messages if rendering fails.
+        render_async: Whether rendering is async (uses render_queue)
+        render_queue: Queue for async render results
+        wandb_run: Wandb run object for sync logging
+        config_path: Optional path to alternative INI config file for the visualize binary
+        wandb_prefix: Prefix for wandb keys (e.g. "render" or "eval")
     """
     if not os.path.exists(bin_path):
         print(f"Binary weights file does not exist: {bin_path}")
@@ -190,21 +160,19 @@ def render_videos(
 
     model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
 
-    # Now call the C rendering function
     try:
-        # Create output directory for videos
         video_output_dir = os.path.join(model_dir, "videos")
         os.makedirs(video_output_dir, exist_ok=True)
 
         # TODO: Fix memory leaks so that this is not needed
-        # Suppress AddressSanitizer exit code (temp)
         env_vars = os.environ.copy()
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
 
-        # Base command with only visualization flags (env config comes from INI)
         base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
-        # Visualization config flags only
+        if config_path:
+            base_cmd.extend(["--config", config_path])
+
         if config.get("show_grid", False):
             base_cmd.append("--show-grid")
         if config.get("obs_only", False):
@@ -216,16 +184,13 @@ def render_videos(
         if config.get("zoom_in", False):
             base_cmd.append("--zoom-in")
 
-        # Frame skip for rendering performance
         frame_skip = config.get("frame_skip", 1)
         if frame_skip > 1:
             base_cmd.extend(["--frame-skip", str(frame_skip)])
 
-        # View mode
         view_mode = config.get("view_mode", "both")
         base_cmd.extend(["--view", view_mode])
 
-        # Get num_maps if available
         if env_cfg is not None and getattr(env_cfg, "num_maps", None):
             base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
 
@@ -234,7 +199,6 @@ def render_videos(
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
         if render_maps is None or render_maps == "none":
-            # Pick a random map from the training map_dir
             map_dir = None
             if env_cfg is not None and hasattr(env_cfg, "map_dir"):
                 map_dir = env_cfg.map_dir
@@ -253,25 +217,23 @@ def render_videos(
         elif isinstance(render_maps, (str, os.PathLike)):
             render_maps = [render_maps]
         else:
-            # Ensure list-like
             render_maps = list(render_maps)
 
-        # Collect videos to log as lists so W&B shows all in the same step
+        file_prefix = f"{wandb_prefix}_" if wandb_prefix != "render" else ""
         videos_to_log_world = []
         videos_to_log_agent = []
         generated_videos = {"output_topdown": [], "output_agent": []}
-        output_topdown = f"resources/drive/output_topdown_{epoch}"
-        output_agent = f"resources/drive/output_agent_{epoch}"
+        output_topdown = f"resources/drive/{file_prefix}output_topdown_{epoch}"
+        output_agent = f"resources/drive/{file_prefix}output_agent_{epoch}"
 
         for i, map_path in enumerate(render_maps):
-            cmd = list(base_cmd)  # copy
+            cmd = list(base_cmd)
             if map_path is not None and os.path.exists(map_path):
                 cmd.extend(["--map-name", str(map_path)])
 
             output_topdown_map = output_topdown + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
             output_agent_map = output_agent + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
 
-            # Output paths (overwrite each iteration; then moved/renamed)
             cmd.extend(["--output-topdown", output_topdown_map])
             cmd.extend(["--output-agent", output_agent_map])
 
@@ -284,12 +246,12 @@ def render_videos(
                     (
                         "output_topdown",
                         output_topdown_map,
-                        f"epoch_{epoch:06d}_map{i:02d}_topdown.mp4" if map_path else f"epoch_{epoch:06d}_topdown.mp4",
+                        f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_topdown.mp4" if map_path else f"{file_prefix}epoch_{epoch:06d}_topdown.mp4",
                     ),
                     (
                         "output_agent",
                         output_agent_map,
-                        f"epoch_{epoch:06d}_map{i:02d}_agent.mp4" if map_path else f"epoch_{epoch:06d}_agent.mp4",
+                        f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_agent.mp4" if map_path else f"{file_prefix}epoch_{epoch:06d}_agent.mp4",
                     ),
                 ]
 
@@ -300,7 +262,6 @@ def render_videos(
                         generated_videos[vid_type].append(target_path)
                         if render_async:
                             continue
-                        # Accumulate for a single wandb.log call
                         if wandb_log:
                             import wandb
 
@@ -322,24 +283,73 @@ def render_videos(
                 {
                     "videos": generated_videos,
                     "step": global_step,
+                    "wandb_prefix": wandb_prefix,
                 }
             )
 
-        # Log all videos at once so W&B keeps all of them under the same step
         if wandb_log and (videos_to_log_world or videos_to_log_agent) and not render_async:
             payload = {}
             if videos_to_log_world:
-                payload["render/world_state"] = videos_to_log_world
+                payload[f"{wandb_prefix}/world_state"] = videos_to_log_world
             if videos_to_log_agent:
-                payload["render/agent_view"] = videos_to_log_agent
+                payload[f"{wandb_prefix}/agent_view"] = videos_to_log_agent
             wandb_run.log(payload, step=global_step)
 
     except subprocess.TimeoutExpired:
         print("C rendering timed out")
     except Exception as e:
-        print(f"Failed to generate GIF: {e}")
+        print(f"Failed to generate videos: {e}")
 
     finally:
-        # Clean up bin weights file
         if os.path.exists(bin_path):
             os.remove(bin_path)
+
+
+def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/ocean/drive.ini"):
+    """Generate a temporary ini file with safe/law-abiding reward conditioning values.
+
+    Sets reward_randomization=1 with min=max bounds so the conditioning values
+    are deterministically set to the safe values the policy sees in its observation.
+    """
+    config = configparser.ConfigParser()
+    config.read(base_ini_path)
+
+    for safe_key, bound_name in SAFE_EVAL_BOUND_KEYS:
+        if safe_key in safe_eval_config:
+            val = str(safe_eval_config[safe_key])
+            config.set("env", f"reward_bound_{bound_name}_min", val)
+            config.set("env", f"reward_bound_{bound_name}_max", val)
+
+    config.set("env", "reward_randomization", "1")
+    config.set("env", "reward_conditioning", "1")
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".ini", prefix="safe_eval_")
+    with os.fdopen(fd, "w") as f:
+        config.write(f)
+
+    return tmp_path
+
+
+def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_config):
+    """Run policy evaluation with safe reward conditioning in a subprocess and log metrics."""
+    num_episodes = safe_eval_config.get("safe_eval_num_episodes", 300)
+
+    extra_args = [
+        "--env.reward-randomization", "1",
+        "--env.reward-conditioning", "1",
+        "--safe-eval.safe-eval-num-episodes", str(num_episodes),
+    ]
+
+    for safe_key, bound_name in SAFE_EVAL_BOUND_KEYS:
+        if safe_key in safe_eval_config:
+            val = str(safe_eval_config[safe_key])
+            cli_name = bound_name.replace("_", "-")
+            extra_args.extend([f"--env.reward-bound-{cli_name}-min", val,
+                               f"--env.reward-bound-{cli_name}-max", val])
+
+    _run_eval_subprocess(
+        config, logger, global_step,
+        mode="safe_eval",
+        extra_args=extra_args,
+        marker_name="SAFE_EVAL",
+    )

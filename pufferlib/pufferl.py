@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import argparse
 import importlib
+import json
 import configparser
 from threading import Thread
 from collections import defaultdict, deque
@@ -519,14 +520,11 @@ class PuffeRL:
                 model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
 
                 if model_files:
-                    # Take the latest checkpoint
                     latest_cpt = max(model_files, key=os.path.getctime)
                     bin_path = f"{model_dir}.bin"
 
-                    # Export to .bin for rendering with raylib
                     try:
                         export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
-
                         export(
                             args=export_args,
                             env_name=self.config["env"],
@@ -538,10 +536,21 @@ class PuffeRL:
 
                         bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
                         shutil.copy2(bin_path, bin_path_epoch)
-
                         env_cfg = getattr(self.vecenv, "driver_env", None)
-                        wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
+                        wandb_log = bool(hasattr(self.logger, "wandb") and self.logger.wandb)
                         wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
+
+                        # Check if safe eval should also run at this interval
+                        safe_eval_config = self.config.get("safe_eval", {})
+                        run_safe_eval = safe_eval_config.get("safe_eval", False)
+                        safe_eval_interval = safe_eval_config.get("safe_eval_interval", self.render_interval)
+                        should_safe_eval = run_safe_eval and self.epoch % safe_eval_interval == 0
+                        bin_path_safe = None
+                        if should_safe_eval:
+                            # Copy bin before render_videos deletes it
+                            bin_path_safe = f"{bin_path_epoch}.safe_eval.bin"
+                            shutil.copy2(bin_path_epoch, bin_path_safe)
+
                         if self.render_async:
                             # Clean up finished processes
                             self.render_processes = [p for p in self.render_processes if p.is_alive()]
@@ -583,6 +592,31 @@ class PuffeRL:
                                 wandb_run=wandb_run,
                             )
 
+                        # Run safe eval using the copied bin (reuses the already-exported model)
+                        if should_safe_eval:
+                            safe_ini_path = None
+                            try:
+                                safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
+                                pufferlib.utils.render_videos(
+                                    self.config, env_cfg, self.logger.run_id,
+                                    wandb_log, self.epoch, self.global_step,
+                                    bin_path_safe, False,
+                                    wandb_run=wandb_run,
+                                    config_path=safe_ini_path,
+                                    wandb_prefix="eval",
+                                )
+
+                                pufferlib.utils.run_safe_eval_metrics_in_subprocess(
+                                    self.config, self.logger, self.global_step, safe_eval_config
+                                )
+                            except Exception as e:
+                                print(f"Failed to run safe eval: {e}")
+                            finally:
+                                if safe_ini_path and os.path.exists(safe_ini_path):
+                                    os.remove(safe_ini_path)
+                                if bin_path_safe and os.path.exists(bin_path_safe):
+                                    os.remove(bin_path_safe)
+
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
 
@@ -606,19 +640,18 @@ class PuffeRL:
                 result = self.render_queue.get_nowait()
                 step = result["step"]
                 videos = result["videos"]
+                prefix = result.get("wandb_prefix", "render")
 
-                # Log to wandb if available
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
                     import wandb
 
                     payload = {}
                     if videos["output_topdown"]:
-                        payload["render/world_state"] = [wandb.Video(p, format="mp4") for p in videos["output_topdown"]]
+                        payload[f"{prefix}/world_state"] = [wandb.Video(p, format="mp4") for p in videos["output_topdown"]]
                     if videos["output_agent"]:
-                        payload["render/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
+                        payload[f"{prefix}/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
 
                     if payload:
-                        # Custom step for render logs to prevent monotonic logic wandb errors
                         payload["render_step"] = step
                         self.logger.wandb.log(payload)
 
@@ -1139,7 +1172,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     else:
         logger = None
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), safe_eval=args.get("safe_eval", {}))
     if "vec" in args and "num_workers" in args["vec"]:
         train_config["num_workers"] = args["vec"]["num_workers"]
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
@@ -1321,6 +1354,65 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
                 imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
                 frames.append("Done")
+
+
+def safe_eval(env_name, args=None, vecenv=None, policy=None):
+    """Evaluate policy with safe/law-abiding reward conditioning and output metrics."""
+    args = args or load_config(env_name)
+
+    args["vec"] = dict(backend="PufferEnv", num_envs=1)
+    args["env"]["num_agents"] = 64
+
+    vecenv = vecenv or load_env(env_name, args)
+    policy = policy or load_policy(args, vecenv, env_name)
+    policy.eval()
+
+    num_steps = args.get("safe_eval", {}).get("safe_eval_num_episodes", 300)
+    device = args["train"]["device"]
+    num_agents = vecenv.observation_space.shape[0]
+    use_rnn = args["train"]["use_rnn"]
+
+    ob, _ = vecenv.reset()
+    state = {}
+    dones = torch.zeros(num_agents, device=device)
+    prev_rewards = torch.zeros(num_agents, device=device)
+    if use_rnn:
+        state = dict(
+            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        )
+
+    all_stats = defaultdict(list)
+    for _ in range(num_steps):
+        with torch.no_grad():
+            ob_t = torch.as_tensor(ob).to(device)
+            if use_rnn:
+                state["reward"] = prev_rewards
+                state["done"] = dones
+            logits, value = policy.forward_eval(ob_t, state)
+            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+            action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+        ob, rewards, terminals, truncations, infos = vecenv.step(action)
+        prev_rewards = torch.as_tensor(rewards).float().to(device)
+        dones = torch.as_tensor(np.maximum(terminals, truncations)).float().to(device)
+        for entry in infos:
+            if isinstance(entry, dict):
+                for k, v in entry.items():
+                    try:
+                        float(v)
+                        all_stats[k].append(v)
+                    except (TypeError, ValueError):
+                        pass
+
+    metrics = {k: float(np.mean(v)) for k, v in all_stats.items() if len(v) > 0}
+
+    print("SAFE_EVAL_METRICS_START")
+    print(json.dumps(metrics))
+    print("SAFE_EVAL_METRICS_END")
+
+    vecenv.close()
+    return metrics
 
 
 def sweep(args=None, env_name=None):
@@ -1756,7 +1848,7 @@ def render(env_name, args=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export, sanity, render] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, safe_eval, sweep, controlled_exp, autotune, profile, export, sanity, render] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -1780,6 +1872,8 @@ def main():
         sanity(env_name=env_name)
     elif mode == "render":
         render(env_name=env_name)
+    elif mode == "safe_eval":
+        safe_eval(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 
