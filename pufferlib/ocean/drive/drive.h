@@ -100,7 +100,7 @@
 #define GRID_CELL_SIZE 5.0f
 
 // Observation constants
-#define MAX_ROAD_SEGMENT_OBSERVATIONS 128
+#define MAX_ROAD_SEGMENT_OBSERVATIONS 512
 #ifndef MAX_AGENTS // TODO: Needs to be replaced with MAX_PARTNER_OBS(agents in obs_radius) throughout observations code
                    // and with env->max_agents_in_sim throughout all agent for loops
 #define MAX_AGENTS 128
