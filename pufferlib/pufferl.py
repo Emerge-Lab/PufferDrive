@@ -613,7 +613,10 @@ class PuffeRL:
 
                             self._run_eval(
                                 pufferlib.utils.run_safe_eval_metrics_in_subprocess,
-                                self.config, self.logger, self.global_step, safe_eval_config,
+                                self.config,
+                                self.logger,
+                                self.global_step,
+                                safe_eval_config,
                             )
                         except Exception as e:
                             print(f"Failed to run safe eval: {e}")
@@ -634,7 +637,9 @@ class PuffeRL:
         ):
             self._run_eval(
                 pufferlib.utils.run_wosac_eval_in_subprocess,
-                self.config, self.logger, self.global_step,
+                self.config,
+                self.logger,
+                self.global_step,
             )
 
         if self.config["eval"]["human_replay_eval"] and (
@@ -642,7 +647,9 @@ class PuffeRL:
         ):
             self._run_eval(
                 pufferlib.utils.run_human_replay_eval_in_subprocess,
-                self.config, self.logger, self.global_step,
+                self.config,
+                self.logger,
+                self.global_step,
             )
 
     def _run_eval(self, fn, *args, **kwargs):
