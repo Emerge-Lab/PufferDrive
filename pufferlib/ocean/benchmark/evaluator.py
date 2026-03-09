@@ -763,12 +763,6 @@ class WOSACEvaluator:
             plt.savefig(f"trajectory_comparison_agent_{agent_idx}.png")
 
 
-RENDER_FIRST = "first"
-RENDER_WORST_SCORE = "worst_score"
-RENDER_WORST_COLLISION = "worst_collision"
-RENDER_RANDOM = "random"
-
-
 class Evaluator:
     """Evaluates policies in self_play or human_replay mode, with optional rendering.
 
@@ -776,6 +770,11 @@ class Evaluator:
     - human_replay_eval: creates sp_env + hr_env
     - render_eval: creates sp_env (if not already created)
     """
+
+    RENDER_FIRST = "first"
+    RENDER_RANDOM = "random"
+    RENDER_WORST_SCORE = "worst_score"
+    RENDER_WORST_COLLISION = "worst_collision"
 
     def __init__(self, configs, logger=None):
         self.configs = configs
@@ -818,9 +817,9 @@ class Evaluator:
             int: Index of the environment to render.
         """
         mode = self.render_select_mode
-        if mode == RENDER_FIRST:
+        if mode == self.RENDER_FIRST:
             return 0
-        if mode == RENDER_RANDOM:
+        if mode == self.RENDER_RANDOM:
             return np.random.randint(len(env_logs))
 
         populated = [(i, log) for i, log in enumerate(env_logs) if log]
@@ -828,9 +827,9 @@ class Evaluator:
         if not populated:
             return 0
 
-        if mode == RENDER_WORST_SCORE:
+        if mode == self.RENDER_WORST_SCORE:
             return min(populated, key=lambda x: x[1].get("score", 1.0))[0]
-        elif mode == RENDER_WORST_COLLISION:
+        elif mode == self.RENDER_WORST_COLLISION:
             return max(populated, key=lambda x: x[1].get("collision_rate", 0.0))[0]
         # Add other modes based on desiderata here
         return 0
@@ -840,7 +839,7 @@ class Evaluator:
         render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
         driver = env.driver_env
 
-        needs_stats_first = render_eval and self.render_select_mode not in (RENDER_FIRST, RENDER_RANDOM)
+        needs_stats_first = render_eval and self.render_select_mode not in (self.RENDER_FIRST, self.RENDER_RANDOM)
 
         if needs_stats_first:
             env_logs = self._run_rollout(policy, env, per_env_logs=True)
@@ -917,12 +916,13 @@ class Evaluator:
             print("Warning: no render videos found in local path")
             return
 
+        render_mode = self.render_select_mode
         for p in video_files:
             scenario_id = os.path.splitext(os.path.basename(p))[0]
-            self.logger.wandb.log(
-                {f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=f"scene_{scenario_id}_epoch_{epoch}")}
-            )
+            caption = f"scene_{scenario_id}_epoch_{epoch}_select_{render_mode}"
+            self.logger.wandb.log({f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=caption)})
 
+        # Clean up
         for p in video_files:
             os.remove(p)
 
