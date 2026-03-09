@@ -54,10 +54,15 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
         latest_cpt = max(model_files, key=os.path.getctime)
 
         cmd = [
-            sys.executable, "-m", "pufferlib.pufferl",
-            mode, config["env"],
-            "--load-model-path", latest_cpt,
-            "--train.device", config.get("device", "cuda"),
+            sys.executable,
+            "-m",
+            "pufferlib.pufferl",
+            mode,
+            config["env"],
+            "--load-model-path",
+            latest_cpt,
+            "--train.device",
+            config.get("device", "cuda"),
         ] + extra_args
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
@@ -91,13 +96,19 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
 def run_human_replay_eval_in_subprocess(config, logger, global_step):
     eval_config = config["eval"]
     _run_eval_subprocess(
-        config, logger, global_step,
+        config,
+        logger,
+        global_step,
         mode="eval",
         extra_args=[
-            "--eval.wosac-realism-eval", "False",
-            "--eval.human-replay-eval", "True",
-            "--eval.human-replay-num-agents", str(eval_config["human_replay_num_agents"]),
-            "--eval.human-replay-control-mode", str(eval_config["human_replay_control_mode"]),
+            "--eval.wosac-realism-eval",
+            "False",
+            "--eval.human-replay-eval",
+            "True",
+            "--eval.human-replay-num-agents",
+            str(eval_config["human_replay_num_agents"]),
+            "--eval.human-replay-control-mode",
+            str(eval_config["human_replay_control_mode"]),
         ],
         marker_name="HUMAN_REPLAY",
         wandb_keys={
@@ -111,18 +122,29 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
 def run_wosac_eval_in_subprocess(config, logger, global_step):
     eval_config = config.get("eval", {})
     _run_eval_subprocess(
-        config, logger, global_step,
+        config,
+        logger,
+        global_step,
         mode="eval",
         extra_args=[
-            "--eval.wosac-realism-eval", "True",
-            "--eval.wosac-num-agents", str(eval_config.get("wosac_num_agents", 256)),
-            "--eval.wosac-init-mode", str(eval_config.get("wosac_init_mode", "create_all_valid")),
-            "--eval.wosac-control-mode", str(eval_config.get("wosac_control_mode", "control_wosac")),
-            "--eval.wosac-init-steps", str(eval_config.get("wosac_init_steps", 10)),
-            "--eval.wosac-goal-behavior", str(eval_config.get("wosac_goal_behavior", 2)),
-            "--eval.wosac-goal-radius", str(eval_config.get("wosac_goal_radius", 2.0)),
-            "--eval.wosac-sanity-check", str(eval_config.get("wosac_sanity_check", False)),
-            "--eval.wosac-aggregate-results", str(eval_config.get("wosac_aggregate_results", True)),
+            "--eval.wosac-realism-eval",
+            "True",
+            "--eval.wosac-num-agents",
+            str(eval_config.get("wosac_num_agents", 256)),
+            "--eval.wosac-init-mode",
+            str(eval_config.get("wosac_init_mode", "create_all_valid")),
+            "--eval.wosac-control-mode",
+            str(eval_config.get("wosac_control_mode", "control_wosac")),
+            "--eval.wosac-init-steps",
+            str(eval_config.get("wosac_init_steps", 10)),
+            "--eval.wosac-goal-behavior",
+            str(eval_config.get("wosac_goal_behavior", 2)),
+            "--eval.wosac-goal-radius",
+            str(eval_config.get("wosac_goal_radius", 2.0)),
+            "--eval.wosac-sanity-check",
+            str(eval_config.get("wosac_sanity_check", False)),
+            "--eval.wosac-aggregate-results",
+            str(eval_config.get("wosac_aggregate_results", True)),
         ],
         marker_name="WOSAC",
         wandb_keys={
@@ -135,8 +157,18 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
 
 
 def render_videos(
-    config, env_cfg, run_id, wandb_log, epoch, global_step, bin_path, render_async,
-    render_queue=None, wandb_run=None, config_path=None, wandb_prefix="render",
+    config,
+    env_cfg,
+    run_id,
+    wandb_log,
+    epoch,
+    global_step,
+    bin_path,
+    render_async,
+    render_queue=None,
+    wandb_run=None,
+    config_path=None,
+    wandb_prefix="render",
 ):
     """
     Generate and log training videos using C-based rendering.
@@ -247,12 +279,16 @@ def render_videos(
                     (
                         "output_topdown",
                         output_topdown_map,
-                        f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_topdown.mp4" if map_path else f"{file_prefix}epoch_{epoch:06d}_topdown.mp4",
+                        f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_topdown.mp4"
+                        if map_path
+                        else f"{file_prefix}epoch_{epoch:06d}_topdown.mp4",
                     ),
                     (
                         "output_agent",
                         output_agent_map,
-                        f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_agent.mp4" if map_path else f"{file_prefix}epoch_{epoch:06d}_agent.mp4",
+                        f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_agent.mp4"
+                        if map_path
+                        else f"{file_prefix}epoch_{epoch:06d}_agent.mp4",
                     ),
                 ]
 
@@ -332,9 +368,12 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
     num_episodes = safe_eval_config.get("safe_eval_num_episodes", 300)
 
     extra_args = [
-        "--env.reward-randomization", "1",
-        "--env.reward-conditioning", "1",
-        "--safe-eval.safe-eval-num-episodes", str(num_episodes),
+        "--env.reward-randomization",
+        "1",
+        "--env.reward-conditioning",
+        "1",
+        "--safe-eval.safe-eval-num-episodes",
+        str(num_episodes),
     ]
 
     for safe_key, bound_name in SAFE_EVAL_BOUND_KEYS:
@@ -342,11 +381,12 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
             val = str(safe_eval_config[safe_key])
             cli_name = bound_name.replace("_", "-")
             # Use = syntax to avoid argparse interpreting negative values as flags
-            extra_args.extend([f"--env.reward-bound-{cli_name}-min={val}",
-                               f"--env.reward-bound-{cli_name}-max={val}"])
+            extra_args.extend([f"--env.reward-bound-{cli_name}-min={val}", f"--env.reward-bound-{cli_name}-max={val}"])
 
     _run_eval_subprocess(
-        config, logger, global_step,
+        config,
+        logger,
+        global_step,
         mode="safe_eval",
         extra_args=extra_args,
         marker_name="SAFE_EVAL",
