@@ -928,14 +928,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_json_root_dir",
         type=str,
-        default="data/processed/carla_data",
+        default="data/processed/single_data_carla",
         help="Root directory for output JSON files",
     )
     parser.add_argument(
         "--carla_map_dir", type=str, default="data/CarlaXODRs", help="Directory containing CARLA XODR files"
     )
     parser.add_argument("--resolution", type=float, default=0.1, help="Resolution for road network processing")
-    parser.add_argument("--num_data_per_map", type=int, default=8, help="Number of data samples per map")
+    parser.add_argument("--num_data_per_map", type=int, default=1, help="Number of data samples per map")
     parser.add_argument("--num_objects", type=int, default=32, help="Number of objects per data sample")
     parser.add_argument(
         "--make_only_first_agent_controllable", action="store_true", help="If set, only the first agent is controllable"
