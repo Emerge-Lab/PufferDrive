@@ -515,37 +515,40 @@ class PuffeRL:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
-            if self.render and self.epoch % self.render_interval == 0:
-                model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-                model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+        # Render and safe eval run on their own intervals, independent of checkpointing.
+        # They use the latest available checkpoint, so they don't need a fresh one.
+        should_render = self.render and self.epoch % self.render_interval == 0
+        safe_eval_config = self.config.get("safe_eval", {})
+        run_safe_eval = safe_eval_config.get("safe_eval", False)
+        safe_eval_interval = safe_eval_config.get("safe_eval_interval", self.render_interval)
+        should_safe_eval = run_safe_eval and self.epoch % safe_eval_interval == 0
 
-                if model_files:
-                    latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
+        if should_render or should_safe_eval:
+            model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+            model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
 
-                    try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
-                        export(
-                            args=export_args,
-                            env_name=self.config["env"],
-                            vecenv=self.vecenv,
-                            policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
-                        )
+            if model_files:
+                latest_cpt = max(model_files, key=os.path.getctime)
+                bin_path = f"{model_dir}.bin"
 
-                        bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
-                        shutil.copy2(bin_path, bin_path_epoch)
-                        env_cfg = getattr(self.vecenv, "driver_env", None)
-                        wandb_log = bool(hasattr(self.logger, "wandb") and self.logger.wandb)
-                        wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
+                try:
+                    export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
+                    export(
+                        args=export_args,
+                        env_name=self.config["env"],
+                        vecenv=self.vecenv,
+                        policy=self.uncompiled_policy,
+                        path=bin_path,
+                        silent=True,
+                    )
 
-                        # Check if safe eval should also run at this interval
-                        safe_eval_config = self.config.get("safe_eval", {})
-                        run_safe_eval = safe_eval_config.get("safe_eval", False)
-                        safe_eval_interval = safe_eval_config.get("safe_eval_interval", self.render_interval)
-                        should_safe_eval = run_safe_eval and self.epoch % safe_eval_interval == 0
+                    bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
+                    shutil.copy2(bin_path, bin_path_epoch)
+                    env_cfg = getattr(self.vecenv, "driver_env", None)
+                    wandb_log = bool(hasattr(self.logger, "wandb") and self.logger.wandb)
+                    wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
 
+                    if should_render:
                         if self.render_async:
                             # Clean up finished processes
                             self.render_processes = [p for p in self.render_processes if p.is_alive()]
@@ -587,36 +590,41 @@ class PuffeRL:
                                 wandb_run=wandb_run,
                             )
 
-                        # Run safe eval using the same bin (reuses the already-exported model)
-                        if should_safe_eval:
-                            safe_ini_path = None
-                            try:
-                                safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
-                                pufferlib.utils.render_videos(
-                                    self.config, env_cfg, self.logger.run_id,
-                                    wandb_log, self.epoch, self.global_step,
-                                    bin_path_epoch, False,
-                                    wandb_run=wandb_run,
-                                    config_path=safe_ini_path,
-                                    wandb_prefix="eval",
-                                )
+                    # Run safe eval using the same bin (reuses the already-exported model)
+                    if should_safe_eval:
+                        safe_ini_path = None
+                        try:
+                            safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
+                            pufferlib.utils.render_videos(
+                                self.config,
+                                env_cfg,
+                                self.logger.run_id,
+                                wandb_log,
+                                self.epoch,
+                                self.global_step,
+                                bin_path_epoch,
+                                False,
+                                wandb_run=wandb_run,
+                                config_path=safe_ini_path,
+                                wandb_prefix="eval",
+                            )
 
-                                pufferlib.utils.run_safe_eval_metrics_in_subprocess(
-                                    self.config, self.logger, self.global_step, safe_eval_config
-                                )
-                            except Exception as e:
-                                print(f"Failed to run safe eval: {e}")
-                            finally:
-                                if safe_ini_path and os.path.exists(safe_ini_path):
-                                    os.remove(safe_ini_path)
+                            pufferlib.utils.run_safe_eval_metrics_in_subprocess(
+                                self.config, self.logger, self.global_step, safe_eval_config
+                            )
+                        except Exception as e:
+                            print(f"Failed to run safe eval: {e}")
+                        finally:
+                            if safe_ini_path and os.path.exists(safe_ini_path):
+                                os.remove(safe_ini_path)
 
-                    except Exception as e:
-                        print(f"Failed to export model weights: {e}")
-                    finally:
-                        if os.path.exists(bin_path):
-                            os.remove(bin_path)
-                        if os.path.exists(bin_path_epoch):
-                            os.remove(bin_path_epoch)
+                except Exception as e:
+                    print(f"Failed to export model weights: {e}")
+                finally:
+                    if os.path.exists(bin_path):
+                        os.remove(bin_path)
+                    if os.path.exists(bin_path_epoch):
+                        os.remove(bin_path_epoch)
 
         if self.config["eval"]["wosac_realism_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
@@ -645,7 +653,9 @@ class PuffeRL:
 
                     payload = {}
                     if videos["output_topdown"]:
-                        payload[f"{prefix}/world_state"] = [wandb.Video(p, format="mp4") for p in videos["output_topdown"]]
+                        payload[f"{prefix}/world_state"] = [
+                            wandb.Video(p, format="mp4") for p in videos["output_topdown"]
+                        ]
                     if videos["output_agent"]:
                         payload[f"{prefix}/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
 
