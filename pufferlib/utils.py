@@ -7,27 +7,10 @@ import json
 import configparser
 import tempfile
 
-# Reward bound names used for safe eval conditioning.
-# Config keys in [safe_eval] match these names directly (e.g. collision = -3.0).
-# They map to env reward_bound_{name}_min/max.
-SAFE_EVAL_REWARD_BOUNDS = [
-    "collision",
-    "offroad",
-    "overspeed",
-    "traffic_light",
-    "reverse",
-    "comfort",
-    "goal_radius",
-    "lane_align",
-    "lane_center",
-    "velocity",
-    "center_bias",
-    "vel_align",
-    "timestep",
-    "throttle",
-    "steer",
-    "acc",
-]
+# Control keys in [safe_eval] that are not reward bounds.
+# Everything else in the section is treated as a reward bound name
+# mapping to env reward_bound_{name}_min/max.
+SAFE_EVAL_CONTROL_KEYS = {"enabled", "interval", "num_agents", "num_episodes"}
 
 
 def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_name, wandb_keys=None):
@@ -348,11 +331,12 @@ def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/oce
     config = configparser.ConfigParser()
     config.read(base_ini_path)
 
-    for bound_name in SAFE_EVAL_REWARD_BOUNDS:
-        if bound_name in safe_eval_config:
-            val = str(safe_eval_config[bound_name])
-            config.set("env", f"reward_bound_{bound_name}_min", val)
-            config.set("env", f"reward_bound_{bound_name}_max", val)
+    for key, val in safe_eval_config.items():
+        if key in SAFE_EVAL_CONTROL_KEYS:
+            continue
+        val = str(val)
+        config.set("env", f"reward_bound_{key}_min", val)
+        config.set("env", f"reward_bound_{key}_max", val)
 
     config.set("env", "reward_randomization", "1")
     config.set("env", "reward_conditioning", "1")
@@ -377,12 +361,13 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
         str(num_episodes),
     ]
 
-    for bound_name in SAFE_EVAL_REWARD_BOUNDS:
-        if bound_name in safe_eval_config:
-            val = str(safe_eval_config[bound_name])
-            cli_name = bound_name.replace("_", "-")
-            # Use = syntax to avoid argparse interpreting negative values as flags
-            extra_args.extend([f"--env.reward-bound-{cli_name}-min={val}", f"--env.reward-bound-{cli_name}-max={val}"])
+    for key, val in safe_eval_config.items():
+        if key in SAFE_EVAL_CONTROL_KEYS:
+            continue
+        val = str(val)
+        cli_name = key.replace("_", "-")
+        # Use = syntax to avoid argparse interpreting negative values as flags
+        extra_args.extend([f"--env.reward-bound-{cli_name}-min={val}", f"--env.reward-bound-{cli_name}-max={val}"])
 
     _run_eval_subprocess(
         config,
