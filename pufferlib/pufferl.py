@@ -136,6 +136,8 @@ class PuffeRL:
             self.render_queue = multiprocessing.Queue()
             self.render_processes = []
 
+        self.eval_threads = []
+
         # LSTM
         if config["use_rnn"]:
             n = vecenv.agents_per_batch
@@ -609,8 +611,9 @@ class PuffeRL:
                                 wandb_prefix="eval",
                             )
 
-                            pufferlib.utils.run_safe_eval_metrics_in_subprocess(
-                                self.config, self.logger, self.global_step, safe_eval_config
+                            self._run_eval(
+                                pufferlib.utils.run_safe_eval_metrics_in_subprocess,
+                                self.config, self.logger, self.global_step, safe_eval_config,
                             )
                         except Exception as e:
                             print(f"Failed to run safe eval: {e}")
@@ -629,12 +632,30 @@ class PuffeRL:
         if self.config["eval"]["wosac_realism_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
-            pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
+            self._run_eval(
+                pufferlib.utils.run_wosac_eval_in_subprocess,
+                self.config, self.logger, self.global_step,
+            )
 
         if self.config["eval"]["human_replay_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
-            pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
+            self._run_eval(
+                pufferlib.utils.run_human_replay_eval_in_subprocess,
+                self.config, self.logger, self.global_step,
+            )
+
+    def _run_eval(self, fn, *args, **kwargs):
+        """Run an eval function, optionally in a background thread."""
+        eval_async = self.config.get("eval", {}).get("eval_async", False)
+        if eval_async:
+            # Clean up finished threads
+            self.eval_threads = [t for t in self.eval_threads if t.is_alive()]
+            t = Thread(target=fn, args=args, kwargs=kwargs, daemon=True)
+            t.start()
+            self.eval_threads.append(t)
+        else:
+            fn(*args, **kwargs)
 
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
@@ -707,6 +728,11 @@ class PuffeRL:
     def close(self):
         self.vecenv.close()
         self.utilization.stop()
+
+        # Wait for any background eval threads to finish
+        for t in self.eval_threads:
+            t.join(timeout=660)  # slightly longer than subprocess timeout (600s)
+        self.eval_threads = []
 
         if self.render_async:  # Ensure all render processes are properly terminated before closing the queue
             if hasattr(self, "render_processes"):
