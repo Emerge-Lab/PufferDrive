@@ -99,11 +99,12 @@ void demo() {
         .termination_mode = conf.termination_mode,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
+        .observation_window_size = conf.observation_window_size,
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .spawn_settings = spawn_settings,
-        .map_name = "resources/drive/binaries/carla_2D/map_000.bin",
+        .map_name = "resources/drive/binaries/carla_py123d/map_001.bin",
         .reward_conditioning = conf.reward_conditioning,
     };
 

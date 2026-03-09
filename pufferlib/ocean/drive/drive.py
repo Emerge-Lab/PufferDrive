@@ -33,6 +33,7 @@ class Drive(pufferlib.PufferEnv):
         max_goal_speed=None,
         collision_behavior=0,
         offroad_behavior=0,
+        observation_window_size=100.0,
         dt=0.1,
         episode_length=None,
         termination_mode=None,
@@ -113,6 +114,7 @@ class Drive(pufferlib.PufferEnv):
         self.max_goal_distance = max_goal_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
+        self.observation_window_size = observation_window_size
         self.human_agent_idx = human_agent_idx
         self.episode_length = episode_length
         self.termination_mode = termination_mode
@@ -279,6 +281,7 @@ class Drive(pufferlib.PufferEnv):
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
+            observation_window_size=self.observation_window_size,
             reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
             reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
             reward_bound_collision_min=self.reward_bound_collision_min,
@@ -386,6 +389,7 @@ class Drive(pufferlib.PufferEnv):
                 min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
+                observation_window_size=self.observation_window_size,
                 dt=dt,
                 episode_length=(int(episode_length) if episode_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
@@ -439,6 +443,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,
+                observation_window_size=self.observation_window_size,
                 # reward randomization bounds
                 reward_bound_collision_min=self.reward_bound_collision_min,
                 reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
@@ -544,6 +549,7 @@ class Drive(pufferlib.PufferEnv):
                     min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                     collision_behavior=self.collision_behavior,
                     offroad_behavior=self.offroad_behavior,
+                    observation_window_size=self.observation_window_size,
                     dt=self.dt,
                     episode_length=(int(self.episode_length) if self.episode_length is not None else None),
                     map_path=self.map_files[map_ids[i]],
@@ -982,7 +988,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data_utils/carla/carla_py123d")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

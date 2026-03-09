@@ -338,6 +338,7 @@ struct Drive {
     char *scenario_id;
     int collision_behavior;
     int offroad_behavior;
+    float observation_window_size;
     int sdc_track_index;
     int num_tracks_to_predict;
     int *tracks_to_predict_indices;
@@ -639,6 +640,9 @@ void add_entity_to_grid(Drive *env, int grid_index, int entity_idx, int geometry
 void init_grid_map(Drive *env) {
     // Allocate memory for the grid map structure
     env->grid_map = (GridMap *)malloc(sizeof(GridMap));
+
+    // Square vision range based on observation window size, plus one cell for current cell
+    env->grid_map->vision_range = (int)ceil(env->observation_window_size / GRID_CELL_SIZE) + 1;
 
     // Find top left and bottom right points of the map
     float top_left_x;
@@ -2044,7 +2048,6 @@ void init(Drive *env) {
     init_grid_map(env);
     generate_offsets(collision_offsets, COLLISION_RANGE);
     generate_offsets(z_offsets, Z_RANGE);
-    env->grid_map->vision_range = 21;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     env->logs_capacity = 0;
@@ -3514,7 +3517,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         if (agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0) {
             continue;
         }
-        Color lineColor = BLUE; // Default color
+        Color lineColor;
         int entity_type = (int)agent_obs[entity_idx + 7];
         // Choose color based on entity type
         if (entity_type + 4 == ROAD_LANE) {

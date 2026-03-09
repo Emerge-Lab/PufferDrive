@@ -22,6 +22,7 @@ typedef struct {
     float max_goal_speed;
     int collision_behavior;
     int offroad_behavior;
+    float observation_window_size;
     int spawn_immunity_timer;
     float dt;
     int goal_behavior;
@@ -201,6 +202,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->collision_behavior = atoi(value);
     } else if (MATCH("env", "offroad_behavior")) {
         env_config->offroad_behavior = atoi(value);
+    } else if (MATCH("env", "observation_window_size")) {
+        env_config->observation_window_size = atof(value);
     } else if (MATCH("env", "spawn_immunity_timer")) {
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "dt")) {
