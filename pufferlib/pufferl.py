@@ -519,8 +519,8 @@ class PuffeRL:
         # They use the latest available checkpoint, so they don't need a fresh one.
         should_render = self.render and self.epoch % self.render_interval == 0
         safe_eval_config = self.config.get("safe_eval", {})
-        run_safe_eval = safe_eval_config.get("safe_eval", False)
-        safe_eval_interval = safe_eval_config.get("safe_eval_interval", self.render_interval)
+        run_safe_eval = safe_eval_config.get("enabled", False)
+        safe_eval_interval = safe_eval_config.get("interval", self.render_interval)
         should_safe_eval = run_safe_eval and self.epoch % safe_eval_interval == 0
 
         if should_render or should_safe_eval:
@@ -1368,14 +1368,15 @@ def safe_eval(env_name, args=None, vecenv=None, policy=None):
     """Evaluate policy with safe/law-abiding reward conditioning and output metrics."""
     args = args or load_config(env_name)
 
+    safe_eval_config = args.get("safe_eval", {})
     args["vec"] = dict(backend="PufferEnv", num_envs=1)
-    args["env"]["num_agents"] = 64
+    args["env"]["num_agents"] = safe_eval_config.get("num_agents", 64)
 
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
     policy.eval()
 
-    num_steps = args.get("safe_eval", {}).get("safe_eval_num_episodes", 300)
+    num_steps = args.get("safe_eval", {}).get("num_episodes", 300)
     device = args["train"]["device"]
     num_agents = vecenv.observation_space.shape[0]
     use_rnn = args["train"]["use_rnn"]

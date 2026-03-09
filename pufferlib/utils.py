@@ -7,25 +7,26 @@ import json
 import configparser
 import tempfile
 
-# Mapping from safe_eval config keys to (reward_bound_min, reward_bound_max) pairs.
-# Used by both generate_safe_eval_ini (underscore form) and the metrics subprocess (hyphen form).
-SAFE_EVAL_BOUND_KEYS = [
-    ("safe_eval_collision", "collision"),
-    ("safe_eval_offroad", "offroad"),
-    ("safe_eval_overspeed", "overspeed"),
-    ("safe_eval_traffic_light", "traffic_light"),
-    ("safe_eval_reverse", "reverse"),
-    ("safe_eval_comfort", "comfort"),
-    ("safe_eval_goal_radius", "goal_radius"),
-    ("safe_eval_lane_align", "lane_align"),
-    ("safe_eval_lane_center", "lane_center"),
-    ("safe_eval_velocity", "velocity"),
-    ("safe_eval_center_bias", "center_bias"),
-    ("safe_eval_vel_align", "vel_align"),
-    ("safe_eval_timestep", "timestep"),
-    ("safe_eval_throttle", "throttle"),
-    ("safe_eval_steer", "steer"),
-    ("safe_eval_acc", "acc"),
+# Reward bound names used for safe eval conditioning.
+# Config keys in [safe_eval] match these names directly (e.g. collision = -3.0).
+# They map to env reward_bound_{name}_min/max.
+SAFE_EVAL_REWARD_BOUNDS = [
+    "collision",
+    "offroad",
+    "overspeed",
+    "traffic_light",
+    "reverse",
+    "comfort",
+    "goal_radius",
+    "lane_align",
+    "lane_center",
+    "velocity",
+    "center_bias",
+    "vel_align",
+    "timestep",
+    "throttle",
+    "steer",
+    "acc",
 ]
 
 
@@ -347,9 +348,9 @@ def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/oce
     config = configparser.ConfigParser()
     config.read(base_ini_path)
 
-    for safe_key, bound_name in SAFE_EVAL_BOUND_KEYS:
-        if safe_key in safe_eval_config:
-            val = str(safe_eval_config[safe_key])
+    for bound_name in SAFE_EVAL_REWARD_BOUNDS:
+        if bound_name in safe_eval_config:
+            val = str(safe_eval_config[bound_name])
             config.set("env", f"reward_bound_{bound_name}_min", val)
             config.set("env", f"reward_bound_{bound_name}_max", val)
 
@@ -365,20 +366,20 @@ def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/oce
 
 def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_config):
     """Run policy evaluation with safe reward conditioning in a subprocess and log metrics."""
-    num_episodes = safe_eval_config.get("safe_eval_num_episodes", 300)
+    num_episodes = safe_eval_config.get("num_episodes", 300)
 
     extra_args = [
         "--env.reward-randomization",
         "1",
         "--env.reward-conditioning",
         "1",
-        "--safe-eval.safe-eval-num-episodes",
+        "--safe-eval.num-episodes",
         str(num_episodes),
     ]
 
-    for safe_key, bound_name in SAFE_EVAL_BOUND_KEYS:
-        if safe_key in safe_eval_config:
-            val = str(safe_eval_config[safe_key])
+    for bound_name in SAFE_EVAL_REWARD_BOUNDS:
+        if bound_name in safe_eval_config:
+            val = str(safe_eval_config[bound_name])
             cli_name = bound_name.replace("_", "-")
             # Use = syntax to avoid argparse interpreting negative values as flags
             extra_args.extend([f"--env.reward-bound-{cli_name}-min={val}", f"--env.reward-bound-{cli_name}-max={val}"])
