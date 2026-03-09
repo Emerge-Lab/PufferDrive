@@ -891,7 +891,7 @@ class Evaluator:
                 action_np = np.clip(action_np, env.action_space.low, env.action_space.high)
 
             # Step environment
-            obs, rewards, dones, truncs, info_list = env.step(action_np, per_env_logs=True)
+            obs, rewards, dones, truncs, info_list = env.step(action_np, per_env_logs=per_env_logs)
 
             if truncs.all():
                 break
