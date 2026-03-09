@@ -12,6 +12,7 @@ Usage:
 import wandb
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions.categorical import Categorical
@@ -153,7 +154,7 @@ if __name__ == "__main__":
         "learning_rate": 1e-4,
         "epochs": 200,
         "minibatches": 64,
-        "resample_every_n_epochs": 10,
+        "resample_every_n_epochs": 5,
         "num_maps": args["env"]["num_maps"],
         "dynamics_model": dynamics_model,
     }
@@ -175,6 +176,10 @@ if __name__ == "__main__":
         hidden_size=config["hidden_size"],
         output_sizes=output_sizes,
     ).to(device)
+
+    param_count = sum(p.numel() for p in policy.parameters())
+    print(f"Total parameters: {param_count:,}")
+    wandb.log({"model/param_count": param_count})
 
     optimizer = Adam(policy.parameters(), lr=config["learning_rate"])
 

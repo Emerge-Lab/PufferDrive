@@ -143,8 +143,8 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define NUM_STEER_BINS 31
 #define STEER_MIN -1.0f // radians
 #define STEER_MAX 1.0f
-#define NUM_DX_BINS 21
-#define NUM_DY_BINS 21
+#define NUM_DX_BINS 31
+#define NUM_DY_BINS 31
 #define NUM_YAW_BINS 127
 #define DELTA_MAX_DX 2.0f
 #define DELTA_MAX_DY 2.0f
@@ -2786,6 +2786,12 @@ Client *make_client(Drive *env) {
     SetTraceLogLevel(LOG_WARNING); // Only show warnings and errors
     InitWindow(client->width, client->height, "PufferDrive");
 
+    if (!IsWindowReady()) {
+        fprintf(stderr, "WARNING: Failed to initialize render window. Rendering disabled.\n");
+        free(client);
+        return NULL;
+    }
+
     // Load assets
     client->cars[0] = LoadModel("resources/drive/RedCar.glb");
     client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
@@ -3506,6 +3512,10 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
     // Create client on first render call
     if (env->client == NULL) {
         env->client = make_client(env);
+    }
+
+    if (env->client == NULL) {
+        return; // Silently skip rendering
     }
 
     Client *client = env->client;

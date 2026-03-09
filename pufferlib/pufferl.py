@@ -689,20 +689,26 @@ class PuffeRL:
             self.evaluator = Evaluator(self.full_args, self.logger)
             if human_replay_eval:
                 self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
-                self.evaluator.rollout(
-                    self.uncompiled_policy,
-                    mode="human_replay",
-                    render_rollout=self.config["eval"]["render_human_replay_eval"],
-                )
+                try:
+                    self.evaluator.rollout(
+                        self.uncompiled_policy,
+                        mode="human_replay",
+                        render_rollout=self.config["eval"]["render_human_replay_eval"],
+                    )
+                except Exception as e:
+                    print(f"Render failed (non-fatal): {e}")
                 self.evaluator.hr_env.close()
                 self.evaluator.log_videos(eval_mode="human_replay", epoch=self.epoch)
             if self_play_eval:
                 self.evaluator.sp_env = load_env("puffer_drive", self.evaluator.sp_eval_config)
-                self.evaluator.rollout(
-                    self.uncompiled_policy,
-                    mode="self_play",
-                    render_rollout=self.config["eval"]["render_self_play_eval"],
-                )
+                try:
+                    self.evaluator.rollout(
+                        self.uncompiled_policy,
+                        mode="self_play",
+                        render_rollout=self.config["eval"]["render_self_play_eval"],
+                    )
+                except Exception as e:
+                    print(f"Render failed (non-fatal): {e}")
                 self.evaluator.sp_env.close()
                 self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
             if human_replay_eval or self_play_eval:
