@@ -286,11 +286,11 @@ class Drive(pufferlib.PufferEnv):
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
-            if per_env_logs: # Get the stats for every separate env
+            if per_env_logs:  # Get the stats for every separate env
                 logs = self.get_env_logs()
                 if any(logs):
                     info = logs
-            else: # Default: Aggregate across vectorized envs
+            else:  # Default: Aggregate across vectorized envs
                 log = binding.vec_log(self.c_envs, self.num_agents)
                 if log:
                     info.append(log)

@@ -662,7 +662,7 @@ static PyObject *env_log(PyObject *self, PyObject *args) {
         ((float *)&aggregate)[j] += ((float *)&env->log)[j];
     }
 
-    PyObject* dict = PyDict_New();
+    PyObject *dict = PyDict_New();
     if (aggregate.n == 0.0f) {
         return dict;
     }
@@ -670,7 +670,7 @@ static PyObject *env_log(PyObject *self, PyObject *args) {
     // Average across agents in env
     float n = aggregate.n;
     for (int i = 0; i < num_keys; i++) {
-        ((float*)&aggregate)[i] /= n;
+        ((float *)&aggregate)[i] /= n;
     }
     aggregate.n = (float)env->active_agent_count;
 

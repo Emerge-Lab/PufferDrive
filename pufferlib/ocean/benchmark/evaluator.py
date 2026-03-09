@@ -762,10 +762,12 @@ class WOSACEvaluator:
 
             plt.savefig(f"trajectory_comparison_agent_{agent_idx}.png")
 
+
 RENDER_FIRST = "first"
 RENDER_WORST_SCORE = "worst_score"
 RENDER_WORST_COLLISION = "worst_collision"
 RENDER_RANDOM = "random"
+
 
 class Evaluator:
     """Evaluates policies in self_play or human_replay mode, with optional rendering.
