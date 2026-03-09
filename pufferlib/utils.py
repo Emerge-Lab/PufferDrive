@@ -78,7 +78,7 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
                     if payload:
                         logger.wandb.log(payload, step=global_step)
         else:
-            print(f"{eval_name} evaluation failed with exit code {result.returncode}: {result.stderr[:500]}")
+            print(f"{eval_name} evaluation failed with exit code {result.returncode}: {result.stderr[-1000:]}")
 
     except subprocess.TimeoutExpired:
         print(f"{eval_name} evaluation timed out")
@@ -122,8 +122,8 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         extra_args=[
             "--eval.wosac-realism-eval",
             "True",
-            "--eval.wosac-num-agents",
-            str(eval_config.get("wosac_num_agents", 256)),
+            "--eval.wosac-num-rollouts",
+            str(eval_config.get("wosac_num_rollouts", 32)),
             "--eval.wosac-init-mode",
             str(eval_config.get("wosac_init_mode", "create_all_valid")),
             "--eval.wosac-control-mode",
