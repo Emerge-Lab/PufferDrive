@@ -57,6 +57,7 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
             sys.executable, "-m", "pufferlib.pufferl",
             mode, config["env"],
             "--load-model-path", latest_cpt,
+            "--train.device", config.get("device", "cuda"),
         ] + extra_args
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
@@ -340,8 +341,9 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
         if safe_key in safe_eval_config:
             val = str(safe_eval_config[safe_key])
             cli_name = bound_name.replace("_", "-")
-            extra_args.extend([f"--env.reward-bound-{cli_name}-min", val,
-                               f"--env.reward-bound-{cli_name}-max", val])
+            # Use = syntax to avoid argparse interpreting negative values as flags
+            extra_args.extend([f"--env.reward-bound-{cli_name}-min={val}",
+                               f"--env.reward-bound-{cli_name}-max={val}"])
 
     _run_eval_subprocess(
         config, logger, global_step,
