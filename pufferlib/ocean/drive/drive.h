@@ -2957,17 +2957,21 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
-        if (agent->freeze_updates) {
-            continue;
-        }
-        env->logs[i].episode_length += 1;
+
         agent->collision_state = 0;
         agent->aabb_collision_state = 0;
         compute_agent_metrics(env, agent_idx);
         int collision_state = agent->collision_state;
+
+        if (agent->freeze_updates) {
+            continue;
+        }
+
         if (collision_state == NO_COLLISION) {
             env->logs[i].distance_without_collision = agent->cumulative_displacement;
         }
+
+        env->logs[i].episode_length += 1;
         float cos_heading = cosf(agent->sim_heading);
         float sin_heading = sinf(agent->sim_heading);
         float speed_magnitude = sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy);
