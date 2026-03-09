@@ -7,10 +7,19 @@ import json
 import configparser
 import tempfile
 
-# Control keys in [safe_eval] that are not reward bounds.
-# Everything else in the section is treated as a reward bound name
-# mapping to env reward_bound_{name}_min/max.
-SAFE_EVAL_CONTROL_KEYS = {"enabled", "interval", "num_agents", "num_episodes"}
+
+def _get_env_reward_bound_names(ini_path="pufferlib/config/ocean/drive.ini"):
+    """Discover valid reward bound names from the env config section."""
+    import re
+
+    config = configparser.ConfigParser()
+    config.read(ini_path)
+    bounds = set()
+    for key in config["env"]:
+        m = re.match(r"reward_bound_(.+)_min$", key)
+        if m:
+            bounds.add(m.group(1))
+    return bounds
 
 
 def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_name, wandb_keys=None):
@@ -331,8 +340,9 @@ def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/oce
     config = configparser.ConfigParser()
     config.read(base_ini_path)
 
+    valid_bounds = _get_env_reward_bound_names(base_ini_path)
     for key, val in safe_eval_config.items():
-        if key in SAFE_EVAL_CONTROL_KEYS:
+        if key not in valid_bounds:
             continue
         val = str(val)
         config.set("env", f"reward_bound_{key}_min", val)
@@ -361,8 +371,9 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
         str(num_episodes),
     ]
 
+    valid_bounds = _get_env_reward_bound_names()
     for key, val in safe_eval_config.items():
-        if key in SAFE_EVAL_CONTROL_KEYS:
+        if key not in valid_bounds:
             continue
         val = str(val)
         cli_name = key.replace("_", "-")
