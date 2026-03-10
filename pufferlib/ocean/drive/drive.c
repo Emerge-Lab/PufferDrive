@@ -121,7 +121,7 @@ void demo() {
         fprintf(stderr, "Error: No active agents found in map '%s' with init_mode=%d. Cannot run demo.\n", env.map_name,
                 conf.init_mode);
         free_allocated(&env);
-        return -1;
+        return;
     }
     c_reset(&env);
     c_render(&env);
@@ -198,7 +198,6 @@ void demo() {
     free_allocated(&env);
     free_drivenet(net);
     free(weights);
-    return 0;
 }
 
 void performance_test() {
