@@ -60,22 +60,22 @@ class Drive(nn.Module):
         else:
             self.atn_dim = env.single_action_space.nvec.tolist()
 
-        self.action_tensor_shape = [sum(self.atn_dim)] + [self.actions_trajectory_length]
+        self.past_action_tensor_shape = [self.actions_trajectory_length, 2]
+        self.output_action_tensor_shape = [self.actions_trajectory_length, sum(self.atn_dim)]
 
-        assert all(type(i) == int for i in self.action_tensor_shape)  # check that all entries are integers
-
-        self.previous_actions_trajectory = torch.zeros(
-            np.prod(self.action_tensor_shape)
-        )  # TODO: remove, this is a temporary input
+        assert all(type(i) == int for i in self.past_action_tensor_shape)  # check that all entries are integers
+        assert all(type(i) == int for i in self.output_action_tensor_shape)  # check that all entries are integers
 
         self.past_actions_encoder = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(np.prod(self.action_tensor_shape), input_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(np.prod(self.past_action_tensor_shape), input_size)),
             nn.LayerNorm(input_size),
             # nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 
-        self.actor = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, np.prod(self.action_tensor_shape)), std=0.01)
+        self.actor = pufferlib.pytorch.layer_init(
+            nn.Linear(hidden_size, np.prod(self.output_action_tensor_shape)), std=0.01
+        )
         self.value_fn = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, 1), std=1)
 
     def forward(self, observations, state=None):
@@ -90,7 +90,7 @@ class Drive(nn.Module):
         ego_dim = self.ego_dim
         partner_dim = self.max_partner_objects * self.partner_features
         road_dim = self.max_road_objects * self.road_features
-        past_actions_dim = np.prod(self.action_tensor_shape)
+        past_actions_dim = np.prod(self.past_action_tensor_shape)
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]

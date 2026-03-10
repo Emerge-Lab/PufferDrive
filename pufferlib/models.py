@@ -101,7 +101,7 @@ class LSTMWrapper(nn.Module):
         Requires that your policy define encode_observations and decode_actions.
         See the Default policy for an example."""
         super().__init__()
-        atn_traj_flat = sum(env.single_action_space.nvec.tolist()) * actions_trajectory_length
+        atn_traj_flat = 2 * actions_trajectory_length  # 2 real numbers (accel, steering) per timestep
         self.obs_shape = (env.single_observation_space.shape[0] + atn_traj_flat,)
 
         self.policy = policy

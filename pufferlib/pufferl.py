@@ -64,6 +64,17 @@ signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
+def convert_action_integers_to_r2(actions: torch.Tensor) -> torch.Tensor:
+    accel = actions // 13
+    steering = actions % 13
+    return torch.cat([accel.unsqueeze(-1), steering.unsqueeze(-1)], dim=-1)
+
+
+def compute_l2_loss_action_traj(a_t: torch.Tensor, a_tm1: torch.Tensor) -> torch.Tensor:
+    loss = torch.sqrt(((a_t[:, :-1, :] - a_tm1[:, 1:, :]) ** 2).sum(-1).sum(-1))
+    return -loss / 80.0
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization
@@ -104,7 +115,7 @@ class PuffeRL:
         self.actions_trajectory_length = config.get("actions_trajectory_length", 80)
         atn_traj_size = (
             self.actions_trajectory_length,
-            sum(atn_space.nvec.tolist()),
+            2,  # 2 real numbers for accel and steering
         )  # TODO: generalize to continuous case
         assert len(obs_space.shape) == 1
         self.obs_len = obs_space.shape[0]
@@ -123,12 +134,13 @@ class PuffeRL:
         self.actions = torch.zeros(
             segments,
             horizon,
+            self.actions_trajectory_length,
             *atn_space.shape,
             device=device,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
         )
 
-        self.prev_logits_traj = torch.ones(
+        self.prev_actions_traj = torch.ones(
             total_agents,
             *atn_traj_size,
             device=device,
@@ -314,19 +326,20 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                prev_traj = self.prev_logits_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1).detach()
+                prev_traj = self.prev_actions_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1).detach()
                 o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
                 logits, value = self.policy.forward_eval(o_device_aug, state)
-                action, logprob, _, logits_full = pufferlib.pytorch.sample_logits(
+                action, logprob, _ = pufferlib.pytorch.sample_logits(
                     logits, actions_trajectory_length=self.actions_trajectory_length
-                )  # sample logits now accepts a length of actions_trajectory to only pick the first element for action sampling
+                )  # sample logits now accepts a length of actions_trajectory to output a full trajectory of actions
 
-                # we store the full logits
-                self.prev_logits_traj[env_id.start : env_id.stop] = logits_full.squeeze(
-                    0
-                )  # store the trajectory as previous traj
-
+                action_r2 = convert_action_integers_to_r2(action)
+                r_commitment = compute_l2_loss_action_traj(
+                    action_r2, self.prev_actions_traj[env_id.start : env_id.stop]
+                )
+                r = r + r_commitment
                 r = torch.clamp(r, -1, 1)
+                self.prev_actions_traj[env_id.start : env_id.stop] = action_r2.detach()
 
             profile("eval_copy", epoch)
             with torch.no_grad():
@@ -343,7 +356,7 @@ class PuffeRL:
                 else:
                     self.observations[batch_rows, l] = o_device_aug
 
-                self.actions[batch_rows, l] = action
+                self.actions[batch_rows, l, :] = action.unsqueeze(-1)
                 self.logprobs[batch_rows, l] = logprob
                 # Truncation bootstrap hack for auto-reset envs.
                 # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
@@ -366,7 +379,7 @@ class PuffeRL:
                     self.free_idx += num_full
                     self.full_rows += num_full
 
-                action = action.cpu().numpy()
+                action = action[:, 0, ...].unsqueeze(-1).cpu().numpy()  # only send the first action to the env
                 if isinstance(logits, torch.distributions.Normal):
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
 
@@ -452,7 +465,7 @@ class PuffeRL:
             )
 
             logits, newvalue = self.policy(mb_obs, state)
-            actions, newlogprob, entropy, full_logits = pufferlib.pytorch.sample_logits(
+            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(
                 logits, action=mb_actions, actions_trajectory_length=self.actions_trajectory_length
             )
 
@@ -483,19 +496,6 @@ class PuffeRL:
             adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
             # Losses
-            # action consistency diff
-            prev_traj = mb_obs[..., self.obs_len :].reshape(-1, self.actions_trajectory_length, full_logits.shape[-1])
-
-            prev_probs = prev_traj[:, 1:, :].softmax(dim=-1).detach()
-            curr_probs = full_logits.squeeze(0)[:, :-1, :].softmax(dim=-1)
-            consistency_loss = (curr_probs - prev_probs) ** 2
-            discount_future_actions = config["action_pred_discount"] ** torch.arange(
-                consistency_loss.shape[1], device=consistency_loss.device
-            )
-            discount_future_actions = discount_future_actions.view(1, consistency_loss.shape[1], 1)
-            consistency_loss = consistency_loss * discount_future_actions
-            consistency_loss = consistency_loss.mean()
-
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
             pg_loss = torch.max(pg_loss1, pg_loss2).mean()
@@ -508,12 +508,7 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = (
-                pg_loss
-                + config["vf_coef"] * v_loss
-                - config["ent_coef"] * entropy_loss
-                + config["action_pred_coef"] * consistency_loss
-            )
+            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -528,7 +523,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["action_prediction"] += config["action_pred_coef"] * consistency_loss.item() / self.total_minibatches
+            # losses["action_prediction"] += config["action_pred_coef"] * consistency_loss.item() / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
@@ -565,28 +560,29 @@ class PuffeRL:
         if self.epoch % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
+            run_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+            artifacts_dir = os.path.join(run_dir, "artifacts")
+            os.makedirs(artifacts_dir, exist_ok=True)
+            save_idxs = np.random.choice(self.observations.shape[0], 1000)
+            prefix = os.path.join(artifacts_dir, f"epoch_{self.epoch:06d}")
+            np.savez(f"{prefix}_observations.npz", self.observations.detach()[save_idxs, ...].cpu())
+            np.savez(f"{prefix}_previous_actions.npz", self.prev_actions_traj.detach()[save_idxs, ...].cpu())
+            np.savez(f"{prefix}_actions.npz", convert_action_integers_to_r2(actions).detach()[save_idxs, ...].cpu())
+            np.savez(f"{prefix}_actions_chunks.npz", self.actions.detach()[save_idxs, ...].cpu())
+            with open(f"{prefix}_shapes.json", "w") as f:
+                json.dump(
+                    {
+                        "observations": list(self.observations.shape),
+                        "previous_actions": list(self.prev_actions_traj.shape),
+                        "actions": list(convert_action_integers_to_r2(actions).shape),
+                        "actions_chunk": list(self.actions.shape),
+                    },
+                    f,
+                )
 
             if self.render and self.epoch % self.render_interval == 0:
                 model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
                 model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
-
-                save_idxs = np.random.choice(self.observations.shape[0], 1000)
-                np.savez(
-                    f"{model_dir}_observation_{self.epoch:06d}.npz", self.observations.detach()[save_idxs, ...].cpu()
-                )
-                np.savez(
-                    f"{model_dir}_previous_action_probs_{self.epoch:06d}.npz", prev_probs.detach()[save_idxs, ...].cpu()
-                )
-                np.savez(f"{model_dir}_action_probs_{self.epoch:06d}.npz", curr_probs.detach()[save_idxs, ...].cpu())
-                with open(f"{model_dir}_shapes_{self.epoch:06d}.json", "w") as f:
-                    json.dump(
-                        {
-                            "observation": list(self.observations.shape),
-                            "previous_action_probs": list(prev_probs.shape),
-                            "action_probs": list(curr_probs.shape),
-                        },
-                        f,
-                    )
 
                 if model_files:
                     # Take the latest checkpoint
@@ -1858,3 +1854,18 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# old stuff
+# # action consistency diff
+# prev_traj = mb_obs[..., self.obs_len :].reshape(-1, self.actions_trajectory_length, full_logits.shape[-1])
+
+# prev_probs = prev_traj[:, 1:, :].softmax(dim=-1).detach()
+# curr_probs = full_logits.squeeze(0)[:, :-1, :].softmax(dim=-1)
+# consistency_loss = (curr_probs - prev_probs) ** 2
+# discount_future_actions = config["action_pred_discount"] ** torch.arange(
+#     consistency_loss.shape[1], device=consistency_loss.device
+# )
+# discount_future_actions = discount_future_actions.view(1, consistency_loss.shape[1], 1)
+# consistency_loss = consistency_loss * discount_future_actions
+# consistency_loss = consistency_loss.mean()
