@@ -15,7 +15,6 @@
 
 // constants for strings, data etc.
 #define SCENARIO_ID_STR_LENGTH 16
-#define A_LAT_LIMIT 0.5
 #define PENALTY_WEIGHT 0.05
 
 // templates for bringing in some datatypes we might use later
@@ -352,6 +351,7 @@ struct Drive {
     int init_mode;
     int control_mode;
     int reward_randomization;
+    float a_lat_limit;
     int reward_conditioning;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
@@ -1500,6 +1500,7 @@ void add_log(Drive *env) {
         env->log.distance_without_collision += env->logs[i].distance_without_collision;
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
+        env->log.steering_error += env->logs[i].steering_error / safe_timestep;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
@@ -3006,13 +3007,15 @@ void c_step(Drive *env) {
 
             float delta_a_long = curr_a_long - prev_a_long;
             float delta_a_lat  = curr_a_lat  - prev_a_lat;
-            float a_lat_limit = A_LAT_LIMIT;
+            float a_lat_limit = env->a_lat_limit;
+            float steering_error = fabsf(delta_a_lat);
             // float alpha = 0.000000002f;  // longitudinal weight
             // float beta  = 0.000000004f;  // lateral weight
             float jerk_penalty = -1*PENALTY_WEIGHT*fmin(1,exp(-1*(a_lat_limit - fabs(delta_a_lat))));
             // float jerk_penalty = -(alpha * delta_a_long * delta_a_long + beta * delta_a_lat * delta_a_lat);
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
+            env->logs[i].steering_error += steering_error;
         }
     }
 

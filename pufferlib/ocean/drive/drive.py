@@ -25,6 +25,7 @@ class Drive(pufferlib.PufferEnv):
         reward_goal_post_respawn=0.5,
         goal_behavior=0,
         reward_randomization=0,
+        a_lat_limit = 1.0,
         reward_conditioning=0,
         min_goal_distance=5.0,
         max_goal_distance=20.0,
@@ -108,6 +109,7 @@ class Drive(pufferlib.PufferEnv):
         self.max_goal_speed = float(max_goal_speed) if max_goal_speed is not None else -1.0
         self.goal_behavior = goal_behavior
         self.reward_randomization = reward_randomization
+        self.a_lat_limit = a_lat_limit
         self.reward_conditioning = reward_conditioning
         self.min_goal_distance = min_goal_distance
         self.max_goal_distance = max_goal_distance
@@ -276,6 +278,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
+            a_lat_limit = self.a_lat_limit,
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
@@ -346,6 +349,7 @@ class Drive(pufferlib.PufferEnv):
                 max_goal_speed=self.max_goal_speed,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
+                a_lat_limit = self.a_lat_limit,
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,
@@ -427,6 +431,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
+            a_lat_limit = self.a_lat_limit,
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
@@ -494,6 +499,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_radius=self.goal_radius,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
+                a_lat_limit = self.a_lat_limit,
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,

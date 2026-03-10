@@ -87,6 +87,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
     int reward_randomization = unpack(kwargs, "reward_randomization");
+    float a_lat_limit = unpack(kwargs, "a_lat_limit");
     int reward_conditioning = unpack(kwargs, "reward_conditioning");
     float min_goal_distance = unpack(kwargs, "min_goal_distance");
     float max_goal_distance = unpack(kwargs, "max_goal_distance");
@@ -194,6 +195,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
         env->reward_randomization = reward_randomization;
+        env->a_lat_limit = a_lat_limit;
         env->reward_conditioning = reward_conditioning;
         env->min_goal_distance = min_goal_distance;
         env->max_goal_distance = max_goal_distance;
@@ -332,6 +334,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->reward_randomization = (int)unpack(kwargs, "reward_randomization");
     env->reward_conditioning = (int)unpack(kwargs, "reward_conditioning");
+    env->a_lat_limit = (float)unpack(kwargs,"a_lat_limit");
     env->min_goal_distance = (float)unpack(kwargs, "min_goal_distance");
     env->max_goal_distance = (float)unpack(kwargs, "max_goal_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
@@ -420,6 +423,7 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
+    assign_to_dict(dict, "steering_error", log->steering_error);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }
