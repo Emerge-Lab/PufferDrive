@@ -52,6 +52,8 @@
 
 // Trajectory Length
 #define TRAJECTORY_LENGTH 91
+// Predicted action trajectory length (must match Python actions_trajectory_length)
+#define PREDICTED_TRAJ_LEN 20
 
 // Initialization modes
 #define INIT_ALL_VALID 0
@@ -350,6 +352,8 @@ struct Drive {
     int reward_conditioning;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
+    float *predicted_traj_x; // [active_agent_count * PREDICTED_TRAJ_LEN], set via visualizer
+    float *predicted_traj_y; // [active_agent_count * PREDICTED_TRAJ_LEN], set via visualizer
 };
 
 // ========================================
@@ -2115,6 +2119,8 @@ void allocate(Drive *env) {
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
     env->terminals = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
     env->truncations = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
+    env->predicted_traj_x = (float *)calloc(env->active_agent_count * PREDICTED_TRAJ_LEN, sizeof(float));
+    env->predicted_traj_y = (float *)calloc(env->active_agent_count * PREDICTED_TRAJ_LEN, sizeof(float));
 }
 
 void free_allocated(Drive *env) {
@@ -2123,6 +2129,8 @@ void free_allocated(Drive *env) {
     free(env->rewards);
     free(env->terminals);
     free(env->truncations);
+    free(env->predicted_traj_x);
+    free(env->predicted_traj_y);
     c_close(env);
 }
 
@@ -2904,6 +2912,111 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     // Free allocated memory
     free(entity_list);
     return;
+}
+
+// Rollout predicted action trajectory from current agent state.
+// pred_actions: PREDICTED_TRAJ_LEN discrete action indices (one per step).
+// out_x, out_y: output world-space positions, length PREDICTED_TRAJ_LEN.
+void rollout_trajectory(Drive *env, int local_idx, int *pred_actions, float *out_x, float *out_y) {
+    int agent_idx = env->active_agent_indices[local_idx];
+    Agent *agent = &env->agents[agent_idx];
+
+    float x = agent->sim_x;
+    float y = agent->sim_y;
+    float heading = agent->sim_heading;
+    float vx = agent->sim_vx;
+    float vy = agent->sim_vy;
+    float a_long = agent->a_long;
+    float a_lat = agent->a_lat;
+    float steering_angle = agent->steering_angle;
+    float length = agent->sim_length;
+    float wheelbase = agent->wheelbase;
+
+    int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+    int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+
+    for (int t = 0; t < PREDICTED_TRAJ_LEN; t++) {
+        int action_val = pred_actions[t];
+
+        if (env->dynamics_model == CLASSIC) {
+            float acceleration = ACCELERATION_VALUES[action_val / num_steer];
+            float steering = STEERING_VALUES[action_val % num_steer];
+
+            float speed_mag = sqrtf(vx * vx + vy * vy);
+            float v_dot_h = vx * cosf(heading) + vy * sinf(heading);
+            float signed_speed = copysignf(speed_mag, v_dot_h);
+            signed_speed = signed_speed + acceleration * env->dt;
+            signed_speed = clipSpeed(signed_speed);
+
+            float beta = tanh(.5 * tanf(steering));
+            float yaw_rate = (signed_speed * cosf(beta) * tanf(steering)) / length;
+            float new_vx = signed_speed * cosf(heading + beta);
+            float new_vy = signed_speed * sinf(heading + beta);
+
+            x += new_vx * env->dt;
+            y += new_vy * env->dt;
+            heading += yaw_rate * env->dt;
+            vx = new_vx;
+            vy = new_vy;
+        } else {
+            // JERK dynamics
+            float j_long = JERK_LONG[action_val / num_lat];
+            float j_lat = JERK_LAT[action_val % num_lat];
+
+            float a_long_new = a_long + j_long * env->dt;
+            float a_lat_new = a_lat + j_lat * env->dt;
+
+            if (a_long * a_long_new < 0)
+                a_long_new = 0.0f;
+            else
+                a_long_new = clip(a_long_new, -5.0f, 2.5f);
+            if (a_lat * a_lat_new < 0)
+                a_lat_new = 0.0f;
+            else
+                a_lat_new = clip(a_lat_new, -4.0f, 4.0f);
+
+            float v_dot_h = vx * cosf(heading) + vy * sinf(heading);
+            float signed_v = copysignf(sqrtf(vx * vx + vy * vy), v_dot_h);
+            float v_new = signed_v + 0.5f * (a_long_new + a_long) * env->dt;
+            if (signed_v * v_new < 0)
+                v_new = 0.0f;
+            else
+                v_new = clip(v_new, -2.0f, 20.0f);
+
+            float signed_curvature = a_lat_new / fmaxf(v_new * v_new, 1e-5f);
+            signed_curvature = copysignf(fmaxf(fabsf(signed_curvature), 1e-5f), signed_curvature);
+            float new_sa = atanf(signed_curvature * wheelbase);
+            float delta_steer = clip(new_sa - steering_angle, -0.6f * env->dt, 0.6f * env->dt);
+            new_sa = clip(steering_angle + delta_steer, -0.55f, 0.55f);
+
+            signed_curvature = tanf(new_sa) / wheelbase;
+            a_lat_new = v_new * v_new * signed_curvature;
+
+            float d = 0.5f * (v_new + signed_v) * env->dt;
+            float theta = d * signed_curvature;
+            float dx_local, dy_local;
+            if (fabsf(signed_curvature) < 1e-5f || fabsf(theta) < 1e-5f) {
+                dx_local = d;
+                dy_local = 0.0f;
+            } else {
+                dx_local = sinf(theta) / signed_curvature;
+                dy_local = (1.0f - cosf(theta)) / signed_curvature;
+            }
+            float cos_h = cosf(heading);
+            float sin_h = sinf(heading);
+            x += dx_local * cos_h - dy_local * sin_h;
+            y += dx_local * sin_h + dy_local * cos_h;
+            heading = normalize_heading(heading + theta);
+            vx = v_new * cosf(heading);
+            vy = v_new * sinf(heading);
+            a_long = a_long_new;
+            a_lat = a_lat_new;
+            steering_angle = new_sa;
+        }
+
+        out_x[t] = x;
+        out_y[t] = y;
+    }
 }
 
 void c_reset(Drive *env) {
@@ -3846,6 +3959,25 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         agent->goal_position_z,
                     },
                     agent->reward_coefs[REWARD_COEF_GOAL_RADIUS], (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
+            }
+        }
+    }
+
+    // Draw predicted action trajectories (cyan fading dots + lines)
+    if (env->predicted_traj_x != NULL && env->predicted_traj_y != NULL) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            for (int t = 0; t < PREDICTED_TRAJ_LEN; t++) {
+                float alpha = 1.0f - (float)t / (float)PREDICTED_TRAJ_LEN;
+                Color c = Fade(PUFF_CYAN, alpha * 0.85f);
+                float wx = env->predicted_traj_x[i * PREDICTED_TRAJ_LEN + t];
+                float wy = env->predicted_traj_y[i * PREDICTED_TRAJ_LEN + t];
+                DrawSphere((Vector3){wx, wy, 0.3f}, 0.25f, c);
+                if (t + 1 < PREDICTED_TRAJ_LEN) {
+                    float wx2 = env->predicted_traj_x[i * PREDICTED_TRAJ_LEN + t + 1];
+                    float wy2 = env->predicted_traj_y[i * PREDICTED_TRAJ_LEN + t + 1];
+                    rlSetLineWidth(2.0f);
+                    DrawLine3D((Vector3){wx, wy, 0.3f}, (Vector3){wx2, wy2, 0.3f}, c);
+                }
             }
         }
     }
