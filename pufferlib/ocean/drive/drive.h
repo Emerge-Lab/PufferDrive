@@ -299,10 +299,15 @@ struct Drive {
     int num_traffic_elements;
     int num_objects; // All agent objects allocated in the sim
     int num_roads;
+    int num_road_lines;
+    int num_drivable; // number of drivable points in sim
     int static_agent_count;
     int *static_agent_indices;
     int expert_static_agent_count;
     int *expert_static_agent_indices;
+    int *drivable_lane_indices;
+    float *drivable_lane_lengths;
+    float total_drivable_lane_length;
     int timestep;
     int init_steps;
     int dynamics_model;
@@ -339,6 +344,8 @@ struct Drive {
     int collision_behavior;
     int offroad_behavior;
     float observation_window_size;
+    float polyline_reduction_threshold;
+    float polyline_max_segment_length;
     int sdc_track_index;
     int num_tracks_to_predict;
     int *tracks_to_predict_indices;
@@ -379,6 +386,108 @@ float relative_distance_3d(float x1, float y1, float z1, float x2, float y2, flo
     float dz = z2 - z1;
     float distance = sqrtf(dx * dx + dy * dy + dz * dz);
     return distance;
+}
+
+float calculate_area(float p1_x, float p1_y, float p1_z, float p2_x, float p2_y, float p2_z, float p3_x, float p3_y,
+                     float p3_z) {
+    float ax = p2_x - p1_x;
+    float ay = p2_y - p1_y;
+    float az = p2_z - p1_z;
+    float bx = p3_x - p1_x;
+    float by = p3_y - p1_y;
+    float bz = p3_z - p1_z;
+
+    float cx = ay * bz - az * by;
+    float cy = az * bx - ax * bz;
+    float cz = ax * by - ay * bx;
+
+    return 0.5f * sqrtf(cx * cx + cy * cy + cz * cz);
+}
+
+void simplify_polyline(RoadMapElement *road, float polyline_reduction_threshold, float max_segment_length) {
+    int num_points = road->segment_length;
+    int total_sparse_points = 0;
+    if (num_points < 3) {
+        return;
+    }
+
+    bool skip[num_points];
+    memset(skip, 0, sizeof(skip));
+
+    bool skip_changed = true;
+    while (skip_changed) {
+        skip_changed = false;
+        int k = 0;
+        while (k < num_points - 1) {
+            int k_1 = k + 1;
+            while (k_1 < num_points - 1 && skip[k_1]) {
+                k_1++;
+            }
+            if (k_1 >= num_points - 1) {
+                break;
+            }
+
+            int k_2 = k_1 + 1;
+            while (k_2 < num_points && skip[k_2]) {
+                k_2++;
+            }
+            if (k_2 >= num_points) {
+                break;
+            }
+
+            float area = calculate_area(road->x[k], road->y[k], road->z[k], road->x[k_1], road->y[k_1], road->z[k_1],
+                                        road->x[k_2], road->y[k_2], road->z[k_2]);
+
+            float segment_len =
+                relative_distance_3d(road->x[k], road->y[k], road->z[k], road->x[k_2], road->y[k_2], road->z[k_2]);
+
+            if (area < polyline_reduction_threshold && segment_len <= max_segment_length) {
+                skip[k_1] = true;
+                skip_changed = true;
+                k = k_2;
+            } else {
+                k = k_1;
+            }
+        }
+    }
+
+    // Count total sparse points after simplification
+    for (int idx = 0; idx < num_points; idx++) {
+        if (skip[idx]) {
+            continue;
+        }
+        total_sparse_points++;
+    }
+
+    // Copy final sparse points to temporary arrays
+    int x_pts[total_sparse_points];
+    int y_pts[total_sparse_points];
+    int z_pts[total_sparse_points];
+
+    int write_idx = 0;
+    for (int read_idx = 0; read_idx < num_points; read_idx++) {
+        if (skip[read_idx]) {
+            continue;
+        }
+        x_pts[write_idx] = road->x[read_idx];
+        y_pts[write_idx] = road->y[read_idx];
+        z_pts[write_idx] = road->z[read_idx];
+        write_idx++;
+    }
+
+    // Create new sparse road points
+    free(road->x);
+    free(road->y);
+    free(road->z);
+
+    road->x = (float *)calloc(total_sparse_points, sizeof(float));
+    road->y = (float *)calloc(total_sparse_points, sizeof(float));
+    road->z = (float *)calloc(total_sparse_points, sizeof(float));
+
+    memcpy(road->x, x_pts, total_sparse_points * sizeof(float));
+    memcpy(road->y, y_pts, total_sparse_points * sizeof(float));
+    memcpy(road->z, z_pts, total_sparse_points * sizeof(float));
+    road->segment_length = total_sparse_points;
 }
 
 float clip(float value, float min, float max) {
@@ -733,6 +842,30 @@ void init_grid_map(Drive *env) {
         }
     }
 }
+
+// // Create sparse lane and road line points for more informative map observations
+// // Note: We don't do this for road edges as they are very important for understanding offroads
+// // Note for future: Might need to completely remove road lines
+// void create_sparse_lane_points(Drive* env, float polyline_reduction_threshold, float max_segment_length) {
+
+//     env->sparse_lanes = (RoadMapElement*)calloc(env->num_lanes, sizeof(RoadMapElement));
+//     env->sparse_road_lines = (RoadMapElement*)calloc(env->num_road_lines, sizeof(RoadMapElement));
+
+//     int lane_idx = 0;
+//     int road_line_idx = 0;
+
+//     for (int i = 0; i < env->num_roads; i++) {
+//         RoadMapElement *road = &env->road_elements[i];
+//         if (road->type == ROAD_LANE) {
+//             deep_copy_road_map_element(&env->sparse_lanes[lane_idx], road);
+//             simplify_polyline(&env->sparse_lanes[lane_idx], polyline_reduction_threshold, max_segment_length);
+//         } else if (road->type == ROAD_LINE) {
+//             deep_copy_road_map_element(&env->sparse_road_lines[road_line_idx], road);
+//             simplify_polyline(&env->sparse_road_lines[road_line_idx], polyline_reduction_threshold,
+//             max_segment_length);
+//         }
+//     }
+// }
 
 void init_neighbor_offsets(Drive *env) {
     // Allocate memory for the offsets
@@ -1576,8 +1709,7 @@ static bool check_spawn_offroad(Drive *env, float spawn_x, float spawn_y, float 
     return check_offroad(env, &temp_agent);
 }
 
-static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *drivable_lanes, int num_drivable,
-                        float *lane_lengths, float total_lane_length) {
+static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check) {
     Agent *agent = &env->agents[agent_idx];
 
     if (agent->route != NULL) {
@@ -1591,7 +1723,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
 
-    if (num_drivable == 0)
+    if (env->num_drivable == 0)
         raise_error_with_message(ERROR_UNKNOWN,
                                  "No drivable lanes found in the environment with %d created agents at agent_idx %d.",
                                  env->num_created_agents, agent_idx);
@@ -1619,17 +1751,17 @@ static bool spawn_agent(Drive *env, int agent_idx, int agents_to_check, int *dri
     // Sampling rejection loop
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
         // Length-weighted lane selection: longer polylines are proportionally more likely
-        float r = ((float)rand() / (float)RAND_MAX) * total_lane_length;
+        float r = ((float)rand() / (float)RAND_MAX) * env->total_drivable_lane_length;
         float cumulative = 0.0f;
-        int selected = num_drivable - 1; // fallback to last lane
-        for (int k = 0; k < num_drivable; k++) {
-            cumulative += lane_lengths[k];
+        int selected = env->num_drivable - 1; // fallback to last lane
+        for (int k = 0; k < env->num_drivable; k++) {
+            cumulative += env->drivable_lane_lengths[k];
             if (r < cumulative) {
                 selected = k;
                 break;
             }
         }
-        start_lane_idx = drivable_lanes[selected];
+        start_lane_idx = env->drivable_lane_indices[selected];
         start_lane = &env->road_elements[start_lane_idx];
 
         get_random_point_on_lane(start_lane, &spawn_x, &spawn_y, &spawn_z, &spawn_heading);
@@ -1807,32 +1939,35 @@ bool should_control_agent(Drive *env, int agent_idx) {
     return distance_to_goal >= MIN_DISTANCE_TO_GOAL;
 }
 
+// Pre-compute drivable lane points and lengths for spawning agents
+void compute_drivable_lane_points(Drive *env) {
+    // allocate max space
+    env->num_drivable = 0;
+    env->drivable_lane_indices = (int *)malloc(env->num_roads * sizeof(int));
+    env->drivable_lane_lengths = (float *)malloc(env->num_roads * sizeof(float));
+    env->total_drivable_lane_length = 0.0f;
+
+    for (int i = 0; i < env->num_roads && env->num_drivable < env->num_roads; i++) {
+        if (env->road_elements[i].type == ROAD_LANE && env->road_elements[i].polyline_length > 0.0f) {
+            env->drivable_lane_indices[env->num_drivable] = i;
+            env->drivable_lane_lengths[env->num_drivable] = env->road_elements[i].polyline_length;
+            env->total_drivable_lane_length += env->drivable_lane_lengths[env->num_drivable];
+            env->num_drivable++;
+        }
+    }
+}
+
 int spawn_active_agents(Drive *env, int num_agents_to_create) {
     // Free any pre-existing agents allocated during map loading
     free_agents(env->agents, env->num_objects);
 
     env->agents = (Agent *)calloc(num_agents_to_create, sizeof(Agent));
 
-    // Pre-compute drivable lanes
-    int drivable_lanes[env->num_roads];
-    float lane_lengths[env->num_roads];
-    int num_drivable = 0;
-    float total_lane_length = 0.0f;
-    for (int i = 0; i < env->num_roads && num_drivable < env->num_roads; i++) {
-        if (env->road_elements[i].type == ROAD_LANE && env->road_elements[i].polyline_length > 0.0f) {
-            drivable_lanes[num_drivable] = i;
-            lane_lengths[num_drivable] = env->road_elements[i].polyline_length;
-            total_lane_length += lane_lengths[num_drivable];
-            num_drivable++;
-        }
-    }
-
     int successfully_created = 0;
     for (int i = 0; i < num_agents_to_create; i++) {
         int created = 0;
         for (int attempt = 0; attempt < MAX_SPAWNS_ATTEMPTS_WITH_DIMENSION_CHANGES; attempt++) {
-            if (spawn_agent(env, i, successfully_created, drivable_lanes, num_drivable, lane_lengths,
-                            total_lane_length)) {
+            if (spawn_agent(env, i, successfully_created)) {
                 successfully_created++;
                 created = 1;
                 break;
@@ -2044,6 +2179,8 @@ void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
     load_map_binary(env->map_name, env);
+    compute_drivable_lane_points(env);
+    // create_sparse_lane_points(env, env->polyline_reduction_threshold, env->polyline_max_segment_length);
     set_means(env);
     init_grid_map(env);
     generate_offsets(collision_offsets, COLLISION_RANGE);
@@ -2067,6 +2204,8 @@ void c_close(Drive *env) {
     free(env->road_elements);
     free(env->road_scenario_ids);
     free(env->active_agent_indices);
+    free(env->drivable_lane_indices);
+    free(env->drivable_lane_lengths);
     free(env->logs);
     // GridMap cleanup
     int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
@@ -3849,7 +3988,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 if (road->type == ROAD_EDGE) {
                     draw_road_edge(env, start.x, start.y, end.x, end.y, start.z, end.z);
                 } else if (road->type == ROAD_LANE || road->type == ROAD_LINE) {
-                    // Draw road lanes and lines as purple lines
                     rlSetLineWidth(2.0f);
                     DrawLine3D(start, end, lineColor);
                 }
