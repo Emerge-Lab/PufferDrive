@@ -72,7 +72,7 @@ def convert_action_integers_to_r2(actions: torch.Tensor) -> torch.Tensor:
 
 def compute_l2_loss_action_traj(a_t: torch.Tensor, a_tm1: torch.Tensor) -> torch.Tensor:
     loss = torch.sqrt(((a_t[:, :-1, :] - a_tm1[:, 1:, :]) ** 2).sum(-1).sum(-1))
-    return -loss / 80.0
+    return -loss / 200.0
 
 
 class PuffeRL:
@@ -565,17 +565,14 @@ class PuffeRL:
             os.makedirs(artifacts_dir, exist_ok=True)
             save_idxs = np.random.choice(self.observations.shape[0], 1000)
             prefix = os.path.join(artifacts_dir, f"epoch_{self.epoch:06d}")
-            np.savez(f"{prefix}_observations.npz", self.observations.detach()[save_idxs, ...].cpu())
-            np.savez(f"{prefix}_previous_actions.npz", self.prev_actions_traj.detach()[save_idxs, ...].cpu())
-            np.savez(f"{prefix}_actions.npz", convert_action_integers_to_r2(actions).detach()[save_idxs, ...].cpu())
-            np.savez(f"{prefix}_actions_chunks.npz", self.actions.detach()[save_idxs, ...].cpu())
+            np.savez(
+                f"{prefix}_actions.npz",
+                convert_action_integers_to_r2(self.actions.squeeze(-1)).detach()[save_idxs, ...].cpu(),
+            )
             with open(f"{prefix}_shapes.json", "w") as f:
                 json.dump(
                     {
-                        "observations": list(self.observations.shape),
-                        "previous_actions": list(self.prev_actions_traj.shape),
-                        "actions": list(convert_action_integers_to_r2(actions).shape),
-                        "actions_chunk": list(self.actions.shape),
+                        "actions": list(convert_action_integers_to_r2(self.actions.squeeze(-1)).shape),
                     },
                     f,
                 )
