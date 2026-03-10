@@ -91,6 +91,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     float min_goal_distance = unpack(kwargs, "min_goal_distance");
     float max_goal_distance = unpack(kwargs, "max_goal_distance");
     float observation_window_size = unpack(kwargs, "observation_window_size");
+    float polyline_reduction_threshold = unpack(kwargs, "polyline_reduction_threshold");
+    float polyline_max_segment_length = unpack(kwargs, "polyline_max_segment_length");
 
     float reward_bound_goal_radius_min = unpack(kwargs, "reward_bound_goal_radius_min");
     float reward_bound_goal_radius_max = unpack(kwargs, "reward_bound_goal_radius_max");
@@ -199,6 +201,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->min_goal_distance = min_goal_distance;
         env->max_goal_distance = max_goal_distance;
         env->observation_window_size = observation_window_size;
+        env->polyline_reduction_threshold = polyline_reduction_threshold;
+        env->polyline_max_segment_length = polyline_max_segment_length;
         env->min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt;
         // reward randomization bounds
         env->reward_bounds[REWARD_COEF_GOAL_RADIUS] =
@@ -356,6 +360,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->max_goal_speed = (float)unpack(kwargs, "max_goal_speed");
     env->min_avg_speed_to_consider_goal_attempt = (float)unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");
     env->observation_window_size = (float)unpack(kwargs, "observation_window_size");
+    env->polyline_reduction_threshold = (float)unpack(kwargs, "polyline_reduction_threshold");
+    env->polyline_max_segment_length = (float)unpack(kwargs, "polyline_max_segment_length");
 
     // reward randomization bounds
     env->reward_bounds[REWARD_COEF_GOAL_RADIUS] = (RewardBound){(float)unpack(kwargs, "reward_bound_goal_radius_min"),

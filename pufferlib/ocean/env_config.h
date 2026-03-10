@@ -23,6 +23,8 @@ typedef struct {
     int collision_behavior;
     int offroad_behavior;
     float observation_window_size;
+    float polyline_reduction_threshold;
+    float polyline_max_segment_length;
     int spawn_immunity_timer;
     float dt;
     int goal_behavior;
@@ -204,6 +206,10 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->offroad_behavior = atoi(value);
     } else if (MATCH("env", "observation_window_size")) {
         env_config->observation_window_size = atof(value);
+    } else if (MATCH("env", "polyline_reduction_threshold")) {
+        env_config->polyline_reduction_threshold = atof(value);
+    } else if (MATCH("env", "polyline_max_segment_length")) {
+        env_config->polyline_max_segment_length = atof(value);
     } else if (MATCH("env", "spawn_immunity_timer")) {
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "dt")) {
