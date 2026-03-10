@@ -15,6 +15,8 @@
 
 // constants for strings, data etc.
 #define SCENARIO_ID_STR_LENGTH 16
+#define A_LAT_LIMIT 0.5
+#define PENALTY_WEIGHT 0.05
 
 // templates for bringing in some datatypes we might use later
 // if we do this we can have a transition phase in which we can start testing with
@@ -103,7 +105,7 @@
 #define GRID_CELL_SIZE 5.0f
 
 // Observation constants
-#define MAX_ROAD_SEGMENT_OBSERVATIONS 128
+#define MAX_ROAD_SEGMENT_OBSERVATIONS 512
 #ifndef MAX_AGENTS // TODO: Needs to be replaced with MAX_PARTNER_OBS(agents in obs_radius) throughout observations code
                    // and with env->max_agents_in_sim throughout all agent for loops
 #define MAX_AGENTS 128
@@ -165,6 +167,9 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
 static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f,
                                           0.167f,  0.333f,  0.500f,  0.667f,  0.833f,  1.000f};
+
+// static const float STEERING_VALUES[13] = {-0.667f, -0.667f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f,
+//                                           0.167f,  0.333f,  0.500f,  0.667f,  0.667f,  0.667f};                                          
 
 static const float offsets[4][2] = {
     {-1, 1}, // top-left
@@ -2971,6 +2976,8 @@ void c_step(Drive *env) {
         env->agents[agent_idx].aabb_collision_state = 0;
         float prev_vx = env->agents[agent_idx].sim_vx;
         float prev_vy = env->agents[agent_idx].sim_vy;
+        float prev_a_long = env->agents[agent_idx].a_long;
+        float prev_a_lat  = env->agents[agent_idx].a_lat;
 
         move_dynamics(env, i, agent_idx);
 
@@ -2979,6 +2986,31 @@ void c_step(Drive *env) {
             float delta_vx = env->agents[agent_idx].sim_vx - prev_vx;
             float delta_vy = env->agents[agent_idx].sim_vy - prev_vy;
             float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
+            env->rewards[i] += jerk_penalty;
+            env->logs[i].episode_return += jerk_penalty;
+        }
+
+        if (env->dynamics_model == CLASSIC) {
+            Agent *ag = &env->agents[agent_idx];
+
+            float ax = (ag->sim_vx - prev_vx) / env->dt;
+            float ay = (ag->sim_vy - prev_vy) / env->dt;
+
+            // Project onto heading (longitudinal) and perpendicular (lateral)
+            // heading_x = cos(heading), heading_y = sin(heading) — already stored on agent
+            float curr_a_long = ax * ag->heading_x + ay * ag->heading_y;
+            float curr_a_lat  = -ax * ag->heading_y + ay * ag->heading_x;
+
+            ag->a_long = curr_a_long;
+            ag->a_lat  = curr_a_lat;
+
+            float delta_a_long = curr_a_long - prev_a_long;
+            float delta_a_lat  = curr_a_lat  - prev_a_lat;
+            float a_lat_limit = A_LAT_LIMIT;
+            // float alpha = 0.000000002f;  // longitudinal weight
+            // float beta  = 0.000000004f;  // lateral weight
+            float jerk_penalty = -1*PENALTY_WEIGHT*fmin(1,exp(-1*(a_lat_limit - fabs(delta_a_lat))));
+            // float jerk_penalty = -(alpha * delta_a_long * delta_a_long + beta * delta_a_lat * delta_a_lat);
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
         }
@@ -3145,10 +3177,12 @@ void c_step(Drive *env) {
 
             // Comfort reward (GIGAFLOW)
 
-            float comfort_penalty = agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
+            //REMOVINF FOR TESTING
 
-            env->rewards[i] += comfort_penalty;
-            env->logs[i].episode_return += comfort_penalty;
+            // float comfort_penalty = agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
+
+            // env->rewards[i] += comfort_penalty;
+            // env->logs[i].episode_return += comfort_penalty;
 
             // Velocity reward (GIGAFLOW)
             float velocity_reward = agent->reward_coefs[REWARD_COEF_VELOCITY] * env->dt * velocity_progress;
