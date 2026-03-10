@@ -169,7 +169,7 @@ static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0
                                           0.167f,  0.333f,  0.500f,  0.667f,  0.833f,  1.000f};
 
 // static const float STEERING_VALUES[13] = {-0.667f, -0.667f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f,
-//                                           0.167f,  0.333f,  0.500f,  0.667f,  0.667f,  0.667f};                                          
+//                                           0.167f,  0.333f,  0.500f,  0.667f,  0.667f,  0.667f};
 
 static const float offsets[4][2] = {
     {-1, 1}, // top-left
@@ -244,6 +244,7 @@ struct Log {
     float expert_static_agent_count;
     float static_agent_count;
     float avg_speed_per_agent;
+    float steering_error;
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -1505,6 +1506,7 @@ void add_log(Drive *env) {
         env->log.expert_static_agent_count += env->expert_static_agent_count;
         env->log.static_agent_count += env->static_agent_count;
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
+        env->log.steering_error += env->logs[i].steering_error / safe_timestep;
         env->log.n += 1;
     }
 }
@@ -2977,7 +2979,7 @@ void c_step(Drive *env) {
         float prev_vx = env->agents[agent_idx].sim_vx;
         float prev_vy = env->agents[agent_idx].sim_vy;
         float prev_a_long = env->agents[agent_idx].a_long;
-        float prev_a_lat  = env->agents[agent_idx].a_lat;
+        float prev_a_lat = env->agents[agent_idx].a_lat;
 
         move_dynamics(env, i, agent_idx);
 
@@ -2999,20 +3001,23 @@ void c_step(Drive *env) {
             // Project onto heading (longitudinal) and perpendicular (lateral)
             // heading_x = cos(heading), heading_y = sin(heading) — already stored on agent
             float curr_a_long = ax * ag->heading_x + ay * ag->heading_y;
-            float curr_a_lat  = -ax * ag->heading_y + ay * ag->heading_x;
+            float curr_a_lat = -ax * ag->heading_y + ay * ag->heading_x;
 
             ag->a_long = curr_a_long;
-            ag->a_lat  = curr_a_lat;
+            ag->a_lat = curr_a_lat;
 
             float delta_a_long = curr_a_long - prev_a_long;
-            float delta_a_lat  = curr_a_lat  - prev_a_lat;
+            float delta_a_lat = curr_a_lat - prev_a_lat;
             float a_lat_limit = A_LAT_LIMIT;
+
+            float steering_error = fabsf(delta_a_lat);
             // float alpha = 0.000000002f;  // longitudinal weight
             // float beta  = 0.000000004f;  // lateral weight
-            float jerk_penalty = -1*PENALTY_WEIGHT*fmin(1,exp(-1*(a_lat_limit - fabs(delta_a_lat))));
+            float jerk_penalty = -1 * PENALTY_WEIGHT * fmin(1, steering_error);
             // float jerk_penalty = -(alpha * delta_a_long * delta_a_long + beta * delta_a_lat * delta_a_lat);
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
+            env->logs[i].steering_error += steering_error;
         }
     }
 
@@ -3177,7 +3182,7 @@ void c_step(Drive *env) {
 
             // Comfort reward (GIGAFLOW)
 
-            //REMOVINF FOR TESTING
+            // REMOVINF FOR TESTING
 
             // float comfort_penalty = agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
 
