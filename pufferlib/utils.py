@@ -76,7 +76,8 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
                     else:
                         payload = {f"eval/{k}": v for k, v in metrics.items()}
                     if payload:
-                        logger.wandb.log(payload, step=global_step)
+                        payload["eval_step"] = global_step
+                        logger.wandb.log(payload)
         else:
             print(f"{eval_name} evaluation failed with exit code {result.returncode}: {result.stderr[-1000:]}")
 
@@ -383,15 +384,12 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
         str(safe_eval_config.get("num_agents", 64)),
     ]
 
-    # Pass env overrides from safe_eval config
-    env_overrides = {
-        "episode_length": "episode-length",
-        "min_goal_distance": "min-goal-distance",
-        "max_goal_distance": "max-goal-distance",
-    }
-    for config_key, cli_key in env_overrides.items():
-        if config_key in safe_eval_config:
-            extra_args.extend([f"--env.{cli_key}", str(safe_eval_config[config_key])])
+    # Pass safe_eval overrides that safe_eval() applies to env config
+    safe_eval_overrides = ["episode_length", "min_goal_distance", "max_goal_distance"]
+    for key in safe_eval_overrides:
+        if key in safe_eval_config:
+            cli_key = key.replace("_", "-")
+            extra_args.extend([f"--safe-eval.{cli_key}", str(safe_eval_config[key])])
 
     valid_bounds = _get_env_reward_bound_names()
     for key, val in safe_eval_config.items():

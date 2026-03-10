@@ -208,6 +208,9 @@ class PuffeRL:
         if self.render_async and hasattr(self.logger, "wandb") and self.logger.wandb:
             self.logger.wandb.define_metric("render_step", hidden=True)
             self.logger.wandb.define_metric("render/*", step_metric="render_step")
+        if hasattr(self.logger, "wandb") and self.logger.wandb:
+            self.logger.wandb.define_metric("eval_step", hidden=True)
+            self.logger.wandb.define_metric("eval/*", step_metric="eval_step")
 
         # Learning rate scheduler
         epochs = config["total_timesteps"] // config["batch_size"]
@@ -1415,7 +1418,8 @@ def safe_eval(env_name, args=None, vecenv=None, policy=None):
     policy = policy or load_policy(args, vecenv, env_name)
     policy.eval()
 
-    num_steps = args.get("safe_eval", {}).get("num_episodes", 300)
+    num_episodes = args.get("safe_eval", {}).get("num_episodes", 300)
+    episode_length = args["env"].get("episode_length", 300)
     device = args["train"]["device"]
     num_agents = vecenv.observation_space.shape[0]
     use_rnn = args["train"]["use_rnn"]
@@ -1431,7 +1435,12 @@ def safe_eval(env_name, args=None, vecenv=None, policy=None):
         )
 
     all_stats = defaultdict(list)
-    for _ in range(num_steps):
+    episodes_collected = 0
+    # Run until we collect enough episode completions
+    max_steps = (num_episodes // max(num_agents, 1) + 2) * episode_length
+    for step in range(max_steps):
+        if episodes_collected >= num_episodes:
+            break
         with torch.no_grad():
             ob_t = torch.as_tensor(ob).to(device)
             if use_rnn:
@@ -1446,6 +1455,7 @@ def safe_eval(env_name, args=None, vecenv=None, policy=None):
         dones = torch.as_tensor(np.maximum(terminals, truncations)).float().to(device)
         for entry in infos:
             if isinstance(entry, dict):
+                episodes_collected += int(entry.get("n", 1))
                 for k, v in entry.items():
                     try:
                         float(v)
