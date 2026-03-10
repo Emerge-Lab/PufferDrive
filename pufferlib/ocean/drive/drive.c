@@ -90,6 +90,8 @@ void demo() {
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .observation_window_size = conf.observation_window_size,
+        .polyline_reduction_threshold = conf.polyline_reduction_threshold,
+        .polyline_max_segment_length = conf.polyline_max_segment_length,
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
