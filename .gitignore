@@ -190,3 +190,5 @@ pufferlib/resources/drive/output*.gif
 emsdk/
 docs/book/*
 !docs/book/assets/
+
+logs/*

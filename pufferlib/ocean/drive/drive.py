@@ -127,7 +127,7 @@ class Drive(pufferlib.PufferEnv):
             "log_prob_direct": RegMode.LOG_PROB_DIRECT,
             "kl_anchor": RegMode.KL_ANCHOR,
         }
-        self.reg_mode = str_to_reg_mode.get(reg_mode.strip('"'))
+        self.reg_mode = str_to_reg_mode.get(str(reg_mode).strip('"'))
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
@@ -1060,7 +1060,7 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/processed/interactive_data_training_100")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

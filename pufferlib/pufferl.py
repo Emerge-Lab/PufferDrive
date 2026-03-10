@@ -780,15 +780,16 @@ class PuffeRL:
             **eval_logs,
             "data/anchor_entropy": self.data.get("data/anchor_entropy", 0),
         }
-
-        logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
-        logs["data/lambda_std"] = float(self.sampled_lambdas.std())
+        if hasattr(self, 'sampled_lambdas'):
+            logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
+            logs["data/lambda_std"] = float(self.sampled_lambdas.std())
 
         if isinstance(self.logger, WandbLogger):
             import wandb
-
-            logs["data/lambda_distrib"] = wandb.Histogram(self.sampled_lambdas.cpu().numpy())
-            logs["data/collision_reward_distrib"] = wandb.Histogram(self.sampled_collision_rewards.cpu().numpy())
+            if hasattr(self, 'sampled_lambdas'):
+                logs["data/lambda_distrib"] = wandb.Histogram(self.sampled_lambdas.cpu().numpy())
+            if hasattr(self, 'sampled_collision_rewards'):    
+                logs["data/collision_reward_distrib"] = wandb.Histogram(self.sampled_collision_rewards.cpu().numpy())
 
         if self.reg_mode == "log_prob_direct":
             logs["data/total_human_samples"] = self.data.get("data/total_human_samples", 0)
