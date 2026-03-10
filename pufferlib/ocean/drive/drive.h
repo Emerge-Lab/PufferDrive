@@ -13,6 +13,9 @@
 #include "error.h"
 #include "datatypes.h"
 
+// constants for strings, data etc.
+#define SCENARIO_ID_STR_LENGTH 16
+
 // templates for bringing in some datatypes we might use later
 // if we do this we can have a transition phase in which we can start testing with
 // the types from datatypes, without losing the ones defined in this file.
@@ -340,7 +343,7 @@ struct Drive {
     float min_goal_distance;
     float max_goal_distance;
     char *ini_file;
-    char *scenario_id;
+    char scenario_id[SCENARIO_ID_STR_LENGTH];
     int collision_behavior;
     int offroad_behavior;
     float observation_window_size;
@@ -1436,7 +1439,7 @@ int collision_check(Drive *env, int agent_idx) {
         int index = -1;
         if (i < env->active_agent_count) {
             index = env->active_agent_indices[i];
-        } else if (i < env->num_created_agents) {
+        } else if (i < env->num_created_agents && env->static_agent_count > 0) {
             index = env->static_agent_indices[i - env->active_agent_count];
         }
         if (index == -1)
@@ -2051,8 +2054,23 @@ void set_active_agents(Drive *env) {
     int *static_agent_indices = (int *)malloc(env->spawn_settings.max_agents_in_sim * sizeof(int));
     int *expert_static_agent_indices = (int *)malloc(env->spawn_settings.max_agents_in_sim * sizeof(int));
 
+    // If we have a SDC index (WOMD), initialize it first:
+    int sdc_index = env->sdc_track_index;
+
+    if (sdc_index >= 0) {
+        active_agent_indices[0] = sdc_index;
+        env->num_created_agents++;
+        env->active_agent_count++;
+        env->agents[sdc_index].active_agent = 1;
+    }
+
     // Iterate through entities to find agents to create and/or control
     for (int i = 0; i < env->num_objects && env->num_created_agents < env->spawn_settings.max_agents_in_sim; i++) {
+
+        // Skip if its the SDC
+        if (i == sdc_index) {
+            continue;
+        }
         Agent *entity = &env->agents[i];
 
         // Skip if not valid at initialization
@@ -2254,16 +2272,16 @@ void free_allocated(Drive *env) {
 // Extra C API Functions
 // ========================================
 
-static inline int get_track_id_or_placeholder(Drive *env, int agent_idx) {
+static inline int is_in_track_to_predicts(Drive *env, int agent_idx) {
     if (env->tracks_to_predict_indices == NULL || env->num_tracks_to_predict == 0) {
-        return -1;
+        return 0;
     }
     for (int k = 0; k < env->num_tracks_to_predict; k++) {
         if (env->tracks_to_predict_indices[k] == agent_idx) {
-            return env->tracks_to_predict_indices[k];
+            return 1;
         }
     }
-    return -1;
+    return 0;
 }
 
 void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out, int *id_out,
@@ -2277,19 +2295,24 @@ void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_o
         y_out[i] = agent->sim_y + env->world_mean_y;
         z_out[i] = agent->sim_z + env->world_mean_z;
         heading_out[i] = agent->sim_heading;
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
+        id_out[i] = agent->id;
         length_out[i] = agent->sim_length;
         width_out[i] = agent->sim_width;
     }
 }
 
 void c_get_global_ground_truth_trajectories(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out,
-                                            int *valid_out, int *id_out, int *scenario_id_out) {
+                                            int *valid_out, int *id_out, bool *is_vehicle_out,
+                                            bool *is_track_to_predict_out, char *scenario_id_out) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
-        id_out[i] = get_track_id_or_placeholder(env, agent_idx);
-        scenario_id_out[i] = agent->scenario_id;
+        id_out[i] = agent->id;
+        is_vehicle_out[i] = agent->type == VEHICLE;
+        is_track_to_predict_out[i] = is_in_track_to_predicts(env, agent_idx);
+
+        // The scenario_id is an array of SCENARIO_ID_STR_LENGTH char
+        memcpy(scenario_id_out + (i * SCENARIO_ID_STR_LENGTH), env->scenario_id, SCENARIO_ID_STR_LENGTH);
 
         for (int t = env->init_steps; t < agent->trajectory_length; t++) {
             int out_idx = i * (agent->trajectory_length - env->init_steps) + (t - env->init_steps);
@@ -2315,13 +2338,14 @@ void c_get_road_edge_counts(Drive *env, int *num_polylines_out, int *total_point
     *total_points_out = points;
 }
 
-void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *lengths_out, int *scenario_ids_out) {
+void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *lengths_out, char *scenario_ids_out) {
     int poly_idx = 0, pt_idx = 0;
     for (int i = 0; i < env->num_roads; i++) {
         RoadMapElement *road = &env->road_elements[i];
         if (road->type == ROAD_EDGE) {
             lengths_out[poly_idx] = road->segment_length;
-            scenario_ids_out[poly_idx] = env->road_scenario_ids[i];
+            char *scenario_id_ptr = scenario_ids_out + poly_idx * SCENARIO_ID_STR_LENGTH;
+            memcpy(scenario_id_ptr, env->scenario_id, SCENARIO_ID_STR_LENGTH);
             for (int j = 0; j < road->segment_length; j++) {
                 x_out[pt_idx] = road->x[j] + env->world_mean_x;
                 y_out[pt_idx] = road->y[j] + env->world_mean_y;
@@ -2628,7 +2652,7 @@ void compute_observations(Drive *env) {
             int index = -1;
             if (j < env->active_agent_count) {
                 index = env->active_agent_indices[j];
-            } else if (j < env->num_created_agents) {
+            } else if (j < env->num_created_agents && env->static_agent_count > 0) {
                 index = env->static_agent_indices[j - env->active_agent_count];
             }
             if (index == -1)
@@ -4039,7 +4063,7 @@ void c_render(Drive *env) {
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
 
-    if (IsKeyPressed(KEY_TAB)) {
+    if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
         env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
     }
 
