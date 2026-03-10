@@ -52,8 +52,8 @@
 
 // Trajectory Length
 #define TRAJECTORY_LENGTH 91
-// Predicted action trajectory length (must match Python actions_trajectory_length)
-#define PREDICTED_TRAJ_LEN 20
+// Default predicted action trajectory length (overridden at runtime from INI)
+#define PREDICTED_TRAJ_LEN_DEFAULT 80
 
 // Initialization modes
 #define INIT_ALL_VALID 0
@@ -352,8 +352,9 @@ struct Drive {
     int reward_conditioning;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
-    float *predicted_traj_x; // [active_agent_count * PREDICTED_TRAJ_LEN], set via visualizer
-    float *predicted_traj_y; // [active_agent_count * PREDICTED_TRAJ_LEN], set via visualizer
+    int predicted_traj_len;  // runtime actions_trajectory_length from INI (default 80)
+    float *predicted_traj_x; // [active_agent_count * predicted_traj_len], set via visualizer
+    float *predicted_traj_y; // [active_agent_count * predicted_traj_len], set via visualizer
 };
 
 // ========================================
@@ -2119,8 +2120,10 @@ void allocate(Drive *env) {
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
     env->terminals = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
     env->truncations = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
-    env->predicted_traj_x = (float *)calloc(env->active_agent_count * PREDICTED_TRAJ_LEN, sizeof(float));
-    env->predicted_traj_y = (float *)calloc(env->active_agent_count * PREDICTED_TRAJ_LEN, sizeof(float));
+    if (env->predicted_traj_len <= 0)
+        env->predicted_traj_len = PREDICTED_TRAJ_LEN_DEFAULT;
+    env->predicted_traj_x = (float *)calloc(env->active_agent_count * env->predicted_traj_len, sizeof(float));
+    env->predicted_traj_y = (float *)calloc(env->active_agent_count * env->predicted_traj_len, sizeof(float));
 }
 
 void free_allocated(Drive *env) {
@@ -2915,8 +2918,8 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 }
 
 // Rollout predicted action trajectory from current agent state.
-// pred_actions: PREDICTED_TRAJ_LEN discrete action indices (one per step).
-// out_x, out_y: output world-space positions, length PREDICTED_TRAJ_LEN.
+// pred_actions: predicted_traj_len discrete action indices (one per step).
+// out_x, out_y: output world-space positions, length predicted_traj_len.
 void rollout_trajectory(Drive *env, int local_idx, int *pred_actions, float *out_x, float *out_y) {
     int agent_idx = env->active_agent_indices[local_idx];
     Agent *agent = &env->agents[agent_idx];
@@ -2934,8 +2937,9 @@ void rollout_trajectory(Drive *env, int local_idx, int *pred_actions, float *out
 
     int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
     int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+    int traj_len = env->predicted_traj_len;
 
-    for (int t = 0; t < PREDICTED_TRAJ_LEN; t++) {
+    for (int t = 0; t < traj_len; t++) {
         int action_val = pred_actions[t];
 
         if (env->dynamics_model == CLASSIC) {
@@ -3965,16 +3969,17 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
     // Draw predicted action trajectories (cyan fading dots + lines)
     if (env->predicted_traj_x != NULL && env->predicted_traj_y != NULL) {
+        int ptl = env->predicted_traj_len;
         for (int i = 0; i < env->active_agent_count; i++) {
-            for (int t = 0; t < PREDICTED_TRAJ_LEN; t++) {
-                float alpha = 1.0f - (float)t / (float)PREDICTED_TRAJ_LEN;
+            for (int t = 0; t < ptl; t++) {
+                float alpha = 1.0f - (float)t / (float)ptl;
                 Color c = Fade(PUFF_CYAN, alpha * 0.85f);
-                float wx = env->predicted_traj_x[i * PREDICTED_TRAJ_LEN + t];
-                float wy = env->predicted_traj_y[i * PREDICTED_TRAJ_LEN + t];
+                float wx = env->predicted_traj_x[i * ptl + t];
+                float wy = env->predicted_traj_y[i * ptl + t];
                 DrawSphere((Vector3){wx, wy, 0.3f}, 0.25f, c);
-                if (t + 1 < PREDICTED_TRAJ_LEN) {
-                    float wx2 = env->predicted_traj_x[i * PREDICTED_TRAJ_LEN + t + 1];
-                    float wy2 = env->predicted_traj_y[i * PREDICTED_TRAJ_LEN + t + 1];
+                if (t + 1 < ptl) {
+                    float wx2 = env->predicted_traj_x[i * ptl + t + 1];
+                    float wy2 = env->predicted_traj_y[i * ptl + t + 1];
                     rlSetLineWidth(2.0f);
                     DrawLine3D((Vector3){wx, wy, 0.3f}, (Vector3){wx2, wy2, 0.3f}, c);
                 }

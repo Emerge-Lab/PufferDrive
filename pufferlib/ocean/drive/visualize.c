@@ -290,6 +290,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         env.num_agents = conf.min_agents_per_env + rand() % (conf.max_agents_per_env - conf.min_agents_per_env + 1);
     }
 
+    env.predicted_traj_len =
+        (conf.actions_trajectory_length > 0) ? conf.actions_trajectory_length : PREDICTED_TRAJ_LEN_DEFAULT;
     allocate(&env);
 
     // Check if map has any active agents
@@ -337,7 +339,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     Weights *weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning,
+                                  env.predicted_traj_len);
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
     char filename_topdown[256];
@@ -395,10 +398,10 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 #define FORWARD_AND_TRAJ(net_, env_)                                                                                   \
     do {                                                                                                               \
         forward((net_), (env_)->observations, (int *)(env_)->actions);                                                 \
+        int _tl = (net_)->traj_len;                                                                                    \
         for (int _j = 0; _j < (env_)->active_agent_count; _j++) {                                                      \
-            rollout_trajectory((env_), _j, &(net_)->pred_actions_traj[_j * PREDICTED_TRAJ_LEN],                        \
-                               &(env_)->predicted_traj_x[_j * PREDICTED_TRAJ_LEN],                                     \
-                               &(env_)->predicted_traj_y[_j * PREDICTED_TRAJ_LEN]);                                    \
+            rollout_trajectory((env_), _j, &(net_)->pred_actions_traj[_j * _tl], &(env_)->predicted_traj_x[_j * _tl],  \
+                               &(env_)->predicted_traj_y[_j * _tl]);                                                   \
         }                                                                                                              \
     } while (0)
 

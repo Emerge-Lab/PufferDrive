@@ -78,6 +78,7 @@ typedef struct {
     float spawn_height;
     char map_dir[256];
     float min_avg_speed_to_consider_goal_attempt;
+    int actions_trajectory_length; // from [train] section, default 80
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -260,6 +261,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->spawn_length_max = atof(value);
     } else if (MATCH("env", "spawn_height")) {
         env_config->spawn_height = atof(value);
+    } else if (MATCH("train", "actions_trajectory_length")) {
+        env_config->actions_trajectory_length = atoi(value);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

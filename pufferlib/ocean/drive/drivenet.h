@@ -17,8 +17,9 @@ struct DriveNet {
     int num_agents;
     int ego_dim;
     int action_size;            // logits per step (91 for CLASSIC, 12 for JERK)
-    int past_actions_input_dim; // PREDICTED_TRAJ_LEN * 2 (accel_idx + steer_idx per step)
-    int actor_output_dim;       // PREDICTED_TRAJ_LEN * action_size
+    int traj_len;               // actions_trajectory_length (from INI config)
+    int past_actions_input_dim; // traj_len * 2 (accel_idx + steer_idx per step)
+    int actor_output_dim;       // traj_len * action_size
 
     // Observation parse buffers
     float *obs_self;
@@ -34,11 +35,11 @@ struct DriveNet {
     float *road_linear_output_two;
 
     // Past-actions state: [num_agents * past_actions_input_dim]
-    // Stores (accel_idx, steer_idx) pairs for each of PREDICTED_TRAJ_LEN steps.
+    // Stores (accel_idx, steer_idx) pairs for each of traj_len steps.
     float *past_actions_traj;
 
     // Per-step argmax action indices for trajectory visualisation.
-    // Shape [num_agents * PREDICTED_TRAJ_LEN].
+    // Shape [num_agents * traj_len].
     int *pred_actions_traj;
 
     // ----- Layers: weight-loading order MUST match Python named_parameters() -----
@@ -87,7 +88,7 @@ struct DriveNet {
     Multidiscrete *multidiscrete;
 };
 
-DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, int reward_conditioning) {
+DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, int reward_conditioning, int traj_len) {
     DriveNet *net = calloc(1, sizeof(DriveNet));
 
     int ego_dim = (dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
@@ -112,12 +113,13 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
         action_size = 4 * 3;
         logit_sizes[0] = 4 * 3;
     }
-    int past_actions_input_dim = PREDICTED_TRAJ_LEN * 2;
-    int actor_output_dim = PREDICTED_TRAJ_LEN * action_size;
+    int past_actions_input_dim = traj_len * 2;
+    int actor_output_dim = traj_len * action_size;
 
     net->num_agents = num_agents;
     net->ego_dim = ego_dim;
     net->action_size = action_size;
+    net->traj_len = traj_len;
     net->past_actions_input_dim = past_actions_input_dim;
     net->actor_output_dim = actor_output_dim;
 
@@ -135,7 +137,7 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
 
     // Zero-init: "no previous trajectory" on first step
     net->past_actions_traj = calloc(num_agents * past_actions_input_dim, sizeof(float));
-    net->pred_actions_traj = calloc(num_agents * PREDICTED_TRAJ_LEN, sizeof(int));
+    net->pred_actions_traj = calloc(num_agents * traj_len, sizeof(int));
 
     // ----------------------------------------------------------------
     // Weight loading -- order MUST match Python LSTMWrapper.named_parameters()
@@ -372,7 +374,8 @@ void forward(DriveNet *net, float *observations, int *actions) {
         actions[b] = best;
 
         // Per-step argmax for trajectory visualisation + update past_actions_traj
-        for (int t = 0; t < PREDICTED_TRAJ_LEN; t++) {
+        int tl = net->traj_len;
+        for (int t = 0; t < tl; t++) {
             float *step_logits = &logits_b[t * action_size];
             int step_best = 0;
             float step_best_val = step_logits[0];
@@ -382,7 +385,7 @@ void forward(DriveNet *net, float *observations, int *actions) {
                     step_best = a;
                 }
             }
-            net->pred_actions_traj[b * PREDICTED_TRAJ_LEN + t] = step_best;
+            net->pred_actions_traj[b * tl + t] = step_best;
 
             // Update past_actions_traj with (accel_idx, steer_idx) for next forward call
             // Matches Python: convert_action_integers_to_r2(action) -> (action // num_steer, action % num_steer)
