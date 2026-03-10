@@ -150,6 +150,7 @@ class PuffeRL:
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
         self.rewards = torch.zeros(segments, horizon, device=device)
+        self.r_commitments = torch.zeros(segments, horizon, device=device)
         self.terminals = torch.zeros(segments, horizon, device=device)
         self.truncations = torch.zeros(segments, horizon, device=device)
         self.ratio = torch.ones(segments, horizon, device=device)
@@ -366,6 +367,7 @@ class PuffeRL:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
+                self.r_commitments[batch_rows, l] = r_commitment
                 self.terminals[batch_rows, l] = done_mask.float()
                 self.truncations[batch_rows, l] = t.float()
                 self.values[batch_rows, l] = value.flatten()
@@ -523,6 +525,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["r_commitment"] += self.r_commitments[idx].mean().item() / self.total_minibatches
             # losses["action_prediction"] += config["action_pred_coef"] * consistency_loss.item() / self.total_minibatches
 
             # Learn on accumulated minibatches
