@@ -102,6 +102,10 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
             str(eval_config["human_replay_num_agents"]),
             "--eval.human-replay-control-mode",
             str(eval_config["human_replay_control_mode"]),
+            "--eval.map-dir",
+            str(eval_config.get("map_dir", "resources/drive/binaries/training")),
+            "--eval.num-maps",
+            str(eval_config.get("num_maps", 20)),
         ],
         marker_name="HUMAN_REPLAY",
         wandb_keys={
@@ -140,6 +144,10 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             str(eval_config.get("wosac_aggregate_results", True)),
             "--env.episode-length",
             str(eval_config.get("wosac_episode_length", 91)),
+            "--eval.map-dir",
+            str(eval_config.get("map_dir", "resources/drive/binaries/training")),
+            "--eval.num-maps",
+            str(eval_config.get("num_maps", 20)),
         ],
         marker_name="WOSAC",
         wandb_keys={
@@ -371,7 +379,19 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
         "1",
         "--safe-eval.num-episodes",
         str(num_episodes),
+        "--safe-eval.num-agents",
+        str(safe_eval_config.get("num_agents", 64)),
     ]
+
+    # Pass env overrides from safe_eval config
+    env_overrides = {
+        "episode_length": "episode-length",
+        "min_goal_distance": "min-goal-distance",
+        "max_goal_distance": "max-goal-distance",
+    }
+    for config_key, cli_key in env_overrides.items():
+        if config_key in safe_eval_config:
+            extra_args.extend([f"--env.{cli_key}", str(safe_eval_config[config_key])])
 
     valid_bounds = _get_env_reward_bound_names()
     for key, val in safe_eval_config.items():

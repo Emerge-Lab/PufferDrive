@@ -1404,6 +1404,12 @@ def safe_eval(env_name, args=None, vecenv=None, policy=None):
     safe_eval_config = args.get("safe_eval", {})
     args["vec"] = dict(backend="PufferEnv", num_envs=1)
     args["env"]["num_agents"] = safe_eval_config.get("num_agents", 64)
+    if "episode_length" in safe_eval_config:
+        args["env"]["episode_length"] = safe_eval_config["episode_length"]
+    if "min_goal_distance" in safe_eval_config:
+        args["env"]["min_goal_distance"] = safe_eval_config["min_goal_distance"]
+    if "max_goal_distance" in safe_eval_config:
+        args["env"]["max_goal_distance"] = safe_eval_config["max_goal_distance"]
 
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
