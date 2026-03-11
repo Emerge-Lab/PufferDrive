@@ -119,7 +119,7 @@
 #define MAX_CHECKED_LANES 32
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 15
+#define EGO_FEATURES_CLASSIC 14
 #define EGO_FEATURES_JERK 16
 
 // Observation normalization constants
@@ -2501,16 +2501,13 @@ void compute_observations(Drive *env) {
             obs[15] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         } else {
             // Add inferred accelaration values to NN (for CLASSIC)
-            float normalized_a_lat = ego_entity->a_lat / ACC_NORM;
-            float normalized_a_long = ego_entity->a_long / ACC_NORM;
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
             obs[8] = normalized_goal_speed_min;
             obs[9] = normalized_goal_speed_max;
             obs[10] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
             obs[11] = lane_center_dist;
             obs[12] = ego_entity->metrics_array[LANE_ANGLE_IDX];
-            obs[13] = normalized_a_lat;
-            obs[14] = normalized_a_long;
+            obs[13] = ego_entity->steering_angle / M_PI;
         }
         int obs_idx = (env->reward_conditioning == 1) ? ego_dim - NUM_REWARD_COEFS : ego_dim;
         // Placeholder for reward conditioning encoder -
@@ -2990,8 +2987,7 @@ void c_step(Drive *env) {
         env->agents[agent_idx].aabb_collision_state = 0;
         float prev_vx = env->agents[agent_idx].sim_vx;
         float prev_vy = env->agents[agent_idx].sim_vy;
-        float prev_a_long = env->agents[agent_idx].a_long;
-        float prev_a_lat = env->agents[agent_idx].a_lat;
+        float prev_steering_angle = env->agents[agent_idx].steering_angle;
 
         move_dynamics(env, i, agent_idx);
 
@@ -3006,32 +3002,15 @@ void c_step(Drive *env) {
 
         if (env->dynamics_model == CLASSIC) {
             Agent *ag = &env->agents[agent_idx];
+            float curr_steering_angle = ag->steering_angle;
+            float delta_steering_angle = fabs(curr_steering_angle - prev_steering_angle);
+            float curr_velocity = sqrt(ag->sim_vx * ag->sim_vx + ag->sim_vy * ag->sim_vy);
 
-            float ax = (ag->sim_vx - prev_vx) / env->dt;
-            float ay = (ag->sim_vy - prev_vy) / env->dt;
-
-            // Project onto heading (longitudinal) and perpendicular (lateral)
-            // heading_x = cos(heading), heading_y = sin(heading) — already stored on agent
-            float curr_a_long = ax * ag->heading_x + ay * ag->heading_y;
-            float curr_a_lat = -ax * ag->heading_y + ay * ag->heading_x;
-
-            ag->a_long = curr_a_long;
-            ag->a_lat = curr_a_lat;
-
-            float delta_a_long = curr_a_long - prev_a_long;
-            float delta_a_lat = curr_a_lat - prev_a_lat;
-            float a_lat_limit = env->a_lat_limit;
-            float steering_error = fabsf(delta_a_lat);
-            // Attenuate penalty when the agent is actively steering:
-            float steering_attenuation = 1.0f - fabsf(ag->steering_angle);
-            // float alpha = 0.000000002f;  // longitudinal weight
-            // float beta  = 0.000000004f;  // lateral weight
-            float jerk_penalty = -1 * env->penalty_weight * steering_attenuation *
-                                 fminf(1.0f, expf(-1.0f * (a_lat_limit - fabsf(delta_a_lat))));
+            float jerk_penalty = -1 * env->penalty_weight * curr_velocity * delta_steering_angle * delta_steering_angle;
             // float jerk_penalty = -(alpha * delta_a_long * delta_a_long + beta * delta_a_lat * delta_a_lat);
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
-            env->logs[i].steering_error += steering_error;
+            env->logs[i].steering_error += delta_steering_angle;
             env->logs[i].reward_steering_error += jerk_penalty;
         }
     }
