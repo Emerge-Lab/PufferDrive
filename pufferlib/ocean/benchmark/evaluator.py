@@ -846,8 +846,7 @@ class Evaluator:
         eval_config["vec"] = dict(backend=backend, num_envs=1)
         eval_config["env"]["fix_lambdas"] = True
         eval_config["env"]["fix_rewards"] = True  # Fix to the ini file ones for all agents
-        eval_config["env"]["lambda_value"] = 0.05
-        # TODO: Find a solution to this
+        eval_config["env"]["lambda_value"] = configs["env"]["lambda_value"]
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
