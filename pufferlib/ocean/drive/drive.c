@@ -95,7 +95,9 @@ void demo() {
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
-        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .spawn_settings = spawn_settings,
+        .map_name = "resources/drive/binaries/carla_3D/map_001.bin",
+        .reward_conditioning = conf.reward_conditioning,
     };
     allocate(&env);
     if (env.active_agent_count == 0) {

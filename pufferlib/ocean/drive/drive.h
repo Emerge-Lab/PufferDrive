@@ -464,9 +464,9 @@ void simplify_polyline(RoadMapElement *road, float polyline_reduction_threshold,
     }
 
     // Copy final sparse points to temporary arrays
-    int x_pts[total_sparse_points];
-    int y_pts[total_sparse_points];
-    int z_pts[total_sparse_points];
+    float x_pts[total_sparse_points];
+    float y_pts[total_sparse_points];
+    float z_pts[total_sparse_points];
 
     int write_idx = 0;
     for (int read_idx = 0; read_idx < num_points; read_idx++) {
@@ -847,29 +847,17 @@ void init_grid_map(Drive *env) {
     }
 }
 
-// // Create sparse lane and road line points for more informative map observations
-// // Note: We don't do this for road edges as they are very important for understanding offroads
-// // Note for future: Might need to completely remove road lines
-// void create_sparse_lane_points(Drive* env, float polyline_reduction_threshold, float max_segment_length) {
-
-//     env->sparse_lanes = (RoadMapElement*)calloc(env->num_lanes, sizeof(RoadMapElement));
-//     env->sparse_road_lines = (RoadMapElement*)calloc(env->num_road_lines, sizeof(RoadMapElement));
-
-//     int lane_idx = 0;
-//     int road_line_idx = 0;
-
-//     for (int i = 0; i < env->num_roads; i++) {
-//         RoadMapElement *road = &env->road_elements[i];
-//         if (road->type == ROAD_LANE) {
-//             deep_copy_road_map_element(&env->sparse_lanes[lane_idx], road);
-//             simplify_polyline(&env->sparse_lanes[lane_idx], polyline_reduction_threshold, max_segment_length);
-//         } else if (road->type == ROAD_LINE) {
-//             deep_copy_road_map_element(&env->sparse_road_lines[road_line_idx], road);
-//             simplify_polyline(&env->sparse_road_lines[road_line_idx], polyline_reduction_threshold,
-//             max_segment_length);
-//         }
-//     }
-// }
+// Create sparse lane and road line points for more informative map observations
+// Note: We don't do this for road edges as they are very important for understanding offroads
+// Note for future: Might need to completely remove road lines
+void create_sparse_lane_points(Drive *env, float polyline_reduction_threshold, float max_segment_length) {
+    for (int i = 0; i < env->num_roads; i++) {
+        RoadMapElement *road = &env->road_elements[i];
+        if (road->type == ROAD_LANE || road->type == ROAD_LINE) {
+            simplify_polyline(road, polyline_reduction_threshold, max_segment_length);
+        }
+    }
+}
 
 void init_neighbor_offsets(Drive *env) {
     // Allocate memory for the offsets
@@ -2199,7 +2187,7 @@ void init(Drive *env) {
     env->timestep = 0;
     load_map_binary(env->map_name, env);
     compute_drivable_lane_points(env);
-    // create_sparse_lane_points(env, env->polyline_reduction_threshold, env->polyline_max_segment_length);
+    create_sparse_lane_points(env, env->polyline_reduction_threshold, env->polyline_max_segment_length);
     set_means(env);
     init_grid_map(env);
     generate_offsets(collision_offsets, COLLISION_RANGE);
