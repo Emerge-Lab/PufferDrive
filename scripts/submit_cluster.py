@@ -223,19 +223,24 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
     if from_config.get("nodelist") is not None:
         additional_parameters["nodelist"] = from_config["nodelist"]
 
-    executor.update_parameters(
+    params = dict(
         slurm_account=from_config.get("account"),
         slurm_partition=from_config.get("partition"),
         cpus_per_task=from_config.get("cpus", 8) // args.task_per_node,
         tasks_per_node=args.task_per_node,
         nodes=from_config.get("nodes", 1),
         slurm_gres=gres,
-        slurm_exclude=from_config.get("exclude", ""),
         slurm_mem=from_config.get("mem"),
         slurm_time=from_config.get("time", 60),
         slurm_job_name=job_name,
         slurm_additional_parameters=additional_parameters,
     )
+
+    exclude = from_config.get("exclude", "")
+    if exclude:
+        params["slurm_exclude"] = exclude
+
+    executor.update_parameters(**params)
 
     def launch_training(args, from_config, cmd, save_dir, project_root, container_config=None):
         """Runs inside the SLURM allocation."""
