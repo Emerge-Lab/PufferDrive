@@ -3008,12 +3008,12 @@ void c_step(Drive *env) {
             ag->a_lat = curr_a_lat;
 
             float delta_a_long = curr_a_long - prev_a_long;
-            float delta_a_lat  = curr_a_lat  - prev_a_lat;
+            float delta_a_lat = curr_a_lat - prev_a_lat;
             float a_lat_limit = env->a_lat_limit;
             float steering_error = fabsf(delta_a_lat);
             // float alpha = 0.000000002f;  // longitudinal weight
             // float beta  = 0.000000004f;  // lateral weight
-            float jerk_penalty = -1 * PENALTY_WEIGHT * fmin(1, steering_error);
+            float jerk_penalty = -1 * PENALTY_WEIGHT * fmin(1, exp(-1 * (a_lat_limit - fabs(delta_a_lat))));
             // float jerk_penalty = -(alpha * delta_a_long * delta_a_long + beta * delta_a_lat * delta_a_lat);
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
