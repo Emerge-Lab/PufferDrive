@@ -108,7 +108,7 @@ void demo() {
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .spawn_settings = spawn_settings,
-        .map_name = "resources/drive/binaries/carla_py123d/map_001.bin",
+        .map_name = "resources/drive/binaries/carla_3D/map_001.bin",
         .reward_conditioning = conf.reward_conditioning,
     };
 
