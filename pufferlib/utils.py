@@ -325,6 +325,7 @@ def render_videos(
                     "videos": generated_videos,
                     "step": global_step,
                     "wandb_prefix": wandb_prefix,
+                    "bin_path": bin_path,
                 }
             )
 

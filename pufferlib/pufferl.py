@@ -549,6 +549,7 @@ class PuffeRL:
 
                     bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
                     shutil.copy2(bin_path, bin_path_epoch)
+                    async_render_owns_bin = False
                     env_cfg = getattr(self.vecenv, "driver_env", None)
                     wandb_log = bool(hasattr(self.logger, "wandb") and self.logger.wandb)
                     wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
@@ -582,6 +583,7 @@ class PuffeRL:
                             )
                             render_proc.start()
                             self.render_processes.append(render_proc)
+                            async_render_owns_bin = True
                         else:
                             pufferlib.utils.render_videos(
                                 self.config,
@@ -632,7 +634,8 @@ class PuffeRL:
                 finally:
                     if os.path.exists(bin_path):
                         os.remove(bin_path)
-                    if os.path.exists(bin_path_epoch):
+                    # If async render is using bin_path_epoch, let check_render_queue clean it up
+                    if not async_render_owns_bin and os.path.exists(bin_path_epoch):
                         os.remove(bin_path_epoch)
 
         if self.config["eval"]["wosac_realism_eval"] and (
@@ -678,6 +681,14 @@ class PuffeRL:
                 step = result["step"]
                 videos = result["videos"]
                 prefix = result.get("wandb_prefix", "render")
+
+                # Clean up bin file that the async render process was using
+                result_bin_path = result.get("bin_path")
+                if result_bin_path and os.path.exists(result_bin_path):
+                    try:
+                        os.remove(result_bin_path)
+                    except OSError:
+                        pass
 
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
                     import wandb
@@ -745,6 +756,8 @@ class PuffeRL:
         self.eval_threads = []
 
         if self.render_async:  # Ensure all render processes are properly terminated before closing the queue
+            # Drain the queue and clean up any bin files from completed renders
+            self.check_render_queue()
             if hasattr(self, "render_processes"):
                 for p in self.render_processes:
                     try:
