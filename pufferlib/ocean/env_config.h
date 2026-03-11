@@ -69,6 +69,13 @@ typedef struct {
     int init_mode;
     int control_mode;
     int num_maps;
+    int max_agents_per_env;
+    int min_agents_per_env;
+    float spawn_width_min;
+    float spawn_width_max;
+    float spawn_length_min;
+    float spawn_length_max;
+    float spawn_height;
     char map_dir[256];
     float min_avg_speed_to_consider_goal_attempt;
 } env_init_config;
@@ -205,9 +212,30 @@ static int handler(void *config, const char *section, const char *name, const ch
     } else if (MATCH("env", "init_steps")) {
         env_config->init_steps = atoi(value);
     } else if (MATCH("env", "init_mode")) {
-        env_config->init_mode = atoi(value);
+        if (strcmp(value, "\"create_all_valid\"") == 0 || strcmp(value, "create_all_valid") == 0) {
+            env_config->init_mode = 0;
+        } else if (strcmp(value, "\"create_only_controlled\"") == 0 || strcmp(value, "create_only_controlled") == 0) {
+            env_config->init_mode = 1;
+        } else if (strcmp(value, "\"init_variable_agent_number\"") == 0 ||
+                   strcmp(value, "init_variable_agent_number") == 0) {
+            env_config->init_mode = 2;
+        } else {
+            printf("Warning: Unknown init_mode value '%s', defaulting to create_all_valid\n", value);
+            env_config->init_mode = 0; // Default to create_all_valid
+        }
     } else if (MATCH("env", "control_mode")) {
-        env_config->control_mode = atoi(value);
+        if (strcmp(value, "\"control_vehicles\"") == 0 || strcmp(value, "control_vehicles") == 0) {
+            env_config->control_mode = 0;
+        } else if (strcmp(value, "\"control_agents\"") == 0 || strcmp(value, "control_agents") == 0) {
+            env_config->control_mode = 1;
+        } else if (strcmp(value, "\"control_wosac\"") == 0 || strcmp(value, "control_wosac") == 0) {
+            env_config->control_mode = 2;
+        } else if (strcmp(value, "\"control_sdc_only\"") == 0 || strcmp(value, "control_sdc_only") == 0) {
+            env_config->control_mode = 3;
+        } else {
+            printf("Warning: Unknown control_mode value '%s', defaulting to CONTROL_VEHICLES\n", value);
+            env_config->control_mode = 0; // Default to CONTROL_VEHICLES
+        }
     } else if (MATCH("env", "map_dir")) {
         if (sscanf(value, "\"%255[^\"]\"", env_config->map_dir) != 1) {
             strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);
@@ -218,6 +246,20 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->num_maps = atoi(value);
     } else if (MATCH("env", "min_avg_speed_to_consider_goal_attempt")) {
         env_config->min_avg_speed_to_consider_goal_attempt = atof(value);
+    } else if (MATCH("env", "min_agents_per_env")) {
+        env_config->min_agents_per_env = atoi(value);
+    } else if (MATCH("env", "max_agents_per_env")) {
+        env_config->max_agents_per_env = atoi(value);
+    } else if (MATCH("env", "spawn_width_min")) {
+        env_config->spawn_width_min = atof(value);
+    } else if (MATCH("env", "spawn_width_max")) {
+        env_config->spawn_width_max = atof(value);
+    } else if (MATCH("env", "spawn_length_min")) {
+        env_config->spawn_length_min = atof(value);
+    } else if (MATCH("env", "spawn_length_max")) {
+        env_config->spawn_length_max = atof(value);
+    } else if (MATCH("env", "spawn_height")) {
+        env_config->spawn_height = atof(value);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

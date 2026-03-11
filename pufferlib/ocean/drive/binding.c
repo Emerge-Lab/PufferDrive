@@ -127,16 +127,64 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     float min_avg_speed_to_consider_goal_attempt = unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");
 
     int use_all_maps = unpack(kwargs, "use_all_maps");
+    int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
+    int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
 
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
+
+    int max_envs = use_all_maps ? num_maps : num_agents;
+
+    if (init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        // Training mode: random agent counts per env
+        int agent_counts[max_envs];
+        int remaining = num_agents;
+        int env_count = 0;
+
+        while (remaining > 0) {
+            int count;
+            if (remaining <= max_agents_per_env) {
+                count = remaining;
+            } else {
+                // Ensure last env can still meet min_agents_per_env requirement
+                int upper = (remaining - max_agents_per_env < min_agents_per_env) ? remaining - min_agents_per_env
+                                                                                  : max_agents_per_env;
+                if (upper - min_agents_per_env + 1 == 0) {
+                    count = min_agents_per_env;
+                } else {
+                    count = min_agents_per_env + rand() % (upper - min_agents_per_env + 1);
+                }
+            }
+            agent_counts[env_count++] = count;
+            remaining -= count;
+        }
+
+        PyObject *agent_offsets = PyList_New(env_count + 1);
+        PyObject *map_ids_list = PyList_New(env_count);
+
+        int offset = 0;
+        for (int i = 0; i < env_count; i++) {
+            PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
+            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rand() % num_maps));
+            offset += agent_counts[i];
+        }
+        PyList_SetItem(agent_offsets, env_count,
+                       PyLong_FromLong(num_agents)); // In random mode, we guarantee num_agents accross all envs
+        PyObject *tuple = PyTuple_New(3);
+        PyTuple_SetItem(tuple, 0, agent_offsets);
+        PyTuple_SetItem(tuple, 1, map_ids_list);
+        PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+        return tuple;
+    }
+
+    // For all other modes
     int total_agent_count = 0;
     int env_count = 0;
-    int max_envs = use_all_maps ? num_maps : num_agents;
     int map_idx = 0;
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
+
     // getting env count
     while (use_all_maps ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
         int map_id = use_all_maps ? map_idx++ : rand() % num_maps;
@@ -184,33 +232,39 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            if (!use_all_maps) {
-                maps_checked++;
+            maps_checked++;
 
-                // Safeguard: if we've checked all available maps and found no active agents, raise an error
-                if (maps_checked >= num_maps) {
-                    for (int j = 0; j < env->num_objects; j++) {
-                        free_agent(&env->agents[j]);
-                    }
-                    for (int j = 0; j < env->num_roads; j++) {
-                        free_road_element(&env->road_elements[j]);
-                    }
-                    free(env->agents);
-                    free(env->road_elements);
-                    free(env->road_scenario_ids);
-                    free(env->active_agent_indices);
-                    free(env->static_agent_indices);
-                    free(env->expert_static_agent_indices);
-                    free(env);
-                    Py_DECREF(agent_offsets);
-                    Py_DECREF(map_ids);
-                    char error_msg[256];
-                    sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
-                    PyErr_SetString(PyExc_ValueError, error_msg);
-                    return NULL;
+            // Safeguard: if we've checked all available maps and found no active agents, raise an error
+            if (maps_checked >= num_maps) {
+                for (int j = 0; j < env->num_objects; j++) {
+                    free_agent(&env->agents[j]);
                 }
+                for (int j = 0; j < env->num_roads; j++) {
+                    free_road_element(&env->road_elements[j]);
+                }
+                free(env->agents);
+                free(env->road_elements);
+                free(env->road_scenario_ids);
+                free(env->active_agent_indices);
+                free(env->static_agent_indices);
+                free(env->expert_static_agent_indices);
+                free(env);
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
             }
 
+            // Store map_id
+            PyObject *map_id_obj = PyLong_FromLong(map_id);
+            PyList_SetItem(map_ids, env_count, map_id_obj);
+            // Store agent offset
+            PyObject *offset = PyLong_FromLong(total_agent_count);
+            PyList_SetItem(agent_offsets, env_count, offset);
+            total_agent_count += env->active_agent_count;
+            env_count++;
             for (int j = 0; j < env->num_objects; j++) {
                 free_agent(&env->agents[j]);
             }
@@ -226,37 +280,16 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env);
             continue;
         }
-
-        // Store map_id
-        PyObject *map_id_obj = PyLong_FromLong(map_id);
-        PyList_SetItem(map_ids, env_count, map_id_obj);
-        // Store agent offset
-        PyObject *offset = PyLong_FromLong(total_agent_count);
-        PyList_SetItem(agent_offsets, env_count, offset);
-        total_agent_count += env->active_agent_count;
-        env_count++;
-        for (int j = 0; j < env->num_objects; j++) {
-            free_agent(&env->agents[j]);
-        }
-        for (int j = 0; j < env->num_roads; j++) {
-            free_road_element(&env->road_elements[j]);
-        }
-        free(env->agents);
-        free(env->road_elements);
-        free(env->road_scenario_ids);
-        free(env->active_agent_indices);
-        free(env->static_agent_indices);
-        free(env->expert_static_agent_indices);
-        free(env);
     }
-    // printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count,
-    // num_agents);
-    if (!use_all_maps && total_agent_count >= num_agents) {
+
+    if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
+
     PyObject *final_total_agent_count = PyLong_FromLong(total_agent_count);
     PyList_SetItem(agent_offsets, env_count, final_total_agent_count);
     PyObject *final_env_count = PyLong_FromLong(env_count);
+
     // resize lists
     PyObject *resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject *resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
@@ -344,8 +377,22 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     char *map_path = unpack_str(kwargs, "map_path");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
+    int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
+
+    AgentSpawnSettings spawn_settings = {
+        .min_w = unpack(kwargs, "spawn_width_min"),
+        .max_w = unpack(kwargs, "spawn_width_max"),
+        .min_l = unpack(kwargs, "spawn_length_min"),
+        .max_l = unpack(kwargs, "spawn_length_max"),
+        .h = unpack(kwargs, "spawn_height"),
+    };
+    env->spawn_settings = spawn_settings;
 
     env->num_agents = max_agents;
+    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        env->spawn_settings.max_agents_in_sim =
+            max_agents_per_env; // INIT_VARIABLE_AGENT_NUMBER only supports controlled agents
+    }
     env->map_name = map_path;
     env->init_steps = init_steps;
     env->timestep = init_steps;
