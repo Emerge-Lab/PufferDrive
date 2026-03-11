@@ -2499,36 +2499,6 @@ void c_step(Drive *env) {
     compute_observations(env);
 }
 
-void c_step_lightweight(Drive *env) {
-    env->timestep++;
-
-    // Move static experts
-    for (int i = 0; i < env->expert_static_agent_count; i++) {
-        int expert_idx = env->expert_static_agent_indices[i];
-        if (env->entities[expert_idx].x == INVALID_POSITION)
-            continue;
-        move_expert(env, env->actions, expert_idx);
-    }
-
-    // Apply dynamics to all active agents
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        env->entities[agent_idx].collision_state = 0;
-
-        if (env->control_mode == CONTROL_REPLAY_LOGS) {
-            move_expert(env, env->actions, agent_idx);
-        } else {
-            if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
-                override_action_with_expert(env, i, agent_idx);
-            }
-            move_dynamics(env, i, agent_idx);
-        }
-    }
-
-    // Update observations
-    compute_observations(env);
-}
-
 void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_actions_continuous_out,
                            float *expert_obs_out) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
@@ -2541,7 +2511,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
     int action_dim_discrete = is_delta ? 3 : 1;
 
     // Reset agents to start of trajectory
-    env->timestep = env->init_steps;
+    env->timestep = 0;
     set_start_position(env);
     compute_observations(env);
 
@@ -2589,38 +2559,15 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                     expert_actions_discrete_out[disc_off + 0] = (float)best_dx;
                     expert_actions_discrete_out[disc_off + 1] = (float)best_dy;
                     expert_actions_discrete_out[disc_off + 2] = (float)best_yaw;
-
-                    // Write into env->actions for c_step_lightweight
-                    if (env->action_type == 1) {
-                        float *ab = (float *)env->actions;
-                        ab[i * 3 + 0] = dx / DELTA_MAX_DX;
-                        ab[i * 3 + 1] = dy / DELTA_MAX_DY;
-                        ab[i * 3 + 2] = dyaw / DELTA_MAX_DYAW;
-                    } else {
-                        int *ai = (int *)env->actions;
-                        ai[i * 3 + 0] = best_dx;
-                        ai[i * 3 + 1] = best_dy;
-                        ai[i * 3 + 2] = best_yaw;
-                    }
                 } else {
-                    // Invalid timestep: mark outputs and apply do-nothing
                     for (int k = 0; k < 3; k++) {
                         expert_actions_continuous_out[cont_off + k] = -1.0f;
                         expert_actions_discrete_out[disc_off + k] = -1.0f;
                     }
-                    if (env->action_type == 1) {
-                        float *ab = (float *)env->actions;
-                        ab[i * 3 + 0] = ab[i * 3 + 1] = ab[i * 3 + 2] = 0.0f;
-                    } else {
-                        int *ai = (int *)env->actions;
-                        ai[i * 3 + 0] = NUM_DX_BINS / 2;
-                        ai[i * 3 + 1] = NUM_DY_BINS / 2;
-                        ai[i * 3 + 2] = NUM_YAW_BINS / 2;
-                    }
                 }
 
             } else {
-                // Classic dynamics: joint accel × steer action
+                // Classic dynamics: joint accel x steer action
                 bool is_valid =
                     (t < agent->array_size && agent->expert_accel != NULL && agent->expert_steering != NULL &&
                      agent->expert_accel[t] != -1.0f && agent->expert_steering[t] != -1.0f);
@@ -2645,32 +2592,32 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
                     int joint = best_a * NUM_STEER_BINS + best_s;
                     expert_actions_discrete_out[disc_off] = (float)joint;
-
-                    if (env->action_type == 1) {
-                        float (*af)[2] = (float (*)[2])env->actions;
-                        af[i][0] = accel / ACCEL_MAX;
-                        af[i][1] = steer / STEER_MAX;
-                    } else {
-                        ((int *)env->actions)[i] = joint;
-                    }
                 } else {
                     expert_actions_continuous_out[cont_off + 0] = -1.0f;
                     expert_actions_continuous_out[cont_off + 1] = -1.0f;
                     expert_actions_discrete_out[disc_off] = -1.0f;
-
-                    if (env->action_type == 1) {
-                        float (*af)[2] = (float (*)[2])env->actions;
-                        af[i][0] = af[i][1] = 0.0f;
-                    } else {
-                        int noop = (NUM_ACCEL_BINS / 2) * NUM_STEER_BINS + (NUM_STEER_BINS / 2);
-                        ((int *)env->actions)[i] = noop;
-                    }
                 }
             }
         }
 
         if (t < TRAJECTORY_LENGTH - 1) {
-            c_step_lightweight(env);
+            // Directly set agents to their ground-truth trajectory positions
+            // instead of stepping through dynamics (which accumulates errors).
+            env->timestep++;
+
+            for (int si = 0; si < env->expert_static_agent_count; si++) {
+                int expert_idx = env->expert_static_agent_indices[si];
+                if (env->entities[expert_idx].x == INVALID_POSITION)
+                    continue;
+                move_expert(env, env->actions, expert_idx);
+            }
+
+            for (int ai = 0; ai < env->active_agent_count; ai++) {
+                int idx = env->active_agent_indices[ai];
+                move_expert(env, env->actions, idx);
+            }
+
+            compute_observations(env);
         }
     }
 

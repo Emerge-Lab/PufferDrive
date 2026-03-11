@@ -121,7 +121,7 @@ if __name__ == "__main__":
     import sys
 
     # Parse dynamics model before load_config eats sys.argv
-    dynamics_model = "delta_local"
+    dynamics_model = "classic"
     for i, arg in enumerate(sys.argv[1:], 1):
         if arg in ("classic", "delta_local"):
             dynamics_model = arg
@@ -149,10 +149,10 @@ if __name__ == "__main__":
 
     config = {
         "batch_size": 512,
-        "hidden_size": 1024,
+        "hidden_size": 512,
         "output_sizes": output_sizes,
         "learning_rate": 1e-4,
-        "epochs": 200,
+        "epochs": 1000,
         "minibatches": 64,
         "resample_every_n_epochs": 5,
         "num_maps": args["env"]["num_maps"],
@@ -163,7 +163,7 @@ if __name__ == "__main__":
     driver_env = env.driver_env
 
     run_name = f"bc_{dynamics_model}_maps_{config['num_maps']}"
-    wandb.init(project="kl_anchor", tags=["bc_policy", dynamics_model], name=run_name, config=config)
+    wandb.init(project="kl_reg", tags=["bc_policy", dynamics_model], name=run_name, config=config)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

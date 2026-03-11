@@ -427,7 +427,7 @@ class Drive(pufferlib.PufferEnv):
     def _hash_pair(self, obs, act):
         return hash((obs.round(3).tobytes(), act.round(2).tobytes()))
 
-    def _init_regularization_strategy(self, device="cuda", bc_hidden_size=1024):
+    def _init_regularization_strategy(self, device="cuda", bc_hidden_size=512):
         bc_anchor = None
         data = {}
 
@@ -444,6 +444,9 @@ class Drive(pufferlib.PufferEnv):
                 hidden_size=bc_hidden_size,
                 output_sizes=output_sizes,
             ).to(device)
+
+            if self.anchor_cpt_path is None:
+                self.anchor_cpt_path = f"models/bc_{self.dynamics_model}_{self.num_maps}.pt"
 
             bc_policy.load_state_dict(torch.load(self.anchor_cpt_path, map_location=device))
             bc_policy.eval()
