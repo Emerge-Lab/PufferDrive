@@ -44,7 +44,7 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
             print(f"No model files found for {eval_name} evaluation")
             return
 
-        latest_cpt = max(model_files, key=os.path.getctime)
+        latest_cpt = max(model_files)
 
         cmd = [
             sys.executable,

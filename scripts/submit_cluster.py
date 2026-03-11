@@ -91,7 +91,7 @@ def parse_args():
     parser.add_argument(
         "--container_overlay",
         type=str,
-        default="/scratch/ev2237/containers/pufferdrive/overlay.ext3",
+        default="/scratch/ev2237/containers/pufferdrive-overlay.ext3",
         help="Singularity overlay path",
     )
 

@@ -533,7 +533,7 @@ class PuffeRL:
             model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
 
             if model_files:
-                latest_cpt = max(model_files, key=os.path.getctime)
+                latest_cpt = max(model_files)
                 bin_path = f"{model_dir}.bin"
 
                 try:
@@ -1741,7 +1741,7 @@ def load_policy(args, vecenv, env_name=""):
 
     load_path = args["load_model_path"]
     if load_path == "latest":
-        load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
+        load_path = max(glob.glob(f"experiments/{env_name}*.pt"))
 
     if load_path is not None:
         state_dict = torch.load(load_path, map_location=device)
