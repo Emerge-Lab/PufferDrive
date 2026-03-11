@@ -27,6 +27,7 @@ typedef struct {
     int goal_behavior;
     int reward_randomization;
     float a_lat_limit;
+    float penalty_weight;
     int reward_conditioning;
     float min_goal_distance;
     float max_goal_distance;
@@ -106,9 +107,11 @@ static int handler(void *config, const char *section, const char *name, const ch
         }
     } else if (MATCH("env", "goal_behavior")) {
         env_config->goal_behavior = atoi(value);
-    } else if (MATCH("env", "reward_randomization")) {
-        env_config->a_lat_limit = atof(value);
     } else if (MATCH("env", "a_lat_limit")) {
+        env_config->a_lat_limit = atof(value);
+    } else if (MATCH("env", "penalty_weight")) {
+        env_config->penalty_weight = atof(value);
+    } else if (MATCH("env", "reward_randomization")) {
         env_config->reward_randomization = atoi(value);
     } else if (MATCH("env", "reward_conditioning")) {
         env_config->reward_conditioning = atoi(value);

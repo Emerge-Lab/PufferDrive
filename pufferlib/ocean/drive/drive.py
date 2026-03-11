@@ -26,6 +26,7 @@ class Drive(pufferlib.PufferEnv):
         goal_behavior=0,
         reward_randomization=0,
         a_lat_limit = 1.0,
+        penalty_weight = 0.001,
         reward_conditioning=0,
         min_goal_distance=5.0,
         max_goal_distance=20.0,
@@ -110,6 +111,7 @@ class Drive(pufferlib.PufferEnv):
         self.goal_behavior = goal_behavior
         self.reward_randomization = reward_randomization
         self.a_lat_limit = a_lat_limit
+        self.penalty_weight = penalty_weight
         self.reward_conditioning = reward_conditioning
         self.min_goal_distance = min_goal_distance
         self.max_goal_distance = max_goal_distance
@@ -279,6 +281,7 @@ class Drive(pufferlib.PufferEnv):
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
             a_lat_limit = self.a_lat_limit,
+            penalty_weight = self.penalty_weight,
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
@@ -350,6 +353,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
                 a_lat_limit = self.a_lat_limit,
+                penalty_weight = self.penalty_weight,
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,
@@ -432,6 +436,7 @@ class Drive(pufferlib.PufferEnv):
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
             a_lat_limit = self.a_lat_limit,
+            penalty_weight = self.penalty_weight,
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
@@ -500,6 +505,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
                 a_lat_limit = self.a_lat_limit,
+                penalty_weight = self.penalty_weight,
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,

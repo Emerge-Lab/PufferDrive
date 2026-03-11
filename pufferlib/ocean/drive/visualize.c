@@ -252,6 +252,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .goal_behavior = conf.goal_behavior,
         .reward_randomization = conf.reward_randomization,
         .a_lat_limit = conf.a_lat_limit,
+        .penalty_weight = conf.penalty_weight,
         .reward_conditioning = conf.reward_conditioning,
         .min_goal_distance = conf.min_goal_distance,
         .max_goal_distance = conf.max_goal_distance,

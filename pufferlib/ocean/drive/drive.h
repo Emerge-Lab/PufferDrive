@@ -15,7 +15,7 @@
 
 // constants for strings, data etc.
 #define SCENARIO_ID_STR_LENGTH 16
-#define PENALTY_WEIGHT 0.05
+#define PENALTY_WEIGHT 0.005
 
 // templates for bringing in some datatypes we might use later
 // if we do this we can have a transition phase in which we can start testing with
@@ -243,6 +243,8 @@ struct Log {
     float expert_static_agent_count;
     float static_agent_count;
     float avg_speed_per_agent;
+    float steering_error;
+    float reward_steering_error;
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -352,6 +354,7 @@ struct Drive {
     int control_mode;
     int reward_randomization;
     float a_lat_limit;
+    float penalty_weight;
     int reward_conditioning;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
@@ -1501,6 +1504,7 @@ void add_log(Drive *env) {
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
         env->log.steering_error += env->logs[i].steering_error / safe_timestep;
+        env->log.reward_steering_error += env->logs[i].reward_steering_error;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
@@ -3011,11 +3015,12 @@ void c_step(Drive *env) {
             float steering_error = fabsf(delta_a_lat);
             // float alpha = 0.000000002f;  // longitudinal weight
             // float beta  = 0.000000004f;  // lateral weight
-            float jerk_penalty = -1*PENALTY_WEIGHT*fmin(1,exp(-1*(a_lat_limit - fabs(delta_a_lat))));
+            float jerk_penalty = -1*env->penalty_weight*fmin(1,exp(-1*(a_lat_limit - fabs(delta_a_lat))));
             // float jerk_penalty = -(alpha * delta_a_long * delta_a_long + beta * delta_a_lat * delta_a_lat);
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
             env->logs[i].steering_error += steering_error;
+            env->logs[i].reward_steering_error += jerk_penalty;
         }
     }
 
