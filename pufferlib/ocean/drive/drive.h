@@ -2775,6 +2775,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float dheading = yaw_rate * env->dt;
 
         // Apply updates to the agent's state
+        agent->steering_angle = steering;
         agent->sim_x += dx;
         agent->sim_y += dy;
         agent->sim_heading += dheading;
@@ -3021,9 +3022,12 @@ void c_step(Drive *env) {
             float delta_a_lat = curr_a_lat - prev_a_lat;
             float a_lat_limit = env->a_lat_limit;
             float steering_error = fabsf(delta_a_lat);
+            // Attenuate penalty when the agent is actively steering:
+            float steering_attenuation = 1.0f - fabsf(ag->steering_angle);
             // float alpha = 0.000000002f;  // longitudinal weight
             // float beta  = 0.000000004f;  // lateral weight
-            float jerk_penalty = -1 * env->penalty_weight * fmin(1, exp(-1 * (a_lat_limit - fabs(delta_a_lat))));
+            float jerk_penalty = -1 * env->penalty_weight * steering_attenuation *
+                                 fminf(1.0f, expf(-1.0f * (a_lat_limit - fabsf(delta_a_lat))));
             // float jerk_penalty = -(alpha * delta_a_long * delta_a_long + beta * delta_a_lat * delta_a_lat);
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
