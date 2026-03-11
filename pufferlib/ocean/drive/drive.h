@@ -119,7 +119,7 @@
 #define MAX_CHECKED_LANES 32
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 13
+#define EGO_FEATURES_CLASSIC 15
 #define EGO_FEATURES_JERK 16
 
 // Observation normalization constants
@@ -158,6 +158,9 @@
 #define MAX_SPAWN_ATTEMPTS 30
 #define MAX_SPAWNS_ATTEMPTS_WITH_DIMENSION_CHANGES 30
 
+// Classic acceleration normlaization
+#define ACC_NORM 100.0f
+
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
@@ -168,7 +171,7 @@ static const float STEERING_VALUES[13] = {-1.000f, -0.833f, -0.667f, -0.500f, -0
                                           0.167f,  0.333f,  0.500f,  0.667f,  0.833f,  1.000f};
 
 // static const float STEERING_VALUES[13] = {-0.667f, -0.667f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f,
-//                                           0.167f,  0.333f,  0.500f,  0.667f,  0.667f,  0.667f};                                          
+//                                           0.167f,  0.333f,  0.500f,  0.667f,  0.667f,  0.667f};
 
 static const float offsets[4][2] = {
     {-1, 1}, // top-left
@@ -2497,12 +2500,17 @@ void compute_observations(Drive *env) {
             obs[14] = lane_center_dist;
             obs[15] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         } else {
+            // Add inferred accelaration values to NN (for CLASSIC)
+            float normalized_a_lat = ego_entity->a_lat / ACC_NORM;
+            float normalized_a_long = ego_entity->a_long / ACC_NORM;
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
             obs[8] = normalized_goal_speed_min;
             obs[9] = normalized_goal_speed_max;
             obs[10] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
             obs[11] = lane_center_dist;
             obs[12] = ego_entity->metrics_array[LANE_ANGLE_IDX];
+            obs[13] = normalized_a_lat;
+            obs[14] = normalized_a_long;
         }
         int obs_idx = (env->reward_conditioning == 1) ? ego_dim - NUM_REWARD_COEFS : ego_dim;
         // Placeholder for reward conditioning encoder -
@@ -2982,7 +2990,7 @@ void c_step(Drive *env) {
         float prev_vx = env->agents[agent_idx].sim_vx;
         float prev_vy = env->agents[agent_idx].sim_vy;
         float prev_a_long = env->agents[agent_idx].a_long;
-        float prev_a_lat  = env->agents[agent_idx].a_lat;
+        float prev_a_lat = env->agents[agent_idx].a_lat;
 
         move_dynamics(env, i, agent_idx);
 
@@ -3004,18 +3012,18 @@ void c_step(Drive *env) {
             // Project onto heading (longitudinal) and perpendicular (lateral)
             // heading_x = cos(heading), heading_y = sin(heading) — already stored on agent
             float curr_a_long = ax * ag->heading_x + ay * ag->heading_y;
-            float curr_a_lat  = -ax * ag->heading_y + ay * ag->heading_x;
+            float curr_a_lat = -ax * ag->heading_y + ay * ag->heading_x;
 
             ag->a_long = curr_a_long;
-            ag->a_lat  = curr_a_lat;
+            ag->a_lat = curr_a_lat;
 
             float delta_a_long = curr_a_long - prev_a_long;
-            float delta_a_lat  = curr_a_lat  - prev_a_lat;
+            float delta_a_lat = curr_a_lat - prev_a_lat;
             float a_lat_limit = env->a_lat_limit;
             float steering_error = fabsf(delta_a_lat);
             // float alpha = 0.000000002f;  // longitudinal weight
             // float beta  = 0.000000004f;  // lateral weight
-            float jerk_penalty = -1*env->penalty_weight*fmin(1,exp(-1*(a_lat_limit - fabs(delta_a_lat))));
+            float jerk_penalty = -1 * env->penalty_weight * fmin(1, exp(-1 * (a_lat_limit - fabs(delta_a_lat))));
             // float jerk_penalty = -(alpha * delta_a_long * delta_a_long + beta * delta_a_lat * delta_a_lat);
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
@@ -3185,7 +3193,7 @@ void c_step(Drive *env) {
 
             // Comfort reward (GIGAFLOW)
 
-            //REMOVINF FOR TESTING
+            // REMOVINF FOR TESTING
 
             // float comfort_penalty = agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
 
