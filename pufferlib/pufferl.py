@@ -528,6 +528,8 @@ class PuffeRL:
                 self.sampled_lambdas = anchor_obs[:, self.lambda_obs_idx].unsqueeze(-1)  # [B, 1]
                 self.sampled_collision_rewards = anchor_obs[:, self.reward_veh_obs_idx].unsqueeze(-1)  # [B, 1]
 
+                unweighted_reg_loss = per_sample_kl.mean()
+
                 # Weight by lambda to get batch average
                 reg_loss = (per_sample_kl * self.sampled_lambdas.squeeze(-1)).mean()
 
@@ -644,7 +646,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["reg_loss"] += reg_loss / self.total_minibatches
+            losses["reg_loss"] += unweighted_reg_loss / self.total_minibatches
 
             # Learn on accumulated minibatches
             profile("learn", epoch)
@@ -780,15 +782,16 @@ class PuffeRL:
             **eval_logs,
             "data/anchor_entropy": self.data.get("data/anchor_entropy", 0),
         }
-        if hasattr(self, 'sampled_lambdas'):
+        if hasattr(self, "sampled_lambdas"):
             logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
             logs["data/lambda_std"] = float(self.sampled_lambdas.std())
 
         if isinstance(self.logger, WandbLogger):
             import wandb
-            if hasattr(self, 'sampled_lambdas'):
+
+            if hasattr(self, "sampled_lambdas"):
                 logs["data/lambda_distrib"] = wandb.Histogram(self.sampled_lambdas.cpu().numpy())
-            if hasattr(self, 'sampled_collision_rewards'):    
+            if hasattr(self, "sampled_collision_rewards"):
                 logs["data/collision_reward_distrib"] = wandb.Histogram(self.sampled_collision_rewards.cpu().numpy())
 
         if self.reg_mode == "log_prob_direct":
