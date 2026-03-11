@@ -5,6 +5,8 @@
 import contextlib
 import warnings
 
+from pufferlib.ocean.drive.python_dynamics import compute_l2_loss_ego_action_traj, rollout_state_trajectory_ego
+
 warnings.filterwarnings("error", category=RuntimeWarning)
 
 import os
@@ -70,11 +72,6 @@ def convert_action_integers_to_r2(actions: torch.Tensor) -> torch.Tensor:
     return torch.cat([accel.unsqueeze(-1), steering.unsqueeze(-1)], dim=-1)
 
 
-def compute_l2_loss_action_traj(a_t: torch.Tensor, a_tm1: torch.Tensor) -> torch.Tensor:
-    loss = torch.sqrt(((a_t[:, :-1, :] - a_tm1[:, 1:, :]) ** 2).sum(-1).sum(-1))
-    return -loss / 200.0
-
-
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization
@@ -113,7 +110,7 @@ class PuffeRL:
         device = config["device"]
 
         self.actions_trajectory_length = config.get("actions_trajectory_length", 80)
-        atn_traj_size = (
+        atn_traj_size = (  # TODO: please let's be precise with the semantics before checking this in
             self.actions_trajectory_length,
             2,  # 2 real numbers for accel and steering
         )  # TODO: generalize to continuous case
@@ -141,6 +138,13 @@ class PuffeRL:
         )
 
         self.prev_actions_traj = torch.ones(
+            total_agents,
+            *atn_traj_size,
+            device=device,
+            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
+        ).softmax(dim=-1)
+
+        self.prev_state_traj = torch.ones(
             total_agents,
             *atn_traj_size,
             device=device,
@@ -334,13 +338,15 @@ class PuffeRL:
                     logits, actions_trajectory_length=self.actions_trajectory_length
                 )  # sample logits now accepts a length of actions_trajectory to output a full trajectory of actions
 
-                action_r2 = convert_action_integers_to_r2(action)
-                r_commitment = compute_l2_loss_action_traj(
-                    action_r2, self.prev_actions_traj[env_id.start : env_id.stop]
+                action_N2 = convert_action_integers_to_r2(action)
+                traj, heading = rollout_state_trajectory_ego(action_N2, observations=o_device)
+                r_commitment = compute_l2_loss_ego_action_traj(
+                    traj, self.prev_state_traj[env_id.start : env_id.stop], heading
                 )
                 r = r + r_commitment
-                r = torch.clamp(r, -1, 1)
-                self.prev_actions_traj[env_id.start : env_id.stop] = action_r2.detach()
+                # r = torch.clamp(r, -1, 1)
+                self.prev_actions_traj[env_id.start : env_id.stop] = action_N2.detach()
+                self.prev_state_traj[env_id.start : env_id.stop] = traj.detach()
 
             profile("eval_copy", epoch)
             with torch.no_grad():
