@@ -103,7 +103,7 @@
 #define GRID_CELL_SIZE 5.0f
 
 // Observation constants
-#define MAX_ROAD_SEGMENT_OBSERVATIONS 128
+#define MAX_ROAD_SEGMENT_OBSERVATIONS 256
 #ifndef MAX_AGENTS // TODO: Needs to be replaced with MAX_PARTNER_OBS(agents in obs_radius) throughout observations code
                    // and with env->max_agents_in_sim throughout all agent for loops
 #define MAX_AGENTS 128
@@ -239,6 +239,8 @@ struct Log {
     float expert_static_agent_count;
     float static_agent_count;
     float avg_speed_per_agent;
+    float max_observation_distance; // average max observation distance
+    float observation_coverage;     // percentage of entities in obs window seen on average
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -302,7 +304,6 @@ struct Drive {
     int num_traffic_elements;
     int num_objects; // All agent objects allocated in the sim
     int num_roads;
-    int num_road_lines;
     int num_drivable; // number of drivable points in sim
     int static_agent_count;
     int *static_agent_indices;
@@ -959,13 +960,15 @@ void cache_neighbor_offsets(Drive *env) {
     }
 }
 
-int get_neighbor_cache_entities(Drive *env, int cell_idx, GridMapEntity *entities, int max_entities) {
+int get_neighbor_cache_entities(Drive *env, int cell_idx, GridMapEntity *entities, int max_entities,
+                                int *actual_entities_cnt) {
     GridMap *grid_map = env->grid_map;
     if (cell_idx < 0 || cell_idx >= (grid_map->grid_cols * grid_map->grid_rows)) {
         return 0; // Invalid cell index
     }
 
     int count = grid_map->neighbor_cache_count[cell_idx];
+    *actual_entities_cnt = count;
     // Limit to available space
     if (count > max_entities) {
         count = max_entities;
@@ -1170,6 +1173,41 @@ void load_map_binary(const char *filename, Drive *env) {
     }
 
     fclose(file);
+}
+
+void filter_road_elements(Drive *env) {
+    // For now just removes all road line elements
+    int inital_road_count = env->num_roads;
+    int filtered_road_count = 0;
+    bool skip[env->num_roads];
+    memset(skip, 0, env->num_roads * sizeof(bool));
+
+    for (int i = 0; i < env->num_roads; i++) {
+        if (env->road_elements[i].type != ROAD_LINE) {
+            filtered_road_count++;
+        } else {
+            skip[i] = true;
+        }
+    }
+
+    RoadMapElement *filtered_roads = (RoadMapElement *)calloc(filtered_road_count, sizeof(RoadMapElement));
+
+    for (int i = 0, j = 0; i < env->num_roads; i++) {
+        if (!skip[i]) {
+            deep_copy_road_element(&filtered_roads[j], &env->road_elements[i]);
+            j++;
+        }
+    }
+
+    // Free old road elements
+    for (int i = 0; i < env->num_roads; i++) {
+        free_road_element(&env->road_elements[i]);
+    }
+    free(env->road_elements);
+
+    // Update environment with filtered roads
+    env->road_elements = filtered_roads;
+    env->num_roads = filtered_road_count;
 }
 
 // ========================================
@@ -1626,6 +1664,8 @@ void add_log(Drive *env) {
         env->log.expert_static_agent_count += env->expert_static_agent_count;
         env->log.static_agent_count += env->static_agent_count;
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
+        env->log.max_observation_distance += env->logs[i].max_observation_distance / safe_timestep;
+        env->log.observation_coverage += env->logs[i].observation_coverage / safe_timestep;
         env->log.n += 1;
     }
 }
@@ -2186,6 +2226,7 @@ void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
     load_map_binary(env->map_name, env);
+    filter_road_elements(env);
     compute_drivable_lane_points(env);
     create_sparse_lane_points(env, env->polyline_reduction_threshold, env->polyline_max_segment_length);
     set_means(env);
@@ -2699,11 +2740,16 @@ void compute_observations(Drive *env) {
         int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 8;
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
-        // map observations
+
+        // Map observations
         GridMapEntity entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS];
         int grid_idx = getGridIndex(env, ego_entity->sim_x, ego_entity->sim_y);
-
-        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
+        float max_observation_distance = 0.0f;
+        int actual_entities_cnt = 0;
+        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS,
+                                                    &actual_entities_cnt);
+        float percent_entities_used =
+            (actual_entities_cnt > 0) ? ((float)list_size / (float)actual_entities_cnt * 100.0f) : 100.0f;
 
         for (int k = 0; k < list_size; k++) {
             int entity_idx = entity_list[k].entity_idx;
@@ -2735,6 +2781,9 @@ void compute_observations(Drive *env) {
             float rel_x = mid_x - ego_entity->sim_x;
             float rel_y = mid_y - ego_entity->sim_y;
             float rel_z = mid_z - ego_entity->sim_z;
+            float distance =
+                relative_distance_3d(ego_entity->sim_x, ego_entity->sim_y, ego_entity->sim_z, mid_x, mid_y, mid_z);
+            max_observation_distance = fmaxf(max_observation_distance, distance);
             float x_obs = rel_x * cos_heading + rel_y * sin_heading;
             float y_obs = -rel_x * sin_heading + rel_y * cos_heading;
             float z_obs = rel_z;
@@ -2763,6 +2812,12 @@ void compute_observations(Drive *env) {
             obs[obs_idx + 7] = entity->type - 4.0f;
             obs_idx += 8;
         }
+        env->logs[i].max_observation_distance += max_observation_distance;
+        env->logs[i].observation_coverage += percent_entities_used;
+        // if (ego_idx == 0) {
+        //     printf("Max observation distance for agent %d at timestep %d: %.2f meters, percentage of entities in obs
+        //     window seen: %.2f\n", ego_idx, env->timestep, max_observation_distance, percent_entities_used);
+        // }
         int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 8;
         // Set the entire block to 0 at once
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));

@@ -432,6 +432,8 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
+    assign_to_dict(dict, "max_observation_distance", log->max_observation_distance);
+    assign_to_dict(dict, "observation_coverage", log->observation_coverage);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }
