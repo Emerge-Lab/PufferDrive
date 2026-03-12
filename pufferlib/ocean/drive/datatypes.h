@@ -267,6 +267,32 @@ struct TrafficControlElement {
     int *controlled_lanes;
 };
 
+void deep_copy_road_element(struct RoadMapElement *dest, struct RoadMapElement *src) {
+    dest->id = src->id;
+    dest->type = src->type;
+    dest->segment_length = src->segment_length;
+    dest->polyline_length = src->polyline_length;
+
+    dest->x = (float *)malloc(sizeof(float) * src->segment_length);
+    dest->y = (float *)malloc(sizeof(float) * src->segment_length);
+    dest->z = (float *)malloc(sizeof(float) * src->segment_length);
+    memcpy(dest->x, src->x, sizeof(float) * src->segment_length);
+    memcpy(dest->y, src->y, sizeof(float) * src->segment_length);
+    memcpy(dest->z, src->z, sizeof(float) * src->segment_length);
+
+    dest->num_entries = src->num_entries;
+    dest->entry_lanes = (int *)malloc(sizeof(int) * src->num_entries);
+    memcpy(dest->entry_lanes, src->entry_lanes, sizeof(int) * src->num_entries);
+
+    dest->num_exits = src->num_exits;
+    dest->exit_lanes = (int *)malloc(sizeof(int) * src->num_exits);
+    memcpy(dest->exit_lanes, src->exit_lanes, sizeof(int) * src->num_exits);
+
+    dest->speed_limit = src->speed_limit;
+}
+
+// Cleanup methods
+
 void free_agent(struct Agent *agent) {
     free(agent->log_trajectory_x);
     free(agent->log_trajectory_y);
