@@ -396,6 +396,9 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
     """Run policy evaluation with safe reward conditioning in a subprocess and log metrics."""
     num_episodes = safe_eval_config.get("num_episodes", 300)
 
+    # Forward training env's map_dir and num_maps so the subprocess uses the
+    # same maps as training (the default INI may point elsewhere).
+    env_config = config.get("env", {})
     extra_args = [
         "--env.reward-randomization",
         "1",
@@ -405,6 +408,8 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
         str(num_episodes),
         "--safe-eval.num-agents",
         str(safe_eval_config.get("num_agents", 64)),
+        f"--env.map-dir={env_config.get('map_dir', 'resources/drive/binaries/training')}",
+        f"--env.num-maps={env_config.get('num_maps', 100)}",
     ]
 
     # Pass safe_eval overrides that safe_eval() applies to env config
