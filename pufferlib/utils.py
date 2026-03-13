@@ -29,7 +29,9 @@ def _get_env_reward_bound_names(ini_path="pufferlib/config/ocean/drive.ini"):
     return bounds
 
 
-def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_name, wandb_keys=None):
+def _run_eval_subprocess(
+    config, logger, global_step, mode, extra_args, marker_name, wandb_keys=None, results_queue=None
+):
     """Run an evaluation subprocess and log metrics to wandb.
 
     Args:
@@ -40,6 +42,7 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
         extra_args: List of extra CLI args appended to the base command
         marker_name: Marker prefix for JSON extraction (e.g. "WOSAC" looks for WOSAC_METRICS_START/END)
         wandb_keys: If dict, maps metric keys to wandb keys. If None, logs all as eval/<key>.
+        results_queue: If provided, put results on this queue instead of logging directly.
     """
     eval_name = marker_name.lower().replace("_", " ")
     try:
@@ -87,8 +90,8 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
                         payload = {f"eval/{k}": v for k, v in metrics.items()}
                     if payload:
                         payload["train_step"] = global_step
-                        if hasattr(logger, "log_async"):
-                            logger.log_async(payload)
+                        if results_queue is not None:
+                            results_queue.put(payload)
                         else:
                             logger.wandb.log(payload)
         else:
@@ -103,7 +106,7 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
         traceback.print_exc()
 
 
-def run_human_replay_eval_in_subprocess(config, logger, global_step):
+def run_human_replay_eval_in_subprocess(config, logger, global_step, results_queue=None):
     eval_config = config.get("eval", {})
     _run_eval_subprocess(
         config,
@@ -130,10 +133,11 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
             "offroad_rate": "human_replay/offroad_rate",
             "completion_rate": "human_replay/completion_rate",
         },
+        results_queue=results_queue,
     )
 
 
-def run_wosac_eval_in_subprocess(config, logger, global_step):
+def run_wosac_eval_in_subprocess(config, logger, global_step, results_queue=None):
     eval_config = config.get("eval", {})
     _run_eval_subprocess(
         config,
@@ -181,6 +185,7 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             "min_ade": "wosac/min_ade",
             "total_num_agents": "wosac/total_num_agents",
         },
+        results_queue=results_queue,
     )
 
 
@@ -360,7 +365,8 @@ def render_videos(
                 payload[f"{wandb_prefix}/world_state"] = videos_to_log_world
             if videos_to_log_agent:
                 payload[f"{wandb_prefix}/agent_view"] = videos_to_log_agent
-            wandb_run.log(payload, step=global_step)
+            payload["train_step"] = global_step
+            wandb_run.log(payload)
 
     except subprocess.TimeoutExpired:
         print("C rendering timed out")
@@ -418,7 +424,7 @@ def generate_human_replay_ini(eval_config, base_ini_path="pufferlib/config/ocean
     return tmp_path
 
 
-def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_config):
+def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_config, results_queue=None):
     """Run policy evaluation with safe reward conditioning in a subprocess and log metrics."""
     num_episodes = safe_eval_config.get("num_episodes", 300)
 
@@ -461,4 +467,5 @@ def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_c
         mode="safe_eval",
         extra_args=extra_args,
         marker_name="SAFE_EVAL",
+        results_queue=results_queue,
     )

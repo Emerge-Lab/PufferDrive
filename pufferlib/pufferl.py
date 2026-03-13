@@ -19,7 +19,6 @@ import argparse
 import importlib
 import json
 import configparser
-import threading
 from threading import Thread
 from collections import defaultdict, deque
 from pathlib import Path
@@ -139,6 +138,7 @@ class PuffeRL:
             self._render_proc_temp_files = {}  # pid -> [temp_file_paths]
 
         self.eval_threads = []
+        self._eval_results_queue = queue.Queue()  # thread-safe queue for async eval metrics
 
         # LSTM
         if config["use_rnn"]:
@@ -686,7 +686,13 @@ class PuffeRL:
                 os.remove(config_path)
 
     def _run_eval(self, fn, *args, **kwargs):
-        """Run an eval function, optionally in a background thread."""
+        """Run an eval function, optionally in a background thread.
+
+        Injects results_queue so eval functions put metrics on the queue
+        instead of logging directly. The main thread drains the queue in
+        mean_and_log().
+        """
+        kwargs["results_queue"] = self._eval_results_queue
         eval_async = self.config.get("eval", {}).get("eval_async", False)
         # Handle string "False"/"True" from INI config
         if isinstance(eval_async, str):
@@ -745,7 +751,7 @@ class PuffeRL:
 
                     if payload:
                         payload["train_step"] = step
-                        self.logger.log_async(payload)
+                        self._eval_results_queue.put(payload)
 
         except queue.Empty:
             pass
@@ -786,6 +792,16 @@ class PuffeRL:
             return None
 
         self.logger.log(logs, agent_steps)
+
+        # Drain eval results queue (populated by async eval threads and render processes)
+        while not self._eval_results_queue.empty():
+            try:
+                payload = self._eval_results_queue.get_nowait()
+                if hasattr(self.logger, "wandb") and self.logger.wandb:
+                    self.logger.wandb.log(payload)
+            except queue.Empty:
+                break
+
         return logs
 
     def close(self):
@@ -812,7 +828,7 @@ class PuffeRL:
                                 p.kill()
                     except Exception:
                         print(f"Failed to clean up render process {p.pid}")
-            # Drain the queue — all finished processes have put their results
+            # Drain the render queue — moves results to _eval_results_queue
             self.check_render_queue()
             # Clean up any remaining temp files (from crashed processes)
             for pid, files in self._render_proc_temp_files.items():
@@ -827,6 +843,15 @@ class PuffeRL:
             if hasattr(self, "render_queue"):
                 self.render_queue.close()
                 self.render_queue.join_thread()
+
+        # Final drain of eval results queue before finishing wandb
+        while not self._eval_results_queue.empty():
+            try:
+                payload = self._eval_results_queue.get_nowait()
+                if hasattr(self.logger, "wandb") and self.logger.wandb:
+                    self.logger.wandb.log(payload)
+            except queue.Empty:
+                break
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
@@ -1226,16 +1251,9 @@ class WandbLogger:
         )
         self.wandb = wandb
         self.run_id = wandb.run.id
-        self._log_lock = threading.Lock()
 
     def log(self, logs, step):
-        with self._log_lock:
-            self.wandb.log(logs, step=step)
-
-    def log_async(self, payload):
-        """Thread-safe log without step= (for async evals that finish out of order)."""
-        with self._log_lock:
-            self.wandb.log(payload)
+        self.wandb.log(logs, step=step)
 
     def close(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
