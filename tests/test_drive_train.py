@@ -80,6 +80,7 @@ def test_drive_training():
             "render_human_replay_eval": False,
             "num_eval_agents": 8,
             "map_dir": "resources/drive/binaries",
+            "render_select_mode": "fixed",
         }
 
         # Load components

@@ -642,6 +642,43 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     return dict;
 }
 
+static PyObject *env_log(PyObject *self, PyObject *args) {
+    int num_args = PyTuple_Size(args);
+    if (num_args != 2) {
+        PyErr_SetString(PyExc_TypeError, "env_log requires 2 arguments");
+        return NULL;
+    }
+
+    Env *env = unpack_env(args);
+    if (!env) {
+        return NULL;
+    }
+
+    // Aggregate this env's per-agent logs (same as vec_log but for one env)
+    // Note: breaks horribly if you don't use floats
+    Log aggregate = {0};
+    int num_keys = sizeof(Log) / sizeof(float);
+    for (int j = 0; j < num_keys; j++) {
+        ((float *)&aggregate)[j] += ((float *)&env->log)[j];
+    }
+
+    PyObject *dict = PyDict_New();
+    if (aggregate.n == 0.0f) {
+        return dict;
+    }
+
+    // Average across agents in env
+    float n = aggregate.n;
+    for (int i = 0; i < num_keys; i++) {
+        ((float *)&aggregate)[i] /= n;
+    }
+    aggregate.n = (float)env->active_agent_count;
+
+    my_log(dict, &aggregate);
+
+    return dict;
+}
+
 static PyObject *vec_close(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
@@ -1059,8 +1096,10 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
         int continuous_action_dim = (env->dynamics_model == DELTA_LOCAL) ? 3 : 2;
         int discrete_action_dim = (env->dynamics_model == DELTA_LOCAL) ? 3 : 1;
 
-        float *env_actions_discrete = (float *)malloc(trajectory_length * num_agents * discrete_action_dim * sizeof(float));
-        float *env_actions_continuous = (float *)malloc(trajectory_length * num_agents * continuous_action_dim * sizeof(float));
+        float *env_actions_discrete =
+            (float *)malloc(trajectory_length * num_agents * discrete_action_dim * sizeof(float));
+        float *env_actions_continuous =
+            (float *)malloc(trajectory_length * num_agents * continuous_action_dim * sizeof(float));
         float *env_obs = (float *)malloc(trajectory_length * num_agents * max_obs * sizeof(float));
 
         if (!env_actions_discrete || !env_actions_continuous || !env_obs) {
@@ -1077,19 +1116,18 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
         for (int t = 0; t < trajectory_length; t++) {
             for (int a = 0; a < num_agents; a++) {
                 // Copy discrete actions (1 value for classic, 3 for delta_local)
-                float *discrete_action_src = &env_actions_discrete[
-                    t * num_agents * discrete_action_dim + a * discrete_action_dim];
-                float *discrete_action_dst = (float *)PyArray_GETPTR3(
-                    expert_actions_discrete, t, agent_offset + a, 0);
+                float *discrete_action_src =
+                    &env_actions_discrete[t * num_agents * discrete_action_dim + a * discrete_action_dim];
+                float *discrete_action_dst = (float *)PyArray_GETPTR3(expert_actions_discrete, t, agent_offset + a, 0);
                 for (int d = 0; d < discrete_action_dim; d++) {
                     discrete_action_dst[d] = discrete_action_src[d];
                 }
 
                 // Copy continuous actions (2 values for classic, 3 for delta_local)
-                float *continuous_action_src = &env_actions_continuous[
-                    t * num_agents * continuous_action_dim + a * continuous_action_dim];
-                float *continuous_action_dst = (float *)PyArray_GETPTR3(
-                    expert_actions_continuous, t, agent_offset + a, 0);
+                float *continuous_action_src =
+                    &env_actions_continuous[t * num_agents * continuous_action_dim + a * continuous_action_dim];
+                float *continuous_action_dst =
+                    (float *)PyArray_GETPTR3(expert_actions_continuous, t, agent_offset + a, 0);
                 for (int d = 0; d < continuous_action_dim; d++) {
                     continuous_action_dst[d] = continuous_action_src[d];
                 }
@@ -1120,6 +1158,7 @@ static PyMethodDef methods[] = {
     {"env_close", env_close, METH_VARARGS, "Close the environment"},
     {"env_get", env_get, METH_VARARGS, "Get the environment state"},
     {"env_put", (PyCFunction)env_put, METH_VARARGS | METH_KEYWORDS, "Put stuff into env"},
+    {"env_log", env_log, METH_VARARGS, "Log stats for a single environment"},
     {"vectorize", vectorize, METH_VARARGS, "Make a vector of environment handles"},
     {"vec_init", (PyCFunction)vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
     {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},

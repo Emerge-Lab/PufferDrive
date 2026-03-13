@@ -716,20 +716,20 @@ class PuffeRL:
             if human_replay_eval or self_play_eval:
                 self.evaluator.log_stats()
 
-            if human_replay_eval:
-                # # Lambda conditioning sweep
-                # self.evaluator.run_lambda_sweep(
-                #     self.uncompiled_policy,
-                #     load_env_fn_from_config=lambda cfg: load_env("puffer_drive", cfg),
-                # )
-                # self.evaluator.log_lambda_sweep(epoch=self.epoch)
+            # if human_replay_eval:
+            #     # # Lambda conditioning sweep
+            #     # self.evaluator.run_lambda_sweep(
+            #     #     self.uncompiled_policy,
+            #     #     load_env_fn_from_config=lambda cfg: load_env("puffer_drive", cfg),
+            #     # )
+            #     # self.evaluator.log_lambda_sweep(epoch=self.epoch)
 
-                # Reward conditioning
-                self.evaluator.run_collision_reward_sweep(
-                    self.uncompiled_policy,
-                    load_env_fn_from_config=lambda cfg: load_env("puffer_drive", cfg),
-                )
-                self.evaluator.log_collision_reward_sweep(epoch=self.epoch)
+            #     # Reward conditioning
+            #     self.evaluator.run_collision_reward_sweep(
+            #         self.uncompiled_policy,
+            #         load_env_fn_from_config=lambda cfg: load_env("puffer_drive", cfg),
+            #     )
+            #     self.evaluator.log_collision_reward_sweep(epoch=self.epoch)
 
             del self.evaluator
 

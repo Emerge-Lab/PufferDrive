@@ -211,7 +211,7 @@ class Drive(pufferlib.PufferEnv):
         self.map_ids = map_ids
         self.num_envs = num_envs
         super().__init__(buf=buf)
-        env_ids = []
+        self.env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i + 1]
@@ -246,14 +246,16 @@ class Drive(pufferlib.PufferEnv):
                 map_dir=map_dir,
                 max_controlled_agents=self.max_controlled_agents,
                 render_mode=render_mode,
-                fix_rewards=int(self.fix_rewards),
-                fix_lambdas=int(self.fix_lambdas),
-                lambda_value=self.lambda_value,
-                dynamics_model=self._dynamics_model_flag,
             )
-            env_ids.append(env_id)
+            self.env_ids.append(env_id)
 
-        self.c_envs = binding.vectorize(*env_ids)
+        self.c_envs = binding.vectorize(*self.env_ids)
+
+        # Per-agent lambda value for conditioning
+        self.lambda_obs_idx = binding.LAMBDA_CONDITIONING_IDX
+        self.reward_veh_obs_idx = binding.REWARD_COLLISION_IDX
+        self.reward_offroad_obs_idx = binding.REWARD_OFFROAD_COLLISION_IDX
+        self.reward_goal_obs_idx = binding.REWARD_GOAL_IDX
 
         # Per-agent lambda value for conditioning
         self.lambda_obs_idx = binding.LAMBDA_CONDITIONING_IDX
@@ -286,7 +288,7 @@ class Drive(pufferlib.PufferEnv):
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
-        env_ids = []
+        self.env_ids = []
         seed = np.random.randint(0, 2**32 - 1)
         for i in range(num_envs):
             cur = agent_offsets[i]
@@ -327,13 +329,14 @@ class Drive(pufferlib.PufferEnv):
                 lambda_value=self.lambda_value,
                 dynamics_model=self._dynamics_model_flag,
             )
-            env_ids.append(env_id)
-        self.c_envs = binding.vectorize(*env_ids)
+            self.env_ids.append(env_id)
+        self.c_envs = binding.vectorize(*self.env_ids)
+
         binding.vec_reset(self.c_envs, seed)
         self.truncations[:] = 1
         self.terminals[:] = 1
 
-    def step(self, actions):
+    def step(self, actions, per_env_logs=False):
         self.terminals[:] = 0
         self.truncations[:] = 0
         self.actions[:] = actions
@@ -342,9 +345,14 @@ class Drive(pufferlib.PufferEnv):
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs, self.num_agents)
-            if log:
-                info.append(log)
+            if per_env_logs:  # Get the stats for every separate env
+                logs = self.get_env_logs()
+                if any(logs):
+                    info = logs
+            else:  # Default: Aggregate across vectorized envs
+                log = binding.vec_log(self.c_envs, self.num_agents)
+                if log:
+                    info.append(log)
 
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             # Resample batch of scenes used for training
@@ -604,6 +612,15 @@ class Drive(pufferlib.PufferEnv):
 
     def close(self):
         binding.vec_close(self.c_envs)
+
+    def env_log(self, env_idx):
+        """Get log statistics for a single environment."""
+        num_agents = self.agent_offsets[env_idx + 1] - self.agent_offsets[env_idx]
+        return binding.env_log(self.env_ids[env_idx], num_agents)
+
+    def get_env_logs(self):
+        """Get log statistics for all environments (unaggregated)."""
+        return [self.env_log(i) for i in range(self.num_envs)]
 
     @property
     def scenario_ids(self) -> list[str]:

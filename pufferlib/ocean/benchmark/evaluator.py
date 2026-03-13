@@ -821,6 +821,11 @@ class Evaluator:
     - render_eval: creates sp_env (if not already created)
     """
 
+    RENDER_FIRST = "first"
+    RENDER_RANDOM = "random"
+    RENDER_WORST_SCORE = "worst_score"
+    RENDER_WORST_COLLISION = "worst_collision"
+
     def __init__(self, configs, logger=None):
         self.configs = configs
         self.logger = logger
@@ -853,18 +858,64 @@ class Evaluator:
         self.hr_eval_config["env"]["goal_behavior"] = 2  # Stop and terminate
         self.sp_eval_config = copy.deepcopy(eval_config)
         self.sp_eval_config["env"]["control_mode"] = "control_agents"
+        self.render_select_mode = self.configs["eval"]["render_select_mode"]
+        self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
+        self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
 
-    def rollout(self, policy, mode="self_play", render_rollout=False):
-        """Roll out the given policy in the specified eval env and collect statistics.
-
+    def select_render_env(self, env_logs):
+        """Select which environment to render based on per-env rollout statistics.
         Args:
-            policy: The policy to evaluate.
-            mode: "self_play" or "human_replay".
-            render_rollout: Whether to render during rollout.
-            lambda_override: If not None, set all agents to this lambda value after reset.
-        """
+            env_logs: List of dicts, one per environment. Each dict contains
+                aggregated agent statistics (score, collision_rate, offroad_rate, etc.)
+                with 'n' being the number of controlled agents in that env.
+                Empty dicts indicate no data was collected for that env.
 
+        Returns:
+            int: Index of the environment to render.
+        """
+        mode = self.render_select_mode
+        if mode == self.RENDER_FIRST:
+            return 0
+        if mode == self.RENDER_RANDOM:
+            return np.random.randint(len(env_logs))
+
+        populated = [(i, log) for i, log in enumerate(env_logs) if log]
+
+        if not populated:
+            return 0
+
+        if mode == self.RENDER_WORST_SCORE:
+            return min(populated, key=lambda x: x[1].get("score", 1.0))[0]
+        elif mode == self.RENDER_WORST_COLLISION:
+            return max(populated, key=lambda x: x[1].get("collision_rate", 0.0))[0]
+        # Add other modes based on desiderata here
+        return 0
+
+    def rollout(self, policy, mode="self_play"):
         env = self.hr_env if mode == "human_replay" else self.sp_env
+        render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
+        driver = env.driver_env
+
+        needs_stats_first = render_eval and self.render_select_mode not in (self.RENDER_FIRST, self.RENDER_RANDOM)
+
+        if needs_stats_first:
+            env_logs = self._run_rollout(policy, env, per_env_logs=True)
+            render_env_idx = self.select_render_env(env_logs)
+        else:
+            render_env_idx = self.select_render_env([{}] * driver.num_envs)
+
+        info_list = self._run_rollout(policy, env, render_env_idx if render_eval else None)
+
+        final_info = info_list[0] if info_list else {}
+        if mode == "self_play":
+            self.self_play_stats = final_info
+            self.self_play_stats["render_env_idx"] = render_env_idx
+        elif mode == "human_replay":
+            self.human_replay_stats = final_info
+            self.human_replay_stats["render_env_idx"] = render_env_idx
+
+    def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False):
+        """Run a single rollout. If render_env_idx is not None, render that env."""
         driver = env.driver_env
         num_agents = env.observation_space.shape[0]
         device = self.configs["train"]["device"]
@@ -881,15 +932,10 @@ class Evaluator:
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
-        # Rollout
+        info_list = []
         for time_idx in range(self.sim_steps):
-            if render_rollout:
-                if mode == "human_replay":
-                    if not terminals[self.render_env_idx]:
-                        # Stop rendering when SDC is done
-                        driver.render(env_id=self.render_env_idx)
-                else:
-                    driver.render(env_id=self.render_env_idx)
+            if render_env_idx is not None:
+                driver.render(env_id=render_env_idx)
 
             # Get action from policy
             with torch.no_grad():
@@ -903,22 +949,12 @@ class Evaluator:
                 action_np = np.clip(action_np, env.action_space.low, env.action_space.high)
 
             # Step environment
-            obs, rewards, terminals, truncated, info_list = env.step(action_np)
-
-            # Verify lambdas
-            # print(obs[:,0])
-            # breakpoint()
+            obs, rewards, terminals, truncated, info_list = env.step(action_np, per_env_logs=per_env_logs)
 
             if truncated.all():
                 break
 
-        # Aggregate final statistics
-        final_info = info_list[0] if info_list else {}
-
-        if mode == "self_play":
-            self.self_play_stats = final_info
-        elif mode == "human_replay":
-            self.human_replay_stats = final_info
+        return info_list
 
     def run_lambda_sweep(self, policy, load_env_fn_from_config):
         """Run human replay rollouts across inference lambda values and collect stats.
@@ -1044,12 +1080,13 @@ class Evaluator:
             print("Warning: no render videos found in local path")
             return
 
+        render_mode = self.render_select_mode
         for p in video_files:
             scenario_id = os.path.splitext(os.path.basename(p))[0]
-            self.logger.wandb.log(
-                {f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=f"scene_{scenario_id}_epoch_{epoch}")}
-            )
+            caption = f"scene_{scenario_id}_epoch_{epoch}_select_{render_mode}"
+            self.logger.wandb.log({f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=caption)})
 
+        # Clean up
         for p in video_files:
             os.remove(p)
 
