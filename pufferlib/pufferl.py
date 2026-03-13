@@ -206,12 +206,7 @@ class PuffeRL:
         self.logger = logger
         if logger is None:
             self.logger = NoLogger(config)
-        if self.render_async and hasattr(self.logger, "wandb") and self.logger.wandb:
-            self.logger.wandb.define_metric("render_step", hidden=True)
-            self.logger.wandb.define_metric("render/*", step_metric="render_step")
-        if hasattr(self.logger, "wandb") and self.logger.wandb:
-            self.logger.wandb.define_metric("eval_step", hidden=True)
-            self.logger.wandb.define_metric("eval/*", step_metric="eval_step")
+        # No custom step_metric needed — all eval types log with step=global_step
 
         # Learning rate scheduler
         epochs = config["total_timesteps"] // config["batch_size"]

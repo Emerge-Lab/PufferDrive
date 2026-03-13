@@ -86,8 +86,7 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
                     else:
                         payload = {f"eval/{k}": v for k, v in metrics.items()}
                     if payload:
-                        payload["eval_step"] = global_step
-                        logger.wandb.log(payload)
+                        logger.wandb.log(payload, step=global_step)
         else:
             print(f"{eval_name} evaluation failed with exit code {result.returncode}: {result.stderr[-1000:]}")
 
@@ -123,9 +122,9 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
         ],
         marker_name="HUMAN_REPLAY",
         wandb_keys={
-            "collision_rate": "eval/human_replay_collision_rate",
-            "offroad_rate": "eval/human_replay_offroad_rate",
-            "completion_rate": "eval/human_replay_completion_rate",
+            "collision_rate": "human_replay/collision_rate",
+            "offroad_rate": "human_replay/offroad_rate",
+            "completion_rate": "human_replay/completion_rate",
         },
     )
 
@@ -169,14 +168,14 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         ],
         marker_name="WOSAC",
         wandb_keys={
-            "realism_meta_score": "eval/wosac_realism_meta_score",
-            "realism_meta_score_std": "eval/wosac_realism_meta_score_std",
-            "kinematic_metrics": "eval/wosac_kinematic_metrics",
-            "interactive_metrics": "eval/wosac_interactive_metrics",
-            "map_based_metrics": "eval/wosac_map_based_metrics",
-            "ade": "eval/wosac_ade",
-            "min_ade": "eval/wosac_min_ade",
-            "total_num_agents": "eval/wosac_total_num_agents",
+            "realism_meta_score": "wosac/realism_meta_score",
+            "realism_meta_score_std": "wosac/realism_meta_score_std",
+            "kinematic_metrics": "wosac/kinematic_metrics",
+            "interactive_metrics": "wosac/interactive_metrics",
+            "map_based_metrics": "wosac/map_based_metrics",
+            "ade": "wosac/ade",
+            "min_ade": "wosac/min_ade",
+            "total_num_agents": "wosac/total_num_agents",
         },
     )
 
