@@ -65,13 +65,6 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
             _normalize_device(config.get("device", "cuda")),
         ]
 
-        # Forward the training env config so the subprocess inherits it
-        # Use = syntax to avoid argparse interpreting negative values as flags
-        env_config = config.get("env_config", {})
-        for key, val in env_config.items():
-            cli_key = key.replace("_", "-")
-            cmd.append(f"--env.{cli_key}={val}")
-
         cmd += extra_args
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
@@ -102,6 +95,7 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
         print(f"{eval_name} evaluation timed out")
     except Exception as e:
         import traceback
+
         print(f"Failed to run {eval_name} evaluation: {e}")
         traceback.print_exc()
 

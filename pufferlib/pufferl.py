@@ -135,6 +135,7 @@ class PuffeRL:
         if self.render_async:
             self.render_queue = multiprocessing.Queue()
             self.render_processes = []
+            self._render_proc_temp_files = {}  # pid -> [temp_file_paths]
 
         self.eval_threads = []
 
@@ -537,7 +538,6 @@ class PuffeRL:
                 bin_path = f"{model_dir}.bin"
 
                 try:
-                    t0 = time.time()
                     export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
                     export(
                         args=export_args,
@@ -547,81 +547,100 @@ class PuffeRL:
                         path=bin_path,
                         silent=True,
                     )
-                    print(f"TIMING: model export: {time.time() - t0:.1f}s")
 
                     env_cfg = getattr(self.vecenv, "driver_env", None)
                     wandb_log = bool(hasattr(self.logger, "wandb") and self.logger.wandb)
                     wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
-                    async_bin_paths = []  # track bin copies owned by async processes
 
                     if should_render:
-                        t1 = time.time()
                         if self.render_async:
-                            self.render_processes = [p for p in self.render_processes if p.is_alive()]
+                            self._cleanup_dead_render_processes()
                             max_processes = self.config.get("num_workers", 1)
                             while len(self.render_processes) >= max_processes:
                                 time.sleep(1)
-                                self.render_processes = [p for p in self.render_processes if p.is_alive()]
+                                self._cleanup_dead_render_processes()
 
                             bin_copy = f"{model_dir}_epoch_{self.epoch:06d}_render.bin"
                             shutil.copy2(bin_path, bin_copy)
-                            async_bin_paths.append(bin_copy)
                             render_proc = multiprocessing.Process(
                                 target=pufferlib.utils.render_videos,
                                 args=(
-                                    self.config, env_cfg, self.logger.run_id,
-                                    wandb_log, self.epoch, self.global_step,
-                                    bin_copy, True, self.render_queue,
+                                    self.config,
+                                    env_cfg,
+                                    self.logger.run_id,
+                                    wandb_log,
+                                    self.epoch,
+                                    self.global_step,
+                                    bin_copy,
+                                    True,
+                                    self.render_queue,
                                 ),
                             )
                             render_proc.start()
+                            self._render_proc_temp_files[render_proc.pid] = [bin_copy]
                             self.render_processes.append(render_proc)
                         else:
                             pufferlib.utils.render_videos(
-                                self.config, env_cfg, self.logger.run_id,
-                                wandb_log, self.epoch, self.global_step,
-                                bin_path, False, wandb_run=wandb_run,
+                                self.config,
+                                env_cfg,
+                                self.logger.run_id,
+                                wandb_log,
+                                self.epoch,
+                                self.global_step,
+                                bin_path,
+                                False,
+                                wandb_run=wandb_run,
                             )
-                        print(f"TIMING: training render: {time.time() - t1:.1f}s")
 
                     if should_safe_eval:
                         try:
                             safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
 
-                            t2 = time.time()
                             if self.render_async:
                                 bin_copy_eval = f"{model_dir}_epoch_{self.epoch:06d}_eval.bin"
                                 shutil.copy2(bin_path, bin_copy_eval)
-                                async_bin_paths.append(bin_copy_eval)
                                 eval_render_proc = multiprocessing.Process(
                                     target=pufferlib.utils.render_videos,
                                     args=(
-                                        self.config, env_cfg, self.logger.run_id,
-                                        wandb_log, self.epoch, self.global_step,
-                                        bin_copy_eval, True, self.render_queue,
+                                        self.config,
+                                        env_cfg,
+                                        self.logger.run_id,
+                                        wandb_log,
+                                        self.epoch,
+                                        self.global_step,
+                                        bin_copy_eval,
+                                        True,
+                                        self.render_queue,
                                     ),
                                     kwargs={"config_path": safe_ini_path, "wandb_prefix": "eval"},
                                 )
                                 eval_render_proc.start()
+                                self._render_proc_temp_files[eval_render_proc.pid] = [bin_copy_eval, safe_ini_path]
                                 self.render_processes.append(eval_render_proc)
                             else:
                                 pufferlib.utils.render_videos(
-                                    self.config, env_cfg, self.logger.run_id,
-                                    wandb_log, self.epoch, self.global_step,
-                                    bin_path, False, wandb_run=wandb_run,
-                                    config_path=safe_ini_path, wandb_prefix="eval",
+                                    self.config,
+                                    env_cfg,
+                                    self.logger.run_id,
+                                    wandb_log,
+                                    self.epoch,
+                                    self.global_step,
+                                    bin_path,
+                                    False,
+                                    wandb_run=wandb_run,
+                                    config_path=safe_ini_path,
+                                    wandb_prefix="eval",
                                 )
                                 if os.path.exists(safe_ini_path):
                                     os.remove(safe_ini_path)
-                            print(f"TIMING: safe eval render: {time.time() - t2:.1f}s")
 
-                            t3 = time.time()
                             self._run_eval(
                                 pufferlib.utils.run_safe_eval_metrics_in_subprocess,
-                                self.config, self.logger, self.global_step,
+                                self.config,
+                                self.logger,
+                                self.global_step,
                                 safe_eval_config,
                             )
-                            print(f"TIMING: safe eval metrics subprocess: {time.time() - t3:.1f}s")
                         except Exception as e:
                             print(f"Failed to run safe eval: {e}")
 
@@ -634,26 +653,22 @@ class PuffeRL:
         if self.config["eval"]["wosac_realism_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
-            t_wosac = time.time()
             self._run_eval(
                 pufferlib.utils.run_wosac_eval_in_subprocess,
                 self.config,
                 self.logger,
                 self.global_step,
             )
-            print(f"TIMING: wosac eval: {time.time() - t_wosac:.1f}s")
 
         if self.config["eval"]["human_replay_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
-            t_human = time.time()
             self._run_eval(
                 pufferlib.utils.run_human_replay_eval_in_subprocess,
                 self.config,
                 self.logger,
                 self.global_step,
             )
-            print(f"TIMING: human replay eval: {time.time() - t_human:.1f}s")
 
     def _run_eval(self, fn, *args, **kwargs):
         """Run an eval function, optionally in a background thread."""
@@ -670,10 +685,30 @@ class PuffeRL:
         else:
             fn(*args, **kwargs)
 
+    def _cleanup_dead_render_processes(self):
+        """Remove dead render processes and clean up their temp files."""
+        if not hasattr(self, "render_processes"):
+            return
+        alive = []
+        for p in self.render_processes:
+            if p.is_alive():
+                alive.append(p)
+            else:
+                # Process finished (or crashed) — clean up its temp files
+                for f in self._render_proc_temp_files.pop(p.pid, []):
+                    if os.path.exists(f):
+                        try:
+                            os.remove(f)
+                        except OSError:
+                            pass
+        self.render_processes = alive
+
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
         if not self.render_async or not hasattr(self, "render_queue"):
             return
+
+        self._cleanup_dead_render_processes()
 
         try:
             while not self.render_queue.empty():
@@ -681,15 +716,6 @@ class PuffeRL:
                 step = result["step"]
                 videos = result["videos"]
                 prefix = result.get("wandb_prefix", "render")
-
-                # Clean up files that the async render process was using
-                for cleanup_key in ("bin_path", "config_path"):
-                    cleanup_path = result.get(cleanup_key)
-                    if cleanup_path and os.path.exists(cleanup_path):
-                        try:
-                            os.remove(cleanup_path)
-                        except OSError:
-                            pass
 
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
                     import wandb
@@ -703,8 +729,7 @@ class PuffeRL:
                         payload[f"{prefix}/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
 
                     if payload:
-                        payload["render_step"] = step
-                        self.logger.wandb.log(payload)
+                        self.logger.wandb.log(payload, step=step)
 
         except queue.Empty:
             pass
@@ -756,22 +781,33 @@ class PuffeRL:
             t.join(timeout=660)  # slightly longer than subprocess timeout (600s)
         self.eval_threads = []
 
-        if self.render_async:  # Ensure all render processes are properly terminated before closing the queue
-            # Drain the queue and clean up any bin files from completed renders
-            self.check_render_queue()
+        if self.render_async:
+            # Wait for in-flight render processes to finish so their results
+            # reach the queue and get uploaded to wandb.
             if hasattr(self, "render_processes"):
                 for p in self.render_processes:
                     try:
+                        p.join(timeout=120)
                         if p.is_alive():
+                            print(f"Render process {p.pid} did not finish in time, terminating")
                             p.terminate()
                             p.join(timeout=5)
                             if p.is_alive():
                                 p.kill()
                     except Exception:
-                        # Best-effort cleanup; avoid letting close() crash on process errors
-                        print(f"Failed to terminate render process {p.pid}")
-                # Optionally clear the list to drop references to finished processes
-                self.render_processes = []
+                        print(f"Failed to clean up render process {p.pid}")
+            # Drain the queue — all finished processes have put their results
+            self.check_render_queue()
+            # Clean up any remaining temp files (from crashed processes)
+            for pid, files in self._render_proc_temp_files.items():
+                for f in files:
+                    if os.path.exists(f):
+                        try:
+                            os.remove(f)
+                        except OSError:
+                            pass
+            self._render_proc_temp_files.clear()
+            self.render_processes = []
             if hasattr(self, "render_queue"):
                 self.render_queue.close()
                 self.render_queue.join_thread()
@@ -1230,7 +1266,13 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     else:
         logger = None
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), safe_eval=args.get("safe_eval", {}), env_config=args.get("env", {}))
+    train_config = dict(
+        **args["train"],
+        env=env_name,
+        eval=args.get("eval", {}),
+        safe_eval=args.get("safe_eval", {}),
+        env_config=args.get("env", {}),
+    )
     if "vec" in args and "num_workers" in args["vec"]:
         train_config["num_workers"] = args["vec"]["num_workers"]
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
