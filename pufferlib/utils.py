@@ -392,6 +392,29 @@ def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/oce
     return tmp_path
 
 
+def generate_human_replay_ini(eval_config, base_ini_path="pufferlib/config/ocean/drive.ini"):
+    """Generate a temporary ini file for human replay rendering.
+
+    Sets control_mode to control_sdc_only so only the SDC is policy-controlled,
+    with all other agents replaying logged trajectories.
+    """
+    config = configparser.ConfigParser()
+    config.read(base_ini_path)
+
+    config.set("env", "control_mode", '"control_sdc_only"')
+    config.set("env", "init_mode", '"create_all_valid"')
+    config.set("env", "init_steps", "10")
+    # Use eval map_dir (waymo maps), not training map_dir
+    map_dir = eval_config.get("map_dir", "resources/drive/binaries/training")
+    config.set("env", "map_dir", f'"{map_dir}"')
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".ini", prefix="human_replay_")
+    with os.fdopen(fd, "w") as f:
+        config.write(f)
+
+    return tmp_path
+
+
 def run_safe_eval_metrics_in_subprocess(config, logger, global_step, safe_eval_config):
     """Run policy evaluation with safe reward conditioning in a subprocess and log metrics."""
     num_episodes = safe_eval_config.get("num_episodes", 300)

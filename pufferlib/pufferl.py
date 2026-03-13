@@ -528,8 +528,16 @@ class PuffeRL:
         run_safe_eval = safe_eval_config.get("enabled", False)
         safe_eval_interval = safe_eval_config.get("interval", self.render_interval)
         should_safe_eval = run_safe_eval and self.epoch % safe_eval_interval == 0
+        eval_interval = self.config["eval"]["eval_interval"]
+        should_wosac = self.config["eval"]["wosac_realism_eval"] and (self.epoch % eval_interval == 0 or done_training)
+        should_human_replay = self.config["eval"]["human_replay_eval"] and (
+            self.epoch % eval_interval == 0 or done_training
+        )
 
-        if should_render or should_safe_eval:
+        # Any render-based eval needs a .bin export of the current policy
+        needs_bin = should_render or should_safe_eval or should_human_replay
+
+        if needs_bin:
             model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
             model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
 
@@ -644,15 +652,60 @@ class PuffeRL:
                         except Exception as e:
                             print(f"Failed to run safe eval: {e}")
 
+                    if should_human_replay:
+                        try:
+                            eval_config = self.config["eval"]
+                            hr_ini_path = pufferlib.utils.generate_human_replay_ini(eval_config)
+
+                            if self.render_async:
+                                bin_copy_hr = f"{model_dir}_epoch_{self.epoch:06d}_human_replay.bin"
+                                shutil.copy2(bin_path, bin_copy_hr)
+                                hr_render_proc = multiprocessing.Process(
+                                    target=pufferlib.utils.render_videos,
+                                    args=(
+                                        self.config,
+                                        env_cfg,
+                                        self.logger.run_id,
+                                        wandb_log,
+                                        self.epoch,
+                                        self.global_step,
+                                        bin_copy_hr,
+                                        True,
+                                        self.render_queue,
+                                    ),
+                                    kwargs={"config_path": hr_ini_path, "wandb_prefix": "human_replay"},
+                                )
+                                hr_render_proc.start()
+                                self._render_proc_temp_files[hr_render_proc.pid] = [bin_copy_hr, hr_ini_path]
+                                self.render_processes.append(hr_render_proc)
+                            else:
+                                pufferlib.utils.render_videos(
+                                    self.config,
+                                    env_cfg,
+                                    self.logger.run_id,
+                                    wandb_log,
+                                    self.epoch,
+                                    self.global_step,
+                                    bin_path,
+                                    False,
+                                    wandb_run=wandb_run,
+                                    config_path=hr_ini_path,
+                                    wandb_prefix="human_replay",
+                                )
+                                if os.path.exists(hr_ini_path):
+                                    os.remove(hr_ini_path)
+                        except Exception as e:
+                            print(f"Failed to run human replay render: {e}")
+
                 except Exception as e:
                     print(f"Failed to export model weights: {e}")
                 finally:
                     if os.path.exists(bin_path):
                         os.remove(bin_path)
 
-        if self.config["eval"]["wosac_realism_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
-        ):
+        # WOSAC and human replay metric subprocesses (don't need bin_path,
+        # they load from checkpoint via _run_eval_subprocess)
+        if should_wosac:
             self._run_eval(
                 pufferlib.utils.run_wosac_eval_in_subprocess,
                 self.config,
@@ -660,9 +713,7 @@ class PuffeRL:
                 self.global_step,
             )
 
-        if self.config["eval"]["human_replay_eval"] and (
-            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
-        ):
+        if should_human_replay:
             self._run_eval(
                 pufferlib.utils.run_human_replay_eval_in_subprocess,
                 self.config,
