@@ -86,11 +86,11 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
                     else:
                         payload = {f"eval/{k}": v for k, v in metrics.items()}
                     if payload:
-                        # Don't pass step= here — async evals finish after
-                        # training has moved past this step, and wandb rejects
-                        # non-monotonic steps. Include step as a data field instead.
                         payload["train_step"] = global_step
-                        logger.wandb.log(payload)
+                        if hasattr(logger, "log_async"):
+                            logger.log_async(payload)
+                        else:
+                            logger.wandb.log(payload)
         else:
             print(f"{eval_name} evaluation failed with exit code {result.returncode}: {result.stderr[-1000:]}")
 

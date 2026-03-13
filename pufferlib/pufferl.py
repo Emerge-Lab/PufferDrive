@@ -19,6 +19,7 @@ import argparse
 import importlib
 import json
 import configparser
+import threading
 from threading import Thread
 from collections import defaultdict, deque
 from pathlib import Path
@@ -516,17 +517,24 @@ class PuffeRL:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
+        # Evals only run on rank 0 in distributed training
+        is_rank0 = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+
         # Render and safe eval run on their own intervals, independent of checkpointing.
         # They use the latest available checkpoint, so they don't need a fresh one.
-        should_render = self.render and self.epoch % self.render_interval == 0
+        should_render = is_rank0 and self.render and self.epoch % self.render_interval == 0
         safe_eval_config = self.config.get("safe_eval", {})
         run_safe_eval = safe_eval_config.get("enabled", False)
         safe_eval_interval = safe_eval_config.get("interval", self.render_interval)
-        should_safe_eval = run_safe_eval and self.epoch % safe_eval_interval == 0
+        should_safe_eval = is_rank0 and run_safe_eval and self.epoch % safe_eval_interval == 0
         eval_interval = self.config["eval"]["eval_interval"]
-        should_wosac = self.config["eval"]["wosac_realism_eval"] and (self.epoch % eval_interval == 0 or done_training)
-        should_human_replay = self.config["eval"]["human_replay_eval"] and (
-            self.epoch % eval_interval == 0 or done_training
+        should_wosac = (
+            is_rank0
+            and self.config["eval"]["wosac_realism_eval"]
+            and (self.epoch % eval_interval == 0 or done_training)
+        )
+        should_human_replay = (
+            is_rank0 and self.config["eval"]["human_replay_eval"] and (self.epoch % eval_interval == 0 or done_training)
         )
 
         # Any render-based eval needs a .bin export of the current policy
@@ -737,7 +745,7 @@ class PuffeRL:
 
                     if payload:
                         payload["train_step"] = step
-                        self.logger.wandb.log(payload)
+                        self.logger.log_async(payload)
 
         except queue.Empty:
             pass
@@ -1218,9 +1226,16 @@ class WandbLogger:
         )
         self.wandb = wandb
         self.run_id = wandb.run.id
+        self._log_lock = threading.Lock()
 
     def log(self, logs, step):
-        self.wandb.log(logs, step=step)
+        with self._log_lock:
+            self.wandb.log(logs, step=step)
+
+    def log_async(self, payload):
+        """Thread-safe log without step= (for async evals that finish out of order)."""
+        with self._log_lock:
+            self.wandb.log(payload)
 
     def close(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
