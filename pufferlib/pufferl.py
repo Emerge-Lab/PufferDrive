@@ -736,7 +736,8 @@ class PuffeRL:
                         payload[f"{prefix}/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
 
                     if payload:
-                        self.logger.wandb.log(payload, step=step)
+                        payload["train_step"] = step
+                        self.logger.wandb.log(payload)
 
         except queue.Empty:
             pass
