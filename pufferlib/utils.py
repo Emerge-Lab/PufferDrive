@@ -8,6 +8,13 @@ import configparser
 import tempfile
 
 
+def _normalize_device(device):
+    """Convert device to a string suitable for torch.load(map_location=...)."""
+    if isinstance(device, int):
+        return f"cuda:{device}"
+    return str(device)
+
+
 def _get_env_reward_bound_names(ini_path="pufferlib/config/ocean/drive.ini"):
     """Discover valid reward bound names from the env config section."""
     import re
@@ -55,8 +62,17 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
             "--load-model-path",
             latest_cpt,
             "--train.device",
-            config.get("device", "cuda"),
-        ] + extra_args
+            _normalize_device(config.get("device", "cuda")),
+        ]
+
+        # Forward the training env config so the subprocess inherits it
+        # Use = syntax to avoid argparse interpreting negative values as flags
+        env_config = config.get("env_config", {})
+        for key, val in env_config.items():
+            cli_key = key.replace("_", "-")
+            cmd.append(f"--env.{cli_key}={val}")
+
+        cmd += extra_args
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
 
@@ -65,7 +81,8 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
 
         if result.returncode == 0:
             stdout = result.stdout
-            if start_marker in stdout and end_marker in stdout:
+            has_markers = start_marker in stdout and end_marker in stdout
+            if has_markers:
                 start = stdout.find(start_marker) + len(start_marker)
                 end = stdout.find(end_marker)
                 metrics = json.loads(stdout[start:end].strip())
@@ -84,7 +101,9 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
     except subprocess.TimeoutExpired:
         print(f"{eval_name} evaluation timed out")
     except Exception as e:
+        import traceback
         print(f"Failed to run {eval_name} evaluation: {e}")
+        traceback.print_exc()
 
 
 def run_human_replay_eval_in_subprocess(config, logger, global_step):
@@ -105,7 +124,7 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
             str(eval_config["human_replay_control_mode"]),
             "--eval.map-dir",
             str(eval_config.get("map_dir", "resources/drive/binaries/training")),
-            "--eval.num-maps",
+            "--env.num-maps",
             str(eval_config.get("num_maps", 20)),
         ],
         marker_name="HUMAN_REPLAY",
@@ -334,6 +353,7 @@ def render_videos(
                     "step": global_step,
                     "wandb_prefix": wandb_prefix,
                     "bin_path": bin_path,
+                    "config_path": config_path,
                 }
             )
 
