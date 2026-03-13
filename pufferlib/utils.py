@@ -101,7 +101,7 @@ def _run_eval_subprocess(config, logger, global_step, mode, extra_args, marker_n
 
 
 def run_human_replay_eval_in_subprocess(config, logger, global_step):
-    eval_config = config["eval"]
+    eval_config = config.get("eval", {})
     _run_eval_subprocess(
         config,
         logger,

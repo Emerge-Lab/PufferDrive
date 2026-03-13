@@ -561,87 +561,21 @@ class PuffeRL:
                     wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
 
                     if should_render:
-                        if self.render_async:
-                            self._cleanup_dead_render_processes()
-                            max_processes = self.config.get("num_workers", 1)
-                            while len(self.render_processes) >= max_processes:
-                                time.sleep(1)
-                                self._cleanup_dead_render_processes()
-
-                            bin_copy = f"{model_dir}_epoch_{self.epoch:06d}_render.bin"
-                            shutil.copy2(bin_path, bin_copy)
-                            render_proc = multiprocessing.Process(
-                                target=pufferlib.utils.render_videos,
-                                args=(
-                                    self.config,
-                                    env_cfg,
-                                    self.logger.run_id,
-                                    wandb_log,
-                                    self.epoch,
-                                    self.global_step,
-                                    bin_copy,
-                                    True,
-                                    self.render_queue,
-                                ),
-                            )
-                            render_proc.start()
-                            self._render_proc_temp_files[render_proc.pid] = [bin_copy]
-                            self.render_processes.append(render_proc)
-                        else:
-                            pufferlib.utils.render_videos(
-                                self.config,
-                                env_cfg,
-                                self.logger.run_id,
-                                wandb_log,
-                                self.epoch,
-                                self.global_step,
-                                bin_path,
-                                False,
-                                wandb_run=wandb_run,
-                            )
+                        self._dispatch_render(model_dir, bin_path, env_cfg, wandb_log, wandb_run, "render")
 
                     if should_safe_eval:
                         try:
                             safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
-
-                            if self.render_async:
-                                bin_copy_eval = f"{model_dir}_epoch_{self.epoch:06d}_eval.bin"
-                                shutil.copy2(bin_path, bin_copy_eval)
-                                eval_render_proc = multiprocessing.Process(
-                                    target=pufferlib.utils.render_videos,
-                                    args=(
-                                        self.config,
-                                        env_cfg,
-                                        self.logger.run_id,
-                                        wandb_log,
-                                        self.epoch,
-                                        self.global_step,
-                                        bin_copy_eval,
-                                        True,
-                                        self.render_queue,
-                                    ),
-                                    kwargs={"config_path": safe_ini_path, "wandb_prefix": "eval"},
-                                )
-                                eval_render_proc.start()
-                                self._render_proc_temp_files[eval_render_proc.pid] = [bin_copy_eval, safe_ini_path]
-                                self.render_processes.append(eval_render_proc)
-                            else:
-                                pufferlib.utils.render_videos(
-                                    self.config,
-                                    env_cfg,
-                                    self.logger.run_id,
-                                    wandb_log,
-                                    self.epoch,
-                                    self.global_step,
-                                    bin_path,
-                                    False,
-                                    wandb_run=wandb_run,
-                                    config_path=safe_ini_path,
-                                    wandb_prefix="eval",
-                                )
-                                if os.path.exists(safe_ini_path):
-                                    os.remove(safe_ini_path)
-
+                            self._dispatch_render(
+                                model_dir,
+                                bin_path,
+                                env_cfg,
+                                wandb_log,
+                                wandb_run,
+                                "eval",
+                                config_path=safe_ini_path,
+                                wandb_prefix="eval",
+                            )
                             self._run_eval(
                                 pufferlib.utils.run_safe_eval_metrics_in_subprocess,
                                 self.config,
@@ -654,46 +588,17 @@ class PuffeRL:
 
                     if should_human_replay:
                         try:
-                            eval_config = self.config["eval"]
-                            hr_ini_path = pufferlib.utils.generate_human_replay_ini(eval_config)
-
-                            if self.render_async:
-                                bin_copy_hr = f"{model_dir}_epoch_{self.epoch:06d}_human_replay.bin"
-                                shutil.copy2(bin_path, bin_copy_hr)
-                                hr_render_proc = multiprocessing.Process(
-                                    target=pufferlib.utils.render_videos,
-                                    args=(
-                                        self.config,
-                                        env_cfg,
-                                        self.logger.run_id,
-                                        wandb_log,
-                                        self.epoch,
-                                        self.global_step,
-                                        bin_copy_hr,
-                                        True,
-                                        self.render_queue,
-                                    ),
-                                    kwargs={"config_path": hr_ini_path, "wandb_prefix": "human_replay"},
-                                )
-                                hr_render_proc.start()
-                                self._render_proc_temp_files[hr_render_proc.pid] = [bin_copy_hr, hr_ini_path]
-                                self.render_processes.append(hr_render_proc)
-                            else:
-                                pufferlib.utils.render_videos(
-                                    self.config,
-                                    env_cfg,
-                                    self.logger.run_id,
-                                    wandb_log,
-                                    self.epoch,
-                                    self.global_step,
-                                    bin_path,
-                                    False,
-                                    wandb_run=wandb_run,
-                                    config_path=hr_ini_path,
-                                    wandb_prefix="human_replay",
-                                )
-                                if os.path.exists(hr_ini_path):
-                                    os.remove(hr_ini_path)
+                            hr_ini_path = pufferlib.utils.generate_human_replay_ini(self.config["eval"])
+                            self._dispatch_render(
+                                model_dir,
+                                bin_path,
+                                env_cfg,
+                                wandb_log,
+                                wandb_run,
+                                "human_replay",
+                                config_path=hr_ini_path,
+                                wandb_prefix="human_replay",
+                            )
                         except Exception as e:
                             print(f"Failed to run human replay render: {e}")
 
@@ -720,6 +625,62 @@ class PuffeRL:
                 self.logger,
                 self.global_step,
             )
+
+    def _dispatch_render(
+        self, model_dir, bin_path, env_cfg, wandb_log, wandb_run, suffix, config_path=None, wandb_prefix=None
+    ):
+        """Dispatch a render_videos call, either async (multiprocessing) or sync."""
+        extra_kwargs = {}
+        if config_path is not None:
+            extra_kwargs["config_path"] = config_path
+        if wandb_prefix is not None:
+            extra_kwargs["wandb_prefix"] = wandb_prefix
+
+        if self.render_async:
+            self._cleanup_dead_render_processes()
+            max_processes = self.config.get("num_workers", 1)
+            while len(self.render_processes) >= max_processes:
+                time.sleep(1)
+                self._cleanup_dead_render_processes()
+
+            bin_copy = f"{model_dir}_epoch_{self.epoch:06d}_{suffix}.bin"
+            shutil.copy2(bin_path, bin_copy)
+            proc = multiprocessing.Process(
+                target=pufferlib.utils.render_videos,
+                args=(
+                    self.config,
+                    env_cfg,
+                    self.logger.run_id,
+                    wandb_log,
+                    self.epoch,
+                    self.global_step,
+                    bin_copy,
+                    True,
+                    self.render_queue,
+                ),
+                kwargs=extra_kwargs,
+            )
+            proc.start()
+            temp_files = [bin_copy]
+            if config_path:
+                temp_files.append(config_path)
+            self._render_proc_temp_files[proc.pid] = temp_files
+            self.render_processes.append(proc)
+        else:
+            pufferlib.utils.render_videos(
+                self.config,
+                env_cfg,
+                self.logger.run_id,
+                wandb_log,
+                self.epoch,
+                self.global_step,
+                bin_path,
+                False,
+                wandb_run=wandb_run,
+                **extra_kwargs,
+            )
+            if config_path and os.path.exists(config_path):
+                os.remove(config_path)
 
     def _run_eval(self, fn, *args, **kwargs):
         """Run an eval function, optionally in a background thread."""
