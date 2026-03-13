@@ -494,8 +494,8 @@ class PuffeRL:
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
             if self.reg_mode == "kl_anchor":
-                # Flatten the batch and time dimensions for feeding into the BC anchor policy
-                # -> [B, obs_dim]
+                # Flatten the batch and time dimensions for feeding into the BC anchor policy since it is trained without memory
+                # [B, rollout_horizon, obs_dim] -> [B * rollout_horizon, obs_dim]
                 anchor_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
                 # Set all conditioning weights to zero because that is what we train the anchor with.
                 # lambda conditioning only has a meaning for the self-play RL training and policy.
