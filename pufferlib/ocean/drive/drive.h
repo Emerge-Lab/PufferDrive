@@ -2216,7 +2216,7 @@ void c_reset(Drive *env) {
             env->entities[agent_idx].reward_goal_cond = env->reward_goal;
         } else {
             float u = (float)rand() / (float)RAND_MAX;
-            float range = 0.01f - env->reward_vehicle_collision;
+            float range = 0.1f - env->reward_vehicle_collision;
             env->entities[agent_idx].reward_collision_cond = env->reward_vehicle_collision + u * range;
 
             u = (float)rand() / (float)RAND_MAX;

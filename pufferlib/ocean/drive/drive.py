@@ -427,7 +427,7 @@ class Drive(pufferlib.PufferEnv):
     def _hash_pair(self, obs, act):
         return hash((obs.round(3).tobytes(), act.round(2).tobytes()))
 
-    def _init_regularization_strategy(self, device="cuda", bc_hidden_size=512):
+    def _init_regularization_strategy(self, device="cuda", bc_hidden_size=2048):
         bc_anchor = None
         data = {}
 
@@ -1063,7 +1063,7 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/interactive_data_training_100")
+    process_all_maps(data_folder="data/processed/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
