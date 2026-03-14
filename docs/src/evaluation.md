@@ -12,7 +12,8 @@ PufferDrive supports running evaluations automatically during training. There ar
 | **Safe eval render** | Records videos with safe reward conditioning | `--safe-eval.enabled True` | `--safe-eval.interval N` |
 | **Safe eval metrics** | Runs policy in subprocess, logs driving metrics | `--safe-eval.enabled True` | `--safe-eval.interval N` |
 | **WOSAC realism** | Measures distributional realism (WOSAC benchmark) | `--eval.wosac-realism-eval True` | `--eval.eval-interval N` |
-| **Human replay** | Tests policy alongside replayed human trajectories | `--eval.human-replay-eval True` | `--eval.eval-interval N` |
+| **Human replay render** | Records videos with policy-controlled SDC + replayed humans | `--eval.human-replay-eval True` | `--eval.eval-interval N` |
+| **Human replay metrics** | Logs collision/offroad/completion rates vs human replays | `--eval.human-replay-eval True` | `--eval.eval-interval N` |
 
 All eval types trigger at `epoch % interval == 0`. They require a saved checkpoint, so **`checkpoint-interval` must be <= the smallest eval interval**.
 
@@ -69,9 +70,9 @@ velocity = 0.005
 
 ### Async vs sync evaluation
 
-By default, WOSAC and human replay evals run synchronously, blocking training until they finish. Set `--eval.eval-async True` to run them in background threads instead.
+By default, all evals run asynchronously (`--train.render-async True` and `--eval.eval-async True` in `drive.ini`). Video renders run in separate processes, while metric evals (safe eval, WOSAC, human replay) run in background threads. Results are queued and logged to wandb on the main thread during the next training epoch.
 
-> **Note:** Render and safe eval always run synchronously in the training loop. The `eval_async` flag only affects WOSAC and human replay evaluations.
+Set `--eval.eval-async False` to run metric evals synchronously (blocks training until they finish). Set `--train.render-async False` to run video renders synchronously.
 
 ## Sanity maps
 
