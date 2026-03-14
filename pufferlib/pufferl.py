@@ -796,9 +796,12 @@ class PuffeRL:
         self.vecenv.close()
         self.utilization.stop()
 
-        # Wait for any background eval threads to finish
+        # Wait briefly for any background eval threads to finish.
+        # These are daemon threads, so they'll die when the process exits.
         for t in self.eval_threads:
-            t.join(timeout=660)  # slightly longer than subprocess timeout (600s)
+            t.join(timeout=10)
+            if t.is_alive():
+                log.warning(f"Eval thread {t.name} still running after 10s, abandoning")
         self.eval_threads = []
 
         if self.render_async:
