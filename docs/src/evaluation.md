@@ -70,9 +70,7 @@ velocity = 0.005
 
 ### Async vs sync evaluation
 
-By default, all evals run asynchronously (`--train.render-async True` and `--eval.eval-async True` in `drive.ini`). Video renders run in separate processes, while metric evals (safe eval, WOSAC, human replay) run in background threads. Results are queued and logged to wandb on the main thread during the next training epoch.
-
-Set `--eval.eval-async False` to run metric evals synchronously (blocks training until they finish). Set `--train.render-async False` to run video renders synchronously.
+By default, all evals run synchronously (blocking training until they finish). Set `--train.render-async True` to run video renders in separate processes, and `--eval.eval-async True` to run metric evals (safe eval, WOSAC, human replay) in background threads. When async, results are queued and logged to wandb on the main thread during the next training epoch.
 
 ## Sanity maps
 
