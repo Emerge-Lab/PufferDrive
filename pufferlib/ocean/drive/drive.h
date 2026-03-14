@@ -65,7 +65,7 @@
 
 // Threshold for data selection: trajectories above threshold are excluded from 
 // human demonstrations
-#define ADE_THRESHOLD 2.0f
+#define ADE_THRESHOLD 3.0f
 
 // Actions
 #define NOOP 0
