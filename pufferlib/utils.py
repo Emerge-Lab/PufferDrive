@@ -45,65 +45,56 @@ def _run_eval_subprocess(
         results_queue: If provided, put results on this queue instead of logging directly.
     """
     eval_name = marker_name.lower().replace("_", " ")
-    try:
-        run_id = logger.run_id
-        model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
-        model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+    run_id = logger.run_id
+    model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
+    model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
 
-        if not model_files:
-            print(f"No model files found for {eval_name} evaluation")
-            return
+    if not model_files:
+        print(f"No model files found for {eval_name} evaluation")
+        return
 
-        latest_cpt = max(model_files)
+    latest_cpt = max(model_files)
 
-        cmd = [
-            sys.executable,
-            "-m",
-            "pufferlib.pufferl",
-            mode,
-            config["env"],
-            "--load-model-path",
-            latest_cpt,
-            "--train.device",
-            _normalize_device(config.get("device", "cuda")),
-        ]
+    cmd = [
+        sys.executable,
+        "-m",
+        "pufferlib.pufferl",
+        mode,
+        config["env"],
+        "--load-model-path",
+        latest_cpt,
+        "--train.device",
+        _normalize_device(config.get("device", "cuda")),
+    ]
 
-        cmd += extra_args
+    cmd += extra_args
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
 
-        start_marker = f"{marker_name}_METRICS_START"
-        end_marker = f"{marker_name}_METRICS_END"
+    start_marker = f"{marker_name}_METRICS_START"
+    end_marker = f"{marker_name}_METRICS_END"
 
-        if result.returncode == 0:
-            stdout = result.stdout
-            has_markers = start_marker in stdout and end_marker in stdout
-            if has_markers:
-                start = stdout.find(start_marker) + len(start_marker)
-                end = stdout.find(end_marker)
-                metrics = json.loads(stdout[start:end].strip())
+    if result.returncode == 0:
+        stdout = result.stdout
+        has_markers = start_marker in stdout and end_marker in stdout
+        if has_markers:
+            start = stdout.find(start_marker) + len(start_marker)
+            end = stdout.find(end_marker)
+            metrics = json.loads(stdout[start:end].strip())
 
-                if hasattr(logger, "wandb") and logger.wandb:
-                    if wandb_keys is not None:
-                        payload = {wandb_keys[k]: metrics[k] for k in wandb_keys if k in metrics}
+            if hasattr(logger, "wandb") and logger.wandb:
+                if wandb_keys is not None:
+                    payload = {wandb_keys[k]: metrics[k] for k in wandb_keys if k in metrics}
+                else:
+                    payload = {f"eval/{k}": v for k, v in metrics.items()}
+                if payload:
+                    payload["train_step"] = global_step
+                    if results_queue is not None:
+                        results_queue.put(payload)
                     else:
-                        payload = {f"eval/{k}": v for k, v in metrics.items()}
-                    if payload:
-                        payload["train_step"] = global_step
-                        if results_queue is not None:
-                            results_queue.put(payload)
-                        else:
-                            logger.wandb.log(payload)
-        else:
-            print(f"{eval_name} evaluation failed with exit code {result.returncode}: {result.stderr[-1000:]}")
-
-    except subprocess.TimeoutExpired:
-        print(f"{eval_name} evaluation timed out")
-    except Exception as e:
-        import traceback
-
-        print(f"Failed to run {eval_name} evaluation: {e}")
-        traceback.print_exc()
+                        logger.wandb.log(payload)
+    else:
+        print(f"{eval_name} evaluation failed with exit code {result.returncode}: {result.stderr[-1000:]}")
 
 
 def run_human_replay_eval_in_subprocess(config, logger, global_step, results_queue=None):
@@ -226,152 +217,147 @@ def render_videos(
 
     model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
 
-    try:
-        video_output_dir = os.path.join(model_dir, "videos")
-        os.makedirs(video_output_dir, exist_ok=True)
+    video_output_dir = os.path.join(model_dir, "videos")
+    os.makedirs(video_output_dir, exist_ok=True)
 
-        # TODO: Fix memory leaks so that this is not needed
-        env_vars = os.environ.copy()
-        env_vars["ASAN_OPTIONS"] = "exitcode=0"
+    # TODO: Fix memory leaks so that this is not needed
+    env_vars = os.environ.copy()
+    env_vars["ASAN_OPTIONS"] = "exitcode=0"
 
-        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+    base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
 
-        if config_path:
-            base_cmd.extend(["--config", config_path])
+    if config_path:
+        base_cmd.extend(["--config", config_path])
 
-        if config.get("show_grid", False):
-            base_cmd.append("--show-grid")
-        if config.get("obs_only", False):
-            base_cmd.append("--obs-only")
-        if config.get("show_lasers", False):
-            base_cmd.append("--lasers")
-        if config.get("show_human_logs", False):
-            base_cmd.append("--show-human-logs")
-        if config.get("zoom_in", False):
-            base_cmd.append("--zoom-in")
+    if config.get("show_grid", False):
+        base_cmd.append("--show-grid")
+    if config.get("obs_only", False):
+        base_cmd.append("--obs-only")
+    if config.get("show_lasers", False):
+        base_cmd.append("--lasers")
+    if config.get("show_human_logs", False):
+        base_cmd.append("--show-human-logs")
+    if config.get("zoom_in", False):
+        base_cmd.append("--zoom-in")
 
-        frame_skip = config.get("frame_skip", 1)
-        if frame_skip > 1:
-            base_cmd.extend(["--frame-skip", str(frame_skip)])
+    frame_skip = config.get("frame_skip", 1)
+    if frame_skip > 1:
+        base_cmd.extend(["--frame-skip", str(frame_skip)])
 
-        view_mode = config.get("view_mode", "both")
-        base_cmd.extend(["--view", view_mode])
+    view_mode = config.get("view_mode", "both")
+    base_cmd.extend(["--view", view_mode])
 
-        if env_cfg is not None and getattr(env_cfg, "num_maps", None):
-            base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
+    if env_cfg is not None and getattr(env_cfg, "num_maps", None):
+        base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
 
-        base_cmd.extend(["--policy-name", bin_path])
+    base_cmd.extend(["--policy-name", bin_path])
 
-        # Handle single or multiple map rendering
-        render_maps = config.get("render_map", None)
-        if render_maps is None or render_maps == "none":
-            map_dir = None
-            if env_cfg is not None and hasattr(env_cfg, "map_dir"):
-                map_dir = env_cfg.map_dir
-            if map_dir and os.path.isdir(map_dir):
-                import random
+    # Handle single or multiple map rendering
+    render_maps = config.get("render_map", None)
+    if render_maps is None or render_maps == "none":
+        map_dir = None
+        if env_cfg is not None and hasattr(env_cfg, "map_dir"):
+            map_dir = env_cfg.map_dir
+        if map_dir and os.path.isdir(map_dir):
+            import random
 
-                bin_files = [f for f in os.listdir(map_dir) if f.endswith(".bin")]
-                if bin_files:
-                    render_maps = [os.path.join(map_dir, random.choice(bin_files))]
-                else:
-                    print(f"Warning: No .bin files found in {map_dir}, skipping render")
-                    return
+            bin_files = [f for f in os.listdir(map_dir) if f.endswith(".bin")]
+            if bin_files:
+                render_maps = [os.path.join(map_dir, random.choice(bin_files))]
             else:
-                print(f"Warning: map_dir not found or invalid ({map_dir}), skipping render")
+                print(f"Warning: No .bin files found in {map_dir}, skipping render")
                 return
-        elif isinstance(render_maps, (str, os.PathLike)):
-            render_maps = [render_maps]
         else:
-            render_maps = list(render_maps)
+            print(f"Warning: map_dir not found or invalid ({map_dir}), skipping render")
+            return
+    elif isinstance(render_maps, (str, os.PathLike)):
+        render_maps = [render_maps]
+    else:
+        render_maps = list(render_maps)
 
-        file_prefix = f"{wandb_prefix}_" if wandb_prefix != "render" else ""
-        videos_to_log_world = []
-        videos_to_log_agent = []
-        generated_videos = {"output_topdown": [], "output_agent": []}
-        output_topdown = f"resources/drive/{file_prefix}output_topdown_{epoch}"
-        output_agent = f"resources/drive/{file_prefix}output_agent_{epoch}"
+    file_prefix = f"{wandb_prefix}_" if wandb_prefix != "render" else ""
+    videos_to_log_world = []
+    videos_to_log_agent = []
+    generated_videos = {"output_topdown": [], "output_agent": []}
+    output_topdown = f"resources/drive/{file_prefix}output_topdown_{epoch}"
+    output_agent = f"resources/drive/{file_prefix}output_agent_{epoch}"
 
-        for i, map_path in enumerate(render_maps):
-            cmd = list(base_cmd)
-            if map_path is not None and os.path.exists(map_path):
-                cmd.extend(["--map-name", str(map_path)])
+    for i, map_path in enumerate(render_maps):
+        cmd = list(base_cmd)
+        if map_path is not None and os.path.exists(map_path):
+            cmd.extend(["--map-name", str(map_path)])
 
-            output_topdown_map = output_topdown + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
-            output_agent_map = output_agent + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
+        output_topdown_map = output_topdown + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
+        output_agent_map = output_agent + (f"_map{i:02d}.mp4" if len(render_maps) > 1 else ".mp4")
 
-            cmd.extend(["--output-topdown", output_topdown_map])
-            cmd.extend(["--output-agent", output_agent_map])
+        cmd.extend(["--output-topdown", output_topdown_map])
+        cmd.extend(["--output-agent", output_agent_map])
 
-            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1200, env=env_vars)
+        result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1200, env=env_vars)
 
-            vids_exist = os.path.exists(output_topdown_map) and os.path.exists(output_agent_map)
+        vids_exist = os.path.exists(output_topdown_map) and os.path.exists(output_agent_map)
 
-            if result.returncode == 0 or (result.returncode == 1 and vids_exist):
-                videos = [
-                    (
-                        "output_topdown",
-                        output_topdown_map,
-                        f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_topdown.mp4"
-                        if map_path
-                        else f"{file_prefix}epoch_{epoch:06d}_topdown.mp4",
-                    ),
-                    (
-                        "output_agent",
-                        output_agent_map,
-                        f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_agent.mp4"
-                        if map_path
-                        else f"{file_prefix}epoch_{epoch:06d}_agent.mp4",
-                    ),
-                ]
+        if result.returncode == 0 or (result.returncode == 1 and vids_exist):
+            videos = [
+                (
+                    "output_topdown",
+                    output_topdown_map,
+                    f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_topdown.mp4"
+                    if map_path
+                    else f"{file_prefix}epoch_{epoch:06d}_topdown.mp4",
+                ),
+                (
+                    "output_agent",
+                    output_agent_map,
+                    f"{file_prefix}epoch_{epoch:06d}_map{i:02d}_agent.mp4"
+                    if map_path
+                    else f"{file_prefix}epoch_{epoch:06d}_agent.mp4",
+                ),
+            ]
 
-                for vid_type, source_vid, target_filename in videos:
-                    if os.path.exists(source_vid):
-                        target_path = os.path.join(video_output_dir, target_filename)
-                        shutil.move(source_vid, target_path)
-                        generated_videos[vid_type].append(target_path)
-                        if render_async:
-                            continue
-                        if wandb_log:
-                            import wandb
+            for vid_type, source_vid, target_filename in videos:
+                if os.path.exists(source_vid):
+                    target_path = os.path.join(video_output_dir, target_filename)
+                    shutil.move(source_vid, target_path)
+                    generated_videos[vid_type].append(target_path)
+                    if render_async:
+                        continue
+                    if wandb_log:
+                        import wandb
 
-                            if "topdown" in target_filename:
-                                videos_to_log_world.append(wandb.Video(target_path, format="mp4"))
-                            else:
-                                videos_to_log_agent.append(wandb.Video(target_path, format="mp4"))
-                    else:
-                        print(f"Video generation completed but {source_vid} not found")
-                        if result.stdout:
-                            print(f"StdOUT: {result.stdout}")
-                        if result.stderr:
-                            print(f"StdERR: {result.stderr}")
-            else:
-                print(f"C rendering failed (map index {i}) with exit code {result.returncode}: {result.stdout}")
+                        if "topdown" in target_filename:
+                            videos_to_log_world.append(wandb.Video(target_path, format="mp4"))
+                        else:
+                            videos_to_log_agent.append(wandb.Video(target_path, format="mp4"))
+                else:
+                    print(f"Video generation completed but {source_vid} not found")
+                    if result.stdout:
+                        print(f"StdOUT: {result.stdout}")
+                    if result.stderr:
+                        print(f"StdERR: {result.stderr}")
+        else:
+            print(f"C rendering failed (map index {i}) with exit code {result.returncode}: {result.stdout}")
 
-        if render_async:
-            render_queue.put(
-                {
-                    "videos": generated_videos,
-                    "step": global_step,
-                    "wandb_prefix": wandb_prefix,
-                    "bin_path": bin_path,
-                    "config_path": config_path,
-                }
-            )
+    if render_async:
+        render_queue.put(
+            {
+                "videos": generated_videos,
+                "step": global_step,
+                "wandb_prefix": wandb_prefix,
+                "bin_path": bin_path,
+                "config_path": config_path,
+            }
+        )
 
-        if wandb_log and (videos_to_log_world or videos_to_log_agent) and not render_async:
-            payload = {}
-            if videos_to_log_world:
-                payload[f"{wandb_prefix}/world_state"] = videos_to_log_world
-            if videos_to_log_agent:
-                payload[f"{wandb_prefix}/agent_view"] = videos_to_log_agent
-            payload["train_step"] = global_step
-            wandb_run.log(payload)
+    if wandb_log and (videos_to_log_world or videos_to_log_agent) and not render_async:
+        payload = {}
+        if videos_to_log_world:
+            payload[f"{wandb_prefix}/world_state"] = videos_to_log_world
+        if videos_to_log_agent:
+            payload[f"{wandb_prefix}/agent_view"] = videos_to_log_agent
+        payload["train_step"] = global_step
+        wandb_run.log(payload)
 
-    except subprocess.TimeoutExpired:
-        print("C rendering timed out")
-    except Exception as e:
-        print(f"Failed to generate videos: {e}")
 
 
 def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/ocean/drive.ini"):

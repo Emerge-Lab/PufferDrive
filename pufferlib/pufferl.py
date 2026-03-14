@@ -548,8 +548,8 @@ class PuffeRL:
                 latest_cpt = max(model_files)
                 bin_path = f"{model_dir}.bin"
 
+                export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
                 try:
-                    export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
                     export(
                         args=export_args,
                         env_name=self.config["env"],
@@ -567,46 +567,37 @@ class PuffeRL:
                         self._dispatch_render(model_dir, bin_path, env_cfg, wandb_log, wandb_run, "render")
 
                     if should_safe_eval:
-                        try:
-                            safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
-                            self._dispatch_render(
-                                model_dir,
-                                bin_path,
-                                env_cfg,
-                                wandb_log,
-                                wandb_run,
-                                "eval",
-                                config_path=safe_ini_path,
-                                wandb_prefix="eval",
-                            )
-                            self._run_eval(
-                                pufferlib.utils.run_safe_eval_metrics_in_subprocess,
-                                self.config,
-                                self.logger,
-                                self.global_step,
-                                safe_eval_config,
-                            )
-                        except Exception as e:
-                            print(f"Failed to run safe eval: {e}")
+                        safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
+                        self._dispatch_render(
+                            model_dir,
+                            bin_path,
+                            env_cfg,
+                            wandb_log,
+                            wandb_run,
+                            "eval",
+                            config_path=safe_ini_path,
+                            wandb_prefix="eval",
+                        )
+                        self._run_eval(
+                            pufferlib.utils.run_safe_eval_metrics_in_subprocess,
+                            self.config,
+                            self.logger,
+                            self.global_step,
+                            safe_eval_config,
+                        )
 
                     if should_human_replay:
-                        try:
-                            hr_ini_path = pufferlib.utils.generate_human_replay_ini(self.config["eval"])
-                            self._dispatch_render(
-                                model_dir,
-                                bin_path,
-                                env_cfg,
-                                wandb_log,
-                                wandb_run,
-                                "human_replay",
-                                config_path=hr_ini_path,
-                                wandb_prefix="human_replay",
-                            )
-                        except Exception as e:
-                            print(f"Failed to run human replay render: {e}")
-
-                except Exception as e:
-                    print(f"Failed to export model weights: {e}")
+                        hr_ini_path = pufferlib.utils.generate_human_replay_ini(self.config["eval"])
+                        self._dispatch_render(
+                            model_dir,
+                            bin_path,
+                            env_cfg,
+                            wandb_log,
+                            wandb_run,
+                            "human_replay",
+                            config_path=hr_ini_path,
+                            wandb_prefix="human_replay",
+                        )
                 finally:
                     if os.path.exists(bin_path):
                         os.remove(bin_path)
