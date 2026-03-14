@@ -292,11 +292,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyList_SetItem(agent_offsets, env_count, final_total_agent_count);
     PyObject *final_env_count = PyLong_FromLong(env_count);
 
-    // resize lists (GetSlice returns new refs; release originals)
+    // resize lists
     PyObject *resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject *resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-    Py_DECREF(agent_offsets);
-    Py_DECREF(map_ids);
     PyObject *tuple = PyTuple_New(3);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
