@@ -257,17 +257,32 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 PyErr_SetString(PyExc_ValueError, error_msg);
                 return NULL;
             }
-        } else {
-            // Map has active agents — record it
-            PyObject *map_id_obj = PyLong_FromLong(map_id);
-            PyList_SetItem(map_ids, env_count, map_id_obj);
-            PyObject *offset = PyLong_FromLong(total_agent_count);
-            PyList_SetItem(agent_offsets, env_count, offset);
-            total_agent_count += env->active_agent_count;
-            env_count++;
+
+            for (int j = 0; j < env->num_objects; j++) {
+                free_agent(&env->agents[j]);
+            }
+            for (int j = 0; j < env->num_roads; j++) {
+                free_road_element(&env->road_elements[j]);
+            }
+            free(env->agents);
+            free(env->road_elements);
+            free(env->road_scenario_ids);
+            free(env->tracks_to_predict_indices);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env);
+            continue;
         }
 
-        // Free the temporary env (actual envs are created in init)
+        // Map has active agents — record it
+        PyObject *map_id_obj = PyLong_FromLong(map_id);
+        PyList_SetItem(map_ids, env_count, map_id_obj);
+        PyObject *offset = PyLong_FromLong(total_agent_count);
+        PyList_SetItem(agent_offsets, env_count, offset);
+        total_agent_count += env->active_agent_count;
+        env_count++;
+
         for (int j = 0; j < env->num_objects; j++) {
             free_agent(&env->agents[j]);
         }
