@@ -497,78 +497,30 @@ class Drive(pufferlib.PufferEnv):
         if np.all(expert_actions_discrete == -1):
             raise ValueError("No valid human demonstrations could be collected. Please check the data format.")
 
-        if self.uses_memory:
-            # LSTM is conditioned on the memory_size last observations.
-            # Adapt the human data collection to chunk trajectories into
-            # sequences of length memory_size: (feature_dim, memory_size)
-
-            # Filter out invalid timesteps first
-            invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)  # (T, N)
-
-            sequences_obs = []
-            sequences_actions_discrete = []
-            sequences_actions_continuous = []
-            max_sequences = max_samples // self.memory_size
-
-            for agent_idx in range(self.num_agents):
-                if len(sequences_obs) >= max_sequences:
-                    break
-
-                valid_mask = ~invalid_action_mask[:, agent_idx]
-                valid_timesteps = np.where(valid_mask)[0]
-
-                if len(valid_timesteps) < self.memory_size:
-                    continue
-
-                agent_obs = expert_observations_full[valid_mask, agent_idx, :]
-                agent_actions_discrete = expert_actions_discrete[valid_mask, agent_idx, :]
-                agent_actions_continuous = expert_actions_continuous[valid_mask, agent_idx, :]
-
-                num_sequences = len(agent_obs) - self.memory_size + 1
-                for start_idx in range(num_sequences):
-                    if len(sequences_obs) >= max_sequences:
-                        break
-                    end_idx = start_idx + self.memory_size
-                    sequences_obs.append(agent_obs[start_idx:end_idx])
-                    sequences_actions_discrete.append(agent_actions_discrete[start_idx:end_idx])
-                    sequences_actions_continuous.append(agent_actions_continuous[start_idx:end_idx])
-
-            if len(sequences_obs) == 0:
-                raise ValueError("No valid sequences could be created.")
-
-            self.expert_observations_full = torch.tensor(np.stack(sequences_obs, axis=0), dtype=torch.float32)
-            self.expert_actions_discrete = torch.tensor(
-                np.stack(sequences_actions_discrete, axis=0), dtype=torch.float32
-            )
-            self.expert_actions_continuous = torch.tensor(
-                np.stack(sequences_actions_continuous, axis=0), dtype=torch.float32
-            )
-            self.total_num_samples = self.expert_actions_discrete.shape[0]
+        if self.dynamics_model == "delta_local":
+            # Any dimension being -1 means the timestep is invalid
+            invalid_action_mask = expert_actions_discrete[:, :, 0] == -1.0
         else:
-            if self.dynamics_model == "delta_local":
-                # Any dimension being -1 means the timestep is invalid
-                invalid_action_mask = expert_actions_discrete[:, :, 0] == -1.0
-            else:
-                invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)
+            invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)
 
-            self.expert_actions_discrete = torch.Tensor(expert_actions_discrete[~invalid_action_mask])
-            self.expert_actions_continuous = torch.Tensor(expert_actions_continuous[~invalid_action_mask])
-            self.expert_observations_full = torch.Tensor(expert_observations_full[~invalid_action_mask])
+        self.expert_actions_discrete = torch.Tensor(expert_actions_discrete[~invalid_action_mask])
+        self.expert_actions_continuous = torch.Tensor(expert_actions_continuous[~invalid_action_mask])
+        self.expert_observations_full = torch.Tensor(expert_observations_full[~invalid_action_mask])
 
-            if len(self.expert_observations_full) > max_samples:
-                # Limit storage if needed (keep most recent samples)
-                self.expert_observations_full = self.expert_observations_full[:max_samples:]
-                self.expert_actions_discrete = self.expert_actions_discrete[:max_samples:]
-                self.expert_actions_continuous = self.expert_actions_continuous[:max_samples:]
+        if len(self.expert_observations_full) > max_samples:
+            # Limit storage if needed (keep most recent samples)
+            self.expert_observations_full = self.expert_observations_full[:max_samples:]
+            self.expert_actions_discrete = self.expert_actions_discrete[:max_samples:]
+            self.expert_actions_continuous = self.expert_actions_continuous[:max_samples:]
 
-            # Count unique number of (observation, action) pairs. This gives
-            # an idea of the diversity and coverage of the human demonstrations.
-            obs_np = self.expert_observations_full.numpy()
-            act_np = self.expert_actions_discrete.numpy()
-            self.total_unique_samples = len({self._hash_pair(obs_np[i], act_np[i]) for i in range(len(obs_np))})
-            self.total_num_samples = self.expert_actions_discrete.shape[0]
+        # Count unique number of (observation, action) pairs. This gives
+        # an idea of the diversity and coverage of the human demonstrations.
+        obs_np = self.expert_observations_full.numpy()
+        act_np = self.expert_actions_discrete.numpy()
+        self.total_unique_samples = len({self._hash_pair(obs_np[i], act_np[i]) for i in range(len(obs_np))})
+        self.total_num_samples = self.expert_actions_discrete.shape[0]
 
-            return self.total_num_samples, self.total_unique_samples
+        return self.total_num_samples, self.total_unique_samples
 
     def sample_human_demonstrations(self, batch_size=512):
         # get random indices between min and max

@@ -63,6 +63,10 @@
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
 
+// Threshold for data selection: trajectories above threshold are excluded from 
+// human demonstrations
+#define ADE_THRESHOLD 2.0f
+
 // Actions
 #define NOOP 0
 
@@ -240,6 +244,7 @@ struct Entity {
     float *expert_delta_yaw;
     float *inferred_traj_x;
     float *inferred_traj_y;
+    float inferred_ade; 
     float width;
     float length;
     float height;
@@ -2666,6 +2671,44 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
         }
     }
 
+    // Filter data
+    // Compute per-agent ADE and mark trajectories with ADE above threshold unfit for usage
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int idx = env->active_agent_indices[i];
+        Entity *e = &env->entities[idx];
+        float total_error = 0.0f;
+        int count = 0;
+        int is_static = 1;
+
+        if (e->inferred_traj_x && e->traj_valid) {
+            for (int t = 0; t < e->array_size; t++) {
+                if (!e->traj_valid[t]) continue;
+                float dx = e->inferred_traj_x[t] - e->traj_x[t];
+                float dy = e->inferred_traj_y[t] - e->traj_y[t];
+                total_error += sqrtf(dx * dx + dy * dy);
+                count++;
+                if (count > 1 && (e->traj_x[t] != e->traj_x[0] || e->traj_y[t] != e->traj_y[0]))
+                    is_static = 0;
+            }
+        }
+
+        e->inferred_ade = (count > 0) ? total_error / count : -1.0f;
+
+        int unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD
+                     || count < 3 || is_static);
+
+        if (unfit) {
+            for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
+                int cont_off = t * env->active_agent_count * action_dim_continuous + i * action_dim_continuous;
+                int disc_off = t * env->active_agent_count * action_dim_discrete + i * action_dim_discrete;
+                for (int k = 0; k < action_dim_continuous; k++)
+                    expert_actions_continuous_out[cont_off + k] = -1.0f;
+                for (int k = 0; k < action_dim_discrete; k++)
+                    expert_actions_discrete_out[disc_off + k] = -1.0f;
+            }
+        }
+    }
+
     env->control_mode = saved_control_mode;
 
     // Restore original state
@@ -3175,14 +3218,12 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
     DrawTriangle3D(t4, t1, b1, CURB_SIDE);
 }
 
-float draw_inferred_trajectory(Drive *env, int agent_array_idx) {
+void draw_inferred_trajectory(Drive *env, int agent_array_idx) {
     int idx = env->active_agent_indices[agent_array_idx];
     Entity *e = &env->entities[idx];
-    if (!e->inferred_traj_x || !e->traj_valid) return -1.0f;
+    if (!e->inferred_traj_x || !e->traj_valid) return;
 
     float zg = Z_ROAD_MARKINGS, zs = Z_ROAD_MARKINGS + 0.01f;
-    float total_err = 0.0f;
-    int count = 0;
 
     for (int t = 0; t < e->array_size - 1; t++) {
         if (!e->traj_valid[t]) continue;
@@ -3198,12 +3239,6 @@ float draw_inferred_trajectory(Drive *env, int agent_array_idx) {
         DrawLine3D((Vector3){e->inferred_traj_x[t], e->inferred_traj_y[t], zs},
                    (Vector3){e->inferred_traj_x[t + 1], e->inferred_traj_y[t + 1], zs}, Fade(LIGHT_PURPLE, 0.6f));
 
-        // Accumulate displacement error
-        float dx = e->inferred_traj_x[t] - e->traj_x[t];
-        float dy = e->inferred_traj_y[t] - e->traj_y[t];
-        total_err += sqrtf(dx * dx + dy * dy);
-        count++;
-
         // Error shading (red)
         if (e->traj_valid[t + 1]) {
             Vector3 a = {e->traj_x[t], e->traj_y[t], zg};
@@ -3217,12 +3252,10 @@ float draw_inferred_trajectory(Drive *env, int agent_array_idx) {
             DrawTriangle3D(d, b, c, err);
         }
     }
-
-    return (count > 0) ? total_err / count : -1.0f;
 }
 
 void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, int show_grid) {
-    float inferred_ade[MAX_AGENTS];
+    
     int has_inferred = 0;
     if (show_grid) {
         float grid_start_x = env->grid_map->top_left_x;
@@ -3257,7 +3290,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
             has_inferred = 1;
             for (int i = 0; i < env->active_agent_count; i++) {
-                inferred_ade[i] = draw_inferred_trajectory(env, i);
+                draw_inferred_trajectory(env, i);
             }
         }
     }
@@ -3533,25 +3566,30 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     // Draw per-agent ADE labels projected to screen
     if (has_inferred) {
         for (int i = 0; i < env->active_agent_count; i++) {
-            if (inferred_ade[i] < 0) continue;
             int idx = env->active_agent_indices[i];
             Entity *e = &env->entities[idx];
-            int valid_count = 0;
-            int is_static = 1;
-            for (int t = 0; t < e->array_size; t++) {
-                if (!e->traj_valid[t]) continue;
-                valid_count++;
-                if (valid_count > 1 && (e->traj_x[t] != e->traj_x[0] || e->traj_y[t] != e->traj_y[0]))
-                    is_static = 0;
-            }
-            if (valid_count <= 3 || is_static) continue;
+            if (e->inferred_ade < 0) continue;
             int mid = e->array_size / 2;
             Vector2 sp = GetWorldToScreen((Vector3){e->traj_x[mid], e->traj_y[mid], Z_AGENT_DETAILS}, client->camera);
             int sx = (int)sp.x, sy = (int)sp.y;
             if (sx < 0 || sx > client->width || sy < 0 || sy > client->height) continue;
             char buf[32];
-            snprintf(buf, sizeof(buf), "ADE:%.2fm", inferred_ade[i]);
-            DrawText(buf, sx - MeasureText(buf, 16) / 2, sy, 16, PUFF_WHITE);
+            // Check if unfit (same criteria as c_collect_expert_data)
+            int valid_count = 0;
+            int is_static = 1;
+            if (e->traj_valid) {
+                for (int t = 0; t < e->array_size; t++) {
+                    if (!e->traj_valid[t]) continue;
+                    valid_count++;
+                    if (valid_count > 1 && (e->traj_x[t] != e->traj_x[0] || e->traj_y[t] != e->traj_y[0]))
+                        is_static = 0;
+                }
+            }
+            int unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD
+                         || valid_count < 3 || is_static);
+            Color label_color = unfit ? PUFF_RED : PUFF_WHITE;
+            snprintf(buf, sizeof(buf), "ADE:%.2fm", e->inferred_ade);
+            DrawText(buf, sx - MeasureText(buf, 16) / 2, sy, 16, label_color);
         }
     }
 
@@ -3715,6 +3753,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             } else if (env->dynamics_model == CLASSIC) {
                 DrawText("Classic dynamics model", 10, 45, 20, LIGHT_PURPLE);
             }
+            //DrawText(env->action_type == 1 ? "Actions: continuous" : "Actions: discrete", 10, 65, 20, LIGHT_PURPLE);
         }
 
         int human_idx = env->active_agent_indices[env->human_agent_idx];
