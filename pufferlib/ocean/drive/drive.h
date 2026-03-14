@@ -238,6 +238,8 @@ struct Entity {
     float *expert_delta_x;
     float *expert_delta_y;
     float *expert_delta_yaw;
+    float *inferred_traj_x;
+    float *inferred_traj_y;
     float width;
     float length;
     float height;
@@ -293,6 +295,8 @@ void free_entity(Entity *entity) {
     free(entity->traj_vz);
     free(entity->traj_heading);
     free(entity->traj_valid);
+    free(entity->inferred_traj_x);
+    free(entity->inferred_traj_y);
     free(entity->expert_accel);
     free(entity->expert_steering);
     free(entity->expert_delta_x);
@@ -528,6 +532,8 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             entities[i].traj_vz = (float *)malloc(size * sizeof(float));
             entities[i].traj_heading = (float *)malloc(size * sizeof(float));
             entities[i].traj_valid = (int *)malloc(size * sizeof(int));
+            entities[i].inferred_traj_x = (float *)calloc(size, sizeof(float));
+            entities[i].inferred_traj_y = (float *)calloc(size, sizeof(float));
             entities[i].expert_accel = (float *)malloc(size * sizeof(float));
             entities[i].expert_steering = (float *)malloc(size * sizeof(float));
             entities[i].expert_delta_x = (float *)malloc(size * sizeof(float));
@@ -540,6 +546,8 @@ Entity *load_map_binary(const char *filename, Drive *env) {
             entities[i].traj_vz = NULL;
             entities[i].traj_heading = NULL;
             entities[i].traj_valid = NULL;
+            entities[i].inferred_traj_x = NULL;
+            entities[i].inferred_traj_y = NULL;
             entities[i].expert_accel = NULL;
             entities[i].expert_steering = NULL;
             entities[i].expert_delta_x = NULL;
@@ -2499,6 +2507,36 @@ void c_step(Drive *env) {
     compute_observations(env);
 }
 
+void c_step_lightweight(Drive *env) {
+    env->timestep++;
+
+    // Move static experts
+    for (int i = 0; i < env->expert_static_agent_count; i++) {
+        int expert_idx = env->expert_static_agent_indices[i];
+        if (env->entities[expert_idx].x == INVALID_POSITION)
+            continue;
+        move_expert(env, env->actions, expert_idx);
+    }
+
+    // Apply dynamics to all active agents
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        env->entities[agent_idx].collision_state = 0;
+
+        if (env->control_mode == CONTROL_REPLAY_LOGS) {
+            move_expert(env, env->actions, agent_idx);
+        } else {
+            if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+                override_action_with_expert(env, i, agent_idx);
+            }
+            move_dynamics(env, i, agent_idx);
+        }
+    }
+
+    // Update observations
+    compute_observations(env);
+}
+
 void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_actions_continuous_out,
                            float *expert_obs_out) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
@@ -2506,20 +2544,32 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
     int original_timestep = env->timestep;
     int is_delta = (env->dynamics_model == DELTA_LOCAL);
 
-    // Action dimensions per agent
     int action_dim_continuous = is_delta ? 3 : 2;
     int action_dim_discrete = is_delta ? 3 : 1;
 
-    // Reset agents to start of trajectory
+    int saved_control_mode = env->control_mode;
+    env->control_mode = CONTROL_INFERRED_EXPERT_ACTIONS;
+
     env->timestep = 0;
     set_start_position(env);
     compute_observations(env);
 
+    // Store initial inferred trajectory positions
+    for (int ai = 0; ai < env->active_agent_count; ai++) {
+        int idx = env->active_agent_indices[ai];
+        Entity *e = &env->entities[idx];
+        if (e->inferred_traj_x != NULL) {
+            e->inferred_traj_x[0] = e->x;
+            e->inferred_traj_y[0] = e->y;
+        }
+    }
+
     for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
-        // Copy current observations
+        // Copy current observations (from dynamics-stepped positions)
         int obs_offset = t * env->active_agent_count * max_obs;
         memcpy(&expert_obs_out[obs_offset], env->observations, env->active_agent_count * max_obs * sizeof(float));
 
+        // Record expert actions at this timestep
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             Entity *agent = &env->entities[agent_idx];
@@ -2600,26 +2650,23 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
             }
         }
 
+        // Step agents using inferred actions through dynamics
         if (t < TRAJECTORY_LENGTH - 1) {
-            // Directly set agents to their ground-truth trajectory positions
-            // instead of stepping through dynamics (which accumulates errors).
-            env->timestep++;
+            c_step_lightweight(env);
 
-            for (int si = 0; si < env->expert_static_agent_count; si++) {
-                int expert_idx = env->expert_static_agent_indices[si];
-                if (env->entities[expert_idx].x == INVALID_POSITION)
-                    continue;
-                move_expert(env, env->actions, expert_idx);
-            }
-
+            // Store inferred trajectory positions
             for (int ai = 0; ai < env->active_agent_count; ai++) {
                 int idx = env->active_agent_indices[ai];
-                move_expert(env, env->actions, idx);
+                Entity *e = &env->entities[idx];
+                if (e->inferred_traj_x != NULL) {
+                    e->inferred_traj_x[t + 1] = e->x;
+                    e->inferred_traj_y[t + 1] = e->y;
+                }
             }
-
-            compute_observations(env);
         }
     }
+
+    env->control_mode = saved_control_mode;
 
     // Restore original state
     env->timestep = original_timestep;
@@ -3128,8 +3175,55 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
     DrawTriangle3D(t4, t1, b1, CURB_SIDE);
 }
 
-void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, int show_grid) {
+float draw_inferred_trajectory(Drive *env, int agent_array_idx) {
+    int idx = env->active_agent_indices[agent_array_idx];
+    Entity *e = &env->entities[idx];
+    if (!e->inferred_traj_x || !e->traj_valid) return -1.0f;
 
+    float zg = Z_ROAD_MARKINGS, zs = Z_ROAD_MARKINGS + 0.01f;
+    float total_err = 0.0f;
+    int count = 0;
+
+    for (int t = 0; t < e->array_size - 1; t++) {
+        if (!e->traj_valid[t]) continue;
+
+        // Ground truth (green)
+        DrawSphere((Vector3){e->traj_x[t], e->traj_y[t], zg}, 0.15f, LIGHTGREEN);
+        if (e->traj_valid[t + 1])
+            DrawLine3D((Vector3){e->traj_x[t], e->traj_y[t], zg},
+                       (Vector3){e->traj_x[t + 1], e->traj_y[t + 1], zg}, Fade(LIGHTGREEN, 0.6f));
+
+        // Inferred (purple)
+        DrawSphere((Vector3){e->inferred_traj_x[t], e->inferred_traj_y[t], zs}, 0.2f, LIGHT_PURPLE);
+        DrawLine3D((Vector3){e->inferred_traj_x[t], e->inferred_traj_y[t], zs},
+                   (Vector3){e->inferred_traj_x[t + 1], e->inferred_traj_y[t + 1], zs}, Fade(LIGHT_PURPLE, 0.6f));
+
+        // Accumulate displacement error
+        float dx = e->inferred_traj_x[t] - e->traj_x[t];
+        float dy = e->inferred_traj_y[t] - e->traj_y[t];
+        total_err += sqrtf(dx * dx + dy * dy);
+        count++;
+
+        // Error shading (red)
+        if (e->traj_valid[t + 1]) {
+            Vector3 a = {e->traj_x[t], e->traj_y[t], zg};
+            Vector3 b = {e->inferred_traj_x[t], e->inferred_traj_y[t], zg};
+            Vector3 c = {e->traj_x[t + 1], e->traj_y[t + 1], zg};
+            Vector3 d = {e->inferred_traj_x[t + 1], e->inferred_traj_y[t + 1], zg};
+            Color err = Fade(PUFF_RED, 0.15f);
+            DrawTriangle3D(a, b, c, err);
+            DrawTriangle3D(c, b, d, err);
+            DrawTriangle3D(c, b, a, err);
+            DrawTriangle3D(d, b, c, err);
+        }
+    }
+
+    return (count > 0) ? total_err / count : -1.0f;
+}
+
+void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, int show_grid) {
+    float inferred_ade[MAX_AGENTS];
+    int has_inferred = 0;
     if (show_grid) {
         float grid_start_x = env->grid_map->top_left_x;
         float grid_start_y = env->grid_map->bottom_right_y;
@@ -3157,6 +3251,13 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 if (e->traj_valid[t]) {
                     DrawSphere((Vector3){e->traj_x[t], e->traj_y[t], Z_ROAD_MARKINGS}, 0.15f, traj_color);
                 }
+            }
+        }
+
+        if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+            has_inferred = 1;
+            for (int i = 0; i < env->active_agent_count; i++) {
+                inferred_ade[i] = draw_inferred_trajectory(env, i);
             }
         }
     }
@@ -3429,6 +3530,31 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
     EndMode3D();
 
+    // Draw per-agent ADE labels projected to screen
+    if (has_inferred) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            if (inferred_ade[i] < 0) continue;
+            int idx = env->active_agent_indices[i];
+            Entity *e = &env->entities[idx];
+            int valid_count = 0;
+            int is_static = 1;
+            for (int t = 0; t < e->array_size; t++) {
+                if (!e->traj_valid[t]) continue;
+                valid_count++;
+                if (valid_count > 1 && (e->traj_x[t] != e->traj_x[0] || e->traj_y[t] != e->traj_y[0]))
+                    is_static = 0;
+            }
+            if (valid_count <= 3 || is_static) continue;
+            int mid = e->array_size / 2;
+            Vector2 sp = GetWorldToScreen((Vector3){e->traj_x[mid], e->traj_y[mid], Z_AGENT_DETAILS}, client->camera);
+            int sx = (int)sp.x, sy = (int)sp.y;
+            if (sx < 0 || sx > client->width || sy < 0 || sy > client->height) continue;
+            char buf[32];
+            snprintf(buf, sizeof(buf), "ADE:%.2fm", inferred_ade[i]);
+            DrawText(buf, sx - MeasureText(buf, 16) / 2, sy, 16, PUFF_WHITE);
+        }
+    }
+
     if (mode == 1) {
         float cam_x = 0.0f, cam_y = 0.0f;
         float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
@@ -3448,7 +3574,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             if (sx < 0 || sx > client->width || sy < 0 || sy > client->height)
                 continue;
             char text[32];
-            snprintf(text, sizeof(text), idx == env->sdc_track_index ? "sdc" : "%d", idx);
+                snprintf(text, sizeof(text), idx == env->sdc_track_index ? "sdc" : "%d", idx);
             DrawText(text, sx - MeasureText(text, 20) / 2, sy, 20, PUFF_WHITE);
         }
     }

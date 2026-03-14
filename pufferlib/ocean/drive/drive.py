@@ -662,7 +662,7 @@ def infer_human_actions(obj):
 
     dt = 0.1
     vehicle_length = obj.get("length", 4.5)
-    wheelbase = 0.6 * vehicle_length
+    wheelbase = 1.0 * vehicle_length
 
     for t in range(trajectory_length):
         # Check validity for both current and next timestep
@@ -715,8 +715,8 @@ def infer_human_actions(obj):
             tan_steering = max(-10.0, min(10.0, tan_steering))
             steering = math.atan(tan_steering)
 
-        acceleration = max(-10.0, min(10.0, acceleration))
-        steering = max(-2.0, min(2.0, steering))
+        acceleration = max(-20.0, min(20.0, acceleration))
+        steering = max(-4.0, min(4.0, steering))
 
         expert_acceleration.append(acceleration)
         expert_steering.append(steering)
@@ -1080,7 +1080,7 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

@@ -1442,6 +1442,10 @@ def verify(env_name, args=None, vecenv=None):
 
     ob, info = vecenv.reset()
     driver = vecenv.driver_env
+
+    # Populate inferred trajectory arrays for visualization
+    driver._prepare_human_data()
+
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
@@ -1463,7 +1467,6 @@ def verify(env_name, args=None, vecenv=None):
                 break
 
     vecenv.close()
-
 
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)
