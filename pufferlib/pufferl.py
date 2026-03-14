@@ -764,13 +764,10 @@ class PuffeRL:
 
         config = self.config
         for k in list(self.stats.keys()):
-            v = self.stats[k]
             try:
-                v = np.mean(v)
-            except:
+                self.stats[k] = np.mean(self.stats[k])
+            except Exception:
                 del self.stats[k]
-
-            self.stats[k] = v
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
@@ -794,7 +791,7 @@ class PuffeRL:
         self.logger.log(logs, agent_steps)
 
         # Drain eval results queue (populated by async eval threads and render processes)
-        while not self._eval_results_queue.empty():
+        while True:
             try:
                 payload = self._eval_results_queue.get_nowait()
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
@@ -845,7 +842,7 @@ class PuffeRL:
                 self.render_queue.join_thread()
 
         # Final drain of eval results queue before finishing wandb
-        while not self._eval_results_queue.empty():
+        while True:
             try:
                 payload = self._eval_results_queue.get_nowait()
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
