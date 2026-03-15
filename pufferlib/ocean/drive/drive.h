@@ -63,7 +63,7 @@
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
 
-// Threshold for data selection: trajectories above threshold are excluded from 
+// Threshold for data selection: trajectories above threshold are excluded from
 // human demonstrations
 #define ADE_THRESHOLD 3.0f
 
@@ -244,7 +244,7 @@ struct Entity {
     float *expert_delta_yaw;
     float *inferred_traj_x;
     float *inferred_traj_y;
-    float inferred_ade; 
+    float inferred_ade;
     float width;
     float length;
     float height;
@@ -644,7 +644,7 @@ void set_start_position(Drive *env) {
         e->jerk_long = 0.0f;
         e->jerk_lat = 0.0f;
         e->steering_angle = 0.0f;
-        e->wheelbase = 0.6f * e->length;
+        e->wheelbase = e->length;
     }
 }
 
@@ -1713,6 +1713,8 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float beta = tanh(.5 * tanf(steering));
 
         // New heading
+        // Note: uses agent->length directly, must match wheelbase used in infer_human_actions()
+        // Currently wheelbase == length (set in set_start_position)
         float yaw_rate = (signed_speed * cosf(beta) * tanf(steering)) / agent->length;
 
         // New velocity
@@ -2682,7 +2684,8 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
         if (e->inferred_traj_x && e->traj_valid) {
             for (int t = 0; t < e->array_size; t++) {
-                if (!e->traj_valid[t]) continue;
+                if (!e->traj_valid[t])
+                    continue;
                 float dx = e->inferred_traj_x[t] - e->traj_x[t];
                 float dy = e->inferred_traj_y[t] - e->traj_y[t];
                 total_error += sqrtf(dx * dx + dy * dy);
@@ -2694,8 +2697,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
         e->inferred_ade = (count > 0) ? total_error / count : -1.0f;
 
-        int unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD
-                     || count < 3 || is_static);
+        int unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD || count < 3 || is_static);
 
         if (unfit) {
             for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
@@ -3221,18 +3223,20 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
 void draw_inferred_trajectory(Drive *env, int agent_array_idx) {
     int idx = env->active_agent_indices[agent_array_idx];
     Entity *e = &env->entities[idx];
-    if (!e->inferred_traj_x || !e->traj_valid) return;
+    if (!e->inferred_traj_x || !e->traj_valid)
+        return;
 
     float zg = Z_ROAD_MARKINGS, zs = Z_ROAD_MARKINGS + 0.01f;
 
     for (int t = 0; t < e->array_size - 1; t++) {
-        if (!e->traj_valid[t]) continue;
+        if (!e->traj_valid[t])
+            continue;
 
         // Ground truth (green)
         DrawSphere((Vector3){e->traj_x[t], e->traj_y[t], zg}, 0.15f, LIGHTGREEN);
         if (e->traj_valid[t + 1])
-            DrawLine3D((Vector3){e->traj_x[t], e->traj_y[t], zg},
-                       (Vector3){e->traj_x[t + 1], e->traj_y[t + 1], zg}, Fade(LIGHTGREEN, 0.6f));
+            DrawLine3D((Vector3){e->traj_x[t], e->traj_y[t], zg}, (Vector3){e->traj_x[t + 1], e->traj_y[t + 1], zg},
+                       Fade(LIGHTGREEN, 0.6f));
 
         // Inferred (purple)
         DrawSphere((Vector3){e->inferred_traj_x[t], e->inferred_traj_y[t], zs}, 0.2f, LIGHT_PURPLE);
@@ -3255,7 +3259,7 @@ void draw_inferred_trajectory(Drive *env, int agent_array_idx) {
 }
 
 void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, int show_grid) {
-    
+
     int has_inferred = 0;
     if (show_grid) {
         float grid_start_x = env->grid_map->top_left_x;
@@ -3568,25 +3572,27 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         for (int i = 0; i < env->active_agent_count; i++) {
             int idx = env->active_agent_indices[i];
             Entity *e = &env->entities[idx];
-            if (e->inferred_ade < 0) continue;
+            if (e->inferred_ade < 0)
+                continue;
             int mid = e->array_size / 2;
             Vector2 sp = GetWorldToScreen((Vector3){e->traj_x[mid], e->traj_y[mid], Z_AGENT_DETAILS}, client->camera);
             int sx = (int)sp.x, sy = (int)sp.y;
-            if (sx < 0 || sx > client->width || sy < 0 || sy > client->height) continue;
+            if (sx < 0 || sx > client->width || sy < 0 || sy > client->height)
+                continue;
             char buf[32];
             // Check if unfit (same criteria as c_collect_expert_data)
             int valid_count = 0;
             int is_static = 1;
             if (e->traj_valid) {
                 for (int t = 0; t < e->array_size; t++) {
-                    if (!e->traj_valid[t]) continue;
+                    if (!e->traj_valid[t])
+                        continue;
                     valid_count++;
                     if (valid_count > 1 && (e->traj_x[t] != e->traj_x[0] || e->traj_y[t] != e->traj_y[0]))
                         is_static = 0;
                 }
             }
-            int unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD
-                         || valid_count < 3 || is_static);
+            int unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD || valid_count < 3 || is_static);
             Color label_color = unfit ? PUFF_RED : PUFF_WHITE;
             snprintf(buf, sizeof(buf), "ADE:%.2fm", e->inferred_ade);
             DrawText(buf, sx - MeasureText(buf, 16) / 2, sy, 16, label_color);
@@ -3612,7 +3618,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             if (sx < 0 || sx > client->width || sy < 0 || sy > client->height)
                 continue;
             char text[32];
-                snprintf(text, sizeof(text), idx == env->sdc_track_index ? "sdc" : "%d", idx);
+            snprintf(text, sizeof(text), idx == env->sdc_track_index ? "sdc" : "%d", idx);
             DrawText(text, sx - MeasureText(text, 20) / 2, sy, 20, PUFF_WHITE);
         }
     }
@@ -3753,7 +3759,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             } else if (env->dynamics_model == CLASSIC) {
                 DrawText("Classic dynamics model", 10, 45, 20, LIGHT_PURPLE);
             }
-            //DrawText(env->action_type == 1 ? "Actions: continuous" : "Actions: discrete", 10, 65, 20, LIGHT_PURPLE);
+            // DrawText(env->action_type == 1 ? "Actions: continuous" : "Actions: discrete", 10, 65, 20, LIGHT_PURPLE);
         }
 
         int human_idx = env->active_agent_indices[env->human_agent_idx];
