@@ -629,6 +629,15 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
+    def set_predicted_trajectories(self, traj_x, traj_y):
+        """Set predicted trajectories for visualization.
+
+        Args:
+            traj_x: numpy float32 array of shape (total_agents * traj_len,) with world x coords
+            traj_y: numpy float32 array of shape (total_agents * traj_len,) with world y coords
+        """
+        binding.vec_set_predicted_trajectories(self.c_envs, traj_x, traj_y)
+
     def get_ground_truth_trajectories(self):
         """Get ground truth trajectories for all active agents.
 

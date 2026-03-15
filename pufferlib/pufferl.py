@@ -66,10 +66,19 @@ signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
-def convert_action_integers_to_r2(actions: torch.Tensor) -> torch.Tensor:
+def convert_single_action_integers_to_r2(actions: torch.Tensor) -> torch.Tensor:
     accel = actions // 13
     steering = actions % 13
     return torch.cat([accel.unsqueeze(-1), steering.unsqueeze(-1)], dim=-1)
+
+
+def convert_bptt_action_integers_to_r2(actions: torch.Tensor) -> torch.Tensor:
+    accel = actions // 13
+    steering = actions % 13
+    if actions.shape[1] == 1:
+        return torch.cat([accel.unsqueeze(-1), steering.unsqueeze(-1)], dim=-1)
+    else:
+        return torch.cat([accel, steering], dim=-1)
 
 
 class PuffeRL:
@@ -156,6 +165,7 @@ class PuffeRL:
         self.rewards = torch.zeros(segments, horizon, device=device)
         self.r_commitments = torch.zeros(segments, horizon, device=device)
         self.terminals = torch.zeros(segments, horizon, device=device)
+        self.prev_terminals = torch.zeros(segments, 1, device=device)
         self.truncations = torch.zeros(segments, horizon, device=device)
         self.ratio = torch.ones(segments, horizon, device=device)
         self.importance = torch.ones(segments, horizon, device=device)
@@ -338,15 +348,9 @@ class PuffeRL:
                     logits, actions_trajectory_length=self.actions_trajectory_length
                 )  # sample logits now accepts a length of actions_trajectory to output a full trajectory of actions
 
-                action_N2 = convert_action_integers_to_r2(action)
-                traj, heading = rollout_state_trajectory_ego(action_N2, observations=o_device)
-                r_commitment = compute_l2_loss_ego_action_traj(
-                    traj, self.prev_state_traj[env_id.start : env_id.stop], heading
-                )
-                r = r + r_commitment
-                # r = torch.clamp(r, -1, 1)
+                r = torch.clamp(r, -1, 1)
+                action_N2 = convert_single_action_integers_to_r2(action)
                 self.prev_actions_traj[env_id.start : env_id.stop] = action_N2.detach()
-                self.prev_state_traj[env_id.start : env_id.stop] = traj.detach()
 
             profile("eval_copy", epoch)
             with torch.no_grad():
@@ -373,7 +377,6 @@ class PuffeRL:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
-                self.r_commitments[batch_rows, l] = r_commitment
                 self.terminals[batch_rows, l] = done_mask.float()
                 self.truncations[batch_rows, l] = t.float()
                 self.values[batch_rows, l] = value.flatten()
@@ -427,6 +430,15 @@ class PuffeRL:
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
 
+        action_N2 = convert_bptt_action_integers_to_r2(self.actions)
+        traj, heading = rollout_state_trajectory_ego(action_N2, observations=self.observations)
+
+        r_commitment = compute_l2_loss_ego_action_traj(
+            traj, self.prev_state_traj, heading, torch.cat([self.prev_terminals, self.terminals[:, :-1]], dim=1)
+        )
+        self.prev_state_traj = traj[:, -1, ...].clone().detach()
+        self.prev_terminals = self.terminals[:, [-1]]
+
         for mb in range(self.total_minibatches):
             profile("train_misc", epoch, nest=True)
             self.amp_context.__enter__()
@@ -435,7 +447,7 @@ class PuffeRL:
             advantages = torch.zeros(shape, device=device)
             advantages = compute_puff_advantage(
                 self.values,
-                self.rewards,
+                self.rewards + r_commitment,
                 self.terminals,
                 self.ratio,
                 advantages,
@@ -454,7 +466,7 @@ class PuffeRL:
             mb_obs = self.observations[idx]
             mb_actions = self.actions[idx]
             mb_logprobs = self.logprobs[idx]
-            mb_rewards = self.rewards[idx]
+            mb_rewards = self.rewards[idx] + r_commitment[idx]
             mb_terminals = self.terminals[idx]
             mb_truncations = self.truncations[idx]
             mb_ratio = self.ratio[idx]
@@ -531,7 +543,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["r_commitment"] += self.r_commitments[idx].mean().item() / self.total_minibatches
+            losses["r_commitment"] += r_commitment[idx].mean().item() / self.total_minibatches
             # losses["action_prediction"] += config["action_pred_coef"] * consistency_loss.item() / self.total_minibatches
 
             # Learn on accumulated minibatches
@@ -576,12 +588,12 @@ class PuffeRL:
             prefix = os.path.join(artifacts_dir, f"epoch_{self.epoch:06d}")
             np.savez(
                 f"{prefix}_actions.npz",
-                convert_action_integers_to_r2(self.actions.squeeze(-1)).detach()[save_idxs, ...].cpu(),
+                convert_bptt_action_integers_to_r2(self.actions.squeeze(-1)).detach()[save_idxs, ...].cpu(),
             )
             with open(f"{prefix}_shapes.json", "w") as f:
                 json.dump(
                     {
-                        "actions": list(convert_action_integers_to_r2(self.actions.squeeze(-1)).shape),
+                        "actions": list(convert_bptt_action_integers_to_r2(self.actions.squeeze(-1)).shape),
                     },
                     f,
                 )

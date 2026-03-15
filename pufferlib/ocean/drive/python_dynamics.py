@@ -12,10 +12,10 @@ def rollout_state_trajectory_ego(
     this is a temporary thing to make sure we can rollout a trajecotry of actions into a trajectory of coordinates
 
     input shapes (K is the sequence length)
-    actions_N2 : B X K X 12
-    initial_position : B X 3 (x, y, heading)
-    initial_speed_vector : B X 2 (vx, vy)
-    length : B x 1
+    actions_N2 : B x BPTT x K x 2
+    initial_position : B x BPTT x 3 (x, y, heading)
+    initial_speed_vector : B x BPTT x 2 (vx, vy)
+    length : B x BPTT x 1
     """
     MAX_SPEED = 100.0
     MAX_LENGTH = 30.0
@@ -28,6 +28,8 @@ def rollout_state_trajectory_ego(
         dtype=torch.float32,
     )
     _B = actions_N2.shape[0]
+    _BPTT = actions_N2.shape[1]
+    tensorshapes = (_B, _BPTT)
 
     # convert the action into nice stuff
     accel_values = ACCELERATION_VALUES[actions_N2[..., 0].long()]  # convert into long to use it as an index
@@ -37,27 +39,27 @@ def rollout_state_trajectory_ego(
     signed_speed = observations[..., 3] * MAX_SPEED  # already in obs, de-normalize
     length = observations[..., 5] * MAX_LENGTH
 
-    x = torch.zeros(_B, device=actions_N2.device, dtype=torch.float32)
-    y = torch.zeros(_B, device=actions_N2.device, dtype=torch.float32)
-    heading = torch.zeros(_B, device=actions_N2.device, dtype=torch.float32)
+    x = torch.zeros(tensorshapes, device=actions_N2.device, dtype=torch.float32)
+    y = torch.zeros(tensorshapes, device=actions_N2.device, dtype=torch.float32)
+    heading = torch.zeros(tensorshapes, device=actions_N2.device, dtype=torch.float32)
 
     vx = signed_speed
-    vy = torch.zeros(_B, device=actions_N2.device, dtype=torch.float32)
+    vy = torch.zeros(tensorshapes, device=actions_N2.device, dtype=torch.float32)
 
     positions = []
 
-    for k in range(actions_N2.shape[1]):
+    for k in range(actions_N2.shape[2]):
         speed_magnitude = torch.sqrt(vx**2 + vy**2)
         v_dot_heading = vx * torch.cos(heading) + vy * torch.sin(heading)
         signed_speed = torch.copysign(speed_magnitude, v_dot_heading)
 
-        signed_speed = signed_speed + accel_values[:, k] * dt
+        signed_speed = signed_speed + accel_values[..., k] * dt
         signed_speed = torch.where(signed_speed > MAX_SPEED, MAX_SPEED, signed_speed)
 
         # yaw rate i.e. how much you can steeer
 
-        beta = torch.tanh(0.5 * torch.tan(steering_values[:, k]))
-        yaw_rate = (signed_speed * torch.cos(beta) * torch.tan(steering_values[:, k])) / length
+        beta = torch.tanh(0.5 * torch.tan(steering_values[..., k]))
+        yaw_rate = (signed_speed * torch.cos(beta) * torch.tan(steering_values[..., k])) / length
 
         new_vx = signed_speed * torch.cos(heading + beta)
         new_vy = signed_speed * torch.sin(heading + beta)
@@ -70,17 +72,29 @@ def rollout_state_trajectory_ego(
         if k == 0:
             heading_t0 = heading
 
-    return torch.stack(positions, dim=1), heading_t0  # B x K x 2
+    return torch.stack(positions, dim=2), heading_t0  # B x BPTT x K x 2
 
 
-def compute_l2_loss_ego_action_traj(traj: torch.Tensor, traj_tm1: torch.Tensor, heading: torch.Tensor) -> torch.Tensor:
+def compute_l2_loss_ego_action_traj(
+    traj: torch.Tensor, traj_tm1: torch.Tensor, heading: torch.Tensor, prev_shifted_terminals: torch.Tensor
+) -> torch.Tensor:
     """
     this function computes the difference in implictly planned occupied states between two action sequences
     since the framing is always ego, we have to zero in and rotate the second trajectory so that it matches
     the frame of the first one
+
+    expects:
+
+    traj : B x BPTT x K x 2
+    traj_tm1 : B x K x 2
+    heading : B x BPTT x 1
     """
 
-    zeroed = traj_tm1[:, 1:, :] - traj_tm1[:, 1, :].unsqueeze(1)
+    newtraj = torch.cat([traj_tm1.unsqueeze(1), traj], dim=1)
+
+    if newtraj.shape[2] == 1:
+        return torch.zeros_like(heading)
+    zeroed = newtraj[:, :-1, 1:, :] - newtraj[:, :-1, 1, :].unsqueeze(2)
     cos_heading = torch.cos(heading)[..., None]
     sin_heading = torch.sin(heading)[..., None]
     rotated_x = zeroed[..., 0] * cos_heading - zeroed[..., 1] * sin_heading
@@ -88,8 +102,39 @@ def compute_l2_loss_ego_action_traj(traj: torch.Tensor, traj_tm1: torch.Tensor, 
 
     rotated = torch.stack([rotated_x, rotated_y], dim=-1)  # this should be B X K-1 X 2
 
-    loss = torch.sqrt(((traj[:, :-1, :] - rotated) ** 2).sum(-1).sum(-1))
+    per_point_l2 = torch.sqrt(((newtraj[:, 1:, :-1, :] - rotated[:, :, :, :].detach()) ** 2).sum(-1))
+    per_point_l2 = per_point_l2 * torch.abs(prev_shifted_terminals - 1).unsqueeze(-1)
+    diffs = newtraj[:, 1:, :1, :] - newtraj[:, 1:, :-1, :]
+    arc_length = torch.sqrt((diffs**2).sum(-1)).sum(-1)
+    loss = per_point_l2.sum(-1) / (arc_length + 1e-6)
     return -loss / 500.0
+
+
+def ego_trajectories_to_world(ego_traj, agent_x, agent_y, agent_heading):
+    """Transform ego-frame trajectories to world coordinates per agent.
+
+    Args:
+        ego_traj: [B, K, 2] ego-frame positions (from rollout_state_trajectory_ego)
+        agent_x: [B] world x positions (numpy, from get_global_agent_state)
+        agent_y: [B] world y positions (numpy, from get_global_agent_state)
+        agent_heading: [B] world heading (numpy, from get_global_agent_state)
+
+    Returns:
+        world_x: numpy float32 [B * K] flattened world x coords (ready for set_predicted_trajectories)
+        world_y: numpy float32 [B * K] flattened world y coords
+    """
+    cos_h = np.cos(agent_heading)[:, None]  # [B, 1]
+    sin_h = np.sin(agent_heading)[:, None]
+
+    # ego_traj is torch, move to numpy
+    ex = ego_traj[..., 0].detach().cpu().numpy()  # [B, K]
+    ey = ego_traj[..., 1].detach().cpu().numpy()
+
+    # Rotate ego frame into world frame and translate
+    world_x = ex * cos_h - ey * sin_h + agent_x[:, None]
+    world_y = ex * sin_h + ey * cos_h + agent_y[:, None]
+
+    return world_x.ravel().astype(np.float32), world_y.ravel().astype(np.float32)
 
 
 def rollout_state_trajectory(

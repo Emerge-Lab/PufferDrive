@@ -907,6 +907,40 @@ static PyObject *vec_get_road_edge_polylines(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_predicted_trajectories(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_predicted_trajectories requires 3 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject *x_arr = PyTuple_GetItem(args, 1);
+    PyObject *y_arr = PyTuple_GetItem(args, 2);
+
+    if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr)) {
+        PyErr_SetString(PyExc_TypeError, "x and y must be NumPy arrays");
+        return NULL;
+    }
+
+    float *x_base = (float *)PyArray_DATA((PyArrayObject *)x_arr);
+    float *y_base = (float *)PyArray_DATA((PyArrayObject *)y_arr);
+
+    int offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *)vec->envs[i];
+        int n = drive->active_agent_count * drive->predicted_traj_len;
+        memcpy(drive->predicted_traj_x, &x_base[offset], n * sizeof(float));
+        memcpy(drive->predicted_traj_y, &y_base[offset], n * sizeof(float));
+        offset += n;
+    }
+
+    Py_RETURN_NONE;
+}
+
 static double unpack(PyObject *kwargs, char *key) {
     PyObject *val = PyDict_GetItemString(kwargs, key);
     if (val == NULL) {
@@ -988,6 +1022,8 @@ static PyMethodDef methods[] = {
      "Get road edge polyline counts from vectorized env"},
     {"vec_get_road_edge_polylines", vec_get_road_edge_polylines, METH_VARARGS,
      "Get road edge polylines from vectorized env"},
+    {"vec_set_predicted_trajectories", vec_set_predicted_trajectories, METH_VARARGS,
+     "Set predicted trajectories from Python-computed world coordinates"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}};
 
