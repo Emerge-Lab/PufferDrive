@@ -379,6 +379,13 @@ def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/oce
     config.set("env", "reward_randomization", "1")
     config.set("env", "reward_conditioning", "1")
 
+    # Match the metrics subprocess setup so the render shows the same behavior
+    config.set("env", "episode_length", str(safe_eval_config.get("episode_length", 1000)))
+    config.set("env", "resample_frequency", "0")
+    config.set("env", "num_agents", str(safe_eval_config.get("num_agents", 64)))
+    config.set("env", "min_goal_distance", str(safe_eval_config.get("min_goal_distance", 0.5)))
+    config.set("env", "max_goal_distance", str(safe_eval_config.get("max_goal_distance", 1000.0)))
+
     fd, tmp_path = tempfile.mkstemp(suffix=".ini", prefix="safe_eval_")
     with os.fdopen(fd, "w") as f:
         config.write(f)
