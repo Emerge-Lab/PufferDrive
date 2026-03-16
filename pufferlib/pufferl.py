@@ -146,7 +146,7 @@ class PuffeRL:
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
         )
 
-        self.prev_actions_traj = torch.ones(
+        self.prev_actions_traj = -torch.ones(
             total_agents,
             *atn_traj_size,
             device=device,
@@ -341,7 +341,10 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                prev_traj = self.prev_actions_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1).detach()
+                prev_traj = self.prev_actions_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1)
+                prev_traj[done_mask.bool()] = -1.0
+                if config.get("actions_trajectory_length", 80) == 1:
+                    prev_traj = torch.zeros_like(prev_traj)
                 o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
                 logits, value = self.policy.forward_eval(o_device_aug, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(
@@ -350,7 +353,7 @@ class PuffeRL:
 
                 r = torch.clamp(r, -1, 1)
                 action_N2 = convert_single_action_integers_to_r2(action)
-                self.prev_actions_traj[env_id.start : env_id.stop] = action_N2.detach()
+                self.prev_actions_traj[env_id.start : env_id.stop] = action_N2
 
             profile("eval_copy", epoch)
             with torch.no_grad():
@@ -433,10 +436,9 @@ class PuffeRL:
         action_N2 = convert_bptt_action_integers_to_r2(self.actions)
         traj, heading = rollout_state_trajectory_ego(action_N2, observations=self.observations)
 
-        r_commitment = compute_l2_loss_ego_action_traj(
-            traj, self.prev_state_traj, heading, torch.cat([self.prev_terminals, self.terminals[:, :-1]], dim=1)
-        )
-        self.prev_state_traj = traj[:, -1, ...].clone().detach()
+        r_commitment = compute_l2_loss_ego_action_traj(traj, self.prev_state_traj, heading, self.terminals)
+        r_commitment = r_commitment.detach()
+        self.prev_state_traj = traj[:, -1, ...]
         self.prev_terminals = self.terminals[:, [-1]]
 
         for mb in range(self.total_minibatches):
@@ -584,19 +586,19 @@ class PuffeRL:
             run_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
             artifacts_dir = os.path.join(run_dir, "artifacts")
             os.makedirs(artifacts_dir, exist_ok=True)
-            save_idxs = np.random.choice(self.observations.shape[0], 1000)
-            prefix = os.path.join(artifacts_dir, f"epoch_{self.epoch:06d}")
-            np.savez(
-                f"{prefix}_actions.npz",
-                convert_bptt_action_integers_to_r2(self.actions.squeeze(-1)).detach()[save_idxs, ...].cpu(),
-            )
-            with open(f"{prefix}_shapes.json", "w") as f:
-                json.dump(
-                    {
-                        "actions": list(convert_bptt_action_integers_to_r2(self.actions.squeeze(-1)).shape),
-                    },
-                    f,
-                )
+            # save_idxs = np.random.choice(self.observations.shape[0], 1000)
+            # prefix = os.path.join(artifacts_dir, f"epoch_{self.epoch:06d}")
+            # np.savez(
+            #     f"{prefix}_actions.npz",
+            #     convert_bptt_action_integers_to_r2(self.actions.squeeze(-1)).detach()[save_idxs, ...].cpu(),
+            # )
+            # with open(f"{prefix}_shapes.json", "w") as f:
+            #     json.dump(
+            #         {
+            #             "actions": list(convert_bptt_action_integers_to_r2(self.actions.squeeze(-1)).shape),
+            #         },
+            #         f,
+            #     )
 
             if self.render and self.epoch % self.render_interval == 0:
                 model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")

@@ -229,3 +229,43 @@ def sample_logits(logits, action=None, actions_trajectory_length=80):
         return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0)
 
     return action.T, logprob.sum(0), logits_entropy
+
+
+def sample_logits_old(logits, action=None):
+    is_discrete = isinstance(logits, torch.Tensor)
+    if isinstance(logits, torch.distributions.Normal):
+        batch = logits.loc.shape[0]
+        if action is None:
+            action = logits.sample().view(batch, -1)
+
+        log_probs = logits.log_prob(action.view(batch, -1)).sum(1)
+        logits_entropy = logits.entropy().view(batch, -1).sum(1)
+        return action, log_probs, logits_entropy
+    elif is_discrete:
+        logits = logits.unsqueeze(0)
+    # TODO: Double check this
+    else:  # multi-discrete
+        logits = torch.nn.utils.rnn.pad_sequence(
+            [l.transpose(0, 1) for l in logits], batch_first=False, padding_value=-torch.inf
+        ).permute(1, 2, 0)
+
+    # This can fail on nans etc
+    normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
+    probs = logits_to_probs(logits)
+
+    if action is None:
+        probs = torch.nan_to_num(probs, 1e-8, 1e-8, 1e-8)
+        action = torch.multinomial(probs.reshape(-1, probs.shape[-1]), 1, replacement=True).int()
+        action = action.reshape(probs.shape[:-1])
+    else:
+        batch = logits[0].shape[0]
+        action = action.view(batch, -1).T
+
+    assert len(logits) == len(action)
+    logprob = log_prob(normalized_logits, action)
+    logits_entropy = entropy(normalized_logits).sum(0)
+
+    if is_discrete:
+        return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0)
+
+    return action.T, logprob.sum(0), logits_entropy

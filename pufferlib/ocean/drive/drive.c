@@ -21,7 +21,7 @@ void test_drivenet() {
     // Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights *weights = load_weights("puffer_drive_weights.bin");
     int reward_conditioning = 0;
-    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, reward_conditioning);
+    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, reward_conditioning, PREDICTED_TRAJ_LEN_DEFAULT);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {
@@ -123,7 +123,8 @@ void demo() {
     c_reset(&env);
     c_render(&env);
     Weights *weights = load_weights("best_policy_with_reward_conditioning.bin");
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning,
+                                  env.predicted_traj_len);
 
     int accel_delta = 1;
     int steer_delta = 2;

@@ -76,7 +76,10 @@ def rollout_state_trajectory_ego(
 
 
 def compute_l2_loss_ego_action_traj(
-    traj: torch.Tensor, traj_tm1: torch.Tensor, heading: torch.Tensor, prev_shifted_terminals: torch.Tensor
+    traj: torch.Tensor,
+    traj_tm1: torch.Tensor,
+    heading: torch.Tensor,
+    terminals: torch.Tensor,
 ) -> torch.Tensor:
     """
     this function computes the difference in implictly planned occupied states between two action sequences
@@ -88,6 +91,7 @@ def compute_l2_loss_ego_action_traj(
     traj : B x BPTT x K x 2
     traj_tm1 : B x K x 2
     heading : B x BPTT x 1
+    terminals : B x BPTT (1 = auto-reset happened, obs is post-reset)
     """
 
     newtraj = torch.cat([traj_tm1.unsqueeze(1), traj], dim=1)
@@ -103,9 +107,10 @@ def compute_l2_loss_ego_action_traj(
     rotated = torch.stack([rotated_x, rotated_y], dim=-1)  # this should be B X K-1 X 2
 
     per_point_l2 = torch.sqrt(((newtraj[:, 1:, :-1, :] - rotated[:, :, :, :].detach()) ** 2).sum(-1))
-    per_point_l2 = per_point_l2 * torch.abs(prev_shifted_terminals - 1).unsqueeze(-1)
+    per_point_l2 = per_point_l2 * (1.0 - terminals).unsqueeze(-1)
     diffs = newtraj[:, 1:, :1, :] - newtraj[:, 1:, :-1, :]
     arc_length = torch.sqrt((diffs**2).sum(-1)).sum(-1)
+    arc_length = torch.where(arc_length > 5, arc_length, 5.0)
     loss = per_point_l2.sum(-1) / (arc_length + 1e-6)
     return -loss / 500.0
 
