@@ -312,9 +312,12 @@ void free_entity(Entity *entity) {
 }
 
 // Utility functions
-float relative_distance(float a, float b) {
-    float distance = sqrtf(powf(a - b, 2));
-    return distance;
+static float gaussian_noise(float sigma) {
+    if (sigma <= 0.0f)
+        return 0.0f;
+    float u1 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
+    float u2 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
+    return sigma * sqrtf(-2.0f * logf(u1)) * cosf(2.0f * M_PI * u2);
 }
 
 float relative_distance_2d(float x1, float y1, float x2, float y2) {
@@ -413,6 +416,12 @@ struct Drive {
     int control_mode;
     int max_controlled_agents;
     int render_mode;
+    // Noise configuration
+    float dynamics_noise_pos;     // σ for position perturbation (meters)
+    float dynamics_noise_heading; // σ for heading perturbation (radians)
+    float obs_noise_pos;          // σ for partner position noise
+    float obs_noise_speed;        // σ for partner speed noise
+    float obs_noise_road;         // σ for road segment position noise
 };
 
 void add_log(Drive *env) {
@@ -1579,6 +1588,11 @@ void init(Drive *env) {
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
+    env->dynamics_noise_pos = 0.0125f;    // keep, empirically validated (Gigaflow)
+    env->dynamics_noise_heading = 0.005f; // keep, proportionate
+    env->obs_noise_pos = 0.02f;           // obs-space (~1m equivalent)
+    env->obs_noise_speed = 0.005f;        // obs-space (~0.5 m/s equivalent)
+    env->obs_noise_road = 0.0f;           // drop, irrelevant for transfer
 }
 
 void close_client(Client *client);
@@ -1884,6 +1898,23 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
+void apply_dynamics_noise(Drive *env, int agent_idx) {
+    Entity *agent = &env->entities[agent_idx];
+    if (agent->removed || agent->stopped)
+        return;
+
+    if (env->dynamics_noise_pos > 0.0f) {
+        agent->x += gaussian_noise(env->dynamics_noise_pos);
+        agent->y += gaussian_noise(env->dynamics_noise_pos);
+    }
+    if (env->dynamics_noise_heading > 0.0f) {
+        agent->heading += gaussian_noise(env->dynamics_noise_heading);
+        agent->heading = normalize_heading(agent->heading);
+        agent->heading_x = cosf(agent->heading);
+        agent->heading_y = sinf(agent->heading);
+    }
+}
+
 static inline int is_in_track_to_predicts(Drive *env, int agent_idx) {
     if (env->tracks_to_predict_indices == NULL || env->num_tracks_to_predict == 0) {
         return 0;
@@ -2053,10 +2084,10 @@ void compute_observations(Drive *env) {
             float rel_x = dx * cos_heading + dy * sin_heading;
             float rel_y = -dx * sin_heading + dy * cos_heading;
             // Store observations with correct indexing
-            obs[obs_idx] = rel_x * 0.02f;
-            obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH;
-            obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN;
+            obs[obs_idx] = rel_x * 0.02f + gaussian_noise(env->obs_noise_pos);
+            obs[obs_idx + 1] = rel_y * 0.02f + gaussian_noise(env->obs_noise_pos);
+            obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH + gaussian_noise(env->obs_noise_pos);
+            obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN + gaussian_noise(env->obs_noise_pos);
             // relative heading
             float rel_heading_x =
                 other_entity->heading_x * ego_entity->heading_x +
@@ -2074,7 +2105,7 @@ void compute_observations(Drive *env) {
             float other_v_dot_heading =
                 other_entity->vx * other_entity->heading_x + other_entity->vy * other_entity->heading_y;
             float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
-            obs[obs_idx + 6] = other_signed_speed / MAX_SPEED;
+            obs[obs_idx + 6] = other_signed_speed / MAX_SPEED + gaussian_noise(env->obs_noise_speed);
             cars_seen++;
             obs_idx += 7; // Move to next observation slot
         }
@@ -2342,6 +2373,9 @@ void c_step(Drive *env) {
                 override_action_with_expert(env, i, agent_idx, env->timestep - 1);
             }
             move_dynamics(env, i, agent_idx);
+
+            // Apply sensor noise
+            apply_dynamics_noise(env, agent_idx);
 
             // // Tiny jerk penalty for smoothness
             // if (env->dynamics_model == CLASSIC || env->dynamics_model == DELTA_LOCAL) {
