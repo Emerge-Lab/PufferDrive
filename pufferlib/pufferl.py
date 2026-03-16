@@ -1425,12 +1425,28 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
 
 def verify(env_name, args=None, vecenv=None):
-    """Verify human demonstrations."""
+    """Verify human demonstrations or BC policy behavior."""
 
     args = args or load_config(env_name)
     args["env"]["termination_mode"] = 0
-    # Options: "expert_replay", "inferred_expert_actions"
-    args["env"]["control_mode"] = "inferred_expert_actions"
+
+    # Determine verification mode: "bc_policy", "expert_replay", or "inferred_expert_actions"
+    verify_mode = "bc_policy" #args.get("verify_mode", "inferred_expert_actions")
+
+    if verify_mode == "bc_policy":
+        # BC policy controls all agents directly
+        args["env"]["control_mode"] = "control_agents"
+        args["env"]["reg_mode"] = "kl_anchor"  # Needed to trigger BC loading
+        args["env"]["control_mode"] = "control_agents"
+        args["env"]["fix_lambdas"] = True
+        args["env"]["fix_rewards"] = True
+        args["env"]["lambda_value"] = 0.0
+        args["env"]["reward_vehicle_collision"] = -1.0
+        args["env"]["reward_offroad_collision"] = -1.0
+        args["env"]["reward_goal"] = 1.0
+    else:
+        # Options: "expert_replay", "inferred_expert_actions"
+        args["env"]["control_mode"] = verify_mode
 
     backend = args["vec"]["backend"]
     if backend != "PufferEnv":
@@ -1443,8 +1459,19 @@ def verify(env_name, args=None, vecenv=None):
     ob, info = vecenv.reset()
     driver = vecenv.driver_env
 
-    # Populate inferred trajectory arrays for visualization
-    driver._prepare_human_data()
+    if verify_mode == "bc_policy":
+        # Load BC policy via the existing regularization strategy
+        device = args["train"]["device"]
+        bc_policy, _ = driver._init_regularization_strategy(device=device)
+        if bc_policy is None:
+            raise RuntimeError(
+                "Failed to load BC policy. Ensure anchor_cpt_path is set "
+                "and a trained BC checkpoint exists."
+            )
+        bc_policy.eval()
+    else:
+        # Populate inferred trajectory arrays for visualization
+        driver._prepare_human_data()
 
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
@@ -1456,10 +1483,26 @@ def verify(env_name, args=None, vecenv=None):
     while True:
         driver.render(draw_traces=True)
 
-        # Note: This does not have an effect when control_mode is "inferred_expert_actions" or "expert_replay"
-        placeholder_action = vecenv.action_space.sample()
+        if verify_mode == "bc_policy":
+            with torch.no_grad():
+                ob_tensor = torch.as_tensor(ob).to(device)
+                logits_list = bc_policy.get_action_dist_logits(ob_tensor)
 
-        ob, reward, done, truncated, info = vecenv.step(placeholder_action)
+                if len(logits_list) == 1:
+                    # Joint action space (classic dynamics)
+                    action = torch.argmax(logits_list[0], dim=-1, keepdim=True)
+                else:
+                    # Multi-head (delta_local)
+                    action = torch.stack(
+                        [torch.argmax(l, dim=-1) for l in logits_list], dim=-1
+                    )
+
+                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+        else:
+            # Expert replay / inferred expert actions: env handles actions internally, just need a shape
+            action = vecenv.action_space.sample()
+        
+        ob, reward, done, truncated, info = vecenv.step(action)
 
         if driver.render_mode == 1:
             frame_count += 1

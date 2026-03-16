@@ -97,11 +97,13 @@ def load_data(driver_env):
     obs = driver_env.expert_observations_full.float()
     actions = driver_env.expert_actions_discrete.long()
 
-    # Zero out conditioning slots for BC training
-    obs[:, driver_env.lambda_obs_idx] = 0.0
-    obs[:, driver_env.reward_veh_obs_idx] = 0.0
-    obs[:, driver_env.reward_offroad_obs_idx] = 0.0
-    obs[:, driver_env.reward_goal_obs_idx] = 0.0
+    print(f'unique actions: {len(np.unique(actions))}, {np.unique(actions)}')
+
+    # # Zero out conditioning slots for BC training
+    # obs[:, driver_env.lambda_obs_idx] = 0.0
+    # obs[:, driver_env.reward_veh_obs_idx] = 0.0
+    # obs[:, driver_env.reward_offroad_obs_idx] = 0.0
+    # obs[:, driver_env.reward_goal_obs_idx] = 0.0
 
     return TensorDataset(obs, actions)
 
@@ -138,8 +140,8 @@ if __name__ == "__main__":
 
     args = load_config("puffer_drive")
     args["vec"]["backend"] = "Serial"
-    args["env"]["num_maps"] = 100
-    args["env"]["map_dir"] = "resources/drive/binaries/interactive_data_training_100"
+    args["env"]["num_maps"] = 1
+    args["env"]["map_dir"] = "resources/drive/binaries/selected"
     args["env"]["reg_mode"] = "log_prob_direct"
     args["env"]["dynamics_model"] = dynamics_model
     args["base"]["rnn_name"] = "none"
@@ -152,9 +154,9 @@ if __name__ == "__main__":
         "hidden_size": 512,
         "output_sizes": output_sizes,
         "learning_rate": 1e-4,
-        "epochs": 1000,
+        "epochs": 300,
         "minibatches": 64,
-        "resample_every_n_epochs": 5,
+        "resample_every_n_epochs": 10,
         "num_maps": args["env"]["num_maps"],
         "dynamics_model": dynamics_model,
     }
@@ -231,6 +233,73 @@ if __name__ == "__main__":
     save_path = f"{CHECKPOINT_PATH}/bc_{dynamics_model}_{config['num_maps']}.pt"
     torch.save(policy.state_dict(), save_path)
     print(f"Saved BC policy to {save_path}")
+
+
+    # Visualize action distribution
+    import matplotlib.pyplot as plt
+
+    all_actions = []
+    all_obs = []
+    for batch_obs, batch_actions in DataLoader(dataset, batch_size=len(dataset)):
+        all_actions = batch_actions.numpy().flatten()
+        all_obs = batch_obs
+
+    NUM_STEER = binding.NUM_STEER_BINS
+    NUM_ACCEL = binding.NUM_ACCEL_BINS
+    accel_step = (4.0 - (-4.0)) / (NUM_ACCEL - 1)
+    steer_step = (1.0 - (-1.0)) / (NUM_STEER - 1)
+
+    accel_indices = all_actions.astype(int) // NUM_STEER
+    steer_indices = all_actions.astype(int) % NUM_STEER
+    accel_values = -4.0 + accel_indices * accel_step
+    steer_values = -1.0 + steer_indices * steer_step
+
+    # Get learned policy predictions
+    policy.eval()
+    with torch.no_grad():
+        pred_actions = policy(all_obs.to(device), deterministic=True).cpu().numpy().flatten()
+    pred_accel_indices = pred_actions.astype(int) // NUM_STEER
+    pred_steer_indices = pred_actions.astype(int) % NUM_STEER
+    pred_accel_values = -4.0 + pred_accel_indices * accel_step
+    pred_steer_values = -1.0 + pred_steer_indices * steer_step
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f"BC Training Data vs Learned Policy: {len(all_actions)} samples, {dynamics_model}, {config['num_maps']} maps", fontsize=14)
+
+    # Row 1: Steering histograms
+    ax = axes[0, 0]
+    ax.hist(steer_values, bins=NUM_STEER, range=(-1.0, 1.0), edgecolor='black', alpha=0.7)
+    ax.set_xlabel('Steering (rad)')
+    ax.set_ylabel('Count')
+    ax.set_title(f'Expert Steering (non-zero: {(steer_indices != NUM_STEER//2).sum()}/{len(steer_indices)})')
+    ax.axvline(x=0, color='r', linestyle='--', alpha=0.5)
+
+    ax = axes[0, 1]
+    ax.hist(pred_steer_values, bins=NUM_STEER, range=(-1.0, 1.0), edgecolor='black', alpha=0.7, color='orange')
+    ax.set_xlabel('Steering (rad)')
+    ax.set_ylabel('Count')
+    ax.set_title(f'Learned Steering (non-zero: {(pred_steer_indices != NUM_STEER//2).sum()}/{len(pred_steer_indices)})')
+    ax.axvline(x=0, color='r', linestyle='--', alpha=0.5)
+
+    # Row 2: Acceleration histograms
+    ax = axes[1, 0]
+    ax.hist(accel_values, bins=NUM_ACCEL, range=(-4.0, 4.0), edgecolor='black', alpha=0.7)
+    ax.set_xlabel('Acceleration (m/s²)')
+    ax.set_ylabel('Count')
+    ax.set_title('Expert Acceleration')
+    ax.axvline(x=0, color='r', linestyle='--', alpha=0.5)
+
+    ax = axes[1, 1]
+    ax.hist(pred_accel_values, bins=NUM_ACCEL, range=(-4.0, 4.0), edgecolor='black', alpha=0.7, color='orange')
+    ax.set_xlabel('Acceleration (m/s²)')
+    ax.set_ylabel('Count')
+    ax.set_title('Learned Acceleration')
+    ax.axvline(x=0, color='r', linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig(f"bc_action_distribution_{dynamics_model}_{config['num_maps']}.png", dpi=150)
+    print(f"Saved action distribution plot to bc_action_distribution_{dynamics_model}_{config['num_maps']}.png")
+    #plt.show()
 
     env.close()
     wandb.finish()

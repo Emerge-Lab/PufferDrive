@@ -477,22 +477,18 @@ class Drive(pufferlib.PufferEnv):
         trajectory_length = 91
 
         if self.dynamics_model == "delta_local":
-            continuous_action_dim = 3
             discrete_action_dim = 3
-        else:  # Classic dynamics model
-            continuous_action_dim = 2
+        else: # Classic dynamics model
             discrete_action_dim = 1
 
-        expert_actions_discrete = np.zeros((trajectory_length, self.num_agents, discrete_action_dim), dtype=np.float32)
-
-        expert_actions_continuous = np.zeros(
-            (trajectory_length, self.num_agents, continuous_action_dim), dtype=np.float32
-        )
-        expert_observations_full = np.zeros((trajectory_length, self.num_agents, self.num_obs), dtype=np.float32)
+        expert_actions_discrete = np.full((trajectory_length, self.num_agents, discrete_action_dim), -1.0, dtype=np.float32)
+        expert_observations_full = np.full((trajectory_length, self.num_agents, self.num_obs), -1.0, dtype=np.float32)
 
         binding.vec_collect_expert_data(
-            self.c_envs, expert_actions_discrete, expert_actions_continuous, expert_observations_full
+            self.c_envs, expert_actions_discrete, expert_observations_full
         )
+
+        print(f'unique actions @prep_data: {len(np.unique(expert_actions_discrete))}, {np.unique(expert_actions_discrete)}')
 
         if np.all(expert_actions_discrete == -1):
             raise ValueError("No valid human demonstrations could be collected. Please check the data format.")
@@ -504,14 +500,7 @@ class Drive(pufferlib.PufferEnv):
             invalid_action_mask = (expert_actions_discrete == -1.0).squeeze(-1)
 
         self.expert_actions_discrete = torch.Tensor(expert_actions_discrete[~invalid_action_mask])
-        self.expert_actions_continuous = torch.Tensor(expert_actions_continuous[~invalid_action_mask])
         self.expert_observations_full = torch.Tensor(expert_observations_full[~invalid_action_mask])
-
-        if len(self.expert_observations_full) > max_samples:
-            # Limit storage if needed (keep most recent samples)
-            self.expert_observations_full = self.expert_observations_full[:max_samples:]
-            self.expert_actions_discrete = self.expert_actions_discrete[:max_samples:]
-            self.expert_actions_continuous = self.expert_actions_continuous[:max_samples:]
 
         # Count unique number of (observation, action) pairs. This gives
         # an idea of the diversity and coverage of the human demonstrations.
@@ -527,7 +516,6 @@ class Drive(pufferlib.PufferEnv):
         rand_idx = torch.randint(0, self.total_num_samples - 1, (batch_size,))
         return (
             self.expert_actions_discrete[rand_idx],
-            self.expert_actions_continuous[rand_idx],
             self.expert_observations_full[rand_idx],
         )
 
@@ -1032,7 +1020,7 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/interactive_data_training_100")
+    process_all_maps(data_folder="data/selected")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

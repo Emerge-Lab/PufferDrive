@@ -65,7 +65,7 @@
 
 // Threshold for data selection: trajectories above threshold are excluded from
 // human demonstrations
-#define ADE_THRESHOLD 3.0f
+#define ADE_THRESHOLD 4.0f
 
 // Actions
 #define NOOP 0
@@ -2268,89 +2268,41 @@ void respawn_agent(Drive *env, int agent_idx) {
     env->entities[agent_idx].steering_angle = 0.0f;
 }
 
-// Override the action buffer for a given agent index with expert
-// accel/steering values at the current timestep. Used by
-// CONTROL_INFERRED_EXPERT_ACTIONS mode.
-static void override_action_with_expert(Drive *env, int action_idx, int agent_idx) {
-
+static void override_action_with_expert(Drive *env, int action_idx, int agent_idx, int t) {
     Entity *agent = &env->entities[agent_idx];
-    int t = env->timestep;
 
-    if (env->dynamics_model == CLASSIC) {
-        if (t < 0 || t >= agent->array_size)
-            return;
-        if (agent->expert_accel == NULL || agent->expert_steering == NULL)
-            return;
-        if (agent->expert_accel[t] == -1.0f || agent->expert_steering[t] == -1.0f)
-            return;
-
-        if (env->action_type == 1) { // continuous
-            float (*action_array_f)[2] = (float (*)[2])env->actions;
-            action_array_f[action_idx][0] = agent->expert_accel[t] / ACCEL_MAX;
-            action_array_f[action_idx][1] = agent->expert_steering[t] / STEER_MAX;
-        } else { // discrete
-            int best_accel_idx = 0;
-            float min_accel_diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[0]);
-            for (int j = 1; j < NUM_ACCEL_BINS; j++) {
-                float diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[j]);
-                if (diff < min_accel_diff) {
-                    min_accel_diff = diff;
-                    best_accel_idx = j;
-                }
-            }
-            int best_steer_idx = 0;
-            float min_steer_diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[0]);
-            for (int j = 1; j < NUM_STEER_BINS; j++) {
-                float diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[j]);
-                if (diff < min_steer_diff) {
-                    min_steer_diff = diff;
-                    best_steer_idx = j;
-                }
-            }
-            int *action_array = (int *)env->actions;
-            action_array[action_idx] = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
-        }
-    } else if (env->dynamics_model == DELTA_LOCAL) {
-        if (agent->expert_delta_x == NULL || agent->expert_delta_y == NULL || agent->expert_delta_yaw == NULL)
-            return;
-
-        if (env->action_type == 1) { // continuous
-            float *action_base = (float *)env->actions;
-            action_base[action_idx * 3 + 0] = agent->expert_delta_x[t] / DELTA_MAX_DX;
-            action_base[action_idx * 3 + 1] = agent->expert_delta_y[t] / DELTA_MAX_DY;
-            action_base[action_idx * 3 + 2] = agent->expert_delta_yaw[t] / DELTA_MAX_DYAW;
-        } else { // discrete: find closest bin for each axis
-            float dx_val = agent->expert_delta_x[t];
-            float dy_val = agent->expert_delta_y[t];
-            float yaw_val = agent->expert_delta_yaw[t];
-
-            // if (action_idx == 0 && (t % 10 == 0)) {
-            //     printf("DELTA t=%d dx=%.4f dy=%.4f dyaw=%.4f heading=%.4f x=%.2f y=%.2f\n",
-            //         t, dx_val, dy_val, yaw_val, agent->heading, agent->x, agent->y);
-            // }
-
-            int best_dx = 0;
-            for (int j = 1; j < NUM_DX_BINS; j++) {
-                if (fabsf(dx_val - DELTA_DX_VALUES[j]) < fabsf(dx_val - DELTA_DX_VALUES[best_dx]))
-                    best_dx = j;
-            }
-            int best_dy = 0;
-            for (int j = 1; j < NUM_DY_BINS; j++) {
-                if (fabsf(dy_val - DELTA_DY_VALUES[j]) < fabsf(dy_val - DELTA_DY_VALUES[best_dy]))
-                    best_dy = j;
-            }
-            int best_yaw = 0;
-            for (int j = 1; j < NUM_YAW_BINS; j++) {
-                if (fabsf(yaw_val - DELTA_YAW_VALUES[j]) < fabsf(yaw_val - DELTA_YAW_VALUES[best_yaw]))
-                    best_yaw = j;
-            }
-
-            int *action_array = (int *)env->actions;
-            action_array[action_idx * 3 + 0] = best_dx;
-            action_array[action_idx * 3 + 1] = best_dy;
-            action_array[action_idx * 3 + 2] = best_yaw;
-        }
+    if (t < 0 || t >= agent->array_size)
         return;
+    if (agent->expert_accel == NULL || agent->expert_steering == NULL)
+        return;
+    if (agent->expert_accel[t] == -1.0f || agent->expert_steering[t] == -1.0f)
+        return;
+
+    if (env->action_type == 1) {
+        float (*action_array_f)[2] = (float (*)[2])env->actions;
+        action_array_f[action_idx][0] = agent->expert_accel[t] / ACCEL_MAX;
+        action_array_f[action_idx][1] = agent->expert_steering[t] / STEER_MAX;
+    } else {
+        int best_accel_idx = 0;
+        float min_accel_diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[0]);
+        for (int j = 1; j < NUM_ACCEL_BINS; j++) {
+            float diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[j]);
+            if (diff < min_accel_diff) {
+                min_accel_diff = diff;
+                best_accel_idx = j;
+            }
+        }
+        int best_steer_idx = 0;
+        float min_steer_diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[0]);
+        for (int j = 1; j < NUM_STEER_BINS; j++) {
+            float diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[j]);
+            if (diff < min_steer_diff) {
+                min_steer_diff = diff;
+                best_steer_idx = j;
+            }
+        }
+        int *action_array = (int *)env->actions;
+        action_array[action_idx] = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
     }
 }
 
@@ -2382,7 +2334,7 @@ void c_step(Drive *env) {
             move_expert(env, env->actions, agent_idx);
         } else {
             if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
-                override_action_with_expert(env, i, agent_idx);
+                override_action_with_expert(env, i, agent_idx, env->timestep - 1);
             }
             move_dynamics(env, i, agent_idx);
 
@@ -2514,129 +2466,53 @@ void c_step(Drive *env) {
     compute_observations(env);
 }
 
-void c_step_lightweight(Drive *env) {
-    env->timestep++;
-
-    // Move static experts
-    for (int i = 0; i < env->expert_static_agent_count; i++) {
-        int expert_idx = env->expert_static_agent_indices[i];
-        if (env->entities[expert_idx].x == INVALID_POSITION)
-            continue;
-        move_expert(env, env->actions, expert_idx);
-    }
-
-    // Apply dynamics to all active agents
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        env->entities[agent_idx].collision_state = 0;
-
-        if (env->control_mode == CONTROL_REPLAY_LOGS) {
-            move_expert(env, env->actions, agent_idx);
-        } else {
-            if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
-                override_action_with_expert(env, i, agent_idx);
-            }
-            move_dynamics(env, i, agent_idx);
-        }
-    }
-
-    // Update observations
-    compute_observations(env);
-}
-
-void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_actions_continuous_out,
-                           float *expert_obs_out) {
+void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_obs_out) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
-    int original_timestep = env->timestep;
-    int is_delta = (env->dynamics_model == DELTA_LOCAL);
-
-    int action_dim_continuous = is_delta ? 3 : 2;
-    int action_dim_discrete = is_delta ? 3 : 1;
 
     int saved_control_mode = env->control_mode;
+    int saved_goal_behavior = env->goal_behavior;
+    int saved_episode_length = env->episode_length;
+    int saved_termination_mode = env->termination_mode;
+
     env->control_mode = CONTROL_INFERRED_EXPERT_ACTIONS;
+    env->episode_length = TRAJECTORY_LENGTH + 1;
+    env->goal_behavior = GOAL_STOP; 
+    env->termination_mode = 0;
+    env->init_steps = 0;
 
-    env->timestep = 0;
-    set_start_position(env);
-    compute_observations(env);
-
-    // Store initial inferred trajectory positions
-    for (int ai = 0; ai < env->active_agent_count; ai++) {
-        int idx = env->active_agent_indices[ai];
-        Entity *e = &env->entities[idx];
-        if (e->inferred_traj_x != NULL) {
-            e->inferred_traj_x[0] = e->x;
-            e->inferred_traj_y[0] = e->y;
-        }
-    }
+    c_reset(env); // Reset all agents to their initial position
 
     for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
-        // Copy current observations (from dynamics-stepped positions)
         int obs_offset = t * env->active_agent_count * max_obs;
         memcpy(&expert_obs_out[obs_offset], env->observations, env->active_agent_count * max_obs * sizeof(float));
 
-        // Record expert actions at this timestep
+        // Write expert actions into env->actions for this timestep
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            override_action_with_expert(env, i, agent_idx, t);
+        }
+
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             Entity *agent = &env->entities[agent_idx];
 
-            int cont_off = t * env->active_agent_count * action_dim_continuous + i * action_dim_continuous;
-            int disc_off = t * env->active_agent_count * action_dim_discrete + i * action_dim_discrete;
+            if (agent->inferred_traj_x != NULL) {
+                agent->inferred_traj_x[t] = agent->x;
+                agent->inferred_traj_y[t] = agent->y;
+            }
 
-            if (is_delta) {
-                bool is_valid = (t < agent->array_size && agent->expert_delta_x != NULL &&
-                                 agent->expert_delta_y != NULL && agent->expert_delta_yaw != NULL);
+            int disc_off = t * env->active_agent_count + i;
 
-                if (is_valid) {
-                    float dx = agent->expert_delta_x[t];
-                    float dy = agent->expert_delta_y[t];
-                    float dyaw = agent->expert_delta_yaw[t];
+            bool valid = (t < agent->array_size &&
+                          agent->expert_accel != NULL &&
+                          agent->expert_accel[t] != -1.0f);
 
-                    // Store continuous actions
-                    expert_actions_continuous_out[cont_off + 0] = dx;
-                    expert_actions_continuous_out[cont_off + 1] = dy;
-                    expert_actions_continuous_out[cont_off + 2] = dyaw;
-
-                    // Discretize each axis independently
-                    int best_dx = 0, best_dy = 0, best_yaw = 0;
-                    for (int j = 1; j < NUM_DX_BINS; j++) {
-                        if (fabsf(dx - DELTA_DX_VALUES[j]) < fabsf(dx - DELTA_DX_VALUES[best_dx]))
-                            best_dx = j;
-                    }
-                    for (int j = 1; j < NUM_DY_BINS; j++) {
-                        if (fabsf(dy - DELTA_DY_VALUES[j]) < fabsf(dy - DELTA_DY_VALUES[best_dy]))
-                            best_dy = j;
-                    }
-                    for (int j = 1; j < NUM_YAW_BINS; j++) {
-                        if (fabsf(dyaw - DELTA_YAW_VALUES[j]) < fabsf(dyaw - DELTA_YAW_VALUES[best_yaw]))
-                            best_yaw = j;
-                    }
-
-                    expert_actions_discrete_out[disc_off + 0] = (float)best_dx;
-                    expert_actions_discrete_out[disc_off + 1] = (float)best_dy;
-                    expert_actions_discrete_out[disc_off + 2] = (float)best_yaw;
-                } else {
-                    for (int k = 0; k < 3; k++) {
-                        expert_actions_continuous_out[cont_off + k] = -1.0f;
-                        expert_actions_discrete_out[disc_off + k] = -1.0f;
-                    }
-                }
-
-            } else {
-                // Classic dynamics: joint accel x steer action
-                bool is_valid =
-                    (t < agent->array_size && agent->expert_accel != NULL && agent->expert_steering != NULL &&
-                     agent->expert_accel[t] != -1.0f && agent->expert_steering[t] != -1.0f);
-
-                if (is_valid) {
-                    float accel = agent->expert_accel[t];
-                    float steer = agent->expert_steering[t];
-
-                    expert_actions_continuous_out[cont_off + 0] = accel;
-                    expert_actions_continuous_out[cont_off + 1] = steer;
-
-                    // Find closest discrete bins
+            if (valid) {
+                if (env->action_type == 1) {
+                    float (*af)[2] = (float (*)[2])env->actions;
+                    float accel = af[i][0] * ACCEL_MAX;
+                    float steer = af[i][1] * STEER_MAX;
                     int best_a = 0, best_s = 0;
                     for (int j = 1; j < NUM_ACCEL_BINS; j++) {
                         if (fabsf(accel - ACCELERATION_VALUES[j]) < fabsf(accel - ACCELERATION_VALUES[best_a]))
@@ -2646,35 +2522,31 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                         if (fabsf(steer - STEERING_VALUES[j]) < fabsf(steer - STEERING_VALUES[best_s]))
                             best_s = j;
                     }
-
-                    int joint = best_a * NUM_STEER_BINS + best_s;
-                    expert_actions_discrete_out[disc_off] = (float)joint;
+                    expert_actions_discrete_out[disc_off] = (float)(best_a * NUM_STEER_BINS + best_s);
                 } else {
-                    expert_actions_continuous_out[cont_off + 0] = -1.0f;
-                    expert_actions_continuous_out[cont_off + 1] = -1.0f;
-                    expert_actions_discrete_out[disc_off] = -1.0f;
+                    int *ai = (int *)env->actions;
+                    expert_actions_discrete_out[disc_off] = (float)ai[i];
+                    int action_val = ai[i];
+                    int accel_idx = action_val / NUM_STEER_BINS;
+                    int steer_idx = action_val % NUM_STEER_BINS;
+                    // printf("agent=%d t=%d action_idx=%d accel=%.4f steer=%.4f pos=(%.4f, %.4f)\n",
+                    //        i, t, action_val,
+                    //        ACCELERATION_VALUES[accel_idx], STEERING_VALUES[steer_idx],
+                    //        agent->x, agent->y);
                 }
+            } else {
+                expert_actions_discrete_out[disc_off] = -1.0f;
+                // printf("agent=%d t=%d INVALID pos=(%.4f, %.4f)\n",
+                //        i, t, agent->x, agent->y);
             }
         }
 
-        // Step agents using inferred actions through dynamics
         if (t < TRAJECTORY_LENGTH - 1) {
-            c_step_lightweight(env);
-
-            // Store inferred trajectory positions
-            for (int ai = 0; ai < env->active_agent_count; ai++) {
-                int idx = env->active_agent_indices[ai];
-                Entity *e = &env->entities[idx];
-                if (e->inferred_traj_x != NULL) {
-                    e->inferred_traj_x[t + 1] = e->x;
-                    e->inferred_traj_y[t + 1] = e->y;
-                }
-            }
+            c_step(env);
         }
     }
 
-    // Filter data
-    // Compute per-agent ADE and mark trajectories with ADE above threshold unfit for usage
+    // Filter data: Compute per-agent ADE and mark unfit trajectories
     for (int i = 0; i < env->active_agent_count; i++) {
         int idx = env->active_agent_indices[i];
         Entity *e = &env->entities[idx];
@@ -2683,11 +2555,12 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
         int is_static = 1;
 
         if (e->inferred_traj_x && e->traj_valid) {
-            for (int t = 0; t < e->array_size; t++) {
+            for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
                 if (!e->traj_valid[t])
                     continue;
                 float dx = e->inferred_traj_x[t] - e->traj_x[t];
                 float dy = e->inferred_traj_y[t] - e->traj_y[t];
+                //printf("t %d error %.2f\n", t, sqrtf(dx * dx + dy * dy));
                 total_error += sqrtf(dx * dx + dy * dy);
                 count++;
                 if (count > 1 && (e->traj_x[t] != e->traj_x[0] || e->traj_y[t] != e->traj_y[0]))
@@ -2701,22 +2574,16 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
         if (unfit) {
             for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
-                int cont_off = t * env->active_agent_count * action_dim_continuous + i * action_dim_continuous;
-                int disc_off = t * env->active_agent_count * action_dim_discrete + i * action_dim_discrete;
-                for (int k = 0; k < action_dim_continuous; k++)
-                    expert_actions_continuous_out[cont_off + k] = -1.0f;
-                for (int k = 0; k < action_dim_discrete; k++)
-                    expert_actions_discrete_out[disc_off + k] = -1.0f;
+                int disc_off = t * env->active_agent_count + i;
+                expert_actions_discrete_out[disc_off] = -1.0f;
             }
         }
     }
 
     env->control_mode = saved_control_mode;
-
-    // Restore original state
-    env->timestep = original_timestep;
-    set_start_position(env);
-    compute_observations(env);
+    env->goal_behavior = saved_goal_behavior;
+    env->episode_length = saved_episode_length;
+    env->termination_mode = saved_termination_mode;
 }
 
 typedef struct Client Client;
