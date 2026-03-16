@@ -65,7 +65,7 @@
 
 // Threshold for data selection: trajectories above threshold are excluded from
 // human demonstrations
-#define ADE_THRESHOLD 4.0f
+#define ADE_THRESHOLD 2.0f
 
 // Actions
 #define NOOP 0
@@ -209,6 +209,8 @@ struct Log {
     float offroad_rate;
     float collision_rate;
     float collision_rate_valid;
+    float avg_speed;
+    float avg_dist_to_others;
     float completion_rate;
     float offroad_per_agent;
     float collisions_per_agent;
@@ -451,6 +453,9 @@ void add_log(Drive *env) {
         int lane_aligned = env->logs[i].lane_alignment_rate;
         env->log.lane_alignment_rate += lane_aligned;
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
+        float ep_len = env->logs[i].episode_length > 0 ? env->logs[i].episode_length : 1.0f;
+        env->log.avg_speed += env->logs[i].avg_speed / ep_len;
+        env->log.avg_dist_to_others += env->logs[i].avg_dist_to_others / ep_len;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
@@ -2338,14 +2343,14 @@ void c_step(Drive *env) {
             }
             move_dynamics(env, i, agent_idx);
 
-            // Tiny jerk penalty for smoothness
-            if (env->dynamics_model == CLASSIC || env->dynamics_model == DELTA_LOCAL) {
-                float delta_vx = env->entities[agent_idx].vx - prev_vx;
-                float delta_vy = env->entities[agent_idx].vy - prev_vy;
-                float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
-                env->rewards[i] += jerk_penalty;
-                env->logs[i].episode_return += jerk_penalty;
-            }
+            // // Tiny jerk penalty for smoothness
+            // if (env->dynamics_model == CLASSIC || env->dynamics_model == DELTA_LOCAL) {
+            //     float delta_vx = env->entities[agent_idx].vx - prev_vx;
+            //     float delta_vy = env->entities[agent_idx].vy - prev_vy;
+            //     float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
+            //     env->rewards[i] += jerk_penalty;
+            //     env->logs[i].episode_return += jerk_penalty;
+            // }
         }
     }
 
@@ -2418,6 +2423,33 @@ void c_step(Drive *env) {
 
         int lane_aligned = env->entities[agent_idx].metrics_array[LANE_ALIGNED_IDX];
         env->logs[i].lane_alignment_rate = lane_aligned;
+
+        if (!env->entities[agent_idx].stopped && !env->entities[agent_idx].removed) {
+            env->logs[i].avg_speed += current_speed;
+
+            float min_dist = 1e30f;
+            for (int j = 0; j < MAX_AGENTS; j++) {
+                int other_idx = -1;
+                if (j < env->active_agent_count) {
+                    other_idx = env->active_agent_indices[j];
+                } else if (j < env->num_actors && env->static_agent_count > 0) {
+                    other_idx = env->static_agent_indices[j - env->active_agent_count];
+                }
+                if (other_idx == -1 || other_idx == agent_idx)
+                    continue;
+                Entity *other = &env->entities[other_idx];
+                if (other->x == INVALID_POSITION)
+                    continue;
+                float dx = other->x - env->entities[agent_idx].x;
+                float dy = other->y - env->entities[agent_idx].y;
+                float d = sqrtf(dx * dx + dy * dy);
+                if (d < min_dist)
+                    min_dist = d;
+            }
+            if (min_dist < 1e30f) {
+                env->logs[i].avg_dist_to_others += min_dist;
+            }
+        }
     }
 
     if (env->goal_behavior == GOAL_RESPAWN) {
@@ -2477,7 +2509,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
     env->control_mode = CONTROL_INFERRED_EXPERT_ACTIONS;
     env->episode_length = TRAJECTORY_LENGTH + 1;
-    env->goal_behavior = GOAL_STOP; 
+    env->goal_behavior = GOAL_STOP;
     env->termination_mode = 0;
     env->init_steps = 0;
 
@@ -2504,9 +2536,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
             int disc_off = t * env->active_agent_count + i;
 
-            bool valid = (t < agent->array_size &&
-                          agent->expert_accel != NULL &&
-                          agent->expert_accel[t] != -1.0f);
+            bool valid = (t < agent->array_size && agent->expert_accel != NULL && agent->expert_accel[t] != -1.0f);
 
             if (valid) {
                 if (env->action_type == 1) {
@@ -2560,7 +2590,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                     continue;
                 float dx = e->inferred_traj_x[t] - e->traj_x[t];
                 float dy = e->inferred_traj_y[t] - e->traj_y[t];
-                //printf("t %d error %.2f\n", t, sqrtf(dx * dx + dy * dy));
+                // printf("t %d error %.2f\n", t, sqrtf(dx * dx + dy * dy));
                 total_error += sqrtf(dx * dx + dy * dy);
                 count++;
                 if (count > 1 && (e->traj_x[t] != e->traj_x[0] || e->traj_y[t] != e->traj_y[0]))

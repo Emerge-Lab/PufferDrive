@@ -500,10 +500,11 @@ class PuffeRL:
                 # Set all conditioning weights to zero because that is what we train the anchor with.
                 # lambda conditioning only has a meaning for the self-play RL training and policy.
                 bc_anchor_obs = anchor_obs.clone()
+
                 bc_anchor_obs[:, self.lambda_obs_idx] = 0.0
-                bc_anchor_obs[:, self.reward_veh_obs_idx] = 0.0
-                bc_anchor_obs[:, self.reward_offroad_obs_idx] = 0.0
-                bc_anchor_obs[:, self.reward_goal_obs_idx] = 0.0
+                bc_anchor_obs[:, self.reward_veh_obs_idx] = -1.0
+                bc_anchor_obs[:, self.reward_offroad_obs_idx] = -1.0
+                bc_anchor_obs[:, self.reward_goal_obs_idx] = 1.0
 
                 with torch.no_grad():
                     # Returns a list of tensors, one per action head
@@ -632,6 +633,7 @@ class PuffeRL:
             else:
                 current_ent_coef = config["ent_coef"]
             loss = pg_loss + config["vf_coef"] * v_loss - current_ent_coef * entropy_loss + reg_loss
+            # loss = reg_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
@@ -695,7 +697,6 @@ class PuffeRL:
                     self.evaluator.rollout(
                         self.uncompiled_policy,
                         mode="human_replay",
-                        render_rollout=self.config["eval"]["render_human_replay_eval"],
                     )
                 except Exception as e:
                     print(f"Render failed (non-fatal): {e}")
@@ -707,7 +708,6 @@ class PuffeRL:
                     self.evaluator.rollout(
                         self.uncompiled_policy,
                         mode="self_play",
-                        render_rollout=self.config["eval"]["render_self_play_eval"],
                     )
                 except Exception as e:
                     print(f"Render failed (non-fatal): {e}")
@@ -1431,7 +1431,7 @@ def verify(env_name, args=None, vecenv=None):
     args["env"]["termination_mode"] = 0
 
     # Determine verification mode: "bc_policy", "expert_replay", or "inferred_expert_actions"
-    verify_mode = "bc_policy" #args.get("verify_mode", "inferred_expert_actions")
+    verify_mode = "bc_policy"  # args.get("verify_mode", "inferred_expert_actions")
 
     if verify_mode == "bc_policy":
         # BC policy controls all agents directly
@@ -1465,8 +1465,7 @@ def verify(env_name, args=None, vecenv=None):
         bc_policy, _ = driver._init_regularization_strategy(device=device)
         if bc_policy is None:
             raise RuntimeError(
-                "Failed to load BC policy. Ensure anchor_cpt_path is set "
-                "and a trained BC checkpoint exists."
+                "Failed to load BC policy. Ensure anchor_cpt_path is set and a trained BC checkpoint exists."
             )
         bc_policy.eval()
     else:
@@ -1493,15 +1492,13 @@ def verify(env_name, args=None, vecenv=None):
                     action = torch.argmax(logits_list[0], dim=-1, keepdim=True)
                 else:
                     # Multi-head (delta_local)
-                    action = torch.stack(
-                        [torch.argmax(l, dim=-1) for l in logits_list], dim=-1
-                    )
+                    action = torch.stack([torch.argmax(l, dim=-1) for l in logits_list], dim=-1)
 
                 action = action.cpu().numpy().reshape(vecenv.action_space.shape)
         else:
             # Expert replay / inferred expert actions: env handles actions internally, just need a shape
             action = vecenv.action_space.sample()
-        
+
         ob, reward, done, truncated, info = vecenv.step(action)
 
         if driver.render_mode == 1:
@@ -1510,6 +1507,7 @@ def verify(env_name, args=None, vecenv=None):
                 break
 
     vecenv.close()
+
 
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)

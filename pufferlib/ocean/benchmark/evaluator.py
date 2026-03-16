@@ -904,15 +904,14 @@ class Evaluator:
         else:
             render_env_idx = self.select_render_env([{}] * driver.num_envs)
 
-        info_list = self._run_rollout(policy, env, render_env_idx if render_eval else None)
+        env_statistics = self._run_rollout(policy, env, render_env_idx if render_eval else None, per_env_logs=True)
 
-        final_info = info_list[0] if info_list else {}
         if mode == "self_play":
-            self.self_play_stats = final_info
-            self.self_play_stats["render_env_idx"] = render_env_idx
+            self.self_play_stats = env_statistics
+            self.self_play_stats[0]["render_env_idx"] = render_env_idx
         elif mode == "human_replay":
-            self.human_replay_stats = final_info
-            self.human_replay_stats["render_env_idx"] = render_env_idx
+            self.human_replay_stats = env_statistics
+            self.human_replay_stats[0]["render_env_idx"] = render_env_idx
 
     def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False):
         """Run a single rollout. If render_env_idx is not None, render that env."""
@@ -1097,12 +1096,35 @@ class Evaluator:
         eval_stats = {}
 
         if self.human_replay_stats is not None:
-            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["collision_rate_valid"]
-            eval_stats["eval/hr_score"] = self.human_replay_stats["score"]
+            import wandb
+
+            populated = [log for log in self.human_replay_stats if log and log.get("n", 0) > 0]
+            if populated:
+                collisions_per_agent = np.array([log["collisions_per_agent"] for log in populated])
+                did_collide = np.array([log["collision_rate"] for log in populated])
+                distance_to_others = np.array([log["avg_dist_to_others"] for log in populated])
+                speed = np.array([log["avg_speed"] for log in populated])
+
+                eval_stats["eval/hr_mean_collisions_per_agent"] = float(np.mean(collisions_per_agent))
+                eval_stats["eval/hr_mean_did_collide"] = float(np.mean(did_collide))
+                eval_stats["eval/hr_score"] = float(np.mean([log["score"] for log in populated]))
+                eval_stats["eval/hr_collisions_per_agent_hist"] = wandb.Histogram(collisions_per_agent)
+                eval_stats["eval/hr_mean_speed"] = float(np.mean(speed))
+                eval_stats["eval/hr_mean_do"] = float(np.mean(distance_to_others))
+
         if self.self_play_stats is not None:
-            eval_stats["eval/sp_collision_rate"] = self.self_play_stats["collision_rate"]
-            eval_stats["eval/sp_score"] = self.self_play_stats["score"]
-            eval_stats["eval/num_agents"] = self.self_play_stats["n"]
+            import wandb
+
+            populated = [log for log in self.self_play_stats if log and log.get("n", 0) > 0]
+            if populated:
+                collisions_per_agent = np.array([log["collisions_per_agent"] for log in populated])
+                did_collide = np.array([log["collision_rate"] for log in populated])
+
+                eval_stats["eval/sp_mean_collisions_per_agent"] = float(np.mean(collisions_per_agent))
+                eval_stats["eval/sp_mean_did_collide"] = float(np.mean(did_collide))
+                eval_stats["eval/sp_score"] = float(np.mean([log["score"] for log in populated]))
+                eval_stats["eval/sp_num_agents"] = float(np.mean([log["n"] for log in populated]))
+                eval_stats["eval/sp_collisions_per_agent_hist"] = wandb.Histogram(collisions_per_agent)
         else:
             return
 
