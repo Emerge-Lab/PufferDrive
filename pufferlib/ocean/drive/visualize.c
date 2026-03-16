@@ -193,7 +193,7 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
 
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
-             const char *output_agent, int num_maps, int zoom_in, const char *config_path) {
+             const char *output_agent, int num_maps, int zoom_in, const char *config_path, float render_scale) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};
@@ -316,7 +316,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
     printf("Map size: %.1fx%.1f\n", map_width, map_height);
-    float scale = 6.0f;
+    float scale = render_scale > 0 ? render_scale : 6.0f;
 
     int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
     int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
@@ -477,6 +477,7 @@ int main(int argc, char *argv[]) {
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
     int num_maps = conf.num_maps;
+    float render_scale = 0;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -547,10 +548,15 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc) {
                 i++;
             }
+        } else if (strcmp(argv[i], "--scale") == 0) {
+            if (i + 1 < argc) {
+                render_scale = atof(argv[i + 1]);
+                i++;
+            }
         }
     }
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
-             output_agent, num_maps, zoom_in, config_path);
+             output_agent, num_maps, zoom_in, config_path, render_scale);
     return 0;
 }
