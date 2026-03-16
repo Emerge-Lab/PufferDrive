@@ -2824,16 +2824,110 @@ void compute_observations(Drive *env) {
     }
 }
 
+// Find a random collision-free position on a drivable lane for an existing agent.
+// Returns true if a valid position was found and updates the agent's sim_x/y/z/heading.
+static bool randomize_agent_position(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+
+    // Pre-compute drivable lanes
+    int drivable_lanes[env->num_roads];
+    float lane_lengths[env->num_roads];
+    int num_drivable = 0;
+    float total_lane_length = 0.0f;
+    for (int i = 0; i < env->num_roads; i++) {
+        if (env->road_elements[i].type == ROAD_LANE && env->road_elements[i].polyline_length > 0.0f) {
+            drivable_lanes[num_drivable] = i;
+            lane_lengths[num_drivable] = env->road_elements[i].polyline_length;
+            total_lane_length += lane_lengths[num_drivable];
+            num_drivable++;
+        }
+    }
+
+    if (num_drivable == 0) return false;
+
+    for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
+        // Length-weighted lane selection
+        float r = ((float)rand() / (float)RAND_MAX) * total_lane_length;
+        float cumulative = 0.0f;
+        int selected = num_drivable - 1;
+        for (int k = 0; k < num_drivable; k++) {
+            cumulative += lane_lengths[k];
+            if (r < cumulative) {
+                selected = k;
+                break;
+            }
+        }
+        RoadMapElement *lane = &env->road_elements[drivable_lanes[selected]];
+
+        float spawn_x, spawn_y, spawn_z, spawn_heading;
+        get_random_point_on_lane(lane, &spawn_x, &spawn_y, &spawn_z, &spawn_heading);
+        spawn_z += agent->sim_height / 2.0f;
+
+        // Check collision with all other active agents (excluding this one)
+        bool collision = false;
+        for (int j = 0; j < env->active_agent_count; j++) {
+            int other_idx = env->active_agent_indices[j];
+            if (other_idx == agent_idx) continue;
+            Agent *other = &env->agents[other_idx];
+            if (other->sim_x == INVALID_POSITION || other->removed) continue;
+            float dx = spawn_x - other->sim_x;
+            float dy = spawn_y - other->sim_y;
+            float dist = sqrtf(dx * dx + dy * dy);
+            float min_dist = (agent->sim_length + other->sim_length) / 2.0f;
+            if (dist < min_dist) {
+                collision = true;
+                break;
+            }
+        }
+        if (collision) continue;
+
+        // Check offroad
+        if (check_spawn_offroad(env, spawn_x, spawn_y, spawn_z, spawn_heading,
+                                agent->sim_length, agent->sim_width, agent->sim_height))
+            continue;
+
+        agent->sim_x = spawn_x;
+        agent->sim_y = spawn_y;
+        agent->sim_z = spawn_z;
+        agent->sim_heading = spawn_heading;
+        agent->heading_x = cosf(spawn_heading);
+        agent->heading_y = sinf(spawn_heading);
+        // Update stored initial position so future non-random resets are consistent
+        agent->log_trajectory_x[0] = spawn_x;
+        agent->log_trajectory_y[0] = spawn_y;
+        agent->log_trajectory_z[0] = spawn_z;
+        agent->log_heading[0] = spawn_heading;
+        return true;
+    }
+    return false;
+}
+
 void respawn_agent(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
-    agent->sim_x = agent->log_trajectory_x[0];
-    agent->sim_y = agent->log_trajectory_y[0];
-    agent->sim_z = agent->log_trajectory_z[0];
-    agent->sim_heading = agent->log_heading[0];
-    agent->heading_x = cosf(agent->sim_heading);
-    agent->heading_y = sinf(agent->sim_heading);
-    agent->sim_vx = agent->log_velocity_x[0];
-    agent->sim_vy = agent->log_velocity_y[0];
+
+    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        if (!randomize_agent_position(env, agent_idx)) {
+            // Fallback to original position if no valid spawn found
+            agent->sim_x = agent->log_trajectory_x[0];
+            agent->sim_y = agent->log_trajectory_y[0];
+            agent->sim_z = agent->log_trajectory_z[0];
+            agent->sim_heading = agent->log_heading[0];
+            agent->heading_x = cosf(agent->sim_heading);
+            agent->heading_y = sinf(agent->sim_heading);
+        }
+    } else {
+        agent->sim_x = agent->log_trajectory_x[0];
+        agent->sim_y = agent->log_trajectory_y[0];
+        agent->sim_z = agent->log_trajectory_z[0];
+        agent->sim_heading = agent->log_heading[0];
+        agent->heading_x = cosf(agent->sim_heading);
+        agent->heading_y = sinf(agent->sim_heading);
+    }
+
+    agent->sim_vx = 0.0f;
+    agent->sim_vy = 0.0f;
+    agent->sim_speed = 0.0f;
+    agent->sim_speed_signed = 0.0f;
     agent->metrics_array[COLLISION_IDX] = 0.0f;
     agent->metrics_array[OFFROAD_IDX] = 0.0f;
     agent->metrics_array[REACHED_GOAL_IDX] = 0.0f;
@@ -3097,7 +3191,15 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
 void c_reset(Drive *env) {
     env->timestep = env->init_steps;
-    set_start_position(env);
+    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        // Randomize all agent positions on reset
+        for (int x = 0; x < env->active_agent_count; x++) {
+            int agent_idx = env->active_agent_indices[x];
+            randomize_agent_position(env, agent_idx);
+        }
+    } else {
+        set_start_position(env);
+    }
     reset_goal_positions(env);
     for (int x = 0; x < env->active_agent_count; x++) {
         env->logs[x] = (Log){0};
