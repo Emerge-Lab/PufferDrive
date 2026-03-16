@@ -348,6 +348,7 @@ struct Drive {
     int control_mode;
     int reward_randomization;
     int reward_conditioning;
+    int turn_off_normalization;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
 };
@@ -2499,7 +2500,11 @@ void compute_observations(Drive *env) {
         //  Encoder -> Conditioning and goal waypoints
         if (env->reward_conditioning) {
             for (int c = 0; c < NUM_REWARD_COEFS; c++) {
-                obs[obs_idx++] = normalize_reward_coef(ego_entity->reward_coefs[c], c, env);
+                if (env->turn_off_normalization) {
+                    obs[obs_idx++] = ego_entity->reward_coefs[c];
+                } else {
+                    obs[obs_idx++] = normalize_reward_coef(ego_entity->reward_coefs[c], c, env);
+                }
             }
         }
         //
