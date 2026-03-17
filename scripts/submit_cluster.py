@@ -230,7 +230,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         tasks_per_node=args.task_per_node,
         nodes=from_config.get("nodes", 1),
         slurm_gres=gres,
-        slurm_exclude=from_config.get("exclude", ""),
+        slurm_exclude=from_config.get("exclude") or None,
         slurm_mem=from_config.get("mem"),
         slurm_time=from_config.get("time", 60),
         slurm_job_name=job_name,
