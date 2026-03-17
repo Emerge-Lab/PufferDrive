@@ -848,13 +848,12 @@ void init_grid_map(Drive *env) {
     }
 }
 
-// Create sparse lane and road line points for more informative map observations
-// Note: We don't do this for road edges as they are very important for understanding offroads
-// Note for future: Might need to completely remove road lines
+// Create sparse road points for more informative map observations
+// Note: We don't do this for road edges as they need to be very dense, important for understanding offroads
 void create_sparse_lane_points(Drive *env, float polyline_reduction_threshold, float max_segment_length) {
     for (int i = 0; i < env->num_roads; i++) {
         RoadMapElement *road = &env->road_elements[i];
-        if (road->type == ROAD_LANE || road->type == ROAD_LINE) {
+        if (road->type == ROAD_LANE) {
             simplify_polyline(road, polyline_reduction_threshold, max_segment_length);
         }
     }
@@ -1175,6 +1174,7 @@ void load_map_binary(const char *filename, Drive *env) {
     fclose(file);
 }
 
+// Removes all the road elements not relevant for either the sim or the observations
 void filter_road_elements(Drive *env) {
     // For now just removes all road line elements
     int inital_road_count = env->num_roads;
