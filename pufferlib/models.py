@@ -21,12 +21,12 @@ class Default(nn.Module):
     into decode_actions.
     """
 
-    def __init__(self, env, hidden_size=128):
+    def __init__(self, env, hidden_size=128, actions_trajectory_length=80):
         super().__init__()
         self.hidden_size = hidden_size
         self.is_multidiscrete = isinstance(env.single_action_space, pufferlib.spaces.MultiDiscrete)
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
-        self.actionspace_size = sum(env.single_action_space.nvec.tolist()) * 12  # TODO pass the parameter
+        self.actionspace_size = sum(env.single_action_space.nvec.tolist()) * 2 * actions_trajectory_length
         try:
             self.is_dict_obs = isinstance(env.env.observation_space, pufferlib.spaces.Dict)
         except:

@@ -342,9 +342,9 @@ class PuffeRL:
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
                 prev_traj = self.prev_actions_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1)
-                prev_traj[done_mask.bool()] = -1.0
+                prev_traj[done_mask.bool(), ...] = -1.0
                 if config.get("actions_trajectory_length", 80) == 1:
-                    prev_traj = torch.zeros_like(prev_traj)
+                    prev_traj = -torch.ones_like(prev_traj)
                 o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
                 logits, value = self.policy.forward_eval(o_device_aug, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(
@@ -435,8 +435,9 @@ class PuffeRL:
 
         action_N2 = convert_bptt_action_integers_to_r2(self.actions)
         traj, heading = rollout_state_trajectory_ego(action_N2, observations=self.observations)
-
-        r_commitment = compute_l2_loss_ego_action_traj(traj, self.prev_state_traj, heading, self.terminals)
+        r_commitment = compute_l2_loss_ego_action_traj(
+            traj, self.prev_state_traj, heading, torch.cat([self.prev_terminals, self.terminals[:, :-1]], dim=1)
+        )
         r_commitment = r_commitment.detach()
         self.prev_state_traj = traj[:, -1, ...]
         self.prev_terminals = self.terminals[:, [-1]]

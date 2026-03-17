@@ -68,8 +68,7 @@ class Drive(nn.Module):
 
         self.past_actions_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(np.prod(self.past_action_tensor_shape), input_size)),
-            nn.LayerNorm(input_size),
-            # nn.ReLU(),
+            nn.ReLU(),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
 

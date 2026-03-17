@@ -94,25 +94,44 @@ def compute_l2_loss_ego_action_traj(
     terminals : B x BPTT (1 = auto-reset happened, obs is post-reset)
     """
 
-    newtraj = torch.cat([traj_tm1.unsqueeze(1), traj], dim=1)
+    if traj.shape[2] == 1:
+        return torch.zeros_like(heading)  # if we have no trajectory (i.e. only one action we can return 0)
 
-    if newtraj.shape[2] == 1:
-        return torch.zeros_like(heading)
-    zeroed = newtraj[:, :-1, 1:, :] - newtraj[:, :-1, 1, :].unsqueeze(2)
+    newtraj = torch.cat(
+        [traj_tm1.unsqueeze(1), traj], dim=1
+    )  # concatenate the previous trajectory to compute loss at first step
+
+    # we take up to the last element and renormalize the position to the second position of the trajectory.
+    # since the second position is the position occupied after the action, it is the starting point (the zero) of the second trajectory
+    zeroed_tm1 = newtraj[:, :-1, 1:, :] - newtraj[:, :-1, 1, :].unsqueeze(2)
+
+    # now we rotate everything to bring the tm1 trajectory in the same ego reference as the current time trajectory
     cos_heading = torch.cos(heading)[..., None]
     sin_heading = torch.sin(heading)[..., None]
-    rotated_x = zeroed[..., 0] * cos_heading - zeroed[..., 1] * sin_heading
-    rotated_y = zeroed[..., 0] * sin_heading + zeroed[..., 1] * cos_heading
+    rotated_x = zeroed_tm1[..., 0] * cos_heading - zeroed_tm1[..., 1] * sin_heading
+    rotated_y = zeroed_tm1[..., 0] * sin_heading + zeroed_tm1[..., 1] * cos_heading
 
-    rotated = torch.stack([rotated_x, rotated_y], dim=-1)  # this should be B X K-1 X 2
+    rotated = torch.stack([rotated_x, rotated_y], dim=-1)  # this should be B X BPTT X K-1 X 2
 
-    per_point_l2 = torch.sqrt(((newtraj[:, 1:, :-1, :] - rotated[:, :, :, :].detach()) ** 2).sum(-1))
-    per_point_l2 = per_point_l2 * (1.0 - terminals).unsqueeze(-1)
-    diffs = newtraj[:, 1:, :1, :] - newtraj[:, 1:, :-1, :]
-    arc_length = torch.sqrt((diffs**2).sum(-1)).sum(-1)
-    arc_length = torch.where(arc_length > 5, arc_length, 5.0)
-    loss = per_point_l2.sum(-1) / (arc_length + 1e-6)
-    return -loss / 500.0
+    # we now compute the loss i.e. the difference of positions occupied at future timesteps
+    per_point_l2 = torch.sqrt(((newtraj[:, 1:, :-1, :] - rotated[:, :, :, :].detach()) ** 2).sum(-1)).sum(
+        -1
+    )  # this should be B X BPTT
+    per_point_l2 = per_point_l2 * (
+        1.0 - terminals
+    )  # if a trajecotry is after a terminal point, we don't consider it for the loss (the first plan is free)
+
+    # compute the normalization factors based on the length of the trajectories
+    diffs_t = newtraj[:, 1:, 1:-1, :] - newtraj[:, 1:, 0:-2, :]
+    arc_lengths_t = torch.sqrt((diffs_t**2).sum(-1)).sum(-1)
+
+    diffs_tm1 = (
+        newtraj[:, :-1, 2:, :] - newtraj[:, :-1, 1:-1, :]
+    )  # distance is invariant to rotation and shifting so we can use newtraj
+    arc_lengths_tm1 = torch.sqrt((diffs_tm1**2).sum(-1)).sum(-1)
+
+    loss = per_point_l2 / (torch.maximum(arc_lengths_t, arc_lengths_tm1) + 1.0)
+    return torch.clamp(-loss / 1000.0, -0.05, 0.0)
 
 
 def ego_trajectories_to_world(ego_traj, agent_x, agent_y, agent_heading):
