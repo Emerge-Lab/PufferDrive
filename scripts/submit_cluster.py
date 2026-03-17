@@ -327,12 +327,15 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             for cert_path in ["/etc/ssl/certs", "/etc/pki"]:
                 if os.path.exists(cert_path):
                     full_cmd.extend(["--bind", f"{cert_path}:{cert_path}:ro"])
+            # Wrap inner_cmd in single quotes so && chains stay inside bash -c
+            # Escape any existing single quotes in the command
+            escaped_inner = inner_cmd.replace("'", "'\\''")
             full_cmd.extend(
                 [
                     container_config["image"],
                     "bash",
                     "-c",
-                    inner_cmd,
+                    f"'{escaped_inner}'",
                 ]
             )
 
