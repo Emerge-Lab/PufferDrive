@@ -101,10 +101,11 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
             Vector3 prev_point = {0};
             bool has_prev = false;
 
-            for (int j = 0; j < env->entities[idx].array_size; j++) {
-                float x = env->entities[idx].traj_x[j];
-                float y = env->entities[idx].traj_y[j];
-                float valid = env->entities[idx].traj_valid[j];
+            Agent *agent = &env->agents[idx];
+            for (int j = 0; j < agent->trajectory_length; j++) {
+                float x = agent->log_trajectory_x[j];
+                float y = agent->log_trajectory_y[j];
+                float valid = agent->log_valid[j];
 
                 if (!valid) {
                     has_prev = false;
@@ -139,16 +140,16 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
 void renderAgentView(Drive *env, Client *client, int map_height, int obs_only, int lasers, int show_grid) {
     // Agent perspective camera following the selected agent
     int agent_idx = env->active_agent_indices[env->human_agent_idx];
-    Entity *agent = &env->entities[agent_idx];
+    Agent *agent = &env->agents[agent_idx];
 
     BeginDrawing();
 
     Camera3D camera = {0};
     // Position camera behind and above the agent
-    camera.position = (Vector3){agent->x - (25.0f * cosf(agent->heading)), agent->y - (25.0f * sinf(agent->heading)),
-                                agent->z + 15.0f};
-    camera.target =
-        (Vector3){agent->x + 40.0f * cosf(agent->heading), agent->y + 40.0f * sinf(agent->heading), agent->z + 1.0f};
+    camera.position = (Vector3){agent->sim_x - (25.0f * cosf(agent->sim_heading)),
+                                agent->sim_y - (25.0f * sinf(agent->sim_heading)), agent->sim_z + 15.0f};
+    camera.target = (Vector3){agent->sim_x + 40.0f * cosf(agent->sim_heading),
+                              agent->sim_y + 40.0f * sinf(agent->sim_heading), agent->sim_z + 1.0f};
     camera.up = (Vector3){0.0f, 0.0f, 1.0f};
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
@@ -227,18 +228,34 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
     fclose(policy_file);
 
+    AgentSpawnSettings spawn_settings = {
+        .max_agents_in_sim = conf.max_agents_per_env,
+        .min_w = conf.spawn_width_min,
+        .max_w = conf.spawn_width_max,
+        .min_l = conf.spawn_length_min,
+        .max_l = conf.spawn_length_max,
+        .h = conf.spawn_height,
+    };
+
     // Initialize environment with all config values from INI [env] section
     Drive env = {
         .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_lane_align = conf.reward_lane_align,
+        .reward_lane_center = conf.reward_lane_center,
         .reward_goal = conf.reward_goal,
         .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .goal_radius = conf.goal_radius,
+        .min_goal_speed = conf.min_goal_speed,
         .goal_behavior = conf.goal_behavior,
-        .goal_target_distance = conf.goal_target_distance,
-        .goal_speed = conf.goal_speed,
+        .reward_randomization = conf.reward_randomization,
+        .reward_conditioning = conf.reward_conditioning,
+        .turn_off_normalization = conf.turn_off_normalization,
+        .min_goal_distance = conf.min_goal_distance,
+        .max_goal_distance = conf.max_goal_distance,
+        .max_goal_speed = conf.max_goal_speed,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
@@ -247,8 +264,32 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
+        .reward_bounds =
+            {
+                {conf.reward_bound_goal_radius_min, conf.reward_bound_goal_radius_max},
+                {conf.reward_bound_collision_min, conf.reward_bound_collision_max},
+                {conf.reward_bound_offroad_min, conf.reward_bound_offroad_max},
+                {conf.reward_bound_comfort_min, conf.reward_bound_comfort_max},
+                {conf.reward_bound_lane_align_min, conf.reward_bound_lane_align_max},
+                {conf.reward_bound_lane_center_min, conf.reward_bound_lane_center_max},
+                {conf.reward_bound_velocity_min, conf.reward_bound_velocity_max},
+                {conf.reward_bound_traffic_light_min, conf.reward_bound_traffic_light_max},
+                {conf.reward_bound_center_bias_min, conf.reward_bound_center_bias_max},
+                {conf.reward_bound_vel_align_min, conf.reward_bound_vel_align_max},
+                {conf.reward_bound_overspeed_min, conf.reward_bound_overspeed_max},
+                {conf.reward_bound_timestep_min, conf.reward_bound_timestep_max},
+                {conf.reward_bound_reverse_min, conf.reward_bound_reverse_max},
+                {conf.reward_bound_throttle_min, conf.reward_bound_throttle_max},
+                {conf.reward_bound_steer_min, conf.reward_bound_steer_max},
+                {conf.reward_bound_acc_min, conf.reward_bound_acc_max},
+            },
+        .spawn_settings = spawn_settings,
         .map_name = (char *)map_name,
     };
+
+    if (conf.init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        env.num_agents = conf.min_agents_per_env + rand() % (conf.max_agents_per_env - conf.min_agents_per_env + 1);
+    }
 
     allocate(&env);
 
@@ -297,7 +338,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     Weights *weights = load_weights(policy_name);
     printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
     char filename_topdown[256];
@@ -370,7 +411,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         printf("Recording agent view...\n");
         for (int i = 0; i < frame_count; i++) {
             int human_idx = env.active_agent_indices[env.human_agent_idx];
-            if (env.entities[human_idx].respawn_count > 0) {
+            if (env.agents[human_idx].respawn_count > 0) {
                 break;
             }
             if (i % frame_skip == 0) {
@@ -423,7 +464,7 @@ int main(int argc, char *argv[]) {
 
     // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
-    const char *policy_name = "resources/drive/puffer_drive_weights.bin";
+    const char *policy_name = "resources/drive/best_policy_with_reward_conditioning.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
     int num_maps = conf.num_maps;

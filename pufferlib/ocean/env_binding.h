@@ -128,7 +128,7 @@ static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "Truncations must be 1D");
         return NULL;
     }
-    // env->truncations = PyArray_DATA(truncations);
+    env->truncations = PyArray_DATA(truncations);
 
     PyObject *seed_arg = PyTuple_GetItem(args, 5);
     if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
@@ -412,7 +412,7 @@ static PyObject *vec_init(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->actions = (void *)((char *)PyArray_DATA(actions) + i * PyArray_STRIDE(actions, 0));
         env->rewards = (void *)((char *)PyArray_DATA(rewards) + i * PyArray_STRIDE(rewards, 0));
         env->terminals = (void *)((char *)PyArray_DATA(terminals) + i * PyArray_STRIDE(terminals, 0));
-        // env->truncations = (void*)((char*)PyArray_DATA(truncations) + i*PyArray_STRIDE(truncations, 0));
+        env->truncations = (void *)((char *)PyArray_DATA(truncations) + i * PyArray_STRIDE(truncations, 0));
 
         // Assumes each process has the same number of environments
         int env_seed = i + seed * vec->num_envs;
@@ -603,7 +603,12 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     }
 
     // Compute completion_rate from aggregated counts
-    aggregate.completion_rate = aggregate.goals_reached_this_episode / aggregate.goals_sampled_this_episode;
+    if (aggregate.goals_attempted_this_episode > 0.0f) {
+        aggregate.completion_rate = aggregate.goals_reached_this_episode / aggregate.goals_attempted_this_episode;
+    } else {
+        // Define completion_rate as 0.0 when there were no attempts
+        aggregate.completion_rate = 0.0f;
+    }
 
     // User populates dict
     my_log(dict, &aggregate);
@@ -837,7 +842,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
         c_get_global_ground_truth_trajectories(
             drive, &x_base[traj_offset], &y_base[traj_offset], &z_base[traj_offset], &heading_base[traj_offset],
             &valid_base[traj_offset], &id_base[agent_offset], &is_vehicle_base[agent_offset],
-            &is_track_to_predict_base[agent_offset], &scenario_id_base[agent_offset * 16]);
+            &is_track_to_predict_base[agent_offset], &scenario_id_base[agent_offset * SCENARIO_ID_STR_LENGTH]);
 
         // Move offsets forward
         agent_offset += drive->active_agent_count;
@@ -895,7 +900,7 @@ static PyObject *vec_get_road_edge_polylines(PyObject *self, PyObject *args) {
         int np, tp;
         c_get_road_edge_counts(drive, &np, &tp);
         c_get_road_edge_polylines(drive, &x_base[pt_offset], &y_base[pt_offset], &lengths_base[poly_offset],
-                                  &scenario_ids_base[poly_offset * 16]);
+                                  &scenario_ids_base[poly_offset * SCENARIO_ID_STR_LENGTH]);
         poly_offset += np;
         pt_offset += tp;
     }
@@ -1006,6 +1011,9 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
     PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC", EGO_FEATURES_CLASSIC);
     PyModule_AddIntConstant(m, "EGO_FEATURES_JERK", EGO_FEATURES_JERK);
+    PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC_CONDITIONING", EGO_FEATURES_CLASSIC + NUM_REWARD_COEFS);
+    PyModule_AddIntConstant(m, "EGO_FEATURES_JERK_CONDITIONING", EGO_FEATURES_JERK + NUM_REWARD_COEFS);
+    PyModule_AddIntConstant(m, "SCENARIO_ID_STR_LENGTH", SCENARIO_ID_STR_LENGTH);
 
     return m;
 }

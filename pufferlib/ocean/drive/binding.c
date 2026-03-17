@@ -86,38 +86,150 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int control_mode = unpack(kwargs, "control_mode");
     int init_steps = unpack(kwargs, "init_steps");
     int goal_behavior = unpack(kwargs, "goal_behavior");
-    float goal_target_distance = unpack(kwargs, "goal_target_distance");
+    int reward_randomization = unpack(kwargs, "reward_randomization");
+    int reward_conditioning = unpack(kwargs, "reward_conditioning");
+    int turn_off_normalization = unpack(kwargs, "turn_off_normalization");
+    float min_goal_distance = unpack(kwargs, "min_goal_distance");
+    float max_goal_distance = unpack(kwargs, "max_goal_distance");
+
+    float reward_bound_goal_radius_min = unpack(kwargs, "reward_bound_goal_radius_min");
+    float reward_bound_goal_radius_max = unpack(kwargs, "reward_bound_goal_radius_max");
+    float reward_bound_collision_min = unpack(kwargs, "reward_bound_collision_min");
+    float reward_bound_collision_max = unpack(kwargs, "reward_bound_collision_max");
+    float reward_bound_offroad_min = unpack(kwargs, "reward_bound_offroad_min");
+    float reward_bound_offroad_max = unpack(kwargs, "reward_bound_offroad_max");
+    float reward_bound_comfort_min = unpack(kwargs, "reward_bound_comfort_min");
+    float reward_bound_comfort_max = unpack(kwargs, "reward_bound_comfort_max");
+    float reward_bound_lane_align_min = unpack(kwargs, "reward_bound_lane_align_min");
+    float reward_bound_lane_align_max = unpack(kwargs, "reward_bound_lane_align_max");
+    float reward_bound_lane_center_min = unpack(kwargs, "reward_bound_lane_center_min");
+    float reward_bound_lane_center_max = unpack(kwargs, "reward_bound_lane_center_max");
+    float reward_bound_velocity_min = unpack(kwargs, "reward_bound_velocity_min");
+    float reward_bound_velocity_max = unpack(kwargs, "reward_bound_velocity_max");
+    float reward_bound_traffic_light_min = unpack(kwargs, "reward_bound_traffic_light_min");
+    float reward_bound_traffic_light_max = unpack(kwargs, "reward_bound_traffic_light_max");
+    float reward_bound_center_bias_min = unpack(kwargs, "reward_bound_center_bias_min");
+    float reward_bound_center_bias_max = unpack(kwargs, "reward_bound_center_bias_max");
+    float reward_bound_vel_align_min = unpack(kwargs, "reward_bound_vel_align_min");
+    float reward_bound_vel_align_max = unpack(kwargs, "reward_bound_vel_align_max");
+    float reward_bound_overspeed_min = unpack(kwargs, "reward_bound_overspeed_min");
+    float reward_bound_overspeed_max = unpack(kwargs, "reward_bound_overspeed_max");
+    float reward_bound_timestep_min = unpack(kwargs, "reward_bound_timestep_min");
+    float reward_bound_timestep_max = unpack(kwargs, "reward_bound_timestep_max");
+    float reward_bound_reverse_min = unpack(kwargs, "reward_bound_reverse_min");
+    float reward_bound_reverse_max = unpack(kwargs, "reward_bound_reverse_max");
+    float reward_bound_throttle_min = unpack(kwargs, "reward_bound_throttle_min");
+    float reward_bound_throttle_max = unpack(kwargs, "reward_bound_throttle_max");
+    float reward_bound_steer_min = unpack(kwargs, "reward_bound_steer_min");
+    float reward_bound_steer_max = unpack(kwargs, "reward_bound_steer_max");
+    float reward_bound_acc_min = unpack(kwargs, "reward_bound_acc_min");
+    float reward_bound_acc_max = unpack(kwargs, "reward_bound_acc_max");
+
+    float min_avg_speed_to_consider_goal_attempt = unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");
+
+    int use_all_maps = unpack(kwargs, "use_all_maps");
+    int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
+    int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
 
     clock_gettime(CLOCK_REALTIME, &ts);
-    srand(ts.tv_nsec); // Always use random sampling with replacement
+    srand(ts.tv_nsec);
 
+    int max_envs = use_all_maps ? num_maps : num_agents;
+
+    if (init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        // Training mode: random agent counts per env
+        int agent_counts[max_envs];
+        int remaining = num_agents;
+        int env_count = 0;
+
+        while (remaining > 0) {
+            int count;
+            if (remaining <= max_agents_per_env) {
+                count = remaining;
+            } else {
+                // Ensure last env can still meet min_agents_per_env requirement
+                int upper = (remaining - max_agents_per_env < min_agents_per_env) ? remaining - min_agents_per_env
+                                                                                  : max_agents_per_env;
+                if (upper - min_agents_per_env + 1 == 0) {
+                    count = min_agents_per_env;
+                } else {
+                    count = min_agents_per_env + rand() % (upper - min_agents_per_env + 1);
+                }
+            }
+            agent_counts[env_count++] = count;
+            remaining -= count;
+        }
+
+        PyObject *agent_offsets = PyList_New(env_count + 1);
+        PyObject *map_ids_list = PyList_New(env_count);
+
+        int offset = 0;
+        for (int i = 0; i < env_count; i++) {
+            PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
+            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rand() % num_maps));
+            offset += agent_counts[i];
+        }
+        PyList_SetItem(agent_offsets, env_count,
+                       PyLong_FromLong(num_agents)); // In random mode, we guarantee num_agents accross all envs
+        PyObject *tuple = PyTuple_New(3);
+        PyTuple_SetItem(tuple, 0, agent_offsets);
+        PyTuple_SetItem(tuple, 1, map_ids_list);
+        PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+        return tuple;
+    }
+
+    // For all other modes
     int total_agent_count = 0;
     int env_count = 0;
-
-    int max_envs = num_agents;
-
+    int map_idx = 0;
     int maps_checked = 0;
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
 
-    // Getting env count
-    while (total_agent_count < num_agents && env_count < max_envs) {
-
-        // Always sample randomly with replacement
-        int map_id = rand() % num_maps;
-
-        // printf("Sampling map_id: %d\n", map_id);
-
+    // getting env count
+    while (use_all_maps ? map_idx < max_envs : total_agent_count < num_agents && env_count < max_envs) {
+        int map_id = use_all_maps ? map_idx++ : rand() % num_maps;
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
-        env->goal_target_distance = goal_target_distance;
+        env->reward_randomization = reward_randomization;
+        env->turn_off_normalization = turn_off_normalization;
+        env->reward_conditioning = reward_conditioning;
+        env->min_goal_distance = min_goal_distance;
+        env->max_goal_distance = max_goal_distance;
+        env->min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt;
+        // reward randomization bounds
+        env->reward_bounds[REWARD_COEF_GOAL_RADIUS] =
+            (RewardBound){reward_bound_goal_radius_min, reward_bound_goal_radius_max};
+        env->reward_bounds[REWARD_COEF_COLLISION] =
+            (RewardBound){reward_bound_collision_min, reward_bound_collision_max};
+        env->reward_bounds[REWARD_COEF_OFFROAD] = (RewardBound){reward_bound_offroad_min, reward_bound_offroad_max};
+        env->reward_bounds[REWARD_COEF_COMFORT] = (RewardBound){reward_bound_comfort_min, reward_bound_comfort_max};
+        env->reward_bounds[REWARD_COEF_LANE_ALIGN] =
+            (RewardBound){reward_bound_lane_align_min, reward_bound_lane_align_max};
+        env->reward_bounds[REWARD_COEF_LANE_CENTER] =
+            (RewardBound){reward_bound_lane_center_min, reward_bound_lane_center_max};
+        env->reward_bounds[REWARD_COEF_VELOCITY] = (RewardBound){reward_bound_velocity_min, reward_bound_velocity_max};
+        env->reward_bounds[REWARD_COEF_TRAFFIC_LIGHT] =
+            (RewardBound){reward_bound_traffic_light_min, reward_bound_traffic_light_max};
+        env->reward_bounds[REWARD_COEF_CENTER_BIAS] =
+            (RewardBound){reward_bound_center_bias_min, reward_bound_center_bias_max};
+        env->reward_bounds[REWARD_COEF_VEL_ALIGN] =
+            (RewardBound){reward_bound_vel_align_min, reward_bound_vel_align_max};
+        env->reward_bounds[REWARD_COEF_OVERSPEED] =
+            (RewardBound){reward_bound_overspeed_min, reward_bound_overspeed_max};
+        env->reward_bounds[REWARD_COEF_TIMESTEP] = (RewardBound){reward_bound_timestep_min, reward_bound_timestep_max};
+        env->reward_bounds[REWARD_COEF_REVERSE] = (RewardBound){reward_bound_reverse_min, reward_bound_reverse_max};
+        env->reward_bounds[REWARD_COEF_THROTTLE] = (RewardBound){reward_bound_throttle_min, reward_bound_throttle_max};
+        env->reward_bounds[REWARD_COEF_STEER] = (RewardBound){reward_bound_steer_min, reward_bound_steer_max};
+        env->reward_bounds[REWARD_COEF_ACC] = (RewardBound){reward_bound_acc_min, reward_bound_acc_max};
+
         // Get map file path from Python list
         PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
         const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
-        env->entities = load_map_binary(map_file_path, env);
+        load_map_binary(map_file_path, env);
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
@@ -126,10 +238,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
             // Safeguard: if we've checked all available maps and found no active agents, raise an error
             if (maps_checked >= num_maps) {
-                for (int j = 0; j < env->num_entities; j++) {
-                    free_entity(&env->entities[j]);
+                for (int j = 0; j < env->num_objects; j++) {
+                    free_agent(&env->agents[j]);
                 }
-                free(env->entities);
+                for (int j = 0; j < env->num_roads; j++) {
+                    free_road_element(&env->road_elements[j]);
+                }
+                free(env->agents);
+                free(env->road_elements);
+                free(env->road_scenario_ids);
                 free(env->active_agent_indices);
                 free(env->static_agent_indices);
                 free(env->expert_static_agent_indices);
@@ -142,33 +259,29 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 return NULL;
             }
 
-            for (int j = 0; j < env->num_entities; j++) {
-                free_entity(&env->entities[j]);
+            // Store map_id
+            PyObject *map_id_obj = PyLong_FromLong(map_id);
+            PyList_SetItem(map_ids, env_count, map_id_obj);
+            // Store agent offset
+            PyObject *offset = PyLong_FromLong(total_agent_count);
+            PyList_SetItem(agent_offsets, env_count, offset);
+            total_agent_count += env->active_agent_count;
+            env_count++;
+            for (int j = 0; j < env->num_objects; j++) {
+                free_agent(&env->agents[j]);
             }
-            free(env->entities);
+            for (int j = 0; j < env->num_roads; j++) {
+                free_road_element(&env->road_elements[j]);
+            }
+            free(env->agents);
+            free(env->road_elements);
+            free(env->road_scenario_ids);
             free(env->active_agent_indices);
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
             free(env);
             continue;
         }
-
-        // Store map_id
-        PyObject *map_id_obj = PyLong_FromLong(map_id);
-        PyList_SetItem(map_ids, env_count, map_id_obj);
-        // Store agent offset
-        PyObject *offset = PyLong_FromLong(total_agent_count);
-        PyList_SetItem(agent_offsets, env_count, offset);
-        total_agent_count += env->active_agent_count;
-        env_count++;
-        for (int j = 0; j < env->num_entities; j++) {
-            free_entity(&env->entities[j]);
-        }
-        free(env->entities);
-        free(env->active_agent_indices);
-        free(env->static_agent_indices);
-        free(env->expert_static_agent_indices);
-        free(env);
     }
 
     if (total_agent_count >= num_agents) {
@@ -206,6 +319,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->action_type = conf.action_type;
     env->dynamics_model = conf.dynamics_model;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
+    env->reward_lane_align = conf.reward_lane_align;
+    env->reward_lane_center = conf.reward_lane_center;
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
@@ -213,19 +328,74 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->termination_mode = conf.termination_mode;
     env->collision_behavior = conf.collision_behavior;
     env->offroad_behavior = conf.offroad_behavior;
-    env->max_controlled_agents = unpack(kwargs, "max_controlled_agents");
     env->dt = conf.dt;
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
-    env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
+    env->reward_randomization = (int)unpack(kwargs, "reward_randomization");
+    env->turn_off_normalization = (int)unpack(kwargs, "turn_off_normalization");
+    env->reward_conditioning = (int)unpack(kwargs, "reward_conditioning");
+    env->min_goal_distance = (float)unpack(kwargs, "min_goal_distance");
+    env->max_goal_distance = (float)unpack(kwargs, "max_goal_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
-    env->goal_speed = (float)unpack(kwargs, "goal_speed");
+    env->min_goal_speed = (float)unpack(kwargs, "min_goal_speed");
+    env->max_goal_speed = (float)unpack(kwargs, "max_goal_speed");
+    env->min_avg_speed_to_consider_goal_attempt = (float)unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");
+
+    // reward randomization bounds
+    env->reward_bounds[REWARD_COEF_GOAL_RADIUS] = (RewardBound){(float)unpack(kwargs, "reward_bound_goal_radius_min"),
+                                                                (float)unpack(kwargs, "reward_bound_goal_radius_max")};
+    env->reward_bounds[REWARD_COEF_COLLISION] = (RewardBound){(float)unpack(kwargs, "reward_bound_collision_min"),
+                                                              (float)unpack(kwargs, "reward_bound_collision_max")};
+    env->reward_bounds[REWARD_COEF_OFFROAD] = (RewardBound){(float)unpack(kwargs, "reward_bound_offroad_min"),
+                                                            (float)unpack(kwargs, "reward_bound_offroad_max")};
+    env->reward_bounds[REWARD_COEF_COMFORT] = (RewardBound){(float)unpack(kwargs, "reward_bound_comfort_min"),
+                                                            (float)unpack(kwargs, "reward_bound_comfort_max")};
+    env->reward_bounds[REWARD_COEF_LANE_ALIGN] = (RewardBound){(float)unpack(kwargs, "reward_bound_lane_align_min"),
+                                                               (float)unpack(kwargs, "reward_bound_lane_align_max")};
+    env->reward_bounds[REWARD_COEF_LANE_CENTER] = (RewardBound){(float)unpack(kwargs, "reward_bound_lane_center_min"),
+                                                                (float)unpack(kwargs, "reward_bound_lane_center_max")};
+    env->reward_bounds[REWARD_COEF_VELOCITY] = (RewardBound){(float)unpack(kwargs, "reward_bound_velocity_min"),
+                                                             (float)unpack(kwargs, "reward_bound_velocity_max")};
+    env->reward_bounds[REWARD_COEF_TRAFFIC_LIGHT] =
+        (RewardBound){(float)unpack(kwargs, "reward_bound_traffic_light_min"),
+                      (float)unpack(kwargs, "reward_bound_traffic_light_max")};
+    env->reward_bounds[REWARD_COEF_CENTER_BIAS] = (RewardBound){(float)unpack(kwargs, "reward_bound_center_bias_min"),
+                                                                (float)unpack(kwargs, "reward_bound_center_bias_max")};
+    env->reward_bounds[REWARD_COEF_VEL_ALIGN] = (RewardBound){(float)unpack(kwargs, "reward_bound_vel_align_min"),
+                                                              (float)unpack(kwargs, "reward_bound_vel_align_max")};
+    env->reward_bounds[REWARD_COEF_OVERSPEED] = (RewardBound){(float)unpack(kwargs, "reward_bound_overspeed_min"),
+                                                              (float)unpack(kwargs, "reward_bound_overspeed_max")};
+    env->reward_bounds[REWARD_COEF_TIMESTEP] = (RewardBound){(float)unpack(kwargs, "reward_bound_timestep_min"),
+                                                             (float)unpack(kwargs, "reward_bound_timestep_max")};
+    env->reward_bounds[REWARD_COEF_REVERSE] = (RewardBound){(float)unpack(kwargs, "reward_bound_reverse_min"),
+                                                            (float)unpack(kwargs, "reward_bound_reverse_max")};
+    env->reward_bounds[REWARD_COEF_THROTTLE] = (RewardBound){(float)unpack(kwargs, "reward_bound_throttle_min"),
+                                                             (float)unpack(kwargs, "reward_bound_throttle_max")};
+    env->reward_bounds[REWARD_COEF_STEER] =
+        (RewardBound){(float)unpack(kwargs, "reward_bound_steer_min"), (float)unpack(kwargs, "reward_bound_steer_max")};
+    env->reward_bounds[REWARD_COEF_ACC] =
+        (RewardBound){(float)unpack(kwargs, "reward_bound_acc_min"), (float)unpack(kwargs, "reward_bound_acc_max")};
+
     char *map_path = unpack_str(kwargs, "map_path");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");
+    int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
+
+    AgentSpawnSettings spawn_settings = {
+        .min_w = unpack(kwargs, "spawn_width_min"),
+        .max_w = unpack(kwargs, "spawn_width_max"),
+        .min_l = unpack(kwargs, "spawn_length_min"),
+        .max_l = unpack(kwargs, "spawn_length_max"),
+        .h = unpack(kwargs, "spawn_height"),
+    };
+    env->spawn_settings = spawn_settings;
 
     env->num_agents = max_agents;
+    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        env->spawn_settings.max_agents_in_sim =
+            max_agents_per_env; // INIT_VARIABLE_AGENT_NUMBER only supports controlled agents
+    }
     env->map_name = map_path;
     env->init_steps = init_steps;
     env->timestep = init_steps;
@@ -248,6 +418,11 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
     assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
     assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
+    assign_to_dict(dict, "distance_without_collision", log->distance_without_collision);
+    assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
+    assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
+    assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
+    assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }
