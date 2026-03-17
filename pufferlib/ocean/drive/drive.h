@@ -2863,22 +2863,12 @@ static bool randomize_agent_position(Drive *env, int agent_idx) {
         get_random_point_on_lane(lane, &spawn_x, &spawn_y, &spawn_z, &spawn_heading);
         spawn_z += agent->sim_height / 2.0f;
 
-        // Check collision with all other active agents (excluding this one)
-        bool collision = false;
-        for (int j = 0; j < env->active_agent_count; j++) {
-            int other_idx = env->active_agent_indices[j];
-            if (other_idx == agent_idx) continue;
-            Agent *other = &env->agents[other_idx];
-            if (other->sim_x == INVALID_POSITION || other->removed) continue;
-            float dx = spawn_x - other->sim_x;
-            float dy = spawn_y - other->sim_y;
-            float dist = sqrtf(dx * dx + dy * dy);
-            float min_dist = (agent->sim_length + other->sim_length) / 2.0f;
-            if (dist < min_dist) {
-                collision = true;
-                break;
-            }
-        }
+        // Temporarily invalidate this agent so check_spawn_collision skips it
+        float saved_x = agent->sim_x;
+        agent->sim_x = INVALID_POSITION;
+        bool collision = check_spawn_collision(env, env->active_agent_count, spawn_x, spawn_y, spawn_z,
+                                              spawn_heading, agent->sim_length, agent->sim_width, agent->sim_height);
+        agent->sim_x = saved_x;
         if (collision) continue;
 
         // Check offroad
@@ -2917,6 +2907,10 @@ void respawn_agent(Drive *env, int agent_idx) {
         }
         // Sample a new goal relative to the new position
         sample_new_goal(env, agent_idx);
+        agent->sim_vx = 0.0f;
+        agent->sim_vy = 0.0f;
+        agent->sim_speed = 0.0f;
+        agent->sim_speed_signed = 0.0f;
     } else {
         agent->sim_x = agent->log_trajectory_x[0];
         agent->sim_y = agent->log_trajectory_y[0];
@@ -2924,12 +2918,9 @@ void respawn_agent(Drive *env, int agent_idx) {
         agent->sim_heading = agent->log_heading[0];
         agent->heading_x = cosf(agent->sim_heading);
         agent->heading_y = sinf(agent->sim_heading);
+        agent->sim_vx = agent->log_velocity_x[0];
+        agent->sim_vy = agent->log_velocity_y[0];
     }
-
-    agent->sim_vx = 0.0f;
-    agent->sim_vy = 0.0f;
-    agent->sim_speed = 0.0f;
-    agent->sim_speed_signed = 0.0f;
     agent->metrics_array[COLLISION_IDX] = 0.0f;
     agent->metrics_array[OFFROAD_IDX] = 0.0f;
     agent->metrics_array[REACHED_GOAL_IDX] = 0.0f;
