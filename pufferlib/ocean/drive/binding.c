@@ -88,6 +88,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int goal_behavior = unpack(kwargs, "goal_behavior");
     int reward_randomization = unpack(kwargs, "reward_randomization");
     int reward_conditioning = unpack(kwargs, "reward_conditioning");
+    int turn_off_normalization = unpack(kwargs, "turn_off_normalization");
     float min_goal_distance = unpack(kwargs, "min_goal_distance");
     float max_goal_distance = unpack(kwargs, "max_goal_distance");
     float observation_window_size = unpack(kwargs, "observation_window_size");
@@ -197,6 +198,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
         env->reward_randomization = reward_randomization;
+        env->turn_off_normalization = turn_off_normalization;
         env->reward_conditioning = reward_conditioning;
         env->min_goal_distance = min_goal_distance;
         env->max_goal_distance = max_goal_distance;
@@ -337,6 +339,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->reward_randomization = (int)unpack(kwargs, "reward_randomization");
+    env->turn_off_normalization = (int)unpack(kwargs, "turn_off_normalization");
     env->reward_conditioning = (int)unpack(kwargs, "reward_conditioning");
     env->min_goal_distance = (float)unpack(kwargs, "min_goal_distance");
     env->max_goal_distance = (float)unpack(kwargs, "max_goal_distance");

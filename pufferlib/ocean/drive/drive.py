@@ -25,6 +25,7 @@ class Drive(pufferlib.PufferEnv):
         reward_goal_post_respawn=0.5,
         goal_behavior=0,
         reward_randomization=0,
+        turn_off_normalization=1,
         reward_conditioning=0,
         min_goal_distance=5.0,
         max_goal_distance=20.0,
@@ -111,6 +112,7 @@ class Drive(pufferlib.PufferEnv):
         self.max_goal_speed = float(max_goal_speed) if max_goal_speed is not None else -1.0
         self.goal_behavior = goal_behavior
         self.reward_randomization = reward_randomization
+        self.turn_off_normalization = turn_off_normalization
         self.reward_conditioning = reward_conditioning
         self.min_goal_distance = min_goal_distance
         self.max_goal_distance = max_goal_distance
@@ -282,6 +284,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
+            turn_off_normalization=self.turn_off_normalization,
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
@@ -355,6 +358,7 @@ class Drive(pufferlib.PufferEnv):
                 max_goal_speed=self.max_goal_speed,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
+                turn_off_normalization=self.turn_off_normalization,
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,
@@ -439,6 +443,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
+            turn_off_normalization=self.turn_off_normalization,
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
@@ -510,6 +515,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
                 reward_conditioning=self.reward_conditioning,
+                turn_off_normalization=self.turn_off_normalization,
                 min_goal_distance=self.min_goal_distance,
                 max_goal_distance=self.max_goal_distance,
                 min_goal_speed=self.min_goal_speed,
