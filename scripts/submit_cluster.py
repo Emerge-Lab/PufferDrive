@@ -239,10 +239,27 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
     def launch_training(args, from_config, cmd, save_dir, project_root, container_config=None):
         """Runs inside the SLURM allocation."""
+        import glob
         import os
+        import shutil
         import subprocess
         import sys
         import submitit
+
+        # Code isolation: create a symlink copy of the source tree with .so files
+        # copied (not linked), so rebuilding for another branch won't break this job.
+        isolated_root = os.path.join(save_dir, "code")
+        os.makedirs(save_dir, exist_ok=True)
+        if os.path.exists(isolated_root):
+            shutil.rmtree(isolated_root)
+        subprocess.run(["cp", "-rs", project_root, isolated_root], check=True)
+        # Replace .so symlinks with actual file copies
+        for so_link in glob.glob(os.path.join(isolated_root, "**", "*.so"), recursive=True):
+            if os.path.islink(so_link):
+                real_path = os.path.realpath(so_link)
+                os.remove(so_link)
+                shutil.copy2(real_path, so_link)
+        project_root = isolated_root
 
         # Change to project directory and set up environment
         os.chdir(project_root)
@@ -286,7 +303,18 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
         # Wrap with singularity if container mode is enabled
         if container_config is not None:
-            inner_cmd = f"cd {project_root} && " + " ".join(full_cmd)
+            env_setup = "source /ext3/env.sh"
+            # Redirect caches to scratch to avoid home quota issues
+            scratch_dir = os.environ.get("SCRATCH_DIR", "/scratch/" + os.environ.get("USER", ""))
+            cache_exports = (
+                f"export XDG_CACHE_HOME={scratch_dir}/cache && "
+                f"export WANDB_CACHE_DIR={scratch_dir}/wandb_cache && "
+                f"export WANDB_CONFIG_DIR={scratch_dir}/wandb_config && "
+                f"export WANDB_DATA_DIR={scratch_dir}/wandb_data && "
+                f"export WANDB_DIR={scratch_dir}/wandb_data && "
+                f"mkdir -p {scratch_dir}/cache"
+            )
+            inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && " + " ".join(full_cmd)
             full_cmd = [
                 "singularity",
                 "exec",
