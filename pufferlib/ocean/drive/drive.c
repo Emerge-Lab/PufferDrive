@@ -3,7 +3,6 @@
 #include "libgen.h"
 #include "../env_config.h"
 #include <string.h>
-#include "../env_config.h"
 
 // Use this test if the network changes to ensure that the forward pass
 // matches the torch implementation to the 3rd or ideally 4th decimal place
@@ -21,7 +20,8 @@ void test_drivenet() {
 
     // Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights *weights = load_weights("puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC);
+    int reward_conditioning = 0;
+    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, reward_conditioning);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {
@@ -43,6 +43,9 @@ void demo() {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         exit(1);
     }
+
+    // Set different seed each time
+    srand(time(NULL));
 
     // Note: Use below hardcoded settings for 2.0 demo purposes. Since the policy was
     // trained with these exact settings, changing them may lead to
@@ -70,6 +73,15 @@ void demo() {
     //     .map_name = "resources/drive/map_town_02_carla.bin",
     // };
 
+    AgentSpawnSettings spawn_settings = {
+        .max_agents_in_sim = conf.max_agents_per_env,
+        .min_w = conf.spawn_width_min,
+        .max_w = conf.spawn_width_max,
+        .min_l = conf.spawn_length_min,
+        .max_l = conf.spawn_length_max,
+        .h = conf.spawn_height,
+    };
+
     Drive env = {
         .human_agent_idx = 0,
         .action_type = 0, // Demo doesn't support continuous action space
@@ -80,8 +92,10 @@ void demo() {
         .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .goal_radius = conf.goal_radius,
         .goal_behavior = conf.goal_behavior,
-        .goal_target_distance = conf.goal_target_distance,
-        .goal_speed = conf.goal_speed,
+        .min_goal_distance = conf.min_goal_distance,
+        .max_goal_distance = conf.max_goal_distance,
+        .min_goal_speed = conf.min_goal_speed,
+        .max_goal_speed = conf.max_goal_speed,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
@@ -90,8 +104,15 @@ void demo() {
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
-        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .spawn_settings = spawn_settings,
+        .map_name = "resources/drive/binaries/carla_2D/map_000.bin",
+        .reward_conditioning = conf.reward_conditioning,
     };
+
+    if (conf.init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        env.num_agents = conf.min_agents_per_env + rand() % (conf.max_agents_per_env - conf.min_agents_per_env + 1);
+    }
+
     allocate(&env);
     if (env.active_agent_count == 0) {
         fprintf(stderr, "Error: No active agents found in map '%s' with init_mode=%d. Cannot run demo.\n", env.map_name,
@@ -101,8 +122,8 @@ void demo() {
     }
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    Weights *weights = load_weights("best_policy_with_reward_conditioning.bin");
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;
     int steer_delta = 2;
