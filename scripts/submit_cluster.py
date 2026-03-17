@@ -246,16 +246,28 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         import sys
         import submitit
 
-        # Code isolation: symlink the source tree, then copy just the .so files
+        # Code isolation: shallow symlink of top-level entries, then copy .so files
         # so rebuilding for another branch won't break running jobs.
         isolated_root = os.path.join(save_dir, "code")
-        os.makedirs(save_dir, exist_ok=True)
-        if os.path.exists(isolated_root):
-            shutil.rmtree(isolated_root)
-        # Symlink tree (instant, no disk cost)
-        subprocess.run(["cp", "-rs", project_root, isolated_root], check=True)
+        os.makedirs(isolated_root, exist_ok=True)
+        # Symlink each top-level entry (instant, avoids deep-copying data/)
+        for entry in os.listdir(project_root):
+            src = os.path.join(project_root, entry)
+            dst = os.path.join(isolated_root, entry)
+            if os.path.exists(dst) or os.path.islink(dst):
+                if os.path.isdir(dst) and not os.path.islink(dst):
+                    shutil.rmtree(dst)
+                else:
+                    os.remove(dst)
+            os.symlink(src, dst)
+        # Copy pufferlib/ as a real dir tree so we can replace .so files
+        pufferlib_dst = os.path.join(isolated_root, "pufferlib")
+        if os.path.islink(pufferlib_dst):
+            os.remove(pufferlib_dst)
+        pufferlib_src = os.path.join(project_root, "pufferlib")
+        subprocess.run(["cp", "-rs", pufferlib_src, pufferlib_dst], check=True)
         # Copy .so files over their symlinks so they survive rebuilds
-        for so_link in glob.glob(os.path.join(isolated_root, "pufferlib", "**", "*.so"), recursive=True):
+        for so_link in glob.glob(os.path.join(pufferlib_dst, "**", "*.so"), recursive=True):
             if os.path.islink(so_link):
                 real_path = os.path.realpath(so_link)
                 os.remove(so_link)
