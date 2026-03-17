@@ -230,7 +230,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         tasks_per_node=args.task_per_node,
         nodes=from_config.get("nodes", 1),
         slurm_gres=gres,
-        slurm_exclude=from_config.get("exclude") or None,
+        slurm_exclude=from_config.get("exclude", ""),
         slurm_mem=from_config.get("mem"),
         slurm_time=from_config.get("time", 60),
         slurm_job_name=job_name,
@@ -239,40 +239,10 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
     def launch_training(args, from_config, cmd, save_dir, project_root, container_config=None):
         """Runs inside the SLURM allocation."""
-        import glob
         import os
-        import shutil
         import subprocess
         import sys
         import submitit
-
-        # Code isolation: shallow symlink of top-level entries, then copy .so files
-        # so rebuilding for another branch won't break running jobs.
-        isolated_root = os.path.join(save_dir, "code")
-        os.makedirs(isolated_root, exist_ok=True)
-        # Symlink each top-level entry (instant, avoids deep-copying data/)
-        for entry in os.listdir(project_root):
-            src = os.path.join(project_root, entry)
-            dst = os.path.join(isolated_root, entry)
-            if os.path.exists(dst) or os.path.islink(dst):
-                if os.path.isdir(dst) and not os.path.islink(dst):
-                    shutil.rmtree(dst)
-                else:
-                    os.remove(dst)
-            os.symlink(src, dst)
-        # Copy pufferlib/ as a real dir tree so we can replace .so files
-        pufferlib_dst = os.path.join(isolated_root, "pufferlib")
-        if os.path.islink(pufferlib_dst):
-            os.remove(pufferlib_dst)
-        pufferlib_src = os.path.join(project_root, "pufferlib")
-        subprocess.run(["cp", "-rs", pufferlib_src, pufferlib_dst], check=True)
-        # Copy .so files over their symlinks so they survive rebuilds
-        for so_link in glob.glob(os.path.join(pufferlib_dst, "**", "*.so"), recursive=True):
-            if os.path.islink(so_link):
-                real_path = os.path.realpath(so_link)
-                os.remove(so_link)
-                shutil.copy2(real_path, so_link)
-        project_root = isolated_root
 
         # Change to project directory and set up environment
         os.chdir(project_root)
@@ -316,18 +286,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
         # Wrap with singularity if container mode is enabled
         if container_config is not None:
-            env_setup = "source /ext3/env.sh"
-            # Redirect caches to scratch to avoid home quota issues
-            scratch_dir = os.environ.get("SCRATCH_DIR", "/scratch/" + os.environ.get("USER", ""))
-            cache_exports = (
-                f"export XDG_CACHE_HOME={scratch_dir}/cache && "
-                f"export WANDB_CACHE_DIR={scratch_dir}/wandb_cache && "
-                f"export WANDB_CONFIG_DIR={scratch_dir}/wandb_config && "
-                f"export WANDB_DATA_DIR={scratch_dir}/wandb_data && "
-                f"export WANDB_DIR={scratch_dir}/wandb_data && "
-                f"mkdir -p {scratch_dir}/cache"
-            )
-            inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && " + " ".join(full_cmd)
+            inner_cmd = f"cd {project_root} && " + " ".join(full_cmd)
             full_cmd = [
                 "singularity",
                 "exec",
