@@ -17,6 +17,7 @@ class RenderView(IntEnum):
     FULL_SIM_STATE = 0  # Orthographic top-down, fully observable simulator state
     BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
     AGENT_PERSP = 2  # Third-person perspective following selected agent
+    SENSOR_NOISE = 3  # Agent view, including perception noise
 
 
 class RegMode(IntEnum):
@@ -549,7 +550,7 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self, view_mode: RenderView = RenderView.FULL_SIM_STATE, draw_traces: bool = True, env_id: int = 0):
+    def render(self, view_mode: RenderView = RenderView.SENSOR_NOISE, draw_traces: bool = True, env_id: int = 0):
         binding.vec_render(self.c_envs, int(view_mode), draw_traces, env_id)
 
     def close(self):
@@ -1022,7 +1023,7 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/interactive_data_training_100")
+    process_all_maps(data_folder="data/processed/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

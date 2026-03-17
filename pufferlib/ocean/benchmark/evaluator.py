@@ -891,7 +891,12 @@ class Evaluator:
         # Add other modes based on desiderata here
         return 0
 
-    def rollout(self, policy, mode="self_play"):
+    def rollout(self, policy, mode="self_play", view_mode=None):
+        from pufferlib.ocean.drive.drive import RenderView
+
+        if view_mode is None:
+            view_mode = RenderView.FULL_SIM_STATE
+
         env = self.hr_env if mode == "human_replay" else self.sp_env
         render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
         driver = env.driver_env
@@ -904,7 +909,13 @@ class Evaluator:
         else:
             render_env_idx = self.select_render_env([{}] * driver.num_envs)
 
-        env_statistics = self._run_rollout(policy, env, render_env_idx if render_eval else None, per_env_logs=True)
+        env_statistics = self._run_rollout(
+            policy,
+            env,
+            render_env_idx if render_eval else None,
+            per_env_logs=True,
+            view_mode=view_mode,
+        )
 
         if mode == "self_play":
             self.self_play_stats = env_statistics
@@ -913,8 +924,13 @@ class Evaluator:
             self.human_replay_stats = env_statistics
             self.human_replay_stats[0]["render_env_idx"] = render_env_idx
 
-    def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False):
+    def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False, view_mode=None):
         """Run a single rollout. If render_env_idx is not None, render that env."""
+        from pufferlib.ocean.drive.drive import RenderView
+
+        if view_mode is None:
+            view_mode = RenderView.FULL_SIM_STATE
+
         driver = env.driver_env
         num_agents = env.observation_space.shape[0]
         device = self.configs["train"]["device"]
@@ -934,7 +950,7 @@ class Evaluator:
         info_list = []
         for time_idx in range(self.sim_steps):
             if render_env_idx is not None:
-                driver.render(env_id=render_env_idx)
+                driver.render(view_mode=view_mode, env_id=render_env_idx)
 
             # Get action from policy
             with torch.no_grad():

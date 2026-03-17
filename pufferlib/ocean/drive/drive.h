@@ -22,6 +22,7 @@
 #define VIEW_MODE_SIM_STATE 0
 #define VIEW_MODE_BEV_AGENT_OBS 1
 #define VIEW_MODE_AGENT_PERSP 2
+#define VIEW_MODE_SENSOR_NOISE 3
 
 // Order of entities in rendering (lower is rendered first)
 #define Z_ROAD_SURFACE 0.0f
@@ -1588,11 +1589,11 @@ void init(Drive *env) {
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
-    env->dynamics_noise_pos = 0.0125f;    // keep, empirically validated (Gigaflow)
-    env->dynamics_noise_heading = 0.005f; // keep, proportionate
-    env->obs_noise_pos = 0.02f;           // obs-space (~1m equivalent)
-    env->obs_noise_speed = 0.005f;        // obs-space (~0.5 m/s equivalent)
-    env->obs_noise_road = 0.0f;           // drop, irrelevant for transfer
+    env->dynamics_noise_pos = 0.0f;     // 0.0125f;    // keep, empirically validated (Gigaflow)
+    env->dynamics_noise_heading = 0.0f; // 0.005f; // keep, proportionate
+    env->obs_noise_pos = 0.0f;          // 0.04f;           // obs-space (~1m equivalent)
+    env->obs_noise_speed =              // 0.005f;        // obs-space (~0.5 m/s equivalent)
+        env->obs_noise_road = 0.0f;     // drop, irrelevant for now
 }
 
 void close_client(Client *client);
@@ -3555,6 +3556,125 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     }
 }
 
+void draw_thick_line_3d(Vector3 a, Vector3 b, float thickness, Color color) {
+    float dx = b.x - a.x;
+    float dy = b.y - a.y;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1e-6f)
+        return;
+    float nx = -dy / len * thickness * 0.5f;
+    float ny = dx / len * thickness * 0.5f;
+
+    Vector3 p0 = {a.x + nx, a.y + ny, a.z};
+    Vector3 p1 = {a.x - nx, a.y - ny, a.z};
+    Vector3 p2 = {b.x - nx, b.y - ny, b.z};
+    Vector3 p3 = {b.x + nx, b.y + ny, b.z};
+
+    DrawTriangle3D(p0, p1, p2, color);
+    DrawTriangle3D(p0, p2, p3, color);
+    DrawTriangle3D(p2, p1, p0, color);
+    DrawTriangle3D(p3, p2, p0, color);
+}
+
+void draw_sensor_noise_view(Drive *env, Client *client) {
+    int sdc_array_idx = 0;
+    if (env->sdc_track_index >= 0) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            if (env->active_agent_indices[i] == env->sdc_track_index) {
+                sdc_array_idx = i;
+                break;
+            }
+        }
+    }
+
+    int ego_idx = env->active_agent_indices[sdc_array_idx];
+    Entity *ego = &env->entities[ego_idx];
+    if (ego->respawn_timestep != -1)
+        return;
+
+    float cos_h = ego->heading_x;
+    float sin_h = ego->heading_y;
+    int num_samples = 5;
+
+    for (int j = 0; j < MAX_AGENTS; j++) {
+        int index = -1;
+        if (j < env->active_agent_count)
+            index = env->active_agent_indices[j];
+        else if (j < env->num_actors && env->static_agent_count > 0)
+            index = env->static_agent_indices[j - env->active_agent_count];
+        if (index == -1 || index == ego_idx)
+            continue;
+
+        Entity *other = &env->entities[index];
+        if (other->type > CYCLIST)
+            continue;
+        if (other->x == INVALID_POSITION)
+            continue;
+        if (other->respawn_timestep != -1)
+            continue;
+
+        float dx = other->x - ego->x;
+        float dy = other->y - ego->y;
+        if ((dx * dx + dy * dy) > 2500.0f)
+            continue;
+
+        float gt_cos = other->heading_x;
+        float gt_sin = other->heading_y;
+        float gt_hl = other->length * 0.5f;
+        float gt_hw = other->width * 0.5f;
+
+        // Ground truth box (green)
+        Vector3 gt[4] = {
+            {other->x + gt_hl * gt_cos - gt_hw * gt_sin, other->y + gt_hl * gt_sin + gt_hw * gt_cos, Z_AGENTS},
+            {other->x + gt_hl * gt_cos + gt_hw * gt_sin, other->y + gt_hl * gt_sin - gt_hw * gt_cos, Z_AGENTS},
+            {other->x - gt_hl * gt_cos + gt_hw * gt_sin, other->y - gt_hl * gt_sin - gt_hw * gt_cos, Z_AGENTS},
+            {other->x - gt_hl * gt_cos - gt_hw * gt_sin, other->y - gt_hl * gt_sin + gt_hw * gt_cos, Z_AGENTS},
+        };
+        for (int k = 0; k < 4; k++)
+            draw_thick_line_3d(gt[k], gt[(k + 1) % 4], 0.45f, LIGHTGREEN);
+
+        // Noisy perception samples (purple)
+        for (int s = 0; s < num_samples; s++) {
+            float rel_x = dx * cos_h + dy * sin_h;
+            float rel_y = -dx * sin_h + dy * cos_h;
+            float noisy_rx = rel_x + gaussian_noise(env->obs_noise_pos) / 0.02f;
+            float noisy_ry = rel_y + gaussian_noise(env->obs_noise_pos) / 0.02f;
+            float px = ego->x + noisy_rx * cos_h - noisy_ry * sin_h;
+            float py = ego->y + noisy_rx * sin_h + noisy_ry * cos_h;
+
+            float p_hw = (other->width / MAX_VEH_WIDTH + gaussian_noise(env->obs_noise_pos)) * MAX_VEH_WIDTH * 0.5f;
+            float p_hl = (other->length / MAX_VEH_LEN + gaussian_noise(env->obs_noise_pos)) * MAX_VEH_LEN * 0.5f;
+
+            Vector3 pc[4] = {
+                {px + p_hl * gt_cos - p_hw * gt_sin, py + p_hl * gt_sin + p_hw * gt_cos, Z_AGENTS + 0.01f},
+                {px + p_hl * gt_cos + p_hw * gt_sin, py + p_hl * gt_sin - p_hw * gt_cos, Z_AGENTS + 0.01f},
+                {px - p_hl * gt_cos + p_hw * gt_sin, py - p_hl * gt_sin - p_hw * gt_cos, Z_AGENTS + 0.01f},
+                {px - p_hl * gt_cos - p_hw * gt_sin, py - p_hl * gt_sin + p_hw * gt_cos, Z_AGENTS + 0.01f},
+            };
+            Color sc = Fade(LIGHT_PURPLE, 0.6f);
+            for (int k = 0; k < 4; k++)
+                draw_thick_line_3d(pc[k], pc[(k + 1) % 4], 0.4f, sc);
+        }
+    }
+
+    // Ego box (cyan)
+    float hl = ego->length * 0.5f;
+    float hw = ego->width * 0.5f;
+    Vector3 ec[4] = {
+        {ego->x + hl * cos_h - hw * sin_h, ego->y + hl * sin_h + hw * cos_h, Z_AGENTS},
+        {ego->x + hl * cos_h + hw * sin_h, ego->y + hl * sin_h - hw * cos_h, Z_AGENTS},
+        {ego->x - hl * cos_h + hw * sin_h, ego->y - hl * sin_h - hw * cos_h, Z_AGENTS},
+        {ego->x - hl * cos_h - hw * sin_h, ego->y - hl * sin_h + hw * cos_h, Z_AGENTS},
+    };
+    for (int k = 0; k < 4; k++)
+        draw_thick_line_3d(ec[k], ec[(k + 1) % 4], 0.5f, DEEPBLUE);
+
+    // Ego heading arrow
+    Vector3 as = {ego->x, ego->y, Z_AGENTS};
+    Vector3 ae = {ego->x + cos_h * hl * 2.0f, ego->y + sin_h * hl * 2.0f, Z_AGENTS};
+    draw_thick_line_3d(as, ae, 0.25f, DEEPBLUE);
+}
+
 void c_render(Drive *env, int view_mode, int draw_traces) {
 
     // Create client on first render call
@@ -3640,6 +3760,51 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             ClearBackground(ROAD_COLOR);
             BeginMode3D(camera);
             draw_scene(env, client, 1, 1, 0, 0);
+
+        } else if (view_mode == VIEW_MODE_SENSOR_NOISE) {
+            // Sensor noise visualization: BEV centered on SDC showing
+            // ground truth (green) vs noisy perception (purple)
+            int sdc_array_idx = 0;
+            if (env->sdc_track_index >= 0) {
+                for (int i = 0; i < env->active_agent_count; i++) {
+                    if (env->active_agent_indices[i] == env->sdc_track_index) {
+                        sdc_array_idx = i;
+                        break;
+                    }
+                }
+            }
+            int ego_idx = env->active_agent_indices[sdc_array_idx];
+            Entity *sdc = &env->entities[ego_idx];
+
+            camera.position = (Vector3){sdc->x, sdc->y, 400.0f};
+            camera.target = (Vector3){sdc->x, sdc->y, 0.0f};
+            camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+            camera.projection = CAMERA_ORTHOGRAPHIC;
+            camera.fovy = 100.0f;
+
+            BeginDrawing();
+            ClearBackground(ROAD_COLOR);
+            BeginMode3D(camera);
+
+            // Draw roads first
+            for (int i = 0; i < env->num_entities; i++) {
+                if (env->entities[i].type < ROAD_LANE || env->entities[i].type > ROAD_EDGE)
+                    continue;
+                for (int j = 0; j < env->entities[i].array_size - 1; j++) {
+                    Vector3 start = {env->entities[i].traj_x[j], env->entities[i].traj_y[j], Z_ROAD_MARKINGS};
+                    Vector3 end = {env->entities[i].traj_x[j + 1], env->entities[i].traj_y[j + 1], Z_ROAD_MARKINGS};
+                    if (env->entities[i].type == ROAD_EDGE)
+                        draw_road_edge(env, start.x, start.y, end.x, end.y);
+                    else {
+                        Color c = (env->entities[i].type == ROAD_LANE) ? Fade(SOFT_YELLOW, 0.25f) : WHITE;
+                        rlSetLineWidth(2.0f);
+                        DrawLine3D(start, end, c);
+                    }
+                }
+            }
+
+            draw_sensor_noise_view(env, client);
+            EndMode3D();
 
         } else { // First-person perspective from a selected agent
             int agent_idx = env->active_agent_indices[env->human_agent_idx];
