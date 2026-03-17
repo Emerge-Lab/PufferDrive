@@ -295,7 +295,8 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                # REMOVED REWARD CLAMPING
+                if config.get("clamp_reward", True):
+                    r = torch.clamp(r, -1, 1)
 
             profile("eval_copy", epoch)
             with torch.no_grad():
