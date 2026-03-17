@@ -80,6 +80,8 @@ def compute_l2_loss_ego_action_traj(
     traj_tm1: torch.Tensor,
     heading: torch.Tensor,
     terminals: torch.Tensor,
+    trajectory_loss_norm: float = 1000.0,
+    trajectory_loss_clamp_min: float = -0.05,
 ) -> torch.Tensor:
     """
     this function computes the difference in implictly planned occupied states between two action sequences
@@ -131,7 +133,7 @@ def compute_l2_loss_ego_action_traj(
     arc_lengths_tm1 = torch.sqrt((diffs_tm1**2).sum(-1)).sum(-1)
 
     loss = per_point_l2 / (torch.maximum(arc_lengths_t, arc_lengths_tm1) + 1.0)
-    return torch.clamp(-loss / 1000.0, -0.05, 0.0)
+    return torch.clamp(-loss / trajectory_loss_norm, trajectory_loss_clamp_min, 0.0)
 
 
 def ego_trajectories_to_world(ego_traj, agent_x, agent_y, agent_heading):

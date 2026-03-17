@@ -436,7 +436,12 @@ class PuffeRL:
         action_N2 = convert_bptt_action_integers_to_r2(self.actions)
         traj, heading = rollout_state_trajectory_ego(action_N2, observations=self.observations)
         r_commitment = compute_l2_loss_ego_action_traj(
-            traj, self.prev_state_traj, heading, torch.cat([self.prev_terminals, self.terminals[:, :-1]], dim=1)
+            traj,
+            self.prev_state_traj,
+            heading,
+            torch.cat([self.prev_terminals, self.terminals[:, :-1]], dim=1),
+            trajectory_loss_norm=config["trajectory_loss_norm"],
+            trajectory_loss_clamp_min=config["trajectory_loss_clamp_min"],
         )
         r_commitment = r_commitment.detach()
         self.prev_state_traj = traj[:, -1, ...]
@@ -531,7 +536,11 @@ class PuffeRL:
 
             entropy_loss = entropy.mean()
 
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+            loss = (
+                pg_loss
+                + config["vf_coef"] * v_loss
+                - config["ent_coef"] * entropy_loss / config["actions_trajectory_length"]
+            )
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
