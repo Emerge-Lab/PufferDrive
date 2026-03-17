@@ -2915,6 +2915,8 @@ void respawn_agent(Drive *env, int agent_idx) {
             agent->heading_x = cosf(agent->sim_heading);
             agent->heading_y = sinf(agent->sim_heading);
         }
+        // Sample a new goal relative to the new position
+        sample_new_goal(env, agent_idx);
     } else {
         agent->sim_x = agent->log_trajectory_x[0];
         agent->sim_y = agent->log_trajectory_y[0];
@@ -3197,10 +3199,15 @@ void c_reset(Drive *env) {
             int agent_idx = env->active_agent_indices[x];
             randomize_agent_position(env, agent_idx);
         }
+        // Sample new goals relative to new positions
+        for (int x = 0; x < env->active_agent_count; x++) {
+            int agent_idx = env->active_agent_indices[x];
+            sample_new_goal(env, agent_idx);
+        }
     } else {
         set_start_position(env);
+        reset_goal_positions(env);
     }
-    reset_goal_positions(env);
     for (int x = 0; x < env->active_agent_count; x++) {
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];
