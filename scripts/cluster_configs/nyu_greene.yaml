@@ -6,5 +6,5 @@ cpus: 16
 mem: 32gb
 time: 360  # minutes
 gpu_type: null  # rtx8000, a100, v100 (optional, uses partition default)
-exclude: ""
+exclude: null
 nodelist: null
