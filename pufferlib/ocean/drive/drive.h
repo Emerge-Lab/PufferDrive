@@ -3237,7 +3237,7 @@ void c_reset(Drive *env) {
         agent->prev_goal_z = agent->sim_z;
         generate_reward_coefs(env, agent);
 
-        if (env->goal_behavior == GOAL_GENERATE_NEW) {
+        if (env->goal_behavior == GOAL_GENERATE_NEW && env->init_mode != INIT_VARIABLE_AGENT_NUMBER) {
             agent->goal_position_x = agent->init_goal_x;
             agent->goal_position_y = agent->init_goal_y;
             agent->goal_position_z = agent->init_goal_z;
