@@ -7,8 +7,8 @@ vec.num_envs: 16
 
 # Environment
 env.num_agents: 1024
-env.map_dir: "resources/drive/binaries/training"
-env.num_maps: 10000
+env.map_dir: "resources/drive/binaries/carla_3D"
+env.num_maps: 5
 
 # Training
 train.total_timesteps: 2_000_000_000
