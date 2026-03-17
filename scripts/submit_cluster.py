@@ -246,19 +246,15 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         import sys
         import submitit
 
-        # Code isolation: create a symlink copy of the source tree with .so files
-        # copied (not linked), so rebuilding for another branch won't break this job.
+        # Code isolation: copy the source tree per run so rebuilding for another
+        # branch won't break running jobs.
         isolated_root = os.path.join(save_dir, "code")
         os.makedirs(save_dir, exist_ok=True)
         if os.path.exists(isolated_root):
             shutil.rmtree(isolated_root)
-        subprocess.run(["cp", "-rs", project_root, isolated_root], check=True)
-        # Replace .so symlinks with actual file copies
-        for so_link in glob.glob(os.path.join(isolated_root, "**", "*.so"), recursive=True):
-            if os.path.islink(so_link):
-                real_path = os.path.realpath(so_link)
-                os.remove(so_link)
-                shutil.copy2(real_path, so_link)
+        shutil.copytree(project_root, isolated_root, symlinks=True,
+                        ignore=shutil.ignore_patterns('*.bin', '*.mp4', '*.pt', '*.onnx',
+                                                       'binaries', 'wandb', '__pycache__'))
         project_root = isolated_root
 
         # Change to project directory and set up environment
