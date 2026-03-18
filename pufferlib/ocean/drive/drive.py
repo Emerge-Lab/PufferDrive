@@ -485,9 +485,6 @@ class Drive(pufferlib.PufferEnv):
 
         binding.vec_collect_expert_data(self.c_envs, expert_actions_discrete, expert_observations_full)
 
-        print(
-            f"unique actions @prep_data: {len(np.unique(expert_actions_discrete))}, {np.unique(expert_actions_discrete)}"
-        )
 
         if np.all(expert_actions_discrete == -1):
             raise ValueError("No valid human demonstrations could be collected. Please check the data format.")
@@ -1019,7 +1016,7 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

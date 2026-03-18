@@ -1444,7 +1444,7 @@ def verify(env_name, args=None, vecenv=None):
     args["env"]["termination_mode"] = 0
 
     # Determine verification mode: "bc_policy", "expert_replay", or "inferred_expert_actions"
-    verify_mode = "bc_policy"  # args.get("verify_mode", "inferred_expert_actions")
+    verify_mode = "inferred_expert_actions" #args.get("verify_mode", "inferred_expert_actions")
 
     if verify_mode == "bc_policy":
         # BC policy controls all agents directly
