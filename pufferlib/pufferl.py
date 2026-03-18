@@ -504,7 +504,10 @@ class PuffeRL:
                 try:
                     self._render_in_process()
                 except Exception as e:
+                    import traceback
+
                     print(f"In-process render failed: {e}")
+                    traceback.print_exc()
 
         if self.config["eval"]["wosac_realism_eval"] and (
             (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
