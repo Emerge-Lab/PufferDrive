@@ -523,6 +523,18 @@ class PuffeRL:
         driver = self.vecenv.driver_env
         device = self.config["device"]
 
+        # Ensure a virtual display is available for headless Raylib rendering.
+        # The C-level Xvfb fork in make_client can fail inside containers,
+        # so we start Xvfb from Python and set DISPLAY before creating the env.
+        xvfb_proc = None
+        if os.environ.get("DISPLAY") is None:
+            xvfb_proc = subprocess.Popen(
+                ["Xvfb", ":99", "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac", "-noreset"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            os.environ["DISPLAY"] = ":99"
+            time.sleep(0.5)  # wait for Xvfb to be ready
+
         # Pick a random map from the training set
         map_path = random.choice(driver.map_files)
         map_dir_tmp = os.path.join(self.config["data_dir"], "_render_tmp_map")
@@ -608,6 +620,9 @@ class PuffeRL:
                 print("Warning: No mp4 file found after in-process render")
         finally:
             shutil.rmtree(map_dir_tmp, ignore_errors=True)
+            if xvfb_proc is not None:
+                xvfb_proc.terminate()
+                xvfb_proc.wait()
 
     def mean_and_log(self):
 
