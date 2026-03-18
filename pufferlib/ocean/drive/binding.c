@@ -7,9 +7,18 @@
 // Module-level map cache: indexed by map_id, populated by my_shared(), used by my_init().
 static SharedMapData **g_map_cache = NULL;
 static int g_map_cache_size = 0;
+static pid_t g_map_cache_pid = 0;  // PID of the process that created the cache
 
 static void release_map_cache_internal(void) {
     if (g_map_cache == NULL) return;
+    // After fork, child inherits g_map_cache but must not free parent's memory.
+    // Just discard the inherited pointers without freeing.
+    if (g_map_cache_pid != 0 && g_map_cache_pid != getpid()) {
+        g_map_cache = NULL;
+        g_map_cache_size = 0;
+        g_map_cache_pid = 0;
+        return;
+    }
     for (int i = 0; i < g_map_cache_size; i++) {
         if (g_map_cache[i] != NULL) {
             free_shared_map_data(g_map_cache[i]);
@@ -19,6 +28,7 @@ static void release_map_cache_internal(void) {
     free(g_map_cache);
     g_map_cache = NULL;
     g_map_cache_size = 0;
+    g_map_cache_pid = 0;
 }
 
 static PyObject *release_map_cache_py(PyObject *self, PyObject *args) {
@@ -186,6 +196,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // Allocate map cache indexed by map_id (0..num_maps-1)
     g_map_cache_size = num_maps;
     g_map_cache = (SharedMapData **)calloc(num_maps, sizeof(SharedMapData *));
+    g_map_cache_pid = getpid();
 
     int max_envs = use_all_maps ? num_maps : num_agents;
 
