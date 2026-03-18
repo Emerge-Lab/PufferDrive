@@ -628,7 +628,10 @@ class PuffeRL:
             policy = load_policy(eval_config, vecenv, env_name)
 
             # Copy weights from in-memory policy (no checkpoint dependency)
-            policy.load_state_dict(copy.deepcopy(self.uncompiled_policy.state_dict()))
+            state_dict = copy.deepcopy(self.uncompiled_policy.state_dict())
+            # Strip DDP "module." prefix if present
+            state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+            policy.load_state_dict(state_dict)
 
             metrics = evaluator.evaluate(vecenv, policy)
             evaluator.log_stats(global_step=self.global_step)
