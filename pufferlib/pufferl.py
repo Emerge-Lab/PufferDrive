@@ -64,12 +64,11 @@ ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None, full_args=None):
+    def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
         torch.backends.cudnn.benchmark = True
-        self.full_args = full_args
 
         # Reproducibility
         seed = config["seed"]
@@ -620,10 +619,11 @@ class PuffeRL:
             from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
 
             self.msg = "Running safe eval..."
-            evaluator = SafeEvaluator(self.full_args, logger=self.logger)
+            env_name = self.config["env"]
+            safe_eval_config = self.config.get("safe_eval", {})
+            evaluator = SafeEvaluator(env_name, safe_eval_config, device=self.config["device"], logger=self.logger)
             eval_config = evaluator._build_eval_env_config()
 
-            env_name = self.config["env"]
             vecenv = load_env(env_name, eval_config)
             policy = load_policy(eval_config, vecenv, env_name)
 
@@ -1195,11 +1195,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         env=env_name,
         eval=args.get("eval", {}),
         safe_eval=args.get("safe_eval", {}),
-        env_config=args.get("env", {}),
     )
     if "vec" in args and "num_workers" in args["vec"]:
         train_config["num_workers"] = args["vec"]["num_workers"]
-    pufferl = PuffeRL(train_config, vecenv, policy, logger, full_args=args)
+    pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     all_logs = []
     while pufferl.global_step < train_config["total_timesteps"]:

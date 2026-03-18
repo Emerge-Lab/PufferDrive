@@ -824,38 +824,54 @@ class SafeEvaluator:
     Runs the policy with deterministic reward bounds (reward_randomization=1,
     min=max for each bound) so the conditioning observation vector is fixed to
     safe driving values. Collects metrics over multiple episodes.
+
+    Re-parses the INI config internally so it doesn't need the full training
+    args dict — only the env_name, safe_eval config, and device.
     """
 
-    def __init__(self, config: Dict, logger=None):
-        self.config = config
+    def __init__(self, env_name: str, safe_eval_config: Dict, device="cuda", logger=None):
+        self.env_name = env_name
         self.logger = logger
-        self.safe_eval_config = config.get("safe_eval", {})
-        self.num_episodes = self.safe_eval_config.get("num_episodes", 100)
-        self.num_agents = self.safe_eval_config.get("num_agents", 64)
-        self.episode_length = self.safe_eval_config.get("episode_length", 1000)
-        device = config.get("train", {}).get("device", "cuda")
+        self.safe_eval_config = safe_eval_config
+        self.num_episodes = safe_eval_config.get("num_episodes", 100)
+        self.num_agents = safe_eval_config.get("num_agents", 64)
+        self.episode_length = safe_eval_config.get("episode_length", 1000)
         if isinstance(device, int):
             device = f"cuda:{device}"
         self.device = device
         self.stats = None
 
     def _build_eval_env_config(self):
-        """Build env config with safe reward conditioning values applied."""
-        import copy
-        import re
+        """Build env config with safe reward conditioning values applied.
 
-        eval_config = copy.deepcopy(self.config)
+        Re-parses the INI file to get a fresh full config, then applies
+        safe_eval overrides for env, vec, and reward bounds.
+        """
+        import re
+        from pufferlib.pufferl import load_config
+
+        # Re-parse INI to get full config (env, vec, policy, rnn, etc.)
+        import sys
+
+        original_argv = sys.argv
+        sys.argv = ["pufferl"]
+        try:
+            eval_config = load_config(self.env_name)
+        finally:
+            sys.argv = original_argv
+
         eval_config["vec"] = dict(backend="PufferEnv", num_envs=1)
+        eval_config["train"]["device"] = self.device
         eval_config["env"]["num_agents"] = self.num_agents
         eval_config["env"]["episode_length"] = self.episode_length
         eval_config["env"]["resample_frequency"] = 0
         eval_config["env"]["reward_randomization"] = 1
         eval_config["env"]["reward_conditioning"] = 1
 
-        if "min_goal_distance" in self.safe_eval_config:
-            eval_config["env"]["min_goal_distance"] = self.safe_eval_config["min_goal_distance"]
-        if "max_goal_distance" in self.safe_eval_config:
-            eval_config["env"]["max_goal_distance"] = self.safe_eval_config["max_goal_distance"]
+        # Apply safe_eval overrides for map_dir, goal distances, etc.
+        for override_key in ("map_dir", "num_maps", "min_goal_distance", "max_goal_distance"):
+            if override_key in self.safe_eval_config:
+                eval_config["env"][override_key] = self.safe_eval_config[override_key]
 
         # Discover valid reward bound names from env config
         valid_bounds = set()
@@ -887,7 +903,7 @@ class SafeEvaluator:
 
         policy.eval()
         num_agents = vecenv.observation_space.shape[0]
-        use_rnn = self.config.get("train", {}).get("use_rnn", False)
+        use_rnn = hasattr(policy, "hidden_size")
 
         ob, _ = vecenv.reset()
         state = {}
