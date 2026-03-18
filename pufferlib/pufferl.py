@@ -560,13 +560,22 @@ class PuffeRL:
             obs, _ = render_env.reset()
             ep_length = driver.episode_length if driver.episode_length else 1000
             policy = self.uncompiled_policy
+            num_agents = render_env.num_agents
+
+            # Initialize LSTM state if policy uses one
+            state = None
+            if hasattr(policy, "lstm"):
+                state = dict(
+                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+                )
 
             for step in range(int(ep_length)):
                 render_env.render(RenderView.FULL_SIM_STATE, draw_traces=True)
 
                 with torch.no_grad():
                     obs_t = torch.as_tensor(obs).to(device)
-                    logits, _ = policy.forward_eval(obs_t)
+                    logits, _ = policy.forward_eval(obs_t, state)
                     action, _, _ = pufferlib.pytorch.sample_logits(logits)
                     action = action.cpu().numpy()
 
