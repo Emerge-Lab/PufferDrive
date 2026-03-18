@@ -597,6 +597,42 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
+        safe_eval_config = self.config.get("safe_eval", {})
+        safe_eval_enabled = safe_eval_config.get("enabled", False)
+        safe_eval_interval = safe_eval_config.get("interval", self.render_interval)
+        if safe_eval_enabled and (self.epoch % safe_eval_interval == 0 or done_training):
+            self._run_safe_eval()
+
+    def _run_safe_eval(self):
+        """Run safe eval in-process using SafeEvaluator."""
+        try:
+            from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
+
+            evaluator = SafeEvaluator(self.config, logger=self.logger)
+            eval_config = evaluator._build_eval_env_config()
+
+            vecenv = load_env(self.config["env"], eval_config)
+            policy = load_policy(eval_config, vecenv, self.config["env"])
+
+            # Load weights from latest checkpoint
+            model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+            model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+            if not model_files:
+                print("No model files found for safe eval")
+                return
+
+            latest_cpt = max(model_files, key=os.path.getctime)
+            checkpoint = torch.load(latest_cpt, map_location=str(self.config["device"]), weights_only=False)
+            policy.load_state_dict(checkpoint["model_state_dict"])
+
+            metrics = evaluator.evaluate(vecenv, policy)
+            evaluator.log_stats(global_step=self.global_step)
+            vecenv.close()
+
+            print(f"Safe eval: {len(metrics)} metrics logged")
+        except Exception as e:
+            print(f"Safe eval failed: {e}")
+
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
         if not self.render_async or not hasattr(self, "render_queue"):

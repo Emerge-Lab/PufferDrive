@@ -816,3 +816,132 @@ class HumanReplayEvaluator:
             if len(info_list) > 0:  # Happens at the end of episode
                 results = info_list[0]
                 return results
+
+
+class SafeEvaluator:
+    """Evaluates policies with fixed safe/law-abiding reward conditioning.
+
+    Runs the policy with deterministic reward bounds (reward_randomization=1,
+    min=max for each bound) so the conditioning observation vector is fixed to
+    safe driving values. Collects metrics over multiple episodes.
+    """
+
+    def __init__(self, config: Dict, logger=None):
+        self.config = config
+        self.logger = logger
+        self.safe_eval_config = config.get("safe_eval", {})
+        self.num_episodes = self.safe_eval_config.get("num_episodes", 100)
+        self.num_agents = self.safe_eval_config.get("num_agents", 64)
+        self.episode_length = self.safe_eval_config.get("episode_length", 1000)
+        self.device = config.get("train", {}).get("device", "cuda")
+        self.stats = None
+
+    def _build_eval_env_config(self):
+        """Build env config with safe reward conditioning values applied."""
+        import copy
+        import re
+
+        eval_config = copy.deepcopy(self.config)
+        eval_config["vec"] = dict(backend="PufferEnv", num_envs=1)
+        eval_config["env"]["num_agents"] = self.num_agents
+        eval_config["env"]["episode_length"] = self.episode_length
+        eval_config["env"]["resample_frequency"] = 0
+        eval_config["env"]["reward_randomization"] = 1
+        eval_config["env"]["reward_conditioning"] = 1
+
+        if "min_goal_distance" in self.safe_eval_config:
+            eval_config["env"]["min_goal_distance"] = self.safe_eval_config["min_goal_distance"]
+        if "max_goal_distance" in self.safe_eval_config:
+            eval_config["env"]["max_goal_distance"] = self.safe_eval_config["max_goal_distance"]
+
+        # Discover valid reward bound names from env config
+        valid_bounds = set()
+        for key in eval_config["env"]:
+            m = re.match(r"reward_bound_(.+)_min$", key)
+            if m:
+                valid_bounds.add(m.group(1))
+
+        # Set min=max for each reward bound to fix the conditioning values
+        for key, val in self.safe_eval_config.items():
+            if key not in valid_bounds:
+                continue
+            eval_config["env"][f"reward_bound_{key}_min"] = float(val)
+            eval_config["env"][f"reward_bound_{key}_max"] = float(val)
+
+        return eval_config
+
+    def evaluate(self, vecenv, policy):
+        """Run evaluation with safe reward conditioning and collect metrics.
+
+        Args:
+            vecenv: Vectorized environment (created with safe eval config)
+            policy: Trained policy to evaluate
+
+        Returns:
+            dict: Averaged metrics over collected episodes
+        """
+        from collections import defaultdict
+
+        policy.eval()
+        num_agents = vecenv.observation_space.shape[0]
+        use_rnn = self.config.get("train", {}).get("use_rnn", False)
+
+        ob, _ = vecenv.reset()
+        state = {}
+        dones = torch.zeros(num_agents, device=self.device)
+        prev_rewards = torch.zeros(num_agents, device=self.device)
+        if use_rnn:
+            state = dict(
+                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=self.device),
+                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=self.device),
+            )
+
+        all_stats = defaultdict(list)
+        episodes_collected = 0
+        max_steps = (self.num_episodes // max(num_agents, 1) + 2) * self.episode_length
+
+        for step in range(max_steps):
+            if episodes_collected >= self.num_episodes:
+                break
+
+            with torch.no_grad():
+                ob_t = torch.as_tensor(ob).to(self.device)
+                if use_rnn:
+                    state["reward"] = prev_rewards
+                    state["done"] = dones
+                logits, value = policy.forward_eval(ob_t, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+            if isinstance(logits, torch.distributions.Normal):
+                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+            ob, rewards, terminals, truncations, infos = vecenv.step(action)
+            prev_rewards = torch.as_tensor(rewards).float().to(self.device)
+            dones = torch.as_tensor(np.maximum(terminals, truncations)).float().to(self.device)
+
+            for entry in infos:
+                if isinstance(entry, dict):
+                    episodes_collected += int(entry.get("n", 1))
+                    for k, v in entry.items():
+                        try:
+                            float(v)
+                            all_stats[k].append(v)
+                        except (TypeError, ValueError):
+                            pass
+
+        self.stats = {k: float(np.mean(v)) for k, v in all_stats.items() if len(v) > 0}
+        return self.stats
+
+    def log_stats(self, global_step=None):
+        """Log collected metrics to wandb."""
+        if self.stats is None:
+            return
+
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            return
+
+        payload = {f"eval/safe_{k}": v for k, v in self.stats.items()}
+        if global_step is not None:
+            payload["train_step"] = global_step
+        self.logger.wandb.log(payload)
