@@ -79,6 +79,7 @@ typedef struct {
     float spawn_height;
     char map_dir[256];
     float min_avg_speed_to_consider_goal_attempt;
+    float partner_obs_radius;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -249,6 +250,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->num_maps = atoi(value);
     } else if (MATCH("env", "min_avg_speed_to_consider_goal_attempt")) {
         env_config->min_avg_speed_to_consider_goal_attempt = atof(value);
+    } else if (MATCH("env", "partner_obs_radius")) {
+        env_config->partner_obs_radius = atof(value);
     } else if (MATCH("env", "min_agents_per_env")) {
         env_config->min_agents_per_env = atoi(value);
     } else if (MATCH("env", "max_agents_per_env")) {
