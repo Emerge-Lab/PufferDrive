@@ -520,109 +520,50 @@ class PuffeRL:
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
     def _render_in_process(self):
-        """Render a video in-process using headless Raylib + ffmpeg pipe."""
-        from pufferlib.ocean.drive.drive import Drive, RenderView
+        """Render a video in a subprocess using headless Raylib + ffmpeg."""
+        run_id = self.logger.run_id
+        model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
+        model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+        if not model_files:
+            print("No model files found for render")
+            return
 
+        latest_cpt = max(model_files, key=os.path.getctime)
         driver = self.vecenv.driver_env
-        device = self.config["device"]
+        video_dir = os.path.join(model_dir, "videos")
+        os.makedirs(video_dir, exist_ok=True)
+        output_path = os.path.join(video_dir, f"epoch_{self.epoch:06d}.mp4")
 
-        # Ensure a virtual display is available for headless Raylib rendering.
-        # Start Xvfb once and keep it running for subsequent renders.
-        if not hasattr(self, "_xvfb_proc") and os.environ.get("DISPLAY") is None:
-            self._xvfb_proc = subprocess.Popen(
-                ["Xvfb", ":99", "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac", "-noreset"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            os.environ["DISPLAY"] = ":99"
-            time.sleep(0.5)  # wait for Xvfb to be ready
-
-        # Pick a random map from the training set
+        # Pick a random map
         map_path = random.choice(driver.map_files)
-        map_dir_tmp = os.path.join(self.config["data_dir"], "_render_tmp_map")
-        os.makedirs(map_dir_tmp, exist_ok=True)
-        tmp_map = os.path.join(map_dir_tmp, os.path.basename(map_path))
-        shutil.copy2(map_path, tmp_map)
+
+        cmd = [
+            sys.executable, "-m", "pufferlib.render_video",
+            "--model-path", latest_cpt,
+            "--map-path", map_path,
+            "--output-path", output_path,
+            "--device", str(self.config["device"]),
+            "--dynamics-model", driver.dynamics_model,
+        ]
 
         try:
-            render_env = Drive(
-                render_mode=1,  # RENDER_HEADLESS
-                num_agents=driver.num_agents,
-                num_maps=1,
-                map_dir=map_dir_tmp,
-                action_type="discrete" if driver._action_type_flag == 0 else "continuous",
-                dynamics_model=driver.dynamics_model,
-                dt=driver.dt,
-                episode_length=driver.episode_length,
-                termination_mode=driver.termination_mode,
-                init_steps=driver.init_steps,
-                init_mode=driver.init_mode_str,
-                control_mode=driver.control_mode_str,
-                collision_behavior=driver.collision_behavior,
-                offroad_behavior=driver.offroad_behavior,
-                goal_behavior=driver.goal_behavior,
-                goal_radius=driver.goal_radius,
-                reward_vehicle_collision=driver.reward_vehicle_collision,
-                reward_offroad_collision=driver.reward_offroad_collision,
-                reward_goal=driver.reward_goal,
-                reward_goal_post_respawn=driver.reward_goal_post_respawn,
-                min_agents_per_env=driver.min_agents_per_env,
-                max_agents_per_env=driver.max_agents_per_env,
-                resample_frequency=0,  # no resampling during render
-            )
-
-            obs, _ = render_env.reset()
-            ep_length = driver.episode_length if driver.episode_length else 1000
-            policy = self.uncompiled_policy
-            num_agents = render_env.num_agents
-
-            # Initialize LSTM state if policy uses one
-            state = None
-            if hasattr(policy, "lstm"):
-                state = dict(
-                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-                )
-
-            for step in range(int(ep_length)):
-                render_env.render(RenderView.FULL_SIM_STATE, draw_traces=True)
-
-                with torch.no_grad():
-                    obs_t = torch.as_tensor(obs).clone().to(device)
-                    if step == 0:
-                        print(f"[render debug] obs_t shape={obs_t.shape}, device={obs_t.device}, contiguous={obs_t.is_contiguous()}")
-                    logits, _ = policy.forward_eval(obs_t, state)
-                    action, _, _ = pufferlib.pytorch.sample_logits(logits)
-                    action = action.cpu().numpy()
-
-                obs, rewards, terminals, truncations, info = render_env.step(action)
-
-            render_env.close()  # finalizes ffmpeg → mp4
-
-            # Find the mp4 written to cwd
-            mp4_files = glob.glob("*.mp4")
-            if mp4_files:
-                latest_mp4 = max(mp4_files, key=os.path.getctime)
-                video_dir = os.path.join(
-                    self.config["data_dir"],
-                    f"{self.config['env']}_{self.logger.run_id}",
-                    "videos",
-                )
-                os.makedirs(video_dir, exist_ok=True)
-                dest = os.path.join(video_dir, f"epoch_{self.epoch:06d}.mp4")
-                shutil.move(latest_mp4, dest)
-
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
+            if result.returncode == 0:
+                print(f"Render video saved: {output_path}")
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
                     import wandb
 
                     self.logger.wandb.log(
-                        {"render/world_state": wandb.Video(dest, format="mp4")},
+                        {"render/world_state": wandb.Video(output_path, format="mp4")},
                         step=self.global_step,
                     )
-                print(f"Render video saved: {dest}")
             else:
-                print("Warning: No mp4 file found after in-process render")
-        finally:
-            shutil.rmtree(map_dir_tmp, ignore_errors=True)
+                print(f"Render subprocess failed (exit {result.returncode}):")
+                print(result.stderr[-2000:] if result.stderr else "no stderr")
+        except subprocess.TimeoutExpired:
+            print("Render subprocess timed out (600s)")
+        except Exception as e:
+            print(f"Render failed: {e}")
 
     def mean_and_log(self):
 
@@ -661,9 +602,6 @@ class PuffeRL:
     def close(self):
         self.vecenv.close()
         self.utilization.stop()
-        if hasattr(self, "_xvfb_proc"):
-            self._xvfb_proc.terminate()
-            self._xvfb_proc.wait()
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
