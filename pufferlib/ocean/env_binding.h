@@ -164,6 +164,22 @@ static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
         return NULL;
     }
 
+    PyObject *stp = PyDict_GetItemString(kwargs, "stopped");
+    if (!PyObject_TypeCheck(stp, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "Stopped must be a NumPy array");
+        return 1;
+    }
+    PyArrayObject *stopped = (PyArrayObject *)stp;
+    if (!PyArray_ISCONTIGUOUS(stopped)) {
+        PyErr_SetString(PyExc_ValueError, "Stopped must be contiguous");
+        return 1;
+    }
+    if (PyArray_NDIM(stopped) != 1) {
+        PyErr_SetString(PyExc_ValueError, "Stopped must be 1D");
+        return 1;
+    }
+    env->stopped = PyArray_DATA(stopped);
+
     return PyLong_FromVoidPtr(env);
 }
 
