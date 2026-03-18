@@ -682,11 +682,11 @@ class PuffeRL:
             self.last_log_step = self.global_step
             profile.clear()
 
-        if (self.epoch - 1) % config["checkpoint_interval"] == 0 or done_training:
+        if self.epoch % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
-        if (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training:
+        if self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training:
             human_replay_eval = self.config["eval"]["human_replay_eval"]
             self_play_eval = self.config["eval"]["self_play_eval"]
 
@@ -716,7 +716,7 @@ class PuffeRL:
             if human_replay_eval or self_play_eval:
                 self.evaluator.log_stats()
             # Show agent view with sensor noise
-            sensor_noise_eval = (self.epoch - 1) % 300 == 0
+            sensor_noise_eval = self.epoch % 300 == 0
             if sensor_noise_eval:
                 self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
                 try:
