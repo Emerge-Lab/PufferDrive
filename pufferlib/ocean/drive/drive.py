@@ -41,7 +41,7 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
-        dynamics_model="classic",
+        dynamics_model="jerk",
         buf=None,
         seed=1,
         init_steps=0,
