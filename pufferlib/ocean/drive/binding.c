@@ -170,8 +170,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
 
-    // Release any existing map cache from a previous call
-    release_map_cache_internal();
+    // Reuse existing cache if it was created by this process and has the right size.
+    // Multiple PufferDrive instances in the same process (e.g. Serial workers) share one cache.
+    // Only rebuild after fork (PID mismatch) or on first call.
+    int reuse_cache = (g_map_cache != NULL && g_map_cache_pid == getpid() && g_map_cache_size == num_maps);
+
+    if (!reuse_cache) {
+        // Release any inherited or stale cache
+        release_map_cache_internal();
+    }
 
     // Build reward_bounds array for create_shared_map_data
     RewardBound reward_bounds[NUM_REWARD_COEFS];
@@ -193,10 +200,12 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     reward_bounds[REWARD_COEF_STEER] = (RewardBound){reward_bound_steer_min, reward_bound_steer_max};
     reward_bounds[REWARD_COEF_ACC] = (RewardBound){reward_bound_acc_min, reward_bound_acc_max};
 
-    // Allocate map cache indexed by map_id (0..num_maps-1)
-    g_map_cache_size = num_maps;
-    g_map_cache = (SharedMapData **)calloc(num_maps, sizeof(SharedMapData *));
-    g_map_cache_pid = getpid();
+    if (!reuse_cache) {
+        // Allocate map cache indexed by map_id (0..num_maps-1)
+        g_map_cache_size = num_maps;
+        g_map_cache = (SharedMapData **)calloc(num_maps, sizeof(SharedMapData *));
+        g_map_cache_pid = getpid();
+    }
 
     int max_envs = use_all_maps ? num_maps : num_agents;
 
@@ -441,10 +450,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *map_id_obj = kwargs ? PyDict_GetItemString(kwargs, "map_id") : NULL;
     if (map_id_obj != NULL && g_map_cache != NULL) {
         int map_id = (int)PyLong_AsLong(map_id_obj);
-        fprintf(stderr, "DEBUG: my_init pid=%d map_id=%d cache_size=%d cache_pid=%d cache[map_id]=%p\n",
-                getpid(), map_id, g_map_cache_size, g_map_cache_pid,
-                (map_id >= 0 && map_id < g_map_cache_size) ? (void*)g_map_cache[map_id] : NULL);
-        fflush(stderr);
         if (map_id >= 0 && map_id < g_map_cache_size && g_map_cache[map_id] != NULL) {
             init_from_shared(env, g_map_cache[map_id]);
             return 0;
@@ -452,9 +457,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     }
 
     // Fallback: load from disk (standalone use, tests, rendering, etc.)
-    fprintf(stderr, "DEBUG: my_init pid=%d FALLBACK to disk load (map_id_obj=%p, g_map_cache=%p)\n",
-            getpid(), (void*)map_id_obj, (void*)g_map_cache);
-    fflush(stderr);
     init(env);
     return 0;
 }

@@ -2113,9 +2113,6 @@ void init(Drive *env) {
 // Road elements, grid_map, and neighbor cache are shared (pointer copy, not duplicated).
 // Agents are cloned per-env since they have mutable sim state.
 void init_from_shared(Drive *env, SharedMapData *shared) {
-    fprintf(stderr, "DEBUG: init_from_shared pid=%d shared=%p num_objects=%d num_roads=%d\n",
-            getpid(), (void*)shared, shared->num_objects, shared->num_roads);
-    fflush(stderr);
     env->human_agent_idx = 0;
     env->timestep = 0;
     env->shared_map = shared;
@@ -2910,17 +2907,6 @@ void move_expert(Drive *env, float *actions, int agent_idx) {
 }
 
 void move_dynamics(Drive *env, int action_idx, int agent_idx) {
-    if (env->agents == NULL) {
-        fprintf(stderr, "FATAL: env->agents is NULL in move_dynamics (pid=%d, agent_idx=%d)\n", getpid(), agent_idx);
-        fflush(stderr);
-        abort();
-    }
-    if (agent_idx < 0 || agent_idx >= env->num_objects) {
-        fprintf(stderr, "FATAL: agent_idx=%d out of range [0, %d) in move_dynamics (pid=%d)\n",
-                agent_idx, env->num_objects, getpid());
-        fflush(stderr);
-        abort();
-    }
     Agent *agent = &env->agents[agent_idx];
     if (agent->removed)
         return;
@@ -3177,17 +3163,6 @@ void c_reset(Drive *env) {
 }
 
 void c_step(Drive *env) {
-    if (env->agents == NULL) {
-        fprintf(stderr, "FATAL: env->agents is NULL at start of c_step (pid=%d)\n", getpid());
-        fflush(stderr);
-        abort();
-    }
-    if (env->rewards == NULL || env->terminals == NULL || env->truncations == NULL) {
-        fprintf(stderr, "FATAL: NULL buffer in c_step (pid=%d, rewards=%p, terminals=%p, truncations=%p)\n",
-                getpid(), (void*)env->rewards, (void*)env->terminals, (void*)env->truncations);
-        fflush(stderr);
-        abort();
-    }
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
