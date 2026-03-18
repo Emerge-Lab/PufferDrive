@@ -218,7 +218,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     OVERRIDE_FLOAT(reward_vehicle_collision);
     OVERRIDE_FLOAT(reward_offroad_collision);
     OVERRIDE_FLOAT(reward_goal);
-    OVERRIDE_FLOAT(reward_goal_post_respawn);
     OVERRIDE_INT(collision_behavior);
     OVERRIDE_INT(offroad_behavior);
     OVERRIDE_FLOAT(dt);
@@ -242,7 +241,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;
     env->reward_goal = conf.reward_goal;
-    env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->fix_rewards = conf.fix_rewards;
     env->fix_lambdas = conf.fix_lambdas;
     env->lambda_value = conf.lambda_value;
@@ -278,16 +276,12 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "score", log->score);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
     assign_to_dict(dict, "collision_rate", log->collision_rate);
-    assign_to_dict(dict, "collision_rate_valid", log->collision_rate_valid);
     assign_to_dict(dict, "episode_length", log->episode_length);
     assign_to_dict(dict, "episode_return", log->episode_return);
     assign_to_dict(dict, "completion_rate", log->completion_rate);
-    assign_to_dict(dict, "perc_controlled", log->perc_controlled);
-    assign_to_dict(dict, "avg_speed", log->avg_speed);
-    assign_to_dict(dict, "avg_dist_to_others", log->avg_dist_to_others);
     assign_to_dict(dict, "offroad_per_agent", log->offroad_per_agent);
     assign_to_dict(dict, "collisions_per_agent", log->collisions_per_agent);
-    // assign_to_dict(dict, "lane_alignment_rate", log->lane_alignment_rate);
+    assign_to_dict(dict, "perc_controlled", log->perc_controlled);
     //  assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     // assign_to_dict(dict, "perc_other", log->perc_other);
     // assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);

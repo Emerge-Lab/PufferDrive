@@ -843,7 +843,7 @@ class Evaluator:
     def _unpack_eval_configs(self, configs):
         eval_config = copy.deepcopy(configs)
         # Create separate evaluation environments based on specified configs
-        eval_config["env"]["termination_mode"] = 0
+        eval_config["env"]["termination_mode"] = 1  # Important to ensure correct statistics
         backend = eval_config["eval"].get("backend", "PufferEnv")
         eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
         eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
@@ -855,7 +855,7 @@ class Evaluator:
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
-        self.hr_eval_config["env"]["goal_behavior"] = 2  # Stop and terminate
+        self.hr_eval_config["env"]["goal_behavior"] = 0  # Remove and terminate at goal
         self.sp_eval_config = copy.deepcopy(eval_config)
         self.sp_eval_config["env"]["control_mode"] = "control_agents"
         self.render_select_mode = self.configs["eval"]["render_select_mode"]
@@ -912,6 +912,7 @@ class Evaluator:
         env_statistics = self._run_rollout(
             policy,
             env,
+            mode,
             render_env_idx if render_eval else None,
             per_env_logs=True,
             view_mode=view_mode,
@@ -924,7 +925,7 @@ class Evaluator:
             self.human_replay_stats = env_statistics
             self.human_replay_stats[0]["render_env_idx"] = render_env_idx
 
-    def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False, view_mode=None):
+    def _run_rollout(self, policy, env, mode, render_env_idx=None, per_env_logs=False, view_mode=None):
         """Run a single rollout. If render_env_idx is not None, render that env."""
         from pufferlib.ocean.drive.drive import RenderView
 
@@ -937,7 +938,7 @@ class Evaluator:
 
         # Reset environment
         obs, info = env.reset()
-        terminals = np.zeros_like((num_agents, 1))
+        terminals = np.zeros_like((num_agents, 1), dtype=bool)
 
         # Initialize RNN state if needed
         state = {}
@@ -950,8 +951,10 @@ class Evaluator:
         info_list = []
         for time_idx in range(self.sim_steps):
             if render_env_idx is not None:
-                driver.render(view_mode=view_mode, env_id=render_env_idx)
-
+                if mode == "human_replay" and not terminals[render_env_idx]:
+                    driver.render(view_mode=view_mode, env_id=render_env_idx)
+                elif mode != "human_replay":
+                    driver.render(view_mode=view_mode, env_id=render_env_idx)
             # Get action from policy
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
@@ -990,7 +993,7 @@ class Evaluator:
 
             if self.human_replay_stats is not None:
                 self.lambda_sweep_results[lam] = {
-                    "collision_rate": self.human_replay_stats.get("collision_rate_valid", 0.0),
+                    "collision_rate": self.human_replay_stats.get("collision_rate", 0.0),
                     "score": self.human_replay_stats.get("score", 0.0),
                 }
             else:
@@ -1047,7 +1050,7 @@ class Evaluator:
 
             if self.human_replay_stats is not None:
                 self.collision_reward_sweep_results[reward_val] = {
-                    "collision_rate": self.human_replay_stats["collision_rate_valid"],
+                    "collision_rate": self.human_replay_stats["collision_rate"],
                     "score": self.human_replay_stats.get("score", 0.0),
                 }
             else:
@@ -1118,15 +1121,10 @@ class Evaluator:
             if populated:
                 collisions_per_agent = np.array([log["collisions_per_agent"] for log in populated])
                 did_collide = np.array([log["collision_rate"] for log in populated])
-                distance_to_others = np.array([log["avg_dist_to_others"] for log in populated])
-                speed = np.array([log["avg_speed"] for log in populated])
-
                 eval_stats["eval/hr_mean_collisions_per_agent"] = float(np.mean(collisions_per_agent))
                 eval_stats["eval/hr_mean_did_collide"] = float(np.mean(did_collide))
                 eval_stats["eval/hr_score"] = float(np.mean([log["score"] for log in populated]))
                 eval_stats["eval/hr_collisions_per_agent_hist"] = wandb.Histogram(collisions_per_agent)
-                eval_stats["eval/hr_mean_speed"] = float(np.mean(speed))
-                eval_stats["eval/hr_mean_do"] = float(np.mean(distance_to_others))
 
         if self.self_play_stats is not None:
             import wandb
