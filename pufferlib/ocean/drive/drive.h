@@ -2114,36 +2114,66 @@ static void override_action_with_expert(Drive *env, int action_idx, int agent_id
 
     if (t < 0 || t >= agent->array_size)
         return;
-    if (agent->expert_accel == NULL || agent->expert_steering == NULL)
-        return;
-    if (agent->expert_accel[t] == -1.0f || agent->expert_steering[t] == -1.0f)
-        return;
 
-    if (env->action_type == 1) {
-        float (*action_array_f)[2] = (float (*)[2])env->actions;
-        action_array_f[action_idx][0] = agent->expert_accel[t] / ACCEL_MAX;
-        action_array_f[action_idx][1] = agent->expert_steering[t] / STEER_MAX;
+    if (env->dynamics_model == DELTA_LOCAL) {
+        if (agent->expert_delta_x == NULL)
+            return;
+        if (agent->expert_delta_x[t] == -1.0f && agent->expert_delta_y[t] == -1.0f)
+            return;
+
+        if (env->action_type == 1) {
+            float *action_base = (float *)env->actions;
+            action_base[action_idx * 3 + 0] = agent->expert_delta_x[t] / DELTA_MAX_DX;
+            action_base[action_idx * 3 + 1] = agent->expert_delta_y[t] / DELTA_MAX_DY;
+            action_base[action_idx * 3 + 2] = agent->expert_delta_yaw[t] / DELTA_MAX_DYAW;
+        } else {
+            int best_dx = 0, best_dy = 0, best_yaw = 0;
+            for (int j = 1; j < NUM_DX_BINS; j++)
+                if (fabsf(agent->expert_delta_x[t] - DELTA_DX_VALUES[j]) < fabsf(agent->expert_delta_x[t] - DELTA_DX_VALUES[best_dx]))
+                    best_dx = j;
+            for (int j = 1; j < NUM_DY_BINS; j++)
+                if (fabsf(agent->expert_delta_y[t] - DELTA_DY_VALUES[j]) < fabsf(agent->expert_delta_y[t] - DELTA_DY_VALUES[best_dy]))
+                    best_dy = j;
+            for (int j = 1; j < NUM_YAW_BINS; j++)
+                if (fabsf(agent->expert_delta_yaw[t] - DELTA_YAW_VALUES[j]) < fabsf(agent->expert_delta_yaw[t] - DELTA_YAW_VALUES[best_yaw]))
+                    best_yaw = j;
+            int *action_array = (int *)env->actions;
+            action_array[action_idx * 3 + 0] = best_dx;
+            action_array[action_idx * 3 + 1] = best_dy;
+            action_array[action_idx * 3 + 2] = best_yaw;
+        }
     } else {
-        int best_accel_idx = 0;
-        float min_accel_diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[0]);
-        for (int j = 1; j < NUM_ACCEL_BINS; j++) {
-            float diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[j]);
-            if (diff < min_accel_diff) {
-                min_accel_diff = diff;
-                best_accel_idx = j;
+        if (agent->expert_accel == NULL || agent->expert_steering == NULL)
+            return;
+        if (agent->expert_accel[t] == -1.0f || agent->expert_steering[t] == -1.0f)
+            return;
+
+        if (env->action_type == 1) {
+            float (*action_array_f)[2] = (float (*)[2])env->actions;
+            action_array_f[action_idx][0] = agent->expert_accel[t] / ACCEL_MAX;
+            action_array_f[action_idx][1] = agent->expert_steering[t] / STEER_MAX;
+        } else {
+            int best_accel_idx = 0;
+            float min_accel_diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[0]);
+            for (int j = 1; j < NUM_ACCEL_BINS; j++) {
+                float diff = fabsf(agent->expert_accel[t] - ACCELERATION_VALUES[j]);
+                if (diff < min_accel_diff) {
+                    min_accel_diff = diff;
+                    best_accel_idx = j;
+                }
             }
-        }
-        int best_steer_idx = 0;
-        float min_steer_diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[0]);
-        for (int j = 1; j < NUM_STEER_BINS; j++) {
-            float diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[j]);
-            if (diff < min_steer_diff) {
-                min_steer_diff = diff;
-                best_steer_idx = j;
+            int best_steer_idx = 0;
+            float min_steer_diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[0]);
+            for (int j = 1; j < NUM_STEER_BINS; j++) {
+                float diff = fabsf(agent->expert_steering[t] - STEERING_VALUES[j]);
+                if (diff < min_steer_diff) {
+                    min_steer_diff = diff;
+                    best_steer_idx = j;
+                }
             }
+            int *action_array = (int *)env->actions;
+            action_array[action_idx] = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
         }
-        int *action_array = (int *)env->actions;
-        action_array[action_idx] = best_accel_idx * NUM_STEER_BINS + best_steer_idx;
     }
 }
 
@@ -2346,38 +2376,62 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
             int disc_off = t * env->active_agent_count + i;
 
-            bool valid = (t < agent->array_size && agent->expert_accel != NULL && agent->expert_accel[t] != -1.0f);
+            bool valid;
+            if (env->dynamics_model == DELTA_LOCAL) {
+                valid = (t < agent->array_size && agent->expert_delta_x != NULL && agent->expert_delta_x[t] != -1.0f);
+            } else {
+                valid = (t < agent->array_size && agent->expert_accel != NULL && agent->expert_accel[t] != -1.0f);
+            }
 
             if (valid) {
-                if (env->action_type == 1) {
-                    float (*af)[2] = (float (*)[2])env->actions;
-                    float accel = af[i][0] * ACCEL_MAX;
-                    float steer = af[i][1] * STEER_MAX;
-                    int best_a = 0, best_s = 0;
-                    for (int j = 1; j < NUM_ACCEL_BINS; j++) {
-                        if (fabsf(accel - ACCELERATION_VALUES[j]) < fabsf(accel - ACCELERATION_VALUES[best_a]))
-                            best_a = j;
-                    }
-                    for (int j = 1; j < NUM_STEER_BINS; j++) {
-                        if (fabsf(steer - STEERING_VALUES[j]) < fabsf(steer - STEERING_VALUES[best_s]))
-                            best_s = j;
-                    }
-                    expert_actions_discrete_out[disc_off] = (float)(best_a * NUM_STEER_BINS + best_s);
-                } else {
+                if (env->dynamics_model == DELTA_LOCAL) {
                     int *ai = (int *)env->actions;
-                    expert_actions_discrete_out[disc_off] = (float)ai[i];
-                    int action_val = ai[i];
-                    int accel_idx = action_val / NUM_STEER_BINS;
-                    int steer_idx = action_val % NUM_STEER_BINS;
-                    // printf("agent=%d t=%d action_idx=%d accel=%.4f steer=%.4f pos=(%.4f, %.4f)\n",
-                    //        i, t, action_val,
-                    //        ACCELERATION_VALUES[accel_idx], STEERING_VALUES[steer_idx],
-                    //        agent->x, agent->y);
+                    int dx_idx = ai[i * 3 + 0];
+                    int dy_idx = ai[i * 3 + 1];
+                    int yaw_idx = ai[i * 3 + 2];
+                    if (env->action_type == 1) {
+                        float *ab = (float *)env->actions;
+                        float dx = ab[i * 3 + 0] * DELTA_MAX_DX;
+                        float dy = ab[i * 3 + 1] * DELTA_MAX_DY;
+                        float dyaw = ab[i * 3 + 2] * DELTA_MAX_DYAW;
+                        dx_idx = 0; dy_idx = 0; yaw_idx = 0;
+                        for (int j = 1; j < NUM_DX_BINS; j++)
+                            if (fabsf(dx - DELTA_DX_VALUES[j]) < fabsf(dx - DELTA_DX_VALUES[dx_idx])) dx_idx = j;
+                        for (int j = 1; j < NUM_DY_BINS; j++)
+                            if (fabsf(dy - DELTA_DY_VALUES[j]) < fabsf(dy - DELTA_DY_VALUES[dy_idx])) dy_idx = j;
+                        for (int j = 1; j < NUM_YAW_BINS; j++)
+                            if (fabsf(dyaw - DELTA_YAW_VALUES[j]) < fabsf(dyaw - DELTA_YAW_VALUES[yaw_idx])) yaw_idx = j;
+                    }
+                    expert_actions_discrete_out[disc_off] = (float)(dx_idx * NUM_DY_BINS * NUM_YAW_BINS + dy_idx * NUM_YAW_BINS + yaw_idx);
+                } else {
+                    if (env->action_type == 1) {
+                        float (*af)[2] = (float (*)[2])env->actions;
+                        float accel = af[i][0] * ACCEL_MAX;
+                        float steer = af[i][1] * STEER_MAX;
+                        int best_a = 0, best_s = 0;
+                        for (int j = 1; j < NUM_ACCEL_BINS; j++) {
+                            if (fabsf(accel - ACCELERATION_VALUES[j]) < fabsf(accel - ACCELERATION_VALUES[best_a]))
+                                best_a = j;
+                        }
+                        for (int j = 1; j < NUM_STEER_BINS; j++) {
+                            if (fabsf(steer - STEERING_VALUES[j]) < fabsf(steer - STEERING_VALUES[best_s]))
+                                best_s = j;
+                        }
+                        expert_actions_discrete_out[disc_off] = (float)(best_a * NUM_STEER_BINS + best_s);
+                    } else {
+                        int *ai = (int *)env->actions;
+                        expert_actions_discrete_out[disc_off] = (float)ai[i];
+                    }
                 }
             } else {
-                expert_actions_discrete_out[disc_off] = -1.0f;
-                // printf("agent=%d t=%d INVALID pos=(%.4f, %.4f)\n",
-                //        i, t, agent->x, agent->y);
+                if (env->dynamics_model == DELTA_LOCAL) {
+                    int base = (t * env->active_agent_count + i) * 3;
+                    expert_actions_discrete_out[base + 0] = -1.0f;
+                    expert_actions_discrete_out[base + 1] = -1.0f;
+                    expert_actions_discrete_out[base + 2] = -1.0f;
+                } else {
+                    expert_actions_discrete_out[disc_off] = -1.0f;
+                }            
             }
         }
 
@@ -2414,8 +2468,15 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
         if (unfit) {
             for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
-                int disc_off = t * env->active_agent_count + i;
-                expert_actions_discrete_out[disc_off] = -1.0f;
+                if (env->dynamics_model == DELTA_LOCAL) {
+                    int base = (t * env->active_agent_count + i) * 3;
+                    expert_actions_discrete_out[base + 0] = -1.0f;
+                    expert_actions_discrete_out[base + 1] = -1.0f;
+                    expert_actions_discrete_out[base + 2] = -1.0f;
+                } else {
+                    int disc_off = t * env->active_agent_count + i;
+                    expert_actions_discrete_out[disc_off] = -1.0f;
+                }
             }
         }
     }
