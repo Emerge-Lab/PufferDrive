@@ -441,6 +441,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *map_id_obj = kwargs ? PyDict_GetItemString(kwargs, "map_id") : NULL;
     if (map_id_obj != NULL && g_map_cache != NULL) {
         int map_id = (int)PyLong_AsLong(map_id_obj);
+        fprintf(stderr, "DEBUG: my_init pid=%d map_id=%d cache_size=%d cache_pid=%d cache[map_id]=%p\n",
+                getpid(), map_id, g_map_cache_size, g_map_cache_pid,
+                (map_id >= 0 && map_id < g_map_cache_size) ? (void*)g_map_cache[map_id] : NULL);
+        fflush(stderr);
         if (map_id >= 0 && map_id < g_map_cache_size && g_map_cache[map_id] != NULL) {
             init_from_shared(env, g_map_cache[map_id]);
             return 0;
@@ -448,6 +452,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     }
 
     // Fallback: load from disk (standalone use, tests, rendering, etc.)
+    fprintf(stderr, "DEBUG: my_init pid=%d FALLBACK to disk load (map_id_obj=%p, g_map_cache=%p)\n",
+            getpid(), (void*)map_id_obj, (void*)g_map_cache);
+    fflush(stderr);
     init(env);
     return 0;
 }
