@@ -64,22 +64,19 @@
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
 
-// Threshold for data selection: trajectories above threshold are excluded from
-// human demonstrations
+// Threshold for data filtering
 #define ADE_THRESHOLD 2.0f
-
-// Actions
-#define NOOP 0
 
 // Dynamics models
 #define CLASSIC 0
 #define JERK 1
 #define DELTA_LOCAL 2
-// Grid cell size
+// Grid cell size: Depends on resolution of data 
+// Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in
+// gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define GRID_CELL_SIZE 5.0f
 #define MAX_ENTITIES_PER_CELL                                                                                          \
-    30 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in
-       // gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
+    30 
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
@@ -411,7 +408,6 @@ void add_log(Drive *env) {
         env->log.goals_sampled_this_episode += e->goals_sampled_this_episode;
         env->log.offroad_rate += env->logs[i].offroad_rate;
         env->log.collision_rate += env->logs[i].collision_rate;
-
         env->log.offroad_per_agent += env->logs[i].offroad_per_agent;
         env->log.collisions_per_agent += env->logs[i].collisions_per_agent;
 
@@ -433,6 +429,7 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
@@ -2402,7 +2399,10 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                         for (int j = 1; j < NUM_YAW_BINS; j++)
                             if (fabsf(dyaw - DELTA_YAW_VALUES[j]) < fabsf(dyaw - DELTA_YAW_VALUES[yaw_idx])) yaw_idx = j;
                     }
-                    expert_actions_discrete_out[disc_off] = (float)(dx_idx * NUM_DY_BINS * NUM_YAW_BINS + dy_idx * NUM_YAW_BINS + yaw_idx);
+                    int base = (t * env->active_agent_count + i) * 3;
+                    expert_actions_discrete_out[base + 0] = (float)dx_idx;
+                    expert_actions_discrete_out[base + 1] = (float)dy_idx;
+                    expert_actions_discrete_out[base + 2] = (float)yaw_idx;
                 } else {
                     if (env->action_type == 1) {
                         float (*af)[2] = (float (*)[2])env->actions;
