@@ -76,9 +76,9 @@ class Drive(nn.Module):
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
 
-        partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
+        partner_objects = partner_obs.reshape(-1, self.max_partner_objects, self.partner_features)
 
-        road_objects = road_obs.view(-1, self.max_road_objects, self.road_features)
+        road_objects = road_obs.reshape(-1, self.max_road_objects, self.road_features)
         road_continuous = road_objects[:, :, : self.road_features - 1]
         road_categorical = road_objects[:, :, self.road_features - 1]
         road_onehot = F.one_hot(road_categorical.long(), num_classes=7)  # Shape: [batch, ROAD_MAX_OBJECTS, 7]
