@@ -588,6 +588,8 @@ class PuffeRL:
 
                 with torch.no_grad():
                     obs_t = torch.as_tensor(obs).clone().to(device)
+                    if step == 0:
+                        print(f"[render debug] obs_t shape={obs_t.shape}, device={obs_t.device}, contiguous={obs_t.is_contiguous()}")
                     logits, _ = policy.forward_eval(obs_t, state)
                     action, _, _ = pufferlib.pytorch.sample_logits(logits)
                     action = action.cpu().numpy()
