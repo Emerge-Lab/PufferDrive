@@ -605,9 +605,12 @@ class PuffeRL:
 
     def _run_safe_eval(self):
         """Run safe eval in-process using SafeEvaluator."""
+        import traceback
+
         try:
             from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
 
+            self.msg = "Running safe eval..."
             evaluator = SafeEvaluator(self.config, logger=self.logger)
             eval_config = evaluator._build_eval_env_config()
 
@@ -618,7 +621,7 @@ class PuffeRL:
             model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
             model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
             if not model_files:
-                print("No model files found for safe eval")
+                self.msg = "Safe eval: no model files found"
                 return
 
             latest_cpt = max(model_files, key=os.path.getctime)
@@ -629,9 +632,10 @@ class PuffeRL:
             evaluator.log_stats(global_step=self.global_step)
             vecenv.close()
 
-            print(f"Safe eval: {len(metrics)} metrics logged")
+            self.msg = f"Safe eval: {len(metrics)} metrics logged"
         except Exception as e:
-            print(f"Safe eval failed: {e}")
+            self.msg = f"Safe eval failed: {e}"
+            traceback.print_exc(file=sys.stderr)
 
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
