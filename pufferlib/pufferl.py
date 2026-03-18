@@ -597,6 +597,56 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
+        safe_eval_config = self.config.get("safe_eval", {})
+        safe_eval_enabled = safe_eval_config.get("enabled", False)
+        safe_eval_interval = int(safe_eval_config.get("interval", self.render_interval))
+        is_main = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+        if (
+            is_main
+            and safe_eval_enabled
+            and safe_eval_interval > 0
+            and (self.epoch % safe_eval_interval == 0 or done_training)
+        ):
+            self._run_safe_eval()
+
+    def _run_safe_eval(self):
+        """Run safe eval in-process using SafeEvaluator."""
+        import copy
+        import traceback
+
+        vecenv = None
+        try:
+            from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
+
+            self.msg = "Running safe eval..."
+            env_name = self.config["env"]
+            safe_eval_config = self.config.get("safe_eval", {})
+            evaluator = SafeEvaluator(env_name, safe_eval_config, device=self.config["device"], logger=self.logger)
+            eval_config = evaluator._build_eval_env_config()
+
+            vecenv = load_env(env_name, eval_config)
+            policy = load_policy(eval_config, vecenv, env_name)
+
+            # Copy weights from in-memory policy (no checkpoint dependency)
+            state_dict = copy.deepcopy(self.uncompiled_policy.state_dict())
+            # Strip DDP "module." prefix if present
+            state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+            policy.load_state_dict(state_dict)
+
+            metrics = evaluator.evaluate(vecenv, policy)
+            evaluator.log_stats(global_step=self.global_step)
+
+            self.msg = f"Safe eval: {len(metrics)} metrics logged"
+        except Exception as e:
+            self.msg = f"Safe eval failed: {e}"
+            traceback.print_exc(file=sys.stderr)
+        finally:
+            if vecenv is not None:
+                try:
+                    vecenv.close()
+                except Exception:
+                    pass
+
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
         if not self.render_async or not hasattr(self, "render_queue"):
@@ -1140,7 +1190,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     else:
         logger = None
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    train_config = dict(
+        **args["train"],
+        env=env_name,
+        eval=args.get("eval", {}),
+        safe_eval=args.get("safe_eval", {}),
+    )
     if "vec" in args and "num_workers" in args["vec"]:
         train_config["num_workers"] = args["vec"]["num_workers"]
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
