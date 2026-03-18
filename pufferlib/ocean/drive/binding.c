@@ -7,10 +7,11 @@
 // Module-level map cache: indexed by map_id, populated by my_shared(), used by my_init().
 static SharedMapData **g_map_cache = NULL;
 static int g_map_cache_size = 0;
-static pid_t g_map_cache_pid = 0;  // PID of the process that created the cache
+static pid_t g_map_cache_pid = 0; // PID of the process that created the cache
 
 static void release_map_cache_internal(void) {
-    if (g_map_cache == NULL) return;
+    if (g_map_cache == NULL)
+        return;
     // After fork, child inherits g_map_cache but must not free parent's memory.
     // Just discard the inherited pointers without freeing.
     if (g_map_cache_pid != 0 && g_map_cache_pid != getpid()) {
@@ -248,10 +249,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
                 const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
                 g_map_cache[map_id] = create_shared_map_data(
-                    map_file_path, init_mode, control_mode, init_steps, goal_behavior,
-                    reward_randomization, turn_off_normalization, reward_conditioning,
-                    min_goal_distance, max_goal_distance, min_avg_speed_to_consider_goal_attempt,
-                    reward_bounds);
+                    map_file_path, init_mode, control_mode, init_steps, goal_behavior, reward_randomization,
+                    turn_off_normalization, reward_conditioning, min_goal_distance, max_goal_distance,
+                    min_avg_speed_to_consider_goal_attempt, reward_bounds);
             }
         }
         PyList_SetItem(agent_offsets, env_count,
@@ -279,11 +279,10 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         if (g_map_cache[map_id] == NULL) {
             PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
             const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
-            g_map_cache[map_id] = create_shared_map_data(
-                map_file_path, init_mode, control_mode, init_steps, goal_behavior,
-                reward_randomization, turn_off_normalization, reward_conditioning,
-                min_goal_distance, max_goal_distance, min_avg_speed_to_consider_goal_attempt,
-                reward_bounds);
+            g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps,
+                                                         goal_behavior, reward_randomization, turn_off_normalization,
+                                                         reward_conditioning, min_goal_distance, max_goal_distance,
+                                                         min_avg_speed_to_consider_goal_attempt, reward_bounds);
         }
         SharedMapData *shared = g_map_cache[map_id];
 

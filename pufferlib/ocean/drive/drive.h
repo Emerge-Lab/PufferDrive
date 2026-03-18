@@ -2183,7 +2183,8 @@ void init_from_shared(Drive *env, SharedMapData *shared) {
 
 // Free a SharedMapData and all data it owns.
 void free_shared_map_data(SharedMapData *shared) {
-    if (shared == NULL) return;
+    if (shared == NULL)
+        return;
 
     // Free road elements
     for (int i = 0; i < shared->num_roads; i++) {
@@ -2217,12 +2218,10 @@ void free_shared_map_data(SharedMapData *shared) {
 }
 
 // Create a SharedMapData by loading a map binary and building all spatial structures.
-SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, int control_mode,
-                                       int init_steps, int goal_behavior, int reward_randomization,
-                                       int turn_off_normalization, int reward_conditioning,
-                                       float min_goal_distance, float max_goal_distance,
-                                       float min_avg_speed_to_consider_goal_attempt,
-                                       RewardBound *reward_bounds) {
+SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, int control_mode, int init_steps,
+                                      int goal_behavior, int reward_randomization, int turn_off_normalization,
+                                      int reward_conditioning, float min_goal_distance, float max_goal_distance,
+                                      float min_avg_speed_to_consider_goal_attempt, RewardBound *reward_bounds) {
     SharedMapData *shared = (SharedMapData *)calloc(1, sizeof(SharedMapData));
 
     // Create a temporary Drive to use existing loading functions
