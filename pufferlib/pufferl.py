@@ -589,7 +589,7 @@ class PuffeRL:
                 render_env.render(RenderView.FULL_SIM_STATE, draw_traces=True)
 
                 with torch.no_grad():
-                    obs_t = torch.as_tensor(np.ascontiguousarray(obs)).to(device)
+                    obs_t = torch.from_numpy(obs.copy()).to(device)
                     logits, _ = policy.forward_eval(obs_t, state)
                     action, _, _ = pufferlib.pytorch.sample_logits(logits)
                     action = action.cpu().numpy()
