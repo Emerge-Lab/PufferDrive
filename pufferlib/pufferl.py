@@ -527,11 +527,9 @@ class PuffeRL:
         device = self.config["device"]
 
         # Ensure a virtual display is available for headless Raylib rendering.
-        # The C-level Xvfb fork in make_client can fail inside containers,
-        # so we start Xvfb from Python and set DISPLAY before creating the env.
-        xvfb_proc = None
-        if os.environ.get("DISPLAY") is None:
-            xvfb_proc = subprocess.Popen(
+        # Start Xvfb once and keep it running for subsequent renders.
+        if not hasattr(self, "_xvfb_proc") and os.environ.get("DISPLAY") is None:
+            self._xvfb_proc = subprocess.Popen(
                 ["Xvfb", ":99", "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac", "-noreset"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
@@ -589,7 +587,7 @@ class PuffeRL:
                 render_env.render(RenderView.FULL_SIM_STATE, draw_traces=True)
 
                 with torch.no_grad():
-                    obs_t = torch.from_numpy(obs.copy()).to(device)
+                    obs_t = torch.as_tensor(obs).clone().to(device)
                     logits, _ = policy.forward_eval(obs_t, state)
                     action, _, _ = pufferlib.pytorch.sample_logits(logits)
                     action = action.cpu().numpy()
@@ -623,9 +621,6 @@ class PuffeRL:
                 print("Warning: No mp4 file found after in-process render")
         finally:
             shutil.rmtree(map_dir_tmp, ignore_errors=True)
-            if xvfb_proc is not None:
-                xvfb_proc.terminate()
-                xvfb_proc.wait()
 
     def mean_and_log(self):
 
@@ -664,6 +659,9 @@ class PuffeRL:
     def close(self):
         self.vecenv.close()
         self.utilization.stop()
+        if hasattr(self, "_xvfb_proc"):
+            self._xvfb_proc.terminate()
+            self._xvfb_proc.wait()
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
