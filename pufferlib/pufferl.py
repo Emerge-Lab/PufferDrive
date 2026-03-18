@@ -64,11 +64,12 @@ ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None):
+    def __init__(self, config, vecenv, policy, logger=None, full_args=None):
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
         torch.backends.cudnn.benchmark = True
+        self.full_args = full_args
 
         # Reproducibility
         seed = config["seed"]
@@ -599,43 +600,49 @@ class PuffeRL:
 
         safe_eval_config = self.config.get("safe_eval", {})
         safe_eval_enabled = safe_eval_config.get("enabled", False)
-        safe_eval_interval = safe_eval_config.get("interval", self.render_interval)
-        if safe_eval_enabled and (self.epoch % safe_eval_interval == 0 or done_training):
+        safe_eval_interval = int(safe_eval_config.get("interval", self.render_interval))
+        is_main = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+        if (
+            is_main
+            and safe_eval_enabled
+            and safe_eval_interval > 0
+            and (self.epoch % safe_eval_interval == 0 or done_training)
+        ):
             self._run_safe_eval()
 
     def _run_safe_eval(self):
         """Run safe eval in-process using SafeEvaluator."""
+        import copy
         import traceback
 
+        vecenv = None
         try:
             from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
 
             self.msg = "Running safe eval..."
-            evaluator = SafeEvaluator(self.config, logger=self.logger)
+            evaluator = SafeEvaluator(self.full_args, logger=self.logger)
             eval_config = evaluator._build_eval_env_config()
 
-            vecenv = load_env(self.config["env"], eval_config)
-            policy = load_policy(eval_config, vecenv, self.config["env"])
+            env_name = self.config["env"]
+            vecenv = load_env(env_name, eval_config)
+            policy = load_policy(eval_config, vecenv, env_name)
 
-            # Load weights from latest checkpoint
-            model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-            model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
-            if not model_files:
-                self.msg = "Safe eval: no model files found"
-                return
-
-            latest_cpt = max(model_files, key=os.path.getctime)
-            checkpoint = torch.load(latest_cpt, map_location=str(self.config["device"]), weights_only=False)
-            policy.load_state_dict(checkpoint["model_state_dict"])
+            # Copy weights from in-memory policy (no checkpoint dependency)
+            policy.load_state_dict(copy.deepcopy(self.uncompiled_policy.state_dict()))
 
             metrics = evaluator.evaluate(vecenv, policy)
             evaluator.log_stats(global_step=self.global_step)
-            vecenv.close()
 
             self.msg = f"Safe eval: {len(metrics)} metrics logged"
         except Exception as e:
             self.msg = f"Safe eval failed: {e}"
             traceback.print_exc(file=sys.stderr)
+        finally:
+            if vecenv is not None:
+                try:
+                    vecenv.close()
+                except Exception:
+                    pass
 
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
@@ -1180,10 +1187,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     else:
         logger = None
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    train_config = dict(
+        **args["train"],
+        env=env_name,
+        eval=args.get("eval", {}),
+        safe_eval=args.get("safe_eval", {}),
+        env_config=args.get("env", {}),
+    )
     if "vec" in args and "num_workers" in args["vec"]:
         train_config["num_workers"] = args["vec"]["num_workers"]
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    pufferl = PuffeRL(train_config, vecenv, policy, logger, full_args=args)
 
     all_logs = []
     while pufferl.global_step < train_config["total_timesteps"]:

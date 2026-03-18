@@ -833,7 +833,10 @@ class SafeEvaluator:
         self.num_episodes = self.safe_eval_config.get("num_episodes", 100)
         self.num_agents = self.safe_eval_config.get("num_agents", 64)
         self.episode_length = self.safe_eval_config.get("episode_length", 1000)
-        self.device = config.get("train", {}).get("device", "cuda")
+        device = config.get("train", {}).get("device", "cuda")
+        if isinstance(device, int):
+            device = f"cuda:{device}"
+        self.device = device
         self.stats = None
 
     def _build_eval_env_config(self):
