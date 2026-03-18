@@ -537,7 +537,7 @@ class PuffeRL:
         # Pick a random map
         map_path = random.choice(driver.map_files)
 
-        cmd = [
+        render_cmd = [
             sys.executable, "-m", "pufferlib.render_video",
             "--model-path", latest_cpt,
             "--map-path", map_path,
@@ -545,6 +545,11 @@ class PuffeRL:
             "--device", str(self.config["device"]),
             "--dynamics-model", driver.dynamics_model,
         ]
+        # Wrap with xvfb-run if no display available (headless/Singularity)
+        if not os.environ.get("DISPLAY"):
+            cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24"] + render_cmd
+        else:
+            cmd = render_cmd
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
