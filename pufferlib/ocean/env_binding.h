@@ -198,13 +198,34 @@ static PyObject *env_step(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-// Python function to step the environment
+// Python function to render the environment
 static PyObject *env_render(PyObject *self, PyObject *args) {
+    int num_args = PyTuple_Size(args);
+    if (num_args != 3) {
+        PyErr_SetString(PyExc_TypeError, "env_render requires 3 arguments (env_handle, view_mode, draw_traces)");
+        return NULL;
+    }
+
     Env *env = unpack_env(args);
     if (!env) {
         return NULL;
     }
-    c_render(env);
+
+    PyObject *view_mode_arg = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(view_mode_arg, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
+        return NULL;
+    }
+    int view_mode = PyLong_AsLong(view_mode_arg);
+
+    PyObject *show_traces_arg = PyTuple_GetItem(args, 2);
+    if (!PyObject_TypeCheck(show_traces_arg, &PyBool_Type)) {
+        PyErr_SetString(PyExc_TypeError, "draw_traces must be a boolean");
+        return NULL;
+    }
+    bool draw_traces = PyObject_IsTrue(show_traces_arg);
+
+    c_render(env, view_mode, draw_traces);
     Py_RETURN_NONE;
 }
 
@@ -519,8 +540,8 @@ static PyObject *vec_step(PyObject *self, PyObject *arg) {
 
 static PyObject *vec_render(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
-    if (num_args != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_render requires 2 arguments");
+    if (num_args != 4) {
+        PyErr_SetString(PyExc_TypeError, "vec_render requires 4 arguments");
         return NULL;
     }
 
@@ -530,14 +551,23 @@ static PyObject *vec_render(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    PyObject *env_id_arg = PyTuple_GetItem(args, 1);
-    if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 1), &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
+        return NULL;
+    }
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 2), &PyBool_Type)) {
+        PyErr_SetString(PyExc_TypeError, "draw_traces must be a boolean");
+        return NULL;
+    }
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 3), &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
         return NULL;
     }
-    int env_id = PyLong_AsLong(env_id_arg);
+    int view_mode = PyLong_AsLong(PyTuple_GetItem(args, 1));
+    bool draw_traces = PyObject_IsTrue(PyTuple_GetItem(args, 2));
+    int env_id = PyLong_AsLong(PyTuple_GetItem(args, 3));
 
-    c_render(vec->envs[env_id]);
+    c_render(vec->envs[env_id], view_mode, draw_traces);
     Py_RETURN_NONE;
 }
 

@@ -54,9 +54,6 @@ rich.traceback.install(show_locals=False)
 
 import signal  # Aggressively exit on ctrl+c
 
-import multiprocessing
-import queue
-
 signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 
 # Assume advantage kernel has been built if CUDA compiler is available
@@ -125,15 +122,7 @@ class PuffeRL:
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
         self.render = config["render"]
-        self.render_async = config["render_async"] and self.render  # Only supported if rendering is enabled
         self.render_interval = config["render_interval"]
-
-        if self.render:
-            ensure_drive_binary()
-
-        if self.render_async:
-            self.render_queue = multiprocessing.Queue()
-            self.render_processes = []
 
         # LSTM
         if config["use_rnn"]:
@@ -202,10 +191,6 @@ class PuffeRL:
         self.logger = logger
         if logger is None:
             self.logger = NoLogger(config)
-        if self.render_async and hasattr(self.logger, "wandb") and self.logger.wandb:
-            self.logger.wandb.define_metric("render_step", hidden=True)
-            self.logger.wandb.define_metric("render/*", step_metric="render_step")
-
         # Learning rate scheduler
         epochs = config["total_timesteps"] // config["batch_size"]
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
@@ -516,76 +501,10 @@ class PuffeRL:
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
             if self.render and self.epoch % self.render_interval == 0:
-                model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-                model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
-
-                if model_files:
-                    # Take the latest checkpoint
-                    latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
-
-                    # Export to .bin for rendering with raylib
-                    try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
-
-                        export(
-                            args=export_args,
-                            env_name=self.config["env"],
-                            vecenv=self.vecenv,
-                            policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
-                        )
-
-                        bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
-                        shutil.copy2(bin_path, bin_path_epoch)
-
-                        env_cfg = getattr(self.vecenv, "driver_env", None)
-                        wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
-                        wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
-                        if self.render_async:
-                            # Clean up finished processes
-                            self.render_processes = [p for p in self.render_processes if p.is_alive()]
-
-                            # Cap the number of processes to num_workers
-                            max_processes = self.config.get("num_workers", 1)
-                            if len(self.render_processes) >= max_processes:
-                                print("Waiting for render processes to finish...")
-                            while len(self.render_processes) >= max_processes:
-                                time.sleep(1)
-                                self.render_processes = [p for p in self.render_processes if p.is_alive()]
-
-                            render_proc = multiprocessing.Process(
-                                target=pufferlib.utils.render_videos,
-                                args=(
-                                    self.config,
-                                    env_cfg,
-                                    self.logger.run_id,
-                                    wandb_log,
-                                    self.epoch,
-                                    self.global_step,
-                                    bin_path_epoch,
-                                    self.render_async,
-                                    self.render_queue,
-                                ),
-                            )
-                            render_proc.start()
-                            self.render_processes.append(render_proc)
-                        else:
-                            pufferlib.utils.render_videos(
-                                self.config,
-                                env_cfg,
-                                self.logger.run_id,
-                                wandb_log,
-                                self.epoch,
-                                self.global_step,
-                                bin_path_epoch,
-                                self.render_async,
-                                wandb_run=wandb_run,
-                            )
-
-                    except Exception as e:
-                        print(f"Failed to export model weights: {e}")
+                try:
+                    self._render_in_process()
+                except Exception as e:
+                    print(f"In-process render failed: {e}")
 
         if self.config["eval"]["wosac_realism_eval"] and (
             (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
@@ -597,40 +516,91 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
-    def check_render_queue(self):
-        """Check if any async render jobs finished and log them."""
-        if not self.render_async or not hasattr(self, "render_queue"):
-            return
+    def _render_in_process(self):
+        """Render a video in-process using headless Raylib + ffmpeg pipe."""
+        from pufferlib.ocean.drive.drive import Drive, RenderView
+
+        driver = self.vecenv.driver_env
+        device = self.config["device"]
+
+        # Pick a random map from the training set
+        map_path = random.choice(driver.map_files)
+        map_dir_tmp = os.path.join(self.config["data_dir"], "_render_tmp_map")
+        os.makedirs(map_dir_tmp, exist_ok=True)
+        tmp_map = os.path.join(map_dir_tmp, os.path.basename(map_path))
+        shutil.copy2(map_path, tmp_map)
 
         try:
-            while not self.render_queue.empty():
-                result = self.render_queue.get_nowait()
-                step = result["step"]
-                videos = result["videos"]
+            render_env = Drive(
+                render_mode=1,  # RENDER_HEADLESS
+                num_agents=driver.num_agents,
+                num_maps=1,
+                map_dir=map_dir_tmp,
+                action_type="discrete" if driver._action_type_flag == 0 else "continuous",
+                dynamics_model=driver.dynamics_model,
+                dt=driver.dt,
+                episode_length=driver.episode_length,
+                termination_mode=driver.termination_mode,
+                init_steps=driver.init_steps,
+                init_mode=driver.init_mode_str,
+                control_mode=driver.control_mode_str,
+                collision_behavior=driver.collision_behavior,
+                offroad_behavior=driver.offroad_behavior,
+                goal_behavior=driver.goal_behavior,
+                goal_radius=driver.goal_radius,
+                reward_vehicle_collision=driver.reward_vehicle_collision,
+                reward_offroad_collision=driver.reward_offroad_collision,
+                reward_goal=driver.reward_goal,
+                reward_goal_post_respawn=driver.reward_goal_post_respawn,
+                min_agents_per_env=driver.min_agents_per_env,
+                max_agents_per_env=driver.max_agents_per_env,
+                resample_frequency=0,  # no resampling during render
+            )
 
-                # Log to wandb if available
+            obs, _ = render_env.reset()
+            ep_length = driver.episode_length if driver.episode_length else 1000
+            policy = self.uncompiled_policy
+
+            for step in range(int(ep_length)):
+                render_env.render(RenderView.FULL_SIM_STATE, draw_traces=True)
+
+                with torch.no_grad():
+                    obs_t = torch.as_tensor(obs).to(device)
+                    logits, _ = policy.forward_eval(obs_t)
+                    action, _, _ = pufferlib.pytorch.sample_logits(logits)
+                    action = action.cpu().numpy()
+
+                obs, rewards, terminals, truncations, info = render_env.step(action)
+
+            render_env.close()  # finalizes ffmpeg → mp4
+
+            # Find the mp4 written to cwd
+            mp4_files = glob.glob("*.mp4")
+            if mp4_files:
+                latest_mp4 = max(mp4_files, key=os.path.getctime)
+                video_dir = os.path.join(
+                    self.config["data_dir"],
+                    f"{self.config['env']}_{self.logger.run_id}",
+                    "videos",
+                )
+                os.makedirs(video_dir, exist_ok=True)
+                dest = os.path.join(video_dir, f"epoch_{self.epoch:06d}.mp4")
+                shutil.move(latest_mp4, dest)
+
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
                     import wandb
 
-                    payload = {}
-                    if videos["output_topdown"]:
-                        payload["render/world_state"] = [wandb.Video(p, format="mp4") for p in videos["output_topdown"]]
-                    if videos["output_agent"]:
-                        payload["render/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
-
-                    if payload:
-                        # Custom step for render logs to prevent monotonic logic wandb errors
-                        payload["render_step"] = step
-                        self.logger.wandb.log(payload)
-
-        except queue.Empty:
-            pass
-        except Exception as e:
-            print(f"Error reading render queue: {e}")
+                    self.logger.wandb.log(
+                        {"render/world_state": wandb.Video(dest, format="mp4")},
+                        step=self.global_step,
+                    )
+                print(f"Render video saved: {dest}")
+            else:
+                print("Warning: No mp4 file found after in-process render")
+        finally:
+            shutil.rmtree(map_dir_tmp, ignore_errors=True)
 
     def mean_and_log(self):
-        # Check render queue for finished async jobs
-        self.check_render_queue()
 
         config = self.config
         for k in list(self.stats.keys()):
@@ -667,24 +637,6 @@ class PuffeRL:
     def close(self):
         self.vecenv.close()
         self.utilization.stop()
-
-        if self.render_async:  # Ensure all render processes are properly terminated before closing the queue
-            if hasattr(self, "render_processes"):
-                for p in self.render_processes:
-                    try:
-                        if p.is_alive():
-                            p.terminate()
-                            p.join(timeout=5)
-                            if p.is_alive():
-                                p.kill()
-                    except Exception:
-                        # Best-effort cleanup; avoid letting close() crash on process errors
-                        print(f"Failed to terminate render process {p.pid}")
-                # Optionally clear the list to drop references to finished processes
-                self.render_processes = []
-            if hasattr(self, "render_queue"):
-                self.render_queue.close()
-                self.render_queue.join_thread()
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id

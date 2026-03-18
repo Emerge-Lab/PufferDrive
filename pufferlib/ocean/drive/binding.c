@@ -396,6 +396,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         env->spawn_settings.max_agents_in_sim =
             max_agents_per_env; // INIT_VARIABLE_AGENT_NUMBER only supports controlled agents
     }
+    // render_mode is optional (defaults to 0 = RENDER_WINDOW from calloc)
+    if (kwargs && PyDict_GetItemString(kwargs, "render_mode")) {
+        env->render_mode = (int)unpack(kwargs, "render_mode");
+    }
+
     env->map_name = map_path;
     env->init_steps = init_steps;
     env->timestep = init_steps;

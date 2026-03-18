@@ -100,7 +100,7 @@ void demo() {
         return -1;
     }
     c_reset(&env);
-    c_render(&env);
+    c_render(&env, VIEW_MODE_SIM_STATE, 0);
     Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
@@ -167,7 +167,7 @@ void demo() {
         }
 
         c_step(&env);
-        c_render(&env);
+        c_render(&env, VIEW_MODE_SIM_STATE, 0);
     }
 
     close_client(env.client);
