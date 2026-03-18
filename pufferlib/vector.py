@@ -71,6 +71,10 @@ class Serial:
         self.observation_space = pufferlib.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
 
         set_buffers(self, buf)
+        if buf is not None and "stopped" in buf:
+            self.stopped = buf["stopped"]
+        else:
+            self.stopped = np.zeros(self.agents_per_batch, dtype=np.uint8)
 
         self.envs = []
         ptr = 0
@@ -83,6 +87,7 @@ class Serial:
                 truncations=self.truncations[ptr:end],
                 masks=self.masks[ptr:end],
                 actions=self.actions[ptr:end],
+                stopped=self.stopped[ptr:end],
             )
             ptr = end
             seed_i = seed + i if seed is not None else None
@@ -206,6 +211,7 @@ def _worker_process(
         terminals=np.ndarray(shape, dtype=bool, buffer=shm["terminals"])[worker_idx],
         truncations=np.ndarray(shape, dtype=bool, buffer=shm["truncateds"])[worker_idx],
         masks=np.ndarray(shape, dtype=bool, buffer=shm["masks"])[worker_idx],
+        stopped=np.ndarray(shape, dtype=np.uint8, buffer=shm["stopped"])[worker_idx],
         actions=atn_arr,
     )
     buf["masks"][:] = True
@@ -344,6 +350,7 @@ class Multiprocessing:
             rewards=RawArray("f", num_agents),
             terminals=RawArray("b", num_agents),
             truncateds=RawArray("b", num_agents),
+            stopped=RawArray("B", num_agents),
             masks=RawArray("b", num_agents),
             semaphores=RawArray("c", num_workers),
             notify=RawArray("b", num_workers),
@@ -357,11 +364,13 @@ class Multiprocessing:
             rewards=np.ndarray(shape, dtype=np.float32, buffer=self.shm["rewards"]),
             terminals=np.ndarray(shape, dtype=bool, buffer=self.shm["terminals"]),
             truncations=np.ndarray(shape, dtype=bool, buffer=self.shm["truncateds"]),
+            stopped=np.ndarray(shape, dtype=np.uint8, buffer=self.shm["stopped"]),
             masks=np.ndarray(shape, dtype=bool, buffer=self.shm["masks"]),
             semaphores=np.ndarray(num_workers, dtype=np.uint8, buffer=self.shm["semaphores"]),
             notify=np.ndarray(num_workers, dtype=bool, buffer=self.shm["notify"]),
         )
         self.buf["semaphores"][:] = MAIN
+        self.stopped = self.buf["stopped"].ravel()
 
         from multiprocessing import Pipe, Process
 
@@ -492,6 +501,7 @@ class Multiprocessing:
         agent_ids = self.agent_ids[w_slice].ravel()
         m = buf["masks"][w_slice].ravel()
         self.batch_mask = m
+        self.stopped = buf["stopped"][w_slice].ravel()
 
         return o, r, d, t, infos, agent_ids, m
 
