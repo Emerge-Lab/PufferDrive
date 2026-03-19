@@ -71,12 +71,11 @@
 #define CLASSIC 0
 #define JERK 1
 #define DELTA_LOCAL 2
-// Grid cell size: Depends on resolution of data 
+// Grid cell size: Depends on resolution of data
 // Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution) => For each entity type in
 // gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define GRID_CELL_SIZE 5.0f
-#define MAX_ENTITIES_PER_CELL                                                                                          \
-    30 
+#define MAX_ENTITIES_PER_CELL 30
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
@@ -429,7 +428,7 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
-        
+
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
@@ -2126,13 +2125,16 @@ static void override_action_with_expert(Drive *env, int action_idx, int agent_id
         } else {
             int best_dx = 0, best_dy = 0, best_yaw = 0;
             for (int j = 1; j < NUM_DX_BINS; j++)
-                if (fabsf(agent->expert_delta_x[t] - DELTA_DX_VALUES[j]) < fabsf(agent->expert_delta_x[t] - DELTA_DX_VALUES[best_dx]))
+                if (fabsf(agent->expert_delta_x[t] - DELTA_DX_VALUES[j]) <
+                    fabsf(agent->expert_delta_x[t] - DELTA_DX_VALUES[best_dx]))
                     best_dx = j;
             for (int j = 1; j < NUM_DY_BINS; j++)
-                if (fabsf(agent->expert_delta_y[t] - DELTA_DY_VALUES[j]) < fabsf(agent->expert_delta_y[t] - DELTA_DY_VALUES[best_dy]))
+                if (fabsf(agent->expert_delta_y[t] - DELTA_DY_VALUES[j]) <
+                    fabsf(agent->expert_delta_y[t] - DELTA_DY_VALUES[best_dy]))
                     best_dy = j;
             for (int j = 1; j < NUM_YAW_BINS; j++)
-                if (fabsf(agent->expert_delta_yaw[t] - DELTA_YAW_VALUES[j]) < fabsf(agent->expert_delta_yaw[t] - DELTA_YAW_VALUES[best_yaw]))
+                if (fabsf(agent->expert_delta_yaw[t] - DELTA_YAW_VALUES[j]) <
+                    fabsf(agent->expert_delta_yaw[t] - DELTA_YAW_VALUES[best_yaw]))
                     best_yaw = j;
             int *action_array = (int *)env->actions;
             action_array[action_idx * 3 + 0] = best_dx;
@@ -2391,13 +2393,18 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                         float dx = ab[i * 3 + 0] * DELTA_MAX_DX;
                         float dy = ab[i * 3 + 1] * DELTA_MAX_DY;
                         float dyaw = ab[i * 3 + 2] * DELTA_MAX_DYAW;
-                        dx_idx = 0; dy_idx = 0; yaw_idx = 0;
+                        dx_idx = 0;
+                        dy_idx = 0;
+                        yaw_idx = 0;
                         for (int j = 1; j < NUM_DX_BINS; j++)
-                            if (fabsf(dx - DELTA_DX_VALUES[j]) < fabsf(dx - DELTA_DX_VALUES[dx_idx])) dx_idx = j;
+                            if (fabsf(dx - DELTA_DX_VALUES[j]) < fabsf(dx - DELTA_DX_VALUES[dx_idx]))
+                                dx_idx = j;
                         for (int j = 1; j < NUM_DY_BINS; j++)
-                            if (fabsf(dy - DELTA_DY_VALUES[j]) < fabsf(dy - DELTA_DY_VALUES[dy_idx])) dy_idx = j;
+                            if (fabsf(dy - DELTA_DY_VALUES[j]) < fabsf(dy - DELTA_DY_VALUES[dy_idx]))
+                                dy_idx = j;
                         for (int j = 1; j < NUM_YAW_BINS; j++)
-                            if (fabsf(dyaw - DELTA_YAW_VALUES[j]) < fabsf(dyaw - DELTA_YAW_VALUES[yaw_idx])) yaw_idx = j;
+                            if (fabsf(dyaw - DELTA_YAW_VALUES[j]) < fabsf(dyaw - DELTA_YAW_VALUES[yaw_idx]))
+                                yaw_idx = j;
                     }
                     int base = (t * env->active_agent_count + i) * 3;
                     expert_actions_discrete_out[base + 0] = (float)dx_idx;
@@ -2431,7 +2438,7 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                     expert_actions_discrete_out[base + 2] = -1.0f;
                 } else {
                     expert_actions_discrete_out[disc_off] = -1.0f;
-                }            
+                }
             }
         }
 
@@ -2573,8 +2580,9 @@ Client *make_client(Drive *env) {
         client->camera.projection = CAMERA_PERSPECTIVE;
 
     } else { // Headless rendering
-        if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
-            // Fix to square around target agent
+        if (env->sdc_track_index >= 0) {
+            // if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
+            //  Fix to square around target agent
             client->width = 720;
             client->height = 720;
         } else {
@@ -3382,7 +3390,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     if (mode == 1) {
         float cam_x = 0.0f, cam_y = 0.0f;
         float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
+        // if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
+        if (env->sdc_track_index >= 0) {
             cam_x = env->entities[env->sdc_track_index].x;
             cam_y = env->entities[env->sdc_track_index].y;
             fovy = 150.0f;
@@ -3391,7 +3400,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
         for (int i = 0; i < env->active_agent_count; i++) {
             int idx = env->active_agent_indices[i];
-            if (env->entities[idx].removed)
+            if (env->entities[i].removed)
                 continue;
             int sx = (int)(-(env->entities[idx].x - cam_x) * scale) + client->width / 2 + 20;
             int sy = (int)((env->entities[idx].y - cam_y) * scale) + client->height / 2 - 25;
@@ -3543,7 +3552,9 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         Camera3D camera = {0};
 
         if (view_mode == VIEW_MODE_SIM_STATE) {
-            if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
+            // Uncomment below to see the full map in other control modes
+            // if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
+            if (env->sdc_track_index >= 0) {
                 // Follow the SDC agent
                 Entity *sdc = &env->entities[env->sdc_track_index];
                 camera.position = (Vector3){sdc->x, sdc->y, 400.0f};
