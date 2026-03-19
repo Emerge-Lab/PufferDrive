@@ -151,6 +151,12 @@ class BCPolicy(nn.Module):
         log_prob = sum(d.log_prob(expert_actions[:, i].long()).mean() for i, d in enumerate(dists))
         return log_prob / self.num_heads
 
+    def _entropy(self, obs):
+        dists = self.dist(obs)
+        if self.num_heads == 1:
+            return dists[0].entropy().mean().item()
+        return {f"entropy_head_{i}": d.entropy().mean().item() for i, d in enumerate(dists)}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -347,13 +353,30 @@ def train(dynamics_model: str):
             batch_actions = batch_actions.to(device)
 
             loss = -policy._log_prob(batch_obs, batch_actions.float())
+            entropy = policy._entropy(batch_obs)
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             accuracy = compute_accuracy(policy, batch_obs, batch_actions)
             epoch_losses.append(loss.item())
-            wandb.log({"loss": loss.item(), "accuracy": accuracy, "epoch": epoch, "global_step": global_step})
+
+            if isinstance(entropy, dict):
+                wandb.log(
+                    {"loss": loss.item(), "accuracy": accuracy, "epoch": epoch, "global_step": global_step, **entropy}
+                )
+            else:
+                wandb.log(
+                    {
+                        "loss": loss.item(),
+                        "accuracy": accuracy,
+                        "entropy": entropy,
+                        "epoch": epoch,
+                        "global_step": global_step,
+                    }
+                )
+
             global_step += 1
 
         avg_loss = np.mean(epoch_losses)
