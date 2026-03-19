@@ -386,6 +386,7 @@ def render_videos(
                 {
                     "videos": generated_videos,
                     "step": global_step,
+                    "prefix": wandb_prefix,
                 }
             )
 
@@ -400,14 +401,28 @@ def render_videos(
             payload["train_step"] = global_step
             wandb_run.log(payload)
         elif not render_async:
-            print(f"Skipping wandb log: wandb_log={wandb_log}, world={len(videos_to_log_world)}, agent={len(videos_to_log_agent)}")
+            print(
+                f"Skipping wandb log: wandb_log={wandb_log}, world={len(videos_to_log_world)}, agent={len(videos_to_log_agent)}"
+            )
 
     except subprocess.TimeoutExpired:
         print("C rendering timed out")
     except Exception as e:
         print(f"Failed to generate GIF: {e}")
 
+
+def render_videos_and_cleanup(cleanup_files=None, **render_kwargs):
+    """Wrapper that runs render_videos then cleans up temp files.
+
+    Intended as the target for multiprocessing.Process so that temp files
+    (bin weights, generated INI) are cleaned up inside the spawned process.
+    """
+    try:
+        render_videos(**render_kwargs)
     finally:
-        # Clean up bin weights file
-        if os.path.exists(bin_path):
-            os.remove(bin_path)
+        for f in cleanup_files or []:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except OSError:
+                pass
