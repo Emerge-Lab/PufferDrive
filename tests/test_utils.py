@@ -59,12 +59,8 @@ def test_generate_safe_eval_ini_pins_reward_bounds():
             result.read(out_path)
 
             for key, val in safe_cfg.items():
-                assert result.get("env", f"reward_bound_{key}_min") == str(val), (
-                    f"reward_bound_{key}_min not pinned"
-                )
-                assert result.get("env", f"reward_bound_{key}_max") == str(val), (
-                    f"reward_bound_{key}_max not pinned"
-                )
+                assert result.get("env", f"reward_bound_{key}_min") == str(val), f"reward_bound_{key}_min not pinned"
+                assert result.get("env", f"reward_bound_{key}_max") == str(val), f"reward_bound_{key}_max not pinned"
         finally:
             os.remove(out_path)
     finally:
