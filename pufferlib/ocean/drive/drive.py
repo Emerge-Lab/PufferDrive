@@ -4,15 +4,22 @@ import json
 import struct
 import os
 import pufferlib
+from enum import IntEnum
 from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
 
+class RenderView(IntEnum):
+    FULL_SIM_STATE = 0  # Orthographic top-down, fully observable simulator state
+    BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
+    AGENT_PERSP = 2  # Third-person perspective following selected agent
+
+
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
-        render_mode=None,
+        render_mode=RenderView.FULL_SIM_STATE,
         report_interval=1,
         width=1280,
         height=1024,
@@ -430,6 +437,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                render_mode=render_mode,
             )
             env_ids.append(env_id)
 
@@ -593,6 +601,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                render_mode=self.render_mode,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
@@ -736,11 +745,16 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self):
-        binding.vec_render(self.c_envs, 0)
+    def render(self, view_mode: RenderView = RenderView.FULL_SIM_STATE, draw_traces: bool = True, env_id: int = 0):
+        binding.vec_render(self.c_envs, int(view_mode), draw_traces, env_id)
 
     def close(self):
         binding.vec_close(self.c_envs)
+
+    @property
+    def scenario_ids(self) -> list[str]:
+        """Return scenario ID string for each env, stripping null padding."""
+        return [s.rstrip("\x00") for s in binding.vec_get_scenario_ids(self.c_envs)]
 
 
 def calculate_area(p1, p2, p3):

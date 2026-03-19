@@ -1,3 +1,4 @@
+#include <sys/types.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -12,6 +13,20 @@
 #include <time.h>
 #include "error.h"
 #include "datatypes.h"
+
+#define RENDER_WINDOW 0
+#define RENDER_HEADLESS 1
+
+// View modes
+#define VIEW_MODE_SIM_STATE 0
+#define VIEW_MODE_BEV_AGENT_OBS 1
+#define VIEW_MODE_AGENT_PERSP 2
+
+// // Order of entities in rendering (lower is rendered first)
+// #define Z_ROAD_SURFACE 0.0f
+// #define Z_ROAD_MARKINGS 0.05f // Lane lines, road lines, traces
+// #define Z_AGENT_DETAILS 0.4f  // Arrow, goal markers, obs overlays
+// #define Z_AGENTS 0.6f         // Vehicles, cyclists, pedestrians
 
 // constants for strings, data etc.
 #define SCENARIO_ID_STR_LENGTH 16
@@ -118,8 +133,8 @@
 #define MAX_CHECKED_LANES 32
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 13
-#define EGO_FEATURES_JERK 16
+#define EGO_FEATURES_CLASSIC 14
+#define EGO_FEATURES_JERK 17
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -200,6 +215,13 @@ const Color PUFF_BACKGROUND2 = (Color){18, 72, 72, 255};
 const Color LIGHTGREEN = (Color){152, 255, 152, 255};
 const Color LIGHTYELLOW = (Color){255, 255, 152, 255};
 const Color SOFT_YELLOW = (Color){245, 245, 220, 255};
+
+const Color LIGHTBLUE = (Color){167, 204, 255, 255};
+const Color DEEPBLUE = (Color){45, 112, 226, 255};
+const Color EXPERT_REPLAY = (Color){162, 220, 183, 255};
+const Color EXPERT_REPLAY_SMALL = (Color){95, 112, 93, 255};
+const Color LIGHT_ORANGE = (Color){255, 160, 80, 255};
+const Color LIGHT_PURPLE = (Color){204, 204, 255, 255};
 
 struct timespec ts;
 
@@ -366,6 +388,7 @@ struct Drive {
     int reward_randomization;
     int reward_conditioning;
     int turn_off_normalization;
+    int render_mode;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
     float partner_obs_radius;
@@ -1468,6 +1491,11 @@ int collision_check(Drive *env, int agent_idx) {
     if (agent->sim_x == INVALID_POSITION)
         return -1;
 
+    // Skip collision checking for pedestrians because they are often too
+    // close to other entities at initialization.
+    if (agent->type == PEDESTRIAN)
+        return -1;
+
     int car_collided_with_index = -1;
 
     if (agent->respawn_timestep != -1)
@@ -1561,8 +1589,8 @@ static bool check_offroad(Drive *env, Agent *agent) {
         RoadMapElement *entity;
         entity = &env->road_elements[entity_list[i].entity_idx];
 
-        // Check for offroad collision with road edges
-        if (entity->type == ROAD_EDGE) {
+        // Check for offroad collision with road edges (only for vehicles and cyclists)
+        if (entity->type == ROAD_EDGE && agent->type != PEDESTRIAN) {
             int geometry_idx = entity_list[i].geometry_idx;
             if (entity->z[geometry_idx] > agent->sim_z + agent->sim_height / 2.0f ||
                 entity->z[geometry_idx] < agent->sim_z - agent->sim_height / 2.0f)
@@ -2261,7 +2289,13 @@ void init(Drive *env) {
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
 }
 
+void close_client(Client *client);
+
 void c_close(Drive *env) {
+    if (env->client != NULL) {
+        close_client(env->client);
+        env->client = NULL;
+    }
     free_agents(env->agents, env->num_objects);
     for (int i = 0; i < env->num_roads; i++) {
         free_road_element(&env->road_elements[i]);
@@ -2586,11 +2620,13 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     // FORMAT COMES IN
     agent->metrics_array[SPEED_LIMIT_IDX] = (speed_magnitude > SPEED_LIMIT + 2.0f) ? 1.0f : 0.0f;
 
-    // Check for vehicle collisions
-    int car_collided_with_index = collision_check(env, agent_idx);
-    if (car_collided_with_index != -1)
-        collided = VEHICLE_COLLISION;
-
+    // Check for vehicle collisions (skip for pedestrians)
+    int car_collided_with_index = -1;
+    if (agent->type != PEDESTRIAN) {
+        car_collided_with_index = collision_check(env, agent_idx);
+        if (car_collided_with_index != -1)
+            collided = VEHICLE_COLLISION;
+    }
     agent->collision_state = collided;
 
     if (collided == VEHICLE_COLLISION) {
@@ -2756,6 +2792,7 @@ void compute_observations(Drive *env) {
             obs[13] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
             obs[14] = lane_center_dist;
             obs[15] = ego_entity->metrics_array[LANE_ANGLE_IDX];
+            obs[16] = ego_entity->type / 3.0f;
         } else {
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
             obs[8] = normalized_goal_speed_min;
@@ -2763,6 +2800,7 @@ void compute_observations(Drive *env) {
             obs[10] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
             obs[11] = lane_center_dist;
             obs[12] = ego_entity->metrics_array[LANE_ANGLE_IDX];
+            obs[13] = ego_entity->type / 3.0f;
         }
         int obs_idx = (env->reward_conditioning == 1) ? ego_dim - NUM_REWARD_COEFS : ego_dim;
         // Placeholder for reward conditioning encoder -
@@ -3483,16 +3521,63 @@ struct Client {
     int car_assignments[MAX_AGENTS]; // To keep car model assignments consistent per vehicle
     Vector3 default_camera_position;
     Vector3 default_camera_target;
+    int recorder_pipefd[2];
+    pid_t recorder_pid;
 };
 
 Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
-    client->width = 1280;
-    client->height = 704;
-    SetConfigFlags(FLAG_MSAA_4X_HINT);
+
+    if (env->render_mode == RENDER_HEADLESS && getenv("DISPLAY") == NULL) {
+        // Start Xvfb and set DISPLAY
+        pid_t xvfb_pid = fork();
+        if (xvfb_pid == 0) {
+            execlp("Xvfb", "Xvfb", ":99", "-screen", "0", "1x1x24", NULL);
+            _exit(1);
+        }
+        setenv("DISPLAY", ":99", 1);
+        usleep(500000); // Give Xvfb 500ms to start
+    }
+
+    if (env->render_mode == RENDER_WINDOW) {
+        client->width = 1280;
+        client->height = 704;
+        SetConfigFlags(FLAG_MSAA_4X_HINT);
+        SetTargetFPS(30);
+
+        // Set up camera for interactive window
+        Vector3 target_pos = {0, 0, 1}; // Y is up, Z is depth
+
+        client->default_camera_position = (Vector3){
+            0,      // Same X as target
+            120.0f, // 20 units above target
+            175.0f  // 20 units behind target
+        };
+        client->default_camera_target = target_pos;
+        client->camera.position = client->default_camera_position;
+        client->camera.target = client->default_camera_target;
+        client->camera.up = (Vector3){0.0f, -1.0f, 0.0f}; // Y is up
+        client->camera.fovy = 45.0f;
+        client->camera.projection = CAMERA_PERSPECTIVE;
+
+    } else { // Headless rendering
+        SetConfigFlags(FLAG_WINDOW_HIDDEN);
+        SetTargetFPS(6000);
+
+        float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
+        float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+        float scale = 6.0f; // Controls the resolution of the output video
+        int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
+        int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
+
+        client->width = img_width;
+        client->height = img_height;
+    }
+
+    SetTraceLogLevel(LOG_WARNING); // Only show warnings and errors
     InitWindow(client->width, client->height, "PufferDrive");
-    SetTargetFPS(30);
-    client->puffers = LoadTexture("resources/puffers_128.png");
+
+    // Load assets
     client->cars[0] = LoadModel("resources/drive/RedCar.glb");
     client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
     client->cars[2] = LoadModel("resources/drive/BlueCar.glb");

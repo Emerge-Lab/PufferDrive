@@ -369,6 +369,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->min_goal_distance = (float)unpack(kwargs, "min_goal_distance");
     env->max_goal_distance = (float)unpack(kwargs, "max_goal_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
+    env->render_mode = (int)unpack(kwargs, "render_mode");
     env->min_goal_speed = (float)unpack(kwargs, "min_goal_speed");
     env->max_goal_speed = (float)unpack(kwargs, "max_goal_speed");
     env->min_avg_speed_to_consider_goal_attempt = (float)unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");

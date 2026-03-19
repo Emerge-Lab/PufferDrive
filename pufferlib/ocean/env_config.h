@@ -8,6 +8,7 @@
 
 // Config struct for parsing INI files - contains all environment configuration
 typedef struct {
+    int render_mode;
     int action_type;
     int dynamics_model;
     float reward_vehicle_collision;
