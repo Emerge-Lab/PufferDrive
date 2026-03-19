@@ -39,7 +39,7 @@ SWEEP_CONFIG = {
         "learning_rate": {"distribution": "log_uniform_values", "min": 3e-5, "max": 1e-3},
         "input_size": {"values": [256, 512]},
         "hidden_size": {"values": [512, 1024, 2048]},
-        "batch_size": {"values": [1024, 512]},
+        "batch_size": {"values": [2048]},
         "resample_every_n_epochs": {"values": [5, 10]},
         "num_maps": {"values": [10000]},
     },
@@ -47,48 +47,66 @@ SWEEP_CONFIG = {
 
 TRAIN_DEFAULTS = {
     "learning_rate": 1e-4,
+    "input_size": 256,
     "hidden_size": 128,
-    "batch_size": 512,
-    "resample_every_n_epochs": 3,
-    "epochs": 2000,
-    "minibatches": 16,
-    "num_maps": 10,
+    "batch_size": 2048,
+    "resample_every_n_epochs": 2,  # Resample after full pass through the dataset
+    "epochs": 500,
+    "num_maps": 10000,
+    "learning_rate": 3e-4,
 }
 
 
 class BCPolicy(nn.Module):
     """BC policy supporting both joint (single head) and independent (multi-head) action spaces."""
 
-    def __init__(self, env, input_size, hidden_size, output_sizes):
+    def __init__(
+        self,
+        obs_dim,
+        input_size,
+        max_partner_objects,
+        partner_features,
+        max_road_objects,
+        road_features,
+        ego_dim,
+        hidden_size,
+        output_sizes,
+    ):
         super().__init__()
+
         self.num_heads = len(output_sizes)
         self.hidden_size = hidden_size
-        self.observation_size = env.single_observation_space.shape[0]
-        self.max_partner_objects = env.driver_env.max_partner_objects
-        self.partner_features = env.driver_env.partner_features
-        self.max_road_objects = env.driver_env.max_road_objects
-        self.road_features = env.driver_env.road_features
-        self.road_features_after_onehot = env.driver_env.road_features + 6
-        self.ego_dim = env.driver_env.ego_features
+        self.obs_dim = obs_dim
+
+        self.max_partner_objects = max_partner_objects
+        self.partner_features = partner_features
+        self.max_road_objects = max_road_objects
+        self.road_features = road_features
+        self.road_features_after_onehot = road_features + 6
+        self.ego_dim = ego_dim
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
+            nn.ReLU(),
             nn.LayerNorm(input_size),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
         self.road_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.road_features_after_onehot, input_size)),
+            nn.ReLU(),
             nn.LayerNorm(input_size),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
         self.partner_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.partner_features, input_size)),
+            nn.ReLU(),
             nn.LayerNorm(input_size),
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
         self.shared_embedding = nn.Sequential(
-            nn.GELU(),
-            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, hidden_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, 2048)),
+            nn.ReLU(),
+            pufferlib.pytorch.layer_init(nn.Linear(2048, hidden_size)),
         )
         self.heads = nn.ModuleList([nn.Linear(hidden_size, s) for s in output_sizes])
 
@@ -121,6 +139,10 @@ class BCPolicy(nn.Module):
         dists = self.dist(obs)
         actions = [d.logits.argmax(dim=-1) if deterministic else d.sample() for d in dists]
         return actions[0] if self.num_heads == 1 else torch.stack(actions, dim=-1)
+
+    def get_action_dist_logits(self, obs):
+        """Get logits from all heads. Returns list of tensors."""
+        return [d.logits for d in self.dist(obs)]
 
     def _log_prob(self, obs, expert_actions):
         dists = self.dist(obs)
@@ -155,11 +177,28 @@ def build_env_args(dynamics_model, num_maps):
     return args
 
 
+_cumulative_unique_hashes: set = set()
+
+
 def load_data(driver_env):
     driver_env.resample_maps()
     total_samples, unique_samples = driver_env._prepare_human_data()
-    print(f"Resampled: {total_samples} samples ({unique_samples} unique)")
-    wandb.log({"data/total_samples": total_samples, "data/unique_samples": unique_samples})
+
+    obs_np = driver_env.expert_observations_full.numpy()
+    act_np = driver_env.expert_actions_discrete.numpy()
+    batch_hashes = {driver_env._hash_pair(obs_np[i], act_np[i]) for i in range(len(obs_np))}
+    _cumulative_unique_hashes.update(batch_hashes)
+
+    print(
+        f"Resampled: {total_samples} samples ({unique_samples} unique, {len(_cumulative_unique_hashes)} cumulative unique)"
+    )
+    wandb.log(
+        {
+            "data/total_samples": total_samples,
+            "data/unique_samples": unique_samples,
+            "data/cumulative_unique_samples": len(_cumulative_unique_hashes),
+        }
+    )
     obs = driver_env.expert_observations_full.float()
     actions = driver_env.expert_actions_discrete.long()
     return TensorDataset(obs, actions)
@@ -250,7 +289,6 @@ def train(dynamics_model: str):
     batch_size = config.batch_size
     resample_every = config.resample_every_n_epochs
     epochs = config.epochs
-    minibatches = config.minibatches
     num_maps = config.num_maps
 
     run.name = f"{dynamics_model}_maps{num_maps}"
@@ -267,9 +305,14 @@ def train(dynamics_model: str):
     print(f"Device: {device}")
 
     policy = BCPolicy(
-        env=env,
-        input_size=64,
-        hidden_size=hidden_size,
+        obs_dim=driver_env.num_obs,
+        input_size=config.input_size,
+        max_partner_objects=driver_env.max_partner_objects,
+        partner_features=driver_env.partner_features,
+        max_road_objects=driver_env.max_road_objects,
+        road_features=driver_env.road_features,
+        ego_dim=driver_env.ego_features,
+        hidden_size=config.hidden_size,
         output_sizes=output_sizes,
     ).to(device)
 
@@ -279,6 +322,7 @@ def train(dynamics_model: str):
 
     optimizer = Adam(policy.parameters(), lr=lr)
     dataset = load_data(driver_env)
+    minibatches = len(dataset) // batch_size
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     data_iter = iter(dataloader)
 

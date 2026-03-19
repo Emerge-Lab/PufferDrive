@@ -432,7 +432,7 @@ class Drive(pufferlib.PufferEnv):
     def _hash_pair(self, obs, act):
         return hash((obs.round(3).tobytes(), act.round(2).tobytes()))
 
-    def _init_regularization_strategy(self, device="cuda", bc_hidden_size=1024):
+    def _init_regularization_strategy(self, device="cuda"):
         bc_anchor = None
         data = {}
 
@@ -445,8 +445,14 @@ class Drive(pufferlib.PufferEnv):
                 output_sizes = [self.joint_action_space_size]
 
             bc_policy = BCPolicy(
-                input_size=self.num_obs,
-                hidden_size=bc_hidden_size,
+                obs_dim=self.num_obs,
+                input_size=256,
+                max_partner_objects=self.max_partner_objects,
+                partner_features=self.partner_features,
+                max_road_objects=self.max_road_objects,
+                road_features=self.road_features,
+                ego_dim=self.ego_features,
+                hidden_size=128,
                 output_sizes=output_sizes,
             ).to(device)
 
@@ -484,7 +490,6 @@ class Drive(pufferlib.PufferEnv):
         expert_observations_full = np.full((trajectory_length, self.num_agents, self.num_obs), -1.0, dtype=np.float32)
 
         binding.vec_collect_expert_data(self.c_envs, expert_actions_discrete, expert_observations_full)
-
 
         if np.all(expert_actions_discrete == -1):
             raise ValueError("No valid human demonstrations could be collected. Please check the data format.")
@@ -1016,7 +1021,7 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/training")
+    process_all_maps(data_folder="data/processed/training")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
