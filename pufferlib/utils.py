@@ -320,8 +320,8 @@ def render_videos(
         videos_to_log_world = []
         videos_to_log_agent = []
         generated_videos = {"output_topdown": [], "output_agent": []}
-        output_topdown = f"resources/drive/output_topdown_{epoch}"
-        output_agent = f"resources/drive/output_agent_{epoch}"
+        output_topdown = f"resources/drive/{wandb_prefix}_output_topdown_{epoch}"
+        output_agent = f"resources/drive/{wandb_prefix}_output_agent_{epoch}"
 
         for i, map_path in enumerate(render_maps):
             cmd = list(base_cmd)  # copy
