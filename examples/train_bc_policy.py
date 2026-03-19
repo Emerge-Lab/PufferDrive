@@ -47,13 +47,14 @@ SWEEP_CONFIG = {
 
 TRAIN_DEFAULTS = {
     "learning_rate": 1e-4,
-    "input_size": 256,
+    "input_size": 64,
     "hidden_size": 128,
     "batch_size": 2048,
     "resample_every_n_epochs": 2,  # Resample after full pass through the dataset
     "epochs": 500,
     "num_maps": 10000,
     "learning_rate": 3e-4,
+    "eval_frequency": 10,  # Validation dataset
 }
 
 
@@ -104,9 +105,9 @@ class BCPolicy(nn.Module):
             pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
         )
         self.shared_embedding = nn.Sequential(
-            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, 2048)),
+            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, 512)),
             nn.ReLU(),
-            pufferlib.pytorch.layer_init(nn.Linear(2048, hidden_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(512, hidden_size)),
         )
         self.heads = nn.ModuleList([nn.Linear(hidden_size, s) for s in output_sizes])
 
@@ -277,6 +278,37 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
     wandb.log({"action_distribution": wandb.Image(path)})
 
 
+def evaluate(policy, dataloader, device):
+    policy.eval()
+    losses, accuracies = [], []
+    entropy_accum = {}
+
+    with torch.no_grad():
+        for batch_obs, batch_actions in dataloader:
+            batch_obs = batch_obs.to(device)
+            batch_actions = batch_actions.to(device)
+
+            loss = -policy._log_prob(batch_obs, batch_actions.float())
+            accuracy = compute_accuracy(policy, batch_obs, batch_actions)
+            entropy = policy._entropy(batch_obs)
+
+            losses.append(loss.item())
+            accuracies.append(accuracy)
+            if isinstance(entropy, dict):
+                for k, v in entropy.items():
+                    entropy_accum.setdefault(k, []).append(v)
+            else:
+                entropy_accum.setdefault("entropy", []).append(entropy)
+
+    policy.train()
+    metrics = {
+        "loss": np.mean(losses),
+        "accuracy": np.mean(accuracies),
+        **{k: np.mean(v) for k, v in entropy_accum.items()},
+    }
+    return metrics
+
+
 # ---------------------------------------------------------------------------
 # Core training loop (called by both single-run and sweep agent)
 # ---------------------------------------------------------------------------
@@ -296,6 +328,7 @@ def train(dynamics_model: str):
     resample_every = config.resample_every_n_epochs
     epochs = config.epochs
     num_maps = config.num_maps
+    eval_frequency = config.eval_frequency
 
     run.name = f"{dynamics_model}_maps{num_maps}"
 
@@ -304,9 +337,17 @@ def train(dynamics_model: str):
         f"batch={batch_size}  resample_every={resample_every}"
     )
 
+    # Train env
     args = build_env_args(dynamics_model, num_maps=num_maps)
     env = load_env("puffer_drive", args)
     driver_env = env.driver_env
+
+    # Validation env: Same as train but uses different set of maps
+    val_args = build_env_args(dynamics_model, num_maps=10000)
+    val_args["env"]["map_dir"] = "resources/drive/binaries/validation"
+    val_env = load_env("puffer_drive", val_args)
+    val_driver_env = val_env.driver_env
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
@@ -327,10 +368,15 @@ def train(dynamics_model: str):
     wandb.log({"model/param_count": param_count})
 
     optimizer = Adam(policy.parameters(), lr=lr)
+    # Train
     dataset = load_data(driver_env)
     minibatches = len(dataset) // batch_size
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     data_iter = iter(dataloader)
+
+    # Validation
+    val_dataset = load_data(val_driver_env)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     best_avg_loss = float("inf")
     global_step = 0
@@ -362,20 +408,19 @@ def train(dynamics_model: str):
             accuracy = compute_accuracy(policy, batch_obs, batch_actions)
             epoch_losses.append(loss.item())
 
-            if isinstance(entropy, dict):
-                wandb.log(
-                    {"loss": loss.item(), "accuracy": accuracy, "epoch": epoch, "global_step": global_step, **entropy}
-                )
-            else:
-                wandb.log(
-                    {
+            # Log statistics
+            wandb.log(
+                {
+                    f"train/{k}": v
+                    for k, v in {
                         "loss": loss.item(),
                         "accuracy": accuracy,
-                        "entropy": entropy,
                         "epoch": epoch,
                         "global_step": global_step,
-                    }
-                )
+                        **(entropy if isinstance(entropy, dict) else {"entropy": entropy}),
+                    }.items()
+                }
+            )
 
             global_step += 1
 
@@ -383,7 +428,13 @@ def train(dynamics_model: str):
         if avg_loss < best_avg_loss:
             best_avg_loss = avg_loss
 
-        wandb.log({"avg_loss": avg_loss, "best_avg_loss": best_avg_loss})
+        wandb.log({"train/avg_loss": avg_loss, "train/best_avg_loss": best_avg_loss})
+
+        if epoch % eval_frequency == 0:
+            val_metrics = evaluate(policy, val_dataloader, device)
+            wandb.log({"val/" + k: v for k, v in val_metrics.items()})
+            print(f"  val: loss={val_metrics['loss']:.4f}  acc={val_metrics['accuracy']:.4f}")
+
         print(f"Epoch {epoch + 1}/{epochs}: loss={avg_loss:.4f}  best={best_avg_loss:.4f}")
 
         if avg_loss < 0.001:
@@ -405,6 +456,7 @@ def train(dynamics_model: str):
     )
 
     env.close()
+    val_env.close()
     wandb.finish()
 
 
