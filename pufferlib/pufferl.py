@@ -128,7 +128,8 @@ class PuffeRL:
         self.render_async = config["render_async"] and self.render  # Only supported if rendering is enabled
         self.render_interval = config["render_interval"]
 
-        if self.render:
+        safe_eval_renders = config.get("safe_eval", {}).get("enabled", False)
+        if self.render or safe_eval_renders:
             ensure_drive_binary()
 
         # Always create queue/processes list — safe eval render uses them even if main render_async is off
@@ -540,9 +541,12 @@ class PuffeRL:
                         bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
                         shutil.copy2(bin_path, bin_path_epoch)
 
-                        env_cfg = getattr(self.vecenv, "driver_env", None)
-                        wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
-                        wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
+                        driver_env = getattr(self.vecenv, "driver_env", None)
+                        env_cfg = {
+                            "num_maps": getattr(driver_env, "num_maps", None),
+                            "map_dir": getattr(driver_env, "map_dir", None),
+                        } if driver_env else None
+                        wandb_log = hasattr(self.logger, "wandb") and self.logger.wandb is not None
                         if self.render_async:
                             self._spawn_render_process(
                                 config=self.config,
@@ -565,7 +569,7 @@ class PuffeRL:
                                 self.global_step,
                                 bin_path_epoch,
                                 render_async=False,
-                                wandb_run=wandb_run,
+                                wandb_run=self.logger.wandb if wandb_log else None,
                             )
                             # Clean up bin files in sync mode
                             for f in [bin_path_epoch, bin_path]:
@@ -611,8 +615,7 @@ class PuffeRL:
         cleanup_files=None,
     ):
         """Spawn a background process to render videos without blocking training."""
-        # Clean up finished processes
-        self.render_processes = [p for p in self.render_processes if p.is_alive()]
+        self._reap_render_processes()
 
         # Cap concurrent render processes (keep low — each is ~1 CPU core)
         max_processes = 3
@@ -620,7 +623,7 @@ class PuffeRL:
             print(f"Waiting for render processes to finish ({len(self.render_processes)}/{max_processes})...")
         while len(self.render_processes) >= max_processes:
             time.sleep(1)
-            self.render_processes = [p for p in self.render_processes if p.is_alive()]
+            self._reap_render_processes()
 
         render_proc = multiprocessing.Process(
             target=pufferlib.utils.render_videos_and_cleanup,
@@ -638,6 +641,7 @@ class PuffeRL:
                 "config_path": config_path,
                 "wandb_prefix": wandb_prefix,
             },
+            daemon=True,
         )
         render_proc.start()
         self.render_processes.append(render_proc)
@@ -674,7 +678,6 @@ class PuffeRL:
 
             # Render video with safe reward conditioning (async — doesn't block training)
             self.msg = "Spawning safe eval render..."
-            ensure_drive_binary()
             model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
             bin_path = f"{model_dir}_safe_eval_epoch_{self.epoch:06d}.bin"
 
@@ -688,7 +691,11 @@ class PuffeRL:
             )
 
             safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
-            env_cfg = getattr(vecenv, "driver_env", None)
+            driver_env = getattr(vecenv, "driver_env", None)
+            env_cfg = {
+                "num_maps": getattr(driver_env, "num_maps", None),
+                "map_dir": getattr(driver_env, "map_dir", None),
+            } if driver_env else None
             wandb_log = hasattr(self.logger, "wandb") and self.logger.wandb is not None
 
             self._spawn_render_process(
@@ -715,22 +722,31 @@ class PuffeRL:
                 except Exception:
                     pass
 
+    def _reap_render_processes(self):
+        """Remove finished render processes from the tracking list."""
+        alive = []
+        for p in self.render_processes:
+            if p.is_alive():
+                alive.append(p)
+            else:
+                p.join(timeout=1)
+        self.render_processes = alive
+
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
-        if not hasattr(self, "render_queue"):
-            return
-
-        # Clean up finished processes
-        self.render_processes = [p for p in self.render_processes if p.is_alive()]
+        self._reap_render_processes()
 
         try:
-            while not self.render_queue.empty():
-                result = self.render_queue.get_nowait()
+            while True:
+                try:
+                    result = self.render_queue.get_nowait()
+                except queue.Empty:
+                    break
+
                 step = result["step"]
                 videos = result["videos"]
                 prefix = result.get("prefix", "render")
 
-                # Log to wandb if available
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
                     import wandb
 
@@ -745,9 +761,6 @@ class PuffeRL:
                     if payload:
                         payload["train_step"] = step
                         self.logger.wandb.log(payload)
-
-        except queue.Empty:
-            pass
         except Exception as e:
             print(f"Error reading render queue: {e}")
 
@@ -794,20 +807,18 @@ class PuffeRL:
         # Drain any remaining async render results before closing
         self.check_render_queue()
         # Terminate any in-flight render processes
-        if hasattr(self, "render_processes"):
-            for p in self.render_processes:
-                try:
+        for p in self.render_processes:
+            try:
+                if p.is_alive():
+                    p.terminate()
+                    p.join(timeout=5)
                     if p.is_alive():
-                        p.terminate()
-                        p.join(timeout=5)
-                        if p.is_alive():
-                            p.kill()
-                except Exception:
-                    print(f"Failed to terminate render process {p.pid}")
-            self.render_processes = []
-        if hasattr(self, "render_queue"):
-            self.render_queue.close()
-            self.render_queue.join_thread()
+                        p.kill()
+            except Exception:
+                print(f"Failed to terminate render process {p.pid}")
+        self.render_processes = []
+        self.render_queue.close()
+        self.render_queue.join_thread()
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id

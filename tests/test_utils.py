@@ -94,6 +94,8 @@ def test_generate_safe_eval_ini_env_overrides():
             "num_agents": 64,
             "min_goal_distance": 0.5,
             "max_goal_distance": 1000.0,
+            "map_dir": "resources/drive/binaries/carla_3D",
+            "num_maps": 8,
         }
         out_path = pufferlib.utils.generate_safe_eval_ini(safe_cfg, base_ini_path=base_ini)
         try:
@@ -104,6 +106,8 @@ def test_generate_safe_eval_ini_env_overrides():
             assert result.get("env", "num_agents") == "64"
             assert result.get("env", "min_goal_distance") == "0.5"
             assert result.get("env", "max_goal_distance") == "1000.0"
+            assert result.get("env", "map_dir") == "resources/drive/binaries/carla_3D"
+            assert result.get("env", "num_maps") == "8"
         finally:
             os.remove(out_path)
     finally:
