@@ -215,7 +215,6 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
 
 def render_videos(
     config,
-    env_cfg,
     run_id,
     wandb_log,
     epoch,
@@ -226,6 +225,8 @@ def render_videos(
     wandb_run=None,
     config_path=None,
     wandb_prefix="render",
+    num_maps=None,
+    map_dir=None,
 ):
     """Generate and log training videos using C-based rendering."""
     if not os.path.exists(bin_path):
@@ -272,19 +273,15 @@ def render_videos(
         view_mode = config.get("view_mode", "both")
         base_cmd.extend(["--view", view_mode])
 
-        # Get num_maps if available
-        if env_cfg is not None and env_cfg.get("num_maps"):
-            base_cmd.extend(["--num-maps", str(env_cfg["num_maps"])])
+        if num_maps:
+            base_cmd.extend(["--num-maps", str(num_maps)])
 
         base_cmd.extend(["--policy-name", bin_path])
 
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
         if render_maps is None or render_maps == "none":
-            # Pick a random map from the training map_dir
-            map_dir = None
-            if env_cfg is not None and "map_dir" in env_cfg:
-                map_dir = env_cfg["map_dir"]
+            pass  # use map_dir passed as parameter
             if map_dir and os.path.isdir(map_dir):
                 bin_files = [f for f in os.listdir(map_dir) if f.endswith(".bin")]
                 if bin_files:

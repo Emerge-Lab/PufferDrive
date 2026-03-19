@@ -542,13 +542,10 @@ class PuffeRL:
                         shutil.copy2(bin_path, bin_path_epoch)
 
                         driver_env = getattr(self.vecenv, "driver_env", None)
-                        env_cfg = {
-                            "num_maps": getattr(driver_env, "num_maps", None),
-                            "map_dir": getattr(driver_env, "map_dir", None),
-                        } if driver_env else None
                         self._render_videos(
-                            env_cfg=env_cfg,
                             bin_path=bin_path_epoch,
+                            num_maps=getattr(driver_env, "num_maps", None),
+                            map_dir=getattr(driver_env, "map_dir", None),
                             wandb_prefix="render",
                             cleanup_files=[bin_path_epoch, bin_path],
                         )
@@ -580,8 +577,9 @@ class PuffeRL:
 
     def _render_videos(
         self,
-        env_cfg,
         bin_path,
+        num_maps=None,
+        map_dir=None,
         wandb_prefix="render",
         config_path=None,
         cleanup_files=None,
@@ -590,8 +588,9 @@ class PuffeRL:
         wandb_log = hasattr(self.logger, "wandb") and self.logger.wandb is not None
         render_kwargs = dict(
             config=self.config,
-            env_cfg=env_cfg,
             run_id=self.logger.run_id,
+            num_maps=num_maps,
+            map_dir=map_dir,
             wandb_log=wandb_log,
             epoch=self.epoch,
             global_step=self.global_step,
@@ -637,7 +636,9 @@ class PuffeRL:
         import traceback
 
         vecenv = None
+        bin_path = None
         safe_ini_path = None
+        render_handed_off = False
         try:
             from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
 
@@ -661,7 +662,6 @@ class PuffeRL:
 
             self.msg = f"Safe eval: {len(metrics)} metrics logged"
 
-            # Render video with safe reward conditioning (async — doesn't block training)
             self.msg = "Spawning safe eval render..."
             model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
             bin_path = f"{model_dir}_safe_eval_epoch_{self.epoch:06d}.bin"
@@ -676,19 +676,16 @@ class PuffeRL:
             )
 
             safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
-            driver_env = getattr(vecenv, "driver_env", None)
-            env_cfg = {
-                "num_maps": getattr(driver_env, "num_maps", None),
-                "map_dir": getattr(driver_env, "map_dir", None),
-            } if driver_env else None
 
             self._render_videos(
-                env_cfg=env_cfg,
                 bin_path=bin_path,
+                num_maps=safe_eval_config.get("num_maps"),
+                map_dir=safe_eval_config.get("map_dir"),
                 wandb_prefix="eval",
                 config_path=safe_ini_path,
                 cleanup_files=[bin_path, safe_ini_path],
             )
+            render_handed_off = True
             self.msg = f"Safe eval complete: {len(metrics)} metrics logged"
 
         except Exception as e:
@@ -700,6 +697,13 @@ class PuffeRL:
                     vecenv.close()
                 except Exception:
                     pass
+            if not render_handed_off:
+                for f in [bin_path, safe_ini_path]:
+                    if f and os.path.exists(f):
+                        try:
+                            os.remove(f)
+                        except OSError:
+                            pass
 
     def _reap_render_processes(self):
         """Remove finished render processes from the tracking list."""
