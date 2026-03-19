@@ -392,11 +392,11 @@ struct Drive {
     int max_controlled_agents;
     int render_mode;
     // Noise configuration
-    float dynamics_noise_pos;     // σ for position perturbation (meters)
-    float dynamics_noise_heading; // σ for heading perturbation (radians)
-    float obs_noise_pos;          // σ for partner position noise
-    float obs_noise_speed;        // σ for partner speed noise
-    float obs_noise_road;         // σ for road segment position noise
+    float dynamics_noise_pos;
+    float dynamics_noise_heading;
+    float obs_partner_noise_pos;
+    float obs_partner_noise_speed;
+    float obs_noise_road;
 };
 
 void add_log(Drive *env) {
@@ -1422,11 +1422,9 @@ void init(Drive *env) {
     }
 
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
-    env->dynamics_noise_pos = 0.0f;     // 0.0125f;    // keep, empirically validated (Gigaflow)
-    env->dynamics_noise_heading = 0.0f; // 0.005f; // keep, proportionate
-    env->obs_noise_pos = 0.0f;          // 0.04f;           // obs-space (~1m equivalent)
-    env->obs_noise_speed =              // 0.005f;        // obs-space (~0.5 m/s equivalent)
-        env->obs_noise_road = 0.0f;     // drop, irrelevant for now
+    env->dynamics_noise_pos = 0.0f; // 0.0125f; Gigaflow
+    env->dynamics_noise_heading = 0.0f;
+    env->obs_noise_road = 0.0f;
 }
 
 void close_client(Client *client);
@@ -1916,10 +1914,10 @@ void compute_observations(Drive *env) {
             float rel_x = dx * cos_heading + dy * sin_heading;
             float rel_y = -dx * sin_heading + dy * cos_heading;
             // Store observations with correct indexing
-            obs[obs_idx] = rel_x * 0.02f + gaussian_noise(env->obs_noise_pos);
-            obs[obs_idx + 1] = rel_y * 0.02f + gaussian_noise(env->obs_noise_pos);
-            obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH + gaussian_noise(env->obs_noise_pos);
-            obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN + gaussian_noise(env->obs_noise_pos);
+            obs[obs_idx] = rel_x * 0.02f + gaussian_noise(env->obs_partner_noise_pos);
+            obs[obs_idx + 1] = rel_y * 0.02f + gaussian_noise(env->obs_partner_noise_pos);
+            obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH + gaussian_noise(env->obs_partner_noise_pos);
+            obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN + gaussian_noise(env->obs_partner_noise_pos);
             // relative heading
             float rel_heading_x =
                 other_entity->heading_x * ego_entity->heading_x +
@@ -1937,7 +1935,7 @@ void compute_observations(Drive *env) {
             float other_v_dot_heading =
                 other_entity->vx * other_entity->heading_x + other_entity->vy * other_entity->heading_y;
             float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
-            obs[obs_idx + 6] = other_signed_speed / MAX_SPEED + gaussian_noise(env->obs_noise_speed);
+            obs[obs_idx + 6] = other_signed_speed / MAX_SPEED + gaussian_noise(env->obs_partner_noise_speed);
             cars_seen++;
             obs_idx += 7; // Move to next observation slot
         }
@@ -2181,8 +2179,7 @@ void c_step(Drive *env) {
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
 
-    // Re-assert terminal for agents already removed in a prior step
-    // TODO: Find better solution
+    // Re-assert terminal for agents already terminated in a prior step
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         if (env->entities[agent_idx].removed) {
@@ -2581,8 +2578,7 @@ Client *make_client(Drive *env) {
 
     } else { // Headless rendering
         if (env->sdc_track_index >= 0) {
-            // if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
-            //  Fix to square around target agent
+            // Fix to square around target agent
             client->width = 720;
             client->height = 720;
         } else {
@@ -3074,7 +3070,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
         }
     }
-
+    // Draw entities
     for (int i = 0; i < env->num_entities; i++) {
         // Draw objects
         if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN ||
@@ -3085,9 +3081,11 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             int agent_index = -1;
             for (int j = 0; j < env->active_agent_count; j++) {
                 if (env->active_agent_indices[j] == i) {
-                    is_active_agent = true;
                     agent_index = j;
-                    break;
+                    if (!env->entities[agent_index].removed) {
+                        is_active_agent = true;
+                        break;
+                    }
                 }
             }
 
@@ -3325,7 +3323,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
         }
         // Draw road elements
-        if (env->entities[i].type <= 3 && env->entities[i].type >= 7) {
+        if (env->entities[i].type <= 3 || env->entities[i].type >= 7) {
             continue;
         }
         for (int j = 0; j < env->entities[i].array_size - 1; j++) {
@@ -3390,7 +3388,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     if (mode == 1) {
         float cam_x = 0.0f, cam_y = 0.0f;
         float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        // if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
         if (env->sdc_track_index >= 0) {
             cam_x = env->entities[env->sdc_track_index].x;
             cam_y = env->entities[env->sdc_track_index].y;
@@ -3399,15 +3396,17 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         float scale = client->height / fovy;
 
         for (int i = 0; i < env->active_agent_count; i++) {
-            int idx = env->active_agent_indices[i];
-            if (env->entities[i].removed)
+            int agent_idx = env->active_agent_indices[i];
+            if (env->entities[agent_idx].removed || env->entities[agent_idx].x == INVALID_POSITION) {
                 continue;
-            int sx = (int)(-(env->entities[idx].x - cam_x) * scale) + client->width / 2 + 20;
-            int sy = (int)((env->entities[idx].y - cam_y) * scale) + client->height / 2 - 25;
+            }
+
+            int sx = (int)(-(env->entities[agent_idx].x - cam_x) * scale) + client->width / 2 + 20;
+            int sy = (int)((env->entities[agent_idx].y - cam_y) * scale) + client->height / 2 - 25;
             if (sx < 0 || sx > client->width || sy < 0 || sy > client->height)
                 continue;
             char text[32];
-            snprintf(text, sizeof(text), idx == env->sdc_track_index ? "sdc" : "%d", idx);
+            snprintf(text, sizeof(text), agent_idx == env->sdc_track_index ? "sdc" : "%d", agent_idx);
             DrawText(text, sx - MeasureText(text, 20) / 2, sy, 20, PUFF_WHITE);
         }
     }
@@ -3494,13 +3493,15 @@ void draw_sensor_noise_view(Drive *env, Client *client) {
         for (int s = 0; s < num_samples; s++) {
             float rel_x = dx * cos_h + dy * sin_h;
             float rel_y = -dx * sin_h + dy * cos_h;
-            float noisy_rx = rel_x + gaussian_noise(env->obs_noise_pos) / 0.02f;
-            float noisy_ry = rel_y + gaussian_noise(env->obs_noise_pos) / 0.02f;
+            float noisy_rx = rel_x + gaussian_noise(env->obs_partner_noise_pos) / 0.02f;
+            float noisy_ry = rel_y + gaussian_noise(env->obs_partner_noise_pos) / 0.02f;
             float px = ego->x + noisy_rx * cos_h - noisy_ry * sin_h;
             float py = ego->y + noisy_rx * sin_h + noisy_ry * cos_h;
 
-            float p_hw = (other->width / MAX_VEH_WIDTH + gaussian_noise(env->obs_noise_pos)) * MAX_VEH_WIDTH * 0.5f;
-            float p_hl = (other->length / MAX_VEH_LEN + gaussian_noise(env->obs_noise_pos)) * MAX_VEH_LEN * 0.5f;
+            float p_hw =
+                (other->width / MAX_VEH_WIDTH + gaussian_noise(env->obs_partner_noise_pos)) * MAX_VEH_WIDTH * 0.5f;
+            float p_hl =
+                (other->length / MAX_VEH_LEN + gaussian_noise(env->obs_partner_noise_pos)) * MAX_VEH_LEN * 0.5f;
 
             Vector3 pc[4] = {
                 {px + p_hl * gt_cos - p_hw * gt_sin, py + p_hl * gt_sin + p_hw * gt_cos, Z_AGENTS + 0.01f},
@@ -3552,8 +3553,6 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         Camera3D camera = {0};
 
         if (view_mode == VIEW_MODE_SIM_STATE) {
-            // Uncomment below to see the full map in other control modes
-            // if (env->control_mode == CONTROL_SDC_ONLY && env->sdc_track_index >= 0) {
             if (env->sdc_track_index >= 0) {
                 // Follow the SDC agent
                 Entity *sdc = &env->entities[env->sdc_track_index];
@@ -3601,6 +3600,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             }
 
             draw_scene(env, client, 1, 0, 0, 0);
+            DrawText(TextFormat("t=%d", env->timestep), 10, 10, 20, PUFF_WHITE);
 
         } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
             // Orthographic bird's-eye view centered on the selected agent,

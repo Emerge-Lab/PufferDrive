@@ -217,6 +217,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     OVERRIDE_INT(dynamics_model);
     OVERRIDE_FLOAT(reward_vehicle_collision);
     OVERRIDE_FLOAT(reward_offroad_collision);
+    OVERRIDE_FLOAT(obs_partner_noise_speed);
+    OVERRIDE_FLOAT(obs_partner_noise_pos);
     OVERRIDE_FLOAT(reward_goal);
     OVERRIDE_INT(collision_behavior);
     OVERRIDE_INT(offroad_behavior);
@@ -240,6 +242,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->dynamics_model = conf.dynamics_model;
     env->reward_vehicle_collision = conf.reward_vehicle_collision;
     env->reward_offroad_collision = conf.reward_offroad_collision;
+    env->obs_partner_noise_speed = conf.obs_partner_noise_speed;
+    env->obs_partner_noise_pos = conf.obs_partner_noise_pos;
     env->reward_goal = conf.reward_goal;
     env->fix_rewards = conf.fix_rewards;
     env->fix_lambdas = conf.fix_lambdas;

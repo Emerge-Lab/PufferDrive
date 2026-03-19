@@ -34,6 +34,8 @@ typedef struct {
     char map_dir[256];
     char anchor_policy_path[256];
     int reg_mode;
+    float obs_partner_noise_pos;
+    float obs_partner_noise_speed;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -67,6 +69,10 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->goal_target_distance = atof(value);
     } else if (MATCH("env", "reward_vehicle_collision")) {
         env_config->reward_vehicle_collision = atof(value);
+    } else if (MATCH("env", "obs_partner_noise_speed")) {
+        env_config->obs_partner_noise_speed = atof(value);
+    } else if (MATCH("env", "obs_partner_noise_pos")) {
+        env_config->obs_partner_noise_pos = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {
         env_config->reward_offroad_collision = atof(value);
     } else if (MATCH("env", "reward_goal")) {

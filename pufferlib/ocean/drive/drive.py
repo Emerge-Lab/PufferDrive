@@ -69,6 +69,8 @@ class Drive(pufferlib.PufferEnv):
         fix_rewards=False,
         fix_lambdas=True,
         lambda_value=0.0,
+        obs_partner_noise_speed=0.0,
+        obs_partner_noise_pos=0.0,
     ):
         # env
         self.dt = dt
@@ -98,6 +100,8 @@ class Drive(pufferlib.PufferEnv):
         self.fix_rewards = fix_rewards
         self.fix_lambdas = fix_lambdas
         self.lambda_value = lambda_value
+        self.obs_partner_noise_speed = obs_partner_noise_speed
+        self.obs_partner_noise_pos = obs_partner_noise_pos
         self._dynamics_model_flag = DYNAMICS_MODEL_MAP[dynamics_model]
 
         # Observation space calculation

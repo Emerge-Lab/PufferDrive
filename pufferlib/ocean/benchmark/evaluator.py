@@ -852,6 +852,8 @@ class Evaluator:
         eval_config["env"]["fix_lambdas"] = True
         eval_config["env"]["fix_rewards"] = True  # Fix to the ini file ones for all agents
         eval_config["env"]["lambda_value"] = configs["env"]["lambda_value"]
+        eval_config["env"]["obs_partner_noise_speed"] = 0.0
+        eval_config["env"]["obs_partner_noise_pos"] = 0.0
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
@@ -951,10 +953,15 @@ class Evaluator:
         info_list = []
         for time_idx in range(self.sim_steps):
             if render_env_idx is not None:
+                # Check if focus agent is done
+                cur = driver.agent_offsets[render_env_idx]
+                nxt = driver.agent_offsets[render_env_idx + 1]
+                render_env_done = terminals[cur].all()
                 if mode == "human_replay" and not terminals[render_env_idx]:
                     driver.render(view_mode=view_mode, env_id=render_env_idx)
-                elif mode != "human_replay":
+                elif mode == "self_play" and not render_env_done:
                     driver.render(view_mode=view_mode, env_id=render_env_idx)
+
             # Get action from policy
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
