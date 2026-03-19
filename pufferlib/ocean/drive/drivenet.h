@@ -63,9 +63,8 @@ struct DriveNet {
     // 4. shared_embedding: Python nn.Sequential(GELU(), Linear(4*64=256, 256))
     Linear *shared_embedding;
 
-    // 5. past_actions_encoder (Linear -> LayerNorm -> Linear)
+    // 5. past_actions_encoder (Linear -> ReLU -> Linear)
     Linear *past_act_encoder;
-    LayerNorm *past_act_layernorm;
     Linear *past_act_encoder_two;
 
     // 6. actor -- output is full trajectory: [num_agents, actor_output_dim]
@@ -84,6 +83,7 @@ struct DriveNet {
     CatDim1 *cat3; // 192      + past_act(64)  -> 256
     GELU *gelu;
     ReLU *relu;
+    ReLU *past_act_relu;
 
     Multidiscrete *multidiscrete;
 };
@@ -162,9 +162,8 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     // 4. shared_embedding (GELU at index 0 has no weights, Linear at index 1)
     net->shared_embedding = make_linear(weights, num_agents, 4 * input_size, hidden_size);
 
-    // 5. past_actions_encoder
+    // 5. past_actions_encoder (Linear -> ReLU -> Linear, no LayerNorm)
     net->past_act_encoder = make_linear(weights, num_agents, past_actions_input_dim, input_size);
-    net->past_act_layernorm = make_layernorm(weights, num_agents, input_size);
     net->past_act_encoder_two = make_linear(weights, num_agents, input_size, input_size);
 
     // 6. actor -- output is full trajectory
@@ -183,6 +182,7 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     net->cat3 = make_cat_dim1(num_agents, 3 * input_size, input_size); // -> 256
     net->gelu = make_gelu(num_agents, 4 * input_size);
     net->relu = make_relu(num_agents, hidden_size);
+    net->past_act_relu = make_relu(num_agents, input_size);
 
     net->multidiscrete = make_multidiscrete(num_agents, logit_sizes, action_dim);
     return net;
@@ -211,7 +211,6 @@ void free_drivenet(DriveNet *net) {
     free(net->partner_encoder_two);
     free(net->shared_embedding);
     free(net->past_act_encoder);
-    free(net->past_act_layernorm);
     free(net->past_act_encoder_two);
     free(net->actor);
     free(net->value_fn);
@@ -223,6 +222,7 @@ void free_drivenet(DriveNet *net) {
     free(net->cat3);
     free(net->gelu);
     free(net->relu);
+    free(net->past_act_relu);
     free(net->multidiscrete);
     free(net);
 }
@@ -337,8 +337,8 @@ void forward(DriveNet *net, float *observations, int *actions) {
 
     // ---- Past-actions encoder ----
     linear(net->past_act_encoder, net->past_actions_traj);
-    layernorm(net->past_act_layernorm, net->past_act_encoder->output);
-    linear(net->past_act_encoder_two, net->past_act_layernorm->output);
+    relu(net->past_act_relu, net->past_act_encoder->output);
+    linear(net->past_act_encoder_two, net->past_act_relu->output);
 
     // ---- 4-way concat: ego + road + partner + past_act -> 256 ----
     cat_dim1(net->cat1, net->ego_encoder_two->output, net->road_max->output);
