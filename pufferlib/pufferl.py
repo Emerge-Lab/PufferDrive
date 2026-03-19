@@ -1610,9 +1610,15 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 def ensure_drive_binary():
     """Delete existing visualize binary and rebuild it. This ensures the
     binary is always up-to-date with the latest code changes.
+    If the filesystem is read-only (e.g. Singularity container), skip the
+    rebuild and use the pre-built binary if it exists.
     """
     if os.path.exists("./visualize"):
-        os.remove("./visualize")
+        try:
+            os.remove("./visualize")
+        except OSError:
+            # Read-only filesystem (e.g. Singularity container) — use pre-built binary
+            return
 
     try:
         result = subprocess.run(
