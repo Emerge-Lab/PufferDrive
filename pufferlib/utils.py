@@ -1,9 +1,47 @@
+import configparser
 import os
 import sys
 import glob
 import shutil
 import subprocess
 import json
+import tempfile
+
+
+def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/ocean/drive.ini"):
+    """Generate a temporary INI file with safe reward conditioning values.
+
+    Sets reward_randomization=1 and reward_conditioning=1, then pins each
+    reward bound min=max to the values from safe_eval_config.
+    """
+    config = configparser.ConfigParser()
+    config.read(base_ini_path)
+
+    config.set("env", "reward_randomization", "1")
+    config.set("env", "reward_conditioning", "1")
+    config.set("env", "resample_frequency", "0")
+
+    if "episode_length" in safe_eval_config:
+        config.set("env", "episode_length", str(safe_eval_config["episode_length"]))
+    if "num_agents" in safe_eval_config:
+        config.set("env", "num_agents", str(safe_eval_config["num_agents"]))
+    if "min_goal_distance" in safe_eval_config:
+        config.set("env", "min_goal_distance", str(safe_eval_config["min_goal_distance"]))
+    if "max_goal_distance" in safe_eval_config:
+        config.set("env", "max_goal_distance", str(safe_eval_config["max_goal_distance"]))
+
+    # Pin each reward bound: set min=max to the safe value
+    for key, val in safe_eval_config.items():
+        # Check if this key corresponds to a reward bound in the INI
+        if config.has_option("env", f"reward_bound_{key}_min"):
+            config.set("env", f"reward_bound_{key}_min", str(val))
+            config.set("env", f"reward_bound_{key}_max", str(val))
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".ini", prefix="safe_eval_")
+    with os.fdopen(fd, "w") as f:
+        config.write(f)
+
+    return tmp_path
 
 
 def run_human_replay_eval_in_subprocess(config, logger, global_step):
@@ -172,7 +210,18 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
 
 
 def render_videos(
-    config, env_cfg, run_id, wandb_log, epoch, global_step, bin_path, render_async, render_queue=None, wandb_run=None
+    config,
+    env_cfg,
+    run_id,
+    wandb_log,
+    epoch,
+    global_step,
+    bin_path,
+    render_async,
+    render_queue=None,
+    wandb_run=None,
+    config_path=None,
+    wandb_prefix="render",
 ):
     """
     Generate and log training videos using C-based rendering.
@@ -207,6 +256,9 @@ def render_videos(
 
         # Base command with only visualization flags (env config comes from INI)
         base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+
+        if config_path:
+            base_cmd.extend(["--config", config_path])
 
         # Visualization config flags only
         if config.get("show_grid", False):
@@ -310,7 +362,7 @@ def render_videos(
 
                             if "topdown" in target_filename:
                                 videos_to_log_world.append(wandb.Video(target_path, format="mp4"))
-                            else:
+                            elif "agent" in target_filename:
                                 videos_to_log_agent.append(wandb.Video(target_path, format="mp4"))
                     else:
                         print(f"Video generation completed but {source_vid} not found")
@@ -333,9 +385,9 @@ def render_videos(
         if wandb_log and (videos_to_log_world or videos_to_log_agent) and not render_async:
             payload = {}
             if videos_to_log_world:
-                payload["render/world_state"] = videos_to_log_world
+                payload[f"{wandb_prefix}/world_state"] = videos_to_log_world
             if videos_to_log_agent:
-                payload["render/agent_view"] = videos_to_log_agent
+                payload[f"{wandb_prefix}/agent_view"] = videos_to_log_agent
             wandb_run.log(payload, step=global_step)
 
     except subprocess.TimeoutExpired:

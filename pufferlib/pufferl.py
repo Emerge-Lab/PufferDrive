@@ -128,7 +128,8 @@ class PuffeRL:
         self.render_async = config["render_async"] and self.render  # Only supported if rendering is enabled
         self.render_interval = config["render_interval"]
 
-        if self.render:
+        safe_eval_enabled = config.get("safe_eval", {}).get("enabled", False)
+        if self.render or safe_eval_enabled:
             ensure_drive_binary()
 
         if self.render_async:
@@ -610,11 +611,12 @@ class PuffeRL:
             self._run_safe_eval()
 
     def _run_safe_eval(self):
-        """Run safe eval in-process using SafeEvaluator."""
+        """Run safe eval in-process using SafeEvaluator, then render videos."""
         import copy
         import traceback
 
         vecenv = None
+        safe_ini_path = None
         try:
             from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
 
@@ -637,6 +639,41 @@ class PuffeRL:
             evaluator.log_stats(global_step=self.global_step)
 
             self.msg = f"Safe eval: {len(metrics)} metrics logged"
+
+            # Render video with safe reward conditioning
+            self.msg = "Rendering safe eval video..."
+            model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+            bin_path = f"{model_dir}_safe_eval.bin"
+
+            export(
+                args={"env_name": env_name, "load_model_path": "unused", **self.config},
+                env_name=env_name,
+                vecenv=self.vecenv,
+                policy=self.uncompiled_policy,
+                path=bin_path,
+                silent=True,
+            )
+
+            safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
+            env_cfg = getattr(self.vecenv, "driver_env", None)
+            wandb_log = hasattr(self.logger, "wandb") and self.logger.wandb is not None
+            wandb_run = self.logger.wandb if wandb_log else None
+
+            pufferlib.utils.render_videos(
+                self.config,
+                env_cfg,
+                self.logger.run_id,
+                wandb_log,
+                self.epoch,
+                self.global_step,
+                bin_path,
+                render_async=False,
+                wandb_run=wandb_run,
+                config_path=safe_ini_path,
+                wandb_prefix="eval",
+            )
+            self.msg = f"Safe eval complete: {len(metrics)} metrics + video logged"
+
         except Exception as e:
             self.msg = f"Safe eval failed: {e}"
             traceback.print_exc(file=sys.stderr)
@@ -646,6 +683,8 @@ class PuffeRL:
                     vecenv.close()
                 except Exception:
                     pass
+            if safe_ini_path and os.path.exists(safe_ini_path):
+                os.remove(safe_ini_path)
 
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
