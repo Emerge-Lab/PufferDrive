@@ -27,8 +27,12 @@ def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/oce
     config.set("env", "resample_frequency", "0")
 
     env_override_keys = [
-        "episode_length", "num_agents", "min_goal_distance", "max_goal_distance",
-        "map_dir", "num_maps",
+        "episode_length",
+        "num_agents",
+        "min_goal_distance",
+        "max_goal_distance",
+        "map_dir",
+        "num_maps",
     ]
     for key in env_override_keys:
         if key in safe_eval_config:
