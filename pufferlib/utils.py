@@ -15,7 +15,11 @@ def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/oce
     reward bound min=max to the values from safe_eval_config.
     """
     config = configparser.ConfigParser()
-    config.read(base_ini_path)
+    read_files = config.read(base_ini_path)
+    if not read_files:
+        raise FileNotFoundError(f"Could not read base INI file: {base_ini_path}")
+    if not config.has_section("env"):
+        raise ValueError(f"INI file {base_ini_path} missing required [env] section")
 
     config.set("env", "reward_randomization", "1")
     config.set("env", "reward_conditioning", "1")
@@ -268,7 +272,7 @@ def render_videos(
         if config.get("show_lasers", False):
             base_cmd.append("--lasers")
         if config.get("show_human_logs", False):
-            base_cmd.append("--show-human-logs")
+            base_cmd.append("--log-trajectories")
         if config.get("zoom_in", False):
             base_cmd.append("--zoom-in")
 
@@ -331,9 +335,13 @@ def render_videos(
             cmd.extend(["--output-topdown", output_topdown_map])
             cmd.extend(["--output-agent", output_agent_map])
 
+            print(f"Running render: {' '.join(cmd[:6])}...")
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1200, env=env_vars)
 
             vids_exist = os.path.exists(output_topdown_map) and os.path.exists(output_agent_map)
+            print(f"Render exit code: {result.returncode}, vids_exist: {vids_exist}")
+            if result.returncode != 0 and result.stderr:
+                print(f"Render stderr: {result.stderr[-500:]}")
 
             if result.returncode == 0 or (result.returncode == 1 and vids_exist):
                 videos = [
@@ -388,7 +396,11 @@ def render_videos(
                 payload[f"{wandb_prefix}/world_state"] = videos_to_log_world
             if videos_to_log_agent:
                 payload[f"{wandb_prefix}/agent_view"] = videos_to_log_agent
-            wandb_run.log(payload, step=global_step)
+            print(f"Logging {len(payload)} video keys to wandb: {list(payload.keys())}")
+            payload["train_step"] = global_step
+            wandb_run.log(payload)
+        elif not render_async:
+            print(f"Skipping wandb log: wandb_log={wandb_log}, world={len(videos_to_log_world)}, agent={len(videos_to_log_agent)}")
 
     except subprocess.TimeoutExpired:
         print("C rendering timed out")

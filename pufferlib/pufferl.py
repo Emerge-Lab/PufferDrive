@@ -128,8 +128,7 @@ class PuffeRL:
         self.render_async = config["render_async"] and self.render  # Only supported if rendering is enabled
         self.render_interval = config["render_interval"]
 
-        safe_eval_enabled = config.get("safe_eval", {}).get("enabled", False)
-        if self.render or safe_eval_enabled:
+        if self.render:
             ensure_drive_binary()
 
         if self.render_async:
@@ -642,6 +641,7 @@ class PuffeRL:
 
             # Render video with safe reward conditioning
             self.msg = "Rendering safe eval video..."
+            ensure_drive_binary()
             model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
             bin_path = f"{model_dir}_safe_eval.bin"
 
@@ -655,7 +655,9 @@ class PuffeRL:
             )
 
             safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
-            env_cfg = getattr(self.vecenv, "driver_env", None)
+            # Use the safe eval vecenv's driver_env so map_dir/num_maps match
+            # the safe eval config, not the training config
+            env_cfg = getattr(vecenv, "driver_env", None)
             wandb_log = hasattr(self.logger, "wandb") and self.logger.wandb is not None
             wandb_run = self.logger.wandb if wandb_log else None
 
