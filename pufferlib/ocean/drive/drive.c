@@ -21,7 +21,7 @@ void test_drivenet() {
 
     // Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights *weights = load_weights("puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC);
+    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, 0);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {
@@ -80,8 +80,10 @@ void demo() {
         .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .goal_radius = conf.goal_radius,
         .goal_behavior = conf.goal_behavior,
-        .goal_target_distance = conf.goal_target_distance,
-        .goal_speed = conf.goal_speed,
+        .min_goal_distance = conf.min_goal_distance,
+        .max_goal_distance = conf.max_goal_distance,
+        .min_goal_speed = conf.min_goal_speed,
+        .max_goal_speed = conf.max_goal_speed,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
         .termination_mode = conf.termination_mode,
@@ -102,7 +104,7 @@ void demo() {
     c_reset(&env);
     c_render(&env);
     Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;
     int steer_delta = 2;
