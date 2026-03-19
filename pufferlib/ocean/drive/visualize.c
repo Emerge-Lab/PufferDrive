@@ -543,7 +543,8 @@ int main(int argc, char *argv[]) {
             }
         } else if (strcmp(argv[i], "--config") == 0) {
             // Already handled above; skip the value
-            if (i + 1 < argc) i++;
+            if (i + 1 < argc)
+                i++;
         }
     }
 
