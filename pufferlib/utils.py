@@ -315,9 +315,18 @@ def render_videos(
             cmd.extend(["--output-topdown", output_topdown_map])
             cmd.extend(["--output-agent", output_agent_map])
 
-            print(f"Running render: {' '.join(cmd[:6])}...")
+            print(f"Running render: {' '.join(cmd)}")
+            if config_path:
+                print(f"  config_path={config_path}, exists={os.path.exists(config_path)}")
+                if os.path.exists(config_path):
+                    import configparser as _cp
+                    _tmp = _cp.ConfigParser()
+                    _tmp.read(config_path)
+                    print(f"  INI episode_length={_tmp.get('env', 'episode_length', fallback='MISSING')}")
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1200, env=env_vars)
 
+            if result.stdout:
+                print(f"Render stdout: {result.stdout[-500:]}")
             vids_exist = os.path.exists(output_topdown_map) and os.path.exists(output_agent_map)
             print(f"Render exit code: {result.returncode}, vids_exist: {vids_exist}")
             if result.returncode != 0 and result.stderr:
