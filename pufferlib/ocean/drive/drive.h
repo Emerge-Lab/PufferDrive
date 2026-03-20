@@ -3407,7 +3407,7 @@ void c_step(Drive *env) {
     int originals_remaining = 0;
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
-        if (env->agents[agent_idx].respawn_count == 0) {
+        if (env->agents[agent_idx].respawn_count == 0 && !env->agents[agent_idx].stopped) {
             originals_remaining = 1;
             break;
         }
