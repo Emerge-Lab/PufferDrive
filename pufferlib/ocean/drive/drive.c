@@ -70,6 +70,15 @@ void demo() {
     //     .map_name = "resources/drive/map_town_02_carla.bin",
     // };
 
+    AgentSpawnSettings spawn_settings = {
+        .max_agents_in_sim = conf.max_agents_per_env,
+        .min_w = conf.spawn_width_min,
+        .max_w = conf.spawn_width_max,
+        .min_l = conf.spawn_length_min,
+        .max_l = conf.spawn_length_max,
+        .h = conf.spawn_height,
+    };
+
     Drive env = {
         .human_agent_idx = 0,
         .action_type = 0, // Demo doesn't support continuous action space
