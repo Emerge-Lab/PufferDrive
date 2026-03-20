@@ -689,10 +689,9 @@ class PuffeRL:
                 self.evaluator.sp_env.close()
                 self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
             if human_replay_eval or self_play_eval:
-                eval_logs = self.evaluator.collect_stats()
-
-            self.eval_stats.update(eval_logs)
-            del self.evaluator
+                eval_statistics = self.evaluator.collect_stats()
+                self.eval_stats.update(eval_statistics)
+                del self.evaluator
 
             # Show agent view with sensor noise
             sensor_noise_eval = self.epoch % 500 == 0
@@ -738,8 +737,6 @@ class PuffeRL:
 
         device = config["device"]
 
-        eval_logs = {}
-
         agent_steps = int(dist_sum(self.global_step, device))
         ent_coef = (
             0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
@@ -758,13 +755,11 @@ class PuffeRL:
             **{f"environment/{k}": v for k, v in self.stats.items()},
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
-            **eval_logs,
             "data/anchor_entropy": self.data.get("data/anchor_entropy", 0),
         }
 
         if self.eval_stats:
             logs.update(self.eval_stats)
-            self.eval_stats = {}
 
         if hasattr(self, "sampled_lambdas"):
             logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
@@ -1498,6 +1493,7 @@ def sweep(args=None, env_name=None):
     sweep = sweep_cls(args["sweep"])
     points_per_run = args["sweep"]["downsample"]
     target_key = f"{args['sweep']['metric']}"
+    last_n = 5  # Points to use
 
     for i in range(args["max_runs"]):
         seed = 42
@@ -1505,15 +1501,16 @@ def sweep(args=None, env_name=None):
         np.random.seed(seed)
         torch.manual_seed(seed)
         sweep.suggest(args)
+
         total_timesteps = args["train"]["total_timesteps"]
         all_logs = train(env_name, args=args)
         all_logs = [e for e in all_logs if target_key in e]
-        scores = downsample([log[target_key] for log in all_logs], points_per_run)
+        scores = downsample([log[target_key] for log in all_logs][-last_n:], points_per_run)
         costs = downsample([log["uptime"] for log in all_logs], points_per_run)
         timesteps = downsample([log["agent_steps"] for log in all_logs], points_per_run)
 
         if len(scores) > 0:
-            print(f"Run {i + 1} | {target_key} avg: {np.mean(scores):.4f} (n={len(scores)})")
+            print(f"Run {i + 1} | {target_key} avg: {np.mean(scores):.4f}")
         for score, cost, timestep in zip(scores, costs, timesteps):
             args["train"]["total_timesteps"] = timestep
             sweep.observe(args, score, cost)
