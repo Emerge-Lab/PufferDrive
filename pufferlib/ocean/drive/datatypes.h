@@ -267,6 +267,52 @@ struct TrafficControlElement {
     int *controlled_lanes;
 };
 
+void deep_copy_road_element(struct RoadMapElement *dest, struct RoadMapElement *src) {
+    dest->id = src->id;
+    dest->type = src->type;
+    dest->segment_length = src->segment_length;
+    dest->polyline_length = src->polyline_length;
+
+    // Geometry
+    if (src->segment_length > 0 && src->x && src->y && src->z) {
+        size_t n = sizeof(float) * (size_t)src->segment_length;
+        dest->x = (float *)malloc(n);
+        dest->y = (float *)malloc(n);
+        dest->z = (float *)malloc(n);
+        memcpy(dest->x, src->x, n);
+        memcpy(dest->y, src->y, n);
+        memcpy(dest->z, src->z, n);
+    } else {
+        dest->x = NULL;
+        dest->y = NULL;
+        dest->z = NULL;
+    }
+
+    // Entries
+    dest->num_entries = src->num_entries;
+    if (src->num_entries > 0 && src->entry_lanes) {
+        size_t n = sizeof(int) * (size_t)src->num_entries;
+        dest->entry_lanes = (int *)malloc(n);
+        memcpy(dest->entry_lanes, src->entry_lanes, n);
+    } else {
+        dest->entry_lanes = NULL;
+    }
+
+    // Exits
+    dest->num_exits = src->num_exits;
+    if (src->num_exits > 0 && src->exit_lanes) {
+        size_t n = sizeof(int) * (size_t)src->num_exits;
+        dest->exit_lanes = (int *)malloc(n);
+        memcpy(dest->exit_lanes, src->exit_lanes, n);
+    } else {
+        dest->exit_lanes = NULL;
+    }
+
+    dest->speed_limit = src->speed_limit;
+}
+
+// Cleanup methods
+
 void free_agent(struct Agent *agent) {
     free(agent->log_trajectory_x);
     free(agent->log_trajectory_y);

@@ -91,6 +91,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int turn_off_normalization = unpack(kwargs, "turn_off_normalization");
     float min_goal_distance = unpack(kwargs, "min_goal_distance");
     float max_goal_distance = unpack(kwargs, "max_goal_distance");
+    float observation_window_size = unpack(kwargs, "observation_window_size");
+    float polyline_reduction_threshold = unpack(kwargs, "polyline_reduction_threshold");
+    float polyline_max_segment_length = unpack(kwargs, "polyline_max_segment_length");
 
     float reward_bound_goal_radius_min = unpack(kwargs, "reward_bound_goal_radius_min");
     float reward_bound_goal_radius_max = unpack(kwargs, "reward_bound_goal_radius_max");
@@ -199,6 +202,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->reward_conditioning = reward_conditioning;
         env->min_goal_distance = min_goal_distance;
         env->max_goal_distance = max_goal_distance;
+        env->observation_window_size = observation_window_size;
+        env->polyline_reduction_threshold = polyline_reduction_threshold;
+        env->polyline_max_segment_length = polyline_max_segment_length;
         env->min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt;
         // reward randomization bounds
         env->reward_bounds[REWARD_COEF_GOAL_RADIUS] =
@@ -341,6 +347,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->min_goal_speed = (float)unpack(kwargs, "min_goal_speed");
     env->max_goal_speed = (float)unpack(kwargs, "max_goal_speed");
     env->min_avg_speed_to_consider_goal_attempt = (float)unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");
+    env->observation_window_size = (float)unpack(kwargs, "observation_window_size");
+    env->polyline_reduction_threshold = (float)unpack(kwargs, "polyline_reduction_threshold");
+    env->polyline_max_segment_length = (float)unpack(kwargs, "polyline_max_segment_length");
 
     // reward randomization bounds
     env->reward_bounds[REWARD_COEF_GOAL_RADIUS] = (RewardBound){(float)unpack(kwargs, "reward_bound_goal_radius_min"),
@@ -423,6 +432,8 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
+    assign_to_dict(dict, "max_observation_distance", log->max_observation_distance);
+    assign_to_dict(dict, "observation_coverage", log->observation_coverage);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }

@@ -126,10 +126,11 @@ class PuffeRL:
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
         self.render = config["render"]
-        self.render_async = config["render_async"] and self.render  # Only supported if rendering is enabled
+        self.render_async = config["render_async"]
         self.render_interval = config["render_interval"]
 
-        if self.render:
+        safe_eval_renders = config.get("safe_eval", {}).get("enabled", False)
+        if self.render or safe_eval_renders:
             ensure_drive_binary()
 
         if self.render_async:
@@ -570,49 +571,14 @@ class PuffeRL:
                         bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
                         shutil.copy2(bin_path, bin_path_epoch)
 
-                        env_cfg = getattr(self.vecenv, "driver_env", None)
-                        wandb_log = True if hasattr(self.logger, "wandb") and self.logger.wandb else False
-                        wandb_run = self.logger.wandb if hasattr(self.logger, "wandb") else None
-                        if self.render_async:
-                            # Clean up finished processes
-                            self.render_processes = [p for p in self.render_processes if p.is_alive()]
-
-                            # Cap the number of processes to num_workers
-                            max_processes = self.config.get("num_workers", 1)
-                            if len(self.render_processes) >= max_processes:
-                                print("Waiting for render processes to finish...")
-                            while len(self.render_processes) >= max_processes:
-                                time.sleep(1)
-                                self.render_processes = [p for p in self.render_processes if p.is_alive()]
-
-                            render_proc = multiprocessing.Process(
-                                target=pufferlib.utils.render_videos,
-                                args=(
-                                    self.config,
-                                    env_cfg,
-                                    self.logger.run_id,
-                                    wandb_log,
-                                    self.epoch,
-                                    self.global_step,
-                                    bin_path_epoch,
-                                    self.render_async,
-                                    self.render_queue,
-                                ),
-                            )
-                            render_proc.start()
-                            self.render_processes.append(render_proc)
-                        else:
-                            pufferlib.utils.render_videos(
-                                self.config,
-                                env_cfg,
-                                self.logger.run_id,
-                                wandb_log,
-                                self.epoch,
-                                self.global_step,
-                                bin_path_epoch,
-                                self.render_async,
-                                wandb_run=wandb_run,
-                            )
+                        driver_env = getattr(self.vecenv, "driver_env", None)
+                        self._render_videos(
+                            bin_path=bin_path_epoch,
+                            num_maps=getattr(driver_env, "num_maps", None),
+                            map_dir=getattr(driver_env, "map_dir", None),
+                            wandb_prefix="render",
+                            cleanup_files=[bin_path_epoch, bin_path],
+                        )
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
@@ -627,34 +593,191 @@ class PuffeRL:
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
 
+        safe_eval_config = self.config.get("safe_eval", {})
+        safe_eval_enabled = safe_eval_config.get("enabled", False)
+        safe_eval_interval = int(safe_eval_config.get("interval", self.render_interval))
+        is_main = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+        if (
+            is_main
+            and safe_eval_enabled
+            and safe_eval_interval > 0
+            and (self.epoch % safe_eval_interval == 0 or done_training)
+        ):
+            self._run_safe_eval()
+
+    def _render_videos(
+        self,
+        bin_path,
+        num_maps=None,
+        map_dir=None,
+        wandb_prefix="render",
+        config_path=None,
+        cleanup_files=None,
+    ):
+        """Render videos, either async (background process) or sync (blocking)."""
+        wandb_log = hasattr(self.logger, "wandb") and self.logger.wandb is not None
+        render_kwargs = dict(
+            config=self.config,
+            run_id=self.logger.run_id,
+            num_maps=num_maps,
+            map_dir=map_dir,
+            wandb_log=wandb_log,
+            epoch=self.epoch,
+            global_step=self.global_step,
+            bin_path=bin_path,
+            config_path=config_path,
+            wandb_prefix=wandb_prefix,
+        )
+
+        if self.render_async:
+            self._reap_render_processes()
+            max_processes = 3
+            if len(self.render_processes) >= max_processes:
+                print(f"Waiting for render processes to finish ({len(self.render_processes)}/{max_processes})...")
+            while len(self.render_processes) >= max_processes:
+                time.sleep(1)
+                self._reap_render_processes()
+
+            render_proc = multiprocessing.Process(
+                target=pufferlib.utils.render_videos_and_cleanup,
+                kwargs={
+                    **render_kwargs,
+                    "cleanup_files": cleanup_files or [],
+                    "render_async": True,
+                    "render_queue": self.render_queue,
+                },
+                daemon=True,
+            )
+            render_proc.start()
+            self.render_processes.append(render_proc)
+        else:
+            pufferlib.utils.render_videos(
+                **render_kwargs,
+                render_async=False,
+                wandb_run=self.logger.wandb if wandb_log else None,
+            )
+            for f in cleanup_files or []:
+                if os.path.exists(f):
+                    os.remove(f)
+
+    def _run_safe_eval(self):
+        """Run safe eval in-process using SafeEvaluator, then render videos."""
+        import copy
+        import traceback
+
+        vecenv = None
+        bin_path = None
+        safe_ini_path = None
+        render_handed_off = False
+        try:
+            from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
+
+            self.msg = "Running safe eval..."
+            env_name = self.config["env"]
+            safe_eval_config = self.config.get("safe_eval", {})
+            evaluator = SafeEvaluator(env_name, safe_eval_config, device=self.config["device"], logger=self.logger)
+            eval_config = evaluator._build_eval_env_config()
+
+            vecenv = load_env(env_name, eval_config)
+            policy = load_policy(eval_config, vecenv, env_name)
+
+            # Copy weights from in-memory policy (no checkpoint dependency)
+            state_dict = copy.deepcopy(self.uncompiled_policy.state_dict())
+            # Strip DDP "module." prefix if present
+            state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+            policy.load_state_dict(state_dict)
+
+            metrics = evaluator.evaluate(vecenv, policy)
+            evaluator.log_stats(global_step=self.global_step)
+
+            self.msg = f"Safe eval: {len(metrics)} metrics logged"
+
+            self.msg = "Spawning safe eval render..."
+            model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+            bin_path = f"{model_dir}_safe_eval_epoch_{self.epoch:06d}.bin"
+
+            export(
+                args={"env_name": env_name, "load_model_path": "unused", **self.config},
+                env_name=env_name,
+                vecenv=self.vecenv,
+                policy=self.uncompiled_policy,
+                path=bin_path,
+                silent=True,
+            )
+
+            safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
+
+            self._render_videos(
+                bin_path=bin_path,
+                num_maps=safe_eval_config.get("num_maps"),
+                map_dir=safe_eval_config.get("map_dir"),
+                wandb_prefix="eval",
+                config_path=safe_ini_path,
+                cleanup_files=[bin_path, safe_ini_path],
+            )
+            render_handed_off = True
+            self.msg = f"Safe eval complete: {len(metrics)} metrics logged"
+
+        except Exception as e:
+            self.msg = f"Safe eval failed: {e}"
+            traceback.print_exc(file=sys.stderr)
+        finally:
+            if vecenv is not None:
+                try:
+                    vecenv.close()
+                except Exception:
+                    pass
+            if not render_handed_off:
+                for f in [bin_path, safe_ini_path]:
+                    if f and os.path.exists(f):
+                        try:
+                            os.remove(f)
+                        except OSError:
+                            pass
+
+    def _reap_render_processes(self):
+        """Remove finished render processes from the tracking list."""
+        if not self.render_async:
+            return
+        alive = []
+        for p in self.render_processes:
+            if p.is_alive():
+                alive.append(p)
+            else:
+                p.join(timeout=1)
+        self.render_processes = alive
+
     def check_render_queue(self):
         """Check if any async render jobs finished and log them."""
-        if not self.render_async or not hasattr(self, "render_queue"):
+        if not self.render_async:
             return
+        self._reap_render_processes()
 
         try:
-            while not self.render_queue.empty():
-                result = self.render_queue.get_nowait()
+            while True:
+                try:
+                    result = self.render_queue.get_nowait()
+                except queue.Empty:
+                    break
+
                 step = result["step"]
                 videos = result["videos"]
+                prefix = result.get("prefix", "render")
 
-                # Log to wandb if available
                 if hasattr(self.logger, "wandb") and self.logger.wandb:
                     import wandb
 
                     payload = {}
                     if videos["output_topdown"]:
-                        payload["render/world_state"] = [wandb.Video(p, format="mp4") for p in videos["output_topdown"]]
+                        payload[f"{prefix}/world_state"] = [
+                            wandb.Video(p, format="mp4") for p in videos["output_topdown"]
+                        ]
                     if videos["output_agent"]:
-                        payload["render/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
+                        payload[f"{prefix}/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
 
                     if payload:
-                        # Custom step for render logs to prevent monotonic logic wandb errors
-                        payload["render_step"] = step
+                        payload["train_step"] = step
                         self.logger.wandb.log(payload)
-
-        except queue.Empty:
-            pass
         except Exception as e:
             print(f"Error reading render queue: {e}")
 
@@ -698,23 +821,21 @@ class PuffeRL:
         self.vecenv.close()
         self.utilization.stop()
 
-        if self.render_async:  # Ensure all render processes are properly terminated before closing the queue
-            if hasattr(self, "render_processes"):
-                for p in self.render_processes:
-                    try:
+        if self.render_async:
+            # Drain any remaining async render results before closing
+            self.check_render_queue()
+            for p in self.render_processes:
+                try:
+                    if p.is_alive():
+                        p.terminate()
+                        p.join(timeout=5)
                         if p.is_alive():
-                            p.terminate()
-                            p.join(timeout=5)
-                            if p.is_alive():
-                                p.kill()
-                    except Exception:
-                        # Best-effort cleanup; avoid letting close() crash on process errors
-                        print(f"Failed to terminate render process {p.pid}")
-                # Optionally clear the list to drop references to finished processes
-                self.render_processes = []
-            if hasattr(self, "render_queue"):
-                self.render_queue.close()
-                self.render_queue.join_thread()
+                            p.kill()
+                except Exception:
+                    print(f"Failed to terminate render process {p.pid}")
+            self.render_processes = []
+            self.render_queue.close()
+            self.render_queue.join_thread()
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
@@ -1170,7 +1291,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     else:
         logger = None
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    train_config = dict(
+        **args["train"],
+        env=env_name,
+        eval=args.get("eval", {}),
+        safe_eval=args.get("safe_eval", {}),
+    )
     if "vec" in args and "num_workers" in args["vec"]:
         train_config["num_workers"] = args["vec"]["num_workers"]
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
