@@ -70,6 +70,15 @@ void demo() {
     //     .map_name = "resources/drive/map_town_02_carla.bin",
     // };
 
+    AgentSpawnSettings spawn_settings = {
+        .max_agents_in_sim = conf.max_agents_per_env,
+        .min_w = conf.spawn_width_min,
+        .max_w = conf.spawn_width_max,
+        .min_l = conf.spawn_length_min,
+        .max_l = conf.spawn_length_max,
+        .h = conf.spawn_height,
+    };
+
     Drive env = {
         .human_agent_idx = 0,
         .action_type = 0, // Demo doesn't support continuous action space
@@ -89,17 +98,22 @@ void demo() {
         .termination_mode = conf.termination_mode,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
+        .observation_window_size = conf.observation_window_size,
+        .polyline_reduction_threshold = conf.polyline_reduction_threshold,
+        .polyline_max_segment_length = conf.polyline_max_segment_length,
         .init_steps = conf.init_steps,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
-        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .spawn_settings = spawn_settings,
+        .map_name = "resources/drive/binaries/carla_3D/map_001.bin",
+        .reward_conditioning = conf.reward_conditioning,
     };
     allocate(&env);
     if (env.active_agent_count == 0) {
         fprintf(stderr, "Error: No active agents found in map '%s' with init_mode=%d. Cannot run demo.\n", env.map_name,
                 conf.init_mode);
         free_allocated(&env);
-        return -1;
+        return;
     }
     c_reset(&env);
     c_render(&env);
@@ -176,7 +190,6 @@ void demo() {
     free_allocated(&env);
     free_drivenet(net);
     free(weights);
-    return 0;
 }
 
 void performance_test() {
