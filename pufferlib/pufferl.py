@@ -228,16 +228,9 @@ class PuffeRL:
         self.utilization = Utilization()
         self.profile = Profile()
         self.stats = defaultdict(list)
+        self.eval_stats = {}
         self.last_stats = defaultdict(list)
         self.losses = {}
-        self.sanity = {
-            "policy_actions": [],
-            "human_actions": [],
-            "human_log_prob_obs": [],
-            "human_entropy_obs": [],
-            "relative_entropy": [],
-            "human_obs_importance": [],
-        }
         self.data = {}
 
         # We only do this for the driver env to save memory
@@ -562,8 +555,6 @@ class PuffeRL:
                 with torch.no_grad():
                     # Policy actions and corresponding entropy at human observations
                     policy_actions, _, policy_entropy = pufferlib.pytorch.sample_logits(human_logits)
-                    self.sanity["policy_actions"].extend(policy_actions.flatten().tolist())
-                    self.sanity["human_actions"].extend(human_actions.flatten().tolist())
 
                     # Estimate how off-policy the human observations are relative to the on-policy samples.
                     # The assumption is that if the human observations are very off-policy,
@@ -574,11 +565,6 @@ class PuffeRL:
                     relative_entropy = human_entropy_obs.mean() - entropy.mean()
                     logratio_human_data = human_log_prob_obs - mb_logprobs[: human_log_prob_obs.shape[0], 0]
                     human_obs_importance = logratio_human_data.exp()
-
-                    self.sanity["human_log_prob_obs"].extend(human_log_prob_obs.flatten().tolist())
-                    self.sanity["human_entropy_obs"].extend(human_entropy_obs.flatten().tolist())
-                    self.sanity["relative_entropy"].append(relative_entropy.item())
-                    self.sanity["human_obs_importance"].append(human_obs_importance.mean().item())
 
                 # Average and clip
                 human_log_prob = torch.clamp(human_log_prob, -15, 0)
@@ -673,19 +659,8 @@ class PuffeRL:
         logs = None
         self.epoch += 1
         done_training = self.global_step >= config["total_timesteps"]
-        if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
-            logs = self.mean_and_log()
-            self.losses = losses
-            self.print_dashboard()
-            self.stats = defaultdict(list)
-            self.last_log_time = time.time()
-            self.last_log_step = self.global_step
-            profile.clear()
 
-        if self.epoch % config["checkpoint_interval"] == 0 or done_training:
-            self.save_checkpoint()
-            self.msg = f"Checkpoint saved at update {self.epoch}"
-
+        # Intermittent evaluations
         if self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training:
             human_replay_eval = self.config["eval"]["human_replay_eval"]
             self_play_eval = self.config["eval"]["self_play_eval"]
@@ -714,9 +689,13 @@ class PuffeRL:
                 self.evaluator.sp_env.close()
                 self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
             if human_replay_eval or self_play_eval:
-                self.evaluator.log_stats()
+                eval_logs = self.evaluator.collect_stats()
+
+            self.eval_stats.update(eval_logs)
+            del self.evaluator
+
             # Show agent view with sensor noise
-            sensor_noise_eval = self.epoch % 300 == 0
+            sensor_noise_eval = self.epoch % 500 == 0
             if sensor_noise_eval:
                 self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
                 try:
@@ -729,22 +708,19 @@ class PuffeRL:
                     print(f"Sensor noise render failed (non-fatal): {e}")
                 self.evaluator.hr_env.close()
                 self.evaluator.log_videos(eval_mode="sensor_noise", epoch=self.epoch)
-            # if human_replay_eval:
-            #     # # Lambda conditioning sweep
-            #     # self.evaluator.run_lambda_sweep(
-            #     #     self.uncompiled_policy,
-            #     #     load_env_fn_from_config=lambda cfg: load_env("puffer_drive", cfg),
-            #     # )
-            #     # self.evaluator.log_lambda_sweep(epoch=self.epoch)
 
-            #     # Reward conditioning
-            #     self.evaluator.run_collision_reward_sweep(
-            #         self.uncompiled_policy,
-            #         load_env_fn_from_config=lambda cfg: load_env("puffer_drive", cfg),
-            #     )
-            #     self.evaluator.log_collision_reward_sweep(epoch=self.epoch)
+        if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
+            logs = self.mean_and_log()
+            self.losses = losses
+            self.print_dashboard()
+            self.stats = defaultdict(list)
+            self.last_log_time = time.time()
+            self.last_log_step = self.global_step
+            profile.clear()
 
-            del self.evaluator
+        if self.epoch % config["checkpoint_interval"] == 0 or done_training:
+            self.save_checkpoint()
+            self.msg = f"Checkpoint saved at update {self.epoch}"
 
         if self.config["eval"]["wosac_realism_eval"]:
             pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
@@ -763,16 +739,6 @@ class PuffeRL:
         device = config["device"]
 
         eval_logs = {}
-
-        policy_actions = self.sanity["policy_actions"]
-        human_actions = self.sanity["human_actions"]
-        if policy_actions and human_actions:
-            accuracy = (np.array(policy_actions) == np.array(human_actions)).mean() * 100
-            eval_logs["eval/action_accuracy"] = accuracy
-
-        if self.sanity["relative_entropy"]:
-            eval_logs["eval/relative_entropy"] = np.mean(self.sanity["relative_entropy"])
-            eval_logs["eval/human_obs_importance"] = np.mean(self.sanity["human_obs_importance"])
 
         agent_steps = int(dist_sum(self.global_step, device))
         ent_coef = (
@@ -795,6 +761,11 @@ class PuffeRL:
             **eval_logs,
             "data/anchor_entropy": self.data.get("data/anchor_entropy", 0),
         }
+
+        if self.eval_stats:
+            logs.update(self.eval_stats)
+            self.eval_stats = {}
+
         if hasattr(self, "sampled_lambdas"):
             logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
             logs["data/lambda_std"] = float(self.sampled_lambdas.std())
@@ -820,15 +791,6 @@ class PuffeRL:
                 return None
 
         self.logger.log(logs, agent_steps)
-
-        self.sanity = {
-            "policy_actions": [],
-            "human_actions": [],
-            "human_log_prob_obs": [],
-            "human_entropy_obs": [],
-            "relative_entropy": [],
-            "human_obs_importance": [],
-        }
         return logs
 
     def close(self):
@@ -1444,7 +1406,7 @@ def verify(env_name, args=None, vecenv=None):
     args["env"]["termination_mode"] = 0
 
     # Determine verification mode: "bc_policy", "expert_replay", or "inferred_expert_actions"
-    verify_mode = "inferred_expert_actions" #args.get("verify_mode", "inferred_expert_actions")
+    verify_mode = "inferred_expert_actions"  # args.get("verify_mode", "inferred_expert_actions")
 
     if verify_mode == "bc_policy":
         # BC policy controls all agents directly
@@ -1535,7 +1497,8 @@ def sweep(args=None, env_name=None):
 
     sweep = sweep_cls(args["sweep"])
     points_per_run = args["sweep"]["downsample"]
-    target_key = f"environment/{args['sweep']['metric']}"
+    target_key = f"{args['sweep']['metric']}"
+
     for i in range(args["max_runs"]):
         seed = 42
         random.seed(seed)
@@ -1548,6 +1511,9 @@ def sweep(args=None, env_name=None):
         scores = downsample([log[target_key] for log in all_logs], points_per_run)
         costs = downsample([log["uptime"] for log in all_logs], points_per_run)
         timesteps = downsample([log["agent_steps"] for log in all_logs], points_per_run)
+
+        if len(scores) > 0:
+            print(f"Run {i + 1} | {target_key} avg: {np.mean(scores):.4f} (n={len(scores)})")
         for score, cost, timestep in zip(scores, costs, timesteps):
             args["train"]["total_timesteps"] = timestep
             sweep.observe(args, score, cost)

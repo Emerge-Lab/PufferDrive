@@ -3353,7 +3353,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
     EndMode3D();
 
-    // Draw per-agent ADE labels projected to screen
+    // Draw per-agent ADE labels projected to screen for interactive verify mode
     if (has_inferred) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int idx = env->active_agent_indices[i];
@@ -3388,7 +3388,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     if (mode == 1) {
         float cam_x = 0.0f, cam_y = 0.0f;
         float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        if (env->sdc_track_index >= 0) {
+        if (env->sdc_track_index >= 0 && !env->entities[env->sdc_track_index].removed) {
             cam_x = env->entities[env->sdc_track_index].x;
             cam_y = env->entities[env->sdc_track_index].y;
             fovy = 150.0f;
