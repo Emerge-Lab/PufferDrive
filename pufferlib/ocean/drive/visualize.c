@@ -447,9 +447,17 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 }
 
 int main(int argc, char *argv[]) {
+    // Scan for --config first so INI parsing uses the right file
+    const char *ini_file = "pufferlib/config/ocean/drive.ini";
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+            ini_file = argv[i + 1];
+            break;
+        }
+    }
+
     // Parse configuration from INI file
     env_init_config conf = {0}; // Initialize to zero
-    const char *ini_file = "pufferlib/config/ocean/drive.ini";
     if (ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         return -1;
@@ -533,6 +541,10 @@ int main(int argc, char *argv[]) {
                 num_maps = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--config") == 0) {
+            // Already handled above; skip the value
+            if (i + 1 < argc)
+                i++;
         }
     }
 
