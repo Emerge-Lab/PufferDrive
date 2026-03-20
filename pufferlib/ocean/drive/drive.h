@@ -2609,6 +2609,7 @@ void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs
 
     int ego_idx = env->active_agent_indices[agent_idx];
     Agent *ego_entity = &env->agents[ego_idx];
+    int ego_id = ego_entity->id;
 
     // Ego stats
     float cos_heading = cosf(ego_entity->sim_heading);
@@ -2617,12 +2618,13 @@ void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs
     // Get all agents in sim within vision range till partner_obs array is filled
     float obs_radius = (env->partner_obs_radius > 0.0f) ? env->partner_obs_radius : 50.0f;
     int cars_seen = 0;
-    for (int i = 0; i < env->num_created_agents; i++) {
-        int partner_idx = env->active_agent_indices[i];
-        // You don't see yourself as partner
-        if (partner_idx == ego_idx)
-            continue;
-        Agent *partner = &env->agents[partner_idx];
+    // Iterate over all created agents
+    for (int i = 0; i < env->num_created_agents && cars_seen < MAX_PARTNER_OBSERVATIONS; i++) {
+        Agent *partner = &env->agents[i];
+        if (ego_id == partner->id) {
+            continue; // Skip self
+        }
+
         float distance = relative_distance_3d(ego_entity->sim_x, ego_entity->sim_y, ego_entity->sim_z, partner->sim_x,
                                               partner->sim_y, partner->sim_z);
 
