@@ -326,7 +326,9 @@ class PuffeRL:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
-                self.terminals[batch_rows, l] = done_mask.float()
+                # Merge stopped into terminals so GAE treats stopped steps as
+                # episode boundaries and does not bootstrap through them.
+                self.terminals[batch_rows, l] = (done_mask.float() + stopped.float()).clamp(max=1.0)
                 self.truncations[batch_rows, l] = t.float()
                 self.stopped[batch_rows, l] = stopped
                 self.values[batch_rows, l] = value.flatten()
@@ -409,36 +411,50 @@ class PuffeRL:
             mb_logprobs = self.logprobs[idx]
             mb_rewards = self.rewards[idx]
             mb_terminals = self.terminals[idx]
-            mb_stopped = self.stopped[idx].bool()
             mb_truncations = self.truncations[idx]
             mb_ratio = self.ratio[idx]
             mb_values = self.values[idx]
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
 
+            # Filter out stopped samples before the forward pass so we
+            # never compute gradients for steps where the car is stopped.
+            active_mask = ~self.stopped[idx].bool()
+            flat_active = active_mask.reshape(-1)
+
             profile("train_forward", epoch)
+            obs_shape = self.vecenv.single_observation_space.shape
             if not config["use_rnn"]:
-                mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
+                mb_obs = mb_obs.reshape(-1, *obs_shape)[flat_active]
+
+            mb_actions_flat = mb_actions.reshape(-1, *mb_actions.shape[2:])[flat_active]
 
             state = dict(
-                action=mb_actions,
+                action=mb_actions_flat,
                 lstm_h=None,
                 lstm_c=None,
             )
 
             logits, newvalue = self.policy(mb_obs, state)
-            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions_flat)
 
             profile("train_misc", epoch)
-            newlogprob = newlogprob.reshape(mb_logprobs.shape)
-            logratio = newlogprob - mb_logprobs
+            # Scatter active results back to full shape for ratio bookkeeping
+            full_logprobs = mb_logprobs.clone()
+            full_newlogprob = torch.zeros_like(mb_logprobs)
+            full_newlogprob[active_mask] = newlogprob
+            logratio = full_newlogprob - mb_logprobs
             ratio = logratio.exp()
+            # For stopped samples, ratio stays 1 (log-ratio = 0 → exp = 1)
             self.ratio[idx] = ratio.detach()
 
             with torch.no_grad():
-                old_approx_kl = (-logratio).mean()
-                approx_kl = ((ratio - 1) - logratio).mean()
-                clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
+                # Compute KL/clipfrac only on active samples
+                active_logratio = logratio[active_mask]
+                active_ratio = ratio[active_mask]
+                old_approx_kl = (-active_logratio).mean()
+                approx_kl = ((active_ratio - 1) - active_logratio).mean()
+                clipfrac = ((active_ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
             adv = advantages[idx]
             adv = compute_puff_advantage(
@@ -455,20 +471,25 @@ class PuffeRL:
             adv = mb_advantages
             adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
-            # Losses
-            pg_loss1 = -adv * ratio
-            pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-            pg_loss = torch.max(pg_loss1, pg_loss2)
-            pg_loss[mb_stopped] = 0.0
-            pg_loss = pg_loss.mean()
+            # Losses — only on active (non-stopped) samples
+            adv_active = adv[active_mask]
+            ratio_active = ratio[active_mask]
+            pg_loss1 = -adv_active * ratio_active
+            pg_loss2 = -adv_active * torch.clamp(ratio_active, 1 - clip_coef, 1 + clip_coef)
+            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-            newvalue = newvalue.view(mb_returns.shape)
-            v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
-            v_loss_unclipped = (newvalue - mb_returns) ** 2
-            v_loss_clipped = (v_clipped - mb_returns) ** 2
-            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
-            v_loss[mb_stopped] = 0.0
-            v_loss = v_loss.mean()
+            # Scatter newvalue back to full shape for value bookkeeping
+            full_newvalue = mb_values.clone()
+            full_newvalue[active_mask] = newvalue.squeeze(-1)
+            newvalue_full = full_newvalue
+
+            v_active = newvalue.view(-1)
+            mb_returns_active = mb_returns[active_mask]
+            mb_values_active = mb_values[active_mask]
+            v_clipped = mb_values_active + torch.clamp(v_active - mb_values_active, -vf_clip, vf_clip)
+            v_loss_unclipped = (v_active - mb_returns_active) ** 2
+            v_loss_clipped = (v_clipped - mb_returns_active) ** 2
+            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
             entropy_loss = entropy.mean()
 
@@ -476,7 +497,7 @@ class PuffeRL:
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
-            self.values[idx] = newvalue.detach().float()
+            self.values[idx] = newvalue_full.detach().float()
 
             # Logging
             profile("train_misc", epoch)
