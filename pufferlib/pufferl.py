@@ -418,30 +418,40 @@ class PuffeRL:
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
 
-            # Filter out stopped samples before the forward pass so we
-            # never compute gradients for steps where the car is stopped.
+            # Filter out stopped samples so we never compute gradients
+            # for steps where the car is stopped.  Stopped is absorbing —
+            # once set it stays set until world reset — so stopped samples
+            # are always a contiguous suffix of each segment.
             active_mask = ~self.stopped[idx].bool()
             flat_active = active_mask.reshape(-1)
 
             profile("train_forward", epoch)
             obs_shape = self.vecenv.single_observation_space.shape
-            if not config["use_rnn"]:
-                mb_obs = mb_obs.reshape(-1, *obs_shape)[flat_active]
-
-            mb_actions_flat = mb_actions.reshape(-1, *mb_actions.shape[2:])[flat_active]
+            if config["use_rnn"]:
+                # RNN needs full sequences; we filter losses afterwards.
+                mb_obs_fwd = mb_obs
+                mb_actions_fwd = mb_actions
+            else:
+                mb_obs_fwd = mb_obs.reshape(-1, *obs_shape)[flat_active]
+                mb_actions_fwd = mb_actions.reshape(-1, *mb_actions.shape[2:])[flat_active]
 
             state = dict(
-                action=mb_actions_flat,
+                action=mb_actions_fwd,
                 lstm_h=None,
                 lstm_c=None,
             )
 
-            logits, newvalue = self.policy(mb_obs, state)
-            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions_flat)
+            logits, newvalue = self.policy(mb_obs_fwd, state)
+            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions_fwd)
 
             profile("train_misc", epoch)
+            if config["use_rnn"]:
+                # RNN ran on everything; select only active outputs for losses.
+                newlogprob = newlogprob.reshape(mb_logprobs.shape)[active_mask]
+                newvalue = newvalue.reshape(mb_values.shape)[active_mask]
+                entropy = entropy.reshape(mb_logprobs.shape)[active_mask]
+
             # Scatter active results back to full shape for ratio bookkeeping
-            full_logprobs = mb_logprobs.clone()
             full_newlogprob = torch.zeros_like(mb_logprobs)
             full_newlogprob[active_mask] = newlogprob
             logratio = full_newlogprob - mb_logprobs
