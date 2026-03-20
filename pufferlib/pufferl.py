@@ -419,9 +419,10 @@ class PuffeRL:
             mb_advantages = advantages[idx]
 
             # Filter out stopped samples so we never compute gradients
-            # for steps where the car is stopped.  Stopped is absorbing —
-            # once set it stays set until world reset — so stopped samples
-            # are always a contiguous suffix of each segment.
+            # for steps where the car is stopped.  Stopped is absorbing
+            # within an episode (once set it stays until world reset).
+            # A segment can span episodes, so stopped steps may be
+            # non-contiguous (active-stopped-reset-active).
             active_mask = ~self.stopped[idx].bool()
             flat_active = active_mask.reshape(-1)
 
@@ -451,12 +452,14 @@ class PuffeRL:
                 newvalue = newvalue.reshape(mb_values.shape)[active_mask]
                 entropy = entropy.reshape(mb_logprobs.shape)[active_mask]
 
-            # Scatter active results back to full shape for ratio bookkeeping
-            full_newlogprob = torch.zeros_like(mb_logprobs)
+            # Scatter active results back to full shape for ratio bookkeeping.
+            # Stopped samples get logprob copied from the rollout so their
+            # logratio is 0 and ratio is 1 (importance weight = 1, though it
+            # doesn't matter since terminals cut GAE propagation).
+            full_newlogprob = mb_logprobs.clone()
             full_newlogprob[active_mask] = newlogprob
             logratio = full_newlogprob - mb_logprobs
             ratio = logratio.exp()
-            # For stopped samples, ratio stays 1 (log-ratio = 0 → exp = 1)
             self.ratio[idx] = ratio.detach()
 
             with torch.no_grad():
