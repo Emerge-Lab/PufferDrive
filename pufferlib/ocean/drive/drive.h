@@ -2853,11 +2853,13 @@ void compute_road_obs_for_position(RoadMapElement *road_elements, int num_roads,
     float sin_heading = sinf(agent_heading);
     memset(road_obs, 0, MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES * sizeof(float));
 
-    int grid_col = (int)((agent_x - grid_map->top_left_x) / GRID_CELL_SIZE);
-    int grid_row = (int)((grid_map->top_left_y - agent_y) / GRID_CELL_SIZE);
-    if (grid_col < 0 || grid_col >= grid_map->grid_cols || grid_row < 0 || grid_row >= grid_map->grid_rows)
+    float relativeX = agent_x - grid_map->top_left_x;
+    float relativeY = agent_y - grid_map->bottom_right_y;
+    int gridX = (int)(relativeX / GRID_CELL_SIZE);
+    int gridY = (int)(relativeY / GRID_CELL_SIZE);
+    if (gridX < 0 || gridX >= grid_map->grid_cols || gridY < 0 || gridY >= grid_map->grid_rows)
         return;
-    int grid_idx = grid_row * grid_map->grid_cols + grid_col;
+    int grid_idx = gridY * grid_map->grid_cols + gridX;
 
     int cached_count = grid_map->neighbor_cache_count[grid_idx];
     GridMapEntity *cached = grid_map->neighbor_cache_entities[grid_idx];

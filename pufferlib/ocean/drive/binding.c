@@ -89,6 +89,10 @@ static PyObject *reconstruct_road_obs_py(PyObject *self, PyObject *args) {
             compute_road_obs_for_position(shared->road_elements, shared->num_roads, shared->grid_map, agent_x, agent_y,
                                           agent_z, agent_heading, road_out);
         } else {
+            fprintf(stderr,
+                    "WARNING: reconstruct_road_obs: map_id=%d not in cache (cache_size=%d, cache=%p). "
+                    "Road obs will be zeros.\n",
+                    map_id, g_map_cache_size, (void *)g_map_cache);
             memset(road_out, 0, full_road_dim * sizeof(float));
         }
     }
