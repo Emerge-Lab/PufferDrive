@@ -184,7 +184,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         release_map_cache_internal();
     }
 
-    // Build reward_bounds array for create_shared_map_data
+    // Build reward_bounds array for per-env initialization
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     reward_bounds[REWARD_COEF_GOAL_RADIUS] = (RewardBound){reward_bound_goal_radius_min, reward_bound_goal_radius_max};
     reward_bounds[REWARD_COEF_COLLISION] = (RewardBound){reward_bound_collision_min, reward_bound_collision_max};
@@ -254,7 +254,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 g_map_cache[map_id] = create_shared_map_data(
                     map_file_path, init_mode, control_mode, init_steps, goal_behavior, reward_randomization,
                     turn_off_normalization, reward_conditioning, min_goal_distance, max_goal_distance,
-                    min_avg_speed_to_consider_goal_attempt, reward_bounds);
+                    min_avg_speed_to_consider_goal_attempt);
             }
         }
         PyList_SetItem(agent_offsets, env_count,
@@ -282,14 +282,16 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         if (g_map_cache[map_id] == NULL) {
             PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
             const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
-            g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps,
-                                                         goal_behavior, reward_randomization, turn_off_normalization,
-                                                         reward_conditioning, min_goal_distance, max_goal_distance,
-                                                         min_avg_speed_to_consider_goal_attempt, reward_bounds);
+            g_map_cache[map_id] =
+                create_shared_map_data(map_file_path, init_mode, control_mode, init_steps, goal_behavior,
+                                       reward_randomization, turn_off_normalization, reward_conditioning,
+                                       min_goal_distance, max_goal_distance, min_avg_speed_to_consider_goal_attempt);
         }
         SharedMapData *shared = g_map_cache[map_id];
 
-        // Count active agents using a temporary Drive (doesn't allocate map data)
+        // Count active agents using a temporary Drive (doesn't allocate map data).
+        // Must reset agent flags afterward since set_active_agents mutates them
+        // and the agents are shared templates.
         Drive temp_env = {0};
         temp_env.init_mode = init_mode;
         temp_env.control_mode = control_mode;
@@ -305,6 +307,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         temp_env.tracks_to_predict_indices = shared->tracks_to_predict_indices;
         set_active_agents(&temp_env);
         int active_count = temp_env.active_agent_count;
+
+        // Reset flags set by set_active_agents on shared template agents
+        for (int j = 0; j < shared->num_objects; j++) {
+            shared->template_agents[j].active_agent = 0;
+        }
 
         // Free the index arrays that set_active_agents allocated
         free(temp_env.active_agent_indices);

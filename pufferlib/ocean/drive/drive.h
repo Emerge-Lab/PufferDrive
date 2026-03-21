@@ -2404,7 +2404,7 @@ void free_shared_map_data(SharedMapData *shared) {
 SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, int control_mode, int init_steps,
                                       int goal_behavior, int reward_randomization, int turn_off_normalization,
                                       int reward_conditioning, float min_goal_distance, float max_goal_distance,
-                                      float min_avg_speed_to_consider_goal_attempt, RewardBound *reward_bounds) {
+                                      float min_avg_speed_to_consider_goal_attempt) {
     SharedMapData *shared = (SharedMapData *)calloc(1, sizeof(SharedMapData));
 
     // Create a temporary Drive to use existing loading functions
@@ -2419,10 +2419,10 @@ SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, 
     temp.min_goal_distance = min_goal_distance;
     temp.max_goal_distance = max_goal_distance;
     temp.min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt;
-    memcpy(temp.reward_bounds, reward_bounds, NUM_REWARD_COEFS * sizeof(RewardBound));
 
-    // Load map binary (allocates agents, road_elements, etc.)
+    // Load map binary and filter invalid road elements
     load_map_binary(map_file_path, &temp);
+    filter_road_elements(&temp);
 
     // Transfer ownership to shared struct
     shared->template_agents = temp.agents;
@@ -3066,36 +3066,22 @@ void compute_observations(Drive *env) {
 static bool randomize_agent_position(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
-    // Pre-compute drivable lanes
-    int drivable_lanes[env->num_roads];
-    float lane_lengths[env->num_roads];
-    int num_drivable = 0;
-    float total_lane_length = 0.0f;
-    for (int i = 0; i < env->num_roads; i++) {
-        if (env->road_elements[i].type == ROAD_LANE && env->road_elements[i].polyline_length > 0.0f) {
-            drivable_lanes[num_drivable] = i;
-            lane_lengths[num_drivable] = env->road_elements[i].polyline_length;
-            total_lane_length += lane_lengths[num_drivable];
-            num_drivable++;
-        }
-    }
-
-    if (num_drivable == 0)
+    if (env->num_drivable == 0)
         return false;
 
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
-        // Length-weighted lane selection
-        float r = ((float)rand() / (float)RAND_MAX) * total_lane_length;
+        // Length-weighted lane selection using pre-computed drivable lane data
+        float r = ((float)rand() / (float)RAND_MAX) * env->total_drivable_lane_length;
         float cumulative = 0.0f;
-        int selected = num_drivable - 1;
-        for (int k = 0; k < num_drivable; k++) {
-            cumulative += lane_lengths[k];
+        int selected = env->num_drivable - 1;
+        for (int k = 0; k < env->num_drivable; k++) {
+            cumulative += env->drivable_lane_lengths[k];
             if (r < cumulative) {
                 selected = k;
                 break;
             }
         }
-        RoadMapElement *lane = &env->road_elements[drivable_lanes[selected]];
+        RoadMapElement *lane = &env->road_elements[env->drivable_lane_indices[selected]];
 
         float spawn_x, spawn_y, spawn_z, spawn_heading;
         get_random_point_on_lane(lane, &spawn_x, &spawn_y, &spawn_z, &spawn_heading);
@@ -3424,10 +3410,14 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 void c_reset(Drive *env) {
     env->timestep = env->init_steps;
     if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
-        // Randomize all agent positions on reset
+        // Randomize all agent positions and zero velocities on reset
         for (int x = 0; x < env->active_agent_count; x++) {
             int agent_idx = env->active_agent_indices[x];
             randomize_agent_position(env, agent_idx);
+            env->agents[agent_idx].sim_vx = 0.0f;
+            env->agents[agent_idx].sim_vy = 0.0f;
+            env->agents[agent_idx].sim_speed = 0.0f;
+            env->agents[agent_idx].sim_speed_signed = 0.0f;
         }
         // Sample new goals relative to new positions
         for (int x = 0; x < env->active_agent_count; x++) {

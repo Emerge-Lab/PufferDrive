@@ -1,5 +1,6 @@
 # NYU Greene cluster compute configuration
 account: torch_pr_355_general  # Set your account/allocation
+partition: l40s_public,h200_public,a100_tandon,h100_tandon,h200_tandon
 nodes: 1
 gpus: 1
 cpus: 16
