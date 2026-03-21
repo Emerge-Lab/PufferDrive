@@ -2843,7 +2843,8 @@ static bool randomize_agent_position(Drive *env, int agent_idx) {
         }
     }
 
-    if (num_drivable == 0) return false;
+    if (num_drivable == 0)
+        return false;
 
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
         // Length-weighted lane selection
@@ -2866,14 +2867,15 @@ static bool randomize_agent_position(Drive *env, int agent_idx) {
         // Temporarily invalidate this agent so check_spawn_collision skips it
         float saved_x = agent->sim_x;
         agent->sim_x = INVALID_POSITION;
-        bool collision = check_spawn_collision(env, env->active_agent_count, spawn_x, spawn_y, spawn_z,
-                                              spawn_heading, agent->sim_length, agent->sim_width, agent->sim_height);
+        bool collision = check_spawn_collision(env, env->active_agent_count, spawn_x, spawn_y, spawn_z, spawn_heading,
+                                               agent->sim_length, agent->sim_width, agent->sim_height);
         agent->sim_x = saved_x;
-        if (collision) continue;
+        if (collision)
+            continue;
 
         // Check offroad
-        if (check_spawn_offroad(env, spawn_x, spawn_y, spawn_z, spawn_heading,
-                                agent->sim_length, agent->sim_width, agent->sim_height))
+        if (check_spawn_offroad(env, spawn_x, spawn_y, spawn_z, spawn_heading, agent->sim_length, agent->sim_width,
+                                agent->sim_height))
             continue;
 
         agent->sim_x = spawn_x;
