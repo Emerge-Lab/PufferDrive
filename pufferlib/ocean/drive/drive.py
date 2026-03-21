@@ -230,6 +230,8 @@ class Drive(pufferlib.PufferEnv):
                 reward_vehicle_collision=reward_vehicle_collision,
                 reward_offroad_collision=reward_offroad_collision,
                 reward_goal=reward_goal,
+                obs_partner_noise_pos=self.obs_partner_noise_pos,
+                obs_partner_noise_speed=self.obs_partner_noise_speed,
                 goal_radius=goal_radius,
                 goal_speed=goal_speed,
                 goal_behavior=self.goal_behavior,
@@ -329,6 +331,8 @@ class Drive(pufferlib.PufferEnv):
                 fix_lambdas=int(self.fix_lambdas),
                 lambda_value=self.lambda_value,
                 dynamics_model=self._dynamics_model_flag,
+                obs_partner_noise_pos=self.obs_partner_noise_pos,
+                obs_partner_noise_speed=self.obs_partner_noise_speed,
             )
             self.env_ids.append(env_id)
         self.c_envs = binding.vectorize(*self.env_ids)
@@ -1007,12 +1011,12 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
     while time.time() - start < timeout:
         atn = actions[tick % atn_cache]
         obs, rewards, terminals, truncated, info_list = env.step(atn)
-        print(obs[:, 0])
-        print(obs[:, 1])
-        print(obs[:, 2])
-        print(obs[:, 3])
+        # print(obs[:, 0])
+        # print(obs[:, 1])
+        # print(obs[:, 2])
+        # print(obs[:, 3])
         tick += 1
-        print(tick)
+        # print(tick)
 
         if tick > 4:
             break
@@ -1023,9 +1027,9 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 
 
 if __name__ == "__main__":
-    # test_performance()
+    test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/validation")
+    # process_all_maps(data_folder="data/processed/validation")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
