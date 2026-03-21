@@ -688,11 +688,6 @@ class PuffeRL:
                     print(f"Render failed (non-fatal): {e}")
                 self.evaluator.sp_env.close()
                 self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
-            if human_replay_eval or self_play_eval:
-                eval_statistics = self.evaluator.collect_stats()
-                self.eval_stats.update(eval_statistics)
-                del self.evaluator
-
             # Show agent view with sensor noise
             sensor_noise_eval = self.epoch % 500 == 0
             if sensor_noise_eval:
@@ -707,6 +702,11 @@ class PuffeRL:
                     print(f"Sensor noise render failed (non-fatal): {e}")
                 self.evaluator.hr_env.close()
                 self.evaluator.log_videos(eval_mode="sensor_noise", epoch=self.epoch)
+
+            if human_replay_eval or self_play_eval:
+                eval_statistics = self.evaluator.collect_stats()
+                self.eval_stats.update(eval_statistics)
+                del self.evaluator
 
         if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
             logs = self.mean_and_log()

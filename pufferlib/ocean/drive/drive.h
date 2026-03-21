@@ -139,6 +139,7 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define DELTA_MAX_DY 2.0f
 #define DELTA_MAX_DYAW 3.14159265 / 4.0
 
+static int COLLECT_EXPERT_TELEPORT = 0;
 static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
 static float STEERING_VALUES[NUM_STEER_BINS];
 static float DELTA_DX_VALUES[NUM_DX_BINS];
@@ -2370,6 +2371,21 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 agent->inferred_traj_y[t] = agent->y;
             }
 
+            if (COLLECT_EXPERT_TELEPORT) {
+                int next = t + 1;
+                if (next < agent->array_size && agent->traj_valid && agent->traj_valid[next]) {
+                    agent->x = agent->traj_x[next];
+                    agent->y = agent->traj_y[next];
+                    agent->z = agent->traj_z[next];
+                    agent->heading = agent->traj_heading[next];
+                    agent->heading_x = cosf(agent->heading);
+                    agent->heading_y = sinf(agent->heading);
+                    agent->vx = agent->traj_vx[next];
+                    agent->vy = agent->traj_vy[next];
+                    agent->vz = agent->traj_vz[next];
+                }
+            }
+
             int disc_off = t * env->active_agent_count + i;
 
             bool valid;
@@ -2439,8 +2455,12 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
             }
         }
 
-        if (t < TRAJECTORY_LENGTH - 1) {
-            c_step(env);
+        if (COLLECT_EXPERT_TELEPORT) {
+            if (t < TRAJECTORY_LENGTH - 1)
+                compute_observations(env);
+        } else {
+            if (t < TRAJECTORY_LENGTH - 1)
+                c_step(env);
         }
     }
 
@@ -2468,7 +2488,12 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
         e->inferred_ade = (count > 0) ? total_error / count : -1.0f;
 
-        int unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD || count < 3 || is_static);
+        int unfit;
+        if (COLLECT_EXPERT_TELEPORT) {
+            unfit = (count < 3 || is_static);
+        } else {
+            unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD || count < 3 || is_static);
+        }
 
         if (unfit) {
             for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
