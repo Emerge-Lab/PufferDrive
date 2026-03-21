@@ -99,10 +99,18 @@ class PuffeRL:
             raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
 
         device = config["device"]
+        self.actions_trajectory_length = config.get("actions_trajectory_length", 80)
+        atn_traj_size = (  # TODO: please let's be precise with the semantics before checking this in
+            self.actions_trajectory_length,
+            2,  # 2 real numbers for accel and steering
+        )
+        assert len(obs_space.shape) == 1
+        self.obs_len = obs_space.shape[0]
+        obs_aug_shape = (obs_space.shape[0] + np.prod(atn_traj_size),)
         self.observations = torch.zeros(
             segments,
             horizon,
-            *obs_space.shape,
+            *obs_aug_shape,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
             pin_memory=device == "cuda" and config["cpu_offload"],
             device="cpu" if config["cpu_offload"] else device,
@@ -113,6 +121,12 @@ class PuffeRL:
             *atn_space.shape,
             device=device,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
+        )
+        self.prev_actions_traj = -torch.ones(
+            total_agents,
+            *atn_traj_size,
+            device=device,
+            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
         )
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
@@ -294,7 +308,9 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                logits, value = self.policy.forward_eval(o_device, state)
+                prev_traj = self.prev_actions_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1)
+                o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
+                logits, value = self.policy.forward_eval(o_device_aug, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 if config.get("clamp_reward", True):
                     r = torch.clamp(r, -1, 1)
@@ -310,9 +326,9 @@ class PuffeRL:
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
                 if config["cpu_offload"]:
-                    self.observations[batch_rows, l] = o
+                    self.observations[batch_rows, l] = o_device_aug.cpu()
                 else:
-                    self.observations[batch_rows, l] = o_device
+                    self.observations[batch_rows, l] = o_device_aug
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
@@ -1680,13 +1696,14 @@ def load_policy(args, vecenv, env_name=""):
     env_module = importlib.import_module(module_name)
 
     device = args["train"]["device"]
+    actions_trajectory_length = args["train"].get("actions_trajectory_length", 80)
     policy_cls = getattr(env_module.torch, args["policy_name"])
-    policy = policy_cls(vecenv.driver_env, **args["policy"])
+    policy = policy_cls(vecenv.driver_env, **args["policy"], actions_trajectory_length=actions_trajectory_length)
 
     rnn_name = args["rnn_name"]
     if rnn_name is not None:
         rnn_cls = getattr(env_module.torch, args["rnn_name"])
-        policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"])
+        policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"], actions_trajectory_length=actions_trajectory_length)
 
     policy = policy.to(device)
 

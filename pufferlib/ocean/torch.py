@@ -2,6 +2,8 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 
+import numpy as np
+
 import pufferlib
 import pufferlib.models
 
@@ -22,6 +24,7 @@ class Drive(nn.Module):
         self.max_road_objects = env.max_road_objects
         self.road_features = env.road_features
         self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
+        self.actions_trajectory_length = kwargs.get("actions_trajectory_length", 80)
         # Determine ego dimension from environment's feature layout
         self.ego_dim = env.ego_features
 
@@ -48,7 +51,7 @@ class Drive(nn.Module):
 
         self.shared_embedding = nn.Sequential(
             nn.GELU(),
-            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, hidden_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(4 * input_size, hidden_size)),
         )
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
 
@@ -57,7 +60,21 @@ class Drive(nn.Module):
         else:
             self.atn_dim = env.single_action_space.nvec.tolist()
 
-        self.actor = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, sum(self.atn_dim)), std=0.01)
+        self.past_action_tensor_shape = [self.actions_trajectory_length, 2]
+        self.output_action_tensor_shape = [self.actions_trajectory_length, sum(self.atn_dim)]
+
+        assert all(type(i) == int for i in self.past_action_tensor_shape)  # check that all entries are integers
+        assert all(type(i) == int for i in self.output_action_tensor_shape)  # check that all entries are integers
+
+        self.past_actions_encoder = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(np.prod(self.past_action_tensor_shape), input_size)),
+            nn.ReLU(),
+            pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
+        )
+
+        self.actor = pufferlib.pytorch.layer_init(
+            nn.Linear(hidden_size, np.prod(self.output_action_tensor_shape)), std=0.01
+        )
         self.value_fn = pufferlib.pytorch.layer_init(nn.Linear(hidden_size, 1), std=1)
 
     def forward(self, observations, state=None):
@@ -72,9 +89,16 @@ class Drive(nn.Module):
         ego_dim = self.ego_dim
         partner_dim = self.max_partner_objects * self.partner_features
         road_dim = self.max_road_objects * self.road_features
+        past_actions_dim = np.prod(self.past_action_tensor_shape)
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
+        # past_actions_traj = observations[
+        #     :, ego_dim + partner_dim + road_dim : ego_dim + partner_dim + road_dim + past_actions_dim
+        # ]
+        past_actions_traj = -torch.ones(
+            (road_obs.shape[0], np.prod(self.past_action_tensor_shape)), device=road_obs.device
+        )
 
         partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
 
@@ -86,8 +110,9 @@ class Drive(nn.Module):
         ego_features = self.ego_encoder(ego_obs)
         partner_features, _ = self.partner_encoder(partner_objects).max(dim=1)
         road_features, _ = self.road_encoder(road_objects).max(dim=1)
+        past_actions_features = self.past_actions_encoder(past_actions_traj)
 
-        concat_features = torch.cat([ego_features, road_features, partner_features], dim=1)
+        concat_features = torch.cat([ego_features, road_features, partner_features, past_actions_features], dim=1)
 
         # Pass through shared embedding
         embedding = F.relu(self.shared_embedding(concat_features))
@@ -101,9 +126,15 @@ class Drive(nn.Module):
             std = torch.nn.functional.softplus(scale) + 1e-4
             action = torch.distributions.Normal(loc, std)
         else:
-            action = self.actor(flat_hidden)
+            action_old = self.actor(flat_hidden)
+            action = self.actor(flat_hidden).reshape(
+                flat_hidden.shape[0] * self.actions_trajectory_length, sum(self.atn_dim)
+            )  # push the sequence length in the batch
+            # repack the actions into n tuples where n is the number of kind of actions you can have (MultiDiscrete)
             action = torch.split(action, self.atn_dim, dim=1)
 
-        value = self.value_fn(flat_hidden)
+        value = self.value_fn(
+            flat_hidden
+        )  # NOTE: there shouldn't be any difference if we pass the hidden state that is used for future actions
 
         return action, value
