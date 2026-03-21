@@ -136,33 +136,6 @@ def compute_l2_loss_ego_action_traj(
     return torch.clamp(-loss / trajectory_loss_norm, trajectory_loss_clamp_min, 0.0)
 
 
-def ego_trajectories_to_world(ego_traj, agent_x, agent_y, agent_heading):
-    """Transform ego-frame trajectories to world coordinates per agent.
-
-    Args:
-        ego_traj: [B, K, 2] ego-frame positions (from rollout_state_trajectory_ego)
-        agent_x: [B] world x positions (numpy, from get_global_agent_state)
-        agent_y: [B] world y positions (numpy, from get_global_agent_state)
-        agent_heading: [B] world heading (numpy, from get_global_agent_state)
-
-    Returns:
-        world_x: numpy float32 [B * K] flattened world x coords (ready for set_predicted_trajectories)
-        world_y: numpy float32 [B * K] flattened world y coords
-    """
-    cos_h = np.cos(agent_heading)[:, None]  # [B, 1]
-    sin_h = np.sin(agent_heading)[:, None]
-
-    # ego_traj is torch, move to numpy
-    ex = ego_traj[..., 0].detach().cpu().numpy()  # [B, K]
-    ey = ego_traj[..., 1].detach().cpu().numpy()
-
-    # Rotate ego frame into world frame and translate
-    world_x = ex * cos_h - ey * sin_h + agent_x[:, None]
-    world_y = ex * sin_h + ey * cos_h + agent_y[:, None]
-
-    return world_x.ravel().astype(np.float32), world_y.ravel().astype(np.float32)
-
-
 def rollout_state_trajectory(
     actions_N2: torch.Tensor,
     initial_position: torch.Tensor,

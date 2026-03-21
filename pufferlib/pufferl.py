@@ -63,6 +63,21 @@ signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
+def convert_single_action_integers_to_r2(actions: torch.Tensor) -> torch.Tensor:
+    accel = actions // 13
+    steering = actions % 13
+    return torch.cat([accel.unsqueeze(-1), steering.unsqueeze(-1)], dim=-1)
+
+
+def convert_bptt_action_integers_to_r2(actions: torch.Tensor) -> torch.Tensor:
+    accel = actions // 13
+    steering = actions % 13
+    if actions.shape[1] == 1:
+        return torch.cat([accel.unsqueeze(-1), steering.unsqueeze(-1)], dim=-1)
+    else:
+        return torch.cat([accel, steering], dim=-1)
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization
@@ -118,6 +133,7 @@ class PuffeRL:
         self.actions = torch.zeros(
             segments,
             horizon,
+            self.actions_trajectory_length,
             *atn_space.shape,
             device=device,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
@@ -309,12 +325,14 @@ class PuffeRL:
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
                 prev_traj = self.prev_actions_traj[env_id.start : env_id.stop].reshape(o_device.shape[0], -1)
+                prev_traj[done_mask.bool(), ...] = -1.0
                 o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
                 logits, value = self.policy.forward_eval(o_device_aug, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 if config.get("clamp_reward", True):
                     r = torch.clamp(r, -1, 1)
-
+                action_N2 = convert_single_action_integers_to_r2(action)
+                self.prev_actions_traj[env_id.start : env_id.stop] = action_N2
             profile("eval_copy", epoch)
             with torch.no_grad():
                 if config["use_rnn"]:
@@ -329,8 +347,9 @@ class PuffeRL:
                     self.observations[batch_rows, l] = o_device_aug.cpu()
                 else:
                     self.observations[batch_rows, l] = o_device_aug
-
-                self.actions[batch_rows, l] = action
+                if action.dim() < self.actions[batch_rows, l, :].dim():
+                    action = action.unsqueeze(-1)
+                self.actions[batch_rows, l, :] = action
                 self.logprobs[batch_rows, l] = logprob
                 # Truncation bootstrap hack for auto-reset envs.
                 # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
@@ -353,7 +372,7 @@ class PuffeRL:
                     self.free_idx += num_full
                     self.full_rows += num_full
 
-                action = action.cpu().numpy()
+                action = action[:, 0, :].cpu().numpy()
                 if isinstance(logits, torch.distributions.Normal):
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
 

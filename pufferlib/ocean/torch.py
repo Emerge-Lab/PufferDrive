@@ -93,12 +93,9 @@ class Drive(nn.Module):
         ego_obs = observations[:, :ego_dim]
         partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
         road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
-        # past_actions_traj = observations[
-        #     :, ego_dim + partner_dim + road_dim : ego_dim + partner_dim + road_dim + past_actions_dim
-        # ]
-        past_actions_traj = -torch.ones(
-            (road_obs.shape[0], np.prod(self.past_action_tensor_shape)), device=road_obs.device
-        )
+        past_actions_traj = observations[
+            :, ego_dim + partner_dim + road_dim : ego_dim + partner_dim + road_dim + past_actions_dim
+        ]
 
         partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
 
