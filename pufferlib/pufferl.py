@@ -223,6 +223,14 @@ class PuffeRL:
         # Initializations
         self.config = config
         self.vecenv = vecenv
+
+        # Compact obs: store position+map_id instead of road features, reconstruct during training
+        driver = getattr(vecenv, "driver_env", None)
+        self.compact_obs = getattr(driver, "compact_obs", 0) if driver else 0
+        if self.compact_obs:
+            self.ego_partner_dim = driver.ego_partner_dim
+            self.full_road_dim = driver.full_road_dim
+            self.full_obs_shape = (driver.full_num_obs,)
         self.epoch = 0
         self.global_step = 0
         self.last_log_step = 0
@@ -275,7 +283,16 @@ class PuffeRL:
 
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
-            o_device = o.to(device)  # , non_blocking=True)
+            if self.compact_obs:
+                full_o = torch.zeros(o.shape[0], self.full_obs_shape[0], dtype=o.dtype)
+                from pufferlib.ocean.drive import binding as drive_binding
+
+                drive_binding.reconstruct_road_obs(
+                    np.ascontiguousarray(o.numpy()), full_o.numpy(), self.ego_partner_dim, self.full_road_dim
+                )
+                o_device = full_o.to(device)
+            else:
+                o_device = o.to(device)  # , non_blocking=True)
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
             t = torch.as_tensor(t).to(device)  # , non_blocking=True)
@@ -415,6 +432,19 @@ class PuffeRL:
             profile("train_forward", epoch)
             if not config["use_rnn"]:
                 mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
+
+            if self.compact_obs:
+                from pufferlib.ocean.drive import binding as drive_binding
+
+                flat_compact = mb_obs.reshape(-1, mb_obs.shape[-1])
+                flat_full = torch.zeros(flat_compact.shape[0], self.full_obs_shape[0], dtype=flat_compact.dtype)
+                drive_binding.reconstruct_road_obs(
+                    np.ascontiguousarray(flat_compact.cpu().numpy()),
+                    flat_full.numpy(),
+                    self.ego_partner_dim,
+                    self.full_road_dim,
+                )
+                mb_obs = flat_full.to(device)
 
             state = dict(
                 action=mb_actions,

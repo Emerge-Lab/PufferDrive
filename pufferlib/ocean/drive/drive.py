@@ -95,8 +95,10 @@ class Drive(pufferlib.PufferEnv):
         spawn_length_min=2.0,
         spawn_length_max=5.5,
         spawn_height=1.5,
+        compact_obs=False,
     ):
         # env
+        self.compact_obs = int(compact_obs) if compact_obs else 0
         self.dt = dt
         self.render_mode = render_mode
         self.num_maps = num_maps
@@ -179,12 +181,17 @@ class Drive(pufferlib.PufferEnv):
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
 
-        self.num_obs = (
-            self.ego_features
-            + self.max_partner_objects * self.partner_features
-            + self.max_road_objects * self.road_features
+        self.ego_partner_dim = self.ego_features + self.max_partner_objects * self.partner_features
+        self.full_road_dim = self.max_road_objects * self.road_features
+        self.full_num_obs = self.ego_partner_dim + self.full_road_dim
+
+        if self.compact_obs:
+            self.num_obs = self.ego_partner_dim + 5  # x, y, z, heading, map_id
+        else:
+            self.num_obs = self.full_num_obs
+        self.single_observation_space = gymnasium.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(self.num_obs,), dtype=np.float32
         )
-        self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         self.init_steps = init_steps
         self.init_mode_str = init_mode
@@ -417,6 +424,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                compact_obs=self.compact_obs,
             )
             env_ids.append(env_id)
 
@@ -575,6 +583,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                compact_obs=self.compact_obs,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)

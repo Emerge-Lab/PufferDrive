@@ -114,6 +114,7 @@
 #define ROAD_FEATURES 8
 #define ROAD_FEATURES_ONEHOT 14
 #define PARTNER_FEATURES 8
+#define COMPACT_ROAD_FEATURES 5 // x, y, z, heading, map_id
 
 #define MAX_CHECKED_LANES 32
 
@@ -396,6 +397,10 @@ struct Drive {
     int turn_off_normalization;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
+
+    // Compact obs mode: store position+map_id instead of road features
+    int compact_obs;
+    int map_id;
 
     // Shared map data (NULL if map data is owned by this env)
     SharedMapData *shared_map;
@@ -2840,10 +2845,78 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
 // void compute_rewards(void){}
 
+// Reconstruct road observations for a single agent position using shared map data.
+// Writes ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS floats into road_obs.
+void compute_road_obs_for_position(RoadMapElement *road_elements, int num_roads, GridMap *grid_map, float agent_x,
+                                   float agent_y, float agent_z, float agent_heading, float *road_obs) {
+    float cos_heading = cosf(agent_heading);
+    float sin_heading = sinf(agent_heading);
+    memset(road_obs, 0, MAX_ROAD_SEGMENT_OBSERVATIONS * ROAD_FEATURES * sizeof(float));
+
+    int grid_col = (int)((agent_x - grid_map->top_left_x) / GRID_CELL_SIZE);
+    int grid_row = (int)((grid_map->top_left_y - agent_y) / GRID_CELL_SIZE);
+    if (grid_col < 0 || grid_col >= grid_map->grid_cols || grid_row < 0 || grid_row >= grid_map->grid_rows)
+        return;
+    int grid_idx = grid_row * grid_map->grid_cols + grid_col;
+
+    int cached_count = grid_map->neighbor_cache_count[grid_idx];
+    GridMapEntity *cached = grid_map->neighbor_cache_entities[grid_idx];
+    int list_size = (cached_count < MAX_ROAD_SEGMENT_OBSERVATIONS) ? cached_count : MAX_ROAD_SEGMENT_OBSERVATIONS;
+
+    int obs_idx = 0;
+    for (int k = 0; k < list_size; k++) {
+        int entity_idx = cached[k].entity_idx;
+        int geometry_idx = cached[k].geometry_idx;
+        if (entity_idx < 0 || entity_idx >= num_roads)
+            continue;
+        RoadMapElement *entity = &road_elements[entity_idx];
+        if (geometry_idx < 0 || geometry_idx >= entity->segment_length)
+            continue;
+        float start_x = entity->x[geometry_idx];
+        float start_y = entity->y[geometry_idx];
+        float start_z = entity->z[geometry_idx];
+        float end_x = entity->x[geometry_idx + 1];
+        float end_y = entity->y[geometry_idx + 1];
+        float end_z = entity->z[geometry_idx + 1];
+        float mid_x = (start_x + end_x) / 2.0f;
+        float mid_y = (start_y + end_y) / 2.0f;
+        float mid_z = (start_z + end_z) / 2.0f;
+        float rel_x = mid_x - agent_x;
+        float rel_y = mid_y - agent_y;
+        float rel_z = mid_z - agent_z;
+        float x_obs = rel_x * cos_heading + rel_y * sin_heading;
+        float y_obs = -rel_x * sin_heading + rel_y * cos_heading;
+        float z_obs = rel_z;
+        float length = relative_distance_3d(mid_x, mid_y, mid_z, end_x, end_y, end_z);
+        float width = 0.1;
+        float dx = end_x - mid_x;
+        float dy = end_y - mid_y;
+        float dx_norm = dx;
+        float dy_norm = dy;
+        float hypot = sqrtf(dx * dx + dy * dy);
+        if (hypot > 0) {
+            dx_norm /= hypot;
+            dy_norm /= hypot;
+        }
+        float cos_angle = dx_norm * cos_heading + dy_norm * sin_heading;
+        float sin_angle = -dx_norm * sin_heading + dy_norm * cos_heading;
+        road_obs[obs_idx] = x_obs * 0.02f;
+        road_obs[obs_idx + 1] = y_obs * 0.02f;
+        road_obs[obs_idx + 2] = z_obs * 0.02f;
+        road_obs[obs_idx + 3] = length / MAX_ROAD_SEGMENT_LENGTH;
+        road_obs[obs_idx + 4] = width / MAX_ROAD_SCALE;
+        road_obs[obs_idx + 5] = cos_angle;
+        road_obs[obs_idx + 6] = sin_angle;
+        road_obs[obs_idx + 7] = entity->type - 4.0f;
+        obs_idx += 8;
+    }
+}
+
 void compute_observations(Drive *env) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int road_dim = env->compact_obs ? COMPACT_ROAD_FEATURES : (ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS);
+    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + road_dim;
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     for (int i = 0; i < env->active_agent_count; i++) {
@@ -2979,85 +3052,83 @@ void compute_observations(Drive *env) {
         obs_idx += remaining_partner_obs;
 
         // Map observations
-        GridMapEntity entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS];
-        int grid_idx = getGridIndex(env, ego_entity->sim_x, ego_entity->sim_y);
-        float max_observation_distance = 0.0f;
-        int actual_entities_cnt = 0;
-        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS,
-                                                    &actual_entities_cnt);
-        float percent_entities_used =
-            (actual_entities_cnt > 0) ? ((float)list_size / (float)actual_entities_cnt * 100.0f) : 100.0f;
+        if (env->compact_obs) {
+            // Compact mode: store world position + map_id for later reconstruction
+            obs[obs_idx] = ego_entity->sim_x;
+            obs[obs_idx + 1] = ego_entity->sim_y;
+            obs[obs_idx + 2] = ego_entity->sim_z;
+            obs[obs_idx + 3] = ego_entity->sim_heading;
+            obs[obs_idx + 4] = (float)env->map_id;
+        } else {
+            // Full mode: compute road observations inline
+            GridMapEntity entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS];
+            int grid_idx = getGridIndex(env, ego_entity->sim_x, ego_entity->sim_y);
+            float max_observation_distance = 0.0f;
+            int actual_entities_cnt = 0;
+            int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS,
+                                                        &actual_entities_cnt);
+            float percent_entities_used =
+                (actual_entities_cnt > 0) ? ((float)list_size / (float)actual_entities_cnt * 100.0f) : 100.0f;
 
-        for (int k = 0; k < list_size; k++) {
-            int entity_idx = entity_list[k].entity_idx;
-            int geometry_idx = entity_list[k].geometry_idx;
-
-            // Validate entity_idx before accessing
-            if (entity_idx < 0 || entity_idx >= env->num_roads) {
-                printf("ERROR: Invalid road_idx %d (max: %d)\n", entity_idx, env->num_roads - 1);
-                continue;
+            for (int k = 0; k < list_size; k++) {
+                int entity_idx = entity_list[k].entity_idx;
+                int geometry_idx = entity_list[k].geometry_idx;
+                if (entity_idx < 0 || entity_idx >= env->num_roads) {
+                    printf("ERROR: Invalid road_idx %d (max: %d)\n", entity_idx, env->num_roads - 1);
+                    continue;
+                }
+                RoadMapElement *entity = &env->road_elements[entity_idx];
+                if (geometry_idx < 0 || geometry_idx >= entity->segment_length) {
+                    printf("ERROR: Invalid geometry_idx %d for road %d (max: %d)\n", geometry_idx, entity_idx,
+                           entity->segment_length - 1);
+                    continue;
+                }
+                float start_x = entity->x[geometry_idx];
+                float start_y = entity->y[geometry_idx];
+                float start_z = entity->z[geometry_idx];
+                float end_x = entity->x[geometry_idx + 1];
+                float end_y = entity->y[geometry_idx + 1];
+                float end_z = entity->z[geometry_idx + 1];
+                float mid_x = (start_x + end_x) / 2.0f;
+                float mid_y = (start_y + end_y) / 2.0f;
+                float mid_z = (start_z + end_z) / 2.0f;
+                float rel_x = mid_x - ego_entity->sim_x;
+                float rel_y = mid_y - ego_entity->sim_y;
+                float rel_z = mid_z - ego_entity->sim_z;
+                float distance =
+                    relative_distance_3d(ego_entity->sim_x, ego_entity->sim_y, ego_entity->sim_z, mid_x, mid_y, mid_z);
+                max_observation_distance = fmaxf(max_observation_distance, distance);
+                float x_obs = rel_x * cos_heading + rel_y * sin_heading;
+                float y_obs = -rel_x * sin_heading + rel_y * cos_heading;
+                float z_obs = rel_z;
+                float length = relative_distance_3d(mid_x, mid_y, mid_z, end_x, end_y, end_z);
+                float width = 0.1;
+                float dx = end_x - mid_x;
+                float dy = end_y - mid_y;
+                float dx_norm = dx;
+                float dy_norm = dy;
+                float hypot = sqrtf(dx * dx + dy * dy);
+                if (hypot > 0) {
+                    dx_norm /= hypot;
+                    dy_norm /= hypot;
+                }
+                float cos_angle = dx_norm * cos_heading + dy_norm * sin_heading;
+                float sin_angle = -dx_norm * sin_heading + dy_norm * cos_heading;
+                obs[obs_idx] = x_obs * 0.02f;
+                obs[obs_idx + 1] = y_obs * 0.02f;
+                obs[obs_idx + 2] = z_obs * 0.02f;
+                obs[obs_idx + 3] = length / MAX_ROAD_SEGMENT_LENGTH;
+                obs[obs_idx + 4] = width / MAX_ROAD_SCALE;
+                obs[obs_idx + 5] = cos_angle;
+                obs[obs_idx + 6] = sin_angle;
+                obs[obs_idx + 7] = entity->type - 4.0f;
+                obs_idx += 8;
             }
-
-            RoadMapElement *entity = &env->road_elements[entity_idx];
-
-            // Validate geometry_idx before accessing
-            if (geometry_idx < 0 || geometry_idx >= entity->segment_length) {
-                printf("ERROR: Invalid geometry_idx %d for road %d (max: %d)\n", geometry_idx, entity_idx,
-                       entity->segment_length - 1);
-                continue;
-            }
-            float start_x = entity->x[geometry_idx];
-            float start_y = entity->y[geometry_idx];
-            float start_z = entity->z[geometry_idx];
-            float end_x = entity->x[geometry_idx + 1];
-            float end_y = entity->y[geometry_idx + 1];
-            float end_z = entity->z[geometry_idx + 1];
-            float mid_x = (start_x + end_x) / 2.0f;
-            float mid_y = (start_y + end_y) / 2.0f;
-            float mid_z = (start_z + end_z) / 2.0f;
-            float rel_x = mid_x - ego_entity->sim_x;
-            float rel_y = mid_y - ego_entity->sim_y;
-            float rel_z = mid_z - ego_entity->sim_z;
-            float distance =
-                relative_distance_3d(ego_entity->sim_x, ego_entity->sim_y, ego_entity->sim_z, mid_x, mid_y, mid_z);
-            max_observation_distance = fmaxf(max_observation_distance, distance);
-            float x_obs = rel_x * cos_heading + rel_y * sin_heading;
-            float y_obs = -rel_x * sin_heading + rel_y * cos_heading;
-            float z_obs = rel_z;
-            float length = relative_distance_3d(mid_x, mid_y, mid_z, end_x, end_y, end_z);
-            float width = 0.1;
-            // Calculate angle from ego to midpoint (vector from ego to midpoint)
-            float dx = end_x - mid_x;
-            float dy = end_y - mid_y;
-            float dx_norm = dx;
-            float dy_norm = dy;
-            float hypot = sqrtf(dx * dx + dy * dy);
-            if (hypot > 0) {
-                dx_norm /= hypot;
-                dy_norm /= hypot;
-            }
-            // Compute sin and cos of relative angle directly without atan2f
-            float cos_angle = dx_norm * cos_heading + dy_norm * sin_heading;
-            float sin_angle = -dx_norm * sin_heading + dy_norm * cos_heading;
-            obs[obs_idx] = x_obs * 0.02f;
-            obs[obs_idx + 1] = y_obs * 0.02f;
-            obs[obs_idx + 2] = z_obs * 0.02f;
-            obs[obs_idx + 3] = length / MAX_ROAD_SEGMENT_LENGTH;
-            obs[obs_idx + 4] = width / MAX_ROAD_SCALE;
-            obs[obs_idx + 5] = cos_angle;
-            obs[obs_idx + 6] = sin_angle;
-            obs[obs_idx + 7] = entity->type - 4.0f;
-            obs_idx += 8;
+            env->logs[i].max_observation_distance += max_observation_distance;
+            env->logs[i].observation_coverage += percent_entities_used;
+            int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 8;
+            memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
         }
-        env->logs[i].max_observation_distance += max_observation_distance;
-        env->logs[i].observation_coverage += percent_entities_used;
-        // if (ego_idx == 0) {
-        //     printf("Max observation distance for agent %d at timestep %d: %.2f meters, percentage of entities in obs
-        //     window seen: %.2f\n", ego_idx, env->timestep, max_observation_distance, percent_entities_used);
-        // }
-        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 8;
-        // Set the entire block to 0 at once
-        memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
     }
 }
 

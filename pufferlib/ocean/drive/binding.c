@@ -1,4 +1,5 @@
 #include <Python.h>
+#include <numpy/arrayobject.h>
 #include "drive.h"
 #define Env Drive
 #define MY_SHARED
@@ -37,7 +38,67 @@ static PyObject *release_map_cache_py(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-#define MY_METHODS {"release_map_cache", release_map_cache_py, METH_VARARGS, "Release the shared map data cache"}
+// Reconstruct road observations from compact obs (position + map_id).
+// Args: compact_obs (numpy [N, compact_dim]), output (numpy [N, full_dim]),
+//       ego_partner_dim (int: ego + partner feature count),
+//       full_road_dim (int: ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS)
+static PyObject *reconstruct_road_obs_py(PyObject *self, PyObject *args) {
+    PyArrayObject *compact_arr, *output_arr;
+    int ego_partner_dim, full_road_dim;
+
+    if (!PyArg_ParseTuple(args, "O!O!ii", &PyArray_Type, &compact_arr, &PyArray_Type, &output_arr, &ego_partner_dim,
+                          &full_road_dim)) {
+        return NULL;
+    }
+
+    if (!PyArray_ISCONTIGUOUS(compact_arr) || !PyArray_ISCONTIGUOUS(output_arr)) {
+        PyErr_SetString(PyExc_ValueError, "Arrays must be contiguous");
+        return NULL;
+    }
+
+    int n = (int)PyArray_DIM(compact_arr, 0);
+    int compact_dim = (int)PyArray_DIM(compact_arr, 1);
+    int full_dim = (int)PyArray_DIM(output_arr, 1);
+
+    if (full_dim != ego_partner_dim + full_road_dim) {
+        PyErr_SetString(PyExc_ValueError, "full_dim != ego_partner_dim + full_road_dim");
+        return NULL;
+    }
+
+    float *compact = (float *)PyArray_DATA(compact_arr);
+    float *output = (float *)PyArray_DATA(output_arr);
+
+    for (int i = 0; i < n; i++) {
+        float *c = compact + i * compact_dim;
+        float *o = output + i * full_dim;
+
+        // Copy ego + partner features unchanged
+        memcpy(o, c, ego_partner_dim * sizeof(float));
+
+        // Read position and map_id from compact road section
+        float agent_x = c[ego_partner_dim];
+        float agent_y = c[ego_partner_dim + 1];
+        float agent_z = c[ego_partner_dim + 2];
+        float agent_heading = c[ego_partner_dim + 3];
+        int map_id = (int)c[ego_partner_dim + 4];
+
+        // Reconstruct road features from map cache
+        float *road_out = o + ego_partner_dim;
+        if (g_map_cache != NULL && map_id >= 0 && map_id < g_map_cache_size && g_map_cache[map_id] != NULL) {
+            SharedMapData *shared = g_map_cache[map_id];
+            compute_road_obs_for_position(shared->road_elements, shared->num_roads, shared->grid_map, agent_x, agent_y,
+                                          agent_z, agent_heading, road_out);
+        } else {
+            memset(road_out, 0, full_road_dim * sizeof(float));
+        }
+    }
+
+    Py_RETURN_NONE;
+}
+
+#define MY_METHODS                                                                                                     \
+    {"release_map_cache", release_map_cache_py, METH_VARARGS, "Release the shared map data cache"},                    \
+        {"reconstruct_road_obs", reconstruct_road_obs_py, METH_VARARGS, "Reconstruct road obs from compact obs"}
 
 #include "../env_binding.h"
 
@@ -457,11 +518,13 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->map_name = map_path;
     env->init_steps = init_steps;
     env->timestep = init_steps;
+    env->compact_obs = (kwargs && PyDict_GetItemString(kwargs, "compact_obs")) ? (int)unpack(kwargs, "compact_obs") : 0;
 
     // Check if map_id was provided and the map cache is populated
     PyObject *map_id_obj = kwargs ? PyDict_GetItemString(kwargs, "map_id") : NULL;
     if (map_id_obj != NULL && g_map_cache != NULL) {
         int map_id = (int)PyLong_AsLong(map_id_obj);
+        env->map_id = map_id;
         if (map_id >= 0 && map_id < g_map_cache_size && g_map_cache[map_id] != NULL) {
             init_from_shared(env, g_map_cache[map_id]);
             return 0;
