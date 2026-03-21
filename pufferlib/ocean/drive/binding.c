@@ -332,8 +332,16 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_goal_post_respawn = conf.reward_goal_post_respawn;
     env->episode_length = conf.episode_length;
     env->termination_mode = conf.termination_mode;
-    env->collision_behavior = conf.collision_behavior;
-    env->offroad_behavior = conf.offroad_behavior;
+    if (kwargs && PyDict_GetItemString(kwargs, "collision_behavior")) {
+        env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
+    } else {
+        env->collision_behavior = conf.collision_behavior;
+    }
+    if (kwargs && PyDict_GetItemString(kwargs, "offroad_behavior")) {
+        env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
+    } else {
+        env->offroad_behavior = conf.offroad_behavior;
+    }
     env->dt = conf.dt;
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
