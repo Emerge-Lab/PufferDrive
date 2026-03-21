@@ -236,9 +236,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
 
-    clock_gettime(CLOCK_REALTIME, &ts);
-    srand(ts.tv_nsec);
-
     // Reuse existing cache if it was created by this process and has the right size.
     // Multiple PufferDrive instances in the same process (e.g. Serial workers) share one cache.
     // Only rebuild after fork (PID mismatch) or on first call.
@@ -523,6 +520,15 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->init_steps = init_steps;
     env->timestep = init_steps;
     env->compact_obs = (kwargs && PyDict_GetItemString(kwargs, "compact_obs")) ? (int)unpack(kwargs, "compact_obs") : 0;
+
+    // Seed rand() uniquely per env so forked workers don't share random state.
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        static int env_counter = 0;
+        unsigned int raw = (unsigned int)(ts.tv_nsec ^ (getpid() << 16) ^ (env_counter++ * 2654435761u));
+        srand(raw);
+    }
 
     // Check if map_id was provided and the map cache is populated
     PyObject *map_id_obj = kwargs ? PyDict_GetItemString(kwargs, "map_id") : NULL;
