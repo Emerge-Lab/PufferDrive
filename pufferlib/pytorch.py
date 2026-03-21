@@ -225,3 +225,34 @@ def sample_logits(logits, action=None):
         return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0)
 
     return action.T, logprob.sum(0), logits_entropy
+
+
+def sample_logits_action_sequence(logits, action=None):
+    """
+    sample actions from a distribution and if an action is passed computes instead the log probabilities of those actions
+    expects:
+    logits : B X Aseq X |A| (batch by action sequence length by action space)
+    action : B x Aseq
+
+
+    returns:
+    action : B x Aseq
+    logprob : B
+    entropy: scalar (sum of all logprobs)
+
+    """
+
+    # This can fail on nans etc
+    normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
+    probs = logits_to_probs(logits)
+
+    if action is None:
+        probs = torch.nan_to_num(probs, 1e-8, 1e-8, 1e-8)
+        action = torch.multinomial(probs.reshape(-1, probs.shape[-1]), 1, replacement=True).int()
+        action = action.reshape(probs.shape[:-1])
+    else:
+        action = action.reshape(-1, action.shape[-2])
+    logprob = log_prob(normalized_logits, action)
+    logits_entropy = entropy(normalized_logits).sum(-1)
+
+    return action, logprob.sum(-1), logits_entropy

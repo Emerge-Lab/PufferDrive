@@ -328,7 +328,7 @@ class PuffeRL:
                 prev_traj[done_mask.bool(), ...] = -1.0
                 o_device_aug = torch.cat([o_device, prev_traj], dim=-1)
                 logits, value = self.policy.forward_eval(o_device_aug, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action, logprob, _ = pufferlib.pytorch.sample_logits_action_sequence(logits)
                 if config.get("clamp_reward", True):
                     r = torch.clamp(r, -1, 1)
                 action_N2 = convert_single_action_integers_to_r2(action)
@@ -458,7 +458,7 @@ class PuffeRL:
             )
 
             logits, newvalue = self.policy(mb_obs, state)
-            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits_action_sequence(logits, action=mb_actions)
 
             profile("train_misc", epoch)
             newlogprob = newlogprob.reshape(mb_logprobs.shape)

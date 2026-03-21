@@ -125,10 +125,9 @@ class Drive(nn.Module):
         else:
             action_old = self.actor(flat_hidden)
             action = self.actor(flat_hidden).reshape(
-                flat_hidden.shape[0] * self.actions_trajectory_length, sum(self.atn_dim)
+                flat_hidden.shape[0], self.actions_trajectory_length, sum(self.atn_dim)
             )  # push the sequence length in the batch
             # repack the actions into n tuples where n is the number of kind of actions you can have (MultiDiscrete)
-            action = torch.split(action, self.atn_dim, dim=1)
 
         value = self.value_fn(
             flat_hidden
