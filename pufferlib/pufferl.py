@@ -688,21 +688,23 @@ class PuffeRL:
                     print(f"Render failed (non-fatal): {e}")
                 self.evaluator.sp_env.close()
                 self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
-            # Show agent view with sensor noise
-            # sensor_noise_eval = self.epoch % 500 == 0
-            # if sensor_noise_eval:
-            #     self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
-            #     try:
-            #         self.evaluator.rollout(
-            #             self.uncompiled_policy,
-            #             mode="human_replay",
-            #             view_mode=3,
-            #         )
-            #     except Exception as e:
-            #         print(f"Sensor noise render failed (non-fatal): {e}")
-            #     self.evaluator.hr_env.close()
-            #     self.evaluator.log_videos(eval_mode="sensor_noise", epoch=self.epoch)
 
+            # Show agent view with sensor noise
+            sensor_noise_eval = self.epoch % 1000 == 0
+            if sensor_noise_eval:
+                self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
+                try:
+                    self.evaluator.rollout(
+                        self.uncompiled_policy,
+                        mode="human_replay",
+                        view_mode=3,
+                    )
+                except Exception as e:
+                    print(f"Sensor noise render failed (non-fatal): {e}")
+                self.evaluator.hr_env.close()
+                self.evaluator.log_videos(eval_mode="sensor_noise", epoch=self.epoch)
+
+            # Get statistics
             if human_replay_eval or self_play_eval:
                 eval_statistics = self.evaluator.collect_stats()
                 self.eval_stats.update(eval_statistics)
