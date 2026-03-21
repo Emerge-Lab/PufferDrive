@@ -492,8 +492,14 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
     int seed = PyLong_AsLong(seed_arg);
 
     for (int i = 0; i < vec->num_envs; i++) {
-        // Assumes each process has the same number of environments
-        srand(i + seed * vec->num_envs);
+        // Seed with PID + clock so each reset and each worker gets a unique sequence
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        unsigned int raw = (unsigned int)(i + seed * vec->num_envs + getpid() + ts.tv_nsec);
+        raw ^= raw >> 16;
+        raw *= 0x45d9f3b;
+        raw ^= raw >> 16;
+        srand(raw);
         c_reset(vec->envs[i]);
     }
     Py_RETURN_NONE;
