@@ -307,6 +307,12 @@ struct SharedMapData {
     int num_tracks_to_predict;
     int *tracks_to_predict_indices;
 
+    // Drivable lane cache (shared read-only across envs)
+    int *drivable_lane_indices;
+    float *drivable_lane_lengths;
+    float total_drivable_lane_length;
+    int num_drivable;
+
     // Reference counting
     int ref_count;
 };
@@ -2296,6 +2302,10 @@ void init_from_shared(Drive *env, SharedMapData *shared) {
     env->world_mean_x = shared->world_mean_x;
     env->world_mean_y = shared->world_mean_y;
     env->world_mean_z = shared->world_mean_z;
+    env->drivable_lane_indices = shared->drivable_lane_indices;
+    env->drivable_lane_lengths = shared->drivable_lane_lengths;
+    env->total_drivable_lane_length = shared->total_drivable_lane_length;
+    env->num_drivable = shared->num_drivable;
     env->sdc_track_index = shared->sdc_track_index;
     env->num_tracks_to_predict = shared->num_tracks_to_predict;
 
@@ -2383,6 +2393,10 @@ void free_shared_map_data(SharedMapData *shared) {
     // Free tracks_to_predict
     free(shared->tracks_to_predict_indices);
 
+    // Free drivable lane cache
+    free(shared->drivable_lane_indices);
+    free(shared->drivable_lane_lengths);
+
     free(shared);
 }
 
@@ -2438,6 +2452,20 @@ SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, 
     shared->grid_map = temp.grid_map;
     shared->neighbor_offsets = temp.neighbor_offsets;
 
+    // Compute drivable lane indices from road elements
+    shared->num_drivable = 0;
+    shared->drivable_lane_indices = (int *)malloc(shared->num_roads * sizeof(int));
+    shared->drivable_lane_lengths = (float *)malloc(shared->num_roads * sizeof(float));
+    shared->total_drivable_lane_length = 0.0f;
+    for (int i = 0; i < shared->num_roads; i++) {
+        if (shared->road_elements[i].type == ROAD_LANE && shared->road_elements[i].polyline_length > 0.0f) {
+            shared->drivable_lane_indices[shared->num_drivable] = i;
+            shared->drivable_lane_lengths[shared->num_drivable] = shared->road_elements[i].polyline_length;
+            shared->total_drivable_lane_length += shared->drivable_lane_lengths[shared->num_drivable];
+            shared->num_drivable++;
+        }
+    }
+
     shared->ref_count = 0;
     return shared;
 }
@@ -2446,8 +2474,11 @@ void c_close(Drive *env) {
     // Always free per-env agent data
     free_agents(env->agents, env->num_objects);
     free(env->active_agent_indices);
-    free(env->drivable_lane_indices);
-    free(env->drivable_lane_lengths);
+    // Only free drivable arrays if not shared (shared maps own them)
+    if (env->shared_map == NULL) {
+        free(env->drivable_lane_indices);
+        free(env->drivable_lane_lengths);
+    }
     free(env->logs);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
