@@ -492,14 +492,19 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
     int seed = PyLong_AsLong(seed_arg);
 
     for (int i = 0; i < vec->num_envs; i++) {
-        // Seed with PID + clock so each reset and each worker gets a unique sequence
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        unsigned int raw = (unsigned int)(i + seed * vec->num_envs + getpid() + ts.tv_nsec);
-        raw ^= raw >> 16;
-        raw *= 0x45d9f3b;
-        raw ^= raw >> 16;
-        srand(raw);
+        // Seed with PID + counter so each env, each reset, and each worker
+        // gets a unique rand() sequence. Counter ensures uniqueness within
+        // a single process; PID ensures uniqueness across forked workers.
+        {
+            static unsigned int reset_counter = 0;
+            unsigned int raw = (unsigned int)(i + seed * vec->num_envs + getpid() * 1000003 + reset_counter++);
+            raw ^= raw >> 16;
+            raw *= 0x45d9f3b;
+            raw ^= raw >> 16;
+            raw *= 0x45d9f3b;
+            raw ^= raw >> 16;
+            srand(raw);
+        }
         c_reset(vec->envs[i]);
     }
     Py_RETURN_NONE;

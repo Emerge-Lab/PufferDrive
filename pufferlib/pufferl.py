@@ -432,7 +432,8 @@ class PuffeRL:
 
             profile("train_forward", epoch)
             if not config["use_rnn"]:
-                mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
+                buf_shape = self.observations.shape[-1:]  # compact or full depending on mode
+                mb_obs = mb_obs.reshape(-1, *buf_shape)
 
             if self.compact_obs:
                 from pufferlib.ocean.drive import binding as drive_binding

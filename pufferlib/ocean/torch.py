@@ -16,7 +16,9 @@ class Drive(nn.Module):
     def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
         super().__init__()
         self.hidden_size = hidden_size
-        self.observation_size = env.single_observation_space.shape[0]
+        # Use policy_observation_space if available (compact obs reconstructs to full size)
+        policy_obs_space = getattr(env, "policy_observation_space", env.single_observation_space)
+        self.observation_size = policy_obs_space.shape[0]
         self.max_partner_objects = env.max_partner_objects
         self.partner_features = env.partner_features
         self.max_road_objects = env.max_road_objects

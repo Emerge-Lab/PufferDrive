@@ -189,8 +189,13 @@ class Drive(pufferlib.PufferEnv):
             self.num_obs = self.ego_partner_dim + 5  # x, y, z, heading, map_id
         else:
             self.num_obs = self.full_num_obs
+        # single_observation_space: compact or full (drives vectorizer buffer allocation)
         self.single_observation_space = gymnasium.spaces.Box(
             low=-np.inf, high=np.inf, shape=(self.num_obs,), dtype=np.float32
+        )
+        # policy_observation_space: always full size (policy sees reconstructed full obs)
+        self.policy_observation_space = gymnasium.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(self.full_num_obs,), dtype=np.float32
         )
 
         self.init_steps = init_steps
