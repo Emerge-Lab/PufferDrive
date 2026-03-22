@@ -74,17 +74,17 @@ class ObsLayout:
 
     def ego(self, obs):
         """Ego features including reward coefs if conditioning is on."""
-        return obs[..., :self.ego_dim]
+        return obs[..., : self.ego_dim]
 
     def reward_coefs(self, obs):
         """Reward conditioning coefficients, or None if conditioning is off."""
         if self._reward_coef_start is None:
             return None
-        return obs[..., self._reward_coef_start:self._reward_coef_end]
+        return obs[..., self._reward_coef_start : self._reward_coef_end]
 
     def partners_flat(self, obs):
         """Partner features as a flat vector (..., max_partners * partner_features)."""
-        return obs[..., self._partner_start:self._partner_end]
+        return obs[..., self._partner_start : self._partner_end]
 
     def partners(self, obs):
         """Partner features reshaped to (..., max_partners, partner_features).
@@ -97,7 +97,7 @@ class ObsLayout:
 
     def roads_flat(self, obs):
         """Road features as a flat vector (..., max_roads * road_features)."""
-        return obs[..., self._road_start:self._road_end]
+        return obs[..., self._road_start : self._road_end]
 
     def roads(self, obs):
         """Road features reshaped to (..., max_roads, road_features).

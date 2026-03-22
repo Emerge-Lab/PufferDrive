@@ -422,9 +422,7 @@ void obs_writer_init(ObsWriter *w, int dynamics_model, int reward_conditioning) 
 }
 
 // Get pointer to ego section for agent i
-static inline float *obs_ego(ObsWriter *w, float *obs_base, int agent) {
-    return &obs_base[agent * w->total];
-}
+static inline float *obs_ego(ObsWriter *w, float *obs_base, int agent) { return &obs_base[agent * w->total]; }
 
 // Get pointer to reward coef c for agent i (caller must check reward_coef_start >= 0)
 static inline float *obs_reward_coef(ObsWriter *w, float *obs_base, int agent, int c) {

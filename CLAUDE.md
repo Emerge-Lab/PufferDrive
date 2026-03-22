@@ -62,4 +62,4 @@ When investigating OOM or memory problems, do NOT hypothesize — write a script
 - Name wandb runs descriptively
 
 ## Checking on jobs.
-Don't ever wait more than 30 seconds to check on jobs. Always 30 seconds or less. 
+Don't ever wait more than 30 seconds to check on jobs. Always 30 seconds or less.
