@@ -45,7 +45,7 @@ def test_reward_coefs_vary_across_instances():
     for _ in range(10):
         env = Drive(
             num_agents=1,
-            map_dir="resources/drive/binaries/carla_data",
+            map_dir="resources/drive/binaries/carla_3D",
             num_maps=1,
             init_mode="init_variable_agent_number",
             min_agents_per_env=1,
@@ -57,8 +57,7 @@ def test_reward_coefs_vary_across_instances():
         )
         env.reset()
         obs, _, _, _, _ = env.step(np.zeros((1, 1), dtype=np.int32))
-        ego_dim = env.ego_features
-        reward_section = obs[0, ego_dim - 16 : ego_dim]
+        reward_section = env.reward_coefs_from_obs(obs[0])
         reward_obs.append(tuple(round(float(x), 6) for x in reward_section))
         env.close()
 

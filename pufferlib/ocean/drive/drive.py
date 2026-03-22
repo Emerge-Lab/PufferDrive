@@ -185,6 +185,8 @@ class Drive(pufferlib.PufferEnv):
             + self.max_road_objects * self.road_features
         )
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+        self.num_reward_coefs = binding.NUM_REWARD_COEFS
+        self._reward_coef_start = self.ego_features - self.num_reward_coefs if self.reward_conditioning else None
 
         self.init_steps = init_steps
         self.init_mode_str = init_mode
@@ -420,6 +422,19 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
+
+    def reward_coefs_from_obs(self, obs):
+        """Extract reward conditioning coefficients from observations.
+
+        Args:
+            obs: Observation array of shape (..., num_obs).
+
+        Returns:
+            Array of shape (..., num_reward_coefs) or None if reward_conditioning is off.
+        """
+        if self._reward_coef_start is None:
+            return None
+        return obs[..., self._reward_coef_start : self._reward_coef_start + self.num_reward_coefs]
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
