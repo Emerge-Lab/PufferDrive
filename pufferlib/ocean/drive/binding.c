@@ -409,6 +409,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->init_steps = init_steps;
     env->timestep = init_steps;
     init(env);
+    compute_obs_layout(env);
     return 0;
 }
 

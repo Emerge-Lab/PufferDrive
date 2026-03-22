@@ -961,6 +961,23 @@ static char *unpack_str(PyObject *kwargs, char *key) {
     return ret;
 }
 
+static PyObject *get_obs_layout(PyObject *self, PyObject *args) {
+    Env *env = unpack_env(args);
+    if (!env) return NULL;
+    PyObject *dict = PyDict_New();
+    PyDict_SetItemString(dict, "ego_dim", PyLong_FromLong(env->obs_ego_dim));
+    PyDict_SetItemString(dict, "reward_coef_start", PyLong_FromLong(env->obs_reward_coef_start));
+    PyDict_SetItemString(dict, "partner_start", PyLong_FromLong(env->obs_partner_start));
+    PyDict_SetItemString(dict, "road_start", PyLong_FromLong(env->obs_road_start));
+    PyDict_SetItemString(dict, "total", PyLong_FromLong(env->obs_total));
+    PyDict_SetItemString(dict, "num_reward_coefs", PyLong_FromLong(NUM_REWARD_COEFS));
+    PyDict_SetItemString(dict, "partner_features", PyLong_FromLong(PARTNER_FEATURES));
+    PyDict_SetItemString(dict, "road_features", PyLong_FromLong(ROAD_FEATURES));
+    PyDict_SetItemString(dict, "max_partner_objects", PyLong_FromLong(MAX_AGENTS - 1));
+    PyDict_SetItemString(dict, "max_road_objects", PyLong_FromLong(MAX_ROAD_SEGMENT_OBSERVATIONS));
+    return dict;
+}
+
 // Method table
 static PyMethodDef methods[] = {
     {"env_init", (PyCFunction)env_init, METH_VARARGS | METH_KEYWORDS,
@@ -979,6 +996,7 @@ static PyMethodDef methods[] = {
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
+    {"get_obs_layout", get_obs_layout, METH_VARARGS, "Get observation layout offsets from env"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
     {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},

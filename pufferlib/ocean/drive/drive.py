@@ -17,28 +17,48 @@ class ObsLayout:
 
     All slicing methods work with both numpy arrays and torch tensors,
     and support arbitrary leading batch dimensions via ``...`` indexing.
+
+    Constructed from the C env's computed offsets (via binding.get_obs_layout)
+    to guarantee the layout matches what compute_observations() writes.
     """
 
-    def __init__(self, ego_features, partner_features, road_features,
+    @classmethod
+    def from_c_env(cls, env_id):
+        """Construct from a C environment's computed layout offsets."""
+        layout = binding.get_obs_layout(env_id)
+        return cls(
+            ego_dim=layout["ego_dim"],
+            reward_coef_start=layout["reward_coef_start"],
+            partner_start=layout["partner_start"],
+            road_start=layout["road_start"],
+            total=layout["total"],
+            num_reward_coefs=layout["num_reward_coefs"],
+            partner_features=layout["partner_features"],
+            road_features=layout["road_features"],
+            max_partner_objects=layout["max_partner_objects"],
+            max_road_objects=layout["max_road_objects"],
+        )
+
+    def __init__(self, ego_dim, partner_start, road_start, total,
+                 partner_features, road_features,
                  max_partner_objects, max_road_objects,
-                 reward_conditioning=False, num_reward_coefs=0):
-        self.ego_dim = ego_features
+                 reward_coef_start=-1, num_reward_coefs=0):
+        self.ego_dim = ego_dim
         self.partner_features = partner_features
         self.road_features = road_features
         self.max_partner_objects = max_partner_objects
         self.max_road_objects = max_road_objects
-        self.reward_conditioning = reward_conditioning
         self.num_reward_coefs = num_reward_coefs
 
-        self._partner_start = self.ego_dim
-        self._partner_end = self._partner_start + max_partner_objects * partner_features
-        self._road_start = self._partner_end
-        self._road_end = self._road_start + max_road_objects * road_features
-        self.num_obs = self._road_end
+        self._partner_start = partner_start
+        self._partner_end = partner_start + max_partner_objects * partner_features
+        self._road_start = road_start
+        self._road_end = road_start + max_road_objects * road_features
+        self.num_obs = total
 
-        if reward_conditioning and num_reward_coefs > 0:
-            self._reward_coef_start = self.ego_dim - num_reward_coefs
-            self._reward_coef_end = self.ego_dim
+        if reward_coef_start >= 0 and num_reward_coefs > 0:
+            self._reward_coef_start = reward_coef_start
+            self._reward_coef_end = reward_coef_start + num_reward_coefs
         else:
             self._reward_coef_start = None
             self._reward_coef_end = None
@@ -232,7 +252,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_bound_acc_max = reward_bound_acc_max
         self.min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt
 
-        # Observation space calculation
+        # Observation space calculation (from C module constants, for buffer allocation)
         if self.reward_conditioning:
             self.ego_features = {
                 "classic": binding.EGO_FEATURES_CLASSIC_CONDITIONING,
@@ -243,24 +263,18 @@ class Drive(pufferlib.PufferEnv):
                 dynamics_model
             )
 
-        # Extract observation shapes from constants
-        # These need to be defined in C, since they determine the shape of the arrays
         self.max_road_objects = binding.MAX_ROAD_SEGMENT_OBSERVATIONS
         self.max_partner_objects = binding.MAX_AGENTS - 1
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
 
-        self.obs_layout = ObsLayout(
-            ego_features=self.ego_features,
-            partner_features=self.partner_features,
-            road_features=self.road_features,
-            max_partner_objects=self.max_partner_objects,
-            max_road_objects=self.max_road_objects,
-            reward_conditioning=bool(self.reward_conditioning),
-            num_reward_coefs=binding.NUM_REWARD_COEFS,
+        self.num_obs = (
+            self.ego_features
+            + self.max_partner_objects * self.partner_features
+            + self.max_road_objects * self.road_features
         )
-        self.num_obs = self.obs_layout.num_obs
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
+        # obs_layout is set after env_init from C-computed offsets (see below)
 
         self.init_steps = init_steps
         self.init_mode_str = init_mode
@@ -495,6 +509,8 @@ class Drive(pufferlib.PufferEnv):
             )
             env_ids.append(env_id)
 
+        # Build obs_layout from C env's actual computed offsets (single source of truth)
+        self.obs_layout = ObsLayout.from_c_env(env_ids[0])
         self.c_envs = binding.vectorize(*env_ids)
 
     def reset(self, seed=0):
