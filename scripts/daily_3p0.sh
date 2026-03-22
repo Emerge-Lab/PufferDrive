@@ -32,6 +32,11 @@ REPO=$WORKTREE
 COMPUTE_CONFIG=$REPO/scripts/cluster_configs/nyu_greene.yaml
 PROGRAM_CONFIG=$REPO/scripts/cluster_configs/train_base.yaml
 
+# Symlink resources from main repo into worktree (maps are not in git)
+if [ ! -d "$REPO/resources" ]; then
+  ln -s "$MAIN_REPO/resources" "$REPO/resources"
+fi
+
 # Rebuild C extension on a compute node
 echo "Rebuilding C extension in worktree..."
 srun --account=torch_pr_355_general --gres=gpu:1 --cpus-per-task=4 --mem=16gb --time=15 \
