@@ -281,6 +281,21 @@ struct AgentSpawnSettings {
     float h;
 };
 
+// Observation layout struct — defined here so Drive can embed it.
+// See "Observation Writer" section below for the init and accessor functions.
+typedef struct {
+    int ego_dim;           // total ego section size (base ego + reward coefs)
+    int reward_coef_start; // start of reward coefs within ego section (-1 if none)
+    int partner_start;     // start of partner section
+    int road_start;        // start of road section
+    int total;             // total observation size per agent
+    int partner_features;
+    int road_features;
+    int max_partners;
+    int max_roads;
+    int num_reward_coefs;
+} ObsWriter;
+
 struct Drive {
     Client *client;
     float *observations;
@@ -361,12 +376,14 @@ struct Drive {
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
 
-    // Observation layout offsets (computed once, used everywhere)
-    int obs_ego_dim;           // total ego section size (base ego + reward coefs if conditioning)
-    int obs_reward_coef_start; // start of reward coefs within ego section (-1 if no conditioning)
-    int obs_partner_start;     // start of partner features
-    int obs_road_start;        // start of road features
-    int obs_total;             // total observation size per agent
+    // Observation layout and writer (single source of truth)
+    ObsWriter obs;
+    // Flat copies for easy export to Python (set by compute_obs_layout)
+    int obs_ego_dim;
+    int obs_reward_coef_start;
+    int obs_partner_start;
+    int obs_road_start;
+    int obs_total;
 };
 
 // ========================================
@@ -382,21 +399,61 @@ int check_lane_aligned(Agent *car, RoadMapElement *lane, int geometry_idx);
 void reset_goal_positions(Drive *env);
 
 // ========================================
-// Observation Layout
+// Observation Writer
 // ========================================
 
-void compute_obs_layout(Drive *env) {
-    int ego_base = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    if (env->reward_conditioning == 1) {
-        env->obs_reward_coef_start = ego_base;
-        env->obs_ego_dim = ego_base + NUM_REWARD_COEFS;
+void obs_writer_init(ObsWriter *w, int dynamics_model, int reward_conditioning) {
+    int ego_base = (dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    if (reward_conditioning) {
+        w->reward_coef_start = ego_base;
+        w->ego_dim = ego_base + NUM_REWARD_COEFS;
     } else {
-        env->obs_reward_coef_start = -1;
-        env->obs_ego_dim = ego_base;
+        w->reward_coef_start = -1;
+        w->ego_dim = ego_base;
     }
-    env->obs_partner_start = env->obs_ego_dim;
-    env->obs_road_start = env->obs_partner_start + PARTNER_FEATURES * (MAX_AGENTS - 1);
-    env->obs_total = env->obs_road_start + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    w->partner_features = PARTNER_FEATURES;
+    w->road_features = ROAD_FEATURES;
+    w->max_partners = MAX_AGENTS - 1;
+    w->max_roads = MAX_ROAD_SEGMENT_OBSERVATIONS;
+    w->num_reward_coefs = NUM_REWARD_COEFS;
+    w->partner_start = w->ego_dim;
+    w->road_start = w->partner_start + w->partner_features * w->max_partners;
+    w->total = w->road_start + w->road_features * w->max_roads;
+}
+
+// Get pointer to ego section for agent i
+static inline float *obs_ego(ObsWriter *w, float *obs_base, int agent) {
+    return &obs_base[agent * w->total];
+}
+
+// Get pointer to reward coef c for agent i (caller must check reward_coef_start >= 0)
+static inline float *obs_reward_coef(ObsWriter *w, float *obs_base, int agent, int c) {
+    return &obs_base[agent * w->total + w->reward_coef_start + c];
+}
+
+// Get pointer to partner j's features for agent i
+static inline float *obs_partner(ObsWriter *w, float *obs_base, int agent, int j) {
+    return &obs_base[agent * w->total + w->partner_start + j * w->partner_features];
+}
+
+// Get pointer to road k's features for agent i
+static inline float *obs_road(ObsWriter *w, float *obs_base, int agent, int k) {
+    return &obs_base[agent * w->total + w->road_start + k * w->road_features];
+}
+
+// Zero the entire observation for all agents
+static inline void obs_clear(ObsWriter *w, float *obs_base, int num_agents) {
+    memset(obs_base, 0, w->total * num_agents * sizeof(float));
+}
+
+// Convenience: copy layout to Drive struct fields (for backward compat / Python export)
+void compute_obs_layout(Drive *env) {
+    obs_writer_init(&env->obs, env->dynamics_model, env->reward_conditioning);
+    env->obs_ego_dim = env->obs.ego_dim;
+    env->obs_reward_coef_start = env->obs.reward_coef_start;
+    env->obs_partner_start = env->obs.partner_start;
+    env->obs_road_start = env->obs.road_start;
+    env->obs_total = env->obs.total;
 }
 
 // ========================================
@@ -2627,11 +2684,10 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 // void compute_rewards(void){}
 
 void compute_observations(Drive *env) {
-    int max_obs = env->obs_total;
-    memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
-    float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
+    ObsWriter *w = &env->obs;
+    obs_clear(w, env->observations, env->active_agent_count);
     for (int i = 0; i < env->active_agent_count; i++) {
-        float *obs = &observations[i][0];
+        float *ego = obs_ego(w, env->observations, i);
         int ego_idx = env->active_agent_indices[i];
         Agent *ego_entity = &env->agents[ego_idx];
         if (ego_entity->type > CYCLIST)
@@ -2657,45 +2713,43 @@ void compute_observations(Drive *env) {
         float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
 
         float rel_goal_z = goal_z; // No rotation needed for vertical component
-        obs[0] = rel_goal_x * 0.005f;
-        obs[1] = rel_goal_y * 0.005f;
-        obs[2] = rel_goal_z * 0.005f;
-        obs[3] = signed_speed / MAX_SPEED;
-        obs[4] = ego_entity->sim_width / MAX_VEH_WIDTH;
-        obs[5] = ego_entity->sim_length / MAX_VEH_LEN;
-        obs[6] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
+        ego[0] = rel_goal_x * 0.005f;
+        ego[1] = rel_goal_y * 0.005f;
+        ego[2] = rel_goal_z * 0.005f;
+        ego[3] = signed_speed / MAX_SPEED;
+        ego[4] = ego_entity->sim_width / MAX_VEH_WIDTH;
+        ego[5] = ego_entity->sim_length / MAX_VEH_LEN;
+        ego[6] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
         float normalized_goal_speed_min = (env->min_goal_speed < 0.0f) ? 0.0f : (env->min_goal_speed) / MAX_SPEED;
         float normalized_goal_speed_max = (env->max_goal_speed < 0.0f) ? 0.0f : (env->max_goal_speed) / MAX_SPEED;
 
         if (env->dynamics_model == JERK) {
-            obs[7] = ego_entity->steering_angle / M_PI;
-            // Asymmetric normalization for a_long to match action space
-            obs[8] =
+            ego[7] = ego_entity->steering_angle / M_PI;
+            ego[8] =
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
-            obs[9] = ego_entity->a_lat / JERK_LAT[2];
-            obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[11] = normalized_goal_speed_min;
-            obs[12] = normalized_goal_speed_max;
-            obs[13] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
-            obs[14] = lane_center_dist;
-            obs[15] = ego_entity->metrics_array[LANE_ANGLE_IDX];
+            ego[9] = ego_entity->a_lat / JERK_LAT[2];
+            ego[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            ego[11] = normalized_goal_speed_min;
+            ego[12] = normalized_goal_speed_max;
+            ego[13] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
+            ego[14] = lane_center_dist;
+            ego[15] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         } else {
-            obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[8] = normalized_goal_speed_min;
-            obs[9] = normalized_goal_speed_max;
-            obs[10] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
-            obs[11] = lane_center_dist;
-            obs[12] = ego_entity->metrics_array[LANE_ANGLE_IDX];
+            ego[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
+            ego[8] = normalized_goal_speed_min;
+            ego[9] = normalized_goal_speed_max;
+            ego[10] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
+            ego[11] = lane_center_dist;
+            ego[12] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         }
         // Reward conditioning coefficients
-        int obs_idx = env->obs_partner_start;
         if (env->reward_conditioning) {
-            int rc_idx = env->obs_reward_coef_start;
             for (int c = 0; c < NUM_REWARD_COEFS; c++) {
+                float *rc = obs_reward_coef(w, env->observations, i, c);
                 if (env->turn_off_normalization) {
-                    obs[rc_idx++] = ego_entity->reward_coefs[c];
+                    *rc = ego_entity->reward_coefs[c];
                 } else {
-                    obs[rc_idx++] = normalize_reward_coef(ego_entity->reward_coefs[c], c, env);
+                    *rc = normalize_reward_coef(ego_entity->reward_coefs[c], c, env);
                 }
             }
         }
@@ -2714,52 +2768,39 @@ void compute_observations(Drive *env) {
             if (env->agents[index].type > CYCLIST)
                 break;
             if (index == env->active_agent_indices[i])
-                continue; // Skip self, but don't increment obs_idx
+                continue; // Skip self
             Agent *other_entity = &env->agents[index];
             if (ego_entity->respawn_timestep != -1)
                 continue;
             if (other_entity->respawn_timestep != -1)
                 continue;
-            // Store original relative positions
             float dx = other_entity->sim_x - ego_entity->sim_x;
             float dy = other_entity->sim_y - ego_entity->sim_y;
             float dz = other_entity->sim_z - ego_entity->sim_z;
             float dist = (dx * dx + dy * dy + dz * dz);
             if (dist > 2500.0f)
                 continue;
-            // Rotate to ego vehicle's frame
             float rel_x = dx * cos_heading + dy * sin_heading;
             float rel_y = -dx * sin_heading + dy * cos_heading;
-            float rel_z = dz; // No rotation needed for vertical component
-            // Store observations with correct indexing
-            obs[obs_idx] = rel_x * 0.02f;
-            obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = rel_z * 0.02f;
-            obs[obs_idx + 3] = other_entity->sim_width / MAX_VEH_WIDTH;
-            obs[obs_idx + 4] = other_entity->sim_length / MAX_VEH_LEN;
-            // relative heading
+            float rel_z = dz;
+            float *p = obs_partner(w, env->observations, i, cars_seen);
+            p[0] = rel_x * 0.02f;
+            p[1] = rel_y * 0.02f;
+            p[2] = rel_z * 0.02f;
+            p[3] = other_entity->sim_width / MAX_VEH_WIDTH;
+            p[4] = other_entity->sim_length / MAX_VEH_LEN;
             float other_cos = cosf(other_entity->sim_heading);
             float other_sin = sinf(other_entity->sim_heading);
-            float rel_heading_x =
-                other_cos * cos_heading + other_sin * sin_heading; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
-            float rel_heading_y =
-                other_sin * cos_heading - other_cos * sin_heading; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
-
-            obs[obs_idx + 5] = rel_heading_x;
-            obs[obs_idx + 6] = rel_heading_y;
-            // relative speed
+            p[5] = other_cos * cos_heading + other_sin * sin_heading;
+            p[6] = other_sin * cos_heading - other_cos * sin_heading;
             float rel_vx = other_entity->sim_vx - ego_entity->sim_vx;
             float rel_vy = other_entity->sim_vy - ego_entity->sim_vy;
             float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
             float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
-            float rel_signed_speed = copysignf(rel_speed_magnitude, rel_v_dot_heading);
-            obs[obs_idx + 7] = rel_signed_speed / MAX_SPEED;
+            p[7] = copysignf(rel_speed_magnitude, rel_v_dot_heading) / MAX_SPEED;
             cars_seen++;
-            obs_idx += 8; // Move to next observation slot
         }
-        int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 8;
-        memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
-        obs_idx = env->obs_road_start;
+        // Remaining partner slots are already zeroed by obs_clear
 
         // Map observations
         GridMapEntity entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS];
@@ -2822,25 +2863,19 @@ void compute_observations(Drive *env) {
             // Compute sin and cos of relative angle directly without atan2f
             float cos_angle = dx_norm * cos_heading + dy_norm * sin_heading;
             float sin_angle = -dx_norm * sin_heading + dy_norm * cos_heading;
-            obs[obs_idx] = x_obs * 0.02f;
-            obs[obs_idx + 1] = y_obs * 0.02f;
-            obs[obs_idx + 2] = z_obs * 0.02f;
-            obs[obs_idx + 3] = length / MAX_ROAD_SEGMENT_LENGTH;
-            obs[obs_idx + 4] = width / MAX_ROAD_SCALE;
-            obs[obs_idx + 5] = cos_angle;
-            obs[obs_idx + 6] = sin_angle;
-            obs[obs_idx + 7] = entity->type - 4.0f;
-            obs_idx += 8;
+            float *r = obs_road(w, env->observations, i, k);
+            r[0] = x_obs * 0.02f;
+            r[1] = y_obs * 0.02f;
+            r[2] = z_obs * 0.02f;
+            r[3] = length / MAX_ROAD_SEGMENT_LENGTH;
+            r[4] = width / MAX_ROAD_SCALE;
+            r[5] = cos_angle;
+            r[6] = sin_angle;
+            r[7] = entity->type - 4.0f;
         }
         env->logs[i].max_observation_distance += max_observation_distance;
         env->logs[i].observation_coverage += percent_entities_used;
-        // if (ego_idx == 0) {
-        //     printf("Max observation distance for agent %d at timestep %d: %.2f meters, percentage of entities in obs
-        //     window seen: %.2f\n", ego_idx, env->timestep, max_observation_distance, percent_entities_used);
-        // }
-        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 8;
-        // Set the entire block to 0 at once
-        memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
+        // Remaining road slots are already zeroed by obs_clear
     }
 }
 
