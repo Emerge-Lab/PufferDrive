@@ -8,31 +8,6 @@ correlated reward coefficients, goal positions, and spawn positions.
 """
 
 import numpy as np
-import ctypes
-
-
-def test_vec_reset_srand_varies_across_pids():
-    """After fork, different PIDs should produce different rand() sequences.
-    The old code used srand(i + seed * num_envs) which is PID-independent.
-    """
-    libc = ctypes.CDLL(None)
-
-    seed = 42
-    num_envs = 1
-
-    # Simulate old vec_reset: srand(i + seed * num_envs) — ignores PID
-    old_seeds = []
-    for fake_pid in range(16):
-        srand_val = 0 + seed * num_envs
-        libc.srand(srand_val)
-        old_seeds.append(libc.rand())
-
-    unique_old = len(set(old_seeds))
-    assert unique_old > 1, (
-        f"vec_reset srand produces identical rand() for all 16 simulated workers "
-        f"({unique_old}/16 unique). srand(i + seed * num_envs) ignores PID — "
-        f"all forked workers get correlated random state."
-    )
 
 
 def test_reward_coefs_vary_across_instances():
@@ -57,6 +32,7 @@ def test_reward_coefs_vary_across_instances():
         )
         env.reset()
         obs, _, _, _, _ = env.step(np.zeros((1, 1), dtype=np.int32))
+        # TODO: use reward_coefs_from_obs() or similar instead of hardcoded magic index
         ego_dim = env.ego_features
         reward_section = obs[0, ego_dim - 16 : ego_dim]
         reward_obs.append(tuple(round(float(x), 6) for x in reward_section))
@@ -70,6 +46,5 @@ def test_reward_coefs_vary_across_instances():
 
 
 if __name__ == "__main__":
-    test_vec_reset_srand_varies_across_pids()
     test_reward_coefs_vary_across_instances()
     print("All tests passed!")
