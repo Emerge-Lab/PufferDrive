@@ -172,6 +172,10 @@ pufferlib/resources/drive/binaries/validation/
 !pufferlib/resources/drive/binaries/training/map_000.bin
 pufferlib/resources/drive/sanity/sanity_binaries/
 
+# Keep carla map binaries
+!pufferlib/resources/drive/binaries/carla/
+!pufferlib/resources/drive/binaries/carla_2D/
+
 # Compiled drive binary in root
 /drive
 /visualize
