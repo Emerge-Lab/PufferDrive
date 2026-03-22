@@ -9,6 +9,77 @@ from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
 
+class ObsLayout:
+    """Defines the observation layout so components can be accessed by name.
+
+    The observation vector is laid out as:
+        [ego_features | reward_coefs (if conditioning) | partner_features | road_features]
+
+    All slicing methods work with both numpy arrays and torch tensors,
+    and support arbitrary leading batch dimensions via ``...`` indexing.
+    """
+
+    def __init__(self, ego_features, partner_features, road_features,
+                 max_partner_objects, max_road_objects,
+                 reward_conditioning=False, num_reward_coefs=0):
+        self.ego_dim = ego_features
+        self.partner_features = partner_features
+        self.road_features = road_features
+        self.max_partner_objects = max_partner_objects
+        self.max_road_objects = max_road_objects
+        self.reward_conditioning = reward_conditioning
+        self.num_reward_coefs = num_reward_coefs
+
+        self._partner_start = self.ego_dim
+        self._partner_end = self._partner_start + max_partner_objects * partner_features
+        self._road_start = self._partner_end
+        self._road_end = self._road_start + max_road_objects * road_features
+        self.num_obs = self._road_end
+
+        if reward_conditioning and num_reward_coefs > 0:
+            self._reward_coef_start = self.ego_dim - num_reward_coefs
+            self._reward_coef_end = self.ego_dim
+        else:
+            self._reward_coef_start = None
+            self._reward_coef_end = None
+
+    def ego(self, obs):
+        """Ego features including reward coefs if conditioning is on."""
+        return obs[..., :self.ego_dim]
+
+    def reward_coefs(self, obs):
+        """Reward conditioning coefficients, or None if conditioning is off."""
+        if self._reward_coef_start is None:
+            return None
+        return obs[..., self._reward_coef_start:self._reward_coef_end]
+
+    def partners_flat(self, obs):
+        """Partner features as a flat vector (..., max_partners * partner_features)."""
+        return obs[..., self._partner_start:self._partner_end]
+
+    def partners(self, obs):
+        """Partner features reshaped to (..., max_partners, partner_features).
+
+        Works with both numpy arrays and torch tensors.
+        """
+        flat = self.partners_flat(obs)
+        shape = list(flat.shape[:-1]) + [self.max_partner_objects, self.partner_features]
+        return flat.reshape(shape)
+
+    def roads_flat(self, obs):
+        """Road features as a flat vector (..., max_roads * road_features)."""
+        return obs[..., self._road_start:self._road_end]
+
+    def roads(self, obs):
+        """Road features reshaped to (..., max_roads, road_features).
+
+        Works with both numpy arrays and torch tensors.
+        """
+        flat = self.roads_flat(obs)
+        shape = list(flat.shape[:-1]) + [self.max_road_objects, self.road_features]
+        return flat.reshape(shape)
+
+
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
@@ -179,11 +250,16 @@ class Drive(pufferlib.PufferEnv):
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
 
-        self.num_obs = (
-            self.ego_features
-            + self.max_partner_objects * self.partner_features
-            + self.max_road_objects * self.road_features
+        self.obs_layout = ObsLayout(
+            ego_features=self.ego_features,
+            partner_features=self.partner_features,
+            road_features=self.road_features,
+            max_partner_objects=self.max_partner_objects,
+            max_road_objects=self.max_road_objects,
+            reward_conditioning=bool(self.reward_conditioning),
+            num_reward_coefs=binding.NUM_REWARD_COEFS,
         )
+        self.num_obs = self.obs_layout.num_obs
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         self.init_steps = init_steps

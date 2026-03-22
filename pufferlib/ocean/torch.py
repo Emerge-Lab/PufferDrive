@@ -16,14 +16,14 @@ class Drive(nn.Module):
     def __init__(self, env, input_size=128, hidden_size=128, **kwargs):
         super().__init__()
         self.hidden_size = hidden_size
+        self.obs_layout = env.obs_layout
         self.observation_size = env.single_observation_space.shape[0]
-        self.max_partner_objects = env.max_partner_objects
-        self.partner_features = env.partner_features
-        self.max_road_objects = env.max_road_objects
-        self.road_features = env.road_features
-        self.road_features_after_onehot = env.road_features + 6  # 6 is the number of one-hot encoded categories
-        # Determine ego dimension from environment's feature layout
-        self.ego_dim = env.ego_features
+        self.max_partner_objects = self.obs_layout.max_partner_objects
+        self.partner_features = self.obs_layout.partner_features
+        self.max_road_objects = self.obs_layout.max_road_objects
+        self.road_features = self.obs_layout.road_features
+        self.road_features_after_onehot = self.obs_layout.road_features + 6  # 6 one-hot encoded categories
+        self.ego_dim = self.obs_layout.ego_dim
 
         self.ego_encoder = nn.Sequential(
             pufferlib.pytorch.layer_init(nn.Linear(self.ego_dim, input_size)),
@@ -69,16 +69,10 @@ class Drive(nn.Module):
         return self.forward(x, state)
 
     def encode_observations(self, observations, state=None):
-        ego_dim = self.ego_dim
-        partner_dim = self.max_partner_objects * self.partner_features
-        road_dim = self.max_road_objects * self.road_features
-        ego_obs = observations[:, :ego_dim]
-        partner_obs = observations[:, ego_dim : ego_dim + partner_dim]
-        road_obs = observations[:, ego_dim + partner_dim : ego_dim + partner_dim + road_dim]
-
-        partner_objects = partner_obs.view(-1, self.max_partner_objects, self.partner_features)
-
-        road_objects = road_obs.view(-1, self.max_road_objects, self.road_features)
+        layout = self.obs_layout
+        ego_obs = layout.ego(observations)
+        partner_objects = layout.partners(observations)
+        road_objects = layout.roads(observations)
         road_continuous = road_objects[:, :, : self.road_features - 1]
         road_categorical = road_objects[:, :, self.road_features - 1]
         road_onehot = F.one_hot(road_categorical.long(), num_classes=7)  # Shape: [batch, ROAD_MAX_OBJECTS, 7]
