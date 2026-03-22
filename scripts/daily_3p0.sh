@@ -1,0 +1,84 @@
+#!/bin/bash
+# Daily 3.0 training jobs: rebuild from 3.0 and launch 3 seeds.
+# Intended to be run via cron on the torch cluster login node.
+#
+# Crontab entry (runs at 6am daily):
+#   0 6 * * * /scratch/ev2237/code/PufferDrive/scripts/daily_3p0.sh >> /scratch/ev2237/logs/daily_3p0.log 2>&1
+
+set -euo pipefail
+
+REPO=/scratch/ev2237/code/PufferDrive
+OVERLAY=/scratch/ev2237/images/PufferDrive/overlay-15GB-500K.ext3
+IMAGE=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
+SAVE_DIR=/scratch/ev2237/experiments
+COMPUTE_CONFIG=$REPO/scripts/cluster_configs/nyu_greene.yaml
+PROGRAM_CONFIG=$REPO/scripts/cluster_configs/train_base.yaml
+WANDB_PROJECT=Daily3p0Runs
+DATE=$(date +%Y-%m-%d)
+SEEDS="42 55 1"
+ACCOUNTS="torch_pr_355_general torch_pr_355_tandon_advanced torch_pr_355_tandon_priority torch_pr_104_general torch_pr_104_tandon_advanced torch_pr_102_general torch_pr_102_tandon_advanced torch_pr_45_general torch_pr_45_tandon_advanced"
+
+echo "=== Daily 3.0 build: $DATE ==="
+
+# Checkout and pull latest 3.0
+cd $REPO
+git fetch origin
+git checkout 3.0
+git pull origin 3.0
+
+# Rebuild C extension on a compute node
+echo "Rebuilding C extension..."
+srun --account=torch_pr_355_general --gres=gpu:1 --cpus-per-task=4 --mem=16gb --time=15 \
+  singularity exec --nv --overlay ${OVERLAY}:ro $IMAGE \
+  bash -c "source /ext3/env.sh && cd $REPO && python setup.py build_ext --inplace --force"
+
+echo "Build complete. Launching jobs..."
+
+# Activate login venv for submitit
+source /scratch/ev2237/login_venv/bin/activate
+
+# Launch 3 seeds, each on all accounts (first to start wins, rest get cancelled)
+for seed in $SEEDS; do
+  PREFIX="${DATE}-3p0-seed${seed}"
+  JOBS=""
+
+  for acct in $ACCOUNTS; do
+    JOB_OUTPUT=$(python $REPO/scripts/submit_cluster.py \
+      --save_dir $SAVE_DIR \
+      --compute_config $COMPUTE_CONFIG \
+      --program_config $PROGRAM_CONFIG \
+      --prefix "$PREFIX" \
+      --wandb-project "$WANDB_PROJECT" \
+      --container \
+      --container_overlay $OVERLAY \
+      --account $acct \
+      --args "env.map_dir=resources/drive/binaries/carla_3D" "env.num_maps=3" "train.seed=${seed}" 2>&1)
+
+    JOB_ID=$(echo "$JOB_OUTPUT" | grep -oP 'Submitted job \K\d+')
+    if [ -n "$JOB_ID" ]; then
+      JOBS="$JOBS $JOB_ID"
+    fi
+  done
+
+  echo "Seed $seed: submitted jobs:$JOBS"
+
+  # Wait briefly for one to start, then cancel the rest
+  sleep 15
+  RUNNING_JOB=""
+  for jid in $JOBS; do
+    STATE=$(squeue -j $jid -h -o '%T' 2>/dev/null || echo "GONE")
+    if [ "$STATE" = "RUNNING" ] && [ -z "$RUNNING_JOB" ]; then
+      RUNNING_JOB=$jid
+    elif [ "$STATE" != "GONE" ] && [ "$jid" != "$RUNNING_JOB" ]; then
+      scancel $jid 2>/dev/null || true
+    fi
+  done
+
+  if [ -n "$RUNNING_JOB" ]; then
+    echo "Seed $seed: keeping job $RUNNING_JOB, cancelled rest"
+  else
+    echo "Seed $seed: no job running yet, keeping all pending"
+  fi
+done
+
+echo "=== Daily 3.0 launch complete: $DATE ==="
