@@ -62,7 +62,7 @@ for seed in $SEEDS; do
     --container \
     --container_overlay $OVERLAY \
     --account $ACCOUNT \
-    --args "env.map_dir=resources/drive/binaries/carla_3D" "env.num_maps=3" "train.seed=${seed}" 2>&1)
+    --args "env.map_dir=resources/drive/binaries/carla_3D" "env.num_maps=3" "train.seed=${seed}" "train.render_interval=250" "train.checkpoint_interval=250" 2>&1)
 
   JOB_ID=$(echo "$JOB_OUTPUT" | grep -oP 'Submitted job \K\d+')
   echo "Seed $seed: submitted job $JOB_ID"
