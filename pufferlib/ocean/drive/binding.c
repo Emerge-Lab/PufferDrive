@@ -8,16 +8,27 @@
 static SharedMapData **g_map_cache = NULL;
 static int g_map_cache_size = 0;
 static pid_t g_map_cache_pid = 0; // PID of the process that created the cache
+// Cache key: params that affect SharedMapData contents (roads, grid, polylines)
+static float g_cache_observation_window_size = 0;
+static float g_cache_polyline_reduction_threshold = 0;
+static float g_cache_polyline_max_segment_length = 0;
 
 static void release_map_cache_internal(void) {
     if (g_map_cache == NULL)
         return;
-    // After fork, child inherits g_map_cache but must not free parent's memory.
-    // Just discard the inherited pointers without freeing.
+    // After fork, child inherits g_map_cache pointers via copy-on-write.
+    // We must NOT free them — they belong to the parent's address space.
+    // Discarding the pointers "leaks" the CoW pages in the child, but this
+    // is bounded (one map cache worth of memory per worker) and unavoidable
+    // with fork-based multiprocessing. The child rebuilds its own cache on
+    // the next my_shared() call.
     if (g_map_cache_pid != 0 && g_map_cache_pid != getpid()) {
         g_map_cache = NULL;
         g_map_cache_size = 0;
         g_map_cache_pid = 0;
+        g_cache_observation_window_size = 0;
+        g_cache_polyline_reduction_threshold = 0;
+        g_cache_polyline_max_segment_length = 0;
         return;
     }
     int has_refs = 0;
@@ -36,6 +47,9 @@ static void release_map_cache_internal(void) {
     g_map_cache = NULL;
     g_map_cache_size = 0;
     g_map_cache_pid = 0;
+    g_cache_observation_window_size = 0;
+    g_cache_polyline_reduction_threshold = 0;
+    g_cache_polyline_max_segment_length = 0;
 }
 
 static PyObject *release_map_cache_py(PyObject *self, PyObject *args) {
@@ -180,21 +194,24 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     clock_gettime(CLOCK_REALTIME, &ts);
     srand(ts.tv_nsec);
 
-    // Reuse existing cache if it was created by this process and has the right size.
-    // Multiple PufferDrive instances in the same process (e.g. Serial workers) share one cache.
-    // Only rebuild after fork (PID mismatch) or on first call.
-    int reuse_cache = (g_map_cache != NULL && g_map_cache_pid == getpid() && g_map_cache_size == num_maps);
+    // Reuse existing cache if it was created by this process with matching config.
+    // The cache key includes all params that affect SharedMapData contents:
+    // num_maps (array size), observation_window_size (grid vision_range),
+    // polyline params (road simplification). Other params (init_mode, reward bounds,
+    // etc.) only affect per-env state and don't change the shared map data.
+    int reuse_cache = (g_map_cache != NULL && g_map_cache_pid == getpid() && g_map_cache_size == num_maps &&
+                       g_cache_observation_window_size == observation_window_size &&
+                       g_cache_polyline_reduction_threshold == polyline_reduction_threshold &&
+                       g_cache_polyline_max_segment_length == polyline_max_segment_length);
 
     if (!reuse_cache) {
-        // Release any inherited or stale cache
         release_map_cache_internal();
-    }
-
-    if (!reuse_cache) {
-        // Allocate map cache indexed by map_id (0..num_maps-1)
         g_map_cache_size = num_maps;
         g_map_cache = (SharedMapData **)calloc(num_maps, sizeof(SharedMapData *));
         g_map_cache_pid = getpid();
+        g_cache_observation_window_size = observation_window_size;
+        g_cache_polyline_reduction_threshold = polyline_reduction_threshold;
+        g_cache_polyline_max_segment_length = polyline_max_segment_length;
     }
 
     int max_envs = use_all_maps ? num_maps : num_agents;

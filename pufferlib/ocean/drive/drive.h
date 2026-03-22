@@ -2255,6 +2255,19 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
+// Common post-load initialization shared by both init() and init_from_shared().
+// Called after map data and drivable lanes are ready. Spawns/configures agents,
+// sets start positions, and allocates per-env logs.
+void finalize_env(Drive *env) {
+    env->logs_capacity = 0;
+    set_active_agents(env);
+    env->logs_capacity = env->active_agent_count;
+    remove_bad_trajectories(env);
+    set_start_position(env);
+    init_goal_positions(env);
+    env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
+}
+
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
@@ -2269,13 +2282,7 @@ void init(Drive *env) {
     generate_offsets(z_offsets, Z_RANGE);
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
-    env->logs_capacity = 0;
-    set_active_agents(env);
-    env->logs_capacity = env->active_agent_count;
-    remove_bad_trajectories(env);
-    set_start_position(env);
-    init_goal_positions(env);
-    env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
+    finalize_env(env);
 }
 
 // Initialize an environment using shared map data instead of loading from disk.
@@ -2345,13 +2352,7 @@ void init_from_shared(Drive *env, SharedMapData *shared) {
         }
     }
 
-    env->logs_capacity = 0;
-    set_active_agents(env);
-    env->logs_capacity = env->active_agent_count;
-    remove_bad_trajectories(env);
-    set_start_position(env);
-    init_goal_positions(env);
-    env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
+    finalize_env(env);
 }
 
 // Free a SharedMapData and all data it owns.
