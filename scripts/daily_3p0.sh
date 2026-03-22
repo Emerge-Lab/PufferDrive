@@ -14,7 +14,7 @@ SAVE_DIR=/scratch/ev2237/experiments
 WANDB_PROJECT=Daily3p0Runs
 DATE=$(date +%Y-%m-%d)
 SEEDS="42 55 1"
-ACCOUNTS="torch_pr_355_general torch_pr_355_tandon_advanced torch_pr_355_tandon_priority torch_pr_104_general torch_pr_104_tandon_advanced torch_pr_102_general torch_pr_102_tandon_advanced torch_pr_45_general torch_pr_45_tandon_advanced"
+ACCOUNT=torch_pr_355_tandon_advanced
 WORKTREE=/scratch/ev2237/daily_builds/${DATE}
 
 echo "=== Daily 3.0 build: $DATE ==="
@@ -48,56 +48,23 @@ echo "Build complete. Launching jobs..."
 # Activate login venv for submitit
 source /scratch/ev2237/login_venv/bin/activate
 
-# Launch 3 seeds, each on all accounts (first to start wins, rest get cancelled)
+# Launch 3 seeds
 for seed in $SEEDS; do
   PREFIX="${DATE}-3p0-seed${seed}"
-  JOBS=""
 
-  for acct in $ACCOUNTS; do
-    JOB_OUTPUT=$(python $REPO/scripts/submit_cluster.py \
-      --save_dir $SAVE_DIR \
-      --compute_config $COMPUTE_CONFIG \
-      --program_config $PROGRAM_CONFIG \
-      --prefix "$PREFIX" \
-      --wandb-project "$WANDB_PROJECT" \
-      --container \
-      --container_overlay $OVERLAY \
-      --account $acct \
-      --args "env.map_dir=resources/drive/binaries/carla_3D" "env.num_maps=3" "train.seed=${seed}" 2>&1)
+  JOB_OUTPUT=$(python $REPO/scripts/submit_cluster.py \
+    --save_dir $SAVE_DIR \
+    --compute_config $COMPUTE_CONFIG \
+    --program_config $PROGRAM_CONFIG \
+    --prefix "$PREFIX" \
+    --wandb-project "$WANDB_PROJECT" \
+    --container \
+    --container_overlay $OVERLAY \
+    --account $ACCOUNT \
+    --args "env.map_dir=resources/drive/binaries/carla_3D" "env.num_maps=3" "train.seed=${seed}" 2>&1)
 
-    JOB_ID=$(echo "$JOB_OUTPUT" | grep -oP 'Submitted job \K\d+')
-    if [ -n "$JOB_ID" ]; then
-      JOBS="$JOBS $JOB_ID"
-    fi
-  done
-
-  echo "Seed $seed: submitted jobs:$JOBS"
-
-  # Poll until one job starts running, then cancel the rest
-  RUNNING_JOB=""
-  for attempt in $(seq 1 12); do
-    for jid in $JOBS; do
-      STATE=$(squeue -j $jid -h -o '%T' 2>/dev/null || echo "GONE")
-      if [ "$STATE" = "RUNNING" ]; then
-        RUNNING_JOB=$jid
-        break 2
-      fi
-    done
-    sleep 5
-  done
-
-  # Cancel all jobs except the running one
-  for jid in $JOBS; do
-    if [ "$jid" != "$RUNNING_JOB" ]; then
-      scancel $jid 2>/dev/null || true
-    fi
-  done
-
-  if [ -n "$RUNNING_JOB" ]; then
-    echo "Seed $seed: keeping job $RUNNING_JOB, cancelled rest"
-  else
-    echo "Seed $seed: WARNING — no job started after 60s, all jobs left as-is"
-  fi
+  JOB_ID=$(echo "$JOB_OUTPUT" | grep -oP 'Submitted job \K\d+')
+  echo "Seed $seed: submitted job $JOB_ID"
 done
 
 # Clean up worktrees older than 7 days
