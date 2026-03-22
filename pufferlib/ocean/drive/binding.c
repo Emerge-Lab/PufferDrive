@@ -254,7 +254,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             if (g_map_cache[map_id] == NULL) {
                 PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
                 const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
-                g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps, observation_window_size, polyline_reduction_threshold, polyline_max_segment_length);
+                g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps,
+                                       observation_window_size, polyline_reduction_threshold,
+                                       polyline_max_segment_length);
             }
         }
         PyList_SetItem(agent_offsets, env_count,
@@ -282,7 +284,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         if (g_map_cache[map_id] == NULL) {
             PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
             const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
-            g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps, observation_window_size, polyline_reduction_threshold, polyline_max_segment_length);
+            g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps,
+                                       observation_window_size, polyline_reduction_threshold,
+                                       polyline_max_segment_length);
         }
         SharedMapData *shared = g_map_cache[map_id];
 
