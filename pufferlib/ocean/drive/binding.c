@@ -181,26 +181,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         release_map_cache_internal();
     }
 
-    // Build reward_bounds array for create_shared_map_data
-    RewardBound reward_bounds[NUM_REWARD_COEFS];
-    reward_bounds[REWARD_COEF_GOAL_RADIUS] = (RewardBound){reward_bound_goal_radius_min, reward_bound_goal_radius_max};
-    reward_bounds[REWARD_COEF_COLLISION] = (RewardBound){reward_bound_collision_min, reward_bound_collision_max};
-    reward_bounds[REWARD_COEF_OFFROAD] = (RewardBound){reward_bound_offroad_min, reward_bound_offroad_max};
-    reward_bounds[REWARD_COEF_COMFORT] = (RewardBound){reward_bound_comfort_min, reward_bound_comfort_max};
-    reward_bounds[REWARD_COEF_LANE_ALIGN] = (RewardBound){reward_bound_lane_align_min, reward_bound_lane_align_max};
-    reward_bounds[REWARD_COEF_LANE_CENTER] = (RewardBound){reward_bound_lane_center_min, reward_bound_lane_center_max};
-    reward_bounds[REWARD_COEF_VELOCITY] = (RewardBound){reward_bound_velocity_min, reward_bound_velocity_max};
-    reward_bounds[REWARD_COEF_TRAFFIC_LIGHT] =
-        (RewardBound){reward_bound_traffic_light_min, reward_bound_traffic_light_max};
-    reward_bounds[REWARD_COEF_CENTER_BIAS] = (RewardBound){reward_bound_center_bias_min, reward_bound_center_bias_max};
-    reward_bounds[REWARD_COEF_VEL_ALIGN] = (RewardBound){reward_bound_vel_align_min, reward_bound_vel_align_max};
-    reward_bounds[REWARD_COEF_OVERSPEED] = (RewardBound){reward_bound_overspeed_min, reward_bound_overspeed_max};
-    reward_bounds[REWARD_COEF_TIMESTEP] = (RewardBound){reward_bound_timestep_min, reward_bound_timestep_max};
-    reward_bounds[REWARD_COEF_REVERSE] = (RewardBound){reward_bound_reverse_min, reward_bound_reverse_max};
-    reward_bounds[REWARD_COEF_THROTTLE] = (RewardBound){reward_bound_throttle_min, reward_bound_throttle_max};
-    reward_bounds[REWARD_COEF_STEER] = (RewardBound){reward_bound_steer_min, reward_bound_steer_max};
-    reward_bounds[REWARD_COEF_ACC] = (RewardBound){reward_bound_acc_min, reward_bound_acc_max};
-
     if (!reuse_cache) {
         // Allocate map cache indexed by map_id (0..num_maps-1)
         g_map_cache_size = num_maps;
@@ -248,10 +228,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             if (g_map_cache[map_id] == NULL) {
                 PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
                 const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
-                g_map_cache[map_id] = create_shared_map_data(
-                    map_file_path, init_mode, control_mode, init_steps, goal_behavior, reward_randomization,
-                    turn_off_normalization, reward_conditioning, min_goal_distance, max_goal_distance,
-                    min_avg_speed_to_consider_goal_attempt, reward_bounds);
+                g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps);
             }
         }
         PyList_SetItem(agent_offsets, env_count,
@@ -279,10 +256,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         if (g_map_cache[map_id] == NULL) {
             PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
             const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
-            g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps,
-                                                         goal_behavior, reward_randomization, turn_off_normalization,
-                                                         reward_conditioning, min_goal_distance, max_goal_distance,
-                                                         min_avg_speed_to_consider_goal_attempt, reward_bounds);
+            g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps);
         }
         SharedMapData *shared = g_map_cache[map_id];
 

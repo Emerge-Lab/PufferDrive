@@ -2218,25 +2218,15 @@ void free_shared_map_data(SharedMapData *shared) {
 }
 
 // Create a SharedMapData by loading a map binary and building all spatial structures.
-SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, int control_mode, int init_steps,
-                                      int goal_behavior, int reward_randomization, int turn_off_normalization,
-                                      int reward_conditioning, float min_goal_distance, float max_goal_distance,
-                                      float min_avg_speed_to_consider_goal_attempt, RewardBound *reward_bounds) {
+SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, int control_mode, int init_steps) {
     SharedMapData *shared = (SharedMapData *)calloc(1, sizeof(SharedMapData));
 
-    // Create a temporary Drive to use existing loading functions
+    // Create a temporary Drive to use existing loading functions.
+    // Only fields needed by load_map_binary / set_means / init_grid_map are set.
     Drive temp = {0};
     temp.init_mode = init_mode;
     temp.control_mode = control_mode;
     temp.init_steps = init_steps;
-    temp.goal_behavior = goal_behavior;
-    temp.reward_randomization = reward_randomization;
-    temp.turn_off_normalization = turn_off_normalization;
-    temp.reward_conditioning = reward_conditioning;
-    temp.min_goal_distance = min_goal_distance;
-    temp.max_goal_distance = max_goal_distance;
-    temp.min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt;
-    memcpy(temp.reward_bounds, reward_bounds, NUM_REWARD_COEFS * sizeof(RewardBound));
 
     // Load map binary (allocates agents, road_elements, etc.)
     load_map_binary(map_file_path, &temp);
