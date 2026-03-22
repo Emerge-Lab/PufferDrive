@@ -2,6 +2,7 @@
 
 Usage: python scripts/inspect_maps.py <map_dir> [num_maps]
 """
+
 import struct
 import sys
 import os

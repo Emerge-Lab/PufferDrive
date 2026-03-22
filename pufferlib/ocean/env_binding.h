@@ -963,7 +963,8 @@ static char *unpack_str(PyObject *kwargs, char *key) {
 
 static PyObject *get_obs_layout(PyObject *self, PyObject *args) {
     Env *env = unpack_env(args);
-    if (!env) return NULL;
+    if (!env)
+        return NULL;
     PyObject *dict = PyDict_New();
     PyDict_SetItemString(dict, "ego_dim", PyLong_FromLong(env->obs_ego_dim));
     PyDict_SetItemString(dict, "reward_coef_start", PyLong_FromLong(env->obs_reward_coef_start));
