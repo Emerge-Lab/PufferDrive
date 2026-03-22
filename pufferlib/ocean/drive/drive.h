@@ -300,6 +300,12 @@ struct SharedMapData {
     float world_mean_y;
     float world_mean_z;
 
+    // Drivable lane index (computed from road_elements, used for agent spawning)
+    int *drivable_lane_indices;
+    float *drivable_lane_lengths;
+    int num_drivable;
+    float total_drivable_lane_length;
+
     // Agent templates from binary (for cloning into per-env agents)
     Agent *template_agents;
     int num_objects;
@@ -2319,9 +2325,11 @@ void init_from_shared(Drive *env, SharedMapData *shared) {
     generate_offsets(collision_offsets, COLLISION_RANGE);
     generate_offsets(z_offsets, Z_RANGE);
 
-    // Build per-env drivable lane index from shared road_elements
-    // (needed by spawn_agent for length-weighted lane selection)
-    compute_drivable_lane_points(env);
+    // Point to shared drivable lane data (read-only, used by spawn_agent)
+    env->drivable_lane_indices = shared->drivable_lane_indices;
+    env->drivable_lane_lengths = shared->drivable_lane_lengths;
+    env->num_drivable = shared->num_drivable;
+    env->total_drivable_lane_length = shared->total_drivable_lane_length;
 
     if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         // Variable agent mode: agents are spawned fresh, not cloned from template.
@@ -2382,6 +2390,10 @@ void free_shared_map_data(SharedMapData *shared) {
     free(shared->grid_map->neighbor_cache_count);
     free(shared->grid_map);
 
+    // Free drivable lane data
+    free(shared->drivable_lane_indices);
+    free(shared->drivable_lane_lengths);
+
     // Free template agents
     free_agents(shared->template_agents, shared->num_objects);
 
@@ -2410,6 +2422,7 @@ SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, 
     load_map_binary(map_file_path, &temp);
     filter_road_elements(&temp);
     create_sparse_lane_points(&temp, polyline_reduction_threshold, polyline_max_segment_length);
+    compute_drivable_lane_points(&temp);
 
     // Transfer ownership to shared struct
     shared->template_agents = temp.agents;
@@ -2420,6 +2433,10 @@ SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, 
     shared->sdc_track_index = temp.sdc_track_index;
     shared->num_tracks_to_predict = temp.num_tracks_to_predict;
     shared->tracks_to_predict_indices = temp.tracks_to_predict_indices;
+    shared->drivable_lane_indices = temp.drivable_lane_indices;
+    shared->drivable_lane_lengths = temp.drivable_lane_lengths;
+    shared->num_drivable = temp.num_drivable;
+    shared->total_drivable_lane_length = temp.total_drivable_lane_length;
 
     // Compute world means
     set_means(&temp);
@@ -2446,8 +2463,11 @@ void c_close(Drive *env) {
     // Always free per-env agent data
     free_agents(env->agents, env->num_objects);
     free(env->active_agent_indices);
-    free(env->drivable_lane_indices);
-    free(env->drivable_lane_lengths);
+    // Only free drivable lanes if not shared (shared envs point to SharedMapData's copy)
+    if (env->shared_map == NULL) {
+        free(env->drivable_lane_indices);
+        free(env->drivable_lane_lengths);
+    }
     free(env->logs);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
