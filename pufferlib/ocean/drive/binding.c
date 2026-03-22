@@ -12,6 +12,7 @@ static pid_t g_map_cache_pid = 0; // PID of the process that created the cache
 static float g_cache_observation_window_size = 0;
 static float g_cache_polyline_reduction_threshold = 0;
 static float g_cache_polyline_max_segment_length = 0;
+static char **g_cache_map_paths = NULL; // strdup'd file paths, one per map_id
 
 static void release_map_cache_internal(void) {
     if (g_map_cache == NULL)
@@ -29,6 +30,7 @@ static void release_map_cache_internal(void) {
         g_cache_observation_window_size = 0;
         g_cache_polyline_reduction_threshold = 0;
         g_cache_polyline_max_segment_length = 0;
+        g_cache_map_paths = NULL; // don't free — parent owns the strings
         return;
     }
     int has_refs = 0;
@@ -44,12 +46,19 @@ static void release_map_cache_internal(void) {
         }
     }
     free(g_map_cache);
+    if (g_cache_map_paths != NULL) {
+        for (int i = 0; i < g_map_cache_size; i++) {
+            free(g_cache_map_paths[i]);
+        }
+        free(g_cache_map_paths);
+    }
     g_map_cache = NULL;
     g_map_cache_size = 0;
     g_map_cache_pid = 0;
     g_cache_observation_window_size = 0;
     g_cache_polyline_reduction_threshold = 0;
     g_cache_polyline_max_segment_length = 0;
+    g_cache_map_paths = NULL;
 }
 
 static PyObject *release_map_cache_py(PyObject *self, PyObject *args) {
@@ -195,14 +204,24 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     srand(ts.tv_nsec);
 
     // Reuse existing cache if it was created by this process with matching config.
-    // The cache key includes all params that affect SharedMapData contents:
-    // num_maps (array size), observation_window_size (grid vision_range),
-    // polyline params (road simplification). Other params (init_mode, reward bounds,
-    // etc.) only affect per-env state and don't change the shared map data.
+    // The cache key includes: PID, num_maps, map file paths, and params that
+    // affect SharedMapData (observation_window_size for grid, polyline params for
+    // road simplification). Other params (init_mode, reward bounds, etc.) only
+    // affect per-env state and don't change the shared map data.
     int reuse_cache = (g_map_cache != NULL && g_map_cache_pid == getpid() && g_map_cache_size == num_maps &&
                        g_cache_observation_window_size == observation_window_size &&
                        g_cache_polyline_reduction_threshold == polyline_reduction_threshold &&
                        g_cache_polyline_max_segment_length == polyline_max_segment_length);
+    // Also check that map file paths haven't changed
+    if (reuse_cache && g_cache_map_paths != NULL) {
+        for (int i = 0; i < num_maps; i++) {
+            const char *path = PyUnicode_AsUTF8(PyList_GetItem(map_files_list, i));
+            if (g_cache_map_paths[i] == NULL || strcmp(g_cache_map_paths[i], path) != 0) {
+                reuse_cache = 0;
+                break;
+            }
+        }
+    }
 
     if (!reuse_cache) {
         release_map_cache_internal();
@@ -212,6 +231,12 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         g_cache_observation_window_size = observation_window_size;
         g_cache_polyline_reduction_threshold = polyline_reduction_threshold;
         g_cache_polyline_max_segment_length = polyline_max_segment_length;
+        // Store map file paths for future reuse checks
+        g_cache_map_paths = (char **)calloc(num_maps, sizeof(char *));
+        for (int i = 0; i < num_maps; i++) {
+            const char *path = PyUnicode_AsUTF8(PyList_GetItem(map_files_list, i));
+            g_cache_map_paths[i] = strdup(path);
+        }
     }
 
     int max_envs = use_all_maps ? num_maps : num_agents;
@@ -284,9 +309,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         if (g_map_cache[map_id] == NULL) {
             PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
             const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
-            g_map_cache[map_id] = create_shared_map_data(map_file_path, init_mode, control_mode, init_steps,
-                                       observation_window_size, polyline_reduction_threshold,
-                                       polyline_max_segment_length);
+            g_map_cache[map_id] =
+                create_shared_map_data(map_file_path, init_mode, control_mode, init_steps, observation_window_size,
+                                       polyline_reduction_threshold, polyline_max_segment_length);
         }
         SharedMapData *shared = g_map_cache[map_id];
 
