@@ -153,6 +153,21 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
         # Boolean flags that don't take values (store_true)
         boolean_flags = {"wandb", "neptune"}
 
+        # Skip noisy keys from job name (paths, wandb config, common overrides)
+        name_skip_keys = {
+            "config",
+            "config_path",
+            "map_dir",
+            "env.map_dir",
+            "init_mode",
+            "env.init_mode",
+            "total_timesteps",
+            "train.total_timesteps",
+            "wandb_project",
+            "wandb_group",
+            "wandb_name",
+        }
+
         for key, val in main_args.items():
             # Convert underscores to dashes for CLI compatibility
             cli_key = key.replace("_", "-")
@@ -166,20 +181,6 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                 cmd.append(f"--{cli_key}")
                 cmd.append(str(val))
 
-            # Skip noisy keys from job name (paths, wandb config, common overrides)
-            name_skip_keys = {
-                "config",
-                "config_path",
-                "map_dir",
-                "env.map_dir",
-                "init_mode",
-                "env.init_mode",
-                "total_timesteps",
-                "train.total_timesteps",
-                "wandb_project",
-                "wandb_group",
-                "wandb_name",
-            }
             if key in overrides and key not in name_skip_keys:
                 display_key = key.split(".")[-1] if "." in key else key
                 name_entries.append(f"{display_key}{val}")
