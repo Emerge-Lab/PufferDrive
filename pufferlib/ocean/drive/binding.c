@@ -14,6 +14,16 @@ static float g_cache_polyline_reduction_threshold = 0;
 static float g_cache_polyline_max_segment_length = 0;
 static char **g_cache_map_paths = NULL; // strdup'd file paths, one per map_id
 
+static void reset_cache_globals(void) {
+    g_map_cache = NULL;
+    g_map_cache_size = 0;
+    g_map_cache_pid = 0;
+    g_cache_observation_window_size = 0;
+    g_cache_polyline_reduction_threshold = 0;
+    g_cache_polyline_max_segment_length = 0;
+    g_cache_map_paths = NULL;
+}
+
 static void release_map_cache_internal(void) {
     if (g_map_cache == NULL)
         return;
@@ -24,25 +34,16 @@ static void release_map_cache_internal(void) {
     // with fork-based multiprocessing. The child rebuilds its own cache on
     // the next my_shared() call.
     if (g_map_cache_pid != 0 && g_map_cache_pid != getpid()) {
-        g_map_cache = NULL;
-        g_map_cache_size = 0;
-        g_map_cache_pid = 0;
-        g_cache_observation_window_size = 0;
-        g_cache_polyline_reduction_threshold = 0;
-        g_cache_polyline_max_segment_length = 0;
-        g_cache_map_paths = NULL; // don't free — parent owns the strings
+        reset_cache_globals();
         return;
     }
-    int has_refs = 0;
     for (int i = 0; i < g_map_cache_size; i++) {
         if (g_map_cache[i] != NULL) {
             if (g_map_cache[i]->ref_count > 0) {
                 fprintf(stderr, "WARNING: releasing map cache entry %d with ref_count=%d\n", i,
                         g_map_cache[i]->ref_count);
-                has_refs = 1;
             }
             free_shared_map_data(g_map_cache[i]);
-            g_map_cache[i] = NULL;
         }
     }
     free(g_map_cache);
@@ -52,13 +53,7 @@ static void release_map_cache_internal(void) {
         }
         free(g_cache_map_paths);
     }
-    g_map_cache = NULL;
-    g_map_cache_size = 0;
-    g_map_cache_pid = 0;
-    g_cache_observation_window_size = 0;
-    g_cache_polyline_reduction_threshold = 0;
-    g_cache_polyline_max_segment_length = 0;
-    g_cache_map_paths = NULL;
+    reset_cache_globals();
 }
 
 static PyObject *release_map_cache_py(PyObject *self, PyObject *args) {
