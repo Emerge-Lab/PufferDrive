@@ -100,7 +100,9 @@ class LSTMWrapper(nn.Module):
         Requires that your policy define encode_observations and decode_actions.
         See the Default policy for an example."""
         super().__init__()
-        self.obs_shape = env.single_observation_space.shape
+        # Use policy_observation_space if available (compact obs reconstructs to full size)
+        policy_obs_space = getattr(env, "policy_observation_space", env.single_observation_space)
+        self.obs_shape = policy_obs_space.shape
 
         self.policy = policy
         self.input_size = input_size
