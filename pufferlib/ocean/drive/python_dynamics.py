@@ -110,8 +110,9 @@ def compute_l2_loss_ego_action_traj(
     # now we rotate everything to bring the tm1 trajectory in the same ego reference as the current time trajectory
     cos_heading = torch.cos(heading)[..., None]
     sin_heading = torch.sin(heading)[..., None]
-    rotated_x = zeroed_tm1[..., 0] * cos_heading - zeroed_tm1[..., 1] * sin_heading
-    rotated_y = zeroed_tm1[..., 0] * sin_heading + zeroed_tm1[..., 1] * cos_heading
+
+    rotated_x = zeroed_tm1[..., 0] * cos_heading + zeroed_tm1[..., 1] * sin_heading
+    rotated_y = -zeroed_tm1[..., 0] * sin_heading + zeroed_tm1[..., 1] * cos_heading
 
     rotated = torch.stack([rotated_x, rotated_y], dim=-1)  # this should be B X BPTT X K-1 X 2
 
