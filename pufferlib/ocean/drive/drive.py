@@ -39,10 +39,19 @@ class ObsLayout:
             max_road_objects=layout["max_road_objects"],
         )
 
-    def __init__(self, ego_dim, partner_start, road_start, total,
-                 partner_features, road_features,
-                 max_partner_objects, max_road_objects,
-                 reward_coef_start=-1, num_reward_coefs=0):
+    def __init__(
+        self,
+        ego_dim,
+        partner_start,
+        road_start,
+        total,
+        partner_features,
+        road_features,
+        max_partner_objects,
+        max_road_objects,
+        reward_coef_start=-1,
+        num_reward_coefs=0,
+    ):
         self.ego_dim = ego_dim
         self.partner_features = partner_features
         self.road_features = road_features

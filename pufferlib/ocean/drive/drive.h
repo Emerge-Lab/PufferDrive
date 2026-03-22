@@ -362,11 +362,11 @@ struct Drive {
     float min_avg_speed_to_consider_goal_attempt;
 
     // Observation layout offsets (computed once, used everywhere)
-    int obs_ego_dim;            // total ego section size (base ego + reward coefs if conditioning)
-    int obs_reward_coef_start;  // start of reward coefs within ego section (-1 if no conditioning)
-    int obs_partner_start;      // start of partner features
-    int obs_road_start;         // start of road features
-    int obs_total;              // total observation size per agent
+    int obs_ego_dim;           // total ego section size (base ego + reward coefs if conditioning)
+    int obs_reward_coef_start; // start of reward coefs within ego section (-1 if no conditioning)
+    int obs_partner_start;     // start of partner features
+    int obs_road_start;        // start of road features
+    int obs_total;             // total observation size per agent
 };
 
 // ========================================
@@ -3740,7 +3740,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
     // Then draw map observations
     int map_start_idx = env->obs_road_start;
-    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {          // Loop through potential map entities
+    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) { // Loop through potential map entities
         int entity_idx = map_start_idx + k * 8;
         if (agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0) {
             continue;
