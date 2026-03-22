@@ -163,7 +163,7 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                 cmd.append(f"--{cli_key}")
                 cmd.append(str(val))
 
-            # Skip noisy keys from job name (paths, wandb config)
+            # Skip noisy keys from job name (paths, wandb config, common overrides)
             name_skip_keys = {
                 "config",
                 "config_path",
@@ -171,6 +171,8 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                 "env.map_dir",
                 "init_mode",
                 "env.init_mode",
+                "total_timesteps",
+                "train.total_timesteps",
                 "wandb_project",
                 "wandb_group",
                 "wandb_name",
