@@ -275,6 +275,11 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         # Code isolation: shallow symlink of top-level entries, then copy .so files
         # so rebuilding for another branch won't break running jobs.
         isolated_root = os.path.join(save_dir, "code")
+        if os.path.exists(isolated_root):
+            version = 1
+            while os.path.exists(f"{isolated_root}_v{version}"):
+                version += 1
+            isolated_root = f"{isolated_root}_v{version}"
         os.makedirs(isolated_root, exist_ok=True)
         # Symlink each top-level entry (instant, avoids deep-copying data/)
         for entry in os.listdir(project_root):
