@@ -283,6 +283,7 @@ class PuffeRL:
 
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
+            o_compact = o  # Always store compact obs in buffer
             if self.compact_obs:
                 full_o = torch.zeros(o.shape[0], self.full_obs_shape[0], dtype=o.dtype)
                 from pufferlib.ocean.drive import binding as drive_binding
@@ -327,9 +328,9 @@ class PuffeRL:
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
                 if config["cpu_offload"]:
-                    self.observations[batch_rows, l] = o
+                    self.observations[batch_rows, l] = o_compact
                 else:
-                    self.observations[batch_rows, l] = o_device
+                    self.observations[batch_rows, l] = o_compact.to(device) if self.compact_obs else o_device
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob
