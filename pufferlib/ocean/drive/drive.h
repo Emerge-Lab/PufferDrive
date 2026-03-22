@@ -2312,6 +2312,10 @@ void init_from_shared(Drive *env, SharedMapData *shared) {
     generate_offsets(collision_offsets, COLLISION_RANGE);
     generate_offsets(z_offsets, Z_RANGE);
 
+    // Build per-env drivable lane index from shared road_elements
+    // (needed by spawn_agent for length-weighted lane selection)
+    compute_drivable_lane_points(env);
+
     if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         // Variable agent mode: agents are spawned fresh, not cloned from template.
         // Set num_objects=0 so spawn_active_agents' free_agents() call is a no-op.
