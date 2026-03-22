@@ -68,14 +68,22 @@ for seed in $SEEDS; do
 
   echo "Seed $seed: submitted jobs:$JOBS"
 
-  # Wait briefly for one to start, then cancel the rest
-  sleep 15
+  # Poll until one job starts running, then cancel the rest
   RUNNING_JOB=""
+  for attempt in $(seq 1 12); do
+    for jid in $JOBS; do
+      STATE=$(squeue -j $jid -h -o '%T' 2>/dev/null || echo "GONE")
+      if [ "$STATE" = "RUNNING" ]; then
+        RUNNING_JOB=$jid
+        break 2
+      fi
+    done
+    sleep 5
+  done
+
+  # Cancel all jobs except the running one
   for jid in $JOBS; do
-    STATE=$(squeue -j $jid -h -o '%T' 2>/dev/null || echo "GONE")
-    if [ "$STATE" = "RUNNING" ] && [ -z "$RUNNING_JOB" ]; then
-      RUNNING_JOB=$jid
-    elif [ "$STATE" != "GONE" ] && [ "$jid" != "$RUNNING_JOB" ]; then
+    if [ "$jid" != "$RUNNING_JOB" ]; then
       scancel $jid 2>/dev/null || true
     fi
   done
@@ -83,7 +91,7 @@ for seed in $SEEDS; do
   if [ -n "$RUNNING_JOB" ]; then
     echo "Seed $seed: keeping job $RUNNING_JOB, cancelled rest"
   else
-    echo "Seed $seed: no job running yet, keeping all pending"
+    echo "Seed $seed: WARNING — no job started after 60s, all jobs left as-is"
   fi
 done
 
