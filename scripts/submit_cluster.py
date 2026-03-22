@@ -164,7 +164,17 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                 cmd.append(str(val))
 
             # Skip noisy keys from job name (paths, wandb config)
-            name_skip_keys = {"config", "config_path", "map_dir", "env.map_dir", "init_mode", "env.init_mode", "wandb_project", "wandb_group", "wandb_name"}
+            name_skip_keys = {
+                "config",
+                "config_path",
+                "map_dir",
+                "env.map_dir",
+                "init_mode",
+                "env.init_mode",
+                "wandb_project",
+                "wandb_group",
+                "wandb_name",
+            }
             if key in overrides and key not in name_skip_keys:
                 display_key = key.split(".")[-1] if "." in key else key
                 name_entries.append(f"{display_key}{val}")
