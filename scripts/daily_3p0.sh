@@ -32,10 +32,10 @@ REPO=$WORKTREE
 COMPUTE_CONFIG=$REPO/scripts/cluster_configs/nyu_greene.yaml
 PROGRAM_CONFIG=$REPO/scripts/cluster_configs/train_base.yaml
 
-# Symlink resources from main repo into worktree (maps are not in git)
-if [ ! -d "$REPO/resources" ]; then
-  ln -s "$MAIN_REPO/resources" "$REPO/resources"
-fi
+# Replace worktree's pufferlib/resources with symlink to main repo's copy
+# (map binaries are .gitignored so the worktree doesn't have them)
+rm -rf "$REPO/pufferlib/resources"
+ln -s "$MAIN_REPO/pufferlib/resources" "$REPO/pufferlib/resources"
 
 # Rebuild C extension on a compute node
 echo "Rebuilding C extension in worktree..."
