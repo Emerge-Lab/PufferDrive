@@ -7,7 +7,7 @@ so all forked workers got identical rand() sequences. This caused
 correlated reward coefficients, goal positions, and spawn positions.
 """
 
-import multiprocessing
+from multiprocessing import Pipe, Process
 
 import numpy as np
 
@@ -48,11 +48,13 @@ def test_forked_workers_get_different_reward_coefs():
     num_workers = 8
     seed = 42
 
+    # Use bare multiprocessing.Process to match PufferLib's vectorization
+    # (pufferlib/vector.py). On Linux this defaults to fork, which is where
+    # the bug manifests. On macOS it defaults to spawn, which is also fine.
     coefs = []
-    ctx = multiprocessing.get_context("fork")
     for _ in range(num_workers):
-        parent_conn, child_conn = ctx.Pipe()
-        p = ctx.Process(target=_worker_reward_coefs, args=(child_conn, seed))
+        parent_conn, child_conn = Pipe()
+        p = Process(target=_worker_reward_coefs, args=(child_conn, seed))
         p.start()
         coefs.append(parent_conn.recv())
         p.join()
