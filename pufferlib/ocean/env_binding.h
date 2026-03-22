@@ -492,12 +492,10 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
     int seed = PyLong_AsLong(seed_arg);
 
     for (int i = 0; i < vec->num_envs; i++) {
-        // Seed with PID + counter so each env, each reset, and each worker
-        // gets a unique rand() sequence. Counter ensures uniqueness within
-        // a single process; PID ensures uniqueness across forked workers.
+        // Include PID so forked workers get different rand() sequences.
+        // Hash-mix to avoid correlated lane assignments across envs.
         {
-            static unsigned int reset_counter = 0;
-            unsigned int raw = (unsigned int)(i + seed * vec->num_envs + getpid() * 1000003 + reset_counter++);
+            unsigned int raw = (unsigned int)(i + seed * vec->num_envs + getpid());
             raw ^= raw >> 16;
             raw *= 0x45d9f3b;
             raw ^= raw >> 16;
