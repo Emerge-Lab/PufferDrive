@@ -163,7 +163,9 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                 cmd.append(f"--{cli_key}")
                 cmd.append(str(val))
 
-            if key in overrides and key not in ["config", "config_path"]:
+            # Skip noisy keys from job name (paths, wandb config)
+            name_skip_keys = {"config", "config_path", "map_dir", "env.map_dir", "init_mode", "env.init_mode", "wandb_project", "wandb_group", "wandb_name"}
+            if key in overrides and key not in name_skip_keys:
                 display_key = key.split(".")[-1] if "." in key else key
                 name_entries.append(f"{display_key}{val}")
 
@@ -182,6 +184,8 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
 
         if args.prefix is not None:
             job_name = f"{args.prefix}_{job_name}"
+            # Use prefix as the wandb run name for easy identification
+            cmd.extend(["--wandb-name", args.prefix])
 
         save_dir = os.path.join(args.save_dir, job_name)
         name2commands[job_name] = (cmd, save_dir)
