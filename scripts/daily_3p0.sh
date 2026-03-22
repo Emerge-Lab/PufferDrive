@@ -7,27 +7,33 @@
 
 set -euo pipefail
 
-REPO=/scratch/ev2237/code/PufferDrive
+MAIN_REPO=/scratch/ev2237/code/PufferDrive
 OVERLAY=/scratch/ev2237/images/PufferDrive/overlay-15GB-500K.ext3
 IMAGE=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 SAVE_DIR=/scratch/ev2237/experiments
-COMPUTE_CONFIG=$REPO/scripts/cluster_configs/nyu_greene.yaml
-PROGRAM_CONFIG=$REPO/scripts/cluster_configs/train_base.yaml
 WANDB_PROJECT=Daily3p0Runs
 DATE=$(date +%Y-%m-%d)
 SEEDS="42 55 1"
 ACCOUNTS="torch_pr_355_general torch_pr_355_tandon_advanced torch_pr_355_tandon_priority torch_pr_104_general torch_pr_104_tandon_advanced torch_pr_102_general torch_pr_102_tandon_advanced torch_pr_45_general torch_pr_45_tandon_advanced"
+WORKTREE=/scratch/ev2237/daily_builds/${DATE}
 
 echo "=== Daily 3.0 build: $DATE ==="
 
-# Checkout and pull latest 3.0
-cd $REPO
+# Create an isolated worktree so we never touch the main repo's state
+cd $MAIN_REPO
 git fetch origin
-git checkout 3.0
-git pull origin 3.0
+if [ -d "$WORKTREE" ]; then
+  echo "Worktree $WORKTREE already exists, removing stale one"
+  git worktree remove --force "$WORKTREE" 2>/dev/null || rm -rf "$WORKTREE"
+fi
+git worktree add "$WORKTREE" origin/3.0 --detach
+
+REPO=$WORKTREE
+COMPUTE_CONFIG=$REPO/scripts/cluster_configs/nyu_greene.yaml
+PROGRAM_CONFIG=$REPO/scripts/cluster_configs/train_base.yaml
 
 # Rebuild C extension on a compute node
-echo "Rebuilding C extension..."
+echo "Rebuilding C extension in worktree..."
 srun --account=torch_pr_355_general --gres=gpu:1 --cpus-per-task=4 --mem=16gb --time=15 \
   singularity exec --nv --overlay ${OVERLAY}:ro $IMAGE \
   bash -c "source /ext3/env.sh && cd $REPO && python setup.py build_ext --inplace --force"
@@ -80,5 +86,9 @@ for seed in $SEEDS; do
     echo "Seed $seed: no job running yet, keeping all pending"
   fi
 done
+
+# Clean up worktrees older than 7 days
+find /scratch/ev2237/daily_builds -maxdepth 1 -mindepth 1 -type d -mtime +7 -exec bash -c \
+  'cd '"$MAIN_REPO"' && git worktree remove --force "$1" 2>/dev/null || rm -rf "$1"' _ {} \;
 
 echo "=== Daily 3.0 launch complete: $DATE ==="
