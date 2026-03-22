@@ -58,6 +58,7 @@ for seed in $SEEDS; do
     --program_config $PROGRAM_CONFIG \
     --prefix "$PREFIX" \
     --wandb-project "$WANDB_PROJECT" \
+    --wandb-group "$DATE" \
     --container \
     --container_overlay $OVERLAY \
     --account $ACCOUNT \
