@@ -18,7 +18,7 @@ def _worker_reward_coefs(conn, seed):
 
     env = Drive(
         num_agents=1,
-        map_dir="resources/drive/binaries/carla_data",
+        map_dir="resources/drive/binaries/carla_3D",
         num_maps=1,
         init_mode="init_variable_agent_number",
         min_agents_per_env=1,
@@ -74,7 +74,7 @@ def test_same_process_resets_get_different_reward_coefs():
     for _ in range(10):
         env = Drive(
             num_agents=1,
-            map_dir="resources/drive/binaries/carla_data",
+            map_dir="resources/drive/binaries/carla_3D",
             num_maps=1,
             init_mode="init_variable_agent_number",
             min_agents_per_env=1,
@@ -99,9 +99,47 @@ def test_same_process_resets_get_different_reward_coefs():
     )
 
 
+def test_sub_envs_get_different_spawn_positions():
+    """Sub-envs within a single Drive instance must spawn agents at different positions.
+
+    Before the fix, all sub-envs got srand(seed) with the same seed in env_init,
+    so spawn_agent produced identical positions for every sub-env.
+    """
+    from pufferlib.ocean.drive.drive import Drive
+
+    env = Drive(
+        num_agents=16,
+        map_dir="resources/drive/binaries/carla_3D",
+        num_maps=1,
+        init_mode="init_variable_agent_number",
+        min_agents_per_env=1,
+        max_agents_per_env=1,
+        episode_length=300,
+        seed=42,
+        reward_randomization=1,
+        reward_conditioning=1,
+    )
+    env.reset()
+    obs, _, _, _, _ = env.step(np.zeros((env.num_agents, 1), dtype=np.int32))
+
+    # Extract ego positions (obs indices 0-2 are relative goal, 3 is speed, etc.)
+    # The actual sim positions aren't in the obs, but if spawn positions are the same,
+    # the observations will be identical (same road context, same relative geometry).
+    # Check that observations differ across agents.
+    obs_tuples = [tuple(round(float(x), 4) for x in obs[i, :16]) for i in range(env.num_agents)]
+    unique = len(set(obs_tuples))
+    assert unique > env.num_agents // 2, (
+        f"Only {unique}/{env.num_agents} unique ego observations across sub-envs. "
+        f"Sub-envs likely have identical spawn positions (env_init seed not diversified)."
+    )
+    env.close()
+
+
 if __name__ == "__main__":
     test_forked_workers_get_different_reward_coefs()
     print("PASS: forked workers get different reward coefs")
     test_same_process_resets_get_different_reward_coefs()
     print("PASS: same-process resets get different reward coefs")
+    test_sub_envs_get_different_spawn_positions()
+    print("PASS: sub-envs get different spawn positions")
     print("All tests passed!")
