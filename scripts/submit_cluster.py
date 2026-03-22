@@ -51,7 +51,10 @@ def parse_args():
 
     # Job management
     parser.add_argument("--save_dir", type=str, required=True, help="Base directory for experiment outputs")
-    parser.add_argument("--prefix", type=str, default=None, help="Prefix for job names")
+    parser.add_argument("--prefix", type=str, default=None, help="Prefix for job names and wandb run name")
+    parser.add_argument("--wandb-name", type=str, default=None, help="Wandb run name (defaults to --prefix)")
+    parser.add_argument("--wandb-group", type=str, default=None, help="Wandb group name (overrides program config)")
+    parser.add_argument("--wandb-project", type=str, default=None, help="Wandb project name (overrides program config)")
     parser.add_argument("--dry", action="store_true", help="Dry run (don't submit, just print commands)")
 
     # Config files
@@ -196,8 +199,15 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
 
         if args.prefix is not None:
             job_name = f"{args.prefix}_{job_name}"
-            # Use prefix as the wandb run name for easy identification
-            cmd.extend(["--wandb-name", args.prefix])
+
+        # Wandb overrides: explicit flags take priority, then prefix for name
+        wandb_name = args.wandb_name or args.prefix
+        if wandb_name is not None:
+            cmd.extend(["--wandb-name", wandb_name])
+        if args.wandb_group is not None:
+            cmd.extend(["--wandb-group", args.wandb_group])
+        if args.wandb_project is not None:
+            cmd.extend(["--wandb-project", args.wandb_project])
 
         save_dir = os.path.join(args.save_dir, job_name)
         name2commands[job_name] = (cmd, save_dir)
