@@ -339,6 +339,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->reward_randomization = (int)unpack(kwargs, "reward_randomization");
+    env->stopped_reset_threshold = (float)unpack(kwargs, "stopped_reset_threshold");
     env->turn_off_normalization = (int)unpack(kwargs, "turn_off_normalization");
     env->reward_conditioning = (int)unpack(kwargs, "reward_conditioning");
     env->min_goal_distance = (float)unpack(kwargs, "min_goal_distance");

@@ -87,6 +87,7 @@ class Drive(pufferlib.PufferEnv):
         reward_bound_acc_min=0.666,
         reward_bound_acc_max=1.5,
         min_avg_speed_to_consider_goal_attempt=2.0,
+        stopped_reset_threshold=0.0,
         # spawn settings
         min_agents_per_env=32,
         max_agents_per_env=64,
@@ -112,6 +113,7 @@ class Drive(pufferlib.PufferEnv):
         self.max_goal_speed = float(max_goal_speed) if max_goal_speed is not None else -1.0
         self.goal_behavior = goal_behavior
         self.reward_randomization = reward_randomization
+        self.stopped_reset_threshold = stopped_reset_threshold
         self.turn_off_normalization = turn_off_normalization
         self.reward_conditioning = reward_conditioning
         self.min_goal_distance = min_goal_distance
@@ -284,6 +286,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
+            stopped_reset_threshold=self.stopped_reset_threshold,
             turn_off_normalization=self.turn_off_normalization,
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
@@ -363,6 +366,7 @@ class Drive(pufferlib.PufferEnv):
                 max_goal_speed=self.max_goal_speed,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
+                stopped_reset_threshold=self.stopped_reset_threshold,
                 turn_off_normalization=self.turn_off_normalization,
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
@@ -448,6 +452,7 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
+            stopped_reset_threshold=self.stopped_reset_threshold,
             turn_off_normalization=self.turn_off_normalization,
             observation_window_size=self.observation_window_size,
             polyline_reduction_threshold=self.polyline_reduction_threshold,
@@ -520,6 +525,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_radius=self.goal_radius,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
+                stopped_reset_threshold=self.stopped_reset_threshold,
                 reward_conditioning=self.reward_conditioning,
                 turn_off_normalization=self.turn_off_normalization,
                 min_goal_distance=self.min_goal_distance,

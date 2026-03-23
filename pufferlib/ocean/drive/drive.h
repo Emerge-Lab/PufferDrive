@@ -356,6 +356,7 @@ struct Drive {
     int *tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    float stopped_reset_threshold;
     int reward_randomization;
     int reward_conditioning;
     int turn_off_normalization;
@@ -3406,9 +3407,19 @@ void c_step(Drive *env) {
             break;
         }
     }
+    int stopped_count = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        if (env->agents[agent_idx].stopped) {
+            stopped_count++;
+        }
+    }
+    float stopped_fraction = (float)stopped_count / (float)env->active_agent_count;
+    int reached_stopped_threshold =
+        (env->stopped_reset_threshold > 0.0f && stopped_fraction >= env->stopped_reset_threshold);
     int reached_time_limit = (env->timestep + 1) >= env->episode_length;
     int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
-    if (reached_time_limit || reached_early_termination) {
+    if (reached_time_limit || reached_early_termination || reached_stopped_threshold) {
         for (int i = 0; i < env->active_agent_count; i++) {
             env->truncations[i] = 1;
         }
