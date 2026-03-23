@@ -1660,7 +1660,10 @@ def ensure_drive_binary():
     binary is always up-to-date with the latest code changes.
     """
     if os.path.exists("./visualize"):
-        os.remove("./visualize")
+        try:
+            os.remove("./visualize")
+        except OSError:
+            return
 
     try:
         result = subprocess.run(
