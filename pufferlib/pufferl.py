@@ -542,7 +542,9 @@ class PuffeRL:
                         shutil.copy2(bin_path, bin_path_epoch)
 
                         driver_env = getattr(self.vecenv, "driver_env", None)
-                        render_ini = pufferlib.utils.generate_env_ini(self.config.get("env", {}), prefix="render_")
+                        render_ini = pufferlib.utils.generate_env_ini(
+                            self.config.get("env_config", {}), prefix="render_"
+                        )
                         self._render_videos(
                             bin_path=bin_path_epoch,
                             num_maps=getattr(driver_env, "num_maps", None),
@@ -1266,6 +1268,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     train_config = dict(
         **args["train"],
         env=env_name,
+        env_config=args.get("env", {}),
         eval=args.get("eval", {}),
         safe_eval=args.get("safe_eval", {}),
     )

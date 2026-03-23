@@ -23,8 +23,7 @@ def generate_env_ini(env_config, base_ini_path="pufferlib/config/ocean/drive.ini
         raise ValueError(f"INI file {base_ini_path} missing required [env] section")
 
     for key, val in env_config.items():
-        if config.has_option("env", key):
-            config.set("env", key, str(val))
+        config.set("env", key, str(val))
 
     fd, tmp_path = tempfile.mkstemp(suffix=".ini", prefix=prefix)
     with os.fdopen(fd, "w") as f:
