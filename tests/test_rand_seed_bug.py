@@ -167,8 +167,7 @@ def test_cross_worker_spawn_positions_differ():
     unique = len(set(all_obs))
     total = len(all_obs)
     assert unique == total, (
-        f"Only {unique}/{total} unique ego observations across 2 workers. "
-        f"Cross-worker sub-envs have overlapping seeds."
+        f"Only {unique}/{total} unique ego observations across 2 workers. Cross-worker sub-envs have overlapping seeds."
     )
 
 
