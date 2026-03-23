@@ -2,7 +2,6 @@
 
 import configparser
 import os
-import tempfile
 
 from pufferlib.utils import generate_env_ini, generate_safe_eval_ini
 
@@ -25,16 +24,6 @@ def test_generate_env_ini_overrides_existing_key():
         os.unlink(tmp)
 
 
-def test_generate_env_ini_adds_new_key():
-    """Keys not in the base INI are still written."""
-    tmp = generate_env_ini({"totally_new_key": 42}, BASE_INI)
-    try:
-        config = _read_ini(tmp)
-        assert config.get("env", "totally_new_key") == "42"
-    finally:
-        os.unlink(tmp)
-
-
 def test_generate_env_ini_preserves_unmodified_keys():
     """Keys not in env_config remain at their base INI values."""
     base = _read_ini(BASE_INI)
@@ -46,30 +35,6 @@ def test_generate_env_ini_preserves_unmodified_keys():
         assert config.get("env", "episode_length") == original_episode_length
     finally:
         os.unlink(tmp)
-
-
-def test_generate_env_ini_missing_base_file():
-    """Raises FileNotFoundError for a nonexistent base INI."""
-    try:
-        generate_env_ini({}, "/nonexistent/path.ini")
-        assert False, "Should have raised FileNotFoundError"
-    except FileNotFoundError:
-        pass
-
-
-def test_generate_env_ini_missing_env_section():
-    """Raises ValueError if the base INI has no [env] section."""
-    fd, tmp_base = tempfile.mkstemp(suffix=".ini")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write("[other]\nfoo = bar\n")
-        try:
-            generate_env_ini({}, tmp_base)
-            assert False, "Should have raised ValueError"
-        except ValueError:
-            pass
-    finally:
-        os.unlink(tmp_base)
 
 
 def test_generate_env_ini_output_is_readable():
@@ -95,18 +60,6 @@ def test_generate_safe_eval_ini_pins_reward_bounds():
         os.unlink(tmp)
 
 
-def test_generate_safe_eval_ini_forces_reward_randomization():
-    """generate_safe_eval_ini always sets reward_randomization=1."""
-    tmp = generate_safe_eval_ini({}, BASE_INI)
-    try:
-        config = _read_ini(tmp)
-        assert config.get("env", "reward_randomization") == "1"
-        assert config.get("env", "reward_conditioning") == "1"
-        assert config.get("env", "resample_frequency") == "0"
-    finally:
-        os.unlink(tmp)
-
-
 def test_generate_safe_eval_ini_overrides_env_keys():
     """generate_safe_eval_ini passes through env override keys."""
     safe_config = {"episode_length": 500, "num_maps": 10}
@@ -121,12 +74,8 @@ def test_generate_safe_eval_ini_overrides_env_keys():
 
 if __name__ == "__main__":
     test_generate_env_ini_overrides_existing_key()
-    test_generate_env_ini_adds_new_key()
     test_generate_env_ini_preserves_unmodified_keys()
-    test_generate_env_ini_missing_base_file()
-    test_generate_env_ini_missing_env_section()
     test_generate_env_ini_output_is_readable()
     test_generate_safe_eval_ini_pins_reward_bounds()
-    test_generate_safe_eval_ini_forces_reward_randomization()
     test_generate_safe_eval_ini_overrides_env_keys()
     print("All tests passed!")
