@@ -344,7 +344,7 @@ class Drive(pufferlib.PufferEnv):
                 self.rewards[cur:nxt],
                 self.terminals[cur:nxt],
                 self.truncations[cur:nxt],
-                seed + i,  # unique seed per sub-env so spawn positions differ
+                seed * num_envs + i,  # unique seed per sub-env, non-overlapping across workers
                 action_type=self._action_type_flag,
                 human_agent_idx=human_agent_idx,
                 reward_vehicle_collision=reward_vehicle_collision,
@@ -502,7 +502,7 @@ class Drive(pufferlib.PufferEnv):
                 self.rewards[cur:nxt],
                 self.terminals[cur:nxt],
                 self.truncations[cur:nxt],
-                seed + i,  # unique seed per sub-env so spawn positions differ
+                seed * num_envs + i,  # unique seed per sub-env, non-overlapping across workers
                 action_type=self._action_type_flag,
                 human_agent_idx=self.human_agent_idx,
                 reward_vehicle_collision=self.reward_vehicle_collision,
