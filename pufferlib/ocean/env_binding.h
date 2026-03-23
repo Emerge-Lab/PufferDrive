@@ -1,6 +1,18 @@
 #include "env_config.h"
 #include <Python.h>
 #include <numpy/arrayobject.h>
+#include <unistd.h>
+
+// Hash-mix a base seed with getpid() to ensure forked workers diverge.
+static inline void seed_rand(unsigned int base_seed) {
+    unsigned int raw = base_seed + (unsigned int)getpid();
+    raw ^= raw >> 16;
+    raw *= 0x45d9f3b;
+    raw ^= raw >> 16;
+    raw *= 0x45d9f3b;
+    raw ^= raw >> 16;
+    srand(raw);
+}
 
 // Forward declarations for env-specific functions supplied by user
 static int my_log(PyObject *dict, Log *log);
@@ -137,8 +149,7 @@ static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     int seed = PyLong_AsLong(seed_arg);
 
-    // Assumes each process has the same number of environments
-    srand(seed);
+    seed_rand((unsigned int)seed);
 
     // If kwargs is NULL, create a new dictionary
     if (kwargs == NULL) {
@@ -414,9 +425,8 @@ static PyObject *vec_init(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->terminals = (void *)((char *)PyArray_DATA(terminals) + i * PyArray_STRIDE(terminals, 0));
         env->truncations = (void *)((char *)PyArray_DATA(truncations) + i * PyArray_STRIDE(truncations, 0));
 
-        // Assumes each process has the same number of environments
         int env_seed = i + seed * vec->num_envs;
-        srand(env_seed);
+        seed_rand((unsigned int)env_seed);
 
         // Add the seed to kwargs for this environment
         PyObject *py_seed = PyLong_FromLong(env_seed);
@@ -492,8 +502,10 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
     int seed = PyLong_AsLong(seed_arg);
 
     for (int i = 0; i < vec->num_envs; i++) {
-        // Assumes each process has the same number of environments
-        srand(i + seed * vec->num_envs);
+        // Counter ensures repeated resets in the same process differ.
+        // seed_rand adds getpid() + hash mixing internally.
+        static unsigned int reset_counter = 0;
+        seed_rand((unsigned int)(i + seed * vec->num_envs + reset_counter++));
         c_reset(vec->envs[i]);
     }
     Py_RETURN_NONE;
