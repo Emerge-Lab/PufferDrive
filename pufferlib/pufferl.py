@@ -542,9 +542,7 @@ class PuffeRL:
                         shutil.copy2(bin_path, bin_path_epoch)
 
                         driver_env = getattr(self.vecenv, "driver_env", None)
-                        render_ini = pufferlib.utils.generate_env_ini(
-                            self.config.get("env", {}), prefix="render_"
-                        )
+                        render_ini = pufferlib.utils.generate_env_ini(self.config.get("env", {}), prefix="render_")
                         self._render_videos(
                             bin_path=bin_path_epoch,
                             num_maps=getattr(driver_env, "num_maps", None),
