@@ -119,7 +119,7 @@ class PuffeRL:
         self.rewards = torch.zeros(segments, horizon, device=device)
         self.terminals = torch.zeros(segments, horizon, device=device)
         self.truncations = torch.zeros(segments, horizon, device=device)
-        self.stopped = torch.zeros(segments, horizon, device=device)
+        self.is_invalid_step = torch.zeros(segments, horizon, device=device)
         self.ratio = torch.ones(segments, horizon, device=device)
         self.importance = torch.ones(segments, horizon, device=device)
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
@@ -266,7 +266,7 @@ class PuffeRL:
         self.full_rows = 0
         while self.full_rows < self.segments:
             profile("env", epoch)
-            o, r, d, t, info, env_id, mask = self.vecenv.recv()
+            o, r, d, t, info, env_id, mask, is_invalid_step = self.vecenv.recv()
 
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
@@ -276,9 +276,9 @@ class PuffeRL:
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
             o_device = o.to(device)  # , non_blocking=True)
-            stopped = torch.tensor(self.vecenv.stopped).to(device)
+            is_invalid_step = torch.as_tensor(is_invalid_step, dtype=torch.bool).to(device)
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
-            r = r * (1.0 - stopped)  # mask the reward after the car was stopped
+            r[is_invalid_step] = 0.0  # mask the reward for invalid steps
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
             t = torch.as_tensor(t).to(device)  # , non_blocking=True)
             done_mask = (d + t).clamp(max=1)
@@ -300,6 +300,7 @@ class PuffeRL:
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 if config.get("clamp_reward", True):
                     r = torch.clamp(r, -1, 1)
+                value[~is_invalid_step] = 0.0
 
             profile("eval_copy", epoch)
             with torch.no_grad():
@@ -328,7 +329,7 @@ class PuffeRL:
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = done_mask.float()
                 self.truncations[batch_rows, l] = t.float()
-                self.stopped[batch_rows, l] = stopped
+                self.is_invalid_step[batch_rows, l] = is_invalid_step
                 self.values[batch_rows, l] = value.flatten()
 
                 # Note: We are not yet handling masks in this version
@@ -409,7 +410,7 @@ class PuffeRL:
             mb_logprobs = self.logprobs[idx]
             mb_rewards = self.rewards[idx]
             mb_terminals = self.terminals[idx]
-            mb_stopped = self.stopped[idx].bool()
+            mb_is_invalid_step = self.is_invalid_step[idx].bool()
             mb_truncations = self.truncations[idx]
             mb_ratio = self.ratio[idx]
             mb_values = self.values[idx]
@@ -455,11 +456,21 @@ class PuffeRL:
             adv = mb_advantages
             adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
+            # --- Masked advantage normalization ---
+            # Only compute mean/std over valid timesteps
+            valid_adv = adv[~mb_is_invalid_step]
+            if valid_adv.numel() > 0:
+                adv_mean = valid_adv.mean()
+                adv_std = valid_adv.std() + 1e-8
+            else:
+                adv_mean = adv.mean()
+                adv_std = adv.std() + 1e-8
+            adv = (adv - adv_mean) / adv_std
+
             # Losses
-            pg_loss1 = -adv * ratio
-            pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
+            pg_loss1 = -adv[~mb_is_invalid_step] * ratio[~mb_is_invalid_step]
+            pg_loss2 = -adv[~mb_is_invalid_step] * torch.clamp(ratio[~mb_is_invalid_step], 1 - clip_coef, 1 + clip_coef)
             pg_loss = torch.max(pg_loss1, pg_loss2)
-            pg_loss[mb_stopped] = 0.0
             pg_loss = pg_loss.mean()
 
             newvalue = newvalue.view(mb_returns.shape)
@@ -467,8 +478,7 @@ class PuffeRL:
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
-            v_loss[mb_stopped] = 0.0
-            v_loss = v_loss.mean()
+            v_loss = v_loss[~mb_is_invalid_step].mean()
 
             entropy_loss = entropy.mean()
 
