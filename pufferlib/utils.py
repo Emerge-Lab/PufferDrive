@@ -9,11 +9,11 @@ import random
 import tempfile
 
 
-def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/ocean/drive.ini"):
-    """Generate a temporary INI file with safe reward conditioning values.
+def generate_env_ini(env_config, base_ini_path="pufferlib/config/ocean/drive.ini", prefix="env_"):
+    """Generate a temporary INI file with env config overrides applied.
 
-    Sets reward_randomization=1 and reward_conditioning=1, then pins each
-    reward bound min=max to the values from safe_eval_config.
+    The visualize binary and other tools read config from an INI file,
+    not CLI args. This ensures they use the same settings as training.
     """
     config = configparser.ConfigParser()
     read_files = config.read(base_ini_path)
@@ -22,31 +22,41 @@ def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/oce
     if not config.has_section("env"):
         raise ValueError(f"INI file {base_ini_path} missing required [env] section")
 
-    config.set("env", "reward_randomization", "1")
-    config.set("env", "reward_conditioning", "1")
-    config.set("env", "resample_frequency", "0")
+    for key, val in env_config.items():
+        config.set("env", key, str(val))
 
-    env_override_keys = [
-        "episode_length",
-        "num_agents",
-        "min_goal_distance",
-        "max_goal_distance",
-        "map_dir",
-        "num_maps",
-    ]
-    for key in env_override_keys:
+    fd, tmp_path = tempfile.mkstemp(suffix=".ini", prefix=prefix)
+    with os.fdopen(fd, "w") as f:
+        config.write(f)
+
+    return tmp_path
+
+
+def generate_safe_eval_ini(safe_eval_config, base_ini_path="pufferlib/config/ocean/drive.ini"):
+    """Generate a temporary INI file with safe reward conditioning values.
+
+    Builds on generate_env_ini, then pins reward bounds min=max.
+    """
+    env_overrides = {
+        "reward_randomization": 1,
+        "reward_conditioning": 1,
+        "resample_frequency": 0,
+    }
+    for key in ["episode_length", "num_agents", "min_goal_distance", "max_goal_distance", "map_dir", "num_maps"]:
         if key in safe_eval_config:
-            config.set("env", key, str(safe_eval_config[key]))
+            env_overrides[key] = safe_eval_config[key]
 
-    # Pin each reward bound: set min=max to the safe value
+    tmp_path = generate_env_ini(env_overrides, base_ini_path, prefix="safe_eval_")
+
+    # Re-read to pin reward bounds
+    config = configparser.ConfigParser()
+    config.read(tmp_path)
     for key, val in safe_eval_config.items():
-        # Check if this key corresponds to a reward bound in the INI
         if config.has_option("env", f"reward_bound_{key}_min"):
             config.set("env", f"reward_bound_{key}_min", str(val))
             config.set("env", f"reward_bound_{key}_max", str(val))
 
-    fd, tmp_path = tempfile.mkstemp(suffix=".ini", prefix="safe_eval_")
-    with os.fdopen(fd, "w") as f:
+    with open(tmp_path, "w") as f:
         config.write(f)
 
     return tmp_path
