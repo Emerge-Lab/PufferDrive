@@ -301,7 +301,7 @@ class PuffeRL:
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 if config.get("clamp_reward", True):
                     r = torch.clamp(r, -1, 1)
-                value[~is_invalid_step] = 0.0
+                value[is_invalid_step] = 0.0
 
             profile("eval_copy", epoch)
             with torch.no_grad():
