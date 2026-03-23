@@ -542,12 +542,16 @@ class PuffeRL:
                         shutil.copy2(bin_path, bin_path_epoch)
 
                         driver_env = getattr(self.vecenv, "driver_env", None)
+                        render_ini = pufferlib.utils.generate_env_ini(
+                            self.config.get("env", {}), prefix="render_"
+                        )
                         self._render_videos(
                             bin_path=bin_path_epoch,
                             num_maps=getattr(driver_env, "num_maps", None),
                             map_dir=getattr(driver_env, "map_dir", None),
                             wandb_prefix="render",
-                            cleanup_files=[bin_path_epoch, bin_path],
+                            config_path=render_ini,
+                            cleanup_files=[bin_path_epoch, bin_path, render_ini],
                         )
 
                     except Exception as e:
