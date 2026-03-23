@@ -115,6 +115,7 @@ class PufferEnv:
             self.infos,
             self.agent_ids,
             self.masks,
+            self.is_invalid_step,
         )
 
 

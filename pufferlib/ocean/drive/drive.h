@@ -288,7 +288,7 @@ struct Drive {
     float *rewards;
     unsigned char *terminals;
     unsigned char *truncations;
-    unsigned char *stopped;
+    unsigned char *is_invalid_step;
     Log log;
     Log *logs;
     int num_agents; // Max controlled agents
@@ -3144,7 +3144,7 @@ void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
-    memset(env->stopped, 0, env->active_agent_count * sizeof(unsigned char));
+    memset(env->is_invalid_step, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
 
     // Move static experts
@@ -3183,7 +3183,7 @@ void c_step(Drive *env) {
         agent->aabb_collision_state = 0;
         // log the agent is stopped before computing the metrics. this way we get stopped AFTER the collision (stopped
         // is true on the first step where it can't move)
-        env->stopped[i] = (unsigned char)agent->stopped;
+        env->is_invalid_step[i] = (unsigned char)agent->stopped;
         compute_agent_metrics(env, agent_idx);
         int collision_state = agent->collision_state;
         if (collision_state == NO_COLLISION) {
