@@ -561,8 +561,8 @@ static PyObject *vec_trajectory_reward(PyObject *self, PyObject *args) {
     int *actions = (int *)PyArray_DATA(action_arr);
     int total = num_agents * traj_len;
 
-    // Initialize trajectory buffers on first call
-    if (env->traj_len != traj_len) {
+    // Initialize trajectory buffers on first call or if size changed
+    if (env->traj_len != traj_len || env->curr_traj_x == NULL) {
         free(env->prev_traj_x);
         free(env->prev_traj_y);
         free(env->curr_traj_x);

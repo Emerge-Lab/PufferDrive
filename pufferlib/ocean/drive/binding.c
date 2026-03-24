@@ -399,6 +399,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->map_name = map_path;
     env->init_steps = init_steps;
     env->timestep = init_steps;
+
+    // Trajectory length for action buffer stride (default 1 = no trajectory)
+    PyObject *tl_obj = kwargs ? PyDict_GetItemString(kwargs, "actions_trajectory_length") : NULL;
+    env->traj_len = (tl_obj != NULL) ? (int)PyLong_AsLong(tl_obj) : 1;
+
     init(env);
     return 0;
 }

@@ -409,6 +409,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                actions_trajectory_length=self.actions_trajectory_length,
             )
             env_ids.append(env_id)
 
@@ -560,6 +561,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                actions_trajectory_length=self.actions_trajectory_length,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
