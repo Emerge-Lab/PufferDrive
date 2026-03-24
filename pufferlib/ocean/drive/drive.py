@@ -334,6 +334,10 @@ class Drive(pufferlib.PufferEnv):
         self.map_ids = map_ids
         self.num_envs = num_envs
         super().__init__(buf=buf)
+        if buf is not None and "is_invalid_step" in buf:
+            self.is_invalid_step = buf["is_invalid_step"]
+        else:
+            self.is_invalid_step = np.zeros(self.num_agents, dtype=np.uint8)
         env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
@@ -345,6 +349,7 @@ class Drive(pufferlib.PufferEnv):
                 self.terminals[cur:nxt],
                 self.truncations[cur:nxt],
                 seed * num_envs + i,  # unique seed per sub-env, non-overlapping across workers
+                self.is_invalid_step[cur:nxt],
                 action_type=self._action_type_flag,
                 human_agent_idx=human_agent_idx,
                 reward_vehicle_collision=reward_vehicle_collision,
@@ -503,6 +508,7 @@ class Drive(pufferlib.PufferEnv):
                 self.terminals[cur:nxt],
                 self.truncations[cur:nxt],
                 seed * num_envs + i,  # unique seed per sub-env, non-overlapping across workers
+                self.is_invalid_step[cur:nxt],
                 action_type=self._action_type_flag,
                 human_agent_idx=self.human_agent_idx,
                 reward_vehicle_collision=self.reward_vehicle_collision,
