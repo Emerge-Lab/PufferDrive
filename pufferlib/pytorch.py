@@ -251,7 +251,8 @@ def sample_logits_action_sequence(logits, action=None):
         action = torch.multinomial(probs.reshape(-1, probs.shape[-1]), 1, replacement=True).int()
         action = action.reshape(probs.shape[:-1])
     else:
-        action = action.reshape(-1, action.shape[-2])
+        if action.dim() > 2:
+            action = action.reshape(-1, action.shape[-1])
     logprob = log_prob(normalized_logits, action)
     logits_entropy = entropy(normalized_logits).sum(-1)
 
