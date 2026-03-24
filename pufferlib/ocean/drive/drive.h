@@ -3184,6 +3184,14 @@ void c_step(Drive *env) {
         // log the agent is stopped before computing the metrics. this way we get stopped AFTER the collision (stopped
         // is true on the first step where it can't move)
         env->is_invalid_step[i] = (unsigned char)agent->stopped;
+
+        // Stopped agents get zero reward — they already received their collision/offroad
+        // penalty on the step they were stopped. No further reward accumulation.
+        if (agent->stopped) {
+            env->rewards[i] = 0.0f;
+            continue;
+        }
+
         compute_agent_metrics(env, agent_idx);
         int collision_state = agent->collision_state;
         if (collision_state == NO_COLLISION) {
