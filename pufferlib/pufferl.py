@@ -377,6 +377,7 @@ class PuffeRL:
                     self.full_rows += num_full
 
                 action = action.squeeze(-1).cpu().numpy()  # [agents, traj_len] — full trajectory
+                print(f"DEBUG send action shape={action.shape} dtype={action.dtype} atn_space={self.vecenv.action_space}", flush=True)
                 if isinstance(logits, torch.distributions.Normal):
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
 
