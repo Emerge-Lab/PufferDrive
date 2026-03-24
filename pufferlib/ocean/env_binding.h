@@ -541,6 +541,72 @@ static PyObject *vec_render(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+// Roll out action trajectories through dynamics and store for rendering.
+// action_traj: [num_agents * traj_len] array of discrete action indices.
+static PyObject *vec_set_trajectory(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_trajectory requires 4 args: vec_env, env_id, action_traj, traj_len");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    int env_id = PyLong_AsLong(PyTuple_GetItem(args, 1));
+    PyArrayObject *action_arr = (PyArrayObject *)PyTuple_GetItem(args, 2);
+    int traj_len = PyLong_AsLong(PyTuple_GetItem(args, 3));
+
+    Env *env = vec->envs[env_id];
+    int num_agents = env->active_agent_count;
+    int *actions = (int *)PyArray_DATA(action_arr);
+    int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+
+    // Allocate/reallocate trajectory buffers
+    free(env->predicted_traj_x);
+    free(env->predicted_traj_y);
+    int total = num_agents * traj_len;
+    env->predicted_traj_x = (float *)calloc(total, sizeof(float));
+    env->predicted_traj_y = (float *)calloc(total, sizeof(float));
+    env->predicted_traj_len = traj_len;
+
+    // Roll out each agent's trajectory using classic dynamics
+    for (int i = 0; i < num_agents; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        Agent *agent = &env->agents[agent_idx];
+        float x = agent->sim_x;
+        float y = agent->sim_y;
+        float heading = agent->sim_heading;
+        float vx = agent->sim_vx;
+        float vy = agent->sim_vy;
+
+        for (int t = 0; t < traj_len; t++) {
+            int action_val = actions[i * traj_len + t];
+            int accel_idx = action_val / num_steer;
+            int steer_idx = action_val % num_steer;
+            float acceleration = ACCELERATION_VALUES[accel_idx];
+            float steering = STEERING_VALUES[steer_idx];
+
+            float speed_mag = sqrtf(vx * vx + vy * vy);
+            float v_dot = vx * cosf(heading) + vy * sinf(heading);
+            float signed_speed = copysignf(speed_mag, v_dot);
+            signed_speed += acceleration * env->dt;
+            signed_speed = clipSpeed(signed_speed);
+            float beta = tanhf(0.5f * tanf(steering));
+            float new_vx = signed_speed * cosf(heading + beta);
+            float new_vy = signed_speed * sinf(heading + beta);
+            float yaw_rate = (signed_speed * cosf(beta) * tanf(steering)) / agent->sim_length;
+
+            x += new_vx * env->dt;
+            y += new_vy * env->dt;
+            heading += yaw_rate * env->dt;
+            vx = new_vx;
+            vy = new_vy;
+
+            env->predicted_traj_x[i * traj_len + t] = x;
+            env->predicted_traj_y[i * traj_len + t] = y;
+        }
+    }
+
+    Py_RETURN_NONE;
+}
+
 static int assign_to_dict(PyObject *dict, char *key, float value) {
     PyObject *v = PyFloat_FromDouble(value);
     if (v == NULL) {
@@ -977,6 +1043,7 @@ static PyMethodDef methods[] = {
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
+    {"vec_set_trajectory", vec_set_trajectory, METH_VARARGS, "Set predicted trajectory for rendering"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},

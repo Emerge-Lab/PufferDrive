@@ -351,6 +351,16 @@ struct Drive {
     int turn_off_normalization;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
+
+    // Predicted trajectory visualization (set from Python, drawn by c_render)
+    float *predicted_traj_x;  // [num_agents * traj_len]
+    float *predicted_traj_y;  // [num_agents * traj_len]
+    int predicted_traj_len;   // steps per agent (0 = no trajectory to draw)
+
+    // Headless rendering (ffmpeg pipe)
+    int render_mode;      // 0=window, 1=headless
+    int render_pipe_fd;   // write end of pipe to ffmpeg
+    pid_t render_pid;     // ffmpeg child process
 };
 
 // ========================================
@@ -3914,6 +3924,54 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     }
 }
 
+// Start headless ffmpeg pipe for recording
+void start_render_pipe(Drive *env, int width, int height) {
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        fprintf(stderr, "Failed to create render pipe\n");
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == 0) { // child: run ffmpeg
+        close(pipefd[1]);
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[0]);
+        for (int fd = 3; fd < 256; fd++)
+            close(fd);
+        char size_str[64];
+        snprintf(size_str, sizeof(size_str), "%dx%d", width, height);
+        execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
+               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "-loglevel", "error",
+               "/tmp/pufferdrive_render.mp4", NULL);
+        fprintf(stderr, "execlp ffmpeg failed\n");
+        _exit(1);
+    }
+    close(pipefd[0]);
+    env->render_pid = pid;
+    env->render_pipe_fd = pipefd[1];
+}
+
+void stop_render_pipe(Drive *env) {
+    if (env->render_pipe_fd > 0) {
+        close(env->render_pipe_fd);
+        env->render_pipe_fd = 0;
+    }
+    if (env->render_pid > 0) {
+        waitpid(env->render_pid, NULL, 0);
+        env->render_pid = 0;
+    }
+}
+
+void write_render_frame(Drive *env, int width, int height) {
+    if (env->render_pipe_fd <= 0)
+        return;
+    unsigned char *pixels = rlReadScreenPixels(width, height);
+    if (pixels) {
+        write(env->render_pipe_fd, pixels, width * height * 4);
+        RL_FREE(pixels);
+    }
+}
+
 void c_render(Drive *env) {
     if (env->client == NULL) {
         env->client = make_client(env);
@@ -3925,6 +3983,24 @@ void c_render(Drive *env) {
     BeginMode3D(client->camera);
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
+
+    // Draw predicted trajectories (set from Python)
+    if (env->predicted_traj_x != NULL && env->predicted_traj_len > 0) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            Agent *agent = &env->agents[agent_idx];
+            int tlen = env->predicted_traj_len;
+            Vector3 prev = {agent->sim_x, agent->sim_y, 0.6f};
+            for (int t = 0; t < tlen; t++) {
+                float tx = env->predicted_traj_x[i * tlen + t];
+                float ty = env->predicted_traj_y[i * tlen + t];
+                Vector3 curr = {tx, ty, 0.6f};
+                DrawLine3D(prev, curr, Fade(SKYBLUE, 0.8f));
+                DrawSphere(curr, 0.3f, Fade(SKYBLUE, 0.6f));
+                prev = curr;
+            }
+        }
+    }
 
     if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
         env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;

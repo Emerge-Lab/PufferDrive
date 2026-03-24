@@ -706,6 +706,21 @@ class Drive(pufferlib.PufferEnv):
     def render(self):
         binding.vec_render(self.c_envs, 0)
 
+    def set_predicted_trajectories(self, action_trajectories):
+        """Roll out action trajectories through dynamics and set for rendering.
+
+        Args:
+            action_trajectories: numpy array of shape [num_agents, traj_len]
+                containing discrete action indices (e.g. classic: accel_idx * 13 + steer_idx).
+        """
+        num_agents, traj_len = action_trajectories.shape
+        binding.vec_set_trajectory(
+            self.c_envs,
+            0,
+            action_trajectories.flatten().astype(np.int32),
+            traj_len,
+        )
+
     def close(self):
         binding.vec_close(self.c_envs)
 
