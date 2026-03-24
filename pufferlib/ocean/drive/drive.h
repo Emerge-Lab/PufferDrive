@@ -3399,16 +3399,22 @@ void c_step(Drive *env) {
     }
 
     int originals_remaining = 0;
+    int stopped_count = 0;
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         if (env->agents[agent_idx].respawn_count == 0) {
             originals_remaining = 1;
-            break;
+        }
+        if (env->agents[agent_idx].stopped) {
+            stopped_count++;
         }
     }
     int reached_time_limit = (env->timestep + 1) >= env->episode_length;
     int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
-    if (reached_time_limit || reached_early_termination) {
+    // Truncate if >40% of agents are stopped (world is no longer productive)
+    int too_many_stopped = (env->active_agent_count > 0) &&
+                           (stopped_count * 10 > env->active_agent_count * 4);
+    if (reached_time_limit || reached_early_termination || too_many_stopped) {
         for (int i = 0; i < env->active_agent_count; i++) {
             env->truncations[i] = 1;
         }
