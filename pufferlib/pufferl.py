@@ -377,6 +377,8 @@ class PuffeRL:
                     self.full_rows += num_full
 
                 action = action.squeeze(-1).long().cpu().numpy()  # [agents, traj_len] int64
+                assert action.min() >= 0 and action.max() < 91, f"Action out of bounds: min={action.min()} max={action.max()}"
+                assert action.shape == (action.shape[0], self.actions_trajectory_length), f"Action shape mismatch: {action.shape} vs ({action.shape[0]}, {self.actions_trajectory_length})"
                 if isinstance(logits, torch.distributions.Normal):
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
 
