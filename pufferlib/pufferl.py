@@ -158,6 +158,7 @@ class PuffeRL:
         self.rewards = torch.zeros(segments, horizon, device=device)
         self.terminals = torch.zeros(segments, horizon, device=device)
         self.prev_terminals = torch.zeros(segments, 1, device=device)
+        self.prev_heading = torch.zeros(segments, 1, device=device)
         self.truncations = torch.zeros(segments, horizon, device=device)
         self.ratio = torch.ones(segments, horizon, device=device)
         self.importance = torch.ones(segments, horizon, device=device)
@@ -428,13 +429,14 @@ class PuffeRL:
         r_commitment = compute_l2_loss_ego_action_traj(
             traj,
             self.prev_state_traj,
-            heading,
+            torch.cat([self.prev_heading, heading[:, :-1]], dim=1),
             self.terminals,  # torch.cat([self.prev_terminals, self.terminals[:, :-1]], dim=1),
             trajectory_loss_norm=config["trajectory_loss_norm"],
             trajectory_loss_clamp_min=config["trajectory_loss_clamp_min"],
         )
         r_commitment = r_commitment.detach()
         self.prev_state_traj = traj[:, -1, ...]
+        self.prev_heading = heading[:, [-1]]
         self.prev_terminals = self.terminals[:, [-1]]
 
         for mb in range(self.total_minibatches):
