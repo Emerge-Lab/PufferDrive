@@ -149,9 +149,8 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
         }
     }
 
-    // Draw scene
+    // Draw scene (note: draw_scene calls EndMode3D internally)
     draw_scene(env, client, 1, obs, lasers, show_grid);
-    EndMode3D();
     EndDrawing();
 }
 

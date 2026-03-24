@@ -2113,6 +2113,8 @@ void c_close(Drive *env) {
     free(env->expert_static_agent_indices);
     free(env->tracks_to_predict_indices);
     free(env->ini_file);
+    free(env->predicted_traj_x);
+    free(env->predicted_traj_y);
 }
 
 void allocate(Drive *env) {
@@ -3996,7 +3998,7 @@ void c_render(Drive *env) {
             client->camera_zoom = 3.0f;
     }
 
-    // Mouse drag pan (right button or middle button)
+    // Mouse drag pan (left button)
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
         Vector2 delta = GetMouseDelta();
         // Scale mouse pixels to world units based on current zoom
@@ -4021,14 +4023,6 @@ void c_render(Drive *env) {
     // Re-enter 3D mode for trajectory drawing (draw_scene ended it)
     BeginMode3D(topdown_cam);
     rlDisableDepthTest();
-    // First: draw GREEN circles at every agent position to verify coordinate alignment
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        Agent *agent = &env->agents[agent_idx];
-        DrawCircle3D((Vector3){agent->sim_x, agent->sim_y, agent->sim_z + 0.1f},
-                     5.0f, (Vector3){0, 0, 1}, 0.0f, GREEN);
-    }
-    // Then: draw trajectory lines and points
     if (env->predicted_traj_x != NULL && env->predicted_traj_len > 0) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];

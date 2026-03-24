@@ -23,7 +23,7 @@ void test_drivenet() {
     Weights *weights = load_weights("puffer_drive_weights.bin");
     DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, 0);
 
-    forward(net, observations, actions);
+    forward(net, NULL, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {
         printf("idx: %d, action: %d, logits:", i, actions[i]);
         for (int j = 0; j < num_actions; j++) {
@@ -112,7 +112,7 @@ void demo() {
         int *actions = (int *)env.actions; // Single integer per agent
 
         if (!IsKeyDown(KEY_LEFT_SHIFT)) {
-            forward(net, env.observations, actions);
+            forward(net, &env, env.observations, actions);
         } else {
             if (env.dynamics_model == CLASSIC) {
                 // Classic dynamics: acceleration and steering
