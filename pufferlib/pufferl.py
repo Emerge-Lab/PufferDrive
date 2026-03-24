@@ -723,8 +723,8 @@ class PuffeRL:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
-        if self.config["eval"]["wosac_realism_eval"]:
-            pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
+            if self.config["eval"]["wosac_realism_eval"]:
+                pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
     def mean_and_log(self):
         config = self.config
