@@ -197,7 +197,7 @@ static PyObject *env_reset(PyObject *self, PyObject *args) {
 static PyObject *env_step(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
     if (num_args != 1) {
-        PyErr_SetString(PyExc_TypeError, "vec_render requires 1 argument");
+        PyErr_SetString(PyExc_TypeError, "env_step requires 1 argument");
         return NULL;
     }
 

@@ -1,5 +1,6 @@
 """WOSAC evaluation class for PufferDrive."""
 
+import copy
 import torch
 import numpy as np
 import pandas as pd
@@ -816,6 +817,146 @@ class HumanReplayEvaluator:
             if len(info_list) > 0:  # Happens at the end of episode
                 results = info_list[0]
                 return results
+
+
+class Evaluator:
+    """Evaluates policies in self_play or human_replay mode, with optional rendering.
+
+    Initializes the eval envs needed based on eval config flags:
+    - human_replay_eval: creates sp_env + hr_env
+    - render_eval: creates sp_env (if not already created)
+
+
+
+    """
+
+    def __init__(self, configs, logger=None):
+        self.configs = configs
+        self.logger = logger
+        self.sim_steps = 90
+        self.self_play_stats = None
+        self.human_replay_stats = None
+        self.sp_env = None
+        self.hr_env = None
+
+        self._unpack_eval_configs(configs)
+
+    def _unpack_eval_configs(self, configs):
+        eval_config = copy.deepcopy(configs)
+        # Create separate evaluation environments based on specified configs
+        eval_config["env"]["termination_mode"] = 0
+        backend = eval_config["eval"].get("backend", "PufferEnv")
+        eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
+        eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
+        eval_config["env"]["episode_length"] = 91  # WOMD scenario length
+        eval_config["vec"] = dict(backend=backend, num_envs=1)
+
+        self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
+        self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
+
+        self.hr_eval_config = copy.deepcopy(eval_config)
+        self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
+        self.hr_eval_config["env"]["render_mode"] = 1 if self.render_hr_rollout else 0
+
+        self.sp_eval_config = copy.deepcopy(eval_config)
+        self.sp_eval_config["env"]["control_mode"] = "control_agents"
+        self.sp_eval_config["env"]["render_mode"] = 1 if self.render_sp_rollout else 0
+
+    def rollout(self, policy, mode="self_play", render_rollout=False):
+        """Roll out the given policy in the specified eval env and collect statistics."""
+
+        env = self.hr_env if mode == "human_replay" else self.sp_env
+        render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
+        driver = env.driver_env
+        num_agents = env.observation_space.shape[0]
+        device = self.configs["train"]["device"]
+
+        # Reset environment
+        obs, info = env.reset()
+
+        # Initialize RNN state if needed
+        state = {}
+        if self.configs["train"]["use_rnn"]:
+            state = dict(
+                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+            )
+
+        # Rollout
+        for time_idx in range(self.sim_steps):
+            if render_rollout or render_eval:
+                driver.render()
+
+            # Get action from policy
+            with torch.no_grad():
+                ob_tensor = torch.as_tensor(obs).to(device)
+                logits, value = policy.forward_eval(ob_tensor, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action_np = action.cpu().numpy().reshape(env.action_space.shape)
+
+            # Clip continuous actions to valid range
+            if isinstance(logits, torch.distributions.Normal):
+                action_np = np.clip(action_np, env.action_space.low, env.action_space.high)
+
+            # Step environment
+            obs, rewards, dones, truncs, info_list = env.step(action_np)
+
+            if truncs.all():
+                break
+
+        # Aggregate final statistics
+        final_info = info_list[0] if info_list else {}
+
+        if mode == "self_play":
+            self.self_play_stats = final_info
+        elif mode == "human_replay":
+            self.human_replay_stats = final_info
+
+    def log_videos(self, eval_mode, epoch):
+        """Log all mp4s in local path to wandb after env close has flushed ffmpeg pipes."""
+        import os
+        import glob
+
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            # Still clean up even if not logging
+            for p in glob.glob("*.mp4"):
+                os.remove(p)
+            return
+
+        import wandb
+
+        video_files = glob.glob("*.mp4")
+        if not video_files:
+            print("Warning: no render videos found in local path")
+            return
+
+        for p in video_files:
+            scenario_id = os.path.splitext(os.path.basename(p))[0]
+            self.logger.wandb.log(
+                {f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=f"scene_{scenario_id}_epoch_{epoch}")}
+            )
+
+        for p in video_files:
+            os.remove(p)
+
+    def log_stats(self):
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            return
+
+        eval_stats = {}
+
+        if self.human_replay_stats is not None:
+            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["collision_rate"]
+            eval_stats["eval/hr_score"] = self.human_replay_stats["score"]
+        if self.self_play_stats is not None:
+            eval_stats["eval/sp_collision_rate"] = self.self_play_stats["collision_rate"]
+            eval_stats["eval/sp_score"] = self.self_play_stats["score"]
+            eval_stats["eval/num_agents"] = self.self_play_stats["n"]
+
+        if not eval_stats:
+            return
+
+        self.logger.wandb.log(eval_stats)
 
 
 class SafeEvaluator:

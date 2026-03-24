@@ -11,9 +11,10 @@ from tqdm import tqdm
 
 
 class RenderView(IntEnum):
-    FULL_SIM_STATE = 0  # Orthographic top-down, fully observable simulator state
+    FULL_SIM_STATE = 0  # Orthographic top-down, fully observable simulator state (zoomed in, origin-centered)
     BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
     AGENT_PERSP = 2  # Third-person perspective following selected agent
+    FULL_SIM_STATE_ZOOMED_OUT = 3  # Orthographic top-down, full map bbox view (mirrors old visualize.c zoom_in=false)
 
 
 class Drive(pufferlib.PufferEnv):
