@@ -2,11 +2,10 @@
 BC Policy training script with wandb sweep support.
 
 Usage:
-    python train_bc.py train                        # single run, default config
-    python train_bc.py train --dynamics classic     # single run, classic dynamics
-    python train_bc.py sweep                        # launch sweep + agent
-    python train_bc.py sweep --dynamics classic
-    python train_bc.py agent SWEEP_ID               # attach agent to existing sweep
+    python examples/train_bc_policy.py train                        # single run, default config
+    python examples/train_bc_policy.py train --dynamics classic     # single run, classic dynamics
+    python examples/train_bc_policy.py sweep                        # launch sweep + agent
+    python examples/train_bc_policy.py --dynamics classic
 """
 
 import argparse
@@ -51,7 +50,7 @@ TRAIN_DEFAULTS = {
     "hidden_size": 128,
     "batch_size": 2048,
     "resample_every_n_epochs": 2,  # Resample after k full passes through the dataset
-    "epochs": 1000,
+    "epochs": 100,
     "num_maps": 10000,
     "eval_frequency": 10,  # Validation dataset
 }
