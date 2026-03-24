@@ -3975,103 +3975,92 @@ void write_render_frame(Drive *env, int width, int height) {
 void c_render(Drive *env) {
     if (env->client == NULL) {
         env->client = make_client(env);
+        // Initialize pan offset to map center
+        float cx = (env->grid_map->top_left_x + env->grid_map->bottom_right_x) / 2.0f;
+        float cy = (env->grid_map->top_left_y + env->grid_map->bottom_right_y) / 2.0f;
+        env->client->camera_target = (Vector3){cx, cy, 0.0f};
     }
     Client *client = env->client;
     BeginDrawing();
-    Color road = (Color){35, 35, 37, 255};
-    ClearBackground(road);
-    BeginMode3D(client->camera);
-    handle_camera_controls(env->client);
-    draw_scene(env, client, 0, 0, 0, 0);
+    ClearBackground((Color){35, 35, 37, 255});
 
-    // Draw predicted trajectories (set from Python)
+    float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+
+    // Mouse wheel zoom
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0) {
+        client->camera_zoom -= wheel * 0.1f;
+        if (client->camera_zoom < 0.05f)
+            client->camera_zoom = 0.05f;
+        if (client->camera_zoom > 3.0f)
+            client->camera_zoom = 3.0f;
+    }
+
+    // Mouse drag pan (right button or middle button)
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        Vector2 delta = GetMouseDelta();
+        // Scale mouse pixels to world units based on current zoom
+        float scale = (map_height * 1.1f * client->camera_zoom) / client->height;
+        client->camera_target.x -= delta.x * scale;
+        client->camera_target.y += delta.y * scale;
+    }
+
+    // Build top-down camera from pan/zoom state
+    Camera3D topdown_cam = {0};
+    topdown_cam.position = (Vector3){client->camera_target.x, client->camera_target.y, 500.0f};
+    topdown_cam.target = client->camera_target;
+    topdown_cam.up = (Vector3){0.0f, -1.0f, 0.0f};
+    topdown_cam.fovy = map_height * 1.1f * client->camera_zoom;
+    topdown_cam.projection = CAMERA_ORTHOGRAPHIC;
+
+    BeginMode3D(topdown_cam);
+
+    // Draw scene (mode=1 for top-down style) — NOTE: draw_scene calls EndMode3D() internally
+    draw_scene(env, client, 1, 0, 0, 0);
+
+    // Re-enter 3D mode for trajectory drawing (draw_scene ended it)
+    BeginMode3D(topdown_cam);
+    rlDisableDepthTest();
+    // First: draw GREEN circles at every agent position to verify coordinate alignment
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        Agent *agent = &env->agents[agent_idx];
+        DrawCircle3D((Vector3){agent->sim_x, agent->sim_y, agent->sim_z + 0.1f},
+                     5.0f, (Vector3){0, 0, 1}, 0.0f, GREEN);
+    }
+    // Then: draw trajectory lines and points
     if (env->predicted_traj_x != NULL && env->predicted_traj_len > 0) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             Agent *agent = &env->agents[agent_idx];
             int tlen = env->predicted_traj_len;
-            Vector3 prev = {agent->sim_x, agent->sim_y, 0.6f};
+            float z = agent->sim_z + 0.1f;
+
+            Vector3 prev = {agent->sim_x, agent->sim_y, z};
             for (int t = 0; t < tlen; t++) {
                 float tx = env->predicted_traj_x[i * tlen + t];
                 float ty = env->predicted_traj_y[i * tlen + t];
-                Vector3 curr = {tx, ty, 0.6f};
-                DrawLine3D(prev, curr, Fade(SKYBLUE, 0.8f));
-                DrawSphere(curr, 0.3f, Fade(SKYBLUE, 0.6f));
+                Vector3 curr = {tx, ty, z};
+                rlSetLineWidth(3.0f);
+                DrawLine3D(prev, curr, RED);
+                DrawCircle3D(curr, 1.5f, (Vector3){0, 0, 1}, 0.0f, RED);
                 prev = curr;
             }
         }
     }
+    rlEnableDepthTest();
+    EndMode3D();
+
+    // 2D HUD overlay
+    DrawText(TextFormat("Timestep: %d  Agents: %d  Zoom: %.1fx", env->timestep, env->active_agent_count,
+                        1.0f / client->camera_zoom),
+             10, 10, 20, PUFF_WHITE);
+    DrawText("Scroll=zoom, Drag=pan, TAB=cycle agent", 10, client->height - 25, 18, PUFF_WHITE);
 
     if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
         env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
     }
 
-    // Draw debug info
-    DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,
-                        client->camera.position.z),
-             10, 10, 20, PUFF_WHITE);
-    DrawText(TextFormat("Camera Target: (%.2f, %.2f, %.2f)", client->camera.target.x, client->camera.target.y,
-                        client->camera.target.z),
-             10, 30, 20, PUFF_WHITE);
-    DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
-
-    int human_idx = env->active_agent_indices[env->human_agent_idx];
-    DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
-    DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
-
-    // Display current action values - yellow when controlling, white otherwise
-    Color action_color = IsKeyDown(KEY_LEFT_SHIFT) ? YELLOW : PUFF_WHITE;
-
-    if (env->action_type == 0) { // discrete
-        int *action_array = (int *)env->actions;
-        int action_val = action_array[env->human_agent_idx];
-
-        if (env->dynamics_model == CLASSIC) {
-            int num_steer = 13;
-            int accel_idx = action_val / num_steer;
-            int steer_idx = action_val % num_steer;
-            float accel_value = ACCELERATION_VALUES[accel_idx];
-            float steer_value = STEERING_VALUES[steer_idx];
-
-            DrawText(TextFormat("Acceleration: %.2f m/s^2", accel_value), 10, 110, 20, action_color);
-            DrawText(TextFormat("Steering: %.3f", steer_value), 10, 130, 20, action_color);
-        } else if (env->dynamics_model == JERK) {
-            int num_lat = 3;
-            int jerk_long_idx = action_val / num_lat;
-            int jerk_lat_idx = action_val % num_lat;
-            float jerk_long_value = JERK_LONG[jerk_long_idx];
-            float jerk_lat_value = JERK_LAT[jerk_lat_idx];
-
-            DrawText(TextFormat("Longitudinal Jerk: %.2f m/s^3", jerk_long_value), 10, 110, 20, action_color);
-            DrawText(TextFormat("Lateral Jerk: %.2f m/s^3", jerk_lat_value), 10, 130, 20, action_color);
-        }
-    } else { // continuous
-        float (*action_array_f)[2] = (float (*)[2])env->actions;
-        DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20, action_color);
-        DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, action_color);
-    }
-
-    // Show key press status
-    int status_y = 150;
-    if (IsKeyDown(KEY_LEFT_SHIFT)) {
-        DrawText("[shift pressed]", 10, status_y, 20, YELLOW);
-        status_y += 20;
-    }
-    if (IsKeyDown(KEY_SPACE)) {
-        DrawText("[space pressed]", 10, status_y, 20, YELLOW);
-        status_y += 20;
-    }
-    if (IsKeyDown(KEY_LEFT_CONTROL)) {
-        DrawText("[ctrl pressed]", 10, status_y, 20, YELLOW);
-        status_y += 20;
-    }
-
-    // Controls help
-    DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10,
-             client->height - 30, 20, PUFF_WHITE);
-
-    DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, status_y, 20, PUFF_WHITE);
-    DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, status_y + 20, 20, PUFF_WHITE);
     EndDrawing();
 }
 

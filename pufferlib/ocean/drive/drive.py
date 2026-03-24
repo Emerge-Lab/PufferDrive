@@ -703,8 +703,8 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self):
-        binding.vec_render(self.c_envs, 0)
+    def render(self, env_id=0):
+        binding.vec_render(self.c_envs, env_id)
 
     def set_predicted_trajectories(self, action_trajectories):
         """Roll out action trajectories through dynamics and set for rendering.
@@ -712,14 +712,20 @@ class Drive(pufferlib.PufferEnv):
         Args:
             action_trajectories: numpy array of shape [num_agents, traj_len]
                 containing discrete action indices (e.g. classic: accel_idx * 13 + steer_idx).
+                num_agents is the total across all sub-envs.
         """
-        num_agents, traj_len = action_trajectories.shape
-        binding.vec_set_trajectory(
-            self.c_envs,
-            0,
-            action_trajectories.flatten().astype(np.int32),
-            traj_len,
-        )
+        _, traj_len = action_trajectories.shape
+        # Set trajectories per sub-env using agent_offsets to slice correctly
+        for i in range(self.num_envs):
+            start = self.agent_offsets[i]
+            end = self.agent_offsets[i + 1]
+            sub_actions = action_trajectories[start:end]
+            binding.vec_set_trajectory(
+                self.c_envs,
+                i,
+                sub_actions.flatten().astype(np.int32),
+                traj_len,
+            )
 
     def close(self):
         binding.vec_close(self.c_envs)
