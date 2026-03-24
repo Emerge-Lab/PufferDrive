@@ -429,7 +429,7 @@ class PuffeRL:
             traj,
             self.prev_state_traj,
             heading,
-            torch.cat([self.prev_terminals, self.terminals[:, :-1]], dim=1),
+            self.terminals,  # torch.cat([self.prev_terminals, self.terminals[:, :-1]], dim=1),
             trajectory_loss_norm=config["trajectory_loss_norm"],
             trajectory_loss_clamp_min=config["trajectory_loss_clamp_min"],
         )

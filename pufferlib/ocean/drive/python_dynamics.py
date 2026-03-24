@@ -105,7 +105,7 @@ def compute_l2_loss_ego_action_traj(
 
     # we take up to the last element and renormalize the position to the second position of the trajectory.
     # since the second position is the position occupied after the action, it is the starting point (the zero) of the second trajectory
-    zeroed_tm1 = newtraj[:, :-1, 1:, :] - newtraj[:, :-1, 1, :].unsqueeze(2)
+    zeroed_tm1 = newtraj[:, :-1, 1:, :] - newtraj[:, :-1, 0, :].unsqueeze(2)
 
     # now we rotate everything to bring the tm1 trajectory in the same ego reference as the current time trajectory
     cos_heading = torch.cos(heading)[..., None]
