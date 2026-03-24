@@ -5,7 +5,7 @@
 import contextlib
 import warnings
 
-from pufferlib.ocean.drive.python_dynamics import compute_l2_loss_ego_action_traj, rollout_state_trajectory_ego
+# Trajectory commitment loss is now computed in C env (via apply_trajectory_commitment_reward)
 
 warnings.filterwarnings("error", category=RuntimeWarning)
 
@@ -147,17 +147,10 @@ class PuffeRL:
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
         )
 
-        self.prev_state_traj = torch.zeros(
-            total_agents,
-            *atn_traj_size,
-            device=device,
-            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
-        )
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
         self.rewards = torch.zeros(segments, horizon, device=device)
         self.terminals = torch.zeros(segments, horizon, device=device)
-        self.prev_terminals = torch.zeros(segments, 1, device=device)
         self.truncations = torch.zeros(segments, horizon, device=device)
         self.ratio = torch.ones(segments, horizon, device=device)
         self.importance = torch.ones(segments, horizon, device=device)
@@ -383,7 +376,7 @@ class PuffeRL:
                     self.free_idx += num_full
                     self.full_rows += num_full
 
-                action = action[:, 0, :].cpu().numpy()
+                action = action[:, :, 0].cpu().numpy()  # [agents, traj_len] — full trajectory for commitment
                 if isinstance(logits, torch.distributions.Normal):
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
 
@@ -423,19 +416,8 @@ class PuffeRL:
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
 
-        action_N2 = convert_bptt_action_integers_to_r2(self.actions)
-        traj, heading = rollout_state_trajectory_ego(action_N2, observations=self.observations)
-        r_commitment = compute_l2_loss_ego_action_traj(
-            traj,
-            self.prev_state_traj,
-            heading,
-            torch.cat([self.prev_terminals, self.terminals[:, :-1]], dim=1),
-            trajectory_loss_norm=config["trajectory_loss_norm"],
-            trajectory_loss_clamp_min=config["trajectory_loss_clamp_min"],
-        )
-        r_commitment = r_commitment.detach()
-        self.prev_state_traj = traj[:, -1, ...]
-        self.prev_terminals = self.terminals[:, [-1]]
+        # Trajectory commitment loss is now computed per-step in C env
+        # (via apply_trajectory_commitment_reward called in the eval loop)
 
         for mb in range(self.total_minibatches):
             profile("train_misc", epoch, nest=True)
@@ -445,7 +427,7 @@ class PuffeRL:
             advantages = torch.zeros(shape, device=device)
             advantages = compute_puff_advantage(
                 self.values,
-                self.rewards + r_commitment,
+                self.rewards,
                 self.terminals,
                 self.ratio,
                 advantages,
@@ -464,7 +446,7 @@ class PuffeRL:
             mb_obs = self.observations[idx]
             mb_actions = self.actions[idx]
             mb_logprobs = self.logprobs[idx]
-            mb_rewards = self.rewards[idx] + r_commitment[idx]
+            mb_rewards = self.rewards[idx]
             mb_terminals = self.terminals[idx]
             mb_truncations = self.truncations[idx]
             mb_ratio = self.ratio[idx]
@@ -539,7 +521,7 @@ class PuffeRL:
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
             losses["importance"] += ratio.mean().item() / self.total_minibatches
-            losses["r_commitment"] += r_commitment[idx].mean().item() / self.total_minibatches
+            # r_commitment is now in env rewards directly
             # losses["action_prediction"] += config["action_pred_coef"] * consistency_loss.item() / self.total_minibatches
 
             # Learn on accumulated minibatches

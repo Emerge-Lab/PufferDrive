@@ -563,9 +563,25 @@ class Drive(pufferlib.PufferEnv):
         self.terminals[:] = 1
 
     def step(self, actions):
+        """Step the environment.
+
+        Actions can be:
+        - [num_agents, 1]: single action per agent (no trajectory commitment)
+        - [num_agents, traj_len]: trajectory of actions per agent.
+          First action is used for stepping, full trajectory is used for
+          commitment reward computation.
+        """
         self.terminals[:] = 0
-        self.actions[:] = actions
-        binding.vec_step(self.c_envs)
+
+        if actions.ndim == 2 and actions.shape[1] > 1:
+            # Trajectory actions: step with first, compute commitment with all
+            self.actions[:] = actions[:, 0:1]
+            binding.vec_step(self.c_envs)
+            self.apply_trajectory_commitment_reward(actions)
+        else:
+            self.actions[:] = actions
+            binding.vec_step(self.c_envs)
+
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
