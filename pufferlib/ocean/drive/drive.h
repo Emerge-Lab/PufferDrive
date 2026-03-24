@@ -2926,6 +2926,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
 void c_reset(Drive *env) {
     env->timestep = env->init_steps;
+    env->has_prev_traj = 0; // invalidate previous trajectory on episode reset
     set_start_position(env);
     reset_goal_positions(env);
     for (int x = 0; x < env->active_agent_count; x++) {
