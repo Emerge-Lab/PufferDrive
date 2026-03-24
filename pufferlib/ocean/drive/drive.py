@@ -578,7 +578,7 @@ class Drive(pufferlib.PufferEnv):
         self.c_envs = binding.vectorize(*env_ids)
 
         binding.vec_reset(self.c_envs, seed)
-        self.terminals[:] = 1
+        self.truncations[:] = 1
 
     def step(self, actions):
         self.terminals[:] = 0
