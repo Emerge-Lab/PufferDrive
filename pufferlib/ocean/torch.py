@@ -58,7 +58,10 @@ class Drive(nn.Module):
         if self.is_continuous:
             self.atn_dim = (env.single_action_space.shape[0],) * 2
         else:
-            self.atn_dim = env.single_action_space.nvec.tolist()
+            # Action space is MultiDiscrete([base]*traj_len) — extract base action size
+            nvec = env.single_action_space.nvec.tolist()
+            base_action_size = nvec[0]  # e.g. 91 for classic
+            self.atn_dim = [base_action_size]
 
         self.past_action_tensor_shape = [self.actions_trajectory_length, 2]
         self.output_action_tensor_shape = [self.actions_trajectory_length, sum(self.atn_dim)]
