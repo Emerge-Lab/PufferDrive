@@ -249,6 +249,18 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
     if from_config.get("nodelist") is not None:
         additional_parameters["nodelist"] = from_config["nodelist"]
 
+    # Activate the login-node venv on the compute node so that submitit's own
+    # launcher wrapper (which runs outside the container) can import submitit.
+    # Training code uses its own Python via "source /ext3/env.sh" inside the
+    # singularity container, so this only affects the submitit bootstrap layer.
+    import sys
+    venv_python = sys.executable  # e.g. /scratch/ag11023/login_venv/bin/python3.12
+    venv_activate = os.path.join(os.path.dirname(venv_python), "activate")
+    if os.path.exists(venv_activate):
+        slurm_setup = [f"source {venv_activate}"]
+    else:
+        slurm_setup = []
+
     executor.update_parameters(
         slurm_account=from_config.get("account"),
         slurm_partition=from_config.get("partition"),
@@ -261,6 +273,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         slurm_time=from_config.get("time", 60),
         slurm_job_name=job_name,
         slurm_additional_parameters=additional_parameters,
+        slurm_setup=slurm_setup,
     )
 
     def launch_training(args, from_config, cmd, save_dir, project_root, container_config=None):
@@ -356,7 +369,10 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
         # Wrap with singularity if container mode is enabled
         if container_config is not None:
-            env_setup = "source /ext3/env.sh"
+            # Activate the project venv inside the container (same as script_gpu.s).
+            # The venv lives on the shared scratch filesystem so it's visible inside
+            # the container without any overlay magic.
+            env_setup = f"source {project_root}/.venv/bin/activate"
             # Redirect caches to scratch to avoid home quota issues
             scratch_dir = os.environ.get("SCRATCH_DIR", "/scratch/" + os.environ.get("USER", ""))
             cache_exports = (
