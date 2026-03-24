@@ -33,6 +33,10 @@ def send_precheck(vecenv, actions):
     if not vecenv.initialized:
         vecenv.initialized = True
         if not vecenv.action_space.contains(actions):
+            import sys
+            print(f"FAIL: actions shape={actions.shape} dtype={actions.dtype} min={actions.min()} max={actions.max()}", flush=True)
+            print(f"FAIL: action_space={vecenv.action_space}", flush=True)
+            print(f"FAIL: action_space.shape={vecenv.action_space.shape} dtype={vecenv.action_space.dtype}", flush=True)
             raise pufferlib.APIUsageError("Actions do not match action space")
 
     vecenv.flag = RECV
