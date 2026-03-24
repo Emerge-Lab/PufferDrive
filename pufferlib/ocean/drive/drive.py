@@ -703,6 +703,31 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
+    def apply_trajectory_commitment_reward(self, action_trajectories, loss_norm=1000.0, clamp_min=-0.01):
+        """Compute trajectory commitment reward and add to env rewards.
+
+        Call this AFTER env.step() each timestep. Rolls out the action trajectory
+        through classic dynamics in C, compares with previous trajectory, and adds
+        a negative reward penalty for trajectory changes.
+
+        Args:
+            action_trajectories: [num_agents, traj_len] int32 array of discrete action indices.
+            loss_norm: normalization constant for the loss.
+            clamp_min: minimum (most negative) reward penalty per step.
+        """
+        num_agents, traj_len = action_trajectories.shape
+        for i in range(self.num_envs):
+            start = self.agent_offsets[i]
+            end = self.agent_offsets[i + 1]
+            sub_actions = action_trajectories[start:end]
+            binding.vec_trajectory_reward(
+                self.c_envs, i,
+                sub_actions.flatten().astype(np.int32),
+                traj_len,
+                float(loss_norm),
+                float(clamp_min),
+            )
+
     def render(self):
         binding.vec_render(self.c_envs, 0)
 

@@ -351,6 +351,16 @@ struct Drive {
     int turn_off_normalization;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
+
+    // Trajectory commitment loss (computed per-step as reward penalty)
+    float *prev_traj_x;       // [num_agents * traj_len] previous predicted trajectory
+    float *prev_traj_y;       // [num_agents * traj_len]
+    float *curr_traj_x;       // [num_agents * traj_len] current predicted trajectory
+    float *curr_traj_y;       // [num_agents * traj_len]
+    int traj_len;             // trajectory prediction length (0 = disabled)
+    float traj_loss_norm;     // normalization constant
+    float traj_loss_clamp_min; // minimum (most negative) reward penalty
+    int has_prev_traj;        // whether prev_traj is valid
 };
 
 // ========================================
@@ -2103,6 +2113,10 @@ void c_close(Drive *env) {
     free(env->expert_static_agent_indices);
     free(env->tracks_to_predict_indices);
     free(env->ini_file);
+    free(env->prev_traj_x);
+    free(env->prev_traj_y);
+    free(env->curr_traj_x);
+    free(env->curr_traj_y);
 }
 
 void allocate(Drive *env) {
@@ -4122,6 +4136,110 @@ float clipSpeed(float speed) {
 }
 
 float normalize_value(float value, float min, float max) { return (value - min) / (max - min); }
+
+// Pure classic dynamics step — no side effects, returns new state.
+typedef struct {
+    float x, y, heading, vx, vy;
+} DynamicsState;
+
+DynamicsState classic_dynamics_step(DynamicsState s, float acceleration, float steering, float length, float dt) {
+    float speed_mag = sqrtf(s.vx * s.vx + s.vy * s.vy);
+    float v_dot = s.vx * cosf(s.heading) + s.vy * sinf(s.heading);
+    float signed_speed = copysignf(speed_mag, v_dot);
+    signed_speed = clipSpeed(signed_speed + acceleration * dt);
+    float beta = tanhf(0.5f * tanf(steering));
+    float yaw_rate = (signed_speed * cosf(beta) * tanf(steering)) / length;
+    DynamicsState out;
+    out.vx = signed_speed * cosf(s.heading + beta);
+    out.vy = signed_speed * sinf(s.heading + beta);
+    out.x = s.x + out.vx * dt;
+    out.y = s.y + out.vy * dt;
+    out.heading = s.heading + yaw_rate * dt;
+    return out;
+}
+
+// Roll out an action trajectory for one agent in ego frame, store in curr_traj_x/y.
+// Returns the heading after the first step (for ego-frame rotation).
+float rollout_agent_trajectory(Drive *env, int agent_local_idx, int *actions, int traj_len) {
+    int agent_idx = env->active_agent_indices[agent_local_idx];
+    Agent *agent = &env->agents[agent_idx];
+    int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+    int offset = agent_local_idx * traj_len;
+
+    // Start in ego frame: position (0,0), heading 0, speed along heading
+    float speed_mag = sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy);
+    float v_dot = agent->sim_vx * cosf(agent->sim_heading) + agent->sim_vy * sinf(agent->sim_heading);
+    DynamicsState s = {0.0f, 0.0f, 0.0f, copysignf(speed_mag, v_dot), 0.0f};
+    float heading_after_first = 0.0f;
+
+    for (int t = 0; t < traj_len; t++) {
+        int action_val = actions[agent_local_idx * traj_len + t];
+        float acceleration = ACCELERATION_VALUES[action_val / num_steer];
+        float steering = STEERING_VALUES[action_val % num_steer];
+
+        s = classic_dynamics_step(s, acceleration, steering, agent->sim_length, env->dt);
+        env->curr_traj_x[offset + t] = s.x;
+        env->curr_traj_y[offset + t] = s.y;
+        if (t == 0) heading_after_first = s.heading;
+    }
+    return heading_after_first;
+}
+
+// Compute trajectory commitment reward for one agent.
+// Compares curr_traj with prev_traj (rotated into current ego frame).
+// Returns a negative reward penalty (or 0 if no previous trajectory).
+float compute_trajectory_commitment(Drive *env, int agent_local_idx, float heading_after_first) {
+    int traj_len = env->traj_len;
+    if (traj_len <= 1 || !env->has_prev_traj) return 0.0f;
+
+    int offset = agent_local_idx * traj_len;
+    float cos_h = cosf(heading_after_first);
+    float sin_h = sinf(heading_after_first);
+
+    // Previous trajectory starts at position 1 (skip position 0, which is the current step).
+    // Shift so prev[1] becomes the origin, then rotate into current ego frame.
+    float prev_origin_x = env->prev_traj_x[offset + 0]; // prev traj position after 1st action
+    float prev_origin_y = env->prev_traj_y[offset + 0];
+
+    float l2_sum = 0.0f;
+    float arc_curr = 0.0f;
+    float arc_prev = 0.0f;
+    int K = traj_len - 1; // compare K points (skip first of each)
+
+    for (int t = 0; t < K; t++) {
+        // Current trajectory point t (from position 0..traj_len-2)
+        float cx = env->curr_traj_x[offset + t];
+        float cy = env->curr_traj_y[offset + t];
+
+        // Previous trajectory point: shift by prev_origin, rotate by heading
+        float px_shifted = env->prev_traj_x[offset + t + 1] - prev_origin_x;
+        float py_shifted = env->prev_traj_y[offset + t + 1] - prev_origin_y;
+        float px_rotated = px_shifted * cos_h + py_shifted * sin_h;
+        float py_rotated = -px_shifted * sin_h + py_shifted * cos_h;
+
+        float dx = cx - px_rotated;
+        float dy = cy - py_rotated;
+        l2_sum += sqrtf(dx * dx + dy * dy);
+
+        // Arc lengths for normalization
+        if (t > 0) {
+            float dcx = cx - env->curr_traj_x[offset + t - 1];
+            float dcy = cy - env->curr_traj_y[offset + t - 1];
+            arc_curr += sqrtf(dcx * dcx + dcy * dcy);
+
+            float dpx = env->prev_traj_x[offset + t + 1] - env->prev_traj_x[offset + t];
+            float dpy = env->prev_traj_y[offset + t + 1] - env->prev_traj_y[offset + t];
+            arc_prev += sqrtf(dpx * dpx + dpy * dpy);
+        }
+    }
+
+    float arc_max = fmaxf(arc_curr, arc_prev) + 1.0f;
+    float loss = l2_sum / arc_max;
+    float penalty = -loss / env->traj_loss_norm;
+    if (penalty < env->traj_loss_clamp_min) penalty = env->traj_loss_clamp_min;
+    if (penalty > 0.0f) penalty = 0.0f;
+    return penalty;
+}
 
 void sample_new_goal(Drive *env, int agent_idx) {
     // Samples a new goal position based on the existing road lane points

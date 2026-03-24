@@ -541,6 +541,61 @@ static PyObject *vec_render(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+// Receive action trajectories, roll out, compute commitment reward, add to env rewards.
+// Args: vec_env, env_id, action_traj (int32 flat array), traj_len, loss_norm, clamp_min
+static PyObject *vec_trajectory_reward(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 6) {
+        PyErr_SetString(PyExc_TypeError,
+                        "vec_trajectory_reward requires 6 args: vec_env, env_id, action_traj, traj_len, norm, clamp_min");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    int env_id = PyLong_AsLong(PyTuple_GetItem(args, 1));
+    PyArrayObject *action_arr = (PyArrayObject *)PyTuple_GetItem(args, 2);
+    int traj_len = PyLong_AsLong(PyTuple_GetItem(args, 3));
+    float loss_norm = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 4));
+    float clamp_min = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 5));
+
+    Env *env = vec->envs[env_id];
+    int num_agents = env->active_agent_count;
+    int *actions = (int *)PyArray_DATA(action_arr);
+    int total = num_agents * traj_len;
+
+    // Initialize trajectory buffers on first call
+    if (env->traj_len != traj_len) {
+        free(env->prev_traj_x);
+        free(env->prev_traj_y);
+        free(env->curr_traj_x);
+        free(env->curr_traj_y);
+        env->prev_traj_x = (float *)calloc(total, sizeof(float));
+        env->prev_traj_y = (float *)calloc(total, sizeof(float));
+        env->curr_traj_x = (float *)calloc(total, sizeof(float));
+        env->curr_traj_y = (float *)calloc(total, sizeof(float));
+        env->traj_len = traj_len;
+        env->has_prev_traj = 0;
+    }
+    env->traj_loss_norm = loss_norm;
+    env->traj_loss_clamp_min = clamp_min;
+
+    // Roll out trajectories and compute commitment rewards
+    for (int i = 0; i < num_agents; i++) {
+        float heading = rollout_agent_trajectory(env, i, actions, traj_len);
+        float penalty = compute_trajectory_commitment(env, i, heading);
+        env->rewards[i] += penalty;
+    }
+
+    // Swap current → previous for next step
+    float *tmp_x = env->prev_traj_x;
+    float *tmp_y = env->prev_traj_y;
+    env->prev_traj_x = env->curr_traj_x;
+    env->prev_traj_y = env->curr_traj_y;
+    env->curr_traj_x = tmp_x;
+    env->curr_traj_y = tmp_y;
+    env->has_prev_traj = 1;
+
+    Py_RETURN_NONE;
+}
+
 static int assign_to_dict(PyObject *dict, char *key, float value) {
     PyObject *v = PyFloat_FromDouble(value);
     if (v == NULL) {
@@ -977,6 +1032,7 @@ static PyMethodDef methods[] = {
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
+    {"vec_trajectory_reward", vec_trajectory_reward, METH_VARARGS, "Compute trajectory commitment reward"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
