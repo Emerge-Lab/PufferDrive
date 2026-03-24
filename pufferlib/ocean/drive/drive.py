@@ -92,7 +92,13 @@ class Drive(pufferlib.PufferEnv):
         spawn_length_min=2.0,
         spawn_length_max=5.5,
         spawn_height=1.5,
+        actions_trajectory_length=1,
+        traj_loss_norm=1000.0,
+        traj_loss_clamp_min=-0.01,
     ):
+        self.actions_trajectory_length = actions_trajectory_length
+        self.traj_loss_norm = traj_loss_norm
+        self.traj_loss_clamp_min = traj_loss_clamp_min
         # env
         self.dt = dt
         self.render_mode = render_mode
@@ -218,17 +224,16 @@ class Drive(pufferlib.PufferEnv):
 
         self._validate_agent_dimensions()
 
+        traj_len = self.actions_trajectory_length
         if action_type == "discrete":
             if dynamics_model == "classic":
-                # Joint action space (assume dependence)
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 13])
-                # Multi discrete (assume independence)
-                # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+                base_actions = 7 * 13  # 91
             elif dynamics_model == "jerk":
-                # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
+                base_actions = 4 * 3   # 12
             else:
                 raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+            # Action space includes full trajectory: [traj_len] discrete actions
+            self.single_action_space = gymnasium.spaces.MultiDiscrete([base_actions] * traj_len)
         elif action_type == "continuous":
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         else:
@@ -565,22 +570,24 @@ class Drive(pufferlib.PufferEnv):
     def step(self, actions):
         """Step the environment.
 
-        Actions can be:
-        - [num_agents, 1]: single action per agent (no trajectory commitment)
-        - [num_agents, traj_len]: trajectory of actions per agent.
-          First action is used for stepping, full trajectory is used for
-          commitment reward computation.
+        Actions shape: [num_agents, traj_len] where traj_len = actions_trajectory_length.
+        First action per agent is used for env stepping.
+        Full trajectory is used for commitment reward if traj_len > 1.
         """
         self.terminals[:] = 0
+        traj_len = self.actions_trajectory_length
 
-        if actions.ndim == 2 and actions.shape[1] > 1:
-            # Trajectory actions: step with first, compute commitment with all
-            self.actions[:] = actions[:, 0:1]
-            binding.vec_step(self.c_envs)
-            self.apply_trajectory_commitment_reward(actions)
-        else:
-            self.actions[:] = actions
-            binding.vec_step(self.c_envs)
+        # Write full trajectory into shared actions buffer
+        self.actions[:] = actions
+
+        # C reads actions with stride=traj_len, using only the first action per agent
+        binding.vec_step(self.c_envs)
+
+        # Compute trajectory commitment reward
+        if traj_len > 1:
+            self.apply_trajectory_commitment_reward(
+                actions, loss_norm=self.traj_loss_norm, clamp_min=self.traj_loss_clamp_min
+            )
 
         self.tick += 1
         info = []

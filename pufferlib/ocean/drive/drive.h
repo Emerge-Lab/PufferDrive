@@ -2738,9 +2738,11 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             steering *= STEERING_VALUES[12];
         } else { // discrete
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
+            // Actions buffer is [agents * traj_len] — first action at stride traj_len
             int *action_array = (int *)env->actions;
+            int stride = (env->traj_len > 1) ? env->traj_len : 1;
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
-            int action_val = action_array[action_idx];
+            int action_val = action_array[action_idx * stride];
             int acceleration_index = action_val / num_steer;
             int steering_index = action_val % num_steer;
             acceleration = ACCELERATION_VALUES[acceleration_index];
@@ -2804,9 +2806,11 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             a_lat = action_array_f[action_idx][1] * JERK_LAT[2];
         } else { // discrete
             // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
+            // Actions buffer is [agents * traj_len] — first action at stride traj_len
             int *action_array = (int *)env->actions;
+            int stride = (env->traj_len > 1) ? env->traj_len : 1;
             int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
-            int action_val = action_array[action_idx];
+            int action_val = action_array[action_idx * stride];
             int a_long_idx = action_val / num_lat;
             int a_lat_idx = action_val % num_lat;
             a_long = JERK_LONG[a_long_idx];

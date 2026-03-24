@@ -376,7 +376,7 @@ class PuffeRL:
                     self.free_idx += num_full
                     self.full_rows += num_full
 
-                action = action[:, :, 0].cpu().numpy()  # [agents, traj_len] — full trajectory for commitment
+                action = action.squeeze(-1).cpu().numpy()  # [agents, traj_len] — full trajectory
                 if isinstance(logits, torch.distributions.Normal):
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
 
@@ -1280,6 +1280,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         torch.cuda.set_device(local_rank)
         os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
 
+    # Forward trajectory config from train to env so action space includes trajectory
+    traj_len = args.get("train", {}).get("actions_trajectory_length", 1)
+    args.setdefault("env", {})["actions_trajectory_length"] = traj_len
+    args["env"]["traj_loss_norm"] = args.get("train", {}).get("trajectory_loss_norm", 1000.0)
+    args["env"]["traj_loss_clamp_min"] = args.get("train", {}).get("trajectory_loss_clamp_min", -0.01)
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
 
