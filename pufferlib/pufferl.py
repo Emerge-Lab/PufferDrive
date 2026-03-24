@@ -465,9 +465,7 @@ class PuffeRL:
             )
 
             logits, newvalue = self.policy(mb_obs, state)
-            # Reshape mb_actions to match logits: [batch*horizon, traj_len]
-            mb_actions_flat = mb_actions.reshape(-1, *mb_actions.shape[2:]).squeeze(-1)
-            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits_action_sequence(logits, action=mb_actions_flat)
+            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits_action_sequence(logits, action=mb_actions)
 
             profile("train_misc", epoch)
             newlogprob = newlogprob.reshape(mb_logprobs.shape)
