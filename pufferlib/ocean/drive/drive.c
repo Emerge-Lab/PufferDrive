@@ -300,8 +300,6 @@ int main(int argc, char *argv[]) {
                     view_mode = VIEW_MODE_BEV_AGENT_OBS;
                 } else if (strcmp(v, "persp") == 0) {
                     view_mode = VIEW_MODE_AGENT_PERSP;
-                } else if (strcmp(v, "zoom_out") == 0 || strcmp(v, "full_map") == 0) {
-                    view_mode = VIEW_MODE_SIM_STATE_ZOOMED_OUT;
                 } else {
                     fprintf(stderr, "Error: --view must be 'sim_state', 'bev', 'persp', or 'zoom_out'\n");
                     return 1;

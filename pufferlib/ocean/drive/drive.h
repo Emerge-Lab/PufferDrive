@@ -21,9 +21,6 @@
 #define VIEW_MODE_SIM_STATE 0
 #define VIEW_MODE_BEV_AGENT_OBS 1
 #define VIEW_MODE_AGENT_PERSP 2
-#define VIEW_MODE_SIM_STATE_ZOOMED_OUT                                                                                 \
-    3 // Full map, camera centered on map bbox (matches old visualize.c zoom_in=false)
-
 // // Order of entities in rendering (lower is rendered first)
 // #define Z_ROAD_SURFACE 0.0f
 // #define Z_ROAD_MARKINGS 0.05f // Lane lines, road lines, traces
@@ -4086,20 +4083,20 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 // Draw the agent bounding boxes
                 Color agent_color = GRAY;
                 if (is_expert) {
-                    if (agent[i].type == PEDESTRIAN || agent[i].type == CYCLIST)
+                    if (agent->type == PEDESTRIAN || agent->type == CYCLIST)
                         agent_color = EXPERT_REPLAY_SMALL;
                     else
                         agent_color = EXPERT_REPLAY;
                 }
                 if (is_active_agent) {
-                    if (agent[i].type == PEDESTRIAN)
+                    if (agent->type == PEDESTRIAN)
                         agent_color = LIGHT_ORANGE;
-                    else if (agent[i].type == CYCLIST)
+                    else if (agent->type == CYCLIST)
                         agent_color = LIGHT_PURPLE;
                     else
                         agent_color = BLUE;
                 }
-                if (is_active_agent && agent[i].collision_state > 0)
+                if (is_active_agent && agent->collision_state > 0)
                     agent_color = RED;
 
                 rlPushMatrix();
@@ -4344,45 +4341,6 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                     }
                 }
 
-                for (int i = 0; i < env->expert_static_agent_count; i++) {
-                    int idx = env->expert_static_agent_indices[i];
-                    for (int t = env->init_steps; t < env->episode_length; t++) {
-                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t], env->agents[idx].log_trajectory_y[t],
-                                             env->agents[idx].log_trajectory_z[t]},
-                                   0.15f, EXPERT_REPLAY);
-                    }
-                }
-            }
-
-            draw_scene(env, client, 1, 0, 0, 0);
-
-        } else if (view_mode == VIEW_MODE_SIM_STATE_ZOOMED_OUT) {
-            // Orthographic bird's-eye view showing the full map, camera centered on the
-            // map bounding box — mirrors the old visualize.c renderTopDownView zoom_in=false path.
-            camera.position = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 500.0f};
-            camera.target = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0.0f};
-            camera.up = (Vector3){0.0f, -1.0f, 0.0f};
-            camera.projection = CAMERA_ORTHOGRAPHIC;
-            camera.fovy = map_height * 2.0f; // 2× height shows the full map
-
-            BeginDrawing();
-            ClearBackground(ROAD_COLOR);
-            BeginMode3D(camera);
-
-            if (draw_traces) {
-                for (int i = 0; i < env->active_agent_count; i++) {
-                    int idx = env->active_agent_indices[i];
-                    for (int t = env->init_steps; t < env->episode_length; t++) {
-                        Color agent_color = LIGHTBLUE;
-                        if (env->agents[idx].type == PEDESTRIAN)
-                            agent_color = LIGHT_ORANGE;
-                        else if (env->agents[idx].type == CYCLIST)
-                            agent_color = LIGHT_PURPLE;
-                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t], env->agents[idx].log_trajectory_y[t],
-                                             env->agents[idx].log_trajectory_z[t]},
-                                   0.15f, agent_color);
-                    }
-                }
                 for (int i = 0; i < env->expert_static_agent_count; i++) {
                     int idx = env->expert_static_agent_indices[i];
                     for (int t = env->init_steps; t < env->episode_length; t++) {

@@ -1621,8 +1621,6 @@ def render(env_name, args=None):
         "bev": RenderView.BEV_AGENT_OBS,
         "agent": RenderView.BEV_AGENT_OBS,  # backward compat
         "persp": RenderView.AGENT_PERSP,
-        "zoom_out": RenderView.FULL_SIM_STATE_ZOOMED_OUT,
-        "full_map": RenderView.FULL_SIM_STATE_ZOOMED_OUT,  # backward compat alias
     }
     view_mode = _VIEW_MODE_MAP.get(view_mode_str)
     if view_mode is None:
@@ -1692,6 +1690,12 @@ def render(env_name, args=None):
                     lstm_h=torch.zeros(n, policy.hidden_size, device=device),
                     lstm_c=torch.zeros(n, policy.hidden_size, device=device),
                 )
+
+            # Remove any stale mp4 with this map's name from a previous run so that
+            # the set-difference detection below doesn't miss the newly written file.
+            stale = os.path.join(os.getcwd(), f"{map_name}.mp4")
+            if os.path.exists(stale):
+                os.remove(stale)
 
             # Snapshot which mp4s exist before this rollout
             before = set(glob.glob(os.path.join(os.getcwd(), "*.mp4")))
