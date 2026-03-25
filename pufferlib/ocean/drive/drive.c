@@ -105,7 +105,7 @@ void demo() {
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .spawn_settings = spawn_settings,
-        .map_name = "resources/drive/binaries/carla_3D/map_001.bin",
+        .map_name = "resources/drive/binaries/Town01/map_000.bin",
         .reward_conditioning = conf.reward_conditioning,
     };
     allocate(&env);
@@ -117,7 +117,7 @@ void demo() {
     }
     c_reset(&env);
     c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
+    Weights *weights = load_weights("resources/drive/puffer_drive_single_Town_01_1000.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;
@@ -245,7 +245,7 @@ int main(int argc, char *argv[]) {
 
     // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
-    const char *policy_name = "resources/drive/puffer_drive_weights.bin";
+    const char *policy_name = "resources/drive/puffer_drive_single_Town_01_100.bin.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
     int num_maps = 1;

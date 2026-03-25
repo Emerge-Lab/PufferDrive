@@ -475,7 +475,7 @@ int main(int argc, char *argv[]) {
 
     // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
-    const char *policy_name = "resources/drive/best_policy_with_reward_conditioning.bin";
+    const char *policy_name = "resources/drive/puffer_drive_single_Town_01_1000.bin";
     const char *output_topdown = NULL;
     const char *output_agent = NULL;
     int num_maps = conf.num_maps;

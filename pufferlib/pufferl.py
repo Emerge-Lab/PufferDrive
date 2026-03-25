@@ -1617,6 +1617,36 @@ def profile(args=None, env_name=None, vecenv=None, policy=None):
 
 def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent=False):
     args = args or load_config(env_name)
+
+    # --input-path overrides load_model_path for the export command
+    input_path = args.get("input_path")
+    if input_path is not None:
+        args["load_model_path"] = input_path
+
+    # --output-path overrides the default .bin destination
+    if path is None:
+        path = args.get("output_path")
+
+    # Fast path: if a .pt file is given directly, load the state dict without
+    # needing to spin up an environment or instantiate the policy class.
+    if input_path is not None and policy is None:
+        device = args.get("train", {}).get("device", "cpu")
+        # Fall back to CPU if the configured device is not available on this machine
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+        state_dict = torch.load(input_path, map_location=device)
+        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+        weights = np.concatenate([v.cpu().numpy().flatten() for v in state_dict.values()])
+        if not silent:
+            for name, v in state_dict.items():
+                print(name, tuple(v.shape), v.cpu().numpy().ravel()[0])
+        if path is None:
+            path = f"pufferlib/resources/drive/{env_name}_weights.bin"
+        weights.tofile(path)
+        if not silent:
+            print(f"Saved {len(weights)} weights to {path}")
+        return
+
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv)
 
@@ -1726,6 +1756,8 @@ def load_config(env_name, config_dir=None):
         add_help=False,
     )
     parser.add_argument("--load-model-path", type=str, default=None, help="Path to a pretrained checkpoint")
+    parser.add_argument("--input-path", type=str, default=None, help="Path to a .pt model file for export")
+    parser.add_argument("--output-path", type=str, default=None, help="Path for the exported .bin weights file")
     parser.add_argument(
         "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
     )
@@ -1902,7 +1934,7 @@ def main():
     elif mode == "profile":
         profile(env_name=env_name)
     elif mode == "export":
-        export(env_name=env_name)
+        export(env_name=env_name, args=load_config(env_name))
     elif mode == "sanity":
         sanity(env_name=env_name)
     elif mode == "render":
