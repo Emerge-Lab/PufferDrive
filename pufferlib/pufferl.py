@@ -1468,6 +1468,13 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         num_agents = vecenv.observation_space.shape[0]
         device = args["train"]["device"]
 
+        inner_policy = getattr(policy, 'policy', policy)
+        traj_len = getattr(inner_policy, 'actions_trajectory_length', 1)
+        # Past actions buffer for trajectory models (actions decomposed into accel + steer)
+        prev_actions_traj = torch.full(
+            (num_agents, traj_len, 2), -1.0, device=device
+        ) if traj_len > 1 else None
+
         state = {}
         if args["train"]["use_rnn"]:
             state = dict(
@@ -1494,15 +1501,31 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 # time.sleep(1/args['fps'])
 
             with torch.no_grad():
-                ob = torch.as_tensor(ob).to(device)
-                logits, value = policy.forward_eval(ob, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+                ob_t = torch.as_tensor(ob).to(device)
+                if prev_actions_traj is not None:
+                    prev_traj_flat = prev_actions_traj.reshape(num_agents, -1)
+                    ob_aug = torch.cat([ob_t, prev_traj_flat], dim=-1)
+                else:
+                    ob_aug = ob_t
+
+                logits, value = policy.forward_eval(ob_aug, state)
+                if traj_len > 1:
+                    action, logprob, _ = pufferlib.pytorch.sample_logits_action_sequence(logits)
+                    action_np = action.cpu().numpy()
+                    if hasattr(driver, 'set_predicted_trajectories'):
+                        driver.set_predicted_trajectories(action_np)
+                    # Update past actions buffer: decompose action into accel + steer
+                    action_n2 = convert_single_action_integers_to_r2(action)
+                    prev_actions_traj[:] = action_n2
+                    step_action = action_np[:, 0:1].reshape(vecenv.action_space.shape)
+                else:
+                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                    step_action = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
             if isinstance(logits, torch.distributions.Normal):
-                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+                step_action = np.clip(step_action, vecenv.action_space.low, vecenv.action_space.high)
 
-            ob = vecenv.step(action)[0]
+            ob = vecenv.step(step_action)[0]
 
             if len(frames) > 0 and len(frames) == args["save_frames"]:
                 import imageio
