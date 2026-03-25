@@ -660,6 +660,43 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     return dict;
 }
 
+static PyObject *env_log(PyObject *self, PyObject *args) {
+    int num_args = PyTuple_Size(args);
+    if (num_args != 2) {
+        PyErr_SetString(PyExc_TypeError, "env_log requires 2 arguments");
+        return NULL;
+    }
+
+    Env *env = unpack_env(args);
+    if (!env) {
+        return NULL;
+    }
+
+    // Aggregate this env's per-agent logs (same as vec_log but for one env)
+    // Note: breaks horribly if you don't use floats
+    Log aggregate = {0};
+    int num_keys = sizeof(Log) / sizeof(float);
+    for (int j = 0; j < num_keys; j++) {
+        ((float *)&aggregate)[j] += ((float *)&env->log)[j];
+    }
+
+    PyObject *dict = PyDict_New();
+    if (aggregate.n == 0.0f) {
+        return dict;
+    }
+
+    // Average across agents in env
+    float n = aggregate.n;
+    for (int i = 0; i < num_keys; i++) {
+        ((float *)&aggregate)[i] /= n;
+    }
+    aggregate.n = (float)env->active_agent_count;
+
+    my_log(dict, &aggregate);
+
+    return dict;
+}
+
 static PyObject *vec_close(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
