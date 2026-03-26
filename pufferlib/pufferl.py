@@ -1541,17 +1541,22 @@ def render(env_name, args=None):
     except KeyError as e:
         raise pufferlib.APIUsageError(f"Missing render config: {e}")
 
-    # Map config string → RenderView enum
+    # Map config string → list of RenderView enums to render
+    # "both" = sim_state + persp, "all" = sim_state + persp + bev
     _VIEW_MODE_MAP = {
-        "sim_state": RenderView.FULL_SIM_STATE,
-        "topdown": RenderView.FULL_SIM_STATE,  # backward compat
-        "bev": RenderView.BEV_AGENT_OBS,
-        "agent": RenderView.BEV_AGENT_OBS,  # backward compat
-        "persp": RenderView.AGENT_PERSP,
+        "sim_state": [RenderView.FULL_SIM_STATE],
+        "topdown": [RenderView.FULL_SIM_STATE],  # backward compat
+        "bev": [RenderView.BEV_AGENT_OBS],
+        "agent": [RenderView.BEV_AGENT_OBS],  # backward compat
+        "persp": [RenderView.AGENT_PERSP],
+        "both": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP],
+        "all": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP, RenderView.BEV_AGENT_OBS],
     }
-    view_mode = _VIEW_MODE_MAP.get(view_mode_str)
-    if view_mode is None:
-        raise pufferlib.APIUsageError(f"Unknown view_mode '{view_mode_str}'. Choose from: sim_state, bev, persp")
+    view_modes = _VIEW_MODE_MAP.get(view_mode_str)
+    if view_modes is None:
+        raise pufferlib.APIUsageError(
+            f"Unknown view_mode '{view_mode_str}'. Choose from: sim_state, bev, persp, both, all"
+        )
 
     bin_files = sorted(f for f in os.listdir(map_dir) if f.endswith(".bin"))
     if num_maps > len(bin_files):
@@ -1569,90 +1574,92 @@ def render(env_name, args=None):
     device = configured_device
 
     def render_one_map(map_path):
-        """Render a single map file and move the resulting mp4(s) to output_dir.
+        """Render a single map file in one or more view modes, moving resulting mp4(s) to output_dir.
 
-        The map binary is symlinked into a private temp directory so the C
-        loader sees exactly one .bin file (num_maps=1). After env.close()
-        finalizes the ffmpeg pipe, we glob for new *.mp4 files in cwd and
-        move them — no fragile scenario_id filename prediction needed.
+        Each view mode runs a separate rollout so that each gets its own ffmpeg
+        pipe and output file.  Output files are named {scenario_id}_{view}.mp4
+        when multiple views are requested, or {scenario_id}.mp4 for a single view.
         """
         map_name = os.path.splitext(os.path.basename(map_path))[0]
 
-        with tempfile.TemporaryDirectory() as tmp_map_dir:
-            # Hard-link (or copy) the single .bin into an isolated dir
-            tmp_bin = os.path.join(tmp_map_dir, os.path.basename(map_path))
-            shutil.copy2(map_path, tmp_bin)
+        # View-mode suffix labels used in output filenames
+        _VIEW_SUFFIX = {
+            RenderView.FULL_SIM_STATE: "sim_state",
+            RenderView.AGENT_PERSP: "persp",
+            RenderView.BEV_AGENT_OBS: "bev",
+        }
+        multi = len(view_modes) > 1
 
-            env_overrides = {
-                **args["env"],
-                "num_maps": 1,
-                "map_dir": tmp_map_dir,
-                "render_mode": 1,  # headless ffmpeg → writes {scenario_id}.mp4 in cwd
-            }
-            # Override init/control modes if [render] section specifies them.
-            # carla_2D logged-trajectory maps need create_all_valid + control_vehicles;
-            # the training default (init_variable_agent_number) spawns no agents on these maps.
-            if render_init_mode is not None:
-                env_overrides["init_mode"] = render_init_mode
-            if render_control_mode is not None:
-                env_overrides["control_mode"] = render_control_mode
+        for view_mode in view_modes:
+            with tempfile.TemporaryDirectory() as tmp_map_dir:
+                tmp_bin = os.path.join(tmp_map_dir, os.path.basename(map_path))
+                shutil.copy2(map_path, tmp_bin)
 
-            map_args = {
-                **args,
-                "env": env_overrides,
-                "vec": {"backend": "Serial", "num_envs": 1},
-            }
+                env_overrides = {
+                    **args["env"],
+                    "num_maps": 1,
+                    "map_dir": tmp_map_dir,
+                    "render_mode": 1,  # headless ffmpeg → writes {scenario_id}.mp4 in cwd
+                }
+                if render_init_mode is not None:
+                    env_overrides["init_mode"] = render_init_mode
+                if render_control_mode is not None:
+                    env_overrides["control_mode"] = render_control_mode
 
-            env = load_env(env_name, map_args)
-            policy = load_policy(map_args, env, env_name)
-            policy.eval()
+                map_args = {
+                    **args,
+                    "env": env_overrides,
+                    "vec": {"backend": "Serial", "num_envs": 1},
+                }
 
-            ob, _ = env.reset()
-            driver = env.driver_env
+                env = load_env(env_name, map_args)
+                policy = load_policy(map_args, env, env_name)
+                policy.eval()
 
-            state = {}
-            if map_args["train"]["use_rnn"]:
-                n = env.agents_per_batch if hasattr(env, "agents_per_batch") else ob.shape[0]
-                state = dict(
-                    lstm_h=torch.zeros(n, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(n, policy.hidden_size, device=device),
-                )
+                ob, _ = env.reset()
+                driver = env.driver_env
 
-            # Remove any stale mp4 with this map's name from a previous run so that
-            # the set-difference detection below doesn't miss the newly written file.
-            stale = os.path.join(os.getcwd(), f"{map_name}.mp4")
-            if os.path.exists(stale):
-                os.remove(stale)
+                state = {}
+                if map_args["train"]["use_rnn"]:
+                    n = env.agents_per_batch if hasattr(env, "agents_per_batch") else ob.shape[0]
+                    state = dict(
+                        lstm_h=torch.zeros(n, policy.hidden_size, device=device),
+                        lstm_c=torch.zeros(n, policy.hidden_size, device=device),
+                    )
 
-            # Snapshot which mp4s exist before this rollout
-            before = set(glob.glob(os.path.join(os.getcwd(), "*.mp4")))
+                # Remove any stale mp4 from a previous run
+                stale = os.path.join(os.getcwd(), f"{map_name}.mp4")
+                if os.path.exists(stale):
+                    os.remove(stale)
 
-            for _ in range(max_frames):
-                driver.render(view_mode=view_mode, draw_traces=draw_traces)
+                before = set(glob.glob(os.path.join(os.getcwd(), "*.mp4")))
 
-                with torch.no_grad():
-                    ob_t = torch.as_tensor(ob).to(device)
-                    logits, _ = policy.forward_eval(ob_t, state)
-                    action, _, _ = pufferlib.pytorch.sample_logits(logits)
-                    action = action.cpu().numpy().reshape(env.action_space.shape)
+                for _ in range(max_frames):
+                    driver.render(view_mode=view_mode, draw_traces=draw_traces)
 
-                ob, _, done, truncated, _ = env.step(action)
-                if done.all() or truncated.all():
-                    break
+                    with torch.no_grad():
+                        ob_t = torch.as_tensor(ob).to(device)
+                        logits, _ = policy.forward_eval(ob_t, state)
+                        action, _, _ = pufferlib.pytorch.sample_logits(logits)
+                        action = action.cpu().numpy().reshape(env.action_space.shape)
 
-            # env.close() finalizes the ffmpeg pipe and flushes the mp4 to disk
-            env.close()
+                    ob, _, done, truncated, _ = env.step(action)
+                    if done.all() or truncated.all():
+                        break
 
-            # Move any new mp4s that appeared since before the rollout
-            after = set(glob.glob(os.path.join(os.getcwd(), "*.mp4")))
-            new_mp4s = after - before
-            if new_mp4s:
-                for src in sorted(new_mp4s):
-                    dst = os.path.join(output_dir, os.path.basename(src))
-                    shutil.move(src, dst)
-                    print(f"  Saved {dst}")
-            else:
-                print(f"  Warning: no mp4 produced for map {map_name}")
+                env.close()
+
+                after = set(glob.glob(os.path.join(os.getcwd(), "*.mp4")))
+                new_mp4s = after - before
+                if new_mp4s:
+                    for src in sorted(new_mp4s):
+                        base = os.path.splitext(os.path.basename(src))[0]
+                        suffix = f"_{_VIEW_SUFFIX[view_mode]}" if multi else ""
+                        dst = os.path.join(output_dir, f"{base}{suffix}.mp4")
+                        shutil.move(src, dst)
+                        print(f"  Saved {dst}")
+                else:
+                    print(f"  Warning: no mp4 produced for map {map_name} view {_VIEW_SUFFIX[view_mode]}")
 
     if render_maps:
         print(f"Rendering {len(render_maps)} map(s) from {map_dir} → {output_dir} ...")

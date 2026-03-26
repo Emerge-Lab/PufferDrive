@@ -877,8 +877,10 @@ class Evaluator:
         self.safe_eval_config["env"]["reward_randomization"] = 1
         self.safe_eval_config["env"]["reward_conditioning"] = 1
         self.safe_eval_config["env"]["resample_frequency"] = 0
+        self.safe_eval_config["env"]["report_interval"] = 1  # ensure logs fire within 90-step rollout
         # Override map/episode settings from [safe_eval] section
-        for key in ("map_dir", "num_maps", "min_goal_distance", "max_goal_distance", "num_agents", "episode_length"):
+        # Note: episode_length is intentionally NOT overridden here — eval rollout is always 91 steps
+        for key in ("map_dir", "num_maps", "min_goal_distance", "max_goal_distance", "num_agents"):
             if key in safe_cfg:
                 self.safe_eval_config["env"][key] = safe_cfg[key]
         # Pin reward bounds: set min=max for each conditioning value
@@ -1036,15 +1038,22 @@ class Evaluator:
         eval_stats = {}
 
         if self.human_replay_stats is not None:
-            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["collision_rate"]
-            eval_stats["eval/hr_score"] = self.human_replay_stats["score"]
+            if "collision_rate" in self.human_replay_stats:
+                eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["collision_rate"]
+            if "score" in self.human_replay_stats:
+                eval_stats["eval/hr_score"] = self.human_replay_stats["score"]
         if self.self_play_stats is not None:
-            eval_stats["eval/sp_collision_rate"] = self.self_play_stats["collision_rate"]
-            eval_stats["eval/sp_score"] = self.self_play_stats["score"]
-            eval_stats["eval/num_agents"] = self.self_play_stats["n"]
+            if "collision_rate" in self.self_play_stats:
+                eval_stats["eval/sp_collision_rate"] = self.self_play_stats["collision_rate"]
+            if "score" in self.self_play_stats:
+                eval_stats["eval/sp_score"] = self.self_play_stats["score"]
+            if "n" in self.self_play_stats:
+                eval_stats["eval/num_agents"] = self.self_play_stats["n"]
         if self.safe_eval_stats is not None:
-            eval_stats["eval/safe_collision_rate"] = self.safe_eval_stats["collision_rate"]
-            eval_stats["eval/safe_score"] = self.safe_eval_stats["score"]
+            if "collision_rate" in self.safe_eval_stats:
+                eval_stats["eval/safe_collision_rate"] = self.safe_eval_stats["collision_rate"]
+            if "score" in self.safe_eval_stats:
+                eval_stats["eval/safe_score"] = self.safe_eval_stats["score"]
 
         if not eval_stats:
             return

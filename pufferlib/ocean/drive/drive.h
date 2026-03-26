@@ -2341,9 +2341,8 @@ void c_close(Drive *env) {
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
     free(env->tracks_to_predict_indices);
-    free(env->ini_file);
-    free(env->tracks_to_predict_indices);
     env->tracks_to_predict_indices = NULL;
+    free(env->ini_file);
 }
 
 void allocate(Drive *env) {
