@@ -932,6 +932,16 @@ void move_expert(Drive *env, float *actions, int agent_idx) {
     agent->heading = agent->traj_heading[t];
     agent->heading_x = cosf(agent->heading);
     agent->heading_y = sinf(agent->heading);
+
+    if (agent->traj_vx != NULL) {
+        agent->vx = agent->traj_vx[t];
+        agent->vy = agent->traj_vy[t];
+        agent->vz = agent->traj_vz[t];
+    } else if (t > 0 && env->dt > 0.0f) {
+        agent->vx = (agent->traj_x[t] - agent->traj_x[t - 1]) / env->dt;
+        agent->vy = (agent->traj_y[t] - agent->traj_y[t - 1]) / env->dt;
+        agent->vz = (agent->traj_z[t] - agent->traj_z[t - 1]) / env->dt;
+    }
 }
 
 bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2]) {
