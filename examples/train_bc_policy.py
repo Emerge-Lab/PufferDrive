@@ -45,12 +45,12 @@ SWEEP_CONFIG = {
 }
 
 TRAIN_DEFAULTS = {
-    "learning_rate": 2e-4,
+    "learning_rate": 1e-4,
     "input_size": 64,
-    "hidden_size": 128,
+    "hidden_size": 512,
     "batch_size": 2048,
     "resample_every_n_epochs": 2,  # Resample after k full passes through the dataset
-    "epochs": 100,
+    "epochs": 1000,
     "num_maps": 10000,
     "eval_frequency": 10,  # Validation dataset
 }

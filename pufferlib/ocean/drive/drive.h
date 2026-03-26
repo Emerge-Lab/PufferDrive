@@ -139,7 +139,7 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define DELTA_MAX_DY 2.0f
 #define DELTA_MAX_DYAW 3.14159265 / 4.0
 
-static int COLLECT_EXPERT_TELEPORT = 0;
+static int COLLECT_EXPERT_TELEPORT = 1;
 static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
 static float STEERING_VALUES[NUM_STEER_BINS];
 static float DELTA_DX_VALUES[NUM_DX_BINS];
@@ -2380,21 +2380,38 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                 agent->inferred_traj_x[t] = agent->x;
                 agent->inferred_traj_y[t] = agent->y;
             }
+        }
+        if (t < TRAJECTORY_LENGTH - 1) {
+            c_step(env);
 
             if (COLLECT_EXPERT_TELEPORT) {
-                int next = t + 1;
-                if (next < agent->array_size && agent->traj_valid && agent->traj_valid[next]) {
-                    agent->x = agent->traj_x[next];
-                    agent->y = agent->traj_y[next];
-                    agent->z = agent->traj_z[next];
-                    agent->heading = agent->traj_heading[next];
-                    agent->heading_x = cosf(agent->heading);
-                    agent->heading_y = sinf(agent->heading);
-                    agent->vx = agent->traj_vx[next];
-                    agent->vy = agent->traj_vy[next];
-                    agent->vz = agent->traj_vz[next];
+                // Overwrite active agent positions with ground truth after c_step
+                // so that obs are computed from true positions, while static agents
+                // were advanced by c_step as a side effect.
+                for (int i = 0; i < env->active_agent_count; i++) {
+                    int agent_idx = env->active_agent_indices[i];
+                    Entity *agent = &env->entities[agent_idx];
+                    int next = t + 1;
+                    if (next < agent->array_size && agent->traj_valid && agent->traj_valid[next]) {
+                        agent->x = agent->traj_x[next];
+                        agent->y = agent->traj_y[next];
+                        agent->z = agent->traj_z[next];
+                        agent->heading = agent->traj_heading[next];
+                        agent->heading_x = cosf(agent->heading);
+                        agent->heading_y = sinf(agent->heading);
+                        agent->vx = agent->traj_vx[next];
+                        agent->vy = agent->traj_vy[next];
+                        agent->vz = agent->traj_vz[next];
+                    }
                 }
+                compute_observations(env);
             }
+        }
+
+        // Record actions
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            Entity *agent = &env->entities[agent_idx];
 
             int disc_off = t * env->active_agent_count + i;
 
@@ -2460,17 +2477,10 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
                     expert_actions_discrete_out[base + 1] = -1.0f;
                     expert_actions_discrete_out[base + 2] = -1.0f;
                 } else {
+                    int disc_off = t * env->active_agent_count + i;
                     expert_actions_discrete_out[disc_off] = -1.0f;
                 }
             }
-        }
-
-        if (COLLECT_EXPERT_TELEPORT) {
-            if (t < TRAJECTORY_LENGTH - 1)
-                compute_observations(env);
-        } else {
-            if (t < TRAJECTORY_LENGTH - 1)
-                c_step(env);
         }
     }
 
