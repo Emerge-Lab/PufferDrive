@@ -820,14 +820,12 @@ class HumanReplayEvaluator:
 
 
 class Evaluator:
-    """Evaluates policies in self_play or human_replay mode, with optional rendering.
+    """Evaluates policies in self_play, human_replay, or safe_eval mode, with optional rendering.
 
     Initializes the eval envs needed based on eval config flags:
-    - human_replay_eval: creates sp_env + hr_env
-    - render_eval: creates sp_env (if not already created)
-
-
-
+    - human_replay_eval: creates hr_env (control_sdc_only)
+    - self_play_eval: creates sp_env (control_agents)
+    - safe_eval: creates safe_env (control_agents + fixed reward conditioning)
     """
 
     RENDER_FIRST = "first"
@@ -841,8 +839,10 @@ class Evaluator:
         self.sim_steps = 90
         self.self_play_stats = None
         self.human_replay_stats = None
+        self.safe_eval_stats = None
         self.sp_env = None
         self.hr_env = None
+        self.safe_env = None
 
         self._unpack_eval_configs(configs)
 
@@ -858,6 +858,7 @@ class Evaluator:
 
         self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
         self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
+        self.render_safe_rollout = self.configs["eval"].get("render_safe_eval", False)
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
@@ -866,6 +867,33 @@ class Evaluator:
         self.sp_eval_config = copy.deepcopy(eval_config)
         self.sp_eval_config["env"]["control_mode"] = "control_agents"
         self.sp_eval_config["env"]["render_mode"] = 1 if self.render_sp_rollout else 0
+
+        # safe_eval: control_agents like self_play, but with fixed reward conditioning
+        # from [safe_eval] config section (map_dir, num_agents, reward bounds, etc.)
+        safe_cfg = configs.get("safe_eval", {})
+        self.safe_eval_config = copy.deepcopy(eval_config)
+        self.safe_eval_config["env"]["control_mode"] = "control_agents"
+        self.safe_eval_config["env"]["render_mode"] = 1 if self.render_safe_rollout else 0
+        self.safe_eval_config["env"]["reward_randomization"] = 1
+        self.safe_eval_config["env"]["reward_conditioning"] = 1
+        self.safe_eval_config["env"]["resample_frequency"] = 0
+        # Override map/episode settings from [safe_eval] section
+        for key in ("map_dir", "num_maps", "min_goal_distance", "max_goal_distance", "num_agents", "episode_length"):
+            if key in safe_cfg:
+                self.safe_eval_config["env"][key] = safe_cfg[key]
+        # Pin reward bounds: set min=max for each conditioning value
+        import re
+
+        valid_bounds = {
+            re.match(r"reward_bound_(.+)_min$", k).group(1)
+            for k in eval_config["env"]
+            if re.match(r"reward_bound_(.+)_min$", k)
+        }
+        for key, val in safe_cfg.items():
+            if key in valid_bounds:
+                self.safe_eval_config["env"][f"reward_bound_{key}_min"] = float(val)
+                self.safe_eval_config["env"][f"reward_bound_{key}_max"] = float(val)
+
         self.render_select_mode = self.configs["eval"]["render_select_mode"]
 
     def select_render_env(self, env_logs):
@@ -900,8 +928,15 @@ class Evaluator:
     def rollout(self, policy, mode="self_play"):
         """Roll out the given policy in the specified eval env and collect statistics."""
 
-        env = self.hr_env if mode == "human_replay" else self.sp_env
-        render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
+        if mode == "human_replay":
+            env = self.hr_env
+            render_eval = self.render_hr_rollout
+        elif mode == "safe_eval":
+            env = self.safe_env
+            render_eval = self.render_safe_rollout
+        else:  # self_play
+            env = self.sp_env
+            render_eval = self.render_sp_rollout
         driver = env.driver_env
 
         needs_stats_first = render_eval and self.render_select_mode not in (self.RENDER_FIRST, self.RENDER_RANDOM)
@@ -921,6 +956,9 @@ class Evaluator:
         elif mode == "human_replay":
             self.human_replay_stats = final_info
             self.human_replay_stats["render_env_idx"] = render_env_idx
+        elif mode == "safe_eval":
+            self.safe_eval_stats = final_info
+            self.safe_eval_stats["render_env_idx"] = render_env_idx
 
     def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False):
         """Run a single rollout. If render_env_idx is not None, render that env."""
@@ -1004,156 +1042,11 @@ class Evaluator:
             eval_stats["eval/sp_collision_rate"] = self.self_play_stats["collision_rate"]
             eval_stats["eval/sp_score"] = self.self_play_stats["score"]
             eval_stats["eval/num_agents"] = self.self_play_stats["n"]
+        if self.safe_eval_stats is not None:
+            eval_stats["eval/safe_collision_rate"] = self.safe_eval_stats["collision_rate"]
+            eval_stats["eval/safe_score"] = self.safe_eval_stats["score"]
 
         if not eval_stats:
             return
 
         self.logger.wandb.log(eval_stats)
-
-
-class SafeEvaluator:
-    """Evaluates policies with fixed safe/law-abiding reward conditioning.
-
-    Runs the policy with deterministic reward bounds (reward_randomization=1,
-    min=max for each bound) so the conditioning observation vector is fixed to
-    safe driving values. Collects metrics over multiple episodes.
-
-    Re-parses the INI config internally so it doesn't need the full training
-    args dict — only the env_name, safe_eval config, and device.
-    """
-
-    def __init__(self, env_name: str, safe_eval_config: Dict, device="cuda", logger=None):
-        self.env_name = env_name
-        self.logger = logger
-        self.safe_eval_config = safe_eval_config
-        self.num_episodes = safe_eval_config.get("num_episodes", 100)
-        self.num_agents = safe_eval_config.get("num_agents", 64)
-        self.episode_length = safe_eval_config.get("episode_length", 1000)
-        if isinstance(device, int):
-            device = f"cuda:{device}"
-        self.device = device
-        self.stats = None
-
-    def _build_eval_env_config(self):
-        """Build env config with safe reward conditioning values applied.
-
-        Re-parses the INI file to get a fresh full config, then applies
-        safe_eval overrides for env, vec, and reward bounds.
-        """
-        import re
-        from pufferlib.pufferl import load_config
-
-        # Re-parse INI to get full config (env, vec, policy, rnn, etc.)
-        import sys
-
-        original_argv = sys.argv
-        sys.argv = ["pufferl"]
-        try:
-            eval_config = load_config(self.env_name)
-        finally:
-            sys.argv = original_argv
-
-        eval_config["vec"] = dict(backend="PufferEnv", num_envs=1)
-        eval_config["train"]["device"] = self.device
-        eval_config["env"]["num_agents"] = self.num_agents
-        eval_config["env"]["episode_length"] = self.episode_length
-        eval_config["env"]["resample_frequency"] = 0
-        eval_config["env"]["reward_randomization"] = 1
-        eval_config["env"]["reward_conditioning"] = 1
-
-        # Apply safe_eval overrides for map_dir, goal distances, etc.
-        for override_key in ("map_dir", "num_maps", "min_goal_distance", "max_goal_distance"):
-            if override_key in self.safe_eval_config:
-                eval_config["env"][override_key] = self.safe_eval_config[override_key]
-
-        # Discover valid reward bound names from env config
-        valid_bounds = set()
-        for key in eval_config["env"]:
-            m = re.match(r"reward_bound_(.+)_min$", key)
-            if m:
-                valid_bounds.add(m.group(1))
-
-        # Set min=max for each reward bound to fix the conditioning values
-        for key, val in self.safe_eval_config.items():
-            if key not in valid_bounds:
-                continue
-            eval_config["env"][f"reward_bound_{key}_min"] = float(val)
-            eval_config["env"][f"reward_bound_{key}_max"] = float(val)
-
-        return eval_config
-
-    def evaluate(self, vecenv, policy):
-        """Run evaluation with safe reward conditioning and collect metrics.
-
-        Args:
-            vecenv: Vectorized environment (created with safe eval config)
-            policy: Trained policy to evaluate
-
-        Returns:
-            dict: Averaged metrics over collected episodes
-        """
-        from collections import defaultdict
-
-        policy.eval()
-        num_agents = vecenv.observation_space.shape[0]
-        use_rnn = hasattr(policy, "hidden_size")
-
-        ob, _ = vecenv.reset()
-        state = {}
-        dones = torch.zeros(num_agents, device=self.device)
-        prev_rewards = torch.zeros(num_agents, device=self.device)
-        if use_rnn:
-            state = dict(
-                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=self.device),
-                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=self.device),
-            )
-
-        all_stats = defaultdict(list)
-        episodes_collected = 0
-        max_steps = (self.num_episodes // max(num_agents, 1) + 2) * self.episode_length
-
-        for step in range(max_steps):
-            if episodes_collected >= self.num_episodes:
-                break
-
-            with torch.no_grad():
-                ob_t = torch.as_tensor(ob).to(self.device)
-                if use_rnn:
-                    state["reward"] = prev_rewards
-                    state["done"] = dones
-                logits, value = policy.forward_eval(ob_t, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
-
-            if isinstance(logits, torch.distributions.Normal):
-                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-
-            ob, rewards, terminals, truncations, infos = vecenv.step(action)
-            prev_rewards = torch.as_tensor(rewards).float().to(self.device)
-            dones = torch.as_tensor(np.maximum(terminals, truncations)).float().to(self.device)
-
-            for entry in infos:
-                if isinstance(entry, dict):
-                    episodes_collected += int(entry.get("n", 1))
-                    for k, v in entry.items():
-                        try:
-                            float(v)
-                            all_stats[k].append(v)
-                        except (TypeError, ValueError):
-                            pass
-
-        self.stats = {k: float(np.mean(v)) for k, v in all_stats.items() if len(v) > 0}
-        return self.stats
-
-    def log_stats(self, global_step=None):
-        """Log collected metrics to wandb."""
-        if self.stats is None:
-            return
-
-        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
-            return
-
-        payload = {f"eval/safe_{k}": v for k, v in self.stats.items()}
-        if global_step is not None:
-            payload["train_step"] = global_step
-        self.logger.wandb.log(payload)

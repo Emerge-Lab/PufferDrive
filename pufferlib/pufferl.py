@@ -509,7 +509,7 @@ class PuffeRL:
             if self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training:
                 human_replay_eval = self.config["eval"]["human_replay_eval"]
                 self_play_eval = self.config["eval"]["self_play_eval"]
-                safe_eval = self.config["eval"]["safe_eval"]
+                safe_eval = self.config.get("safe_eval", {}).get("enabled", False)
 
                 self.evaluator = Evaluator(self.full_args, self.logger)
                 if human_replay_eval:
@@ -525,7 +525,7 @@ class PuffeRL:
                 if safe_eval:
                     self.evaluator.safe_env = load_env("puffer_drive", self.evaluator.safe_eval_config)
                     self.evaluator.rollout(self.uncompiled_policy, mode="safe_eval")
-                    self.evaluator.sp_env.close()
+                    self.evaluator.safe_env.close()
                     self.evaluator.log_videos(eval_mode="safe_eval", epoch=self.epoch)
                 if human_replay_eval or self_play_eval or safe_eval:
                     self.evaluator.log_stats()
@@ -539,81 +539,6 @@ class PuffeRL:
             (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
-
-    def _run_safe_eval(self):
-        """Run safe eval in-process using SafeEvaluator, then render videos."""
-        import copy
-        import traceback
-
-        vecenv = None
-        bin_path = None
-        safe_ini_path = None
-        render_handed_off = False
-        try:
-            from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
-
-            self.msg = "Running safe eval..."
-            env_name = self.config["env"]
-            safe_eval_config = self.config.get("safe_eval", {})
-            evaluator = SafeEvaluator(env_name, safe_eval_config, device=self.config["device"], logger=self.logger)
-            eval_config = evaluator._build_eval_env_config()
-
-            vecenv = load_env(env_name, eval_config)
-            policy = load_policy(eval_config, vecenv, env_name)
-
-            # Copy weights from in-memory policy (no checkpoint dependency)
-            state_dict = copy.deepcopy(self.uncompiled_policy.state_dict())
-            # Strip DDP "module." prefix if present
-            state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-            policy.load_state_dict(state_dict)
-
-            metrics = evaluator.evaluate(vecenv, policy)
-            evaluator.log_stats(global_step=self.global_step)
-
-            self.msg = f"Safe eval: {len(metrics)} metrics logged"
-
-            self.msg = "Spawning safe eval render..."
-            model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-            bin_path = f"{model_dir}_safe_eval_epoch_{self.epoch:06d}.bin"
-
-            export(
-                args={"env_name": env_name, "load_model_path": "unused", **self.config},
-                env_name=env_name,
-                vecenv=self.vecenv,
-                policy=self.uncompiled_policy,
-                path=bin_path,
-                silent=True,
-            )
-
-            safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
-
-            self._render_videos(
-                bin_path=bin_path,
-                num_maps=safe_eval_config.get("num_maps"),
-                map_dir=safe_eval_config.get("map_dir"),
-                wandb_prefix="eval",
-                config_path=safe_ini_path,
-                cleanup_files=[bin_path, safe_ini_path],
-            )
-            render_handed_off = True
-            self.msg = f"Safe eval complete: {len(metrics)} metrics logged"
-
-        except Exception as e:
-            self.msg = f"Safe eval failed: {e}"
-            traceback.print_exc(file=sys.stderr)
-        finally:
-            if vecenv is not None:
-                try:
-                    vecenv.close()
-                except Exception:
-                    pass
-            if not render_handed_off:
-                for f in [bin_path, safe_ini_path]:
-                    if f and os.path.exists(f):
-                        try:
-                            os.remove(f)
-                        except OSError:
-                            pass
 
     def mean_and_log(self):
         config = self.config
