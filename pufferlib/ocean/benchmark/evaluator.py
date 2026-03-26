@@ -847,6 +847,23 @@ class Evaluator:
         self._unpack_eval_configs(configs)
 
     def _unpack_eval_configs(self, configs):
+        from pufferlib.ocean.drive.drive import RenderView
+
+        _VIEW_MODE_MAP = {
+            "sim_state": [RenderView.FULL_SIM_STATE],
+            "topdown": [RenderView.FULL_SIM_STATE],
+            "bev": [RenderView.BEV_AGENT_OBS],
+            "agent": [RenderView.BEV_AGENT_OBS],
+            "persp": [RenderView.AGENT_PERSP],
+            "both": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP],
+            "all": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP, RenderView.BEV_AGENT_OBS],
+        }
+        _VIEW_SUFFIX = {
+            RenderView.FULL_SIM_STATE: "sim_state",
+            RenderView.AGENT_PERSP: "persp",
+            RenderView.BEV_AGENT_OBS: "bev",
+        }
+
         eval_config = copy.deepcopy(configs)
         # Create separate evaluation environments based on specified configs
         eval_config["env"]["termination_mode"] = 0
@@ -859,6 +876,10 @@ class Evaluator:
         self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
         self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
         self.render_safe_rollout = self.configs["eval"].get("render_safe_eval", False)
+
+        view_mode_str = str(self.configs["eval"].get("render_view_mode", "sim_state")).lower().strip('"').strip("'")
+        self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
+        self.render_view_suffix = _VIEW_SUFFIX
 
         self.hr_eval_config = copy.deepcopy(eval_config)
         self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
@@ -928,7 +949,12 @@ class Evaluator:
         return 0
 
     def rollout(self, policy, mode="self_play"):
-        """Roll out the given policy in the specified eval env and collect statistics."""
+        """Roll out the given policy in the specified eval env and collect statistics.
+
+        If rendering is enabled and multiple view modes are configured, a separate
+        rollout is run for each view mode. The first pass also collects stats;
+        subsequent passes are render-only (stats already captured).
+        """
 
         if mode == "human_replay":
             env = self.hr_env
@@ -949,9 +975,21 @@ class Evaluator:
         else:
             render_env_idx = self.select_render_env([{}] * driver.num_envs)
 
-        info_list = self._run_rollout(policy, env, render_env_idx if render_eval else None)
+        view_modes = self.render_view_modes if render_eval else [None]
+        multi_view = len(view_modes) > 1
 
-        final_info = info_list[0] if info_list else {}
+        final_info = {}
+        for i, view_mode in enumerate(view_modes):
+            info_list = self._run_rollout(
+                policy,
+                env,
+                render_env_idx=render_env_idx if render_eval else None,
+                view_mode=view_mode,
+                view_suffix=self.render_view_suffix.get(view_mode, "") if multi_view else "",
+            )
+            if i == 0:  # capture stats from the first pass only
+                final_info = info_list[0] if info_list else {}
+
         if mode == "self_play":
             self.self_play_stats = final_info
             self.self_play_stats["render_env_idx"] = render_env_idx
@@ -962,11 +1000,19 @@ class Evaluator:
             self.safe_eval_stats = final_info
             self.safe_eval_stats["render_env_idx"] = render_env_idx
 
-    def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False):
-        """Run a single rollout. If render_env_idx is not None, render that env."""
+    def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False, view_mode=None, view_suffix=""):
+        """Run a single rollout. If render_env_idx is not None, render that env.
+
+        view_mode: RenderView enum to use when rendering (defaults to FULL_SIM_STATE).
+        view_suffix: appended to the mp4 filename when logging multiple views, e.g. "_bev".
+        """
+        from pufferlib.ocean.drive.drive import RenderView
+
         driver = env.driver_env
         num_agents = env.observation_space.shape[0]
         device = self.configs["train"]["device"]
+        if view_mode is None:
+            view_mode = RenderView.FULL_SIM_STATE
 
         # Reset environment
         obs, info = env.reset()
@@ -982,7 +1028,7 @@ class Evaluator:
         info_list = []
         for time_idx in range(self.sim_steps):
             if render_env_idx is not None:
-                driver.render(env_id=render_env_idx)
+                driver.render(view_mode=view_mode, env_id=render_env_idx)
 
             # Get action from policy
             with torch.no_grad():
@@ -1022,10 +1068,23 @@ class Evaluator:
             return
 
         render_mode = self.render_select_mode
+        multi_view = len(self.render_view_modes) > 1
+        _known_suffixes = {"_sim_state", "_persp", "_bev"}
+
         for p in video_files:
-            scenario_id = os.path.splitext(os.path.basename(p))[0]
+            stem = os.path.splitext(os.path.basename(p))[0]
+            # Extract view suffix from filename if present (e.g. "abc123_bev" → view="bev")
+            view_tag = ""
+            if multi_view:
+                for s in _known_suffixes:
+                    if stem.endswith(s):
+                        view_tag = s[1:]  # strip leading "_"
+                        stem = stem[: -len(s)]
+                        break
+            scenario_id = stem
             caption = f"scene_{scenario_id}_epoch_{epoch}_select_{render_mode}"
-            self.logger.wandb.log({f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=caption)})
+            wandb_key = f"render/{eval_mode}/{view_tag}" if view_tag else f"render/{eval_mode}"
+            self.logger.wandb.log({wandb_key: wandb.Video(p, format="mp4", caption=caption)})
 
         # Clean up
         for p in video_files:
