@@ -454,13 +454,13 @@ class Drive(pufferlib.PufferEnv):
 
             bc_policy = BCPolicy(
                 obs_dim=self.num_obs,
-                input_size=64,
+                input_size=128,
                 max_partner_objects=self.max_partner_objects,
                 partner_features=self.partner_features,
                 max_road_objects=self.max_road_objects,
                 road_features=self.road_features,
                 ego_dim=self.ego_features,
-                hidden_size=128,
+                hidden_size=512,
                 output_sizes=output_sizes,
             ).to(device)
 
@@ -1027,9 +1027,9 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 
 
 if __name__ == "__main__":
-    test_performance()
+    # test_performance()
     # Process the train dataset
-    # process_all_maps(data_folder="data/processed/validation")
+    process_all_maps(data_folder="data/processed/training_50k")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

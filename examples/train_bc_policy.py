@@ -36,22 +36,22 @@ SWEEP_CONFIG = {
     "metric": {"name": "best_avg_loss", "goal": "minimize"},
     "parameters": {
         "learning_rate": {"distribution": "log_uniform_values", "min": 3e-5, "max": 1e-3},
-        "input_size": {"values": [256, 512]},
-        "hidden_size": {"values": [512, 1024, 2048]},
+        "input_size": {"values": [64, 128]},
+        "hidden_size": {"values": [512, 1024]},
         "batch_size": {"values": [2048]},
-        "resample_every_n_epochs": {"values": [5, 10]},
-        "num_maps": {"values": [10000]},
+        "resample_every_n_epochs": {"values": [1, 5, 10]},
+        "num_maps": {"values": [50000]},
     },
 }
 
 TRAIN_DEFAULTS = {
     "learning_rate": 1e-4,
-    "input_size": 64,
+    "input_size": 128,
     "hidden_size": 512,
     "batch_size": 2048,
-    "resample_every_n_epochs": 2,  # Resample after k full passes through the dataset
+    "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
     "epochs": 1000,
-    "num_maps": 10000,
+    "num_maps": 50000,
     "eval_frequency": 10,  # Validation dataset
 }
 
@@ -172,7 +172,7 @@ def build_env_args(dynamics_model, num_maps):
     args = load_config("puffer_drive")
     args["vec"]["backend"] = "Serial"
     args["env"]["num_maps"] = num_maps
-    args["env"]["map_dir"] = "resources/drive/binaries/training"
+    args["env"]["map_dir"] = "resources/drive/binaries/training_50k"
     args["env"]["reg_mode"] = "log_prob_direct"
     args["env"]["dynamics_model"] = dynamics_model
     args["base"]["rnn_name"] = "none"
@@ -218,55 +218,98 @@ def compute_accuracy(policy, batch_obs, batch_actions):
 
 
 def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run_id, device):
-    """Only implemented for classic dynamics (joint action head)."""
-    if dynamics_model != "classic":
-        return
-
     for batch_obs, batch_actions in DataLoader(dataset, batch_size=len(dataset)):
-        all_actions = batch_actions.numpy().flatten()
         all_obs = batch_obs
+        all_actions = batch_actions.numpy()
 
-    NUM_STEER = binding.NUM_STEER_BINS
-    NUM_ACCEL = binding.NUM_ACCEL_BINS
-    accel_step = 8.0 / (NUM_ACCEL - 1)
-    steer_step = 2.0 / (NUM_STEER - 1)
+    if dynamics_model == "classic":
+        NUM_STEER = binding.NUM_STEER_BINS
+        NUM_ACCEL = binding.NUM_ACCEL_BINS
+        accel_step = 8.0 / (NUM_ACCEL - 1)
+        steer_step = 2.0 / (NUM_STEER - 1)
 
-    accel_idx = all_actions.astype(int) // NUM_STEER
-    steer_idx = all_actions.astype(int) % NUM_STEER
-    accel_vals = -4.0 + accel_idx * accel_step
-    steer_vals = -1.0 + steer_idx * steer_step
+        accel_idx = all_actions.flatten().astype(int) // NUM_STEER
+        steer_idx = all_actions.flatten().astype(int) % NUM_STEER
+        accel_vals = -4.0 + accel_idx * accel_step
+        steer_vals = -1.0 + steer_idx * steer_step
 
-    policy.eval()
-    with torch.no_grad():
-        pred = policy(all_obs.to(device), deterministic=True).cpu().numpy().flatten()
-    pred_accel_idx = pred.astype(int) // NUM_STEER
-    pred_steer_idx = pred.astype(int) % NUM_STEER
-    pred_accel_vals = -4.0 + pred_accel_idx * accel_step
-    pred_steer_vals = -1.0 + pred_steer_idx * steer_step
+        policy.eval()
+        with torch.no_grad():
+            pred = policy(all_obs.to(device), deterministic=True).cpu().numpy().flatten()
+        pred_accel_idx = pred.astype(int) // NUM_STEER
+        pred_steer_idx = pred.astype(int) % NUM_STEER
+        pred_accel_vals = -4.0 + pred_accel_idx * accel_step
+        pred_steer_vals = -1.0 + pred_steer_idx * steer_step
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(
-        f"BC Training Data vs Learned Policy — {len(all_actions)} samples, {dynamics_model}, {num_maps} maps",
-        fontsize=14,
-    )
-    for ax, vals, title, color in [
-        (axes[0, 0], steer_vals, f"Expert Steering (non-zero: {(steer_idx != NUM_STEER // 2).sum()})", "steelblue"),
-        (
-            axes[0, 1],
-            pred_steer_vals,
-            f"Learned Steering (non-zero: {(pred_steer_idx != NUM_STEER // 2).sum()})",
-            "orange",
-        ),
-        (axes[1, 0], accel_vals, "Expert Acceleration", "steelblue"),
-        (axes[1, 1], pred_accel_vals, "Learned Acceleration", "orange"),
-    ]:
-        bins, rng = (NUM_STEER, (-1.0, 1.0)) if "Steer" in title else (NUM_ACCEL, (-4.0, 4.0))
-        xlabel = "Steering (rad)" if "Steer" in title else "Acceleration (m/s²)"
-        ax.hist(vals, bins=bins, range=rng, edgecolor="black", alpha=0.7, color=color)
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel("Count")
-        ax.set_title(title)
-        ax.axvline(x=0, color="r", linestyle="--", alpha=0.5)
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle(
+            f"BC Training Data vs Learned Policy — {len(all_actions)} samples, {dynamics_model}, {num_maps} maps",
+            fontsize=14,
+        )
+        for ax, vals, title, color in [
+            (axes[0, 0], steer_vals, f"Expert Steering (non-zero: {(steer_idx != NUM_STEER // 2).sum()})", "steelblue"),
+            (
+                axes[0, 1],
+                pred_steer_vals,
+                f"Learned Steering (non-zero: {(pred_steer_idx != NUM_STEER // 2).sum()})",
+                "orange",
+            ),
+            (axes[1, 0], accel_vals, "Expert Acceleration", "steelblue"),
+            (axes[1, 1], pred_accel_vals, "Learned Acceleration", "orange"),
+        ]:
+            bins, rng = (NUM_STEER, (-1.0, 1.0)) if "Steer" in title else (NUM_ACCEL, (-4.0, 4.0))
+            xlabel = "Steering (rad)" if "Steer" in title else "Acceleration (m/s²)"
+            ax.hist(vals, bins=bins, range=rng, edgecolor="black", alpha=0.7, color=color)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel("Count")
+            ax.set_title(title)
+            ax.axvline(x=0, color="r", linestyle="--", alpha=0.5)
+
+    elif dynamics_model == "delta_local":
+        NUM_DX = binding.NUM_DX_BINS
+        NUM_DY = binding.NUM_DY_BINS
+        NUM_YAW = binding.NUM_YAW_BINS
+        MAX_DX = 2.0
+        MAX_DY = 2.0
+        MAX_DYAW = np.pi / 4.0
+
+        dx_step = 2 * MAX_DX / (NUM_DX - 1)
+        dy_step = 2 * MAX_DY / (NUM_DY - 1)
+        yaw_step = 2 * MAX_DYAW / (NUM_YAW - 1)
+
+        expert_dx_vals = -MAX_DX + all_actions[:, 0].astype(int) * dx_step
+        expert_dy_vals = -MAX_DY + all_actions[:, 1].astype(int) * dy_step
+        expert_yaw_vals = -MAX_DYAW + all_actions[:, 2].astype(int) * yaw_step
+
+        policy.eval()
+        with torch.no_grad():
+            pred = policy(all_obs.to(device), deterministic=True).cpu().numpy()
+        pred_dx_vals = -MAX_DX + pred[:, 0].astype(int) * dx_step
+        pred_dy_vals = -MAX_DY + pred[:, 1].astype(int) * dy_step
+        pred_yaw_vals = -MAX_DYAW + pred[:, 2].astype(int) * yaw_step
+
+        fig, axes = plt.subplots(3, 2, figsize=(14, 14))
+        fig.suptitle(
+            f"BC Training Data vs Learned Policy — {len(all_actions)} samples, {dynamics_model}, {num_maps} maps",
+            fontsize=14,
+        )
+        plot_configs = [
+            (axes[0, 0], expert_dx_vals, "Expert ΔX", "steelblue", NUM_DX, (-MAX_DX, MAX_DX), "ΔX (m)"),
+            (axes[0, 1], pred_dx_vals, "Learned ΔX", "orange", NUM_DX, (-MAX_DX, MAX_DX), "ΔX (m)"),
+            (axes[1, 0], expert_dy_vals, "Expert ΔY", "steelblue", NUM_DY, (-MAX_DY, MAX_DY), "ΔY (m)"),
+            (axes[1, 1], pred_dy_vals, "Learned ΔY", "orange", NUM_DY, (-MAX_DY, MAX_DY), "ΔY (m)"),
+            (axes[2, 0], expert_yaw_vals, "Expert ΔYaw", "steelblue", NUM_YAW, (-MAX_DYAW, MAX_DYAW), "ΔYaw (rad)"),
+            (axes[2, 1], pred_yaw_vals, "Learned ΔYaw", "orange", NUM_YAW, (-MAX_DYAW, MAX_DYAW), "ΔYaw (rad)"),
+        ]
+        for ax, vals, title, color, bins, rng, xlabel in plot_configs:
+            ax.hist(vals, bins=bins, range=rng, edgecolor="black", alpha=0.7, color=color)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel("Count")
+            ax.set_title(title)
+            ax.axvline(x=0, color="r", linestyle="--", alpha=0.5)
+
+    else:
+        return
 
     plt.tight_layout()
     path = f"bc_action_distribution_{dynamics_model}_{num_maps}_{run_id}.png"

@@ -135,7 +135,7 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define NUM_DX_BINS 31
 #define NUM_DY_BINS 31
 #define NUM_YAW_BINS 127
-#define DELTA_MAX_DX 2.0f
+#define DELTA_MAX_DX 2.5f
 #define DELTA_MAX_DY 2.0f
 #define DELTA_MAX_DYAW 3.14159265 / 4.0
 
@@ -2508,11 +2508,12 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
 
         e->inferred_ade = (count > 0) ? total_error / count : -1.0f;
 
+        int min_valid = 10;
         int unfit;
         if (COLLECT_EXPERT_TELEPORT) {
-            unfit = (count < 3 || is_static);
+            unfit = (count < min_valid || is_static);
         } else {
-            unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD || count < 3 || is_static);
+            unfit = (e->inferred_ade < 0.0f || e->inferred_ade > ADE_THRESHOLD || count < min_valid || is_static);
         }
 
         if (unfit) {
@@ -3430,31 +3431,37 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
     }
 
-    if (mode == 1) {
-        float cam_x = 0.0f, cam_y = 0.0f;
-        float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        if (env->sdc_track_index >= 0 && !env->entities[env->sdc_track_index].removed) {
-            cam_x = env->entities[env->sdc_track_index].x;
-            cam_y = env->entities[env->sdc_track_index].y;
-            fovy = 150.0f;
-        }
-        float scale = client->height / fovy;
-
-        for (int i = 0; i < env->active_agent_count; i++) {
-            int agent_idx = env->active_agent_indices[i];
-            if (env->entities[agent_idx].removed || env->entities[agent_idx].x == INVALID_POSITION) {
-                continue;
-            }
-
-            int sx = (int)(-(env->entities[agent_idx].x - cam_x) * scale) + client->width / 2 + 20;
-            int sy = (int)((env->entities[agent_idx].y - cam_y) * scale) + client->height / 2 - 25;
-            if (sx < 0 || sx > client->width || sy < 0 || sy > client->height)
-                continue;
-            char text[32];
-            snprintf(text, sizeof(text), agent_idx == env->sdc_track_index ? "sdc" : "%d", agent_idx);
-            DrawText(text, sx - MeasureText(text, 20) / 2, sy, 20, PUFF_WHITE);
-        }
+    if (mode == 1 && env->sdc_track_index >= 0 && !env->entities[env->sdc_track_index].removed) {
+        int sx = client->width / 2;
+        int sy = client->height / 2 - 25;
+        DrawText("sdc", sx - MeasureText("sdc", 20) / 2, sy, 20, PUFF_WHITE);
     }
+    // Temp
+    // if (mode == 1) {
+    //     float cam_x = 0.0f, cam_y = 0.0f;
+    //     float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+    //     if (env->sdc_track_index >= 0 && !env->entities[env->sdc_track_index].removed) {
+    //         cam_x = env->entities[env->sdc_track_index].x;
+    //         cam_y = env->entities[env->sdc_track_index].y;
+    //         fovy = 150.0f;
+    //     }
+    //     float scale = client->height / fovy;
+
+    //     for (int i = 0; i < env->active_agent_count; i++) {
+    //         int agent_idx = env->active_agent_indices[i];
+    //         if (env->entities[agent_idx].removed || env->entities[agent_idx].x == INVALID_POSITION) {
+    //             continue;
+    //         }
+
+    //         int sx = (int)(-(env->entities[agent_idx].x - cam_x) * scale) + client->width / 2 + 20;
+    //         int sy = (int)((env->entities[agent_idx].y - cam_y) * scale) + client->height / 2 - 25;
+    //         if (sx < 0 || sx > client->width || sy < 0 || sy > client->height)
+    //             continue;
+    //         char text[32];
+    //         snprintf(text, sizeof(text), agent_idx == env->sdc_track_index ? "sdc" : "%d", agent_idx);
+    //         DrawText(text, sx - MeasureText(text, 20) / 2, sy, 20, PUFF_WHITE);
+    //     }
+    // }
 }
 
 void draw_thick_line_3d(Vector3 a, Vector3 b, float thickness, Color color) {
