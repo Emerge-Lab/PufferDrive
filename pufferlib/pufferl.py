@@ -377,23 +377,22 @@ class PuffeRL:
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
 
+        shape = self.values.shape
+        advantages = torch.zeros(shape, device=device)
+        advantages = compute_puff_advantage(
+            self.values,
+            self.rewards,
+            self.terminals,
+            self.ratio,
+            advantages,
+            config["gamma"],
+            config["gae_lambda"],
+            config["vtrace_rho_clip"],
+            config["vtrace_c_clip"],
+        )
+
         for mb in range(self.total_minibatches):
             profile("train_misc", epoch, nest=True)
-            self.amp_context.__enter__()
-
-            shape = self.values.shape
-            advantages = torch.zeros(shape, device=device)
-            advantages = compute_puff_advantage(
-                self.values,
-                self.rewards,
-                self.terminals,
-                self.ratio,
-                advantages,
-                config["gamma"],
-                config["gae_lambda"],
-                config["vtrace_rho_clip"],
-                config["vtrace_c_clip"],
-            )
 
             profile("train_copy", epoch)
             adv = advantages.abs().sum(axis=1)
@@ -436,18 +435,6 @@ class PuffeRL:
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
-            adv = advantages[idx]
-            adv = compute_puff_advantage(
-                mb_values,
-                mb_rewards,
-                mb_terminals,
-                ratio,
-                adv,
-                config["gamma"],
-                config["gae_lambda"],
-                config["vtrace_rho_clip"],
-                config["vtrace_c_clip"],
-            )
             adv = mb_advantages
             adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
@@ -465,7 +452,6 @@ class PuffeRL:
             entropy_loss = entropy.mean()
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
-            self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             # This breaks vloss clipping?
             self.values[idx] = newvalue.detach().float()
