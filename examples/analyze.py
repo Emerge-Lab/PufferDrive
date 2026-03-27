@@ -6,6 +6,9 @@ Modes:
   3. Human-replay on training maps
   4. Human-replay on validation maps
 
+When NUM_TOTAL_EVAL_AGENTS > NUM_AGENTS_PER_VECENV, we keep the buffer at
+NUM_AGENTS_PER_VECENV and loop resample_maps() to cover more scenes.
+
 Output: One row per scene per mode, with checkpoint name and metrics.
 
 Usage:
@@ -27,7 +30,8 @@ CHECKPOINTS = [
 
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"
-NUM_EVAL_AGENTS = 1024
+NUM_TOTAL_EVAL_AGENTS = 4096
+NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "checkpoint_eval_results.csv"
@@ -51,7 +55,7 @@ def make_eval_config(base_config, map_dir, control_mode, goal_behavior=0):
     """Build an eval-ready config from the base config."""
     config = copy.deepcopy(base_config)
     config["env"]["map_dir"] = map_dir
-    config["env"]["num_agents"] = NUM_EVAL_AGENTS
+    config["env"]["num_agents"] = NUM_AGENTS_PER_VECENV
     config["env"]["episode_length"] = 150
     config["env"]["termination_mode"] = 1
     config["env"]["control_mode"] = control_mode
@@ -64,27 +68,47 @@ def make_eval_config(base_config, map_dir, control_mode, goal_behavior=0):
     return config
 
 
-def collect_scene_rows(info_list, checkpoint, mode, dataset=DATASET):
+def collect_scene_rows(info_list, checkpoint, mode, scene_offset=0, dataset=DATASET):
     """Return one dict per scene (populated env log) with checkpoint/mode metadata."""
     rows = []
     for scene_idx, log in enumerate(info_list):
         if not log or log.get("n", 0) <= 0:
             continue
-        row = {"checkpoint": checkpoint, "dataset": dataset, "mode": mode, "scene_idx": scene_idx}
+        row = {
+            "checkpoint": checkpoint,
+            "dataset": dataset,
+            "mode": mode,
+            "scene_idx": scene_offset + scene_idx,
+        }
         for key in METRICS:
             row[key] = float(log.get(key, 0.0))
         rows.append(row)
     return rows
 
 
+def num_resample_rounds():
+    """How many rollout rounds needed to cover NUM_TOTAL_EVAL_AGENTS."""
+    if NUM_TOTAL_EVAL_AGENTS <= NUM_AGENTS_PER_VECENV:
+        return 1
+    return (NUM_TOTAL_EVAL_AGENTS + NUM_AGENTS_PER_VECENV - 1) // NUM_AGENTS_PER_VECENV
+
+
 def run_mode(evaluator, policy, base_config, map_dir, control_mode, checkpoint, mode_name, goal_behavior=0):
-    """Create env, rollout, collect per-scene rows, close env."""
+    """Create env, rollout (with resampling if needed), collect per-scene rows, close env."""
     config = make_eval_config(base_config, map_dir, control_mode, goal_behavior)
     env = load_env(ENV_NAME, config)
     rows = []
+    n_rounds = num_resample_rounds()
+
     try:
-        info_list = evaluator.rollout(policy, env)
-        rows = collect_scene_rows(info_list, checkpoint, mode_name)
+        for round_idx in range(n_rounds):
+            if round_idx > 0:
+                env.driver_env.resample_maps()
+
+            info_list = evaluator.rollout(policy, env)
+            scene_offset = round_idx * env.driver_env.num_envs
+            rows.extend(collect_scene_rows(info_list, checkpoint, mode_name, scene_offset))
+
         n_scenes = len(rows)
         if n_scenes > 0:
             mean_score = np.mean([r["score"] for r in rows])
@@ -94,6 +118,7 @@ def run_mode(evaluator, policy, base_config, map_dir, control_mode, checkpoint, 
             print(f"  {mode_name}: no populated scenes")
     except Exception as e:
         print(f"  {mode_name} failed (non-fatal): {e}")
+
     env.close()
     return rows
 
@@ -119,14 +144,21 @@ def evaluate_checkpoint(checkpoint_path, base_config):
     all_rows = []
 
     # ── 1. Self-play on training maps (reuse the env we already created) ─────
+    n_rounds = num_resample_rounds()
     try:
-        info_list = evaluator.rollout(policy, env)
-        all_rows.extend(collect_scene_rows(info_list, checkpoint_path, "sp_train"))
-        n = len([r for r in all_rows if r["mode"] == "sp_train"])
-        if n > 0:
-            mean_score = np.mean([r["score"] for r in all_rows if r["mode"] == "sp_train"])
-            mean_coll = np.mean([r["collision_rate"] for r in all_rows if r["mode"] == "sp_train"])
-            print(f"  sp_train: {n} scenes, score={mean_score:.3f}, collision_rate={mean_coll:.3f}")
+        for round_idx in range(n_rounds):
+            if round_idx > 0:
+                env.driver_env.resample_maps()
+
+            info_list = evaluator.rollout(policy, env)
+            scene_offset = round_idx * env.driver_env.num_envs
+            all_rows.extend(collect_scene_rows(info_list, checkpoint_path, "sp_train", scene_offset))
+
+        sp_rows = [r for r in all_rows if r["mode"] == "sp_train"]
+        if sp_rows:
+            mean_score = np.mean([r["score"] for r in sp_rows])
+            mean_coll = np.mean([r["collision_rate"] for r in sp_rows])
+            print(f"  sp_train: {len(sp_rows)} scenes, score={mean_score:.3f}, collision_rate={mean_coll:.3f}")
     except Exception as e:
         print(f"  sp_train failed (non-fatal): {e}")
     env.close()
