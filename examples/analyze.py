@@ -60,6 +60,7 @@ def make_eval_config(base_config, map_dir, control_mode, goal_behavior=0, num_ma
     config["env"]["map_dir"] = map_dir
     config["env"]["num_maps"] = num_maps
     config["env"]["num_agents"] = NUM_AGENTS_PER_VECENV
+    config["env"]["goal_radius"] = 2.5
     config["env"]["episode_length"] = 150
     config["env"]["termination_mode"] = 1
     config["env"]["control_mode"] = control_mode
