@@ -135,7 +135,6 @@ class PuffeRL:
         self.actions = torch.zeros(
             segments,
             horizon,
-            self.actions_trajectory_length,
             *atn_space.shape,
             device=device,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
@@ -465,7 +464,9 @@ class PuffeRL:
             )
 
             logits, newvalue = self.policy(mb_obs, state)
-            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits_action_sequence(logits, action=mb_actions)
+            # Flatten [minibatch, bptt, traj_len] to [minibatch*bptt, traj_len] to match logits
+            flat_mb_actions = mb_actions.reshape(-1, mb_actions.shape[-1])
+            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits_action_sequence(logits, action=flat_mb_actions)
 
             profile("train_misc", epoch)
             newlogprob = newlogprob.reshape(mb_logprobs.shape)
