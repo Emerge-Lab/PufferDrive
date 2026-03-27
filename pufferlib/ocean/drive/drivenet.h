@@ -113,17 +113,18 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     net->partner_encoder = make_linear(weights, num_agents, partner_features, input_size);
     net->partner_layernorm = make_layernorm(weights, num_agents, input_size);
     net->partner_encoder_two = make_linear(weights, num_agents, input_size, input_size);
-    // Past actions encoder: Linear(PAST_ACTIONS_DIM → input_size) + ReLU + Linear(input_size → input_size)
-    net->past_actions_encoder = make_linear(weights, num_agents, PAST_ACTIONS_DIM, input_size);
-    net->past_actions_relu = make_relu(num_agents, input_size);
-    net->past_actions_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->partner_max = make_max_dim1(num_agents, max_partners, input_size);
     net->road_max = make_max_dim1(num_agents, max_road_obs, input_size);
     net->cat1 = make_cat_dim1(num_agents, input_size, input_size);
     net->cat2 = make_cat_dim1(num_agents, input_size + input_size, input_size);
     net->cat3 = make_cat_dim1(num_agents, input_size * 3, input_size);
     net->gelu = make_gelu(num_agents, 4 * input_size);
+    // shared_embedding must be consumed before past_actions_encoder to match Python weight order
     net->shared_embedding = make_linear(weights, num_agents, input_size * 4, hidden_size);
+    // Past actions encoder: Linear(PAST_ACTIONS_DIM → input_size) + ReLU + Linear(input_size → input_size)
+    net->past_actions_encoder = make_linear(weights, num_agents, PAST_ACTIONS_DIM, input_size);
+    net->past_actions_relu = make_relu(num_agents, input_size);
+    net->past_actions_encoder_two = make_linear(weights, num_agents, input_size, input_size);
     net->relu = make_relu(num_agents, hidden_size);
     net->actor = make_linear(weights, num_agents, hidden_size, total_actor_output);
     net->value_fn = make_linear(weights, num_agents, hidden_size, 1);
