@@ -582,6 +582,7 @@ static PyObject *vec_trajectory_reward(PyObject *self, PyObject *args) {
         float heading = rollout_agent_trajectory(env, i, actions, traj_len);
         float penalty = compute_trajectory_commitment(env, i, heading);
         env->rewards[i] += penalty;
+        env->logs[i].trajectory_commitment_penalty += penalty;
     }
 
     // Swap current → previous for next step

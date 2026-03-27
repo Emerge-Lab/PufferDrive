@@ -239,6 +239,7 @@ struct Log {
     float expert_static_agent_count;
     float static_agent_count;
     float avg_speed_per_agent;
+    float trajectory_commitment_penalty;
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -1511,6 +1512,7 @@ void add_log(Drive *env) {
         env->log.expert_static_agent_count += env->expert_static_agent_count;
         env->log.static_agent_count += env->static_agent_count;
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
+        env->log.trajectory_commitment_penalty += env->logs[i].trajectory_commitment_penalty / safe_timestep;
         env->log.n += 1;
     }
 }
