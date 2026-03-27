@@ -5,6 +5,7 @@ Modes:
   2. Self-play on validation maps
   3. Human-replay on training maps
   4. Human-replay on validation maps
+  5. Human-replay on interactive scenes (1k scenes selected for SDC interactivity)
 
 When NUM_TOTAL_EVAL_AGENTS > NUM_AGENTS_PER_VECENV, we keep the buffer at
 NUM_AGENTS_PER_VECENV and loop resample_maps() to cover more scenes.
@@ -29,12 +30,14 @@ CHECKPOINTS = [
 ]
 
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
-VAL_MAP_DIR = "resources/drive/binaries/validation"
-NUM_TOTAL_EVAL_AGENTS = 4096
-NUM_AGENTS_PER_VECENV = 1024
+VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
+INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_training"
+NUM_TOTAL_EVAL_AGENTS = 512
+NUM_AGENTS_PER_VECENV = 512
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "checkpoint_eval_results.csv"
+MAKE_FIGURES = True
 # ────────────────────────────────────────────────────────────────────────────────
 
 METRICS = [
@@ -51,10 +54,11 @@ METRICS = [
 ]
 
 
-def make_eval_config(base_config, map_dir, control_mode, goal_behavior=0):
+def make_eval_config(base_config, map_dir, control_mode, goal_behavior=0, num_maps=50000):
     """Build an eval-ready config from the base config."""
     config = copy.deepcopy(base_config)
     config["env"]["map_dir"] = map_dir
+    config["env"]["num_maps"] = num_maps
     config["env"]["num_agents"] = NUM_AGENTS_PER_VECENV
     config["env"]["episode_length"] = 150
     config["env"]["termination_mode"] = 1
@@ -93,9 +97,11 @@ def num_resample_rounds():
     return (NUM_TOTAL_EVAL_AGENTS + NUM_AGENTS_PER_VECENV - 1) // NUM_AGENTS_PER_VECENV
 
 
-def run_mode(evaluator, policy, base_config, map_dir, control_mode, checkpoint, mode_name, goal_behavior=0):
+def run_mode(
+    evaluator, policy, base_config, map_dir, control_mode, checkpoint, mode_name, goal_behavior=0, num_maps=50000
+):
     """Create env, rollout (with resampling if needed), collect per-scene rows, close env."""
-    config = make_eval_config(base_config, map_dir, control_mode, goal_behavior)
+    config = make_eval_config(base_config, map_dir, control_mode, goal_behavior, num_maps)
     env = load_env(ENV_NAME, config)
     rows = []
     n_rounds = num_resample_rounds()
@@ -166,13 +172,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
     # ── 2. Self-play on validation maps ──────────────────────────────────────
     all_rows.extend(
         run_mode(
-            evaluator,
-            policy,
-            base_config,
-            VAL_MAP_DIR,
-            "control_agents",
-            checkpoint_path,
-            "sp_val",
+            evaluator, policy, base_config, VAL_MAP_DIR, "control_agents", checkpoint_path, "sp_val", num_maps=10_000
         )
     )
 
@@ -186,19 +186,28 @@ def evaluate_checkpoint(checkpoint_path, base_config):
             "control_sdc_only",
             checkpoint_path,
             "hr_train",
+            num_maps=50_000,
         )
     )
 
     # ── 4. Human-replay on validation maps ───────────────────────────────────
     all_rows.extend(
         run_mode(
+            evaluator, policy, base_config, VAL_MAP_DIR, "control_sdc_only", checkpoint_path, "hr_val", num_maps=10_000
+        )
+    )
+
+    # ── 5. Human-replay on interactive scenes ────────────────────────────────
+    all_rows.extend(
+        run_mode(
             evaluator,
             policy,
             base_config,
-            VAL_MAP_DIR,
+            INTERACTIVE_MAP_DIR,
             "control_sdc_only",
             checkpoint_path,
-            "hr_val",
+            "hr_interactive",
+            num_maps=1000,
         )
     )
 
@@ -224,6 +233,11 @@ def main():
     if not df.empty:
         summary = df.groupby(["checkpoint", "mode"])[["score", "collision_rate", "offroad_rate"]].mean()
         print(f"\n{summary}")
+
+    if MAKE_FIGURES and not df.empty:
+        from pufferlib.ocean.benchmark.plot import make_all_figures
+
+        make_all_figures(df)
 
     return df
 
