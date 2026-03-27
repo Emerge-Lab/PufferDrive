@@ -26,16 +26,17 @@ Usage:
 
     # Cap file count for quick testing
     python examples/find_interactive_scenes.py \
-        --data_folder data/processed/training \
-        --top_k 100 \
-        --max_files 1000 \
-        --visualize
+        --data_folder data/processed/training_50k \
+        --top_k 1000 \
+        --visualize \
+        --vis_top_k 50 \
 """
 
 import json
 import shutil
 import argparse
 import math
+import warnings
 from pathlib import Path
 from multiprocessing import Pool, cpu_count
 
@@ -43,11 +44,12 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.collections as mc
+import seaborn as sns
 
 
 # ── geometry helpers ─────────────────────────────────────────────────────────
@@ -201,8 +203,13 @@ def draw_roads(ax, roads):
         ax.plot(xs, ys, color=color, linewidth=lw, alpha=0.6, zorder=1)
 
 
-def visualize_scenario(data, title="", ax=None):
-    """Plot road graph + trajectories. SDC green, others blue, intersections red."""
+def visualize_scenario(data, title="", ax=None, crop_radius=60):
+    """Plot road graph + trajectories. SDC green, others blue, intersections red.
+
+    Args:
+        crop_radius: half-width (meters) of the square crop centered on the
+            SDC trajectory centroid. Set to None to autoscale instead.
+    """
     own_fig = ax is None
     if own_fig:
         fig, ax = plt.subplots(1, 1, figsize=(14, 14))
@@ -245,6 +252,7 @@ def visualize_scenario(data, title="", ax=None):
                     ha="center",
                     va="center",
                     zorder=8,
+                    clip_on=True,
                     bbox=dict(boxstyle="round,pad=0.15", facecolor="#000000", edgecolor="none", alpha=0.6),
                 )
         else:
@@ -261,6 +269,7 @@ def visualize_scenario(data, title="", ax=None):
                     ha="center",
                     va="center",
                     zorder=7,
+                    clip_on=True,
                     bbox=dict(boxstyle="round,pad=0.12", facecolor="#000000", edgecolor="none", alpha=0.5),
                 )
 
@@ -293,17 +302,25 @@ def visualize_scenario(data, title="", ax=None):
     ax.set_aspect("equal")
     ax.set_facecolor("#1a1a1a")
     if own_fig:
-        ax.figure.set_facecolor("#111111")
-    ax.tick_params(colors="white", labelsize=7)
-    for spine in ax.spines.values():
-        spine.set_color("#333")
-
-    label = title or "Scenario"
-    ax.set_title(
-        f"{label}  |  agents={len(objects)}  intersections={intersection_count}", color="white", fontsize=11, pad=10
-    )
+        ax.figure.set_facecolor("#1a1a1a")
+    ax.axis("off")
     ax.legend(loc="upper right", fontsize=8, facecolor="#222", edgecolor="#444", labelcolor="white")
-    ax.autoscale_view()
+
+    # Crop to a fixed square centered on the SDC trajectory centroid
+    if crop_radius is not None and sdc_traj is not None:
+        sdc_pts = [p for p in sdc_traj if p is not None]
+        if sdc_pts:
+            cx = sum(p[0] for p in sdc_pts) / len(sdc_pts)
+            cy = sum(p[1] for p in sdc_pts) / len(sdc_pts)
+            ax.set_xlim(cx - crop_radius, cx + crop_radius)
+            ax.set_ylim(cy - crop_radius, cy + crop_radius)
+            # Clip every artist to the axes rectangle so nothing
+            # bleeds outside the crop in the saved image.
+            for artist in ax.get_children():
+                artist.set_clip_on(True)
+                artist.set_clip_box(ax.clipbox)
+    else:
+        ax.autoscale_view()
     return ax
 
 
@@ -351,6 +368,12 @@ def main():
         "--vis_top_k", type=int, default=None, help="How many top scenarios to visualize (defaults to --top_k)"
     )
     parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument(
+        "--crop_radius",
+        type=float,
+        default=60,
+        help="Half-width (m) of the square crop centered on the SDC centroid. 0 = autoscale.",
+    )
 
     args = parser.parse_args()
     num_workers = args.num_workers or cpu_count()
@@ -425,59 +448,112 @@ def main():
     print(f"  Zero-intersection:     {(counts == 0).sum()}")
     print(f"  Has angled (>0):       {(angled > 0).sum()}")
 
-    # ── 2b. Plot interactivity distribution ─────────────────────────────────
+    # ── 2b. Plot interactivity distribution (WOSAC style) ────────────────
     plot_dir = Path(args.plot_folder)
     plot_dir.mkdir(parents=True, exist_ok=True)
 
+    # Style setup — matches plot_wosac_results exactly
+    sns.set("notebook", font_scale=1.05, rc={"figure.figsize": (18, 5)})
+    sns.set_style("ticks", rc={"figure.facecolor": "none", "axes.facecolor": "none"})
+    warnings.filterwarnings("ignore")
+    plt.set_loglevel("WARNING")
+    mpl.rcParams["lines.markersize"] = 8
+
+    palette = sns.color_palette("Set2", n_colors=3)
+
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    fig.set_facecolor("white")
-    fig.suptitle("SDC Trajectory Intersection Distribution", color="black", fontsize=14, y=1.02)
 
     # (0) Histogram — raw intersection count
     ax = axes[0]
-    ax.hist(counts, bins=60, color="#4A86C8", edgecolor="#2A5680", alpha=0.85)
-    ax.axvline(counts.median(), color="#E04040", linestyle="--", linewidth=1.5, label=f"Median ({counts.median():.0f})")
-    ax.axvline(counts.mean(), color="#2EA82E", linestyle="--", linewidth=1.5, label=f"Mean ({counts.mean():.1f})")
+    ax.hist(counts, bins=60, alpha=0.8, color=palette[0], edgecolor="black")
+    ax.axvline(
+        counts.median(),
+        color="red",
+        linestyle="--",
+        linewidth=2,
+        label=f"Median: {counts.median():.0f}",
+    )
+    mean_val = counts.mean()
+    std_val = counts.std()
+    ax.text(
+        0.95,
+        0.95,
+        f"μ = {mean_val:.1f}\nσ = {std_val:.1f}",
+        transform=ax.transAxes,
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+    )
     ax.set_xlabel("Raw intersection count")
     ax.set_ylabel("Number of scenarios")
     ax.set_title("Raw intersections (all)")
     ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
 
     # (1) Histogram — angled intersection count
     ax = axes[1]
     angled_nonzero = angled[angled > 0]
     if len(angled_nonzero) > 0:
-        ax.hist(angled_nonzero, bins=60, color="#D4952A", edgecolor="#8B6420", alpha=0.85)
-    ax.set_xlabel(f"Angled intersection count (>={args.angle_threshold}°)")
+        ax.hist(angled_nonzero, bins=60, alpha=0.8, color=palette[1], edgecolor="black")
+        mean_a = angled_nonzero.mean()
+        std_a = angled_nonzero.std()
+        ax.axvline(
+            mean_a,
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            label=f"Mean: {mean_a:.1f}",
+        )
+        ax.text(
+            0.95,
+            0.95,
+            f"μ = {mean_a:.1f}\nσ = {std_a:.1f}",
+            transform=ax.transAxes,
+            verticalalignment="top",
+            horizontalalignment="right",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+        ax.legend(fontsize=8)
+    ax.set_xlabel(f"Angled intersection count (≥{args.angle_threshold}°)")
     ax.set_ylabel("Number of scenarios")
     ax.set_title(f"Angled intersections — non-zero ({len(angled_nonzero)}/{len(angled)})")
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
 
-    # (2) Scatter — raw count vs angled count
+    # (2) Histogram — selected top-K scenarios
     ax = axes[2]
-    ax.scatter(counts, angled, s=4, alpha=0.4, color="#2EA82E", edgecolors="none")
-    ax.plot(
-        [0, counts.max()],
-        [0, counts.max()],
-        color="#E04040",
+    top_counts = df.head(args.top_k)["sdc_intersections"]
+    ax.hist(top_counts, bins=60, alpha=0.8, color=palette[2], edgecolor="black")
+    mean_top = top_counts.mean()
+    std_top = top_counts.std()
+    ax.axvline(
+        mean_top,
+        color="red",
         linestyle="--",
-        linewidth=1,
-        alpha=0.5,
-        label="y=x (all angled)",
+        linewidth=2,
+        label=f"Mean: {mean_top:.1f}",
+    )
+    ax.text(
+        0.95,
+        0.95,
+        f"μ = {mean_top:.1f}\nσ = {std_top:.1f}\nmin = {top_counts.min()}",
+        transform=ax.transAxes,
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
     )
     ax.set_xlabel("Raw intersection count")
-    ax.set_ylabel("Angled intersection count")
-    ax.set_title("Raw vs Angled")
+    ax.set_ylabel("Number of scenarios")
+    ax.set_title(f"Selected top-{args.top_k} scenarios")
     ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
 
+    # Despine all panels (WOSAC style)
     for ax in axes:
-        ax.set_facecolor("white")
-        ax.tick_params(colors="black", labelsize=8)
-        for spine in ax.spines.values():
-            spine.set_color("#CCCCCC")
+        sns.despine(ax=ax)
 
     plt.tight_layout()
     dist_path = plot_dir / "interactivity_distribution.png"
-    fig.savefig(dist_path, dpi=args.dpi, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    fig.savefig(dist_path, dpi=args.dpi, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"Saved distribution plot to {dist_path}")
 
@@ -521,12 +597,18 @@ def main():
             with open(fpath) as f:
                 data = json.load(f)
 
-            fig, ax = plt.subplots(1, 1, figsize=(14, 14))
-            fig.set_facecolor("#111111")
-            visualize_scenario(data, title=row["filename"], ax=ax)
+            fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+            fig.set_facecolor("#1a1a1a")
+            ax.set_position([0, 0, 1, 1])  # axes fills entire figure
+            crop = args.crop_radius if args.crop_radius > 0 else None
+            visualize_scenario(data, title=row["filename"], ax=ax, crop_radius=crop)
 
             out_name = fpath.stem + ".png"
-            fig.savefig(plot_dir / out_name, dpi=args.dpi, facecolor=fig.get_facecolor(), bbox_inches="tight")
+            fig.savefig(
+                plot_dir / out_name,
+                dpi=args.dpi,
+                facecolor=fig.get_facecolor(),
+            )
             plt.close(fig)
 
         print(f"Saved {len(vis_df)} plots to {plot_dir}")
