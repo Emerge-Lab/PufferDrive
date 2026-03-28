@@ -362,6 +362,11 @@ struct Drive {
     float traj_loss_norm;     // normalization constant
     float traj_loss_clamp_min; // minimum (most negative) reward penalty
     int has_prev_traj;        // whether prev_traj is valid
+
+    // Predicted trajectory visualization (set from Python, drawn by c_render)
+    float *predicted_traj_x;  // [num_agents * predicted_traj_len]
+    float *predicted_traj_y;  // [num_agents * predicted_traj_len]
+    int predicted_traj_len;   // steps per agent (0 = no trajectory to draw)
 };
 
 // ========================================
@@ -2119,6 +2124,8 @@ void c_close(Drive *env) {
     free(env->prev_traj_y);
     free(env->curr_traj_x);
     free(env->curr_traj_y);
+    free(env->predicted_traj_x);
+    free(env->predicted_traj_y);
 }
 
 void allocate(Drive *env) {
@@ -3946,6 +3953,31 @@ void c_render(Drive *env) {
     BeginMode3D(client->camera);
     handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
+
+    // Re-enter 3D mode for trajectory drawing (draw_scene calls EndMode3D internally)
+    BeginMode3D(client->camera);
+    rlDisableDepthTest();
+    if (env->predicted_traj_x != NULL && env->predicted_traj_len > 0) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            Agent *agent = &env->agents[agent_idx];
+            int tlen = env->predicted_traj_len;
+            float z = agent->sim_z + 0.1f;
+
+            Vector3 prev = {agent->sim_x, agent->sim_y, z};
+            for (int t = 0; t < tlen; t++) {
+                float tx = env->predicted_traj_x[i * tlen + t];
+                float ty = env->predicted_traj_y[i * tlen + t];
+                Vector3 curr = {tx, ty, z};
+                rlSetLineWidth(3.0f);
+                DrawLine3D(prev, curr, RED);
+                DrawCircle3D(curr, 1.5f, (Vector3){0, 0, 1}, 0.0f, RED);
+                prev = curr;
+            }
+        }
+    }
+    rlEnableDepthTest();
+    EndMode3D();
 
     if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
         env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
