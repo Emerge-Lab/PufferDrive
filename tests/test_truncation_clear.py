@@ -4,6 +4,7 @@ Regression test for bug where resample_maps() set truncations[:] = 1
 but step() never cleared them, causing bootstrap heuristic to fire
 on every step after the first resample.
 """
+
 import numpy as np
 import pytest
 from pufferlib.ocean.drive.drive import Drive
@@ -48,9 +49,7 @@ def test_truncations_cleared_after_resample(env):
     assert (env.truncations == 1).all(), "Precondition: truncations should be 1 after resample"
 
     env.step(random_actions(env))
-    assert (env.truncations == 0).all(), (
-        f"Truncations should be 0 after step following resample, got {env.truncations}"
-    )
+    assert (env.truncations == 0).all(), f"Truncations should be 0 after step following resample, got {env.truncations}"
 
 
 def test_truncations_not_sticky_across_multiple_steps(env):
