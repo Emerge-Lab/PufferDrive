@@ -591,7 +591,7 @@ class Drive(pufferlib.PufferEnv):
             if log:
                 info.append(log)
 
-        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+        if self.resample_frequency > 0 and (self.tick + 1) % self.resample_frequency == 0:
             self.resample_maps()
 
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
