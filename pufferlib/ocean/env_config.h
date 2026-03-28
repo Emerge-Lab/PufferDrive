@@ -22,6 +22,9 @@ typedef struct {
     float max_goal_speed;
     int collision_behavior;
     int offroad_behavior;
+    float observation_window_size;
+    float polyline_reduction_threshold;
+    float polyline_max_segment_length;
     int spawn_immunity_timer;
     float dt;
     int goal_behavior;
@@ -79,6 +82,7 @@ typedef struct {
     float spawn_height;
     char map_dir[256];
     float min_avg_speed_to_consider_goal_attempt;
+    float stopped_reset_threshold;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -204,6 +208,12 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->collision_behavior = atoi(value);
     } else if (MATCH("env", "offroad_behavior")) {
         env_config->offroad_behavior = atoi(value);
+    } else if (MATCH("env", "observation_window_size")) {
+        env_config->observation_window_size = atof(value);
+    } else if (MATCH("env", "polyline_reduction_threshold")) {
+        env_config->polyline_reduction_threshold = atof(value);
+    } else if (MATCH("env", "polyline_max_segment_length")) {
+        env_config->polyline_max_segment_length = atof(value);
     } else if (MATCH("env", "spawn_immunity_timer")) {
         env_config->spawn_immunity_timer = atoi(value);
     } else if (MATCH("env", "dt")) {
@@ -249,6 +259,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->num_maps = atoi(value);
     } else if (MATCH("env", "min_avg_speed_to_consider_goal_attempt")) {
         env_config->min_avg_speed_to_consider_goal_attempt = atof(value);
+    } else if (MATCH("env", "stopped_reset_threshold")) {
+        env_config->stopped_reset_threshold = atof(value);
     } else if (MATCH("env", "min_agents_per_env")) {
         env_config->min_agents_per_env = atoi(value);
     } else if (MATCH("env", "max_agents_per_env")) {

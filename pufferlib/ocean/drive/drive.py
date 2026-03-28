@@ -34,6 +34,9 @@ class Drive(pufferlib.PufferEnv):
         max_goal_speed=None,
         collision_behavior=0,
         offroad_behavior=0,
+        observation_window_size=100.0,
+        polyline_reduction_threshold=0.1,
+        polyline_max_segment_length=5.0,
         dt=0.1,
         episode_length=None,
         termination_mode=None,
@@ -41,7 +44,7 @@ class Drive(pufferlib.PufferEnv):
         num_maps=100,
         num_agents=512,
         action_type="discrete",
-        dynamics_model="classic",
+        dynamics_model="jerk",
         buf=None,
         seed=1,
         init_steps=0,
@@ -84,6 +87,7 @@ class Drive(pufferlib.PufferEnv):
         reward_bound_acc_min=0.666,
         reward_bound_acc_max=1.5,
         min_avg_speed_to_consider_goal_attempt=2.0,
+        stopped_reset_threshold=0.0,
         # spawn settings
         min_agents_per_env=32,
         max_agents_per_env=64,
@@ -109,12 +113,16 @@ class Drive(pufferlib.PufferEnv):
         self.max_goal_speed = float(max_goal_speed) if max_goal_speed is not None else -1.0
         self.goal_behavior = goal_behavior
         self.reward_randomization = reward_randomization
+        self.stopped_reset_threshold = stopped_reset_threshold
         self.turn_off_normalization = turn_off_normalization
         self.reward_conditioning = reward_conditioning
         self.min_goal_distance = min_goal_distance
         self.max_goal_distance = max_goal_distance
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
+        self.observation_window_size = observation_window_size
+        self.polyline_reduction_threshold = polyline_reduction_threshold
+        self.polyline_max_segment_length = polyline_max_segment_length
         self.human_agent_idx = human_agent_idx
         self.episode_length = episode_length
         self.termination_mode = termination_mode
@@ -278,10 +286,14 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
+            stopped_reset_threshold=self.stopped_reset_threshold,
             turn_off_normalization=self.turn_off_normalization,
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
+            observation_window_size=self.observation_window_size,
+            polyline_reduction_threshold=self.polyline_reduction_threshold,
+            polyline_max_segment_length=self.polyline_max_segment_length,
             reward_bound_goal_radius_min=self.reward_bound_goal_radius_min,
             reward_bound_goal_radius_max=self.reward_bound_goal_radius_max,
             reward_bound_collision_min=self.reward_bound_collision_min,
@@ -354,6 +366,7 @@ class Drive(pufferlib.PufferEnv):
                 max_goal_speed=self.max_goal_speed,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
+                stopped_reset_threshold=self.stopped_reset_threshold,
                 turn_off_normalization=self.turn_off_normalization,
                 reward_conditioning=self.reward_conditioning,
                 min_goal_distance=self.min_goal_distance,
@@ -394,6 +407,9 @@ class Drive(pufferlib.PufferEnv):
                 min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
+                observation_window_size=self.observation_window_size,
+                polyline_reduction_threshold=self.polyline_reduction_threshold,
+                polyline_max_segment_length=self.polyline_max_segment_length,
                 dt=dt,
                 episode_length=(int(episode_length) if episode_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
@@ -436,7 +452,11 @@ class Drive(pufferlib.PufferEnv):
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             reward_randomization=self.reward_randomization,
+            stopped_reset_threshold=self.stopped_reset_threshold,
             turn_off_normalization=self.turn_off_normalization,
+            observation_window_size=self.observation_window_size,
+            polyline_reduction_threshold=self.polyline_reduction_threshold,
+            polyline_max_segment_length=self.polyline_max_segment_length,
             reward_conditioning=self.reward_conditioning,
             min_goal_distance=self.min_goal_distance,
             max_goal_distance=self.max_goal_distance,
@@ -505,6 +525,7 @@ class Drive(pufferlib.PufferEnv):
                 goal_radius=self.goal_radius,
                 goal_behavior=self.goal_behavior,
                 reward_randomization=self.reward_randomization,
+                stopped_reset_threshold=self.stopped_reset_threshold,
                 reward_conditioning=self.reward_conditioning,
                 turn_off_normalization=self.turn_off_normalization,
                 min_goal_distance=self.min_goal_distance,
@@ -547,6 +568,9 @@ class Drive(pufferlib.PufferEnv):
                 min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
+                observation_window_size=self.observation_window_size,
+                polyline_reduction_threshold=self.polyline_reduction_threshold,
+                polyline_max_segment_length=self.polyline_max_segment_length,
                 dt=self.dt,
                 episode_length=(int(self.episode_length) if self.episode_length is not None else None),
                 map_path=self.map_files[map_ids[i]],
@@ -717,14 +741,26 @@ class Drive(pufferlib.PufferEnv):
 
 
 def calculate_area(p1, p2, p3):
-    # Calculate the area of the triangle using the determinant method
-    return 0.5 * abs((p1["x"] - p3["x"]) * (p2["y"] - p1["y"]) - (p1["x"] - p2["x"]) * (p3["y"] - p1["y"]))
+    # 3D triangle area = 0.5 * ||(p2-p1) x (p3-p1)||
+    x1, y1, z1 = p1["x"], p1["y"], p1.get("z", 0.0)
+    x2, y2, z2 = p2["x"], p2["y"], p2.get("z", 0.0)
+    x3, y3, z3 = p3["x"], p3["y"], p3.get("z", 0.0)
+
+    ax, ay, az = x2 - x1, y2 - y1, z2 - z1
+    bx, by, bz = x3 - x1, y3 - y1, z3 - z1
+
+    cx = ay * bz - az * by
+    cy = az * bx - ax * bz
+    cz = ax * by - ay * bx
+
+    return 0.5 * (cx * cx + cy * cy + cz * cz) ** 0.5
 
 
 def dist(a, b):
     dx = a["x"] - b["x"]
     dy = a["y"] - b["y"]
-    return dx * dx + dy * dy
+    dz = a.get("z", 0.0) - b.get("z", 0.0)
+    return (dx * dx + dy * dy + dz * dz) ** 0.5
 
 
 def simplify_polyline(geometry, polyline_reduction_threshold, max_segment_length):
@@ -1012,7 +1048,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data_utils/carla/carla_py123d")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

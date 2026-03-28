@@ -51,7 +51,10 @@ def parse_args():
 
     # Job management
     parser.add_argument("--save_dir", type=str, required=True, help="Base directory for experiment outputs")
-    parser.add_argument("--prefix", type=str, default=None, help="Prefix for job names")
+    parser.add_argument("--prefix", type=str, default=None, help="Prefix for job names and wandb run name")
+    parser.add_argument("--wandb-name", type=str, default=None, help="Wandb run name (defaults to --prefix)")
+    parser.add_argument("--wandb-group", type=str, default=None, help="Wandb group name (overrides program config)")
+    parser.add_argument("--wandb-project", type=str, default=None, help="Wandb project name (overrides program config)")
     parser.add_argument("--dry", action="store_true", help="Dry run (don't submit, just print commands)")
 
     # Config files
@@ -140,15 +143,29 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
     all_main_args, overrides = process_main_args(args.args, args.program_config)
     name2commands = {}
 
+    # Keys to exclude from auto-generated job name (paths, wandb config, common overrides)
+    name_skip_keys = {
+        "config",
+        "config_path",
+        "map_dir",
+        "env.map_dir",
+        "init_mode",
+        "env.init_mode",
+        "total_timesteps",
+        "train.total_timesteps",
+        "wandb_project",
+        "wandb_group",
+        "wandb_name",
+    }
+    # Boolean flags that don't take values (store_true)
+    boolean_flags = {"wandb", "neptune"}
+
     for main_args in all_main_args:
         cmd = []
         name_entries = []
 
         if args.program_config is not None:
             name_entries.append(args.program_config.split("/")[-1].rsplit(".", 1)[0])
-
-        # Boolean flags that don't take values (store_true)
-        boolean_flags = {"wandb", "neptune"}
 
         for key, val in main_args.items():
             # Convert underscores to dashes for CLI compatibility
@@ -163,7 +180,7 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                 cmd.append(f"--{cli_key}")
                 cmd.append(str(val))
 
-            if key in overrides and key not in ["config", "config_path"]:
+            if key in overrides and key not in name_skip_keys:
                 display_key = key.split(".")[-1] if "." in key else key
                 name_entries.append(f"{display_key}{val}")
 
@@ -182,6 +199,15 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
 
         if args.prefix is not None:
             job_name = f"{args.prefix}_{job_name}"
+
+        # Wandb overrides: explicit flags take priority, then prefix for name
+        wandb_name = args.wandb_name or args.prefix
+        if wandb_name is not None:
+            cmd.extend(["--wandb-name", wandb_name])
+        if args.wandb_group is not None:
+            cmd.extend(["--wandb-group", args.wandb_group])
+        if args.wandb_project is not None:
+            cmd.extend(["--wandb-project", args.wandb_project])
 
         save_dir = os.path.join(args.save_dir, job_name)
         name2commands[job_name] = (cmd, save_dir)
@@ -249,6 +275,11 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         # Code isolation: shallow symlink of top-level entries, then copy .so files
         # so rebuilding for another branch won't break running jobs.
         isolated_root = os.path.join(save_dir, "code")
+        if os.path.exists(isolated_root):
+            version = 1
+            while os.path.exists(f"{isolated_root}_v{version}"):
+                version += 1
+            isolated_root = f"{isolated_root}_v{version}"
         os.makedirs(isolated_root, exist_ok=True)
         # Symlink each top-level entry (instant, avoids deep-copying data/)
         for entry in os.listdir(project_root):
