@@ -125,6 +125,7 @@ class Drive(pufferlib.PufferEnv):
         self.episode_length = episode_length
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
+        self._rng = np.random.default_rng(seed)
         self.dynamics_model = dynamics_model
         # reward randomization bounds
         self.reward_bound_goal_radius_min = reward_bound_goal_radius_min
@@ -423,7 +424,13 @@ class Drive(pufferlib.PufferEnv):
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
-        self.tick = 0
+        # Stagger initial tick so workers don't all resample maps at the same step.
+        # The first episode will be shorter than resample_frequency, but this
+        # desynchronizes resets across workers for the rest of training.
+        if self.resample_frequency > 0:
+            self.tick = int(self._rng.integers(self.resample_frequency))
+        else:
+            self.tick = 0
         self.truncations[:] = 0
         return self.observations, []
 
