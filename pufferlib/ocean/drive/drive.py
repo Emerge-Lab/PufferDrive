@@ -87,7 +87,7 @@ class Drive(pufferlib.PufferEnv):
         reward_bound_acc_min=0.666,
         reward_bound_acc_max=1.5,
         min_avg_speed_to_consider_goal_attempt=2.0,
-        stopped_reset_threshold=0.0,
+        stopped_reset_threshold=0.5,
         # spawn settings
         min_agents_per_env=32,
         max_agents_per_env=64,
