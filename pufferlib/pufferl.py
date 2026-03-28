@@ -481,7 +481,7 @@ class PuffeRL:
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
             v_loss = v_loss[~mb_is_invalid_step].mean()
 
-            entropy_loss = entropy.mean()
+            entropy_loss = entropy[~mb_is_invalid_step].mean()
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
