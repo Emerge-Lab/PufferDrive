@@ -799,9 +799,8 @@ def save_map_binary(map_data, output_file, unique_map_id):
         sdc_track_index = metadata.get("sdc_track_index", -1)  # -1 as default if not found
         tracks_to_predict = metadata.get("tracks_to_predict", [])
 
-        # Write original scenario_id with fallback to placeholder
-        scenario_id = map_data.get("scenario_id", f"map_{unique_map_id:03d}")
-        f.write(struct.pack("16s", scenario_id.encode("utf-8")))
+        # Note: C load_map_binary does NOT read a scenario_id prefix.
+        # Do not write one here or the binary will be misaligned.
 
         # Write sdc_track_index
         f.write(struct.pack("i", sdc_track_index))
