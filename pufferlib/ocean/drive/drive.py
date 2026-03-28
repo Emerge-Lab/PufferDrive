@@ -582,6 +582,7 @@ class Drive(pufferlib.PufferEnv):
 
     def step(self, actions):
         self.terminals[:] = 0
+        self.truncations[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
