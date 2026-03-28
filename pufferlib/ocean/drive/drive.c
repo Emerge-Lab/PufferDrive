@@ -145,7 +145,6 @@ void demo(const char *map_name_arg, const char *policy_name_arg, int view_mode, 
                 conf.init_mode);
         free_allocated(&env);
         return;
-        // return -1;
     }
     c_reset(&env);
     c_render(&env, view_mode, draw_traces);

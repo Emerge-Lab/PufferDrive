@@ -22,11 +22,6 @@
 #define VIEW_MODE_SIM_STATE 0
 #define VIEW_MODE_BEV_AGENT_OBS 1
 #define VIEW_MODE_AGENT_PERSP 2
-// // Order of entities in rendering (lower is rendered first)
-// #define Z_ROAD_SURFACE 0.0f
-// #define Z_ROAD_MARKINGS 0.05f // Lane lines, road lines, traces
-// #define Z_AGENT_DETAILS 0.4f  // Arrow, goal markers, obs overlays
-// #define Z_AGENTS 0.6f         // Vehicles, cyclists, pedestrians
 
 // constants for strings, data etc.
 #define SCENARIO_ID_STR_LENGTH 16
@@ -4500,86 +4495,6 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, status_y + 20, 20, PUFF_WHITE);
         EndDrawing();
     }
-
-    // BeginDrawing();
-    // Color road = (Color){35, 35, 37, 255};
-    // ClearBackground(road);
-    // BeginMode3D(client->camera);
-    // handle_camera_controls(env->client);
-    // draw_scene(env, client, 0, 0, 0, 0);
-
-    // if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
-    //     env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
-    // }
-
-    // // Draw debug info
-    // DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,
-    //                     client->camera.position.z),
-    //          10, 10, 20, PUFF_WHITE);
-    // DrawText(TextFormat("Camera Target: (%.2f, %.2f, %.2f)", client->camera.target.x, client->camera.target.y,
-    //                     client->camera.target.z),
-    //          10, 30, 20, PUFF_WHITE);
-    // DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
-
-    // int human_idx = env->active_agent_indices[env->human_agent_idx];
-    // DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
-    // DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
-
-    // // Display current action values - yellow when controlling, white otherwise
-    // Color action_color = IsKeyDown(KEY_LEFT_SHIFT) ? YELLOW : PUFF_WHITE;
-
-    // if (env->action_type == 0) { // discrete
-    //     int *action_array = (int *)env->actions;
-    //     int action_val = action_array[env->human_agent_idx];
-
-    //     if (env->dynamics_model == CLASSIC) {
-    //         int num_steer = 13;
-    //         int accel_idx = action_val / num_steer;
-    //         int steer_idx = action_val % num_steer;
-    //         float accel_value = ACCELERATION_VALUES[accel_idx];
-    //         float steer_value = STEERING_VALUES[steer_idx];
-
-    //         DrawText(TextFormat("Acceleration: %.2f m/s^2", accel_value), 10, 110, 20, action_color);
-    //         DrawText(TextFormat("Steering: %.3f", steer_value), 10, 130, 20, action_color);
-    //     } else if (env->dynamics_model == JERK) {
-    //         int num_lat = 3;
-    //         int jerk_long_idx = action_val / num_lat;
-    //         int jerk_lat_idx = action_val % num_lat;
-    //         float jerk_long_value = JERK_LONG[jerk_long_idx];
-    //         float jerk_lat_value = JERK_LAT[jerk_lat_idx];
-
-    //         DrawText(TextFormat("Longitudinal Jerk: %.2f m/s^3", jerk_long_value), 10, 110, 20, action_color);
-    //         DrawText(TextFormat("Lateral Jerk: %.2f m/s^3", jerk_lat_value), 10, 130, 20, action_color);
-    //     }
-    // } else { // continuous
-    //     float (*action_array_f)[2] = (float (*)[2])env->actions;
-    //     DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20,
-    //     action_color); DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20,
-    //     action_color);
-    // }
-
-    // // Show key press status
-    // int status_y = 150;
-    // if (IsKeyDown(KEY_LEFT_SHIFT)) {
-    //     DrawText("[shift pressed]", 10, status_y, 20, YELLOW);
-    //     status_y += 20;
-    // }
-    // if (IsKeyDown(KEY_SPACE)) {
-    //     DrawText("[space pressed]", 10, status_y, 20, YELLOW);
-    //     status_y += 20;
-    // }
-    // if (IsKeyDown(KEY_LEFT_CONTROL)) {
-    //     DrawText("[ctrl pressed]", 10, status_y, 20, YELLOW);
-    //     status_y += 20;
-    // }
-
-    // // Controls help
-    // DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10,
-    //          client->height - 30, 20, PUFF_WHITE);
-
-    // DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, status_y, 20, PUFF_WHITE);
-    // DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, status_y + 20, 20, PUFF_WHITE);
-    // EndDrawing();
 }
 
 void close_client(Client *client) {
