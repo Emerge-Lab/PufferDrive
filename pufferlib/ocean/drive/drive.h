@@ -375,6 +375,7 @@ struct Drive {
     float max_goal_distance;
     char *ini_file;
     char scenario_id[SCENARIO_ID_STR_LENGTH];
+    char video_suffix[64]; // Optional suffix appended to mp4 filename (e.g. "_bev")
     int collision_behavior;
     int offroad_behavior;
     float observation_window_size;
@@ -3650,8 +3651,11 @@ Client *make_client(Drive *env) {
         char size_str[64];
         snprintf(size_str, sizeof(size_str), "%dx%d", (int)client->width, (int)client->height);
 
-        char filename[256];
-        snprintf(filename, sizeof(filename), "%s.mp4", env->scenario_id);
+        char filename[320];
+        if (env->video_suffix[0] != '\0')
+            snprintf(filename, sizeof(filename), "%s%s.mp4", env->scenario_id, env->video_suffix);
+        else
+            snprintf(filename, sizeof(filename), "%s.mp4", env->scenario_id);
 
         client->recorder_pid = fork();
         if (client->recorder_pid == -1) {

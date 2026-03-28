@@ -550,6 +550,36 @@ static PyObject *vec_step(PyObject *self, PyObject *arg) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_video_suffix(PyObject *self, PyObject *args) {
+    // Set a suffix appended to the mp4 filename for headless rendering.
+    // Call this before the first vec_render of each rollout when using multi-view.
+    // Args: (vec_env_ptr, env_id, suffix_str)
+    int num_args = PyTuple_Size(args);
+    if (num_args != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_video_suffix requires 3 arguments: (vec, env_id, suffix)");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+    int env_id = (int)PyLong_AsLong(PyTuple_GetItem(args, 1));
+    const char *suffix = PyUnicode_AsUTF8(PyTuple_GetItem(args, 2));
+    if (!suffix) {
+        PyErr_SetString(PyExc_TypeError, "suffix must be a string");
+        return NULL;
+    }
+    if (env_id < 0 || env_id >= vec->num_envs) {
+        PyErr_SetString(PyExc_IndexError, "env_id out of range");
+        return NULL;
+    }
+    Drive *env = (Drive *)vec->envs[env_id];
+    strncpy(env->video_suffix, suffix, sizeof(env->video_suffix) - 1);
+    env->video_suffix[sizeof(env->video_suffix) - 1] = '\0';
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_render(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
     if (num_args != 4) {
@@ -1071,6 +1101,7 @@ static PyMethodDef methods[] = {
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
+    {"vec_set_video_suffix", vec_set_video_suffix, METH_VARARGS, "Set mp4 filename suffix for the given env"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"vec_get_scenario_ids", vec_get_scenario_ids, METH_VARARGS, "Get scenario IDs for all envs"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},

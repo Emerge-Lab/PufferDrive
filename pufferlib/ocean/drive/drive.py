@@ -755,6 +755,14 @@ class Drive(pufferlib.PufferEnv):
     def render(self, view_mode: RenderView = RenderView.FULL_SIM_STATE, draw_traces: bool = True, env_id: int = 0):
         binding.vec_render(self.c_envs, int(view_mode), draw_traces, env_id)
 
+    def set_video_suffix(self, suffix: str, env_id: int = 0):
+        """Set the suffix appended to the mp4 filename for headless rendering.
+
+        Must be called before the first render() call of a rollout.
+        E.g. set_video_suffix("_bev", env_id=0) → {scenario_id}_bev.mp4
+        """
+        binding.vec_set_video_suffix(self.c_envs, env_id, suffix)
+
     def close(self):
         binding.vec_close(self.c_envs)
 
