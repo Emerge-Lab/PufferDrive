@@ -4,6 +4,7 @@ BC Policy training script with wandb sweep support.
 Usage:
     python examples/train_bc_policy.py train                        # single run, default config
     python examples/train_bc_policy.py train --dynamics classic     # single run, classic dynamics
+    python examples/train_bc_policy.py train --map-dir path/to/maps --num-maps 25000
     python examples/train_bc_policy.py sweep                        # launch sweep + agent
     python examples/train_bc_policy.py --dynamics classic
 """
@@ -50,7 +51,7 @@ TRAIN_DEFAULTS = {
     "hidden_size": 512,
     "batch_size": 2048,
     "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
-    "epochs": 1000,
+    "epochs": 1500,
     "num_maps": 50000,
     "eval_frequency": 10,  # Validation dataset
 }
@@ -353,7 +354,7 @@ def evaluate(policy, dataloader, device):
 # ---------------------------------------------------------------------------
 # Core training loop (called by both single-run and sweep agent)
 # ---------------------------------------------------------------------------
-def train(dynamics_model: str):
+def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = None):
     output_sizes = get_output_sizes(dynamics_model)
 
     run = wandb.init(
@@ -361,6 +362,13 @@ def train(dynamics_model: str):
         tags=["bc_policy", dynamics_model],
         config={**TRAIN_DEFAULTS, "dynamics_model": dynamics_model, "output_sizes": output_sizes},
     )
+
+    # Apply CLI overrides to wandb config
+    if num_maps_override is not None:
+        wandb.config.update({"num_maps": num_maps_override}, allow_val_change=True)
+    if map_dir is not None:
+        wandb.config.update({"map_dir": map_dir}, allow_val_change=True)
+
     config = wandb.config
 
     lr = config.learning_rate
@@ -371,8 +379,6 @@ def train(dynamics_model: str):
     num_maps = config.num_maps
     eval_frequency = config.eval_frequency
 
-    run.name = f"{dynamics_model}_maps{num_maps}"
-
     print(
         f"dynamics={dynamics_model}  lr={lr}  hidden={hidden_size}  num_maps={num_maps}"
         f"batch={batch_size}  resample_every={resample_every}"
@@ -380,6 +386,12 @@ def train(dynamics_model: str):
 
     # Train env
     args = build_env_args(dynamics_model, num_maps=num_maps)
+    if hasattr(config, "map_dir") and config.map_dir is not None:
+        args["env"]["map_dir"] = config.map_dir
+
+    effective_map_dir = args["env"]["map_dir"]
+    run.name = f"{dynamics_model}_{os.path.basename(effective_map_dir)}_{num_maps}maps"
+
     env = load_env("puffer_drive", args)
     driver_env = env.driver_env
 
@@ -482,8 +494,9 @@ def train(dynamics_model: str):
             print(f"Early stopping at epoch {epoch + 1}")
             break
 
-    save_path = f"{CHECKPOINT_PATH}/bc_{dynamics_model}_{run.id}.pt"
+    save_path = f"{CHECKPOINT_PATH}/bc_{dynamics_model}_{num_maps}maps_{run.id}.pt"
     torch.save(policy.state_dict(), save_path)
+    wandb.save(save_path, base_path=".")
     print(f"Saved checkpoint: {save_path}")
     wandb.summary["best_avg_loss"] = best_avg_loss
 
@@ -491,7 +504,7 @@ def train(dynamics_model: str):
         policy,
         dataset,
         dynamics_model,
-        num_maps=args["env"]["num_maps"],
+        num_maps=num_maps,
         run_id=run.id,
         device=device,
     )
@@ -514,6 +527,9 @@ def parse_args():
     ]:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--dynamics", choices=["classic", "delta_local"], default="delta_local")
+        if name == "train":
+            p.add_argument("--map-dir", type=str, default=None, help="Override map_dir")
+            p.add_argument("--num-maps", type=int, default=None, help="Override num_maps")
         if name == "sweep":
             p.add_argument("--count", type=int, default=50, help="Number of sweep runs")
 
@@ -527,7 +543,11 @@ if __name__ == "__main__":
     sys.argv = sys.argv[:1]  # strip before load_config sees them
 
     if args.mode == "train":
-        train(dynamics_model=args.dynamics)
+        train(
+            dynamics_model=args.dynamics,
+            map_dir=args.map_dir,
+            num_maps_override=args.num_maps,
+        )
 
     elif args.mode == "sweep":
         sweep_id = wandb.sweep(SWEEP_CONFIG, project="bc_anchor_policy")
