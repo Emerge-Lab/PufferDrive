@@ -867,7 +867,7 @@ class Evaluator:
         backend = eval_config["eval"].get("backend", "PufferEnv")
         eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
         eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
-        if self.config["eval"]["human_replay_eval"]:
+        if self.configs["eval"]["human_replay_eval"]:
             eval_config["env"]["episode_length"] = 91  # WOMD scenario length
         eval_config["vec"] = dict(backend=backend, num_envs=1)
 
