@@ -455,9 +455,6 @@ class PuffeRL:
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
-            # This breaks vloss clipping?
-            self.values[idx] = newvalue.detach().float()
-
             # Logging
             profile("train_misc", epoch)
             losses["policy_loss"] += pg_loss.item() / self.total_minibatches
