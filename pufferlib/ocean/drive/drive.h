@@ -3267,7 +3267,7 @@ void c_step(Drive *env) {
                 agent->last_goal_reached_timestep = env->timestep;
                 agent->cumulative_displacement_since_last_goal = 0.0f;
             } else { // Zero out the velocity so that the agent stops at the goal
-                env->rewards[i] = env->reward_goal;
+                env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
                 agent->stopped = 1;
                 agent->sim_vx = agent->sim_vy = 0.0f;
