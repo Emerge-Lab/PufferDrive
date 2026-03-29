@@ -529,6 +529,65 @@ static PyObject *vec_step(PyObject *self, PyObject *arg) {
     Py_RETURN_NONE;
 }
 
+// Set predicted trajectory positions for rendering (rolled out from Python actions).
+static PyObject *vec_set_trajectory(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_trajectory requires 4 args: vec_env, env_id, action_traj, traj_len");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    int env_id = PyLong_AsLong(PyTuple_GetItem(args, 1));
+    PyArrayObject *action_arr = (PyArrayObject *)PyTuple_GetItem(args, 2);
+    int traj_len = PyLong_AsLong(PyTuple_GetItem(args, 3));
+
+    Env *env = vec->envs[env_id];
+    int num_agents = env->active_agent_count;
+    int *actions = (int *)PyArray_DATA(action_arr);
+    int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+
+    free(env->predicted_traj_x);
+    free(env->predicted_traj_y);
+    int total = num_agents * traj_len;
+    env->predicted_traj_x = (float *)calloc(total, sizeof(float));
+    env->predicted_traj_y = (float *)calloc(total, sizeof(float));
+    env->predicted_traj_len = traj_len;
+
+    int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+
+    for (int i = 0; i < num_agents; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        Agent *agent = &env->agents[agent_idx];
+
+        DynState s = {
+            .x = agent->sim_x, .y = agent->sim_y, .heading = agent->sim_heading,
+            .vx = agent->sim_vx, .vy = agent->sim_vy,
+            .a_long = agent->a_long, .a_lat = agent->a_lat,
+            .steering_angle = agent->steering_angle,
+        };
+
+        for (int t = 0; t < traj_len; t++) {
+            int action_val = actions[i * traj_len + t];
+
+            if (env->dynamics_model == CLASSIC) {
+                int accel_idx = action_val / num_steer;
+                int steer_idx = action_val % num_steer;
+                s = classic_dynamics_step(s, ACCELERATION_VALUES[accel_idx],
+                                          STEERING_VALUES[steer_idx], agent->sim_length, env->dt);
+            } else {
+                int a_long_idx = action_val / num_lat;
+                int a_lat_idx = action_val % num_lat;
+                s = jerk_dynamics_step(s, JERK_LONG[a_long_idx],
+                                       JERK_LAT[a_lat_idx], agent->wheelbase, env->dt);
+            }
+
+            env->predicted_traj_x[i * traj_len + t] = s.x;
+            env->predicted_traj_y[i * traj_len + t] = s.y;
+        }
+    }
+
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_render(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
     if (num_args != 2) {
@@ -989,6 +1048,7 @@ static PyMethodDef methods[] = {
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
+    {"vec_set_trajectory", vec_set_trajectory, METH_VARARGS, "Set predicted trajectory for rendering"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},

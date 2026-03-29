@@ -23,22 +23,157 @@ from pufferlib.ocean.torch import Drive
 from scripts.export_model_bin import load_config
 
 
+JERK_LONG = torch.tensor([-15.0, -4.0, 0.0, 4.0])
+JERK_LAT = torch.tensor([-4.0, 0.0, 4.0])
+NUM_LAT = 3
+SPEED_LIMIT = 20.0
+
+
+class JerkDynamicsRollout(torch.nn.Module):
+    """Roll out a single discrete action through jerk dynamics for N steps.
+
+    Takes the argmax action from logits, decodes into jerk_long/jerk_lat,
+    and integrates through the bicycle jerk model in ego frame (starting
+    at x=0, y=0, heading=0).
+
+    Requires initial state from observation: speed, a_long, a_lat, steering_angle.
+    """
+
+    def __init__(self, num_steps=80, dt=0.1):
+        super().__init__()
+        self.num_steps = num_steps
+        self.dt = dt
+        self.register_buffer("jerk_long", JERK_LONG)
+        self.register_buffer("jerk_lat", JERK_LAT)
+
+    def forward(self, logits, speed, a_long, a_lat, steering_angle, wheelbase):
+        """
+        Args:
+            logits: [B, num_actions] — policy output
+            speed: [B] — signed speed from obs
+            a_long: [B] — longitudinal acceleration from obs
+            a_lat: [B] — lateral acceleration from obs
+            steering_angle: [B] — current steering angle from obs
+            wheelbase: [B] — vehicle wheelbase from obs
+
+        Returns:
+            trajectory: [B, num_steps, 3] — (x, y, heading) in ego frame
+        """
+        B = logits.shape[0]
+        action = logits.argmax(dim=-1)  # [B]
+        a_long_idx = action // NUM_LAT
+        a_lat_idx = action % NUM_LAT
+
+        jerk_long_val = self.jerk_long[a_long_idx]  # [B]
+        jerk_lat_val = self.jerk_lat[a_lat_idx]  # [B]
+
+        # State in ego frame
+        x = torch.zeros(B, device=logits.device)
+        y = torch.zeros(B, device=logits.device)
+        heading = torch.zeros(B, device=logits.device)
+        v = speed.clone()
+        al = a_long.clone()
+        at = a_lat.clone()
+        steer = steering_angle.clone()
+
+        dt = self.dt
+        trajectory = torch.zeros(B, self.num_steps, 3, device=logits.device)
+
+        for t in range(self.num_steps):
+            # Update acceleration
+            al_new = al + jerk_long_val * dt
+            at_new = at + jerk_lat_val * dt
+
+            # Clamp acceleration
+            al_new = torch.clamp(al_new, -5.0, 2.5)
+            at_new = torch.clamp(at_new, -4.0, 4.0)
+
+            # Zero-crossing: easy stop
+            al_new = torch.where(al * al_new < 0, torch.zeros_like(al_new), al_new)
+            at_new = torch.where(at * at_new < 0, torch.zeros_like(at_new), at_new)
+
+            # Update velocity
+            v_new = v + 0.5 * (al_new + al) * dt
+            v_new = torch.where(v * v_new < 0, torch.zeros_like(v_new), v_new)
+            v_new = torch.clamp(v_new, -2.0, SPEED_LIMIT)
+
+            # Steering from lateral acceleration
+            signed_curvature = at_new / torch.clamp(v_new * v_new, min=1e-5)
+            steer_target = torch.atan(signed_curvature * wheelbase)
+            delta_steer = torch.clamp(steer_target - steer, -0.6 * dt, 0.6 * dt)
+            steer_new = torch.clamp(steer + delta_steer, -0.55, 0.55)
+
+            # Recompute curvature from clamped steering
+            signed_curvature = torch.tan(steer_new) / wheelbase
+            at_new = v_new * v_new * signed_curvature
+
+            # Displacement (bicycle model)
+            d = 0.5 * (v_new + v) * dt
+            theta = d * signed_curvature
+
+            # Local displacement
+            small = signed_curvature.abs() < 1e-5
+            dx_local = torch.where(small, d, torch.sin(theta) / (signed_curvature + 1e-10))
+            dy_local = torch.where(small, torch.zeros_like(d), (1 - torch.cos(theta)) / (signed_curvature + 1e-10))
+
+            # Rotate to world frame
+            cos_h = torch.cos(heading)
+            sin_h = torch.sin(heading)
+            dx = dx_local * cos_h - dy_local * sin_h
+            dy = dx_local * sin_h + dy_local * cos_h
+
+            # Update state
+            x = x + dx
+            y = y + dy
+            heading = heading + theta
+            v = v_new
+            al = al_new
+            at = at_new
+            steer = steer_new
+
+            trajectory[:, t, 0] = x
+            trajectory[:, t, 1] = y
+            trajectory[:, t, 2] = heading
+
+        return trajectory
+
+
 class OnnxWrapper(torch.nn.Module):
-    def __init__(self, policy):
+    def __init__(self, policy, fake_trajectory=False, traj_steps=80, dt=0.1):
         super().__init__()
         self.policy = policy
+        self.fake_trajectory = fake_trajectory
+        if fake_trajectory:
+            self.rollout = JerkDynamicsRollout(num_steps=traj_steps, dt=dt)
 
     def forward(self, observation, h, c):
-        # Reconstruct the state dictionary expected by LSTMWrapper
-        # state must be mutable as forward_eval updates it
         state = {"lstm_h": h, "lstm_c": c}
-
-        # Call forward_eval
         logits, value = self.policy.forward_eval(observation, state)
-
-        # Extract updated states
         new_h = state["lstm_h"]
         new_c = state["lstm_c"]
+
+        if self.fake_trajectory:
+            # Extract ego state from observation (jerk model layout)
+            # obs[3] = signed_speed / MAX_SPEED
+            speed = observation[:, 3] * 100.0  # MAX_SPEED = 100
+            # obs[7] = steering_angle / pi
+            steering_angle = observation[:, 7] * 3.14159265
+            # obs[8] = a_long (normalized asymmetrically)
+            a_long_norm = observation[:, 8]
+            a_long = torch.where(
+                a_long_norm < 0,
+                a_long_norm * 15.0,  # JERK_LONG[0] = -15
+                a_long_norm * 4.0,  # JERK_LONG[3] = 4
+            )
+            # obs[9] = a_lat / JERK_LAT[2]
+            a_lat = observation[:, 9] * 4.0  # JERK_LAT[2] = 4
+            # obs[5] = sim_length / MAX_VEH_LEN
+            wheelbase = observation[:, 5] * 5.5  # MAX_VEH_LEN approximate
+
+            # logits[0] for single-head multi-discrete (jerk: MultiDiscrete([12]))
+            logits_tensor = logits[0] if isinstance(logits, (tuple, list)) else logits
+            trajectory = self.rollout(logits_tensor, speed, a_long, a_lat, steering_angle, wheelbase)
+            return logits, value, new_h, new_c, trajectory
 
         return logits, value, new_h, new_c
 
@@ -54,6 +189,14 @@ def export_to_onnx(verify=True):
     )
     parser.add_argument("--output", type=str, help="Output .onnx file path")
     parser.add_argument("--opset", type=int, default=18, help="ONNX opset version")
+    parser.add_argument(
+        "--fake-trajectory",
+        action="store_true",
+        help="Add trajectory output by repeating the argmax action through jerk dynamics",
+    )
+    parser.add_argument("--traj-steps", type=int, default=80, help="Number of trajectory rollout steps")
+    parser.add_argument("--traj-dt", type=float, default=0.1, help="Timestep for trajectory rollout")
+    parser.add_argument("--render", action="store_true", help="Render eval video after export")
 
     args = parser.parse_args()
 
@@ -89,13 +232,15 @@ def export_to_onnx(verify=True):
     else:
         state_dict = checkpoint
 
-    # Strip compile prefixes
+    # Strip DDP and compile prefixes
     new_state_dict = {}
     for k, v in state_dict.items():
-        if k.startswith("_orig_mod."):
-            new_state_dict[k[10:]] = v
-        else:
-            new_state_dict[k] = v
+        key = k
+        if key.startswith("module."):
+            key = key[7:]
+        if key.startswith("_orig_mod."):
+            key = key[10:]
+        new_state_dict[key] = v
 
     policy.load_state_dict(new_state_dict)
     policy.eval()
@@ -158,7 +303,12 @@ def export_to_onnx(verify=True):
     dummy_c = torch.zeros(batch_size, hidden_size)
 
     # Wrap policy for export
-    onnx_policy = OnnxWrapper(policy)
+    onnx_policy = OnnxWrapper(
+        policy,
+        fake_trajectory=args.fake_trajectory,
+        traj_steps=args.traj_steps,
+        dt=args.traj_dt,
+    )
     onnx_policy.eval()
 
     # Determine output path
@@ -172,6 +322,7 @@ def export_to_onnx(verify=True):
     print(f"Exporting to {args.output}...")
 
     # Dynamic axes for batch size flexibility
+    output_names = ["logits", "value", "lstm_h_out", "lstm_c_out"]
     dynamic_axes = {
         "observation": {0: "batch_size"},
         "lstm_h_in": {0: "batch_size"},
@@ -181,6 +332,9 @@ def export_to_onnx(verify=True):
         "lstm_h_out": {0: "batch_size"},
         "lstm_c_out": {0: "batch_size"},
     }
+    if args.fake_trajectory:
+        output_names.append("trajectory")
+        dynamic_axes["trajectory"] = {0: "batch_size"}
 
     dummy_inputs = (dummy_obs, dummy_h, dummy_c)
     torch.onnx.export(
@@ -191,7 +345,7 @@ def export_to_onnx(verify=True):
         opset_version=args.opset,
         do_constant_folding=True,
         input_names=["observation", "lstm_h_in", "lstm_c_in"],
-        output_names=["logits", "value", "lstm_h_out", "lstm_c_out"],
+        output_names=output_names,
         dynamic_axes=dynamic_axes,
     )
 
@@ -211,12 +365,16 @@ def export_to_onnx(verify=True):
 
         # PyTorch output
         with torch.no_grad():
-            torch_logits, torch_value, torch_h, torch_c = onnx_policy(*dummy_inputs)
+            torch_outs = onnx_policy(*dummy_inputs)
+        if args.fake_trajectory:
+            torch_logits, torch_value, torch_h, torch_c, torch_traj = torch_outs
+        else:
+            torch_logits, torch_value, torch_h, torch_c = torch_outs
 
         # Output .pt files for testing
         print(f"Saving test inputs/outputs to {output_dir}")
         torch.save(dummy_inputs, os.path.join(output_dir, "test_inputs.pt"))
-        torch.save((torch_logits, torch_value, torch_h, torch_c), os.path.join(output_dir, "test_outputs.pt"))
+        torch.save(torch_outs, os.path.join(output_dir, "test_outputs.pt"))
 
         # ONNX Runtime output
         ort_inputs = {"observation": dummy_obs.numpy(), "lstm_h_in": dummy_h.numpy(), "lstm_c_in": dummy_c.numpy()}
@@ -254,7 +412,67 @@ def export_to_onnx(verify=True):
         compare("LSTM h", torch_h, ort_h)
         compare("LSTM c", torch_c, ort_c)
 
-        # Export example input and output to .pt files
+        if args.fake_trajectory:
+            ort_traj = ort_outs[4]
+            compare("Trajectory", torch_traj, ort_traj)
+
+    # Optionally render with trajectory visualization
+    if args.render:
+        print("\nRendering eval with trajectories...")
+        render_with_trajectories(
+            policy, config, args.fake_trajectory, args.traj_steps,
+        )
+
+
+def render_with_trajectories(policy, config, fake_trajectory=False, traj_steps=80):
+    """Run eval loop with optional trajectory rendering."""
+    env_kwargs = config["env"]
+    vecenv = pufferlib.vector.make(
+        importlib.import_module(
+            "pufferlib.ocean" if config["base"]["package"] == "ocean"
+            else f"pufferlib.environments.{config['base']['package']}"
+        ).env_creator(config["base"]["env_name"]),
+        env_kwargs=env_kwargs,
+        backend=pufferlib.vector.Serial,
+        num_envs=1,
+    )
+
+    policy.eval()
+    device = "cpu"
+    ob, info = vecenv.reset()
+    driver = vecenv.driver_env
+    num_agents = vecenv.observation_space.shape[0]
+
+    state = {}
+    if config["base"]["rnn_name"]:
+        state = dict(
+            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        )
+
+    print(f"Rendering {num_agents} agents, fake_trajectory={fake_trajectory}")
+    while True:
+        driver.render()
+
+        with torch.no_grad():
+            ob_t = torch.as_tensor(ob).to(device)
+            logits, value = policy.forward_eval(ob_t, state)
+            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+            action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+        # Render fake trajectories: repeat argmax action traj_steps times
+        if fake_trajectory and hasattr(driver, 'set_predicted_trajectories'):
+            # Unwrap tuple logits
+            logits_t = logits[0] if isinstance(logits, (tuple, list)) else logits
+            argmax_action = logits_t.argmax(dim=-1).cpu().numpy()  # [num_agents]
+            # Repeat action for each trajectory step
+            traj_actions = np.tile(argmax_action[:, None], (1, traj_steps))  # [num_agents, traj_steps]
+            driver.set_predicted_trajectories(traj_actions)
+
+        if isinstance(logits, torch.distributions.Normal):
+            action_np = np.clip(action_np, vecenv.action_space.low, vecenv.action_space.high)
+
+        ob = vecenv.step(action_np)[0]
 
 
 if __name__ == "__main__":
