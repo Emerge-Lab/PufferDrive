@@ -3436,6 +3436,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     if (mode == 1) {
         float cam_x = 0.0f, cam_y = 0.0f;
         float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+
         if (env->sdc_track_index >= 0 && env->control_mode == CONTROL_SDC_ONLY &&
             !env->entities[env->sdc_track_index].removed) {
             cam_x = env->entities[env->sdc_track_index].x;
@@ -3446,6 +3447,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
+
             if (env->entities[agent_idx].removed || env->entities[agent_idx].x == INVALID_POSITION) {
                 continue;
             }
@@ -3616,7 +3618,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                 camera.target = (Vector3){0.0, 0.0, 0.0};
                 camera.up = (Vector3){0.0f, -1.0f, 0.0f};
                 camera.projection = CAMERA_ORTHOGRAPHIC;
-                camera.fovy = map_height / 2;
+                camera.fovy = map_height;
             }
             BeginDrawing();
             ClearBackground(ROAD_COLOR);
