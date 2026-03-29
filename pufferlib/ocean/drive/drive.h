@@ -347,6 +347,7 @@ struct Drive {
     char scenario_id[SCENARIO_ID_STR_LENGTH];
     int collision_behavior;
     int offroad_behavior;
+    int randomize_respawn;
     float observation_window_size;
     float polyline_reduction_threshold;
     float polyline_max_segment_length;
@@ -2897,7 +2898,7 @@ static bool randomize_agent_position(Drive *env, int agent_idx) {
 void respawn_agent(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
-    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+    if (env->randomize_respawn) {
         if (!randomize_agent_position(env, agent_idx)) {
             // Fallback to original position if no valid spawn found
             agent->sim_x = agent->log_trajectory_x[0];
@@ -3186,7 +3187,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
 void c_reset(Drive *env) {
     env->timestep = env->init_steps;
-    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+    if (env->randomize_respawn) {
         // Randomize all agent positions on reset
         for (int x = 0; x < env->active_agent_count; x++) {
             int agent_idx = env->active_agent_indices[x];

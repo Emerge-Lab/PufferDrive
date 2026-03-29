@@ -95,6 +95,7 @@ class Drive(pufferlib.PufferEnv):
         spawn_length_min=2.0,
         spawn_length_max=5.5,
         spawn_height=1.5,
+        randomize_respawn=0,
     ):
         # env
         self.dt = dt
@@ -125,6 +126,7 @@ class Drive(pufferlib.PufferEnv):
         self.episode_length = episode_length
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
+        self.randomize_respawn = randomize_respawn
         self.dynamics_model = dynamics_model
         # reward randomization bounds
         self.reward_bound_goal_radius_min = reward_bound_goal_radius_min
@@ -416,6 +418,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                randomize_respawn=self.randomize_respawn,
             )
             env_ids.append(env_id)
 
@@ -573,6 +576,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                randomize_respawn=self.randomize_respawn,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
