@@ -799,10 +799,6 @@ def save_map_binary(map_data, output_file, unique_map_id):
         sdc_track_index = metadata.get("sdc_track_index", -1)  # -1 as default if not found
         tracks_to_predict = metadata.get("tracks_to_predict", [])
 
-        # Write original scenario_id with fallback to placeholder
-        scenario_id = map_data.get("scenario_id", f"map_{unique_map_id:03d}")
-        f.write(struct.pack("16s", scenario_id.encode("utf-8")))
-
         # Write sdc_track_index
         f.write(struct.pack("i", sdc_track_index))
 
@@ -894,7 +890,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
                 road_type = 15
             # breakpoint()
             if len(geometry) > 10 and road_type <= 16:
-                geometry = simplify_polyline(geometry, 0.1, 25)
+                geometry = simplify_polyline(geometry, 0.1, 5.0)
             size = len(geometry)
             # breakpoint()
             if road_type >= 0 and road_type <= 3:
@@ -1036,7 +1032,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data_utils/carla/carla_py123d")
+    process_all_maps(data_folder="data_utils/carla/carla_data")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
