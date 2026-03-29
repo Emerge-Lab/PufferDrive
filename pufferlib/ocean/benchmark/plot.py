@@ -35,7 +35,6 @@ def _draw_lower_bound(ax, value, label="lower bound"):
 
 def _format_percent(ax):
     """Format y-axis as percentages and clip at 0."""
-    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=100, decimals=0))
     ax.set_ylim(bottom=0)
 
 
@@ -63,7 +62,7 @@ def plot_scores(df, save_path="eval_scores.pdf"):
 
     for ax, mode, title in zip(axes, modes, titles):
         subset = df[df["mode"] == mode]
-        sns.barplot(data=subset, x="policy", y="score_pct", errorbar="sd", palette=palette, ax=ax, alpha=0.8)
+        sns.barplot(data=subset, x="policy", y="score_pct", errorbar="se", palette=palette, ax=ax, alpha=0.8)
         _draw_upper_bound(ax, 100, label="perfect score")
         ax.set_title(title)
         ax.set_xlabel("")
@@ -103,7 +102,7 @@ def plot_collision_rates(df, save_path="eval_collision_rates.pdf"):
 
     for ax, mode, title in zip(axes, modes, titles):
         subset = df[df["mode"] == mode]
-        sns.barplot(data=subset, x="policy", y="collision_rate_pct", errorbar="sd", palette=palette, ax=ax, alpha=0.8)
+        sns.barplot(data=subset, x="policy", y="collision_rate_pct", palette=palette, ax=ax, alpha=0.8)
         _draw_lower_bound(ax, 0.0, label="zero collisions")
         ax.set_title(title)
         ax.set_xlabel("")

@@ -2625,7 +2625,7 @@ Client *make_client(Drive *env) {
         client->camera.projection = CAMERA_PERSPECTIVE;
 
     } else { // Headless rendering
-        if (env->sdc_track_index >= 0) {
+        if (env->sdc_track_index >= 0 && env->control_mode == CONTROL_SDC_ONLY) {
             // Fix to square around target agent
             client->width = 720;
             client->height = 720;
@@ -3433,38 +3433,32 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
     }
 
-    if (mode == 1 && env->sdc_track_index >= 0 && !env->entities[env->sdc_track_index].removed &&
-        env->entities[env->sdc_track_index].x != INVALID_POSITION) {
-        int sx = client->width / 2;
-        int sy = client->height / 2 - 25;
-        DrawText("sdc", sx - MeasureText("sdc", 20) / 2, sy, 20, PUFF_WHITE);
+    if (mode == 1) {
+        float cam_x = 0.0f, cam_y = 0.0f;
+        float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+        if (env->sdc_track_index >= 0 && env->control_mode == CONTROL_SDC_ONLY &&
+            !env->entities[env->sdc_track_index].removed) {
+            cam_x = env->entities[env->sdc_track_index].x;
+            cam_y = env->entities[env->sdc_track_index].y;
+            fovy = 150.0f;
+        }
+        float scale = client->height / fovy;
+
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            if (env->entities[agent_idx].removed || env->entities[agent_idx].x == INVALID_POSITION) {
+                continue;
+            }
+
+            int sx = (int)(-(env->entities[agent_idx].x - cam_x) * scale) + client->width / 2 + 20;
+            int sy = (int)((env->entities[agent_idx].y - cam_y) * scale) + client->height / 2 - 25;
+            if (sx < 0 || sx > client->width || sy < 0 || sy > client->height)
+                continue;
+            char text[32];
+            snprintf(text, sizeof(text), agent_idx == env->sdc_track_index ? "sdc" : "%d", agent_idx);
+            DrawText(text, sx - MeasureText(text, 20) / 2, sy, 20, PUFF_WHITE);
+        }
     }
-    // Temp
-    // if (mode == 1) {
-    //     float cam_x = 0.0f, cam_y = 0.0f;
-    //     float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-    //     if (env->sdc_track_index >= 0 && !env->entities[env->sdc_track_index].removed) {
-    //         cam_x = env->entities[env->sdc_track_index].x;
-    //         cam_y = env->entities[env->sdc_track_index].y;
-    //         fovy = 150.0f;
-    //     }
-    //     float scale = client->height / fovy;
-
-    //     for (int i = 0; i < env->active_agent_count; i++) {
-    //         int agent_idx = env->active_agent_indices[i];
-    //         if (env->entities[agent_idx].removed || env->entities[agent_idx].x == INVALID_POSITION) {
-    //             continue;
-    //         }
-
-    //         int sx = (int)(-(env->entities[agent_idx].x - cam_x) * scale) + client->width / 2 + 20;
-    //         int sy = (int)((env->entities[agent_idx].y - cam_y) * scale) + client->height / 2 - 25;
-    //         if (sx < 0 || sx > client->width || sy < 0 || sy > client->height)
-    //             continue;
-    //         char text[32];
-    //         snprintf(text, sizeof(text), agent_idx == env->sdc_track_index ? "sdc" : "%d", agent_idx);
-    //         DrawText(text, sx - MeasureText(text, 20) / 2, sy, 20, PUFF_WHITE);
-    //     }
-    // }
 }
 
 void draw_thick_line_3d(Vector3 a, Vector3 b, float thickness, Color color) {
@@ -3608,7 +3602,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         Camera3D camera = {0};
 
         if (view_mode == VIEW_MODE_SIM_STATE) {
-            if (env->sdc_track_index >= 0) {
+            if (env->sdc_track_index >= 0 && env->control_mode == CONTROL_SDC_ONLY) {
                 // Follow the SDC agent
                 Entity *sdc = &env->entities[env->sdc_track_index];
                 camera.position = (Vector3){sdc->x, sdc->y, 400.0f};
@@ -3622,7 +3616,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                 camera.target = (Vector3){0.0, 0.0, 0.0};
                 camera.up = (Vector3){0.0f, -1.0f, 0.0f};
                 camera.projection = CAMERA_ORTHOGRAPHIC;
-                camera.fovy = map_height;
+                camera.fovy = map_height / 2;
             }
             BeginDrawing();
             ClearBackground(ROAD_COLOR);
