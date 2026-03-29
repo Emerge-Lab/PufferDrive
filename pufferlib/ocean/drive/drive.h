@@ -369,7 +369,7 @@ struct Drive {
 void move_expert(Drive *env, float *actions, int agent_idx);
 float point_to_segment_distance_2d(float px, float py, float x1, float y1, float x2, float y2);
 void init_goal_positions(Drive *env);
-float clipSpeed(float speed);
+float clipSpeed(float speed, float maxSpeed);
 void sample_new_goal(Drive *env, int agent_idx);
 int check_lane_aligned(Agent *car, RoadMapElement *lane, int geometry_idx);
 void reset_goal_positions(Drive *env);
@@ -2930,7 +2930,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
         // Update speed with acceleration
         signed_speed = signed_speed + acceleration * env->dt;
-        signed_speed = clipSpeed(signed_speed);
+        signed_speed = clipSpeed(signed_speed, SPEED_LIMIT);
         // Compute yaw rate
         float beta = tanh(.5 * tanf(steering));
 
@@ -3010,7 +3010,7 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         if (signed_v * v_new < 0) {
             v_new = 0.0f;
         } else {
-            v_new = clip(v_new, -2.0f, 20.0f);
+            v_new = clip(v_new, -2.0f, SPEED_LIMIT);
         }
 
         // Calculate new steering angle
@@ -3363,11 +3363,7 @@ void c_step(Drive *env) {
                 env->logs[i].episode_return += reverse_penalty;
             }
 
-            // Over speed reward (GIGAFLOW++)
-            float speed_reward = agent->reward_coefs[REWARD_COEF_OVERSPEED] * agent->metrics_array[SPEED_LIMIT_IDX];
-
-            env->rewards[i] += speed_reward;
-            env->logs[i].episode_return += speed_reward;
+            // Overspeed penalty removed — speed is now hard-clamped at SPEED_LIMIT in dynamics.
         }
     }
 
@@ -4296,8 +4292,7 @@ void init_goal_positions(Drive *env) {
     }
 }
 
-float clipSpeed(float speed) {
-    const float maxSpeed = MAX_SPEED;
+float clipSpeed(float speed, float maxSpeed) {
     if (speed > maxSpeed)
         return maxSpeed;
     if (speed < -maxSpeed)
