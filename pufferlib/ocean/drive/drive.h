@@ -3239,9 +3239,10 @@ void c_step(Drive *env) {
         }
 
         if (within_distance && within_speed && !agent->current_goal_reached) {
-            if (env->goal_behavior == GOAL_RESPAWN && agent->respawn_timestep != -1) {
-                env->rewards[i] += env->reward_goal_post_respawn;
-                env->logs[i].episode_return += env->reward_goal_post_respawn;
+            if (env->goal_behavior == GOAL_RESPAWN) {
+                float goal_reward = (agent->respawn_timestep == -1) ? env->reward_goal : env->reward_goal_post_respawn;
+                env->rewards[i] += goal_reward;
+                env->logs[i].episode_return += goal_reward;
                 agent->current_goal_reached = 1;
             } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!agent->current_goal_reached)) {
                 env->rewards[i] += env->reward_goal;
