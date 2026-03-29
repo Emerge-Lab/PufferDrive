@@ -3270,6 +3270,7 @@ void c_step(Drive *env) {
                 env->rewards[i] = env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
                 agent->stopped = 1;
+                agent->current_goal_reached = 1;
                 agent->sim_vx = agent->sim_vy = 0.0f;
                 agent->goals_reached_this_episode += 1.0f;
             }
