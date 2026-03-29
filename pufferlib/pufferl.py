@@ -119,8 +119,6 @@ class PuffeRL:
         self.rewards = torch.zeros(segments, horizon, device=device)
         self.terminals = torch.zeros(segments, horizon, device=device)
         self.truncations = torch.zeros(segments, horizon, device=device)
-        self.ratio = torch.ones(segments, horizon, device=device)
-        self.importance = torch.ones(segments, horizon, device=device)
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
@@ -375,41 +373,29 @@ class PuffeRL:
         clip_coef = config["clip_coef"]
         vf_clip = config["vf_clip_coef"]
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
-        self.ratio[:] = 1
-
-        # Compute explained variance before training (pre-update values, ratio=1)
+        # Compute GAE once before training (like SB3)
         shape = self.values.shape
-        initial_advantages = compute_puff_advantage(
+        advantages = compute_puff_advantage(
             self.values,
             self.rewards,
             self.terminals,
-            self.ratio,
+            torch.ones(shape, device=device),
             torch.zeros(shape, device=device),
             config["gamma"],
             config["gae_lambda"],
             config["vtrace_rho_clip"],
             config["vtrace_c_clip"],
         )
+
+        # Explained variance from pre-update values
         y_pred = self.values.flatten()
-        y_true = initial_advantages.flatten() + y_pred
+        y_true = advantages.flatten() + y_pred
         var_y = y_true.var()
         explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
 
         for mb in range(self.total_minibatches):
             profile("train_misc", epoch, nest=True)
             self.amp_context.__enter__()
-
-            advantages = compute_puff_advantage(
-                self.values,
-                self.rewards,
-                self.terminals,
-                self.ratio,
-                torch.zeros(shape, device=device),
-                config["gamma"],
-                config["gae_lambda"],
-                config["vtrace_rho_clip"],
-                config["vtrace_c_clip"],
-            )
 
             profile("train_copy", epoch)
             adv = advantages.abs().sum(axis=1)
@@ -423,7 +409,6 @@ class PuffeRL:
             mb_rewards = self.rewards[idx]
             mb_terminals = self.terminals[idx]
             mb_truncations = self.truncations[idx]
-            mb_ratio = self.ratio[idx]
             mb_values = self.values[idx]
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
@@ -445,25 +430,12 @@ class PuffeRL:
             newlogprob = newlogprob.reshape(mb_logprobs.shape)
             logratio = newlogprob - mb_logprobs
             ratio = logratio.exp()
-            self.ratio[idx] = ratio.detach()
 
             with torch.no_grad():
                 old_approx_kl = (-logratio).mean()
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
-            adv = advantages[idx]
-            adv = compute_puff_advantage(
-                mb_values,
-                mb_rewards,
-                mb_terminals,
-                ratio,
-                adv,
-                config["gamma"],
-                config["gae_lambda"],
-                config["vtrace_rho_clip"],
-                config["vtrace_c_clip"],
-            )
             adv = mb_advantages
             adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
 
