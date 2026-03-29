@@ -95,7 +95,7 @@ class Drive(pufferlib.PufferEnv):
         spawn_length_min=2.0,
         spawn_length_max=5.5,
         spawn_height=1.5,
-        randomize_respawn=0,
+        randomize_respawn=1,
     ):
         # env
         self.dt = dt
