@@ -3182,6 +3182,11 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[agent_idx];
         agent->collision_state = 0;
         agent->aabb_collision_state = 0;
+        // Skip metrics and rewards for stopped/removed agents — they can't act
+        if (agent->stopped || agent->removed) {
+            env->rewards[i] = 0.0f;
+            continue;
+        }
         compute_agent_metrics(env, agent_idx);
         int collision_state = agent->collision_state;
         if (collision_state == NO_COLLISION) {
