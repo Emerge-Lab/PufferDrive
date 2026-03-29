@@ -597,14 +597,14 @@ void set_start_position(Drive *env) {
             e->vz = 0;
             e->failure_before_goal = 0;
         } else {
-            e->vx = e->traj_vx[env->init_steps];
-            e->vy = e->traj_vy[env->init_steps];
-            e->vz = e->traj_vz[env->init_steps];
+            e->vx = e->traj_vx[step];
+            e->vy = e->traj_vy[step];
+            e->vz = e->traj_vz[step];
         }
-        e->heading = e->traj_heading[env->init_steps];
+        e->heading = e->traj_heading[step];
         e->heading_x = cosf(e->heading);
         e->heading_y = sinf(e->heading);
-        e->valid = e->traj_valid[env->init_steps];
+        e->valid = e->traj_valid[step];
         e->collision_state = 0;
         e->offroad_state = 0;
         e->stopped = 0;
@@ -2089,6 +2089,8 @@ void c_reset(Drive *env) {
         }
 
         // Conditioning
+        // printf("lam %f \n", env->lambda_value);
+
         if (env->fix_lambdas) {
             env->entities[agent_idx].lambda = env->lambda_value;
         } else {
@@ -3431,7 +3433,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
     }
 
-    if (mode == 1 && env->sdc_track_index >= 0 && !env->entities[env->sdc_track_index].removed) {
+    if (mode == 1 && env->sdc_track_index >= 0 && !env->entities[env->sdc_track_index].removed &&
+        env->entities[env->sdc_track_index].x != INVALID_POSITION) {
         int sx = client->width / 2;
         int sy = client->height / 2 - 25;
         DrawText("sdc", sx - MeasureText("sdc", 20) / 2, sy, 20, PUFF_WHITE);

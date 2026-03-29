@@ -1530,9 +1530,17 @@ def controlled_exp(env_name, args=None):
     if not args["wandb"] and not args["neptune"]:
         raise pufferlib.APIUsageError("Targeted experiments require either wandb or neptune")
 
-    # Check if controlled_exp config exists
     if "controlled_exp" not in args:
         raise pufferlib.APIUsageError("No [controlled_exp.*] sections found in config")
+
+    # Map num_maps values to corresponding map directories
+    map_dir_lookup = {
+        100: "resources/drive/binaries/training_100",
+        1000: "resources/drive/binaries/training_1k",
+        10000: "resources/drive/binaries/training_10k",
+        20000: "resources/drive/binaries/training_20k",
+        50000: "resources/drive/binaries/training_50k",
+    }
 
     # Extract parameters from controlled_exp namespace
     params = {}
@@ -1540,10 +1548,8 @@ def controlled_exp(env_name, args=None):
         if isinstance(section_config, dict):
             for param, param_config in section_config.items():
                 if isinstance(param_config, dict) and "values" in param_config:
-                    # Process values list to handle both numeric and non-numeric types
                     processed_values = []
                     for val in param_config["values"]:
-                        # Handle string "None" -> Python None
                         if isinstance(val, str) and val == "None":
                             processed_values.append(None)
                         else:
@@ -1553,35 +1559,36 @@ def controlled_exp(env_name, args=None):
     if not params:
         raise pufferlib.APIUsageError("No parameters with 'values' lists found in [controlled_exp.*] sections")
 
-    # Generate all combinations
     keys = list(params.keys())
     combinations = list(itertools.product(*[params[k] for k in keys]))
 
     print(f"Running a total of {len(combinations)} experiments with parameters: {keys}")
 
-    # Run each combination
     for i, combo in enumerate(combinations, 1):
         exp_args = deepcopy(args)
 
-        # Set parameters
         for key, value in zip(keys, combo):
             section, param = key.split(".")
             exp_args[section][param] = value
 
-        # Create descriptive name
+        # Auto-set map_dir based on num_maps if present in sweep
+        if "env.num_maps" in keys:
+            num_maps = exp_args["env"]["num_maps"]
+            if num_maps in map_dir_lookup:
+                exp_args["env"]["map_dir"] = map_dir_lookup[num_maps]
+
+        # Create descriptive name (exclude map_dir)
         run_name_parts = []
         for key, value in zip(keys, combo):
             param_name = key.split(".")[-1]
-            # Handle None display
+            if param_name == "map_dir":
+                continue
             if value is None:
                 value_str = "None"
-            # Handle boolean display
             elif isinstance(value, bool):
                 value_str = str(value)
-            # Handle numeric display
             elif isinstance(value, (int, float)):
                 value_str = str(value)
-            # Handle string display
             else:
                 value_str = str(value)
             run_name_parts.append(f"{param_name}={value_str}")
@@ -1591,7 +1598,6 @@ def controlled_exp(env_name, args=None):
 
         print(f"\nExperiment {i}/{len(combinations)}: {dict(zip(keys, combo))}")
 
-        # Train
         train(env_name, args=exp_args)
 
     print(f"\n✓ Completed all {len(combinations)} experiments")

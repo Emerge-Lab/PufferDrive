@@ -92,7 +92,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
 
-    // printf("Total maps %d\n", num_maps);
+    // printf("map_dir: %s, num_maps: %d\n", map_dir, num_maps);
 
     // Getting env count
     while (total_agent_count < num_agents && env_count < max_envs) {
