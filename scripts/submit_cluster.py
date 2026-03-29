@@ -291,13 +291,27 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 else:
                     os.remove(dst)
             os.symlink(src, dst)
-        # Copy pufferlib/ as a real dir tree so we can replace .so files
+        # Create symlink tree of pufferlib/, excluding resources/drive/binaries
+        # (read-only data, 60K+ map files) which is symlinked as a single dir.
         pufferlib_dst = os.path.join(isolated_root, "pufferlib")
         if os.path.islink(pufferlib_dst):
             os.remove(pufferlib_dst)
         pufferlib_src = os.path.join(project_root, "pufferlib")
-        subprocess.run(["cp", "-rs", pufferlib_src, pufferlib_dst], check=True)
-        # Copy .so files over their symlinks so they survive rebuilds
+        skip_dir = os.path.join(pufferlib_src, "resources", "drive", "binaries")
+        for dirpath, dirnames, filenames in os.walk(pufferlib_src):
+            if os.path.abspath(dirpath) == os.path.abspath(skip_dir):
+                dirnames.clear()
+                continue
+            rel = os.path.relpath(dirpath, pufferlib_src)
+            dst_dir = os.path.join(pufferlib_dst, rel)
+            os.makedirs(dst_dir, exist_ok=True)
+            for fname in filenames:
+                src_file = os.path.join(dirpath, fname)
+                dst_file = os.path.join(dst_dir, fname)
+                os.symlink(src_file, dst_file)
+        # Symlink binaries dir back to original (read-only, shared across runs)
+        os.symlink(skip_dir, os.path.join(pufferlib_dst, "resources", "drive", "binaries"))
+        # Copy .so files so they survive rebuilds on other branches
         for so_link in glob.glob(os.path.join(pufferlib_dst, "**", "*.so"), recursive=True):
             if os.path.islink(so_link):
                 real_path = os.path.realpath(so_link)
