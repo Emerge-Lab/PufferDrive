@@ -814,8 +814,6 @@ void init_grid_map(Drive *env) {
                 float x_center = (road->x[j] + road->x[j + 1]) / 2;
                 float y_center = (road->y[j] + road->y[j + 1]) / 2;
                 int grid_index = getGridIndex(env, x_center, y_center);
-                if (grid_index < 0)
-                    continue;
                 env->grid_map->cell_entities_count[grid_index]++;
             }
         }
@@ -3372,8 +3370,6 @@ void c_step(Drive *env) {
                 env->rewards[i] += reverse_penalty;
                 env->logs[i].episode_return += reverse_penalty;
             }
-
-            // Overspeed penalty removed — speed is now hard-clamped at SPEED_LIMIT in dynamics.
         }
     }
 
