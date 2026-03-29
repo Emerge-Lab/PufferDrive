@@ -376,6 +376,7 @@ class PuffeRL:
         vf_clip = config["vf_clip_coef"]
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
+        explained_var = None
 
         for mb in range(self.total_minibatches):
             profile("train_misc", epoch, nest=True)
@@ -394,6 +395,13 @@ class PuffeRL:
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
             )
+
+            # Capture explained variance on first minibatch (pre-update values, ratio=1)
+            if explained_var is None:
+                y_pred = self.values.flatten()
+                y_true = advantages.flatten() + y_pred
+                var_y = y_true.var()
+                explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
 
             profile("train_copy", epoch)
             adv = advantages.abs().sum(axis=1)
@@ -493,10 +501,6 @@ class PuffeRL:
         if config["anneal_lr"]:
             self.scheduler.step()
 
-        y_pred = self.values.flatten()
-        y_true = advantages.flatten() + self.values.flatten()
-        var_y = y_true.var()
-        explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
         losses["explained_variance"] = explained_var.item()
 
         profile.end()
