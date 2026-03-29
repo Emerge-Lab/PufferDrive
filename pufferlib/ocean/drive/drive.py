@@ -198,6 +198,7 @@ class Drive(pufferlib.PufferEnv):
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
+            seed=seed,
             map_dir=map_dir,
             num_agents=num_agents,
             num_maps=num_maps,
@@ -250,8 +251,16 @@ class Drive(pufferlib.PufferEnv):
                 map_dir=map_dir,
                 max_controlled_agents=self.max_controlled_agents,
                 render_mode=render_mode,
+                lambda_value=lambda_value,
+                fix_lambdas=self.fix_lambdas,
+                fix_reward=self.fix_rewards,
             )
             self.env_ids.append(env_id)
+
+        # Approximation to check if we should ever resample or not
+        self.needs_resampling = self.num_maps > (self.num_agents / 2)
+        self._resample_count = 0
+        self.seed = seed
 
         self.c_envs = binding.vectorize(*self.env_ids)
 
@@ -277,7 +286,9 @@ class Drive(pufferlib.PufferEnv):
         """Resample environment maps."""
         self.tick = 0
         binding.vec_close(self.c_envs)
+        resample_seed = self.seed + self._resample_count
         agent_offsets, map_ids, num_envs = binding.shared(
+            seed=resample_seed,
             num_agents=self.num_agents,
             num_maps=self.num_maps,
             init_mode=self.init_mode,
@@ -293,7 +304,6 @@ class Drive(pufferlib.PufferEnv):
         self.map_ids = map_ids
         self.num_envs = num_envs
         self.env_ids = []
-        seed = np.random.randint(0, 2**32 - 1)
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i + 1]
@@ -303,7 +313,7 @@ class Drive(pufferlib.PufferEnv):
                 self.rewards[cur:nxt],
                 self.terminals[cur:nxt],
                 self.truncations[cur:nxt],
-                seed,
+                resample_seed,
                 action_type=self._action_type_flag,
                 human_agent_idx=self.human_agent_idx,
                 reward_vehicle_collision=self.reward_vehicle_collision,
@@ -327,9 +337,9 @@ class Drive(pufferlib.PufferEnv):
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
                 render_mode=self.render_mode,
+                lambda_value=self.lambda_value,
                 fix_rewards=int(self.fix_rewards),
                 fix_lambdas=int(self.fix_lambdas),
-                lambda_value=self.lambda_value,
                 dynamics_model=self._dynamics_model_flag,
                 obs_partner_noise_pos=self.obs_partner_noise_pos,
                 obs_partner_noise_speed=self.obs_partner_noise_speed,
@@ -337,7 +347,7 @@ class Drive(pufferlib.PufferEnv):
             self.env_ids.append(env_id)
         self.c_envs = binding.vectorize(*self.env_ids)
 
-        binding.vec_reset(self.c_envs, seed)
+        binding.vec_reset(self.c_envs, resample_seed)
         self.truncations[:] = 1
         self.terminals[:] = 1
 
@@ -359,9 +369,10 @@ class Drive(pufferlib.PufferEnv):
                 if log:
                     info.append(log)
 
-        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
-            # Resample batch of scenes used for training
-            self.resample_maps()
+        if self.needs_resampling:
+            if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+                # Resample batch of scenes used for training
+                self.resample_maps()
 
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 

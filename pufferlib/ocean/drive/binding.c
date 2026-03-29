@@ -80,9 +80,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
     int max_controlled_agents = unpack(kwargs, "max_controlled_agents");
 
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    srand(ts.tv_nsec); // Always use random sampling with replacement
+    // Deterministic map sampling
+    int seed = unpack(kwargs, "seed");
+    srand(seed);
 
     int total_agent_count = 0;
     int env_count = 0;
@@ -92,12 +92,14 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
 
+    // printf("Total maps %d\n", num_maps);
+
     // Getting env count
     while (total_agent_count < num_agents && env_count < max_envs) {
         char map_file[512];
 
         // printf("Sampling map for env %d (total agents so far: %d)\n", env_count, total_agent_count);
-        //  Always sample randomly with replacement
+        //   Always sample randomly with replacement
         int map_id = rand() % num_maps;
 
         // printf("Sampling map_id: %d\n", map_id);
