@@ -151,7 +151,6 @@
 
 // Metrics Heuristics
 #define MIN_GOAL_SEGMENT_TIME_TO_ANALYZE_AGENT 1.0f
-#define MIN_AVG_SPEED_TO_CONSIDER_AS_ATTEMPTING_GOAL 2.0f
 
 // Rejection sampling parameters
 #define MAX_SPAWN_ATTEMPTS 30
@@ -241,6 +240,9 @@ struct Log {
     float avg_speed_per_agent;
     float max_observation_distance; // average max observation distance
     float observation_coverage;     // percentage of entities in obs window seen on average
+    float is_last_goal_attempts;    // number of times last goal segment can be considered an attempt
+    float can_complete_last_goal; // percentage of agents who are judged to be able to complete the last goal given more
+                                  // time
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -1585,6 +1587,7 @@ void compute_metrics_for_last_goal_segment(Drive *env) {
 
         if (agent->collided_before_goal) {
             agent->goals_attempted_this_episode += 1; // Bad Attempt
+            env->logs[i].is_last_goal_attempts = 1;
             continue;
         }
         float time_since_last_goal = (env->timestep - agent->last_goal_reached_timestep) * env->dt;
@@ -1592,7 +1595,10 @@ void compute_metrics_for_last_goal_segment(Drive *env) {
             continue;
         }
 
-        agent->goals_attempted_this_episode += 1; // Count as attempt if agent had enough time
+        // Count as attempt if agent had enough time
+        agent->goals_attempted_this_episode += 1;
+        env->logs[i].is_last_goal_attempts = 1;
+
         float displacement_from_last_goal =
             sqrtf((agent->sim_x - agent->prev_goal_x) * (agent->sim_x - agent->prev_goal_x) +
                   (agent->sim_y - agent->prev_goal_y) * (agent->sim_y - agent->prev_goal_y) +
@@ -1605,8 +1611,9 @@ void compute_metrics_for_last_goal_segment(Drive *env) {
         if (displacement_from_last_goal > min_displacement_to_consider_attempting_goal &&
             avg_speed_current_segment > env->min_avg_speed_to_consider_goal_attempt) {
             // Give Benefit of the doubt to the agent
-            env->logs[i].score += 0.5f;
+            env->logs[i].score += 1.0f;
             agent->goals_reached_this_episode += 1;
+            env->logs[i].can_complete_last_goal = 1;
             continue;
         }
     }
@@ -1666,6 +1673,8 @@ void add_log(Drive *env) {
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
         env->log.max_observation_distance += env->logs[i].max_observation_distance / safe_timestep;
         env->log.observation_coverage += env->logs[i].observation_coverage / safe_timestep;
+        env->log.can_complete_last_goal += env->logs[i].can_complete_last_goal;
+        env->log.is_last_goal_attempts += env->logs[i].is_last_goal_attempts;
         env->log.n += 1;
     }
 }

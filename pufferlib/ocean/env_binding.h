@@ -622,6 +622,13 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         aggregate.completion_rate = 0.0f;
     }
 
+    // Compute percentage of last goals judged to be completable
+    if (aggregate.is_last_goal_attempts > 0.0f) {
+        aggregate.can_complete_last_goal = aggregate.can_complete_last_goal / aggregate.is_last_goal_attempts;
+    } else {
+        aggregate.can_complete_last_goal = 0.0f;
+    }
+
     // User populates dict
     my_log(dict, &aggregate);
     assign_to_dict(dict, "n", n);
