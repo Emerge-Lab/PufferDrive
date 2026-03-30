@@ -827,6 +827,20 @@ class PuffeRL:
         state_path = os.path.join(path, "trainer_state.pt")
         torch.save(state, state_path + ".tmp")
         os.rename(state_path + ".tmp", state_path)
+
+        # Upload checkpoint to wandb
+        if isinstance(self.logger, WandbLogger):
+            import wandb
+
+            artifact = wandb.Artifact(
+                f"checkpoint-{run_id}-epoch{self.epoch:06d}",
+                type="checkpoint",
+                metadata={"epoch": self.epoch, "global_step": self.global_step},
+            )
+            artifact.add_file(model_path)
+            artifact.add_file(state_path)
+            self.logger.wandb.run.log_artifact(artifact)
+
         return model_path
 
     def _export_to_bin(self):
