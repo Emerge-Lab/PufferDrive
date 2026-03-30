@@ -72,7 +72,7 @@
 
 // Maximum number of agents per scene
 #ifndef MAX_AGENTS
-#define MAX_AGENTS 32
+#define MAX_AGENTS 256
 #endif
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
@@ -1696,13 +1696,14 @@ void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_o
 
 void c_get_global_ground_truth_trajectories(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out,
                                             int *valid_out, int *id_out, bool *is_vehicle_out,
-                                            bool *is_track_to_predict_out, char *scenario_id_out) {
+                                            bool *is_track_to_predict_out, bool *is_sdc_out, char *scenario_id_out) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Entity *agent = &env->entities[agent_idx];
         id_out[i] = agent->id;
         is_vehicle_out[i] = agent->type == VEHICLE;
         is_track_to_predict_out[i] = is_in_track_to_predicts(env, agent_idx);
+        is_sdc_out[i] = agent_idx == env->sdc_track_index;
 
         // The scenario_id is an array of 16 char
         memcpy(scenario_id_out + (i * 16), env->scenario_id, 16);

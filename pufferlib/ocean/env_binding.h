@@ -727,8 +727,8 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
 }
 
 static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 9) {
-        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 9 arguments");
+    if (PyTuple_Size(args) != 10) {
+        PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 10 arguments");
         return NULL;
     }
 
@@ -748,11 +748,12 @@ static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
     PyObject *id_arr = PyTuple_GetItem(args, 6);
     PyObject *is_vehicle_arr = PyTuple_GetItem(args, 7);
     PyObject *is_track_to_predict_arr = PyTuple_GetItem(args, 8);
-    PyObject *scenario_id_arr = PyTuple_GetItem(args, 9);
+    PyObject *is_sdc_arr = PyTuple_GetItem(args, 9);
+    PyObject *scenario_id_arr = PyTuple_GetItem(args, 10);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
         !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(is_vehicle_arr) ||
-        !PyArray_Check(is_track_to_predict_arr) || !PyArray_Check(scenario_id_arr)) {
+        !PyArray_Check(is_track_to_predict_arr) || !PyArray_Check(is_sdc_arr) || !PyArray_Check(scenario_id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -765,17 +766,18 @@ static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
     int *id_data = (int *)PyArray_DATA((PyArrayObject *)id_arr);
     bool *is_vehicle_data = (bool *)PyArray_DATA((PyArrayObject *)is_vehicle_arr);
     bool *is_track_to_predict_data = (bool *)PyArray_DATA((PyArrayObject *)is_track_to_predict_arr);
+    bool *is_sdc_data = (bool *)PyArray_DATA((PyArrayObject *)is_sdc_arr);
     char *scenario_id_data = (char *)PyArray_DATA((PyArrayObject *)scenario_id_arr);
 
     c_get_global_ground_truth_trajectories(drive, x_data, y_data, z_data, heading_data, valid_data, id_data,
-                                           is_vehicle_data, is_track_to_predict_data, scenario_id_data);
+                                           is_vehicle_data, is_track_to_predict_data, is_sdc_data, scenario_id_data);
 
     Py_RETURN_NONE;
 }
 
 static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 10) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 10 arguments");
+    if (PyTuple_Size(args) != 11) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_ground_truth_trajectories requires 11 arguments");
         return NULL;
     }
 
@@ -793,11 +795,12 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     PyObject *id_arr = PyTuple_GetItem(args, 6);
     PyObject *is_vehicle_arr = PyTuple_GetItem(args, 7);
     PyObject *is_track_to_predict_arr = PyTuple_GetItem(args, 8);
-    PyObject *scenario_id_arr = PyTuple_GetItem(args, 9);
+    PyObject *is_sdc_arr = PyTuple_GetItem(args, 9);
+    PyObject *scenario_id_arr = PyTuple_GetItem(args, 10);
 
     if (!PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr) || !PyArray_Check(heading_arr) ||
         !PyArray_Check(valid_arr) || !PyArray_Check(id_arr) || !PyArray_Check(is_vehicle_arr) ||
-        !PyArray_Check(is_track_to_predict_arr) || !PyArray_Check(scenario_id_arr)) {
+        !PyArray_Check(is_track_to_predict_arr) || !PyArray_Check(is_sdc_arr) || !PyArray_Check(scenario_id_arr)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -810,6 +813,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     PyArrayObject *id_array = (PyArrayObject *)id_arr;
     PyArrayObject *is_vehicle_array = (PyArrayObject *)is_vehicle_arr;
     PyArrayObject *is_track_to_predict_array = (PyArrayObject *)is_track_to_predict_arr;
+    PyArrayObject *is_sdc_array = (PyArrayObject *)is_sdc_arr;
     PyArrayObject *scenario_id_array = (PyArrayObject *)scenario_id_arr;
 
     // Get base pointers to the arrays
@@ -821,6 +825,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     int *id_base = (int *)PyArray_DATA(id_array);
     bool *is_vehicle_base = (bool *)PyArray_DATA(is_vehicle_array);
     bool *is_track_to_predict_base = (bool *)PyArray_DATA(is_track_to_predict_array);
+    bool *is_sdc_base = (bool *)PyArray_DATA(is_sdc_array);
     char *scenario_id_base = (char *)PyArray_DATA(scenario_id_array);
 
     // Get number of timesteps from array shape
@@ -837,7 +842,7 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
         c_get_global_ground_truth_trajectories(
             drive, &x_base[traj_offset], &y_base[traj_offset], &z_base[traj_offset], &heading_base[traj_offset],
             &valid_base[traj_offset], &id_base[agent_offset], &is_vehicle_base[agent_offset],
-            &is_track_to_predict_base[agent_offset], &scenario_id_base[agent_offset * 16]);
+            &is_track_to_predict_base[agent_offset], &is_sdc_base[agent_offset], &scenario_id_base[agent_offset * 16]);
 
         // Move offsets forward
         agent_offset += drive->active_agent_count;

@@ -23,6 +23,8 @@ def align_trajectories(simulated, ground_truth):
         raise
 
     sim_traj = {k: v[indices] for k, v in simulated.items()}
+    sim_traj["valid"] = ground_truth["valid"].copy()
+    sim_traj["is_sdc"] = ground_truth["is_sdc"].copy()
 
     return sim_traj
 
@@ -168,8 +170,9 @@ def evaluate_trajectories(simulated_trajectory_file, args):
         )
 
         if num_agents_sim > num_agents_gt:
+            print("There are more agents in your sim than in the GT")
             print("If you are evaluating on a subset of your trajectories it is fine.")
-            print("\n Else, you should consider changing the value of MAX_AGENTS in drive.h and compile")
+            print("Else, you should consider changing the value of MAX_AGENTS in drive.h and compile")
 
         sim_trajectories = align_trajectories(sim_trajectories, gt_trajectories)
 
@@ -181,20 +184,12 @@ def evaluate_trajectories(simulated_trajectory_file, args):
             sim_trajectories, agent_state, road_edge_polylines, args["eval"]["wosac_aggregate_results"]
         )
 
-        gt_results = evaluator.compute_metrics(
-            gt_trajectories, agent_state, road_edge_polylines, args["eval"]["wosac_aggregate_results"]
-        )
-
-        if args["eval"]["planning_aggregate_results"]:
+        if args["eval"]["wosac_aggregate_results"]:
             import json
 
             print("\nPLANNING_METRICS_START")
             print(json.dumps(results, indent=4))
             print("PLANNING_METRICS_END")
-
-            print("\nPLANNING_GT_METRICS_START")
-            print(json.dumps(gt_results, indent=4))
-            print("PLANNING_GT_METRICS_END")
 
 
 if __name__ == "__main__":

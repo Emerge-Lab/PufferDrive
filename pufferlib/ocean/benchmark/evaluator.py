@@ -731,7 +731,7 @@ class PlanningEvaluator:
     def compute_metrics(
         self, combined_trajectories, agent_state, road_edge_polylines, aggregate_results: bool = False
     ) -> Dict:
-        eval_mask = combined_trajectories["id"][:, 0] <= -2
+        eval_mask = combined_trajectories["is_sdc"][:, 0]
 
         x = combined_trajectories["x"]
         y = combined_trajectories["y"]
@@ -740,6 +740,8 @@ class PlanningEvaluator:
         agent_length = agent_state["length"]
         agent_width = agent_state["width"]
         scenario_ids = combined_trajectories["scenario_id"]
+        
+        scenario_ids = scenario_ids[:,0,:]
 
         # We evaluate the metrics only for the SDCs.
         eval_x = x[eval_mask]
@@ -776,7 +778,7 @@ class PlanningEvaluator:
                 "offroad_indication": offroad_indication.flatten(),
                 "accuracy": accuracy.flatten(),
             },
-            index=eval_scenario_ids.flatten(),
+            index=eval_scenario_ids[:,0],
         )
 
         if aggregate_results:
