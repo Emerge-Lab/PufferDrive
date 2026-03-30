@@ -940,7 +940,7 @@ class Evaluator:
 
         # Reset environment
         obs, info = env.reset()
-        terminals = np.zeros_like((num_agents, 1), dtype=bool)
+        terminals = np.zeros((num_agents, 1), dtype=bool)
 
         # Initialize RNN state if needed
         state = {}
@@ -952,15 +952,10 @@ class Evaluator:
 
         info_list = []
         for time_idx in range(self.sim_steps):
-            if render_env_idx is not None:
-                # Check if focus agent is done
-                cur = driver.agent_offsets[render_env_idx]
-                nxt = driver.agent_offsets[render_env_idx + 1]
-                render_env_done = terminals[cur].all()
-                if mode == "human_replay" and not terminals[render_env_idx]:
-                    driver.render(view_mode=view_mode, env_id=render_env_idx)
-                elif mode == "self_play" and not render_env_done:
-                    driver.render(view_mode=view_mode, env_id=render_env_idx)
+            if mode == "human_replay" and not terminals[render_env_idx]:
+                driver.render(view_mode=view_mode, env_idx=render_env_idx)
+            elif mode == "self_play":
+                driver.render(view_mode=view_mode, env_idx=render_env_idx)
 
             # Get action from policy
             with torch.no_grad():
