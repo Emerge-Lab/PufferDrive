@@ -79,10 +79,16 @@ class JerkDynamicsRollout(torch.nn.Module):
         dt = self.dt
         trajectory = torch.zeros(B, self.num_steps, 3, device=logits.device)
 
+        # Build jerk schedule: apply action on step 0, zero-jerk after
+        jl_schedule = torch.zeros(self.num_steps, B, device=logits.device)
+        jt_schedule = torch.zeros(self.num_steps, B, device=logits.device)
+        jl_schedule[0] = jerk_long_val
+        jt_schedule[0] = jerk_lat_val
+
         for t in range(self.num_steps):
             # Update acceleration
-            al_new = al + jerk_long_val * dt
-            at_new = at + jerk_lat_val * dt
+            al_new = al + jl_schedule[t] * dt
+            at_new = at + jt_schedule[t] * dt
 
             # Clamp acceleration
             al_new = torch.clamp(al_new, -5.0, 2.5)
@@ -460,13 +466,15 @@ def render_with_trajectories(policy, config, fake_trajectory=False, traj_steps=8
             action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
             action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
-        # Render fake trajectories: repeat argmax action traj_steps times
+        # Render fake trajectories
         if fake_trajectory and hasattr(driver, 'set_predicted_trajectories'):
-            # Unwrap tuple logits
             logits_t = logits[0] if isinstance(logits, (tuple, list)) else logits
             argmax_action = logits_t.argmax(dim=-1).cpu().numpy()  # [num_agents]
-            # Repeat action for each trajectory step
-            traj_actions = np.tile(argmax_action[:, None], (1, traj_steps))  # [num_agents, traj_steps]
+            # For jerk dynamics: apply action on first step, then zero-jerk for rest.
+            # Zero-jerk action: JERK_LONG index 2 (0.0) * num_lat(3) + JERK_LAT index 1 (0.0) = 7
+            zero_jerk_action = 2 * 3 + 1  # = 7
+            traj_actions = np.full((num_agents, traj_steps), zero_jerk_action, dtype=np.int32)
+            traj_actions[:, 0] = argmax_action
             driver.set_predicted_trajectories(traj_actions)
 
         if isinstance(logits, torch.distributions.Normal):
