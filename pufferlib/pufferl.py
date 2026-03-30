@@ -128,7 +128,8 @@ class PuffeRL:
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
-        self.eval_interval = config["eval"]["eval_interval"]
+        # Use a safe default when eval settings are absent
+        self.eval_interval = config.get("eval", {}).get("eval_interval", 0)
 
         # LSTM
         if config["use_rnn"]:
