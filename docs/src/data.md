@@ -121,5 +121,5 @@ python data_utils/carla/plot.py
 
 Notes:
 
-- Base Carla maps that agents are spawned live under `data_utils/carla/carla_py123d` and the Carla XODRs are at `data/CarlaXODRs` to interact with the `pyxodr` submodule for XODR parsing and agent traj generation.
+- Base Carla maps that agents are spawned live under `data_utils/carla/carla_py123d` and the Carla XODRs are at `data/CarlaXODR` to interact with the `pyxodr` submodule for XODR parsing and agent traj generation.
 - If you encounter missing binary or map errors, ensure the submodule was initialized and the required packages from `requirements-dev.txt` are installed.
