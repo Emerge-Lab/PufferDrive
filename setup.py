@@ -8,13 +8,17 @@ import urllib.request
 import zipfile
 import tarfile
 import platform
-import shutil
 import sys
 
 from setuptools.command.build_ext import build_ext
 from torch.utils import cpp_extension
-from torch.utils.cpp_extension import CppExtension, CUDAExtension
+from torch.utils.cpp_extension import CppExtension, CUDAExtension, CUDA_HOME, ROCM_HOME
 
+# build cuda extension if torch can find CUDA or HIP/ROCM in the system
+# may require `uv pip install --no-build-isolation` or `python setup.py build_ext --inplace`
+BUILD_CUDA_EXT = bool(CUDA_HOME or ROCM_HOME)
+
+# Build with DEBUG=1 to enable debug symbols
 DEBUG = os.getenv("DEBUG", "0") == "1"
 NO_OCEAN = os.getenv("NO_OCEAN", "0") == "1"
 NO_TRAIN = os.getenv("NO_TRAIN", "0") == "1"
@@ -201,7 +205,7 @@ if not NO_TRAIN:
     torch_sources = [
         "pufferlib/extensions/pufferlib.cpp",
     ]
-    if shutil.which("nvcc"):
+    if BUILD_CUDA_EXT:
         extension = CUDAExtension
         torch_sources.append("pufferlib/extensions/cuda/pufferlib.cu")
     else:
@@ -233,9 +237,10 @@ for key, value in cfg_vars.items():
         cfg_vars[key] = value.replace("-fno-strict-overflow", "")
 
 install_requires = [
-    "setuptools",
-    "numpy<2.0",
+    "setuptools<81",
+    "numpy",
     "gymnasium==0.29.1",
+    "pyyaml",
 ]
 
 if not NO_TRAIN:
@@ -246,14 +251,15 @@ if not NO_TRAIN:
         "rich_argparse",
         "pandas",
         "tqdm",
-        "matplotlib",
+        "matplotlib==3.8.4",
         "imageio",
         "pyro-ppl",
         "mediapy",
-        "heavyball<2.0.0",
+        "heavyball",
         "neptune",
         "wandb",
         "tensorboard",
+        "google-cloud-aiplatform",
     ]
 
 setup(

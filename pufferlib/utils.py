@@ -117,8 +117,6 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
             str(eval_config.get("wosac_control_mode", "control_wosac")),
             "--eval.wosac-init-steps",
             str(eval_config.get("wosac_init_steps", 10)),
-            "--eval.wosac-goal-behavior",
-            str(eval_config.get("wosac_goal_behavior", 2)),
             "--eval.wosac-goal-radius",
             str(eval_config.get("wosac_goal_radius", 2.0)),
             "--eval.wosac-sanity-check",
@@ -220,8 +218,6 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
         env_cfg = getattr(vecenv, "driver_env", None)
         if env_cfg is not None:
-            if getattr(env_cfg, "control_non_vehicles", False):
-                base_cmd.append("--control-non-vehicles")
             if getattr(env_cfg, "goal_radius", None) is not None:
                 base_cmd.extend(["--goal-radius", str(env_cfg.goal_radius)])
             if getattr(env_cfg, "init_steps", 0) > 0:

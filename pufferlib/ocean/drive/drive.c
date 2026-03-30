@@ -37,7 +37,7 @@ void demo() {
     // Read configuration from INI file
     env_init_config conf = {0};
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
-    if (ini_parse(ini_file, handler, &conf) < 0) {
+    if (load_env_config(ini_file, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         exit(1);
     }
@@ -54,6 +54,7 @@ void demo() {
         .init_steps = conf.init_steps,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
+        .compute_eval_metrics = conf.compute_eval_metrics,
     };
     allocate(&env);
     c_reset(&env);
@@ -116,7 +117,7 @@ void performance_test() {
     // Read configuration from INI file
     env_init_config conf = {0};
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
-    if (ini_parse(ini_file, handler, &conf) < 0) {
+    if (load_env_config(ini_file, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         exit(1);
     }
@@ -124,48 +125,100 @@ void performance_test() {
     long test_time = 10;
     Drive env = {
         .human_agent_idx = 0,
+        .map_name = strdup("pufferlib/resources/drive/binaries/carla/map_000.bin"),
+        .ini_file = strdup(ini_file),
+        .num_controllable_agents = conf.max_agents_per_env,
+        // From conf
+        .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_traffic_light_violation = conf.reward_traffic_light_violation,
+        .reward_goal = conf.reward_goal,
         .reward_ade = conf.reward_ade,
+        .reward_overspeed = conf.reward_overspeed,
+        .reward_comfort = conf.reward_comfort,
+        .reward_velocity = conf.reward_velocity,
+        .reward_lane_align = conf.reward_lane_align,
+        .reward_vel_align = conf.reward_vel_align,
+        .reward_lane_center = conf.reward_lane_center,
+        .reward_center_bias = conf.reward_center_bias,
+        .reward_reverse = conf.reward_reverse,
+        .reward_timestep = conf.reward_timestep,
         .goal_radius = conf.goal_radius,
+        .collision_behavior = conf.collision_behavior,
+        .offroad_behavior = conf.offroad_behavior,
+        .traffic_light_behavior = conf.traffic_light_behavior,
         .dt = conf.dt,
-        .map_name = "resources/drive/binaries/map_000.bin",
+        .target_type = conf.target_type,
+        .scenario_length = conf.scenario_length,
+        .termination_mode = conf.termination_mode,
         .init_steps = conf.init_steps,
+        .init_mode = conf.init_mode,
+        .control_mode = conf.control_mode,
+        .simulation_mode = conf.simulation_mode,
+        .min_waypoint_spacing = conf.min_waypoint_spacing,
+        .max_waypoint_spacing = conf.max_waypoint_spacing,
+        .num_target_waypoints = conf.num_target_waypoints,
+        .reward_conditioning = conf.reward_conditioning,
+        .reward_randomization = conf.reward_randomization,
+        .compute_eval_metrics = conf.compute_eval_metrics,
+        .num_max_agents = conf.max_agents_per_env,
+        .use_rear_axle = conf.use_rear_axle,
+        .max_lane_segment_observations = conf.max_lane_segment_observations,
+        .max_boundary_segment_observations = conf.max_boundary_segment_observations,
+        .max_partner_observations = conf.max_partner_observations,
+        .max_traffic_light_observations = conf.max_traffic_light_observations,
+        .max_stop_sign_observations = conf.max_stop_sign_observations,
     };
-    clock_t start_time, end_time;
-    double cpu_time_used;
-    start_time = clock();
+    struct timespec ts_total_start, ts_total_end;
+    struct timespec ts_init_start, ts_init_end;
+    struct timespec ts_step_start, ts_step_end;
+    double init_time = 0, step_time = 0, total_time = 0;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts_total_start);
+
+    clock_gettime(CLOCK_MONOTONIC, &ts_init_start);
     allocate(&env);
     c_reset(&env);
-    end_time = clock();
-    cpu_time_used = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
-    printf("Init time: %f\n", cpu_time_used);
+    clock_gettime(CLOCK_MONOTONIC, &ts_init_end);
+    init_time = (ts_init_end.tv_sec - ts_init_start.tv_sec) + (ts_init_end.tv_nsec - ts_init_start.tv_nsec) / 1e9;
+    printf("Init time: %.4f s\n", init_time);
 
     long start = time(NULL);
     int i = 0;
-    int (*actions)[2] = (int (*)[2])env.actions;
 
+    // Reallocate actions buffer for trajectory mode (needs num_trajectory_scaling_factors per agent)
+
+    clock_gettime(CLOCK_MONOTONIC, &ts_step_start);
     while (time(NULL) - start < test_time) {
-        // Set random actions for all agents
+        // Set random discrete actions for all agents
+        int (*actions)[2] = (int (*)[2])env.actions;
         for (int j = 0; j < env.active_agent_count; j++) {
-            int accel = rand() % 7;
-            int steer = rand() % 13;
-            actions[j][0] = accel; // -1, 0, or 1
-            actions[j][1] = steer; // Random steering
+            actions[j][0] = rand() % 7;
+            actions[j][1] = rand() % 13;
         }
-
         c_step(&env);
         i++;
     }
+    clock_gettime(CLOCK_MONOTONIC, &ts_step_end);
+    step_time = (ts_step_end.tv_sec - ts_step_start.tv_sec) + (ts_step_end.tv_nsec - ts_step_start.tv_nsec) / 1e9;
+
     long end = time(NULL);
+    printf("Steps: %d | Agents: %d\n", i, env.active_agent_count);
+    printf("Step loop time: %.4f s\n", step_time);
     printf("SPS: %ld\n", (i * env.active_agent_count) / (end - start));
+
     free_allocated(&env);
+
+    clock_gettime(CLOCK_MONOTONIC, &ts_total_end);
+    total_time = (ts_total_end.tv_sec - ts_total_start.tv_sec) + (ts_total_end.tv_nsec - ts_total_start.tv_nsec) / 1e9;
+    printf("Total time: %.4f s\n", total_time);
 }
 
 int main() {
-    // performance_test();
-    demo();
+    performance_test();
+    // demo();
     // test_drivenet();
     return 0;
 }

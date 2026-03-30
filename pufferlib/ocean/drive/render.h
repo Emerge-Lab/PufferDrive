@@ -161,8 +161,12 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
 
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    int max_obs =
-        ego_dim + PARTNER_FEATURES * (MAX_AGENTS_OBSERVATIONS) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    if (env->max_stop_sign_observations > 0)
+        ego_dim += 1;
+    int num_reward_coefs = env->reward_conditioning ? NUM_REWARD_COEFS : 0;
+    int target_features = (env->target_type == TARGET_STATIC) ? env->num_target_waypoints * STATIC_TARGET_FEATURES
+                                                              : env->num_target_waypoints * DYNAMIC_TARGET_FEATURES;
+    int max_obs = compute_observation_size(env);
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     float *agent_obs = &observations[agent_index][0];
     // self
@@ -172,27 +176,30 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float heading_self_y = sinf(heading_self);
     float px = env->agents[active_idx].sim_x;
     float py = env->agents[active_idx].sim_y;
-    // draw goal
-    float goal_x = agent_obs[0] * 200;
-    float goal_y = agent_obs[1] * 200;
-    if (mode == 0) {
-        DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
-                     Fade(LIGHTGREEN, 0.3f));
-    }
+    // draw goal (first target waypoint, in ego frame)
+    if (env->num_target_waypoints > 0) {
+        int goal_obs_idx = ego_dim + num_reward_coefs;
+        float goal_x = agent_obs[goal_obs_idx] * MAX_GOAL_POSITION;
+        float goal_y = agent_obs[goal_obs_idx + 1] * MAX_GOAL_POSITION;
+        if (mode == 0) {
+            DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
+            DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
+                         Fade(LIGHTGREEN, 0.3f));
+        }
 
-    if (mode == 1) {
-        float goal_x_world = px + (goal_x * heading_self_x - goal_y * heading_self_y);
-        float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
-        DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
-        DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
-                     Fade(LIGHTGREEN, 0.3f));
+        if (mode == 1) {
+            float goal_x_world = px + (goal_x * heading_self_x - goal_y * heading_self_y);
+            float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
+            DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
+            DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
+                         Fade(LIGHTGREEN, 0.3f));
+        }
     }
     // First draw other agent observations
-    int obs_idx = ego_dim; // Start after ego obs
-    for (int j = 0; j < MAX_AGENTS - 1; j++) {
+    int obs_idx = ego_dim + num_reward_coefs + target_features; // Start after ego, conditioning, and target obs
+    for (int j = 0; j < env->max_partner_observations; j++) {
         if (agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
-            obs_idx += 7; // Move to next agent observation
+            obs_idx += PARTNER_FEATURES;
             continue;
         }
         // Draw position of other agents
@@ -298,23 +305,16 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             }
         }
 
-        obs_idx += 7; // Move to next agent observation (7 values per agent)
+        obs_idx += PARTNER_FEATURES;
     }
-    // Then draw map observations
-    int map_start_idx = 7 + 7 * (MAX_AGENTS - 1);             // Start after agent observations
-    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) { // Loop through potential map entities
-        int entity_idx = map_start_idx + k * 7;
+    // Then draw lane segment observations (obs_idx is now at lane obs start after partner loop)
+    int lane_obs_start = obs_idx;
+    for (int k = 0; k < env->max_lane_segment_observations; k++) {
+        int entity_idx = lane_obs_start + k * ROAD_FEATURES;
         if (agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0) {
             continue;
         }
-        Color lineColor = BLUE; // Default color
-        int entity_type = (int)agent_obs[entity_idx + 6];
-        // Choose color based on entity type
-        int unnormalized_type = unnormalize_road_type(entity_type);
-        if (!is_road_edge(unnormalized_type))
-            continue;
-
-        lineColor = PUFF_CYAN;
+        Color lineColor = PUFF_CYAN;
         // For road segments, draw line between start and end points
         float x_middle = agent_obs[entity_idx] * 50;
         float y_middle = agent_obs[entity_idx + 1] * 50;
@@ -352,7 +352,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
 }
 
-void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float end_y) {
+void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float end_y, Color lineColor) {
     Color CURB_TOP = (Color){220, 220, 220, 255};  // Top surface - lightest
     Color CURB_SIDE = (Color){180, 180, 180, 255}; // Side faces - medium
     Color CURB_BOTTOM = (Color){160, 160, 160, 255};
@@ -435,8 +435,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 break;
             }
         }
-        // HIDE CARS ON RESPAWN - IMPORTANT TO KNOW VISUAL SETTING
-        if ((!is_active_agent && !is_static_agent) || agent->respawn_timestep != -1) {
+        if (!is_active_agent && !is_static_agent) {
             continue;
         }
         Vector3 position;
@@ -610,7 +609,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             else if (element->type == DRIVEWAY)
                 lineColor = RED;
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-                draw_road_edge(env, start.x, start.y, end.x, end.y);
+                draw_road_edge(env, start.x, start.y, end.x, end.y, lineColor);
             }
         }
     }
@@ -636,10 +635,6 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         float pixels_per_world_unit = client->height / map_height;
 
         for (int i = 0; i < env->active_agent_count; i++) {
-            // Ignore respawned agents
-            if (env->agents[i].respawn_timestep != -1) {
-                continue;
-            }
             int agent_idx = env->active_agent_indices[i];
             int womd_track_idx = env->tracks_to_predict[i];
 

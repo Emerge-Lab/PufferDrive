@@ -1,0 +1,92 @@
+# PufferDrive Experiments Configuration
+# ======================================
+#
+# Define experiments and runs to execute on GCP Vertex AI.
+#
+# Structure:
+#   experiments:
+#     - name: experiment_name       # Group name for related runs
+#       machine: T4                 # Default machine for all runs (optional)
+#       dataset_path: gs://...      # Default dataset for all runs (optional)
+#       params: {...}               # Default params inherited by all runs (optional)
+#       param.key: value            # Flat params also supported at experiment level
+#       runs:                       # List of individual runs
+#         - name: run_name          # Unique name within the experiment
+#           machine: L4             # Override machine for this run (optional)
+#           params: {...}           # Additional/override params (optional)
+#
+# If no 'runs' are specified, the experiment itself becomes a single run.
+#
+# Output structure in bucket:
+#   gs://bucket/experiments/<experiment_name>/<run_name>/
+#
+# Usage:
+#   python mlops/mlops.py launch-batch mlops/experiments.yaml
+
+
+experiments:
+  - name: gigaflow
+    machine: RTX6000_2
+    params:
+      # Vec
+      vec.num-envs: 32
+      # Env
+      env.num-agents: 4096
+      # Train
+      train.minibatch-size: 262_144
+      train.max-minibatch-size: 262_144
+      train.total-timesteps: 300_000_000_000
+      # Paper hparams
+      train.gamma: 0.99
+      train.gae-lambda: 0.95
+      train.learning-rate: 0.0005
+      train.ent-coef: 0.01
+      train.vf-coef: 0.5
+      train.clip-coef: 0.2
+      train.max-grad-norm: 0.5
+      train.update-epochs: 1
+    runs:
+      # # 1. Faithful paper replication: FF + large arch + paper hparams
+      # - name: ff_paper_arch
+      #   params:
+      #     rnn-name: None
+      #     policy.input-size: 128
+      #     policy.backbone-hidden-size: 1024
+      #     policy.backbone-num-layers: 3
+      #     policy.encoder-gigaflow: True
+
+      # # 2. LSTM + paper-sized arch + paper hparams
+      # #    (split-network must be False: LSTM wrapper asserts this)
+      # - name: lstm_paper_arch
+      #   params:
+      #     policy.input-size: 128
+      #     policy.backbone-hidden-size: 1024
+      #     policy.backbone-num-layers: 2
+      #     policy.encoder-gigaflow: True
+      #     policy.dropout: 0.2
+      #     rnn.input-size: 1024   # must match backbone-hidden-size
+      #     rnn.hidden-size: 1024
+
+      # - name: l4_lstm_new_arch_input_128_24_env
+      #   params:
+      #     policy.input-size: 128
+      #     policy.encoder-gigaflow: True
+      #     policy.dropout: 0.2
+
+      # - name: test_dockerfile
+      #   params:
+      #     rnn-name: Recurrent
+      #     policy.encoder-gigaflow: True
+      #     policy.dropout: 0.2
+
+      - name: test_dockerfile_ptx
+        params:
+          rnn-name: None
+          policy.encoder-gigaflow: True
+          policy.dropout: 0.2
+
+      # 4. LSTM + current (small) arch + paper hparams → cheapest LSTM comparison
+      # - name: lstm_small_arch
+      #   params:
+      #     policy.encoder-gigaflow: True
+      #     rnn.hidden-size: 512

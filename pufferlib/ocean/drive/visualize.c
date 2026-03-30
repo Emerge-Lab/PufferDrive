@@ -192,7 +192,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     // Parse configuration from INI file
     env_init_config conf = {0}; // Initialize to zero
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
-    if (ini_parse(ini_file, handler, &conf) < 0) {
+    if (load_env_config(ini_file, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         return -1;
     }
@@ -234,6 +234,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .max_controlled_agents = max_controlled_agents,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
+        .compute_eval_metrics = conf.compute_eval_metrics,
         .goal_behavior = goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,

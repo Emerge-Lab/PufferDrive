@@ -1,156 +1,139 @@
 # PufferDrive
 
-<img align="left" style="width:260px" src="https://github.com/Emerge-Lab/PufferDrive/blob/main/pufferlib/resources/drive/pufferdrive_20fps_long.gif" width="288px">
+MARL autonomous driving RL environment. C simulation engine (GigaFlow/Waymo replay) + Python/PyTorch PPO training loop with V-trace and priority sampling.
 
-**PufferDrive is a fast and friendly driving simulator to train and test RL-based models.**
+## Install
 
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
-
----
-
-## Installation
-
-Clone the repo
 ```bash
-https://github.com/Emerge-Lab/PufferDrive.git
-```
-
-Make a venv (`uv venv`), activate the venv
-```
-source .venv/bin/activate
-```
-
-Inside the venv, install the dependencies
-```
+# Python env
+uv venv && source .venv/bin/activate
 uv pip install -e .
-```
 
-Compile the C code
-```
+# Build C extensions (required after any .h/.c change)
 python setup.py build_ext --inplace --force
 ```
 
-To test your setup, you can run
-```
+## Data
+
+Place binaries under `pufferlib/resources/drive/binaries/`.
+
+## Train
+
+```bash
+# Single node
 puffer train puffer_drive
-```
-See also the [puffer docs](https://puffer.ai/docs.html).
 
+# Override config on the fly
+puffer train puffer_drive --train.learning_rate 0.001 --env.num_agents 512
 
-## Quick start
-
-Start a training run
-```
-puffer train puffer_drive
+# Multi-GPU
+torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_drive
 ```
 
-## Dataset
-
-<details>
-<summary>Downloading and using data</summary>
-
-### Data preparation
-
-To train with PufferDrive, you need to convert JSON files to map binaries. Run the following command with the path to your data folder:
+## Eval
 
 ```bash
-python pufferlib/ocean/drive/drive.py
+# Multi-scenario eval (replay mode)
+puffer eval_multi_scenarios puffer_drive \
+  --load-model-path experiments/puffer_drive_177193887946/models/model_puffer_drive_000001.pt \
+  --num_scenarios 250 --eval_simulation replay
+
+# Multi-scenario eval (gigaflow mode)
+puffer eval_multi_scenarios puffer_drive \
+  --load-model-path experiments/puffer_drive_177193887946/models/model_puffer_drive_000001.pt \
+  --num_scenarios 10 --eval_simulation gigaflow
+
+# Multi-scenario eval with rendering
+puffer eval_multi_scenarios_render puffer_drive \
+  --load-model-path experiments/puffer_drive_177193887946/models/model_puffer_drive_000001.pt \
+  --num_scenarios 10 --eval_simulation gigaflow --render 1 --render_obs 0
+
+# Save eval as GIF
+puffer eval_multi_scenarios_render puffer_drive \
+  --load-model-path experiments/puffer_drive_177193887946/models/model_puffer_drive_000001.pt \
+  --num_scenarios 5 --eval_simulation gigaflow --save-frames 1 --gif-path eval.gif --fps 15
 ```
 
-### Downloading Waymo Data
+## Key Configuration (`pufferlib/config/ocean/drive.ini`)
 
-You can download the WOMD data from Hugging Face in two versions:
+### `[env]` — Simulation
 
-- **Mini dataset**: [GPUDrive_mini](https://huggingface.co/datasets/EMERGE-lab/GPUDrive_mini) contains 1,000 training files and 300 test/validation files
-- **Medium dataset**: [10,000 files from the training dataset](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_train)
-- **Large dataset**: [GPUDrive](https://huggingface.co/datasets/EMERGE-lab/GPUDrive) contains 100,000 unique scenes
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `simulation_mode` | `"gigaflow"` | `"gigaflow"` (procedural) or `"replay"` (Data-driven) |
+| `num_agents` | `1024` | Total agents across all workers |
+| `min/max_agents_per_env` | `10 / 80` | Per-env agent count range |
+| `action_type` | `"discrete"` | `"discrete"`, `"continuous"`, `"trajectory"`, `"trajectory_frenet"`, `"trajectory_jerk"` |
+| `dynamics_model` | `"jerk"` | `"classic"` or `"jerk"` |
+| `scenario_length` | `128` | Steps per episode (128 GF, 91 replay) |
+| `collision_behavior` | `1` | `0` ignore, `1` stop, `2` remove |
+| `offroad_behavior` | `1` | Same options |
+| `traffic_light_behavior` | `1` | Same options |
+| `control_mode` | `"control_vehicles"` | `"control_vehicles"`, `"control_agents"`, `"control_sdc_only"` |
+| `reward_conditioning` | `True` | Condition policy on reward weights |
+| `reward_randomization` | `True` | Randomize reward weights each episode |
 
-**Note**: Replace 'GPUDrive_mini' with 'GPUDrive' in your download commands if you want to use the full dataset.
+### `[env]` — Reward Shaping
 
-### Additional Data Sources
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `reward_goal` | `1.0` | Goal reaching (set 0 without reward conditioning) |
+| `reward_vehicle_collision` | `1.0` | Collision penalty |
+| `reward_comfort` | `0.05` | Smooth driving |
+| `reward_lane_align` | `0.025` | Lane heading alignment |
+| `reward_vel_align` | `1.0` | Speed matching road limit |
+| `reward_lane_center` | `0.0038` | Lane centering |
+| `reward_traffic_light_violation` | `1.0` | Red light penalty |
+| `reward_overspeed` | `0.05` | Speeding penalty |
 
-For more training data compatible with PufferDrive, see [ScenarioMax](https://github.com/valeoai/ScenarioMax). The GPUDrive data format is fully compatible with PufferDrive.
-</details>
+### `[train]` — PPO
+
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `learning_rate` | `0.001` | Adam LR |
+| `bptt_horizon` | `64` | BPTT window (64 GF, 91 replay) |
+| `minibatch_size` | `4096` | |
+| `gamma` | `0.98` | Discount |
+| `gae_lambda` | `0.95` | GAE lambda |
+| `vf_coef` | `2` | Value loss weight |
+| `ent_coef` | `0.001` | Entropy bonus |
+| `vtrace_rho_clip` / `vtrace_c_clip` | `1` | V-trace IS ratio clipping |
+| `prio_alpha` / `prio_beta0` | `0.85` | Priority sampling exponents |
+
+### `[policy]` — Network
+
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `backbone_hidden_size` | `512` | |
+| `split_network` | `False` | GigaFlow network vs LSTM |
+| `encoder_gigaflow` | `False` | |
+| `dropout` | `0.0` | |
+
+## Notebooks
+
+| Notebook | Purpose |
+|----------|---------|
+| `01_observations.ipynb` | Verify obs vector packing, normalization, interpretability |
+| `02_rewards.ipynb` | Reward magnitudes, component breakdown, correlation with behavior |
+| `03_metrics.ipynb` | Episode metrics, `vec_log` aggregation, episode boundary handling |
+| `04_training.ipynb` | End-to-end data flow: env → policy → loss; encoding, sampling, advantages, gradients |
+| `05_inference.ipynb` | Config loading, policy forward pass, rollouts (det. vs stochastic), value accuracy, LSTM state |
+| `06_architecture.ipynb` | Model summary, per-encoder breakdown, forward pass shape tracing, weight distributions |
 
 
-## Visualizer
+## Debug
 
-<details>
-<summary>Dependencies and usage</summary>
-
-## Headless server setup
-
-Run the Raylib visualizer on a headless server and export as .mp4. This will rollout the pre-trained policy in the env.
-
-### Install dependencies
-
+**C build issues**
 ```bash
-sudo apt update
-sudo apt install ffmpeg xvfb
-```
+# Verbose build with AddressSanitizer
+DEBUG=1 python setup.py build_ext --inplace --force
 
-For HPC (There are no root privileges), so install into the conda environment
-```bash
-conda install -c conda-forge xorg-x11-server-xvfb-cos6-x86_64
-conda install -c conda-forge ffmpeg
-```
+# Skip unrelated extensions
+NO_OCEAN=1 python setup.py build_ext --inplace --force
+NO_TRAIN=1 python setup.py build_ext --inplace --force
 
-- `ffmpeg`: Video processing and conversion
-- `xvfb`: Virtual display for headless environments
-
-### Build and run
-
-1. Build the application:
-```bash
-bash scripts/build_ocean.sh visualize local
-```
-
-2. Run with virtual display:
-```bash
-xvfb-run -s "-screen 0 1280x720x24" ./visualize
-```
-
-The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color depth.
-
----
-
-> To force a rebuild, you can delete the cached compiled executable binary using `rm ./visualize`.
-
----
-
-</details>
-
-
-## Benchmarks
-
-### Distributional realism
-
-We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See details [here](https://github.com/Emerge-Lab/PufferDrive/tree/main/pufferlib/ocean/benchmark).
-
-WOSAC evaluation with random policy:
-```bash
-puffer eval puffer_drive --eval.wosac-realism-eval True
-```
-
-- **Small clean eval dataset**. A clean validation set with 229 scenarios can be downloaded [here](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_wosac_val_clean).
-- **Large eval dataset**. [TODO]
-
-WOSAC evaluation with your checkpoint (must be .pt file):
-```bash
-puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-trained-policy>.pt
-```
-
-### Human-compatibility
-
-You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how closely aligned your agent's behavior is to how people drive. You can run it like this:
-```bash
-puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-trained-policy>.pt
+# Debug train
+CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pufferlib.pufferl train puffer_drive --train.device cpu --vec.backend Serial
+# or
+gdb --args python -m pufferlib.pufferl train puffer_drive --train.device cpu --vec.backend Serial
 ```

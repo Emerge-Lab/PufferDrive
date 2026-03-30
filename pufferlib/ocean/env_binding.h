@@ -1,9 +1,8 @@
-#include "env_config.h"
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
 // Forward declarations for env-specific functions supplied by user
-static int my_log(PyObject *dict, Log *log);
+static int my_log(PyObject *dict, Env *env, Log *log, float n);
 static int my_init(Env *env, PyObject *args, PyObject *kwargs);
 
 static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs);
@@ -43,8 +42,8 @@ static Env *unpack_env(PyObject *args) {
 
 // Python function to initialize the environment
 static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "Environment requires 5 arguments");
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "Environment requires 7 positional arguments");
         return NULL;
     }
 
@@ -130,7 +129,19 @@ static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     env->truncations = PyArray_DATA(truncations);
 
-    PyObject *seed_arg = PyTuple_GetItem(args, 5);
+    PyObject *msk = PyTuple_GetItem(args, 5);
+    if (!PyObject_TypeCheck(msk, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "Masks must be a NumPy array");
+        return NULL;
+    }
+    PyArrayObject *masks_array = (PyArrayObject *)msk;
+    if (!PyArray_ISCONTIGUOUS(masks_array)) {
+        PyErr_SetString(PyExc_ValueError, "Masks must be contiguous");
+        return NULL;
+    }
+    env->masks = PyArray_DATA(masks_array);
+
+    PyObject *seed_arg = PyTuple_GetItem(args, 6);
     if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "seed must be an integer");
         return NULL;
@@ -493,7 +504,7 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
 
     for (int i = 0; i < vec->num_envs; i++) {
         // Assumes each process has the same number of environments
-        srand(i + seed * vec->num_envs);
+        srand(i + seed);
         c_reset(vec->envs[i]);
     }
     Py_RETURN_NONE;
@@ -570,48 +581,89 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     // horribly if Log has non-float data.
     PyObject *num_agents_arg = PyTuple_GetItem(args, 1);
     float num_agents = (float)PyLong_AsLong(num_agents_arg);
-
-    Log aggregate = {0};
     int num_keys = sizeof(Log) / sizeof(float);
-    for (int i = 0; i < vec->num_envs; i++) {
-        Env *env = vec->envs[i];
-        for (int j = 0; j < num_keys; j++) {
-            ((float *)&aggregate)[j] += ((float *)&env->log)[j];
-        }
-    }
 
-    PyObject *dict = PyDict_New();
-
-    // Only log if we have at least num_agents worth of data
     Env *env = vec->envs[0];
     if (env->eval_mode) {
-        if (aggregate.n == 0) {
+        PyObject *list = PyList_New(vec->num_envs);
+        PyObject *dict = PyDict_New();
+
+        if (env->log.n == 0) {
             return dict;
         }
+
+        // Got enough data. Reset logs and return metrics
+        for (int i = 0; i < vec->num_envs; i++) {
+            PyObject *dict = PyDict_New();
+            Env *env = vec->envs[i];
+            float n = env->log.n;
+            // Average across agents
+            for (int i = 0; i < num_keys; i++) {
+                ((float *)&env->log)[i] /= n;
+            }
+            my_log(dict, env, &env->log, n);
+            assign_to_dict(dict, "n", n);
+            // Add map_name to dict
+            if (env->map_name) {
+                PyObject *s = PyUnicode_FromString(env->map_name);
+                if (s != NULL) {
+                    PyDict_SetItemString(dict, "map_name", s);
+                    Py_DECREF(s);
+                }
+            }
+
+            PyList_SetItem(list, i, dict);
+        }
+        // Reset logs to 0 after extracting metrics (prevents accumulation across episodes)
+        for (int i = 0; i < vec->num_envs; i++) {
+            Env *env = vec->envs[i];
+            for (int j = 0; j < num_keys; j++) {
+                ((float *)&env->log)[j] = 0.0f;
+            }
+        }
+        return list;
     } else {
-        if (aggregate.n < num_agents) {
-            return dict;
+        Log aggregate = {0};
+        for (int i = 0; i < vec->num_envs; i++) {
+            Env *env = vec->envs[i];
+            for (int j = 0; j < num_keys; j++) {
+                ((float *)&aggregate)[j] += ((float *)&env->log)[j];
+            }
         }
-    }
 
-    // Got enough data. Reset logs and return metrics
-    for (int i = 0; i < vec->num_envs; i++) {
-        Env *env = vec->envs[i];
-        for (int j = 0; j < num_keys; j++) {
-            ((float *)&env->log)[j] = 0.0f;
+        PyObject *dict = PyDict_New();
+
+        // Only log if we have at least num_agents worth of data
+        Env *env = vec->envs[0];
+        if (env->eval_mode) {
+            if (aggregate.n == 0) {
+                return dict;
+            }
+        } else {
+            if (aggregate.n < num_agents) {
+                return dict;
+            }
         }
-    }
 
-    float n = aggregate.n;
+        // Got enough data. Reset logs and return metrics
+        for (int i = 0; i < vec->num_envs; i++) {
+            Env *env = vec->envs[i];
+            for (int j = 0; j < num_keys; j++) {
+                ((float *)&env->log)[j] = 0.0f;
+            }
+        }
 
-    // Average across agents
-    for (int i = 0; i < num_keys; i++) {
-        ((float *)&aggregate)[i] /= n;
+        float n = aggregate.n;
+
+        // Average across agents
+        for (int i = 0; i < num_keys; i++) {
+            ((float *)&aggregate)[i] /= n;
+        }
+        // User populates dict
+        my_log(dict, env, &aggregate, n);
+        assign_to_dict(dict, "n", n);
+        return dict;
     }
-    // User populates dict
-    my_log(dict, &aggregate);
-    assign_to_dict(dict, "n", n);
-    return dict;
 }
 
 static PyObject *vec_get(PyObject *self, PyObject *args) {
@@ -1024,14 +1076,12 @@ PyMODINIT_FUNC PyInit_binding(void) {
     }
 
     // Make constants accessible from Python
-    PyModule_AddIntConstant(m, "MAX_LANE_SEGMENT_OBSERVATIONS", MAX_LANE_SEGMENT_OBSERVATIONS);
-    PyModule_AddIntConstant(m, "MAX_ROAD_SEGMENT_OBSERVATIONS", MAX_ROAD_SEGMENT_OBSERVATIONS);
-    PyModule_AddIntConstant(m, "MAX_AGENTS_OBSERVATIONS", MAX_AGENTS_OBSERVATIONS);
-    PyModule_AddIntConstant(m, "MAX_TRAFFIC_CONTROLS", MAX_TRAFFIC_CONTROLS);
     PyModule_AddIntConstant(m, "MAX_ENTITIES_PER_CELL", MAX_ENTITIES_PER_CELL);
     PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
-    PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_FEATURES", TRAFFIC_CONTROL_FEATURES);
+    PyModule_AddIntConstant(m, "TRAFFIC_LIGHT_FEATURES", TRAFFIC_LIGHT_FEATURES);
+    PyModule_AddIntConstant(m, "NUM_TRAFFIC_LIGHT_STATES", NUM_TRAFFIC_LIGHT_STATES);
+    PyModule_AddIntConstant(m, "STOP_SIGN_FEATURES", STOP_SIGN_FEATURES);
     PyModule_AddIntConstant(m, "EGO_FEATURES_CLASSIC", EGO_FEATURES_CLASSIC);
     PyModule_AddIntConstant(m, "EGO_FEATURES_JERK", EGO_FEATURES_JERK);
     PyModule_AddIntConstant(m, "STATIC_TARGET_FEATURES", STATIC_TARGET_FEATURES);
@@ -1040,6 +1090,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
     PyModule_AddIntConstant(m, "TARGET_STATIC", TARGET_STATIC);
     PyModule_AddIntConstant(m, "TARGET_DYNAMIC", TARGET_DYNAMIC);
+    PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
+    PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
 
     return m;
 }

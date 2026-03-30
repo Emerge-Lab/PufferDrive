@@ -63,11 +63,15 @@ if [ "$MODE" = "local" ]; then
         )
     fi
     $COMPILER -g -O0 ${FLAGS[@]}
+elif [ "$MODE" = "profile-debug" ]; then
+    echo "Building profiling-enabled $ENV (no inlining, perf-friendly)..."
+    $COMPILER -g -O1 -fno-inline -fno-omit-frame-pointer -DNDEBUG ${FLAGS[@]}
+    echo "Built to: $ENV"
 elif [ "$MODE" = "fast" ]; then
     echo "Building optimized $ENV for local testing..."
-    $COMPILER -pg -O2 -DNDEBUG ${FLAGS[@]}
+    $COMPILER -O2 -DNDEBUG ${FLAGS[@]}
     echo "Built to: $ENV"
 else
-    echo "Invalid mode: $MODE (use local|fast)"
+    echo "Invalid mode: $MODE (use local|fast|profile-debug)"
     exit 1
 fi

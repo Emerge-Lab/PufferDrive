@@ -74,6 +74,7 @@ class Serial:
 
         self.envs = []
         ptr = 0
+        child_seeds = np.random.SeedSequence(seed).spawn(len(env_creators)) if seed is not None else None
         for i in range(num_envs):
             end = ptr + self.driver_env.num_agents
             buf_i = dict(
@@ -85,10 +86,15 @@ class Serial:
                 actions=self.actions[ptr:end],
             )
             ptr = end
-            seed_i = seed + i if seed is not None else None
+            if seed is not None:
+                seed_i = int(child_seeds[i].generate_state(1)[0]) & 0x7FFFFFFF
+            else:
+                seed_i = None
             env = env_creators[i](*env_args[i], buf=buf_i, seed=seed_i, **env_kwargs[i])
             self.envs.append(env)
 
+        # Close the initial driver_env used only for configuration (it's not in self.envs)
+        self.driver_env.close()
         self.driver_env = driver = self.envs[0]
         self.emulated = self.driver_env.emulated
         check_envs(self.envs, self.driver_env)
@@ -119,11 +125,12 @@ class Serial:
     def async_reset(self, seed=None):
         self.flag = RECV
         infos = []
+        child_seeds = np.random.SeedSequence(seed).spawn(len(self.envs)) if seed is not None else None
         for i, env in enumerate(self.envs):
             if seed is None:
                 ob, i = env.reset()
             else:
-                ob, i = env.reset(seed=seed + i)
+                ob, i = env.reset(seed=int(child_seeds[i].generate_state(1)[0]) & 0x7FFFFFFF)
 
             if isinstance(i, list):
                 infos.extend(i)
@@ -216,7 +223,7 @@ def _worker_process(
     if is_native and num_envs == 1:
         envs = env_creators[0](*env_args[0], **env_kwargs[0], buf=buf, seed=seed)
     else:
-        envs = Serial(env_creators, env_args, env_kwargs, num_envs, buf=buf, seed=seed * num_envs)
+        envs = Serial(env_creators, env_args, env_kwargs, num_envs, buf=buf, seed=seed)
 
     semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
@@ -372,11 +379,13 @@ class Multiprocessing:
         w_send_pipes, self.recv_pipes = zip(*[Pipe() for _ in range(num_workers)])
         self.recv_pipe_dict = {p: i for i, p in enumerate(self.recv_pipes)}
 
+        worker_ss = np.random.SeedSequence(seed).spawn(num_workers) if seed is not None else [None] * num_workers
+        worker_seeds = [int(ss.generate_state(1)[0]) & 0x7FFFFFFF if ss is not None else None for ss in worker_ss]
+
         self.processes = []
         for i in range(num_workers):
             start = i * envs_per_worker
             end = start + envs_per_worker
-            seed_i = seed + i if seed is not None else None
             p = Process(
                 target=_worker_process,
                 args=(
@@ -395,7 +404,7 @@ class Multiprocessing:
                     w_recv_pipes[i],
                     self.shm,
                     is_native,
-                    seed_i,
+                    worker_seeds[i],
                 ),
             )
             p.start()
@@ -528,10 +537,12 @@ class Multiprocessing:
         self.infos = [[] for _ in range(self.num_workers)]
 
         self.buf["semaphores"][:] = RESET
+        worker_ss = (
+            np.random.SeedSequence(seed).spawn(self.num_workers) if seed is not None else [None] * self.num_workers
+        )
         for i in range(self.num_workers):
-            start = i * self.envs_per_worker
-            end = (i + 1) * self.envs_per_worker
-            self.send_pipes[i].send(seed + i)
+            s = int(worker_ss[i].generate_state(1)[0]) & 0x7FFFFFFF if worker_ss[i] is not None else None
+            self.send_pipes[i].send(s)
 
     def notify(self):
         self.buf["notify"][:] = True

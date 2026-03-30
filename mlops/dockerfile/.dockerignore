@@ -1,0 +1,83 @@
+# =============================================================================
+# Docker Ignore for PufferDrive
+# =============================================================================
+# Excludes files not needed in the training container to speed up builds.
+# This file is copied to the project root during docker build by mlops.py
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Python cache and compiled files
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts (will be rebuilt in container)
+build/
+dist/
+*.egg-info/
+*.so
+*.o
+*.a
+
+# Pre-built binaries for other platforms (keep linux only)
+*_macos*/
+*_webassembly*/
+build_web/
+
+# Data files (downloaded at runtime)
+pufferlib/resources/drive/**/*.bin
+resources/
+data/
+
+# IDE and editor configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation (exclude .md but keep pyproject.toml)
+*.md
+*.pdf
+!mlops/sync/readme.md
+LICENSE
+
+# Config files not needed in container
+.pre-commit-config.yaml
+ruff.toml
+
+# MLOps files not needed in container (keep run_training.sh and dockerfile/)
+mlops/configs/
+mlops/__pycache__/
+mlops/sync/
+
+# Experiment outputs and logs
+experiments/
+benchmark/
+wandb/
+videos*/
+runs/
+
+# Test files
+tests/
+
+# Example files
+examples/
+
+# Misc
+*.gif
+*.mp4
+*.png
+*.jpg
+config/

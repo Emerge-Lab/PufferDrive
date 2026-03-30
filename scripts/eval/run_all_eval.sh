@@ -1,7 +1,41 @@
 #!/bin/bash
+
 BASE_DIR="experiments"
 COMMAND_PREFIX="puffer eval_multi_scenarios puffer_drive"
-COMMAND_SUFFIX="--num_scenarios 500 --render 0 --render_obs 0"
+
+# Defaults
+NUM_SCENARIOS=50
+RENDER=0
+RENDER_OBS=0
+EVAL_SIMULATION="replay"
+
+# Parse command-line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --num_scenarios)
+            NUM_SCENARIOS="$2"
+            shift 2
+            ;;
+        --eval_simulation)
+            EVAL_SIMULATION="$2"
+            shift 2
+            ;;
+        --render)
+            RENDER="$2"
+            shift 2
+            ;;
+        --render_obs)
+            RENDER_OBS="$2"
+            shift 2
+            ;;
+        *)
+            echo "❌ Unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
+
+COMMAND_SUFFIX="--num_scenarios ${NUM_SCENARIOS} --render ${RENDER} --render_obs ${RENDER_OBS} --eval_simulation ${EVAL_SIMULATION}"
 
 if [ ! -d "$BASE_DIR" ]; then
     echo "Error: Directory '$BASE_DIR' not found."
@@ -10,17 +44,16 @@ if [ ! -d "$BASE_DIR" ]; then
 fi
 
 echo "🚀 Starting evaluation for all experiments in '$BASE_DIR'..."
+echo "   num_scenarios = ${NUM_SCENARIOS}"
+echo "   eval_simulation = ${EVAL_SIMULATION}"
 echo "---"
 
 for exp_path in ${BASE_DIR}/*/; do
-    MODELS_DIR="${exp_path}best_models/"
+    MODELS_DIR="${exp_path}/models/"
     echo "Processing experiment: ${exp_path}"
-    if [ ! -d "${MODELS_DIR}" ]; then
-        echo "  [SKIP] 'best_models/' directory not found in ${exp_path}."
-        echo "---"
-        continue
-    fi
-    LATEST_MODEL=$(ls -1 ${MODELS_DIR}*.pt 2>/dev/null | sort -V | tail -n 1)
+
+    LATEST_MODEL=$(ls -1 ${MODELS_DIR}*.pt 2>/dev/null | grep -v "trainer_state.pt" | sort -V | tail -n 1)
+
     if [ -z "${LATEST_MODEL}" ]; then
         echo "  [SKIP] No '.pt' model files found in ${MODELS_DIR}."
         echo "---"
@@ -31,10 +64,9 @@ for exp_path in ${BASE_DIR}/*/; do
     FULL_COMMAND="${COMMAND_PREFIX} --load-model-path ${LATEST_MODEL} ${COMMAND_SUFFIX}"
     echo "  ▶️  Executing:"
     echo "      ${FULL_COMMAND}"
+
     ${FULL_COMMAND}
-
     echo "---"
-
 done
 
 echo "🎉 All experiments processed."

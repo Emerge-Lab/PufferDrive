@@ -147,7 +147,7 @@ dmypy.json
 
 checkpoints/
 experiments/
-benchmark/
+benchmark*/
 wandb/
 .neptune/
 raylib*/
@@ -163,15 +163,9 @@ pufferlib/ocean/impulse_wars/benchmark/
 
 # Ignore data files
 data/
-pufferlib/resources/drive/binaries/
-pufferlib/resources/drive/binaries/training/
-pufferlib/resources/drive/binaries/validation/
-pufferlib/resources/drive/binaries/training/
-pufferlib/resources/drive/binaries/validation/
-
-# But keep map_000.bin for the training test
-!pufferlib/resources/drive/binaries/map_000.bin
-!pufferlib/resources/drive/binaries/training/map_000.bin
+pufferlib/resources/drive/binaries/*/
+!pufferlib/resources/drive/binaries/carla/
+!pufferlib/resources/drive/binaries/carla/**
 
 # Compiled drive binary in root
 /drive

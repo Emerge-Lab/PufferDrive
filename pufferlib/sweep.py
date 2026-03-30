@@ -121,6 +121,27 @@ class Logit(Space):
         return 1 - self.base**log_spaced
 
 
+class Categorical(Space):
+    def __init__(self, values, scale, mean):
+        if scale == "auto":
+            scale = 1.0  # full range so all values are reachable
+        self.values = list(values)
+        self._n = len(self.values)
+        super().__init__(min=self.values[0], max=self.values[-1], scale=scale, mean=mean)
+
+    def normalize(self, value):
+        idx = self.values.index(value)
+        if self._n == 1:
+            return 0.0
+        return -1.0 + 2.0 * idx / (self._n - 1)
+
+    def unnormalize(self, value):
+        zero_one = (value + 1) / 2
+        idx = round(zero_one * (self._n - 1))
+        idx = max(0, min(self._n - 1, idx))
+        return self.values[idx]
+
+
 def _params_from_puffer_sweep(sweep_config):
     param_spaces = {}
     for name, param in sweep_config.items():
@@ -134,6 +155,15 @@ def _params_from_puffer_sweep(sweep_config):
 
         assert "distribution" in param
         distribution = param["distribution"]
+
+        if distribution == "categorical":
+            values = param["values"]
+            mean = param.get("mean", values[len(values) // 2])
+            scale = param.get("scale", "auto")
+            space = Categorical(values=values, scale=scale, mean=mean)
+            param_spaces[name] = space
+            continue
+
         search_center = param["mean"]
         kwargs = dict(
             min=param["min"],
