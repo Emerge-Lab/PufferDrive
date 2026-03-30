@@ -6,6 +6,8 @@ Modes:
   3. Human-replay on training maps
   4. Human-replay on validation maps
   5. Human-replay on interactive scenes (1k scenes selected for SDC interactivity)
+  6. Scaling analysis: all checkpoints in SCALING_CHECKPOINTS_PATH on validation
+     set in both self-play and human-replay modes
 
 When NUM_TOTAL_EVAL_AGENTS > NUM_AGENTS_PER_VECENV, we keep the buffer at
 NUM_AGENTS_PER_VECENV and loop resample_maps() to cover more scenes.
@@ -17,6 +19,9 @@ Usage:
 """
 
 import copy
+import os
+import re
+
 import numpy as np
 import pandas as pd
 
@@ -25,15 +30,17 @@ from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────────
 CHECKPOINTS = [
-    "models/rl/pure_self_play_50k.pt",
-    "models/rl/reg_self_play_50k.pt",
+    # "models/rl/pure_self_play_50k.pt",
+    # "models/rl/reg_self_play_50k.pt",
 ]
+
+SCALING_CHECKPOINTS_PATH = "models/scaling_metadata"
 
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_training"
-NUM_TOTAL_EVAL_AGENTS = 128
-NUM_AGENTS_PER_VECENV = 128
+NUM_TOTAL_EVAL_AGENTS = 1024 * 4
+NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "checkpoint_eval_results.csv"
@@ -215,6 +222,126 @@ def evaluate_checkpoint(checkpoint_path, base_config):
     return all_rows
 
 
+def parse_scaling_checkpoint_name(filename):
+    """Parse a scaling checkpoint filename to extract num_maps and regularization.
+
+    Expected format: {num}k_maps_{reg|unreg}.pt
+    Examples:
+        1k_maps_reg.pt   -> (1000, True)
+        10k_maps_unreg.pt -> (10000, False)
+        500_maps_reg.pt  -> (500, True)
+
+    Returns:
+        (num_maps: int, is_regularized: bool) or None if parsing fails.
+    """
+    stem = filename.replace(".pt", "")
+    match = re.match(r"^(\d+)(k?)_maps_(reg|unreg)$", stem)
+    if not match:
+        return None
+    num = int(match.group(1))
+    if match.group(2) == "k":
+        num *= 1000
+    is_reg = match.group(3) == "reg"
+    return num, is_reg
+
+
+def evaluate_scaling_checkpoints(base_config):
+    """Evaluate all scaling checkpoints on validation set in sp and hr modes.
+
+    For each checkpoint in SCALING_CHECKPOINTS_PATH:
+      - Self-play on validation maps  (mode = "scaling_sp_val")
+      - Human-replay on validation maps (mode = "scaling_hr_val")
+
+    Extra columns added to each row: num_train_maps, is_regularized.
+
+    Returns:
+        List of per-scene row dicts.
+    """
+    scaling_entries = []
+    for fname in sorted(os.listdir(SCALING_CHECKPOINTS_PATH)):
+        if not fname.endswith(".pt"):
+            continue
+        parsed = parse_scaling_checkpoint_name(fname)
+        if parsed is None:
+            print(f"  Warning: could not parse scaling checkpoint name '{fname}', skipping")
+            continue
+        num_maps, is_reg = parsed
+        scaling_entries.append((os.path.join(SCALING_CHECKPOINTS_PATH, fname), num_maps, is_reg))
+
+    scaling_entries.sort(key=lambda x: (x[1], x[2]))
+    if not scaling_entries:
+        print("No scaling checkpoints found — skipping scaling eval.")
+        return []
+
+    print(f"\nFound {len(scaling_entries)} scaling checkpoints:")
+    for cpt_path, n_maps, is_reg in scaling_entries:
+        tag = "reg" if is_reg else "unreg"
+        print(f"  {os.path.basename(cpt_path)}  ->  {n_maps} maps, {tag}")
+
+    all_rows = []
+    for cpt_path, n_maps, is_reg in scaling_entries:
+        print(f"\n{'─' * 60}")
+        print(f"Scaling eval: {os.path.basename(cpt_path)}")
+        print(f"{'─' * 60}")
+
+        # Bootstrap an env so load_policy has a vecenv to inspect
+        init_config = make_eval_config(base_config, VAL_MAP_DIR, control_mode="control_agents", num_maps=10_000)
+        env = load_env(ENV_NAME, init_config)
+        base_config["load_model_path"] = cpt_path
+        policy = load_policy(base_config, env, ENV_NAME)
+        policy.eval()
+        env.close()
+
+        evaluator = CheckpointEvaluator(base_config)
+
+        # ── Self-play on training ───────────────────────────────────────
+        sp_train_rows = run_mode(
+            evaluator,
+            policy,
+            base_config,
+            TRAIN_MAP_DIR,
+            "control_agents",
+            cpt_path,
+            "scaling_sp_train",
+            num_maps=50_000,
+        )
+
+        # ── Self-play on validation ──────────────────────────────────────
+        sp_rows = run_mode(
+            evaluator,
+            policy,
+            base_config,
+            VAL_MAP_DIR,
+            "control_agents",
+            cpt_path,
+            "scaling_sp_val",
+            num_maps=10_000,
+        )
+
+        # ── Human-replay on validation ──────────────────────────────────
+        hr_rows = run_mode(
+            evaluator,
+            policy,
+            base_config,
+            VAL_MAP_DIR,
+            "control_sdc_only",
+            cpt_path,
+            "scaling_hr_val",
+            num_maps=10_000,
+        )
+
+        # Attach scaling metadata to every row
+        for row in sp_train_rows + sp_rows + hr_rows:
+            row["num_train_maps"] = n_maps
+            row["is_regularized"] = is_reg
+
+        all_rows.extend(sp_train_rows)
+        all_rows.extend(sp_rows)
+        all_rows.extend(hr_rows)
+
+    return all_rows
+
+
 def main():
     base_config = load_config(ENV_NAME)
 
@@ -225,6 +352,10 @@ def main():
         print(f"{'=' * 60}")
         rows = evaluate_checkpoint(cpt_path, base_config)
         all_rows.extend(rows)
+
+    # ── 6. Scaling analysis ──────────────────────────────────────────────────
+    scaling_rows = evaluate_scaling_checkpoints(base_config)
+    all_rows.extend(scaling_rows)
 
     df = pd.DataFrame(all_rows)
     df.to_csv(OUTPUT_CSV, index=False)
