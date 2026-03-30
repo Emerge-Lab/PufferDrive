@@ -790,7 +790,9 @@ def simplify_polyline(geometry, polyline_reduction_threshold, max_segment_length
     return [geometry[i] for i in range(num_points) if not skip[i]]
 
 
-def save_map_binary(map_data, output_file, unique_map_id):
+def save_map_binary(
+    map_data, output_file, unique_map_id, polyline_reduction_threshold=0.1, polyline_max_segment_length=5.0
+):
     trajectory_length = 91
     """Saves map data in a binary format readable by C"""
     with open(output_file, "wb") as f:
@@ -890,7 +892,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
                 road_type = 15
             # breakpoint()
             if len(geometry) > 10 and road_type <= 16:
-                geometry = simplify_polyline(geometry, 0.1, 5.0)
+                geometry = simplify_polyline(geometry, polyline_reduction_threshold, polyline_max_segment_length)
             size = len(geometry)
             # breakpoint()
             if road_type >= 0 and road_type <= 3:
@@ -928,20 +930,24 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(struct.pack("i", road.get("mark_as_expert", 0)))
 
 
-def load_map(map_name, unique_map_id, binary_output=None):
+def load_map(
+    map_name, unique_map_id, binary_output=None, polyline_reduction_threshold=0.1, polyline_max_segment_length=5.0
+):
     """Loads a JSON map and optionally saves it as binary"""
     with open(map_name, "r") as f:
         map_data = json.load(f)
 
     if binary_output:
-        save_map_binary(map_data, binary_output, unique_map_id)
+        save_map_binary(
+            map_data, binary_output, unique_map_id, polyline_reduction_threshold, polyline_max_segment_length
+        )
 
 
 def _process_single_map(args):
     """Worker function to process a single map file"""
-    i, map_path, binary_path = args
+    i, map_path, binary_path, polyline_reduction_threshold, polyline_max_segment_length = args
     try:
-        load_map(str(map_path), i, str(binary_path))
+        load_map(str(map_path), i, str(binary_path), polyline_reduction_threshold, polyline_max_segment_length)
         return (i, map_path.name, True, None)
     except Exception as e:
         return (i, map_path.name, False, str(e))
@@ -951,6 +957,8 @@ def process_all_maps(
     data_folder="data/processed/training",
     max_maps=50_000,
     num_workers=None,
+    polyline_reduction_threshold=0.1,
+    polyline_max_segment_length=5.0,
 ):
     """Process all maps and save them as binaries using multiprocessing
 
@@ -958,6 +966,8 @@ def process_all_maps(
         data_folder: Path to the folder containing JSON map files
         max_maps: Maximum number of maps to process
         num_workers: Number of parallel workers (defaults to cpu_count())
+        polyline_reduction_threshold: Triangle area below which a middle point is dropped during polyline simplification
+        polyline_max_segment_length: Maximum segment length (meters) allowed after removing a point
     """
     from pathlib import Path
 
@@ -980,7 +990,7 @@ def process_all_maps(
     for i, map_path in enumerate(json_files[:max_maps]):
         binary_file = f"map_{i:03d}.bin"
         binary_path = binary_dir / binary_file
-        tasks.append((i, map_path, binary_path))
+        tasks.append((i, map_path, binary_path, polyline_reduction_threshold, polyline_max_segment_length))
 
     # Process maps in parallel with progress bar
     with Pool(num_workers) as pool:
@@ -1030,9 +1040,40 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
 
 if __name__ == "__main__":
+    import argparse
+
     # test_performance()
+    parser = argparse.ArgumentParser(description="Convert JSON map files to PufferDrive binary format")
+    parser.add_argument(
+        "--data_folder",
+        type=str,
+        default="data_utils/carla/carla_2D",
+        help="Path to folder containing JSON map files (default: data_utils/carla/carla_2D)",
+    )
+    parser.add_argument(
+        "--max_maps", type=int, default=50_000, help="Maximum number of maps to convert (default: 50000)"
+    )
+    parser.add_argument(
+        "--polyline_reduction_threshold",
+        type=float,
+        default=0.1,
+        help="Triangle area below which a middle point is dropped during polyline simplification (default: 0.1)",
+    )
+    parser.add_argument(
+        "--polyline_max_segment_length",
+        type=float,
+        default=5.0,
+        help="Maximum segment length in meters allowed after removing a point (default: 5.0)",
+    )
+    args = parser.parse_args()
+
     # Process the train dataset
-    process_all_maps(data_folder="data_utils/carla/carla_2D")
+    process_all_maps(
+        data_folder=args.data_folder,
+        max_maps=args.max_maps,
+        polyline_reduction_threshold=args.polyline_reduction_threshold,
+        polyline_max_segment_length=args.polyline_max_segment_length,
+    )
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
