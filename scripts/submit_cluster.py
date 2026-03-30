@@ -272,8 +272,8 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         import sys
         import submitit
 
-        # Code isolation: shallow symlink of top-level entries, then copy .so files
-        # so rebuilding for another branch won't break running jobs.
+        # Code isolation: symlink top-level entries, hard copy pufferlib/ source
+        # (symlink resources/ to avoid copying 3.7GB of maps/models).
         isolated_root = os.path.join(save_dir, "code")
         if os.path.exists(isolated_root):
             version = 1
@@ -291,18 +291,28 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 else:
                     os.remove(dst)
             os.symlink(src, dst)
-        # Copy pufferlib/ as a real dir tree so we can replace .so files
+        # Hard copy pufferlib/ so branch switches don't break running jobs.
+        # Previously used `cp -rs` (symlinks) which meant switching branches
+        # after submission would silently change the code running jobs use.
+        # We symlink resources/ (3.7GB of maps/models) to avoid slow copies,
+        # but hard copy everything else (source code, .so files).
         pufferlib_dst = os.path.join(isolated_root, "pufferlib")
         if os.path.islink(pufferlib_dst):
             os.remove(pufferlib_dst)
+        elif os.path.isdir(pufferlib_dst):
+            shutil.rmtree(pufferlib_dst)
         pufferlib_src = os.path.join(project_root, "pufferlib")
-        subprocess.run(["cp", "-rs", pufferlib_src, pufferlib_dst], check=True)
-        # Copy .so files over their symlinks so they survive rebuilds
-        for so_link in glob.glob(os.path.join(pufferlib_dst, "**", "*.so"), recursive=True):
-            if os.path.islink(so_link):
-                real_path = os.path.realpath(so_link)
-                os.remove(so_link)
-                shutil.copy2(real_path, so_link)
+        shutil.copytree(
+            pufferlib_src,
+            pufferlib_dst,
+            symlinks=False,
+            ignore=shutil.ignore_patterns("resources"),
+        )
+        # Symlink resources/ (large static data, safe to share)
+        resources_src = os.path.join(pufferlib_src, "resources")
+        resources_dst = os.path.join(pufferlib_dst, "resources")
+        if os.path.isdir(resources_src):
+            os.symlink(resources_src, resources_dst)
         project_root = isolated_root
 
         # Change to project directory and set up environment
