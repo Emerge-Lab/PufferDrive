@@ -157,8 +157,6 @@ def evaluate_trajectories(simulated_trajectory_file, args):
         evaluator = PlanningEvaluator(args)
 
         print(f"Number of scenarios: {len(np.unique(gt_trajectories['scenario_id']))}")
-        print(f"Number of controlled agents: {num_agents_gt}")
-        print(f"Number of evaluated agents: {gt_trajectories['is_track_to_predict'].sum()}")
 
         print(f"Loading simulated trajectories from {simulated_trajectory_file}...")
         with open(simulated_trajectory_file, "rb") as f:
