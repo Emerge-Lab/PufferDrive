@@ -1114,6 +1114,7 @@ static PyMethodDef methods[] = {
      "Get road edge polyline counts from vectorized env"},
     {"vec_get_road_edge_polylines", vec_get_road_edge_polylines, METH_VARARGS,
      "Get road edge polylines from vectorized env"},
+    {"env_log", env_log, METH_VARARGS, "Log a single environment"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}};
 

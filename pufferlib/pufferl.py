@@ -128,7 +128,7 @@ class PuffeRL:
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
-        self.render_interval = config["eval"]["eval_interval"]
+        self.eval_interval = config["eval"]["eval_interval"]
 
         # LSTM
         if config["use_rnn"]:
@@ -532,7 +532,7 @@ class PuffeRL:
 
         safe_eval_config = self.config.get("safe_eval", {})
         safe_eval_enabled = safe_eval_config.get("enabled", False)
-        safe_eval_interval = int(safe_eval_config.get("interval", self.render_interval))
+        safe_eval_interval = int(safe_eval_config.get("interval", self.eval_interval))
         is_main = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
         if (
             is_main
@@ -1215,7 +1215,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 if frame_count >= max_frames or done.all() or truncated.all():
                     break
 
-            vecenv.close()
+        vecenv.close()
 
 
 def sweep(args=None, env_name=None):

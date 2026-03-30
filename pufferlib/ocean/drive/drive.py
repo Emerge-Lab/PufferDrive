@@ -606,8 +606,6 @@ class Drive(pufferlib.PufferEnv):
             self.env_ids.append(env_id)
         self.c_envs = binding.vectorize(*self.env_ids)
 
-        self.c_envs = binding.vectorize(*self.env_ids)
-
         binding.vec_reset(self.c_envs, seed)
         self.truncations[:] = 1
 

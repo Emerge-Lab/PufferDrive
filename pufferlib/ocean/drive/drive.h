@@ -2636,10 +2636,9 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     // Check for vehicle collisions (skip for pedestrians)
     int car_collided_with_index = -1;
-    if (agent->type != PEDESTRIAN) {
-        car_collided_with_index = collision_check(env, agent_idx);
-        if (car_collided_with_index != -1)
-            collided = VEHICLE_COLLISION;
+    car_collided_with_index = collision_check(env, agent_idx);
+    if (car_collided_with_index != -1) {
+        collided = VEHICLE_COLLISION;
     }
     agent->collision_state = collided;
 
@@ -3546,38 +3545,41 @@ Client *make_client(Drive *env) {
 
     if (env->render_mode == RENDER_HEADLESS && getenv("DISPLAY") == NULL) {
 
-        // Kill any existing Xvfb first
-        system("pkill -9 Xvfb");
-        usleep(200000);
-        unlink("/tmp/.X99-lock");
-        unlink("/tmp/.X11-unix/X99");
+        // Use a per-process display number so multiple rendering jobs on the same
+        // node don't collide. Range :100-:999 avoids the system default :0.
+        client->xvfb_display_num = 100 + (getpid() % 900);
 
-        // Hardcode to single display because we only run this in one process at once
-        client->xvfb_display_num = 99;
+        char lock_file[32], socket_file[32], display_str[16];
+        snprintf(display_str, sizeof(display_str), ":%d", client->xvfb_display_num);
+        snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", client->xvfb_display_num);
+        snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", client->xvfb_display_num);
 
-        // Clean up stale lock if process is dead
-        FILE *f = fopen("/tmp/.X99-lock", "r");
+        // Clean up a stale lock only if the owning process is already dead
+        FILE *f = fopen(lock_file, "r");
         if (f) {
             pid_t pid = -1;
             fscanf(f, "%d", &pid);
             fclose(f);
-            if (pid > 0 && kill(pid, 0) != 0)
-                unlink("/tmp/.X99-lock");
+            if (pid > 0 && kill(pid, 0) != 0) {
+                unlink(lock_file);
+                unlink(socket_file);
+            }
         }
 
         client->xvfb_pid = fork();
         if (client->xvfb_pid == 0) {
             close(STDOUT_FILENO);
             close(STDERR_FILENO);
-            execlp("Xvfb", "Xvfb", ":99", "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac", "-noreset", NULL);
+            execlp("Xvfb", "Xvfb", display_str, "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac", "-noreset",
+                   NULL);
             _exit(1);
         }
 
-        setenv("DISPLAY", ":99", 1);
+        setenv("DISPLAY", display_str, 1);
         // Xvfb starts asynchronously after fork(), so we poll until it creates its
         // lock file (max 2s) then wait an extra 200ms for GLX to finish initializing.
         // Without this, raylib's InitWindow() would try to connect before Xvfb is ready.
-        for (int i = 0; i < 20 && access("/tmp/.X99-lock", F_OK) != 0; i++)
+        for (int i = 0; i < 20 && access(lock_file, F_OK) != 0; i++)
             usleep(100000);
         usleep(200000);
     }
@@ -4510,7 +4512,11 @@ void close_client(Client *client) {
     if (client->xvfb_pid > 0) {
         kill(client->xvfb_pid, SIGTERM);
         waitpid(client->xvfb_pid, NULL, 0);
-        unlink("/tmp/.X99-lock");
+        char lock_file[32], socket_file[32];
+        snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", client->xvfb_display_num);
+        snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", client->xvfb_display_num);
+        unlink(lock_file);
+        unlink(socket_file);
         unsetenv("DISPLAY");
     }
 
