@@ -422,65 +422,44 @@ def export_to_onnx(verify=True):
             ort_traj = ort_outs[4]
             compare("Trajectory", torch_traj, ort_traj)
 
-    # Optionally render with trajectory visualization
+    # Optionally render video using the visualize binary
     if args.render:
-        print("\nRendering eval with trajectories...")
-        render_with_trajectories(
-            policy, config, args.fake_trajectory, args.traj_steps,
+        print("\nExporting weights to .bin for rendering...")
+        from pufferlib.pufferl import export as export_bin
+
+        bin_path = os.path.splitext(args.output)[0] + ".bin"
+        export_bin(
+            env_name=args.env,
+            path=bin_path,
+            args={"env_name": config["base"]["env_name"], "load_model_path": args.checkpoint, **config},
+            vecenv=vecenv,
+            policy=policy,
+            silent=True,
         )
+        print(f"Saved .bin weights to {bin_path}")
 
+        # Build visualize binary
+        import subprocess
+        subprocess.run(["bash", "scripts/build_ocean.sh", "visualize", "local"], check=True)
 
-def render_with_trajectories(policy, config, fake_trajectory=False, traj_steps=80):
-    """Run eval loop with optional trajectory rendering."""
-    env_kwargs = config["env"]
-    vecenv = pufferlib.vector.make(
-        importlib.import_module(
-            "pufferlib.ocean" if config["base"]["package"] == "ocean"
-            else f"pufferlib.environments.{config['base']['package']}"
-        ).env_creator(config["base"]["env_name"]),
-        env_kwargs=env_kwargs,
-        backend=pufferlib.vector.Serial,
-        num_envs=1,
-    )
-
-    policy.eval()
-    device = "cpu"
-    ob, info = vecenv.reset()
-    driver = vecenv.driver_env
-    num_agents = vecenv.observation_space.shape[0]
-
-    state = {}
-    if config["base"]["rnn_name"]:
-        state = dict(
-            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-        )
-
-    print(f"Rendering {num_agents} agents, fake_trajectory={fake_trajectory}")
-    while True:
-        driver.render()
-
-        with torch.no_grad():
-            ob_t = torch.as_tensor(ob).to(device)
-            logits, value = policy.forward_eval(ob_t, state)
-            action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-            action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
-
-        # Render fake trajectories
-        if fake_trajectory and hasattr(driver, 'set_predicted_trajectories'):
-            logits_t = logits[0] if isinstance(logits, (tuple, list)) else logits
-            argmax_action = logits_t.argmax(dim=-1).cpu().numpy()  # [num_agents]
-            # For jerk dynamics: apply action on first step, then zero-jerk for rest.
-            # Zero-jerk action: JERK_LONG index 2 (0.0) * num_lat(3) + JERK_LAT index 1 (0.0) = 7
-            zero_jerk_action = 2 * 3 + 1  # = 7
-            traj_actions = np.full((num_agents, traj_steps), zero_jerk_action, dtype=np.int32)
-            traj_actions[:, 0] = argmax_action
-            driver.set_predicted_trajectories(traj_actions)
-
-        if isinstance(logits, torch.distributions.Normal):
-            action_np = np.clip(action_np, vecenv.action_space.low, vecenv.action_space.high)
-
-        ob = vecenv.step(action_np)[0]
+        # Pick a map
+        map_dir = config["env"].get("map_dir", "resources/drive/binaries/carla_2D")
+        map_files = sorted([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+        if not map_files:
+            print(f"No maps in {map_dir}")
+        else:
+            map_path = os.path.join(map_dir, map_files[0])
+            output_video = os.path.splitext(args.output)[0] + "_video.mp4"
+            cmd = [
+                "./visualize",
+                "--policy-name", bin_path,
+                "--map-name", map_path,
+                "--view", "both",
+                "--output-topdown", output_video,
+            ]
+            print(f"Running: {' '.join(cmd)}")
+            subprocess.run(cmd)
+            print(f"Video saved to {output_video}")
 
 
 if __name__ == "__main__":

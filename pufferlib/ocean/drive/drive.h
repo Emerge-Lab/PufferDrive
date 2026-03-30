@@ -4123,7 +4123,8 @@ void c_render(Drive *env) {
     BeginMode3D(client->camera);
     rlDisableDepthTest();
     if (env->predicted_traj_x != NULL && env->predicted_traj_len > 0) {
-        for (int i = 0; i < env->active_agent_count; i++) {
+        int i = env->human_agent_idx;
+        if (i < env->active_agent_count) {
             int agent_idx = env->active_agent_indices[i];
             Agent *agent = &env->agents[agent_idx];
             int tlen = env->predicted_traj_len;
