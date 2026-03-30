@@ -467,6 +467,10 @@ def export_to_onnx(verify=True):
             ini_config.set("env", f"reward_bound_{key}_max", str(hi))
         ini_config.set("env", "goal_radius", "10.0")
         ini_config.set("env", "max_goal_speed", "3.0")
+        ini_config.set("env", "episode_length", "1000")
+        ini_config.set("env", "resample_frequency", "0")
+        ini_config.set("env", "termination_mode", "0")
+        ini_config.set("env", "goal_behavior", "1")
         fd, ini_path = tempfile.mkstemp(suffix=".ini", prefix="gigaflow_")
         with os.fdopen(fd, "w") as f:
             ini_config.write(f)
@@ -494,7 +498,8 @@ def export_to_onnx(verify=True):
             print(f"Running: {' '.join(cmd)}")
             subprocess.run(cmd)
             print(f"Video saved to {output_video}")
-            os.remove(ini_path)
+            print(f"INI config used: {ini_path}")
+            # os.remove(ini_path)  # keep for debugging
 
 
 if __name__ == "__main__":
