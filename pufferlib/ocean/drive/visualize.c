@@ -67,7 +67,7 @@ void CloseVideo(VideoRecorder *recorder) {
 
 void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int lasers, int trajectories,
                        int frame_count, float *path, int show_human_logs, int show_grid, int img_width, int img_height,
-                       int zoom_in) {
+                       int zoom_in, DriveNet *net) {
     BeginDrawing();
 
     // Top-down orthographic camera
@@ -133,6 +133,31 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
 
     // Draw scene
     draw_scene(env, client, 1, obs, lasers, show_grid);
+
+    // Re-enter 3D mode for trajectory drawing (draw_scene calls EndMode3D internally)
+    BeginMode3D(camera);
+    rlDisableDepthTest();
+
+    // Draw predicted trajectories from policy network (ego agent only)
+    if (net != NULL && net->predicted_traj_x != NULL) {
+        int ego = env->human_agent_idx;
+        if (ego < env->active_agent_count && ego < net->num_agents) {
+            int agent_idx = env->active_agent_indices[ego];
+            Agent *agent = &env->agents[agent_idx];
+            int tlen = net->traj_steps;
+            Vector3 prev = {agent->sim_x, agent->sim_y, agent->sim_z + 0.6f};
+            for (int t = 0; t < tlen; t++) {
+                float tx = net->predicted_traj_x[ego * tlen + t];
+                float ty = net->predicted_traj_y[ego * tlen + t];
+                Vector3 curr = {tx, ty, agent->sim_z + 0.6f};
+                DrawLine3D(prev, curr, Fade(SKYBLUE, 0.8f));
+                DrawSphere(curr, 0.3f, Fade(SKYBLUE, 0.6f));
+                prev = curr;
+            }
+        }
+    }
+
+    rlEnableDepthTest();
     EndMode3D();
     EndDrawing();
 }
@@ -400,11 +425,11 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         for (int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, show_human_logs, show_grid,
-                                  img_width, img_height, zoom_in);
+                                  img_width, img_height, zoom_in, net);
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            forward(net, env.observations, (int *)env.actions);
+            forward(net, &env, env.observations, (int *)env.actions);
             c_step(&env);
         }
     }
@@ -422,7 +447,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
                 WriteFrame(&agent_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            forward(net, env.observations, (int *)env.actions);
+            forward(net, &env, env.observations, (int *)env.actions);
             c_step(&env);
         }
     }

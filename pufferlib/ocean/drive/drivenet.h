@@ -44,6 +44,11 @@ struct DriveNet {
     Linear *actor;
     Linear *value_fn;
     Multidiscrete *multidiscrete;
+    // Predicted trajectory (rolled out from actor output)
+    int action_size;
+    int traj_steps;
+    float *predicted_traj_x;
+    float *predicted_traj_y;
 };
 
 DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, int reward_conditioning) {
@@ -108,6 +113,10 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     memset(net->lstm->state_h, 0, num_agents * NN_HIDDEN_SIZE * sizeof(float));
     memset(net->lstm->state_c, 0, num_agents * NN_HIDDEN_SIZE * sizeof(float));
     net->multidiscrete = make_multidiscrete(num_agents, logit_sizes, action_dim);
+    net->action_size = action_size;
+    net->traj_steps = 80;
+    net->predicted_traj_x = calloc(num_agents * net->traj_steps, sizeof(float));
+    net->predicted_traj_y = calloc(num_agents * net->traj_steps, sizeof(float));
     return net;
 }
 
@@ -138,13 +147,15 @@ void free_drivenet(DriveNet *net) {
     free(net->shared_embedding);
     free(net->relu);
     free(net->multidiscrete);
+    free(net->predicted_traj_x);
+    free(net->predicted_traj_y);
     free(net->actor);
     free(net->value_fn);
     free(net->lstm);
     free(net);
 }
 
-void forward(DriveNet *net, float *observations, int *actions) {
+void forward(DriveNet *net, Drive *env, float *observations, int *actions) {
     int ego_dim = net->ego_dim;
     int max_partners = MAX_AGENTS - 1;
     int max_road_obs = MAX_ROAD_SEGMENT_OBSERVATIONS;
@@ -271,4 +282,46 @@ void forward(DriveNet *net, float *observations, int *actions) {
 
     // Get action by taking argmax of actor output
     softmax_multidiscrete(net->multidiscrete, net->actor->output, actions);
+
+    // Roll out predicted trajectories using the reusable dynamics step functions
+    if (env != NULL) {
+        int traj_steps = net->traj_steps;
+        int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+        int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+
+        for (int b = 0; b < net->num_agents; b++) {
+            int agent_idx = env->active_agent_indices[b];
+            Agent *agent = &env->agents[agent_idx];
+            int action_val = actions[b];
+
+            DynState s = {agent->sim_x, agent->sim_y, agent->sim_heading,
+                          agent->sim_vx, agent->sim_vy,
+                          agent->a_long, agent->a_lat, agent->steering_angle};
+
+            for (int t = 0; t < traj_steps; t++) {
+                // Apply action on first step, zero-jerk/zero-accel after
+                if (t == 0) {
+                    if (env->dynamics_model == CLASSIC) {
+                        int accel_idx = action_val / num_steer;
+                        int steer_idx = action_val % num_steer;
+                        s = classic_dynamics_step(s, ACCELERATION_VALUES[accel_idx],
+                                                  STEERING_VALUES[steer_idx], agent->sim_length, env->dt);
+                    } else {
+                        int al_idx = action_val / num_lat;
+                        int at_idx = action_val % num_lat;
+                        s = jerk_dynamics_step(s, JERK_LONG[al_idx], JERK_LAT[at_idx],
+                                              agent->wheelbase, env->dt);
+                    }
+                } else {
+                    if (env->dynamics_model == CLASSIC) {
+                        s = classic_dynamics_step(s, 0.0f, 0.0f, agent->sim_length, env->dt);
+                    } else {
+                        s = jerk_dynamics_step(s, 0.0f, 0.0f, agent->wheelbase, env->dt);
+                    }
+                }
+                net->predicted_traj_x[b * traj_steps + t] = s.x;
+                net->predicted_traj_y[b * traj_steps + t] = s.y;
+            }
+        }
+    }
 }

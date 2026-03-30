@@ -438,6 +438,39 @@ def export_to_onnx(verify=True):
         )
         print(f"Saved .bin weights to {bin_path}")
 
+        # Generate INI with gigaflow-matching coefficients pinned (min=max)
+        import configparser
+        import tempfile
+        ini_config = configparser.ConfigParser()
+        ini_config.read("pufferlib/config/ocean/drive.ini")
+        # Gigaflow-matching coefficients (sign matches INI convention)
+        gigaflow_bounds = {
+            "goal_radius": (10.0, 10.0),
+            "collision": (-3.0, -3.0),
+            "offroad": (-3.0, -3.0),
+            "comfort": (-0.05, -0.05),
+            "lane_align": (0.025, 0.025),
+            "vel_align": (1.0, 1.0),
+            "lane_center": (-0.0038, -0.0038),
+            "center_bias": (0.0, 0.0),
+            "velocity": (0.0025, 0.0025),
+            "reverse": (-0.005, -0.005),
+            "traffic_light": (-1.0, -1.0),
+            "timestep": (-0.000025, -0.000025),
+            "overspeed": (-1.0, -1.0),
+            "throttle": (1.0, 1.0),
+            "steer": (1.0, 1.0),
+            "acc": (1.0, 1.0),
+        }
+        for key, (lo, hi) in gigaflow_bounds.items():
+            ini_config.set("env", f"reward_bound_{key}_min", str(lo))
+            ini_config.set("env", f"reward_bound_{key}_max", str(hi))
+        ini_config.set("env", "goal_radius", "10.0")
+        ini_config.set("env", "max_goal_speed", "3.0")
+        fd, ini_path = tempfile.mkstemp(suffix=".ini", prefix="gigaflow_")
+        with os.fdopen(fd, "w") as f:
+            ini_config.write(f)
+
         # Build visualize binary
         import subprocess
         subprocess.run(["bash", "scripts/build_ocean.sh", "visualize", "local"], check=True)
@@ -452,6 +485,7 @@ def export_to_onnx(verify=True):
             output_video = os.path.splitext(args.output)[0] + "_video.mp4"
             cmd = [
                 "./visualize",
+                "--config", ini_path,
                 "--policy-name", bin_path,
                 "--map-name", map_path,
                 "--view", "both",
@@ -460,6 +494,7 @@ def export_to_onnx(verify=True):
             print(f"Running: {' '.join(cmd)}")
             subprocess.run(cmd)
             print(f"Video saved to {output_video}")
+            os.remove(ini_path)
 
 
 if __name__ == "__main__":
