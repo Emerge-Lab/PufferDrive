@@ -346,6 +346,7 @@ class Drive(pufferlib.PufferEnv):
             )
             self.env_ids.append(env_id)
         self.c_envs = binding.vectorize(*self.env_ids)
+        self._resample_count += 1
 
         binding.vec_reset(self.c_envs, resample_seed)
         self.truncations[:] = 1
