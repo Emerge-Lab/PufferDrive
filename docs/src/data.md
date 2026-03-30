@@ -29,17 +29,45 @@ Place raw JSON files under `data/processed/training` (default location read by t
 
 ## Convert JSON to map binaries
 
-The conversion script writes compact `.bin` maps to `resources/drive/binaries`:
+The conversion script `pufferlib/ocean/drive/drive.py` calls `process_all_maps` to walk a folder of JSON files and write compact `.bin` maps under `resources/drive/binaries/<dataset_name>/`.
+
+### CARLA 2D maps (default)
 
 ```bash
 python pufferlib/ocean/drive/drive.py
 ```
 
+Output: `resources/drive/binaries/carla_2D/`
+
+### CARLA 3D maps
+
+```bash
+python pufferlib/ocean/drive/drive.py --data_folder data_utils/carla/carla_3D
+```
+
+Output: `resources/drive/binaries/carla_3D/`
+
+### WOMD
+
+```bash
+python pufferlib/ocean/drive/drive.py --data_folder data/processed/training
+```
+
+### All CLI arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--data_folder` | `data_utils/carla/carla_2D` | Path to folder containing JSON map files |
+| `--max_maps` | `50000` | Maximum number of maps to convert |
+| `--polyline_reduction_threshold` | `0.1` | Triangle area below which a middle point is dropped during polyline simplification |
+| `--polyline_max_segment_length` | `5.0` | Maximum segment length (meters) allowed after removing a point |
+
+`polyline_reduction_threshold` and `polyline_max_segment_length` control how aggressively road polylines are simplified before being written to `.bin` files. Larger thresholds produce sparser geometry; smaller values preserve more detail.
+
 Notes:
 
-- The script iterates every JSON file in `data/processed/training` and emits `map_XXX.bin` files.
+- Each JSON file becomes one `map_XXX.bin` file; numbering starts at `000`.
 - `resources/drive/binaries/map_000.bin` ships with the repo for quick smoke tests; generate additional bins for training/eval.
-- If you want to point at a different dataset location or limit the number of maps, adjust `process_all_maps` in `pufferlib/ocean/drive/drive.py` before running.
 
 ## Map binary format reference
 
@@ -93,5 +121,5 @@ python data_utils/carla/plot.py
 
 Notes:
 
-- Base Carla maps that agents are spawned live under `data_utils/carla/carla_py123d` and the Carla XODRs are at `data/CarlaXODRs` to interact with the `pyxodr` submodule for XODR parsing and agent traj generation.
+- Base Carla maps that agents are spawned live under `data_utils/carla/carla_py123d` and the Carla XODRs are at `data/CarlaXODR` to interact with the `pyxodr` submodule for XODR parsing and agent traj generation.
 - If you encounter missing binary or map errors, ensure the submodule was initialized and the required packages from `requirements-dev.txt` are installed.
