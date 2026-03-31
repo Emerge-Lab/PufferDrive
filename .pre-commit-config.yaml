@@ -26,3 +26,4 @@ repos:
   rev: 'v21.1.5'
   hooks:
   -   id: clang-format
+      types_or: [c, c++]
