@@ -54,13 +54,15 @@ class DriveBackbone(nn.Module):
         self.max_lane_segment_observations = env.max_lane_segment_observations
         self.max_boundary_segment_observations = env.max_boundary_segment_observations
         self.road_features_count = env.road_features
-        # Traffic light size
-        self.max_traffic_light_observations = env.max_traffic_light_observations
-        self.traffic_light_features_count = env.traffic_light_features
-        self.traffic_light_features_after_onehot = env.traffic_light_features + (binding.NUM_TRAFFIC_LIGHT_STATES - 1)
-        # Stop sign size
-        self.max_stop_sign_observations = env.max_stop_sign_observations
-        self.stop_sign_features_count = env.stop_sign_features
+        # Traffic control size
+        self.max_traffic_control_observations = env.max_traffic_control_observations
+        self.traffic_control_features_count = env.traffic_control_features
+        self.traffic_control_continuous_features = env.traffic_control_features - 2
+        self.traffic_control_features_after_onehot = (
+            self.traffic_control_continuous_features
+            + binding.NUM_TRAFFIC_CONTROL_TYPES
+            + binding.NUM_TRAFFIC_CONTROL_STATES
+        )
         # Conditioning size (reward coefficients + target info)
         self.conditioning_dim = env.num_reward_coefs + env.target_dim
 
@@ -88,16 +90,9 @@ class DriveBackbone(nn.Module):
         if self.max_partner_observations > 0:
             self.partner_encoder = self._create_encoder(self.partner_features_count, input_size, encoder_gigaflow)
             num_feature_sets += 1
-        if self.max_traffic_light_observations > 0:
-            self.traffic_light_encoder = self._create_encoder(
-                self.traffic_light_features_after_onehot,
-                input_size,
-                encoder_gigaflow,
-            )
-            num_feature_sets += 1
-        if self.max_stop_sign_observations > 0:
-            self.stop_sign_encoder = self._create_encoder(
-                self.stop_sign_features_count,
+        if self.max_traffic_control_observations > 0:
+            self.traffic_control_encoder = self._create_encoder(
+                self.traffic_control_features_after_onehot,
                 input_size,
                 encoder_gigaflow,
             )
@@ -123,8 +118,7 @@ class DriveBackbone(nn.Module):
         partner_dim = self.max_partner_observations * self.partner_features_count
         lane_dim = self.max_lane_segment_observations * self.road_features_count
         boundary_dim = self.max_boundary_segment_observations * self.road_features_count
-        traffic_light_dim = self.max_traffic_light_observations * self.traffic_light_features_count
-        stop_sign_dim = self.max_stop_sign_observations * self.stop_sign_features_count
+        traffic_control_dim = self.max_traffic_control_observations * self.traffic_control_features_count
 
         slide_idx = ego_dim
         ego_observations = observations[:, :slide_idx]
@@ -141,10 +135,7 @@ class DriveBackbone(nn.Module):
         boundary_observations = observations[:, slide_idx : slide_idx + boundary_dim]
         slide_idx += boundary_dim
 
-        traffic_light_observations = observations[:, slide_idx : slide_idx + traffic_light_dim]
-        slide_idx += traffic_light_dim
-
-        stop_sign_observations = observations[:, slide_idx : slide_idx + stop_sign_dim]
+        traffic_control_observations = observations[:, slide_idx : slide_idx + traffic_control_dim]
 
         # Encode Ego State
         ego_features = self.ego_encoder(ego_observations)
@@ -171,28 +162,28 @@ class DriveBackbone(nn.Module):
             partner_features, _ = partner_encoded.max(dim=1)
             feature_list.append(partner_features)
 
-        # Encode Traffic lights
-        if self.max_traffic_light_observations > 0:
-            traffic_light_objects = traffic_light_observations.view(
-                -1, self.max_traffic_light_observations, self.traffic_light_features_count
+        # Encode Traffic Controls
+        if self.max_traffic_control_observations > 0:
+            traffic_control_objects = traffic_control_observations.view(
+                -1, self.max_traffic_control_observations, self.traffic_control_features_count
             )
-            traffic_light_continuous = traffic_light_objects[:, :, : self.traffic_light_features_count - 1]
-            traffic_light_categorical = traffic_light_objects[:, :, self.traffic_light_features_count - 1]
-            traffic_light_onehot = F.one_hot(
-                traffic_light_categorical.long(),
-                num_classes=binding.NUM_TRAFFIC_LIGHT_STATES,
+            traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
+            traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
+            traffic_control_state = traffic_control_objects[:, :, self.traffic_control_continuous_features + 1]
+            traffic_control_type_onehot = F.one_hot(
+                traffic_control_type.long(),
+                num_classes=binding.NUM_TRAFFIC_CONTROL_TYPES,
+            ).float()
+            traffic_control_state_onehot = F.one_hot(
+                traffic_control_state.long(),
+                num_classes=binding.NUM_TRAFFIC_CONTROL_STATES,
+            ).float()
+            traffic_control_objects = torch.cat(
+                [traffic_control_continuous, traffic_control_type_onehot, traffic_control_state_onehot],
+                dim=2,
             )
-            traffic_light_objects = torch.cat([traffic_light_continuous, traffic_light_onehot], dim=2)
-            traffic_light_features, _ = self.traffic_light_encoder(traffic_light_objects).max(dim=1)
-            feature_list.append(traffic_light_features)
-
-        # Encode Stop Signs
-        if self.max_stop_sign_observations > 0:
-            stop_sign_objects = stop_sign_observations.view(
-                -1, self.max_stop_sign_observations, self.stop_sign_features_count
-            )
-            stop_sign_features, _ = self.stop_sign_encoder(stop_sign_objects).max(dim=1)
-            feature_list.append(stop_sign_features)
+            traffic_control_features, _ = self.traffic_control_encoder(traffic_control_objects).max(dim=1)
+            feature_list.append(traffic_control_features)
 
         # Add optional features if enabled
         if self.conditioning_dim > 0:

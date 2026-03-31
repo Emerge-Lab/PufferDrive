@@ -33,15 +33,11 @@ COLORS = {
 }
 
 TRAFFIC_LIGHT_COLORS = {
-    0: "#808080",
-    1: "#FF0000",
-    2: "#FFFF00",
-    3: "#00FF00",
-    4: "#FF0000",
-    5: "#FFFF00",
-    6: "#00FF00",
-    7: "#FF6600",
-    8: "#FFFF00",
+    binding.TRAFFIC_CONTROL_STATE_UNKNOWN: "#808080",
+    binding.TRAFFIC_CONTROL_STATE_RED: "#FF0000",
+    binding.TRAFFIC_CONTROL_STATE_YELLOW: "#FFFF00",
+    binding.TRAFFIC_CONTROL_STATE_GREEN: "#00FF00",
+    binding.TRAFFIC_CONTROL_STATE_OFF: "#808080",
 }
 
 VEHICLE_COLORS = [
@@ -135,6 +131,21 @@ class VizConfig:
 
 def get_agent_color(agent_id, is_active=True):
     return COLORS["inactive_agent"] if not is_active else VEHICLE_COLORS[agent_id % len(VEHICLE_COLORS)]
+
+
+def _traffic_control_kind(control_type):
+    control_type = int(control_type)
+    if control_type == binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT:
+        return "light"
+    if control_type == binding.TRAFFIC_CONTROL_TYPE_STOP_SIGN:
+        return "stop"
+    if control_type == binding.TRAFFIC_CONTROL_TYPE_YIELD_SIGN:
+        return "yield"
+    return None
+
+
+def _traffic_light_color(state):
+    return TRAFFIC_LIGHT_COLORS.get(int(state), COLORS["inactive_agent"])
 
 
 def _init_fig_ax(config: VizConfig, reuse_key: str = None, with_metrics: bool = False):
@@ -237,15 +248,16 @@ def _build_traffic_cache(traffic_elements):
     for elem in traffic_elements or []:
         if not isinstance(elem, dict):
             continue
-        t_type = elem.get("type", 1)
+        t_type = elem.get("type", binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT)
         sl = elem.get("stop_line")
         if sl is None or len(sl) < 4:
             continue
-        if t_type == 1:
+        kind = _traffic_control_kind(t_type)
+        if kind == "light":
             traffic_lights.append({"stop_line": sl, "states": elem.get("states", [])})
-        elif t_type == 2:
+        elif kind == "stop":
             stop_signs.append(sl)
-        elif t_type == 3:
+        elif kind == "yield":
             yield_signs.append(sl)
     return {
         "traffic_lights": traffic_lights,
@@ -262,7 +274,7 @@ def _render_traffic(ax, traffic_cache, timestep):
         sl = light["stop_line"]
         states = light["states"]
         state = int(states[timestep]) if states and len(states) > timestep else 0
-        color = TRAFFIC_LIGHT_COLORS.get(state, "#808080")
+        color = _traffic_light_color(state)
         ax.plot([sl[0], sl[3]], [sl[1], sl[4]], color=color, linewidth=3, solid_capstyle="butt", alpha=0.9, zorder=15)
 
     # Stop signs — red/black striped
@@ -538,7 +550,7 @@ def _render_debug_metrics_table(ax, agents, active_agent_indices, px_per_meter=1
         agent_id = agent["id"]
         vx, vy = agent.get("sim_vx", 0), agent.get("sim_vy", 0)
         speed = np.sqrt(vx**2 + vy**2)
-        current_lane_id = agent.get("current_lane_index", -1)
+        current_lane_id = agent.get("current_lane_idx", -1)
         metrics = agent.get("metrics_array", [0.0] * len(METRIC_LABELS))
         metrics_data.append(
             {
@@ -813,36 +825,33 @@ def unpack_obs(
     max_partners: int = 16,
     max_lane_segments: int = 16,
     max_boundary_segments: int = 16,
-    max_traffic_lights: int = 16,
-    max_stop_signs: int = 10,
+    max_traffic_control_observations: int = 16,
     agent_idx: int = 0,
 ):
     """
-    Unpack the flattened observation into the ego state and visible state.
+    Unpack the flattened observation into ego, map, partner, and traffic-control views.
     Args:
-        obs_flat: flattened observation tensor of shape (batch_size, obs_dim)
+        obs_flat: flattened observation tensor of shape (batch_size, obs_dim) or (obs_dim,)
         dynamics_model: 0 for CLASSIC, 1 for JERK
-        target_type: 0 for goal only, 1 for waypoints only, 2 for both
     Return:
-        ego_state, partners_obs, lane_obs, boundary_obs, traffic_obs, gps_obs, include_goal, include_waypoints
+        ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs
     """
+    obs_flat = np.asarray(obs_flat)
+    if obs_flat.ndim == 1:
+        obs_flat = obs_flat[None, :]
+
     ego_dim = binding.EGO_FEATURES_JERK if dynamics_model == "jerk" else binding.EGO_FEATURES_CLASSIC
 
     # Partner obs
     partner_feature_size = binding.PARTNER_FEATURES
     # Road obs
     road_feature_size = binding.ROAD_FEATURES
-    # Traffic light obs
-    traffic_feature_size = binding.TRAFFIC_LIGHT_FEATURES
-    # Stop sign obs
-    stop_sign_feature_size = binding.STOP_SIGN_FEATURES
+    # Traffic control obs
+    traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES
 
     # Target obs
     target_features = binding.STATIC_TARGET_FEATURES if target_type == "static" else binding.DYNAMIC_TARGET_FEATURES
     target_dim = num_target_waypoints * target_features
-
-    if max_stop_signs > 0:
-        ego_dim += 1
 
     # Extract ego state
     ego_state = obs_flat[:, :ego_dim]
@@ -873,23 +882,16 @@ def unpack_obs(
     boundary_obs = obs_flat[:, boundary_start:boundary_end]
     boundary_obs = boundary_obs.reshape(-1, max_boundary_segments, road_feature_size)
 
-    # Extract traffic lights
+    # Extract traffic controls
     traffic_start = boundary_end
-    traffic_end = traffic_start + max_traffic_lights * traffic_feature_size
-    if max_traffic_lights > 0:
-        traffic_obs = obs_flat[:, traffic_start:traffic_end]
-        traffic_obs = traffic_obs.reshape(-1, max_traffic_lights, traffic_feature_size)
+    traffic_end = traffic_start + max_traffic_control_observations * traffic_control_feature_size
+    if max_traffic_control_observations > 0:
+        traffic_controls_obs = obs_flat[:, traffic_start:traffic_end]
+        traffic_controls_obs = traffic_controls_obs.reshape(
+            -1, max_traffic_control_observations, traffic_control_feature_size
+        )
     else:
-        traffic_obs = np.zeros((obs_flat.shape[0], 0, traffic_feature_size))
-
-    # Extract stop signs
-    stop_sign_start = traffic_end
-    stop_sign_end = stop_sign_start + max_stop_signs * stop_sign_feature_size
-    if max_stop_signs > 0:
-        stop_sign_obs = obs_flat[:, stop_sign_start:stop_sign_end]
-        stop_sign_obs = stop_sign_obs.reshape(-1, max_stop_signs, stop_sign_feature_size)
-    else:
-        stop_sign_obs = np.zeros((obs_flat.shape[0], 0, stop_sign_feature_size))
+        traffic_controls_obs = np.zeros((obs_flat.shape[0], 0, traffic_control_feature_size))
 
     return (
         ego_state[agent_idx],
@@ -897,8 +899,7 @@ def unpack_obs(
         partners_obs[agent_idx],
         lane_obs[agent_idx],
         boundary_obs[agent_idx],
-        traffic_obs[agent_idx],
-        stop_sign_obs[agent_idx],
+        traffic_controls_obs[agent_idx],
     )
 
 
@@ -911,8 +912,7 @@ def plot_observation(
     max_partners=16,
     max_lane_segments=32,
     max_boundary_segments=32,
-    max_traffic_lights=4,
-    max_stop_signs=4,
+    max_traffic_control_observations=4,
     agent_idx=0,
     use_rear_axle=False,
 ) -> np.ndarray:
@@ -925,7 +925,7 @@ def plot_observation(
     """
     fig, ax = plt.subplots(figsize=(20, 20))
 
-    ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_obs, stop_sign_obs = unpack_obs(
+    ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
         obs,
         dynamics_model,
         target_type,
@@ -934,8 +934,7 @@ def plot_observation(
         max_partners,
         max_lane_segments,
         max_boundary_segments,
-        max_traffic_lights,
-        max_stop_signs,
+        max_traffic_control_observations,
         agent_idx,
     )
 
@@ -993,7 +992,7 @@ def plot_observation(
     for i in range(partners_obs.shape[0]):
         if np.all(partners_obs[i] == 0):
             continue
-        rel_x, rel_y, width, length, heading_cos, heading_sin, speed = partners_obs[i]
+        rel_x, rel_y, width, length, heading_cos, heading_sin, _, _ = partners_obs[i]
         heading = np.arctan2(heading_sin, heading_cos)
 
         rect = mpatches.Rectangle(
@@ -1015,7 +1014,7 @@ def plot_observation(
         if np.all(lane_obs[i] == 0):
             continue
         count_lane += 1
-        rel_x, rel_y, length, width, dir_cos, dir_sin = lane_obs[i]
+        rel_x, rel_y, length, width, dir_cos, dir_sin, _ = lane_obs[i]
         color = "lightgrey"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
         ax.plot(
@@ -1031,7 +1030,7 @@ def plot_observation(
         if np.all(boundary_obs[i] == 0):
             continue
         count_boundary += 1
-        rel_x, rel_y, length, width, dir_cos, dir_sin = boundary_obs[i]
+        rel_x, rel_y, length, width, dir_cos, dir_sin, _ = boundary_obs[i]
         color = "black"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
         ax.plot(
@@ -1052,51 +1051,43 @@ def plot_observation(
         bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
     )
 
-    # Traffic lights (stop lines)
-    for i in range(traffic_obs.shape[0]):
-        if np.all(traffic_obs[i] == 0):
+    # Traffic controls
+    for i in range(traffic_controls_obs.shape[0]):
+        if np.all(traffic_controls_obs[i] == 0):
             continue
-        rel_x1, rel_y1, rel_x2, rel_y2, state_normalized = traffic_obs[i]
+        rel_x1, rel_y1, rel_x2, rel_y2, _, control_type, state = traffic_controls_obs[i]
+        control_type = int(control_type)
+        if control_type == binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT:
+            ax.plot(
+                [rel_x1, rel_x2],
+                [rel_y1, rel_y2],
+                color=_traffic_light_color(state),
+                linewidth=2.5,
+                solid_capstyle="round",
+                alpha=0.9,
+                zorder=12,
+            )
+            continue
 
-        if state_normalized == 0:
-            state = 4
-        elif state_normalized == 1:
-            state = 2
-        elif state_normalized == 2:
-            state = 6
-        else:
-            state = 0
-
+        overlay = "#FF0000" if control_type == binding.TRAFFIC_CONTROL_TYPE_STOP_SIGN else "#FFD700"
         ax.plot(
             [rel_x1, rel_x2],
             [rel_y1, rel_y2],
-            color=TRAFFIC_LIGHT_COLORS[state],
-            linewidth=2.5,
+            color="black",
+            linewidth=3.5,
             solid_capstyle="round",
             alpha=0.9,
             zorder=12,
         )
-
-    # Stop signs
-    for i in range(stop_sign_obs.shape[0]):
-        if np.all(stop_sign_obs[i] == 0):
-            continue
-        rel_x, rel_y, _ = stop_sign_obs[i]
-
-        radius = 0.02
-        angles = np.linspace(0, 2 * np.pi, 9)
-        octagon_x = rel_x + radius * np.cos(angles + np.pi / 8)
-        octagon_y = rel_y + radius * np.sin(angles + np.pi / 8)
-        octagon_points = np.column_stack((octagon_x, octagon_y))
-        ax.add_patch(
-            plt.Polygon(
-                xy=octagon_points,
-                alpha=0.9,
-                facecolor=COLORS.get("stop_sign", "#808080"),
-                edgecolor="red",
-                linewidth=1,
-                zorder=12,
-            )
+        ax.plot(
+            [rel_x1, rel_x2],
+            [rel_y1, rel_y2],
+            color=overlay,
+            linewidth=2.2,
+            solid_capstyle="round",
+            alpha=0.9,
+            zorder=13,
+            linestyle=(0, (3, 2)),
         )
 
     ax.axis((-1, 1, -1, 1))
@@ -1144,6 +1135,7 @@ def fill_agents_state(scenario, use_trajectory=False):
                 "id": int(agent_id),
                 "x": round(float(agent["sim_x"]), 2),
                 "y": round(float(agent["sim_y"]), 2),
+                "z": round(float(agent.get("sim_z", 0)), 2),
                 "h": round(float(agent["sim_heading"]), 3),
                 "l": round(float(agent["sim_length"]), 2),
                 "w": round(float(agent["sim_width"]), 2),
@@ -1168,19 +1160,20 @@ def fill_traffics_state(scenario, timestep):
         if not isinstance(elem, dict):
             continue
 
-        t_type = elem.get("type", 1)
+        t_type = elem.get("type", binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT)
         sl = elem.get("stop_line")
         if sl is None or len(sl) < 4:
             continue
 
-        if t_type == 1:
+        kind = _traffic_control_kind(t_type)
+        if kind == "light":
             states = elem.get("states", [])
             state = int(states[timestep]) if states and len(states) > timestep else 0
-            color = TRAFFIC_LIGHT_COLORS.get(state, "#808080")
+            color = _traffic_light_color(state)
             current_traffic_data.append({"type": "light", "stop_line": sl, "c": color})
-        elif t_type == 2:
+        elif kind == "stop":
             current_traffic_data.append({"type": "stop", "stop_line": sl, "c": "#FF0000", "c2": "#000000"})
-        elif t_type == 3:
+        elif kind == "yield":
             current_traffic_data.append({"type": "yield", "stop_line": sl, "c": "#FFD700", "c2": "#000000"})
 
     return current_traffic_data
@@ -1204,7 +1197,7 @@ def fill_trajectories(scenario, timestep):
 
 
 def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, head_north=False):
-    ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_obs, stop_sign_obs = unpack_obs(
+    ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
         obs,
         dynamics_model=args["env"]["dynamics_model"],
         target_type=args["env"]["target_type"],
@@ -1213,8 +1206,7 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         max_partners=args["env"]["max_partner_observations"],
         max_lane_segments=args["env"]["max_lane_segment_observations"],
         max_boundary_segments=args["env"]["max_boundary_segment_observations"],
-        max_traffic_lights=args["env"]["max_traffic_light_observations"],
-        max_stop_signs=args["env"]["max_stop_sign_observations"],
+        max_traffic_control_observations=args["env"]["max_traffic_control_observations"],
         agent_idx=obs_index,
     )
 
@@ -1290,21 +1282,26 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
             }
         )
 
-    # --- Parse Traffic Lights ---
-    parsed_lights = []
-    for t in traffic_obs:
+    # --- Parse Traffic Controls ---
+    parsed_traffic_controls = []
+    for t in traffic_controls_obs:
         if np.all(t == 0):
             continue
-        lx, ly = _rot(t[0], t[1])
-        parsed_lights.append({"x": round(float(lx), 3), "y": round(float(ly), 3), "state": int(t[-1])})
-
-    # --- Parse Stop Signs ---
-    parsed_stops = []
-    for s in stop_sign_obs:
-        if np.all(s == 0):
+        kind = _traffic_control_kind(t[5])
+        if kind is None:
             continue
-        sx, sy = _rot(s[0], s[1])
-        parsed_stops.append({"x": round(float(sx), 3), "y": round(float(sy), 3)})
+        x1, y1 = _rot(t[0], t[1])
+        x2, y2 = _rot(t[2], t[3])
+        parsed_traffic_controls.append(
+            {
+                "type": kind,
+                "x1": round(float(x1), 3),
+                "y1": round(float(y1), 3),
+                "x2": round(float(x2), 3),
+                "y2": round(float(y2), 3),
+                "state": int(t[6]),
+            }
+        )
 
     # --- Parse Trajectory & GPS ---
     traj_data = []
@@ -1326,8 +1323,7 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         "partners": parsed_partners,
         "lanes": parse_roads(lane_obs),
         "bounds": parse_roads(boundary_obs),
-        "lights": parsed_lights,
-        "stops": parsed_stops,
+        "traffic_controls": parsed_traffic_controls,
         "traj": traj_data,
         "gps": gps_data,
     }
@@ -1516,8 +1512,8 @@ def generate_interactive_replay(
             <div class="label" style="margin-top: 15px; color: var(--accent); border-bottom: 1px solid #333">Metrics Table</div>
             <div id="metrics-grid"></div>
 
-            <div class="label" style="margin-top: 15px;">Position (X/Y)</div>
-            <div style="font-family: monospace; font-size: 15px; color: #ccc; font-weight: bold;"><span id="tel-x">0</span> , <span id="tel-y">0</span></div>
+            <div class="label" style="margin-top: 15px;">Position (X/Y/Z)</div>
+            <div style="font-family: monospace; font-size: 15px; color: #ccc; font-weight: bold;"><span id="tel-x">0</span> , <span id="tel-y">0</span> , <span id="tel-z">0</span></div>
         </div>
 
         <div id="obs-container">
@@ -1834,24 +1830,34 @@ def generate_interactive_replay(
                 });
             }
 
-            if (frame.lights && frame.lights.length > 0) {
-                const lightColors = {1: "#ff0000", 2: "#ffff00", 3: "#00ff00"};
-                obsCtx.lineWidth = 1 * px; obsCtx.strokeStyle = "#000";
-                frame.lights.forEach(l => {
-                    obsCtx.fillStyle = lightColors[l.state] || "#888";
-                    obsCtx.beginPath(); obsCtx.arc(l.x, l.y, 0.012, 0, 7); obsCtx.fill(); obsCtx.stroke();
-                });
-            }
-            if (frame.stops && frame.stops.length > 0) {
-                obsCtx.fillStyle = "#cc0000"; obsCtx.strokeStyle = "#fff"; obsCtx.lineWidth = 1 * px;
-                frame.stops.forEach(s => {
-                    obsCtx.beginPath();
-                    for (let i=0; i<8; i++) {
-                        const angle = i*Math.PI/4 + Math.PI/8;
-                        const ptX = s.x + 0.018 * Math.cos(angle), ptY = s.y + 0.018 * Math.sin(angle);
-                        if (i===0) obsCtx.moveTo(ptX, ptY); else obsCtx.lineTo(ptX, ptY);
+            if (frame.traffic_controls && frame.traffic_controls.length > 0) {
+                const lightColors = {0: "#888888", 1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#888888"};
+                frame.traffic_controls.forEach(t => {
+                    if (t.type === "light") {
+                        obsCtx.strokeStyle = lightColors[t.state] || "#888";
+                        obsCtx.lineWidth = 2.5 * px;
+                        obsCtx.beginPath();
+                        obsCtx.moveTo(t.x1, t.y1);
+                        obsCtx.lineTo(t.x2, t.y2);
+                        obsCtx.stroke();
+                        return;
                     }
-                    obsCtx.closePath(); obsCtx.fill(); obsCtx.stroke();
+
+                    obsCtx.strokeStyle = "#000";
+                    obsCtx.lineWidth = 4 * px;
+                    obsCtx.beginPath();
+                    obsCtx.moveTo(t.x1, t.y1);
+                    obsCtx.lineTo(t.x2, t.y2);
+                    obsCtx.stroke();
+
+                    obsCtx.strokeStyle = t.type === "stop" ? "#cc0000" : "#ffd700";
+                    obsCtx.lineWidth = 2.5 * px;
+                    obsCtx.setLineDash([6 * px, 4 * px]);
+                    obsCtx.beginPath();
+                    obsCtx.moveTo(t.x1, t.y1);
+                    obsCtx.lineTo(t.x2, t.y2);
+                    obsCtx.stroke();
+                    obsCtx.setLineDash([]);
                 });
             }
 
@@ -1896,6 +1902,7 @@ def generate_interactive_replay(
                 document.getElementById('tel-rs').innerText = agent.rs.toFixed(2);
                 document.getElementById('tel-x').innerText = agent.x.toFixed(1);
                 document.getElementById('tel-y').innerText = agent.y.toFixed(1);
+                document.getElementById('tel-z').innerText = (agent.z || 0).toFixed(1);
 
                 let histLen = 50;
                 let startIdx = Math.max(0, Math.floor(step) - histLen);

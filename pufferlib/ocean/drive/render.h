@@ -161,8 +161,6 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
 
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
-    if (env->max_stop_sign_observations > 0)
-        ego_dim += 1;
     int num_reward_coefs = env->reward_conditioning ? NUM_REWARD_COEFS : 0;
     int target_features = (env->target_type == TARGET_STATIC) ? env->num_target_waypoints * STATIC_TARGET_FEATURES
                                                               : env->num_target_waypoints * DYNAMIC_TARGET_FEATURES;
@@ -606,7 +604,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 lineColor = BLUE;
             else if (is_road_edge(element->type))
                 lineColor = WHITE;
-            else if (element->type == DRIVEWAY)
+            else if (is_misc_road(element->type))
                 lineColor = RED;
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
                 draw_road_edge(env, start.x, start.y, end.x, end.y, lineColor);

@@ -69,8 +69,8 @@ class Drive(pufferlib.PufferEnv):
         max_lane_segment_observations=32,
         max_boundary_segment_observations=32,
         max_partner_observations=16,
-        max_traffic_light_observations=10,
-        max_stop_sign_observations=10,
+        max_traffic_control_observations=4,
+        traffic_control_scope=0,
         starting_map=0,
     ):
         self.dt = dt
@@ -142,12 +142,11 @@ class Drive(pufferlib.PufferEnv):
         self.max_lane_segment_observations = max_lane_segment_observations
         self.max_boundary_segment_observations = max_boundary_segment_observations
         self.max_partner_observations = max_partner_observations
-        self.max_traffic_light_observations = max_traffic_light_observations
-        self.max_stop_sign_observations = max_stop_sign_observations
+        self.traffic_control_scope = traffic_control_scope
+        self.max_traffic_control_observations = max_traffic_control_observations
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
-        self.traffic_light_features = binding.TRAFFIC_LIGHT_FEATURES
-        self.stop_sign_features = binding.STOP_SIGN_FEATURES
+        self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
         # Target features based on target_type
@@ -164,8 +163,7 @@ class Drive(pufferlib.PufferEnv):
             + self.max_partner_observations * self.partner_features
             + self.max_lane_segment_observations * self.road_features
             + self.max_boundary_segment_observations * self.road_features
-            + self.max_traffic_light_observations * self.traffic_light_features
-            + self.max_stop_sign_observations * self.stop_sign_features
+            + self.max_traffic_control_observations * self.traffic_control_features
         )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
@@ -309,8 +307,8 @@ class Drive(pufferlib.PufferEnv):
                 max_lane_segment_observations=self.max_lane_segment_observations,
                 max_boundary_segment_observations=self.max_boundary_segment_observations,
                 max_partner_observations=self.max_partner_observations,
-                max_traffic_light_observations=self.max_traffic_light_observations,
-                max_stop_sign_observations=self.max_stop_sign_observations,
+                max_traffic_control_observations=self.max_traffic_control_observations,
+                traffic_control_scope=self.traffic_control_scope,
                 dt=self.dt,
                 spawn_initial_speed=self.spawn_initial_speed,
                 goal_speed_threshold=self.goal_speed_threshold,
@@ -428,8 +426,8 @@ class Drive(pufferlib.PufferEnv):
                         max_lane_segment_observations=self.max_lane_segment_observations,
                         max_boundary_segment_observations=self.max_boundary_segment_observations,
                         max_partner_observations=self.max_partner_observations,
-                        max_traffic_light_observations=self.max_traffic_light_observations,
-                        max_stop_sign_observations=self.max_stop_sign_observations,
+                        max_traffic_control_observations=self.max_traffic_control_observations,
+                        traffic_control_scope=self.traffic_control_scope,
                         dt=self.dt,
                         spawn_initial_speed=self.spawn_initial_speed,
                         goal_speed_threshold=self.goal_speed_threshold,

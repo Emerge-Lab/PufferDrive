@@ -168,8 +168,8 @@ void performance_test() {
         .max_lane_segment_observations = conf.max_lane_segment_observations,
         .max_boundary_segment_observations = conf.max_boundary_segment_observations,
         .max_partner_observations = conf.max_partner_observations,
-        .max_traffic_light_observations = conf.max_traffic_light_observations,
-        .max_stop_sign_observations = conf.max_stop_sign_observations,
+        .max_traffic_control_observations = conf.max_traffic_control_observations,
+        .traffic_control_scope = conf.traffic_control_scope,
     };
     struct timespec ts_total_start, ts_total_end;
     struct timespec ts_init_start, ts_init_end;

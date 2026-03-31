@@ -48,8 +48,8 @@ typedef struct {
     int max_lane_segment_observations;
     int max_boundary_segment_observations;
     int max_partner_observations;
-    int max_traffic_light_observations;
-    int max_stop_sign_observations;
+    int max_traffic_control_observations;
+    int traffic_control_scope;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -177,10 +177,10 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->max_lane_segment_observations = atoi(value);
     } else if (MATCH("env", "max_partner_observations")) {
         env_config->max_partner_observations = atoi(value);
-    } else if (MATCH("env", "max_traffic_light_observations")) {
-        env_config->max_traffic_light_observations = atoi(value);
-    } else if (MATCH("env", "max_stop_sign_observations")) {
-        env_config->max_stop_sign_observations = atoi(value);
+    } else if (MATCH("env", "max_traffic_control_observations")) {
+        env_config->max_traffic_control_observations = atoi(value);
+    } else if (MATCH("env", "traffic_control_scope")) {
+        env_config->traffic_control_scope = atoi(value);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

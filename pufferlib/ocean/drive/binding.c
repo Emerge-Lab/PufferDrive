@@ -295,7 +295,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
 
             /* ID and type */
-            PyObject *tmp = PyLong_FromLong(a->id);
+            PyObject *tmp = PyLong_FromLong(i);
             if (!tmp) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -721,13 +721,13 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            tmp = PyLong_FromLong(a->current_lane_index);
+            tmp = PyLong_FromLong(a->current_lane_idx);
             if (!tmp) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(agent, "current_lane_index", tmp) < 0) {
+            if (PyDict_SetItemString(agent, "current_lane_idx", tmp) < 0) {
                 Py_DECREF(tmp);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -994,7 +994,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     SET_WAYPOINT_FLOAT("heading", wp->heading);
                     SET_WAYPOINT_FLOAT("kappa", wp->kappa);
 
-                    tmp_val = PyLong_FromLong(wp->lane_id);
+                    tmp_val = PyLong_FromLong(wp->lane_idx);
                     if (!tmp_val) {
                         Py_DECREF(wp_dict);
                         Py_DECREF(wp_list);
@@ -1052,7 +1052,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 return NULL;
             }
 
-            PyObject *tmp = PyLong_FromLong(r->id);
+            PyObject *tmp = PyLong_FromLong(i);
             if (!tmp) {
                 Py_DECREF(road);
                 Py_DECREF(road_list);
@@ -1277,7 +1277,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 return NULL;
             }
 
-            PyObject *tmp = PyLong_FromLong(t->id);
+            PyObject *tmp = PyLong_FromLong(i);
             if (!tmp) {
                 Py_DECREF(traffic);
                 Py_DECREF(traffic_list);
@@ -1808,8 +1808,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->max_boundary_segment_observations = (int)unpack(kwargs, "max_boundary_segment_observations");
     env->max_lane_segment_observations = (int)unpack(kwargs, "max_lane_segment_observations");
     env->max_partner_observations = (int)unpack(kwargs, "max_partner_observations");
-    env->max_traffic_light_observations = (int)unpack(kwargs, "max_traffic_light_observations");
-    env->max_stop_sign_observations = (int)unpack(kwargs, "max_stop_sign_observations");
+    env->max_traffic_control_observations = (int)unpack(kwargs, "max_traffic_control_observations");
+    env->traffic_control_scope = (int)unpack(kwargs, "traffic_control_scope");
     env->dt = (float)unpack(kwargs, "dt");
     env->spawn_initial_speed = (float)unpack(kwargs, "spawn_initial_speed");
     env->goal_speed_threshold = (float)unpack(kwargs, "goal_speed_threshold");

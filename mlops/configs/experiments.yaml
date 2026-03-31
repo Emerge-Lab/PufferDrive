@@ -25,68 +25,25 @@
 
 
 experiments:
-  - name: gigaflow
-    machine: RTX6000_2
+  - name: miniflow
+    machine: RTX6000
     params:
       # Vec
-      vec.num-envs: 32
+      vec.num-envs: 24
+      # Policy
+      policy.input-size: 128
+      policy.dropout: 0.2
       # Env
-      env.num-agents: 4096
+      env.num-agents: 2048
+      env.reward-conditioning: False
+      env.reward-randomization: False
+      env.max-agents-per-env: 120
+      env.num-maps: 8
       # Train
-      train.minibatch-size: 262_144
-      train.max-minibatch-size: 262_144
       train.total-timesteps: 300_000_000_000
-      # Paper hparams
-      train.gamma: 0.99
-      train.gae-lambda: 0.95
-      train.learning-rate: 0.0005
-      train.ent-coef: 0.01
-      train.vf-coef: 0.5
-      train.clip-coef: 0.2
-      train.max-grad-norm: 0.5
-      train.update-epochs: 1
+      train.checkpoint-interval: 500
+      train.optimizer: adamw
+      train.minibatch-size: 65_536 # 65_536, 131_072, 262_144
+      train.max-minibatch-size: 65_536
     runs:
-      # # 1. Faithful paper replication: FF + large arch + paper hparams
-      # - name: ff_paper_arch
-      #   params:
-      #     rnn-name: None
-      #     policy.input-size: 128
-      #     policy.backbone-hidden-size: 1024
-      #     policy.backbone-num-layers: 3
-      #     policy.encoder-gigaflow: True
-
-      # # 2. LSTM + paper-sized arch + paper hparams
-      # #    (split-network must be False: LSTM wrapper asserts this)
-      # - name: lstm_paper_arch
-      #   params:
-      #     policy.input-size: 128
-      #     policy.backbone-hidden-size: 1024
-      #     policy.backbone-num-layers: 2
-      #     policy.encoder-gigaflow: True
-      #     policy.dropout: 0.2
-      #     rnn.input-size: 1024   # must match backbone-hidden-size
-      #     rnn.hidden-size: 1024
-
-      # - name: l4_lstm_new_arch_input_128_24_env
-      #   params:
-      #     policy.input-size: 128
-      #     policy.encoder-gigaflow: True
-      #     policy.dropout: 0.2
-
-      # - name: test_dockerfile
-      #   params:
-      #     rnn-name: Recurrent
-      #     policy.encoder-gigaflow: True
-      #     policy.dropout: 0.2
-
-      - name: test_dockerfile_ptx
-        params:
-          rnn-name: None
-          policy.encoder-gigaflow: True
-          policy.dropout: 0.2
-
-      # 4. LSTM + current (small) arch + paper hparams → cheapest LSTM comparison
-      # - name: lstm_small_arch
-      #   params:
-      #     policy.encoder-gigaflow: True
-      #     rnn.hidden-size: 512
+      - name: base

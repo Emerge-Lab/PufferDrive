@@ -576,10 +576,14 @@ class PuffeRL:
         pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
         pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-        v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
-        v_loss_unclipped = (newvalue - mb_returns) ** 2
-        v_loss_clipped = (v_clipped - mb_returns) ** 2
-        v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+        if vf_clip is not None:
+            v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
+            v_loss_unclipped = (newvalue - mb_returns) ** 2
+            v_loss_clipped = (v_clipped - mb_returns) ** 2
+            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+        else:
+            v_loss = 0.5 * (newvalue - mb_returns) ** 2
+            v_loss = v_loss.mean()
         entropy_loss = entropy.mean()
         loss = pg_loss + self.config["vf_coef"] * v_loss - self.config["ent_coef"] * entropy_loss
 
@@ -1355,8 +1359,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "max_boundary_segment_observations",
             "max_lane_segment_observations",
             "max_partner_observations",
-            "max_traffic_light_observations",
-            "max_stop_sign_observations",
+            "max_traffic_control_observations",
+            "traffic_control_scope",
         }
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")
@@ -1670,13 +1674,13 @@ def load_eval_multi_scenarios_config(env_name, model_path=None, eval_overrides=N
     return args
 
 
-def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=None, num_carla_maps=6):
+def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=None, num_carla_maps=8):
     """Build evaluation overrides for a given simulation mode.
 
     Args:
         simulation_mode: "gigaflow" or "replay"
         num_agents: agent slot budget for evaluation
-        map_dir: optional map directory, uses config value if not provided
+        map_dir: replay dataset directory, required for replay mode
     """
     # Common reward coefficients (same for both modes)
     common_env = {
@@ -1891,11 +1895,11 @@ def eval_multi_scenarios(
         map_dir = tmp_args["eval"]["map_dir"]
 
         eval_overrides = build_eval_overrides(
-            tmp_args["eval_simulation"],
-            num_agents_eval,
-            tmp_args["num_scenarios"],
-            map_dir,
-            num_carla_maps=tmp_args.get("num_carla_maps", 6),
+            simulation_mode=tmp_args["eval_simulation"],
+            num_agents=num_agents_eval,
+            num_scenarios=tmp_args["num_scenarios"],
+            map_dir=map_dir,
+            num_carla_maps=tmp_args.get("num_carla_maps", 8),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
 
@@ -2036,11 +2040,11 @@ def eval_multi_scenarios_render(
         num_agents_eval = tmp_args["eval"]["num_agents"]
         map_dir = tmp_args["eval"]["map_dir"]
         eval_overrides = build_eval_overrides(
-            tmp_args["eval_simulation"],
-            num_agents_eval,
-            tmp_args["num_scenarios"],
-            map_dir,
-            num_carla_maps=tmp_args.get("num_carla_maps", 6),
+            simulation_mode=tmp_args["eval_simulation"],
+            num_agents=num_agents_eval,
+            num_scenarios=tmp_args["num_scenarios"],
+            map_dir=map_dir,
+            num_carla_maps=tmp_args.get("num_carla_maps", 8),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
 
@@ -2212,18 +2216,6 @@ def eval_multi_scenarios_render(
 
     # Close vectorized environment to avoid file descriptor leaks
     vecenv.close()
-
-
-def dict_to_args(d, prefix=""):
-    args = []
-    for k, v in d.items():
-        key_str = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            args.extend(dict_to_args(v, key_str))
-        else:
-            args.append(f"--{key_str.replace('_', '-')}")
-            args.append(str(v))
-    return args
 
 
 def sweep(args=None, env_name=None):
@@ -2449,15 +2441,12 @@ def load_config(env_name, config_dir=None):
         "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
     )
     parser.add_argument(
-        "--render-mode",
-        type=str,
-        default="matplotlib",
-        choices=["auto", "human", "ansi", "rgb_array", "raylib", "matplotlib", "None"],
+        "--render-mode", type=str, default="auto", choices=["auto", "human", "ansi", "rgb_array", "raylib", "None"]
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
     parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument(
-        "--num_carla_maps", type=int, default=6, help="Number of CARLA maps to use in gigaflow mode (max 6)"
+        "--num_carla_maps", type=int, default=8, help="Number of CARLA maps to use in gigaflow mode (max 8)"
     )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument(

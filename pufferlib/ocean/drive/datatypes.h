@@ -1,5 +1,3 @@
-#define UNKNOWN 0
-
 // -- REWARD CONDITIONING COEFFICIENTS
 #define REWARD_COEF_GOAL_RADIUS 0
 #define REWARD_COEF_COLLISION 1
@@ -21,15 +19,17 @@
 #define NUM_REWARD_COEFS 16
 
 // -- AGENT TYPE
+#define UNKNOWN 0
 #define VEHICLE 1
 #define PEDESTRIAN 2
 #define CYCLIST 3
-#define OTHER 4
 
 // -- ROAD TYPE
+#define LANE_UNKNOWN 0
 #define LANE_FREEWAY 1
 #define LANE_SURFACE_STREET 2
 #define LANE_BIKE_LANE 3
+#define LANE_BUS_LANE 4
 
 #define ROAD_LINE_UNKNOWN 10
 #define ROAD_LINE_BROKEN_SINGLE_WHITE 11
@@ -44,23 +44,24 @@
 #define ROAD_EDGE_UNKNOWN 20
 #define ROAD_EDGE_BOUNDARY 21
 #define ROAD_EDGE_MEDIAN 22
-#define ROAD_EDGE_SIDEWALK 23
 
-#define CROSSWALK 31
-#define DRIVEWAY 32
+#define MISC_UNKNOWN 30
+#define MISC_CROSSWALK 31
+#define MISC_SPEED_BUMP 32
 
 // -- TRAFFIC CONTROL TYPE
-#define TRAFFIC_LIGHT 1
-#define STOP_SIGN 2
-#define YIELD_SIGN 3
-#define SPEED_LIMIT_SIGN 4
-
-#define TL_STATE_DISABLED 0
-#define TL_STATE_YELLOW 2
-#define TL_STATE_GREEN 3
-#define TL_STATE_RED 4
-// Number of normalized traffic light states: disabled, red, yellow, green
-#define NUM_TRAFFIC_LIGHT_STATES 4
+#define TRAFFIC_CONTROL_TYPE_NONE 0
+#define TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT 1
+#define TRAFFIC_CONTROL_TYPE_STOP_SIGN 2
+#define TRAFFIC_CONTROL_TYPE_YIELD_SIGN 3
+#define NUM_TRAFFIC_CONTROL_TYPES 4
+// -- TRAFFIC CONTROL STATE
+#define TRAFFIC_CONTROL_STATE_UNKNOWN 0
+#define TRAFFIC_CONTROL_STATE_RED 1
+#define TRAFFIC_CONTROL_STATE_YELLOW 2
+#define TRAFFIC_CONTROL_STATE_GREEN 3
+#define TRAFFIC_CONTROL_STATE_OFF 4
+#define NUM_TRAFFIC_CONTROL_STATES 5
 
 // Metrics array indices
 #define NUM_METRICS 18
@@ -97,7 +98,7 @@ struct Waypoint {
     float cos_heading; // Cached cosf(heading) - set in build_path
     float sin_heading; // Cached sinf(heading) - set in build_path
     float kappa;       // Curvature at this point
-    int lane_id;       // Lane id of the waypoint
+    int lane_idx;      // Index of the lane this waypoint belongs to (for GT path) or closest to (for expert path)
 };
 struct Path {
     struct Waypoint waypoints[MAX_NUM_WP_PATH];
@@ -111,7 +112,7 @@ struct ttc_result {
     float closing_speed;
 };
 
-static inline int is_road_lane(int type) { return (type >= 1 && type <= 9); }
+static inline int is_road_lane(int type) { return (type >= 0 && type <= 9); }
 
 static inline int is_drivable_road_lane(int type) { return (type == LANE_FREEWAY || type == LANE_SURFACE_STREET); }
 
@@ -119,15 +120,11 @@ static inline int is_road_line(int type) { return (type >= 10 && type <= 19); }
 
 static inline int is_road_edge(int type) { return (type >= 20 && type <= 29); }
 
+static inline int is_misc_road(int type) { return type >= MISC_UNKNOWN; }
+
 static inline int is_road(int type) { return is_road_lane(type) || is_road_line(type) || is_road_edge(type); }
 
 static inline int is_controllable_agent(int type) { return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST); }
-
-static inline int is_traffic_light_red(int state) { return state == 1 || state == TL_STATE_RED || state == 7; }
-
-static inline int is_traffic_light_green(int state) { return state == TL_STATE_GREEN || state == 6 || state == 9; }
-
-static inline int is_traffic_light_yellow(int state) { return state == TL_STATE_YELLOW || state == 5 || state == 8; }
 
 static inline int normalize_road_type(int type) {
     if (is_road_lane(type)) {
@@ -153,32 +150,7 @@ static inline int unnormalize_road_type(int norm_type) {
     }
 }
 
-static inline int normalize_traffic_light_state(int state) {
-    if (is_traffic_light_red(state)) {
-        return 1;
-    } else if (is_traffic_light_yellow(state)) {
-        return 2;
-    } else if (is_traffic_light_green(state)) {
-        return 3;
-    } else {
-        return TL_STATE_DISABLED; // Invalid or disabled
-    }
-}
-
-static inline int unnormalize_traffic_light_state(int norm_state) {
-    if (norm_state == 1) {
-        return TL_STATE_RED;
-    } else if (norm_state == 2) {
-        return TL_STATE_YELLOW;
-    } else if (norm_state == 3) {
-        return TL_STATE_GREEN;
-    } else {
-        return TL_STATE_DISABLED; // Invalid or disabled
-    }
-}
-
 struct Agent {
-    int id;
     int type;
 
     // Log trajectory
@@ -226,8 +198,8 @@ struct Agent {
                                       // comfort_violation, velocity_progress, speed_limit, avg_displacement_error,
                                       // progression, at_fault_collision, ttc, ttc_tfl, progress_ratio,
                                       // multi_lane_time, multi_lane_score]
-    int current_lane_index;
-    int previous_lane_index;
+    int current_lane_idx;
+    int previous_lane_idx;
     int current_lane_geometry_idx;
     int reached_goal_this_episode;
     int num_waypoints_reached;
@@ -273,7 +245,6 @@ struct Agent {
 };
 
 struct RoadMapElement {
-    int id;
     int type;
 
     int segment_length;
@@ -291,7 +262,6 @@ struct RoadMapElement {
 };
 
 struct TrafficControlElement {
-    int id;
     int type;
 
     int state_length;
