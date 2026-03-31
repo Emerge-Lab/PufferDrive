@@ -193,18 +193,14 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         video_output_dir = os.path.join(model_dir, "videos")
         os.makedirs(video_output_dir, exist_ok=True)
 
-        # Copy the binary weights to the expected location
-        expected_weights_path = "resources/drive/puffer_drive_weights.bin"
-        os.makedirs(os.path.dirname(expected_weights_path), exist_ok=True)
-        shutil.copy2(bin_path, expected_weights_path)
-
         # TODO: Fix memory leaks so that this is not needed
         # Suppress AddressSanitizer exit code (temp)
         env_vars = os.environ.copy()
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
 
-        # Base command (without map/output paths)
-        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
+        # Base command — pass policy weights directly via --policy-name
+        base_cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize",
+                     "--policy-name", bin_path]
 
         # Render config flags
         if config.get("show_grid", False):
@@ -273,24 +269,24 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
             if map_path is not None and os.path.exists(map_path):
                 cmd.extend(["--map-name", str(map_path)])
 
-            # Output paths (overwrite each iteration; then moved/renamed)
-            cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
-            cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+            # Output paths — use absolute paths in the video output dir
+            topdown_tmp = os.path.join(video_output_dir, "output_topdown.mp4")
+            agent_tmp = os.path.join(video_output_dir, "output_agent.mp4")
+            cmd.extend(["--output-topdown", topdown_tmp])
+            cmd.extend(["--output-agent", agent_tmp])
 
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env_vars)
 
-            vids_exist = os.path.exists("resources/drive/output_topdown.mp4") and os.path.exists(
-                "resources/drive/output_agent.mp4"
-            )
+            vids_exist = os.path.exists(topdown_tmp) and os.path.exists(agent_tmp)
 
             if result.returncode == 0 or (result.returncode == 1 and vids_exist):
                 videos = [
                     (
-                        "resources/drive/output_topdown.mp4",
+                        topdown_tmp,
                         f"epoch_{epoch:06d}_map{i:02d}_topdown.mp4" if map_path else f"epoch_{epoch:06d}_topdown.mp4",
                     ),
                     (
-                        "resources/drive/output_agent.mp4",
+                        agent_tmp,
                         f"epoch_{epoch:06d}_map{i:02d}_agent.mp4" if map_path else f"epoch_{epoch:06d}_agent.mp4",
                     ),
                 ]
@@ -310,7 +306,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
                     else:
                         print(f"Video generation completed but {source_vid} not found")
             else:
-                print(f"C rendering failed (map index {i}) with exit code {result.returncode}: {result.stdout}")
+                print(f"C rendering failed (map index {i}) with exit code {result.returncode}: {result.stdout}\nstderr: {result.stderr}")
 
         # Log all videos at once so W&B keeps all of them under the same step
         if hasattr(logger, "wandb") and logger.wandb and (videos_to_log_world or videos_to_log_agent):
