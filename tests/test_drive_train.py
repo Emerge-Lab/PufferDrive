@@ -27,7 +27,7 @@ def test_drive_training():
                 "compile": False,
                 "total_timesteps": 100000,
                 "batch_size": 128,
-                "rollout_horizon": 8,
+                "bptt_horizon": 8,
                 "minibatch_size": 128,
                 "max_minibatch_size": 128,
                 "update_epochs": 1,
@@ -51,8 +51,6 @@ def test_drive_training():
                 "action_type": "discrete",
                 "num_maps": 1,
                 "map_dir": "resources/drive/binaries",
-                "init_mode": "create_all_valid",
-                "control_mode": "control_agents",
             }
         )
 
@@ -73,14 +71,10 @@ def test_drive_training():
         args["neptune"] = False
         args["eval"] = {
             "eval_interval": 10000,
-            "self_play_eval": False,
+            "num_episodes": 4,
             "wosac_realism_eval": False,
-            "human_replay_eval": False,
-            "render_self_play_eval": False,
-            "render_human_replay_eval": False,
-            "num_eval_agents": 8,
-            "map_dir": "resources/drive/binaries",
-            "render_select_mode": "fixed",
+            "human_replay_eval": True,
+            "human_replay_num_agents": 8,
         }
 
         # Load components
@@ -90,7 +84,7 @@ def test_drive_training():
 
         # Initialize training
         train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
-        pufferl = PuffeRL(train_config, vecenv, policy, logger=None, full_args=args)
+        pufferl = PuffeRL(train_config, vecenv, policy, logger=None)
 
         # Train until reaching 50K steps
         target_steps = 50000

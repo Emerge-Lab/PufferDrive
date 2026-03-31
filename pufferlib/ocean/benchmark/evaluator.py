@@ -1,17 +1,14 @@
 """WOSAC evaluation class for PufferDrive."""
 
-import copy
 import torch
 import numpy as np
 import pandas as pd
 from typing import Dict
 import matplotlib.pyplot as plt
-from tqdm import tqdm
 import configparser
 import os
-import pufferlib
 
-# WOSAC eval
+import pufferlib
 from pufferlib.ocean.benchmark import metrics
 from pufferlib.ocean.benchmark import estimators
 
@@ -39,105 +36,10 @@ class WOSACEvaluator:
         self.sim_steps = self.num_steps - self.init_steps
         self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
         self.device = config.get("train", {}).get("device", "cuda")
-        self.eval_mode = config.get("eval", {}).get("wosac_eval_mode", "policy")
 
         wosac_metrics_path = os.path.join(os.path.dirname(__file__), "wosac.ini")
         self.metrics_config = configparser.ConfigParser()
         self.metrics_config.read(wosac_metrics_path)
-
-    def evaluate(self, args, vecenv, policy=None, drop_scene_duplicates=True):
-        """Run full WOSAC evaluation with batched iteration over target scenarios.
-
-        Args:
-            args: Configuration dictionary
-            vecenv: Vectorized environment
-            policy: Policy to evaluate
-            drop_scene_duplicates: Whether to drop duplicate scenarios
-
-        Returns:
-            DataFrame: Full results aggregated by scenario.
-        """
-        num_target_maps = args["eval"]["wosac_target_scenarios"]
-        max_batches = args["eval"].get("wosac_max_batches", 100)
-
-        unique_files_sampled = set()
-        combined_results = []
-
-        with tqdm(total=100, desc="Processing batches", unit="%", colour="cyan") as pbar:
-            batch_idx = 0
-            while batch_idx < max_batches:
-                # Resample maps for each batch (except first)
-                if batch_idx > 0:
-                    vecenv.driver_env.resample_maps()
-
-                # Obtain ground truth trajectories
-                gt_trajectories = self.collect_ground_truth_trajectories(vecenv)
-
-                # Collect simulated trajectories
-                if policy is not None and self.eval_mode == "policy":
-                    simulated_trajectories = self.collect_simulated_trajectories(args, vecenv, policy)
-                elif self.eval_mode == "ground_truth":
-                    # Create fake simulated trajectories by repeating ground truth
-                    simulated_trajectories = gt_trajectories.copy()
-                    for key in ["x", "y", "heading", "id"]:
-                        simulated_trajectories[key] = np.repeat(
-                            gt_trajectories[key], args["eval"]["wosac_num_rollouts"], axis=1
-                        )
-                    simulated_trajectories["id"] = simulated_trajectories["id"][..., np.newaxis]
-                else:
-                    raise ValueError(f"Policy is None or unknown evaluation mode: {self.eval_mode}")
-
-                # Compute metrics for this batch
-                agent_state = vecenv.driver_env.get_global_agent_state()
-                road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-                batch_results = self.compute_metrics(
-                    gt_trajectories,
-                    simulated_trajectories,
-                    agent_state,
-                    road_edge_polylines,
-                    aggregate_results=False,
-                )
-
-                # Optional: sanity check on first batch
-                if args["eval"].get("wosac_sanity_check", False) and batch_idx == 0:
-                    self._quick_sanity_check(gt_trajectories, simulated_trajectories)
-
-                # Track coverage
-                unique_files_sampled.update(str(s) for s in np.unique(gt_trajectories["scenario_id"]))
-                combined_results.append(batch_results)
-
-                # Update progress
-                coverage = len(unique_files_sampled) / num_target_maps
-                pbar.n = int(coverage * 100)
-                pbar.set_postfix({"n": len(unique_files_sampled), "batch": batch_idx + 1})
-                pbar.refresh()
-
-                batch_idx += 1
-
-                # Stop if we've covered all target scenarios
-                if len(unique_files_sampled) >= num_target_maps:
-                    break
-
-            # Check if we didn't reach target coverage
-            if len(unique_files_sampled) < num_target_maps:
-                print(
-                    f"\nWarning: Only covered {len(unique_files_sampled)}/{num_target_maps} scenarios after {batch_idx} batches"
-                )
-
-            # Combine batch results into single dataframe
-            df_combined = pd.concat(combined_results)
-
-            # Optionally drop duplicate scenarios (keep first occurrence)
-            if drop_scene_duplicates:
-                initial_count = len(df_combined)
-                df_combined = df_combined[~df_combined.index.duplicated(keep="first")]
-                dropped = initial_count - len(df_combined)
-                if dropped > 0:
-                    print(f"\nDropped {dropped} duplicate scenarios.")
-
-            print(f"\nCollected {len(df_combined)} agent records from {batch_idx} batches")
-
-            return df_combined
 
     def _compute_metametric(self, metrics: pd.Series) -> float:
         metametric = 0.0
@@ -146,7 +48,9 @@ class WOSACEvaluator:
             weight = self.metrics_config.getfloat(field_name, "metametric_weight")
             metric_score = metrics[likelihood_field_name]
             metametric += weight * metric_score
-        return metametric
+
+        weight_sum = sum(self.metrics_config.getfloat(fn, "metametric_weight") for fn in _METRIC_FIELD_NAMES)
+        return metametric / weight_sum
 
     def _get_histogram_params(self, metric_name: str):
         return (
@@ -217,53 +121,6 @@ class WOSACEvaluator:
 
         return trajectories
 
-    def collect_wosac_random_baseline(self, puffer_env):
-        """
-        Random Baseline from Wosac 2023 paper
-        """
-        driver = puffer_env.driver_env
-        num_agents = puffer_env.observation_space.shape[0]
-
-        trajectories = {
-            "x": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
-            "y": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
-            "heading": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.float32),
-            "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
-        }
-
-        for rollout_idx in range(self.num_rollouts):
-            obs, info = puffer_env.reset()
-
-            # Do Initialization
-            agent_state = driver.get_global_agent_state()
-            trajectories["x"][:, rollout_idx, 0] = agent_state["x"]
-            trajectories["y"][:, rollout_idx, 0] = agent_state["y"]
-            trajectories["heading"][:, rollout_idx, 0] = agent_state["heading"]
-            trajectories["id"][:, rollout_idx, 0] = agent_state["id"]
-
-            # Update using Gaussian:
-            samples = np.random.normal(loc=1, scale=0.1, size=(num_agents, self.sim_steps, 3))
-            for time_idx in range(1, self.sim_steps):
-                dx, dy, d_heading = samples[:, time_idx, 0], samples[:, time_idx, 1], samples[:, time_idx, 2]
-                x, y, heading = (
-                    trajectories["x"][:, rollout_idx, time_idx - 1],
-                    trajectories["y"][:, rollout_idx, time_idx - 1],
-                    trajectories["heading"][:, rollout_idx, time_idx - 1],
-                )
-
-                cos_h = np.cos(heading)
-                sin_h = np.sin(heading)
-
-                x += dx * cos_h - dy * sin_h
-                y += dx * sin_h + dy * cos_h
-                heading += d_heading
-
-                trajectories["x"][:, rollout_idx, time_idx] = x
-                trajectories["y"][:, rollout_idx, time_idx] = y
-                trajectories["heading"][:, rollout_idx, time_idx] = heading
-
-        return trajectories
-
     def compute_metrics(
         self,
         ground_truth_trajectories: Dict,
@@ -290,7 +147,7 @@ class WOSACEvaluator:
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
-        eval_mask = ground_truth_trajectories["is_track_to_predict"][:, 0]
+        eval_mask = ground_truth_trajectories["id"][:, 0] >= 0
 
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
@@ -302,10 +159,7 @@ class WOSACEvaluator:
         ref_valid = ground_truth_trajectories["valid"]
         agent_length = agent_state["length"]
         agent_width = agent_state["width"]
-        is_vehicle = ground_truth_trajectories["is_vehicle"]
         scenario_ids = ground_truth_trajectories["scenario_id"]
-
-        last_scenario_id = str(scenario_ids[-1][0])
 
         # We evaluate the metrics only for the Tracks to Predict.
         eval_sim_x = sim_x[eval_mask]
@@ -318,7 +172,6 @@ class WOSACEvaluator:
         eval_agent_length = agent_length[eval_mask]
         eval_agent_width = agent_width[eval_mask]
         eval_scenario_ids = scenario_ids[eval_mask]
-        eval_is_vehicle = is_vehicle[eval_mask]
 
         # Compute features
         # Kinematics-related features
@@ -484,48 +337,60 @@ class WOSACEvaluator:
             sanity_check=False,
         )
 
-        speed_log_likelihood = metrics._reduce_average_with_validity(
-            linear_speed_log_likelihood,
-            speed_validity[:, 0, :],
-            axis=1,
+        speed_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                linear_speed_log_likelihood,
+                speed_validity[:, 0, :],
+                axis=1,
+            )
         )
 
-        accel_log_likelihood = metrics._reduce_average_with_validity(
-            linear_accel_log_likelihood,
-            acceleration_validity[:, 0, :],
-            axis=1,
+        accel_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                linear_accel_log_likelihood,
+                acceleration_validity[:, 0, :],
+                axis=1,
+            )
         )
 
-        angular_speed_log_likelihood = metrics._reduce_average_with_validity(
-            angular_speed_log_likelihood,
-            speed_validity[:, 0, :],
-            axis=1,
+        angular_speed_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                angular_speed_log_likelihood,
+                speed_validity[:, 0, :],
+                axis=1,
+            )
         )
 
-        angular_accel_log_likelihood = metrics._reduce_average_with_validity(
-            angular_accel_log_likelihood,
-            acceleration_validity[:, 0, :],
-            axis=1,
+        angular_accel_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                angular_accel_log_likelihood,
+                acceleration_validity[:, 0, :],
+                axis=1,
+            )
         )
 
-        distance_to_nearest_object_log_likelihood = metrics._reduce_average_with_validity(
-            distance_to_nearest_object_log_likelihood,
-            eval_ref_valid[:, 0, :],
-            axis=1,
+        distance_to_nearest_object_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                distance_to_nearest_object_log_likelihood,
+                eval_ref_valid[:, 0, :],
+                axis=1,
+            )
         )
 
-        # TTC is computed only for vehicles
-        ttc_valid = eval_ref_valid & eval_is_vehicle[..., None]
-        time_to_collision_log_likelihood = metrics._reduce_average_with_validity(
-            time_to_collision_log_likelihood,
-            ttc_valid[:, 0, :],
-            axis=1,
+        time_to_collision_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                time_to_collision_log_likelihood,
+                eval_ref_valid[:, 0, :],
+                axis=1,
+            )
         )
 
-        distance_to_road_edge_log_likelihood = metrics._reduce_average_with_validity(
-            distance_to_road_edge_log_likelihood,
-            eval_ref_valid[:, 0, :],
-            axis=1,
+        distance_to_road_edge_likelihood = np.exp(
+            metrics._reduce_average_with_validity(
+                distance_to_road_edge_log_likelihood,
+                eval_ref_valid[:, 0, :],
+                axis=1,
+            )
         )
 
         # Collision likelihood is computed by aggregating in time. For invalid objects
@@ -535,8 +400,8 @@ class WOSACEvaluator:
         sim_collision_indication = np.any(np.where(eval_ref_valid, sim_collision_per_step, False), axis=2)
         ref_collision_indication = np.any(np.where(eval_ref_valid, ref_collision_per_step, False), axis=2)
 
-        sim_num_collisions = np.mean(sim_collision_indication, axis=1)
-        ref_num_collisions = np.mean(ref_collision_indication, axis=1)
+        sim_num_collisions = np.sum(sim_collision_indication, axis=1)
+        ref_num_collisions = np.sum(ref_collision_indication, axis=1)
 
         collision_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_collision_indication[:, 0],
@@ -546,13 +411,14 @@ class WOSACEvaluator:
             num_bins=2,
             use_bernoulli=True,
         )
+        collision_likelihood = np.exp(collision_log_likelihood)
 
         # Offroad likelihood (same pattern as collision)
         sim_offroad_indication = np.any(np.where(eval_ref_valid, sim_offroad_per_step, False), axis=2)
         ref_offroad_indication = np.any(np.where(eval_ref_valid, ref_offroad_per_step, False), axis=2)
 
-        sim_num_offroad = np.mean(sim_offroad_indication, axis=1)
-        ref_num_offroad = np.mean(ref_offroad_indication, axis=1)
+        sim_num_offroad = np.sum(sim_offroad_indication, axis=1)
+        ref_num_offroad = np.sum(ref_offroad_indication, axis=1)
 
         offroad_log_likelihood = estimators.log_likelihood_estimate_scenario_level(
             log_values=ref_offroad_indication[:, 0],
@@ -562,6 +428,7 @@ class WOSACEvaluator:
             num_bins=2,
             use_bernoulli=True,
         )
+        offroad_likelihood = np.exp(offroad_log_likelihood)
 
         # Get agent IDs
         eval_agent_ids = ground_truth_trajectories["id"][eval_mask]
@@ -576,70 +443,60 @@ class WOSACEvaluator:
                 "num_offroad_ref": ref_num_offroad.flatten(),
                 "ade": ade,
                 "min_ade": min_ade,
-                "likelihood_linear_speed": speed_log_likelihood,
-                "likelihood_linear_acceleration": accel_log_likelihood,
-                "likelihood_angular_speed": angular_speed_log_likelihood,
-                "likelihood_angular_acceleration": angular_accel_log_likelihood,
-                "likelihood_distance_to_nearest_object": distance_to_nearest_object_log_likelihood,
-                "likelihood_time_to_collision": time_to_collision_log_likelihood,
-                "likelihood_collision_indication": collision_log_likelihood,
-                "likelihood_distance_to_road_edge": distance_to_road_edge_log_likelihood,
-                "likelihood_offroad_indication": offroad_log_likelihood,
+                "likelihood_linear_speed": speed_likelihood,
+                "likelihood_linear_acceleration": accel_likelihood,
+                "likelihood_angular_speed": angular_speed_likelihood,
+                "likelihood_angular_acceleration": angular_accel_likelihood,
+                "likelihood_distance_to_nearest_object": distance_to_nearest_object_likelihood,
+                "likelihood_time_to_collision": time_to_collision_likelihood,
+                "likelihood_collision_indication": collision_likelihood,
+                "likelihood_distance_to_road_edge": distance_to_road_edge_likelihood,
+                "likelihood_offroad_indication": offroad_likelihood,
             }
         )
 
-        # Aggregate along agent dimenision: Obtain one score per scenario
-        df_scene_level = df.groupby("scenario_id", as_index=True).mean().drop(columns=["agent_id"]).dropna()
-
-        # Exponentiate the averaged log-likelihoods to get final likelihoods
-        likelihood_columns = [col for col in df_scene_level.columns if col.startswith("likelihood_")]
-        df_scene_level[likelihood_columns] = np.exp(df_scene_level[likelihood_columns])
-
-        df_scene_level["realism_meta_score"] = df_scene_level.apply(self._compute_metametric, axis=1)
-        df_scene_level["num_agents_per_scene"] = df.groupby("scenario_id").size()
-        df_scene_level = df_scene_level.round(3)
-
-        # Get group summary metrics
-        kinematic_metrics = np.mean(
+        scene_level_results = df.groupby("scenario_id")[
             [
-                df_scene_level["likelihood_linear_speed"],
-                df_scene_level["likelihood_linear_acceleration"],
-                df_scene_level["likelihood_angular_speed"],
-                df_scene_level["likelihood_angular_acceleration"],
+                "ade",
+                "min_ade",
+                "num_collisions_sim",
+                "num_collisions_ref",
+                "num_offroad_sim",
+                "num_offroad_ref",
+                "likelihood_linear_speed",
+                "likelihood_linear_acceleration",
+                "likelihood_angular_speed",
+                "likelihood_angular_acceleration",
+                "likelihood_distance_to_nearest_object",
+                "likelihood_time_to_collision",
+                "likelihood_collision_indication",
+                "likelihood_distance_to_road_edge",
+                "likelihood_offroad_indication",
             ]
-        )
+        ].mean()
 
-        interactive_metrics = np.mean(
-            [
-                df_scene_level["likelihood_collision_indication"],
-                df_scene_level["likelihood_distance_to_nearest_object"],
-                df_scene_level["likelihood_time_to_collision"],
-            ]
-        )
-
-        map_metrics = np.mean(
-            [
-                df_scene_level["likelihood_distance_to_road_edge"],
-                df_scene_level["likelihood_offroad_indication"],
-            ]
-        )
-
-        df_scene_level["kinematic_metrics"] = kinematic_metrics
-        df_scene_level["interactive_metrics"] = interactive_metrics
-        df_scene_level["map_based_metrics"] = map_metrics
-
-        # Safety: drop the last scenario (potentially incomplete) from the scene-level results
-        if last_scenario_id in df_scene_level.index:
-            df_scene_level = df_scene_level.drop(last_scenario_id)
+        scene_level_results["realism_meta_score"] = scene_level_results.apply(self._compute_metametric, axis=1)
+        scene_level_results["num_agents"] = df.groupby("scenario_id").size()
+        scene_level_results = scene_level_results[
+            ["num_agents"] + [col for col in scene_level_results.columns if col != "num_agents"]
+        ]
 
         if aggregate_results:
-            # Aggregate over scenarios
-            aggregate_metrics = df_scene_level.mean().to_dict()
-            aggregate_metrics["total_num_agents"] = df_scene_level["num_agents_per_scene"].sum()
-            aggregate_metrics["realism_score_std"] = df_scene_level["realism_meta_score"].std()
-            return aggregate_metrics
+            aggregate_metrics = scene_level_results.mean().to_dict()
+            aggregate_metrics["total_num_agents"] = scene_level_results["num_agents"].sum()
+            # Convert numpy types to Python native types
+            return {k: v.item() if hasattr(v, "item") else v for k, v in aggregate_metrics.items()}
         else:
-            return df_scene_level
+            print("\n Scene-level results:\n")
+            print(scene_level_results)
+
+            print(f"\n Overall realism meta score: {scene_level_results['realism_meta_score'].mean():.4f}")
+            print(f"\n Overall minADE: {scene_level_results['min_ade'].mean():.4f}")
+            print(f"\n Overall ADE: {scene_level_results['ade'].mean():.4f}")
+
+            # print(f"\n Full agent-level results:\n")
+            # print(df)
+            return scene_level_results
 
     def _quick_sanity_check(self, gt_trajectories, simulated_trajectories, agent_idx=None, max_agents_to_plot=10):
         if agent_idx is None:
@@ -763,183 +620,58 @@ class WOSACEvaluator:
             plt.savefig(f"trajectory_comparison_agent_{agent_idx}.png")
 
 
-class Evaluator:
-    """Evaluates policies in self_play or human_replay mode, with optional rendering.
+class HumanReplayEvaluator:
+    """Evaluates policies against human replays in PufferDrive."""
 
-    Initializes the eval envs needed based on eval config flags:
-    - human_replay_eval: creates sp_env + hr_env
-    - render_eval: creates sp_env (if not already created)
-    """
+    def __init__(self, config: Dict):
+        self.config = config
+        self.sim_steps = 91 - self.config["env"]["init_steps"]
 
-    RENDER_FIRST = "first"
-    RENDER_RANDOM = "random"
-    RENDER_WORST_SCORE = "worst_score"
-    RENDER_WORST_COLLISION = "worst_collision"
+    def rollout(self, args, puffer_env, policy):
+        """Roll out policy in env with human replays. Store statistics.
 
-    def __init__(self, configs, logger=None):
-        self.configs = configs
-        self.logger = logger
-        self.sim_steps = 90
-        self.self_play_stats = None
-        self.human_replay_stats = None
-        self.sp_env = None
-        self.hr_env = None
+        In human replay mode, only the SDC (self-driving car) is controlled by the policy
+        while all other agents replay their human trajectories. This tests how compatible
+        the policy is with (static) human partners.
 
-        self._unpack_eval_configs(configs)
-
-    def _unpack_eval_configs(self, configs):
-        eval_config = copy.deepcopy(configs)
-        # Create separate evaluation environments based on specified configs
-        eval_config["env"]["termination_mode"] = 0
-        backend = eval_config["eval"].get("backend", "PufferEnv")
-        eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
-        eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
-        eval_config["env"]["episode_length"] = 91  # WOMD scenario length
-        eval_config["vec"] = dict(backend=backend, num_envs=1)
-
-        self.hr_eval_config = copy.deepcopy(eval_config)
-        self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
-        self.sp_eval_config = copy.deepcopy(eval_config)
-        self.sp_eval_config["env"]["control_mode"] = "control_agents"
-        self.render_select_mode = self.configs["eval"]["render_select_mode"]
-        self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
-        self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
-
-    def select_render_env(self, env_logs):
-        """Select which environment to render based on per-env rollout statistics.
         Args:
-            env_logs: List of dicts, one per environment. Each dict contains
-                aggregated agent statistics (score, collision_rate, offroad_rate, etc.)
-                with 'n' being the number of controlled agents in that env.
-                Empty dicts indicate no data was collected for that env.
+            args: Config dict with train settings (device, use_rnn, etc.)
+            puffer_env: PufferLib environment wrapper
+            policy: Trained policy to evaluate
 
         Returns:
-            int: Index of the environment to render.
+            dict: Aggregated metrics including:
+                - avg_collisions_per_agent: Average collisions per agent
+                - avg_offroad_per_agent: Average offroad events per agent
         """
-        mode = self.render_select_mode
-        if mode == self.RENDER_FIRST:
-            return 0
-        if mode == self.RENDER_RANDOM:
-            return np.random.randint(len(env_logs))
+        import numpy as np
+        import torch
+        import pufferlib
 
-        populated = [(i, log) for i, log in enumerate(env_logs) if log]
+        num_agents = puffer_env.observation_space.shape[0]
+        device = args["train"]["device"]
 
-        if not populated:
-            return 0
-
-        if mode == self.RENDER_WORST_SCORE:
-            return min(populated, key=lambda x: x[1].get("score", 1.0))[0]
-        elif mode == self.RENDER_WORST_COLLISION:
-            return max(populated, key=lambda x: x[1].get("collision_rate", 0.0))[0]
-        # Add other modes based on desiderata here
-        return 0
-
-    def rollout(self, policy, mode="self_play"):
-        env = self.hr_env if mode == "human_replay" else self.sp_env
-        render_eval = self.render_sp_rollout if mode == "self_play" else self.render_hr_rollout
-        driver = env.driver_env
-
-        needs_stats_first = render_eval and self.render_select_mode not in (self.RENDER_FIRST, self.RENDER_RANDOM)
-
-        if needs_stats_first:
-            env_logs = self._run_rollout(policy, env, per_env_logs=True)
-            render_env_idx = self.select_render_env(env_logs)
-        else:
-            render_env_idx = self.select_render_env([{}] * driver.num_envs)
-
-        info_list = self._run_rollout(policy, env, render_env_idx if render_eval else None)
-
-        final_info = info_list[0] if info_list else {}
-        if mode == "self_play":
-            self.self_play_stats = final_info
-            self.self_play_stats["render_env_idx"] = render_env_idx
-        elif mode == "human_replay":
-            self.human_replay_stats = final_info
-            self.human_replay_stats["render_env_idx"] = render_env_idx
-
-    def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False):
-        """Run a single rollout. If render_env_idx is not None, render that env."""
-        driver = env.driver_env
-        num_agents = env.observation_space.shape[0]
-        device = self.configs["train"]["device"]
-
-        # Reset environment
-        obs, info = env.reset()
-
-        # Initialize RNN state if needed
+        obs, info = puffer_env.reset()
         state = {}
-        if self.configs["train"]["use_rnn"]:
+        if args["train"]["use_rnn"]:
             state = dict(
                 lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
-        info_list = []
         for time_idx in range(self.sim_steps):
-            if render_env_idx is not None:
-                driver.render(env_id=render_env_idx)
-
-            # Get action from policy
+            # Step policy
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
                 logits, value = policy.forward_eval(ob_tensor, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                action_np = action.cpu().numpy().reshape(env.action_space.shape)
+                action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
-            # Clip continuous actions to valid range
             if isinstance(logits, torch.distributions.Normal):
-                action_np = np.clip(action_np, env.action_space.low, env.action_space.high)
+                action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-            # Step environment
-            obs, rewards, dones, truncs, info_list = env.step(action_np, per_env_logs=per_env_logs)
+            obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
 
-            if truncs.all():
-                break
-
-        return info_list
-
-    def log_videos(self, eval_mode, epoch):
-        """Log all mp4s in local path to wandb after env close has flushed ffmpeg pipes."""
-        import os
-        import glob
-
-        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
-            # Still clean up even if not logging
-            for p in glob.glob("*.mp4"):
-                os.remove(p)
-            return
-
-        import wandb
-
-        video_files = glob.glob("*.mp4")
-        if not video_files:
-            print("Warning: no render videos found in local path")
-            return
-
-        render_mode = self.render_select_mode
-        for p in video_files:
-            scenario_id = os.path.splitext(os.path.basename(p))[0]
-            caption = f"scene_{scenario_id}_epoch_{epoch}_select_{render_mode}"
-            self.logger.wandb.log({f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=caption)})
-
-        # Clean up
-        for p in video_files:
-            os.remove(p)
-
-    def log_stats(self):
-        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
-            return
-
-        eval_stats = {}
-
-        if self.human_replay_stats is not None:
-            eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["collision_rate"]
-            eval_stats["eval/hr_score"] = self.human_replay_stats["score"]
-        if self.self_play_stats is not None:
-            eval_stats["eval/sp_collision_rate"] = self.self_play_stats["collision_rate"]
-            eval_stats["eval/sp_score"] = self.self_play_stats["score"]
-            eval_stats["eval/num_agents"] = self.self_play_stats["n"]
-        else:
-            return
-
-        self.logger.wandb.log(eval_stats)
+            if len(info_list) > 0:  # Happens at the end of episode
+                results = info_list[0]
+                return results

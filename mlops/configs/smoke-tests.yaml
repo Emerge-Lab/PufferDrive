@@ -1,0 +1,174 @@
+# PufferDrive Smoke Tests Configuration
+# ======================================
+#
+# Short training runs (~200M steps, ~60 min on T4) for CI convergence checks.
+# Launched on every PR merge to develop via cmd_train_test.
+#
+# 4 runs covering the key training setups to verify reward trends upward.
+
+experiments:
+  - name: smoke_tests
+    machine: T4
+    params:
+      vec.num-envs: 8
+      train.total-timesteps: 500_000_000
+      train.torch-deterministic: True
+      env.num-agents: 1024
+      env.dt: 0.1
+      env.reach-goal-behavior: 1
+      env.max-lane-segment-observations: 32
+      env.max-boundary-segment-observations: 12
+      env.max-partner-observations: 4
+      env.max-traffic-light-observations: 4
+      env.max-stop-sign-observations: 1
+      policy.input-size: 64
+      policy.backbone-hidden-size: 256
+      policy.backbone-num-layers: 1
+      policy.actor-hidden-size: 256
+      policy.actor-num-layers: 0
+      policy.critic-hidden-size: 256
+      policy.critic-num-layers: 0
+      policy.split-network: False
+      policy.encoder-gigaflow: False
+      policy.dropout: 0.0
+      rnn.input-size: 256
+      rnn.hidden-size: 256
+
+    runs:
+      - name: smoke_gf_disc_jerk
+        dataset_path: "/gcs/valeo-cp2386-datasets/pufferdrive/v1.1/carla/"
+        params:
+          # Training parameters
+          train.minibatch-size: 4096
+          train.max-minibatch-size: 4096
+          train.bptt-horizon: 64
+          # Environment parameters
+          env.simulation-mode: "gigaflow"
+          env.action-type: "discrete"
+          env.dynamics-model: "jerk"
+          env.reward-conditioning: True
+          env.reward-randomization: True
+          env.scenario-length: 128
+          env.resample-frequency: 0
+          env.num-maps: 1
+
+          # Observations
+          env.target-type: "static"
+          env.num-target-waypoints: 1
+          env.min-waypoint-spacing: 2.0
+          env.max-waypoint-spacing: 2.0
+
+      - name: smoke_replay_cont_classic
+        dataset_path: "/gcs/valeo-cp2386-datasets/pufferdrive/v1.1/womd/1000/"
+        params:
+          # Training parameters
+          train.minibatch-size: 5824
+          train.max-minibatch-size: 5824
+          train.bptt-horizon: 91
+          # Environment parameters
+          env.simulation-mode: "replay"
+          env.action-type: "continuous"
+          env.dynamics-model: "classic"
+          env.reward-conditioning: False
+          env.reward-randomization: False
+          env.scenario-length: 91
+          env.resample-frequency: 910
+          env.num-maps: 1000
+
+          # Observations
+          env.target-type: "dynamic"
+          env.num-target-waypoints: 20
+          env.min-waypoint-spacing: 2.0
+          env.max-waypoint-spacing: 2.0
+
+          # Reward
+          env.reward-vehicle-collision: 1.0
+          env.reward-offroad-collision: 1.0
+          env.reward-traffic-light-violation: 1.0
+          env.reward-ade: 0.0
+          env.reward-goal: 0.0
+          env.reward-progression: 0.2
+          env.reward-under-speed: 0.05
+          env.reward-comfort: 0.0
+          env.reward-vel-align: 0.0
+          env.reward-velocity: 0.0
+          env.reward-lane-align: 0.0
+          env.reward-lane-center: 1.0
+          env.reward-timestep: 0.0
+
+      - name: smoke_replay_traj_jerk
+        dataset_path: "/gcs/valeo-cp2386-datasets/pufferdrive/v1.1/womd/1000/"
+        params:
+          # Training parameters
+          train.minibatch-size: 5824
+          train.max-minibatch-size: 5824
+          train.bptt-horizon: 91
+          # Environment parameters
+          env.simulation-mode: "replay"
+          env.action-type: "trajectory_jerk"
+          env.dynamics-model: "jerk"
+          env.reward-conditioning: False
+          env.reward-randomization: False
+          env.trajectory-scaling-factors: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+          env.scenario-length: 91
+          env.resample-frequency: 910
+          env.num-maps: 1000
+
+          # Observations
+          env.target-type: "dynamic"
+          env.num-target-waypoints: 20
+          env.min-waypoint-spacing: 2.0
+          env.max-waypoint-spacing: 2.0
+
+          # Reward
+          env.reward-vehicle-collision: 1.0
+          env.reward-offroad-collision: 1.0
+          env.reward-traffic-light-violation: 1.0
+          env.reward-ade: 0.0
+          env.reward-goal: 0.0
+          env.reward-progression: 0.2
+          env.reward-under-speed: 0.05
+          env.reward-comfort: 0.0
+          env.reward-vel-align: 0.0
+          env.reward-velocity: 0.0
+          env.reward-lane-align: 0.0
+          env.reward-lane-center: 1.0
+          env.reward-timestep: 0.0
+
+      - name: smoke_replay_disc_jerk
+        dataset_path: "/gcs/valeo-cp2386-datasets/pufferdrive/v1.1/womd/1000/"
+        params:
+          # Training parameters
+          train.minibatch-size: 5824
+          train.max-minibatch-size: 5824
+          train.bptt-horizon: 91
+          # Environment parameters
+          env.simulation-mode: "replay"
+          env.action-type: "discrete"
+          env.dynamics-model: "jerk"
+          env.reward-conditioning: False
+          env.reward-randomization: False
+          env.scenario-length: 91
+          env.resample-frequency: 910
+          env.num-maps: 1000
+
+          # Observations
+          env.target-type: "dynamic"
+          env.num-target-waypoints: 20
+          env.min-waypoint-spacing: 2.0
+          env.max-waypoint-spacing: 2.0
+
+          # Reward
+          env.reward-vehicle-collision: 1.0
+          env.reward-offroad-collision: 1.0
+          env.reward-traffic-light-violation: 1.0
+          env.reward-ade: 0.0
+          env.reward-goal: 0.0
+          env.reward-progression: 0.2
+          env.reward-under-speed: 0.05
+          env.reward-comfort: 0.0
+          env.reward-vel-align: 0.0
+          env.reward-velocity: 0.0
+          env.reward-lane-align: 0.0
+          env.reward-lane-center: 1.0
+          env.reward-timestep: 0.0

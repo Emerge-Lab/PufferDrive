@@ -141,13 +141,13 @@ dmypy.json
 # Pyre type checker
 .pyre/
 .pylintrc
-.vscode/
 
 # ROMs
 *.gb
 
 checkpoints/
 experiments/
+benchmark*/
 wandb/
 .neptune/
 raylib*/
@@ -163,14 +163,9 @@ pufferlib/ocean/impulse_wars/benchmark/
 
 # Ignore data files
 data/
-pufferlib/resources/drive/binaries/
-pufferlib/resources/drive/binaries/training/
-pufferlib/resources/drive/binaries/validation/
-
-# But keep map_000.bin for the training test
-!pufferlib/resources/drive/binaries/map_000.bin
-!pufferlib/resources/drive/binaries/training/map_000.bin
-pufferlib/resources/drive/sanity/sanity_binaries/
+pufferlib/resources/drive/binaries/*/
+!pufferlib/resources/drive/binaries/carla/
+!pufferlib/resources/drive/binaries/carla/**
 
 # Compiled drive binary in root
 /drive
@@ -187,6 +182,5 @@ pufferlib/resources/drive/output_agent.gif pufferlib/resources/drive/output.gif 
 artifacts/
 # Local drive renders
 pufferlib/resources/drive/output*.gif
-emsdk/
-docs/book/*
-!docs/book/assets/
+*.mp4
+.vscode/

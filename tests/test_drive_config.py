@@ -77,21 +77,22 @@ class TestDriveConfig(unittest.TestCase):
 
         # --- Tunable hyperparameters (tested at high strictness) ---
         if ASSERTION_LEVEL >= 3:
-            self.assertEqual(args["train"]["total_timesteps"], 2_000_000_000)
-            self.assertEqual(args["train"]["batch_size"], 524288)
-            self.assertEqual(args["train"]["rollout_horizon"], 32)
-            self.assertEqual(args["train"]["minibatch_size"], 32768)
-            self.assertEqual(args["train"]["learning_rate"], 0.003)
+            self.assertEqual(args["train"]["total_timesteps"], 3_000_000_000)
+            self.assertEqual(args["train"]["batch_size"], "auto")
+            self.assertEqual(args["train"]["bptt_horizon"], 91)
+            self.assertEqual(args["train"]["minibatch_size"], 11648)
+            self.assertEqual(args["train"]["learning_rate"], 0.001)
             self.assertEqual(args["train"]["gamma"], 0.98)
             self.assertEqual(args["train"]["gae_lambda"], 0.95)
-            self.assertEqual(args["train"]["ent_coef"], 0.005)
+            self.assertEqual(args["train"]["ent_coef"], 0.001)
             self.assertEqual(args["env"]["reward_vehicle_collision"], -0.5)
-            self.assertEqual(args["env"]["reward_offroad_collision"], -0.5)
-            self.assertEqual(args["env"]["num_maps"], 10000)
+            self.assertEqual(args["env"]["reward_offroad_collision"], -0.2)
+            self.assertEqual(args["env"]["num_maps"], 1)
 
     @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
     def test_cli_override(self):
         """Test that command-line arguments override INI file values."""
+        # learning_rate is 0.001 in drive.ini, but we override it to 0.5 here
         args = load_config("puffer_drive")
         self.assertEqual(args["train"]["learning_rate"], 0.5)
 

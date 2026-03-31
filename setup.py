@@ -1,113 +1,76 @@
 # Debug command:
 #    DEBUG=1 python setup.py build_ext --inplace --force
-#    CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python3.12 -m pufferlib.clean_pufferl eval --train.device cpu
 
 from setuptools import find_packages, find_namespace_packages, setup, Extension
 import numpy
 import os
-import glob
 import urllib.request
 import zipfile
 import tarfile
 import platform
-import shutil
 import sys
 
 from setuptools.command.build_ext import build_ext
 from torch.utils import cpp_extension
-from torch.utils.cpp_extension import (
-    CppExtension,
-    CUDAExtension,
-)
+from torch.utils.cpp_extension import CppExtension, CUDAExtension, CUDA_HOME, ROCM_HOME
+
+# build cuda extension if torch can find CUDA or HIP/ROCM in the system
+# may require `uv pip install --no-build-isolation` or `python setup.py build_ext --inplace`
+BUILD_CUDA_EXT = bool(CUDA_HOME or ROCM_HOME)
 
 # Build with DEBUG=1 to enable debug symbols
 DEBUG = os.getenv("DEBUG", "0") == "1"
 NO_OCEAN = os.getenv("NO_OCEAN", "0") == "1"
 NO_TRAIN = os.getenv("NO_TRAIN", "0") == "1"
 
-# Build raylib for your platform
+EXTERNAL_LIB_DIR = "extern"
+os.makedirs(EXTERNAL_LIB_DIR, exist_ok=True)
+
 RAYLIB_URL = "https://github.com/raysan5/raylib/releases/download/5.5/"
 RAYLIB_NAME = "raylib-5.5_macos" if platform.system() == "Darwin" else "raylib-5.5_linux_amd64"
 RLIGHTS_URL = "https://raw.githubusercontent.com/raysan5/raylib/refs/heads/master/examples/shaders/rlights.h"
-
-# Fetch inih library
 INIH_URL = "https://github.com/benhoyt/inih/archive/refs/tags/{tag}.{ext}"
 
 
-def download_raylib(platform, ext):
-    if not os.path.exists(platform):
-        print(f"Downloading Raylib {platform}")
-        urllib.request.urlretrieve(RAYLIB_URL + platform + ext, platform + ext)
-        if ext == ".zip":
-            with zipfile.ZipFile(platform + ext, "r") as zip_ref:
-                zip_ref.extractall()
-        else:
-            with tarfile.open(platform + ext, "r") as tar_ref:
-                if sys.version_info >= (3, 12):  # Use secure call when python version >= 3.12
-                    tar_ref.extractall(filter="data")
-                else:
-                    tar_ref.extractall()
+def download_raylib(name, ext):
+    dest = os.path.join(EXTERNAL_LIB_DIR, name)
+    if os.path.exists(dest):
+        return
+    print(f"Downloading Raylib {name}")
+    archive = name + ext
+    urllib.request.urlretrieve(RAYLIB_URL + archive, archive)
+    if ext == ".zip":
+        with zipfile.ZipFile(archive, "r") as zf:
+            zf.extractall(EXTERNAL_LIB_DIR)
+    else:
+        with tarfile.open(archive, "r") as tf:
+            tf.extractall(EXTERNAL_LIB_DIR, filter="data") if sys.version_info >= (3, 12) else tf.extractall(
+                EXTERNAL_LIB_DIR
+            )
+    os.remove(archive)
+    urllib.request.urlretrieve(RLIGHTS_URL, os.path.join(dest, "include", "rlights.h"))
 
-        os.remove(platform + ext)
-        urllib.request.urlretrieve(RLIGHTS_URL, platform + "/include/rlights.h")
 
-
-def download_library(url: str, name: str, tag: str, ext: str = "tar.gz", files_to_extract: list = None):
-    library_folder = name + "-" + tag
-    archive_file = library_folder + "." + ext
-    if not os.path.exists(library_folder):
-        filled_url = url.format(tag=tag, ext=ext)
-        print(f"Downloading {name}-{tag}")
-        urllib.request.urlretrieve(filled_url, archive_file)
-        if ext == "zip":
-            with zipfile.ZipFile(archive_file, "r") as zip_ref:
-                if files_to_extract:
-                    members = [
-                        member_info.filename
-                        for member_info in zip_ref.infolist()
-                        if os.path.basename(member_info.filename) in files_to_extract
-                    ]
-                    zip_ref.extractall(members=members)
-                else:
-                    zip_ref.extractall()
-        else:
-            with tarfile.open(archive_file, "r") as tar_ref:
-                kwargs = {}
-                if sys.version_info >= (3, 12):
-                    kwargs["filter"] = "data"
-                if files_to_extract:
-                    kwargs["members"] = [
-                        member for member in tar_ref.getmembers() if os.path.basename(member.name) in files_to_extract
-                    ]
-                tar_ref.extractall(**kwargs)
-        os.remove(archive_file)
+def download_inih():
+    dest = os.path.join(EXTERNAL_LIB_DIR, "inih-r62")
+    if os.path.exists(dest):
+        return
+    print("Downloading inih")
+    url = INIH_URL.format(tag="r62", ext="tar.gz")
+    archive = "inih-r62.tar.gz"
+    urllib.request.urlretrieve(url, archive)
+    with tarfile.open(archive, "r") as tf:
+        members = [m for m in tf.getmembers() if os.path.basename(m.name) in ["ini.c", "ini.h"]]
+        tf.extractall(EXTERNAL_LIB_DIR, members=members, filter="data") if sys.version_info >= (
+            3,
+            12,
+        ) else tf.extractall(EXTERNAL_LIB_DIR, members=members)
+    os.remove(archive)
 
 
 if not NO_OCEAN:
-    download_library(INIH_URL, "inih", "r62", files_to_extract=["ini.c", "ini.h"])
-    download_raylib("raylib-5.5_webassembly", ".zip")
+    download_inih()
 
-BOX2D_URL = "https://github.com/capnspacehook/box2d/releases/latest/download/"
-BOX2D_NAME = "box2d-macos-arm64" if platform.system() == "Darwin" else "box2d-linux-amd64"
-
-
-def download_box2d(platform):
-    if not os.path.exists(platform):
-        ext = ".tar.gz"
-
-        print(f"Downloading Box2D {platform}")
-        urllib.request.urlretrieve(BOX2D_URL + platform + ext, platform + ext)
-        with tarfile.open(platform + ext, "r") as tar_ref:
-            if sys.version_info >= (3, 12):
-                tar_ref.extractall(filter="data")
-            else:
-                tar_ref.extractall()
-
-        os.remove(platform + ext)
-
-
-if not NO_OCEAN:
-    download_box2d("box2d-web")
 
 # Shared compile args for all platforms
 extra_compile_args = [
@@ -165,7 +128,7 @@ if system == "Linux":
         "-Bsymbolic-functions",
     ]
     if not NO_OCEAN:
-        download_raylib("raylib-5.5_linux_amd64", ".tar.gz")
+        download_raylib(RAYLIB_NAME, ".tar.gz")
 elif system == "Darwin":
     extra_compile_args += [
         "-Wno-error=int-conversion",
@@ -181,25 +144,11 @@ elif system == "Darwin":
         "IOKit",
     ]
     if not NO_OCEAN:
-        download_raylib("raylib-5.5_macos", ".tar.gz")
+        download_raylib(RAYLIB_NAME, ".tar.gz")
 else:
     raise ValueError(f"Unsupported system: {system}")
 
-if not NO_OCEAN:
-    download_box2d(BOX2D_NAME)
 
-# Default Gym/Gymnasium/PettingZoo versions
-# Gym:
-# - 0.26 still has deprecation warnings and is the last version of the package
-# - 0.25 adds a breaking API change to reset, step, and render_modes
-# - 0.24 is broken
-# - 0.22-0.23 triggers deprecation warnings by calling its own functions
-# - 0.21 is the most stable version
-# - <= 0.20 is missing dict methods for gym.spaces.Dict
-# - 0.18-0.21 require setuptools<=65.5.0
-
-
-# Extensions
 class BuildExt(build_ext):
     def run(self):
         # Propagate any build_ext options (e.g., --inplace, --force) to subcommands
@@ -226,47 +175,29 @@ class TorchBuildExt(cpp_extension.BuildExtension):
         super().run()
 
 
-RAYLIB_A = f"{RAYLIB_NAME}/lib/libraylib.a"
-INCLUDE = [numpy.get_include(), "raylib/include", f"{BOX2D_NAME}/include", f"{BOX2D_NAME}/src"]
-extension_kwargs = dict(
-    include_dirs=INCLUDE,
-    extra_compile_args=extra_compile_args,
-    extra_link_args=extra_link_args,
-    extra_objects=[RAYLIB_A],
-)
+RAYLIB_DIR = os.path.join(EXTERNAL_LIB_DIR, RAYLIB_NAME)
+RAYLIB_A = os.path.join(RAYLIB_DIR, "lib", "libraylib.a")
+INIH_DIR = os.path.join(EXTERNAL_LIB_DIR, "inih-r62")
 
-# Find C extensions
 c_extensions = []
+c_extension_paths = []
 if not NO_OCEAN:
-    c_extension_paths = glob.glob("pufferlib/ocean/**/binding.c", recursive=True)
+    c_extension_paths = ["pufferlib/ocean/drive"]
     c_extensions = [
         Extension(
-            path.rstrip(".c").replace("/", "."),
-            sources=[path],
-            **extension_kwargs,
+            "pufferlib.ocean.drive.binding",
+            sources=["pufferlib/ocean/drive/binding.c", os.path.join(INIH_DIR, "ini.c")],
+            include_dirs=[numpy.get_include(), os.path.join(RAYLIB_DIR, "include")],
+            extra_compile_args=extra_compile_args
+            + [
+                '-DINI_START_COMMENT_PREFIXES="#"',
+                '-DINI_INLINE_COMMENT_PREFIXES="#"',
+            ],
+            extra_link_args=extra_link_args,
+            extra_objects=[RAYLIB_A],
         )
-        for path in c_extension_paths
-        if "matsci" not in path
     ]
-    c_extension_paths = [os.path.join(*path.split("/")[:-1]) for path in c_extension_paths]
 
-    for c_ext in c_extensions:
-        if "drive" in c_ext.name:
-            c_ext.sources.append("inih-r62/ini.c")
-            c_ext.extra_compile_args.extend(
-                [
-                    '-DINI_START_COMMENT_PREFIXES="#"',
-                    '-DINI_INLINE_COMMENT_PREFIXES="#"',
-                ]
-            )
-
-        if "impulse_wars" in c_ext.name:
-            print(f"Adding {c_ext.name} to extra objects")
-            c_ext.extra_objects.append(f"{BOX2D_NAME}/libbox2d.a")
-
-        if "matsci" in c_ext.name:
-            c_ext.include_dirs.append("/usr/local/include")
-            c_ext.extra_link_args.extend(["-L/usr/local/lib", "-llammps"])
 
 # Check if CUDA compiler is available. You need cuda dev, not just runtime.
 torch_extensions = []
@@ -274,7 +205,7 @@ if not NO_TRAIN:
     torch_sources = [
         "pufferlib/extensions/pufferlib.cpp",
     ]
-    if shutil.which("nvcc"):
+    if BUILD_CUDA_EXT:
         extension = CUDAExtension
         torch_sources.append("pufferlib/extensions/cuda/pufferlib.cu")
     else:
@@ -292,7 +223,7 @@ if not NO_TRAIN:
     ]
 
 # Prevent Conda from injecting garbage compile flags
-from distutils.sysconfig import get_config_vars
+from distutils.sysconfig import get_config_vars  # noqa: E402
 
 cfg_vars = get_config_vars()
 for key in ("CC", "CXX", "LDSHARED"):
@@ -306,34 +237,34 @@ for key, value in cfg_vars.items():
         cfg_vars[key] = value.replace("-fno-strict-overflow", "")
 
 install_requires = [
-    "setuptools",
-    "numpy<2.0",
-    "shimmy[gym-v21]",
-    "gym==0.23",
+    "setuptools<81",
+    "numpy",
     "gymnasium==0.29.1",
-    "pettingzoo==1.24.1",
+    "pyyaml",
 ]
 
 if not NO_TRAIN:
     install_requires += [
         "torch",
         "psutil",
-        "nvidia-ml-py",
         "rich",
         "rich_argparse",
+        "pandas",
+        "tqdm",
+        "matplotlib==3.8.4",
         "imageio",
         "pyro-ppl",
-        "heavyball<2.0.0",
+        "mediapy",
+        "heavyball",
         "neptune",
         "wandb",
-        "matplotlib",
-        "tqdm",
+        "tensorboard",
+        "google-cloud-aiplatform",
     ]
 
 setup(
     version="3.0.0",
     packages=find_namespace_packages() + find_packages() + c_extension_paths + ["pufferlib/extensions"],
-    package_data={"pufferlib": [RAYLIB_NAME + "/lib/libraylib.a"]},
     include_package_data=True,
     install_requires=install_requires,
     ext_modules=c_extensions + torch_extensions,
@@ -342,5 +273,5 @@ setup(
         "build_torch": TorchBuildExt,
         "build_c": CBuildExt,
     },
-    include_dirs=[numpy.get_include(), RAYLIB_NAME + "/include"],
+    include_dirs=[numpy.get_include(), os.path.join(RAYLIB_DIR, "include")],
 )

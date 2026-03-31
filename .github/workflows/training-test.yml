@@ -1,0 +1,37 @@
+name: Training Test
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches: [ develop ]
+
+jobs:
+  run-training-test:
+    name: Run Training Test
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
+
+      - name: Configure Docker for GCP Artifact Registry
+        run: gcloud auth configure-docker europe-west4-docker.pkg.dev
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies for mlops.py
+        run: pip install pyyaml google-cloud-aiplatform
+
+      - name: Run training test
+        run: python mlops/mlops.py train-test --verbose
+        timeout-minutes: 40

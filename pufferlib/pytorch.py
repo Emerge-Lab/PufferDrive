@@ -187,12 +187,14 @@ def entropy_probs(logits, probs):
     return -p_log_p.sum(-1)
 
 
-def sample_logits(logits, action=None):
+def sample_logits(logits, action=None, deterministic=False):
     is_discrete = isinstance(logits, torch.Tensor)
     if isinstance(logits, torch.distributions.Normal):
         batch = logits.loc.shape[0]
         if action is None:
             action = logits.sample().view(batch, -1)
+            if deterministic:
+                action = logits.loc.view(batch, -1)  # TODO -  DETERMINISTIC use mean action for eval
 
         log_probs = logits.log_prob(action.view(batch, -1)).sum(1)
         logits_entropy = logits.entropy().view(batch, -1).sum(1)
@@ -210,9 +212,12 @@ def sample_logits(logits, action=None):
     probs = logits_to_probs(logits)
 
     if action is None:
-        probs = torch.nan_to_num(probs, 1e-8, 1e-8, 1e-8)
-        action = torch.multinomial(probs.reshape(-1, probs.shape[-1]), 1, replacement=True).int()
-        action = action.reshape(probs.shape[:-1])
+        if deterministic:
+            action = torch.argmax(probs, -1)
+        else:
+            probs = torch.nan_to_num(probs, 1e-8, 1e-8, 1e-8)
+            action = torch.multinomial(probs.reshape(-1, probs.shape[-1]), 1, replacement=True).int()
+            action = action.reshape(probs.shape[:-1])
     else:
         batch = logits[0].shape[0]
         action = action.view(batch, -1).T
