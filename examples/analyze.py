@@ -14,6 +14,15 @@ NUM_AGENTS_PER_VECENV and loop resample_maps() to cover more scenes.
 
 Output: One row per scene per mode, with checkpoint name and metrics.
 
+Checkpoint naming convention (scaling):
+  [reg|unreg]_[dynamics]_[N]_maps[_anchor_[M]_maps].pt
+
+  Examples:
+    reg_delta_100_maps_anchor_50k_maps.pt
+      -> regularized, delta dynamics, 100 self-play maps, 50k anchor maps
+    unreg_delta_10_maps.pt
+      -> unregularized, delta dynamics, 10 self-play maps, no anchor
+
 Usage:
     python evaluate_checkpoints.py
 """
@@ -27,6 +36,7 @@ import pandas as pd
 
 from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
+from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────────
 CHECKPOINTS = [
@@ -34,17 +44,30 @@ CHECKPOINTS = [
     # "models/rl/reg_self_play_50k.pt",
 ]
 
-SCALING_CHECKPOINTS_PATH = "models/scaling_metadata"
+SCALING_CHECKPOINTS_PATH = "models/cpts_scaling"
 
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_training"
-NUM_TOTAL_EVAL_AGENTS = 1024 * 4
-NUM_AGENTS_PER_VECENV = 1024
+NUM_TOTAL_EVAL_AGENTS = 512  # * 4
+NUM_AGENTS_PER_VECENV = 512  # 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "checkpoint_eval_results.csv"
+WOSAC_OUTPUT_CSV = "checkpoint_wosac_results.csv"
 MAKE_FIGURES = True
+WOSAC_ONLY = True
+
+# WOSAC evaluation settings (aligned with run_wosac_eval_in_subprocess defaults)
+WOSAC_NUM_ROLLOUTS = 6
+WOSAC_TARGET_SCENARIOS = 512
+WOSAC_MAX_BATCHES = 1
+WOSAC_INIT_STEPS = 0
+WOSAC_INIT_MODE = "create_all_valid"
+WOSAC_CONTROL_MODE = "control_wosac"
+WOSAC_GOAL_BEHAVIOR = 2
+WOSAC_GOAL_RADIUS = 2.5
+WOSAC_SCENARIO_POOL_SIZE = 10_000
 # ────────────────────────────────────────────────────────────────────────────────
 
 METRICS = [
@@ -59,6 +82,17 @@ METRICS = [
     "episode_return",
     "perc_controlled",
 ]
+
+
+def _parse_num(s):
+    """Parse a number string like '10', '1k', '50k' into an integer."""
+    m = re.match(r"(\d+)(k?)", s)
+    if not m:
+        return None
+    n = int(m.group(1))
+    if m.group(2) == "k":
+        n *= 1000
+    return n
 
 
 def make_eval_config(base_config, map_dir, control_mode, goal_behavior=0, num_maps=50000):
@@ -144,7 +178,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
     sp_train_config = make_eval_config(
         base_config,
         TRAIN_MAP_DIR,
-        control_mode="control_agents",
+        control_mode="control_vehicles",
         goal_behavior=0,
     )
     env = load_env(ENV_NAME, sp_train_config)
@@ -180,7 +214,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
     # ── 2. Self-play on validation maps ──────────────────────────────────────
     all_rows.extend(
         run_mode(
-            evaluator, policy, base_config, VAL_MAP_DIR, "control_agents", checkpoint_path, "sp_val", num_maps=10_000
+            evaluator, policy, base_config, VAL_MAP_DIR, "control_vehicles", checkpoint_path, "sp_val", num_maps=10_000
         )
     )
 
@@ -223,26 +257,38 @@ def evaluate_checkpoint(checkpoint_path, base_config):
 
 
 def parse_scaling_checkpoint_name(filename):
-    """Parse a scaling checkpoint filename to extract num_maps and regularization.
+    """Parse a scaling checkpoint filename.
 
-    Expected format: {num}k_maps_{reg|unreg}.pt
+    Format: [reg|unreg]_[dynamics]_[N]_maps[_anchor_[M]_maps].pt
+
     Examples:
-        1k_maps_reg.pt   -> (1000, True)
-        10k_maps_unreg.pt -> (10000, False)
-        500_maps_reg.pt  -> (500, True)
+        reg_delta_100_maps_anchor_50k_maps.pt  -> (100, True, "delta", 50000)
+        unreg_delta_10_maps.pt                 -> (10, False, "delta", None)
 
     Returns:
-        (num_maps: int, is_regularized: bool) or None if parsing fails.
+        (sp_maps: int, is_regularized: bool, dynamics: str, anchor_maps: int|None)
+        or None if parsing fails.
     """
     stem = filename.replace(".pt", "")
-    match = re.match(r"^(\d+)(k?)_maps_(reg|unreg)$", stem)
-    if not match:
-        return None
-    num = int(match.group(1))
-    if match.group(2) == "k":
-        num *= 1000
-    is_reg = match.group(3) == "reg"
-    return num, is_reg
+
+    # Try regularized with anchor: reg_delta_100_maps_anchor_50k_maps
+    match = re.match(r"^(reg|unreg)_(\w+?)_(\d+k?)_maps_anchor_(\d+k?)_maps$", stem)
+    if match:
+        is_reg = match.group(1) == "reg"
+        dynamics = match.group(2)
+        sp_maps = _parse_num(match.group(3))
+        anchor_maps = _parse_num(match.group(4))
+        return sp_maps, is_reg, dynamics, anchor_maps
+
+    # Try without anchor: unreg_delta_10_maps
+    match = re.match(r"^(reg|unreg)_(\w+?)_(\d+k?)_maps$", stem)
+    if match:
+        is_reg = match.group(1) == "reg"
+        dynamics = match.group(2)
+        sp_maps = _parse_num(match.group(3))
+        return sp_maps, is_reg, dynamics, None
+
+    return None
 
 
 def evaluate_scaling_checkpoints(base_config):
@@ -252,7 +298,11 @@ def evaluate_scaling_checkpoints(base_config):
       - Self-play on validation maps  (mode = "scaling_sp_val")
       - Human-replay on validation maps (mode = "scaling_hr_val")
 
-    Extra columns added to each row: num_train_maps, is_regularized.
+    Extra columns added to each row:
+      - sp_maps: number of maps used for self-play training
+      - is_regularized: whether regularization was used
+      - dynamics: dynamics model name (e.g. "delta")
+      - anchor_maps: number of maps used to train the anchor (None for unreg)
 
     Returns:
         List of per-scene row dicts.
@@ -265,27 +315,36 @@ def evaluate_scaling_checkpoints(base_config):
         if parsed is None:
             print(f"  Warning: could not parse scaling checkpoint name '{fname}', skipping")
             continue
-        num_maps, is_reg = parsed
-        scaling_entries.append((os.path.join(SCALING_CHECKPOINTS_PATH, fname), num_maps, is_reg))
+        sp_maps, is_reg, dynamics, anchor_maps = parsed
+        scaling_entries.append(
+            (
+                os.path.join(SCALING_CHECKPOINTS_PATH, fname),
+                sp_maps,
+                is_reg,
+                dynamics,
+                anchor_maps,
+            )
+        )
 
-    scaling_entries.sort(key=lambda x: (x[1], x[2]))
+    scaling_entries.sort(key=lambda x: (x[1], x[2], x[4] or 0))
     if not scaling_entries:
         print("No scaling checkpoints found — skipping scaling eval.")
         return []
 
     print(f"\nFound {len(scaling_entries)} scaling checkpoints:")
-    for cpt_path, n_maps, is_reg in scaling_entries:
+    for cpt_path, sp_maps, is_reg, dynamics, anchor_maps in scaling_entries:
         tag = "reg" if is_reg else "unreg"
-        print(f"  {os.path.basename(cpt_path)}  ->  {n_maps} maps, {tag}")
+        anchor_str = f"anchor={anchor_maps}" if anchor_maps is not None else "no anchor"
+        print(f"  {os.path.basename(cpt_path)}  ->  sp={sp_maps}, {tag}, {dynamics}, {anchor_str}")
 
     all_rows = []
-    for cpt_path, n_maps, is_reg in scaling_entries:
+    for cpt_path, sp_maps, is_reg, dynamics, anchor_maps in scaling_entries:
         print(f"\n{'─' * 60}")
         print(f"Scaling eval: {os.path.basename(cpt_path)}")
         print(f"{'─' * 60}")
 
         # Bootstrap an env so load_policy has a vecenv to inspect
-        init_config = make_eval_config(base_config, VAL_MAP_DIR, control_mode="control_agents", num_maps=10_000)
+        init_config = make_eval_config(base_config, VAL_MAP_DIR, control_mode="control_vehicles", num_maps=10_000)
         env = load_env(ENV_NAME, init_config)
         base_config["load_model_path"] = cpt_path
         policy = load_policy(base_config, env, ENV_NAME)
@@ -294,82 +353,194 @@ def evaluate_scaling_checkpoints(base_config):
 
         evaluator = CheckpointEvaluator(base_config)
 
-        # ── Self-play on training ───────────────────────────────────────
-        sp_train_rows = run_mode(
-            evaluator,
-            policy,
-            base_config,
-            TRAIN_MAP_DIR,
-            "control_agents",
-            cpt_path,
-            "scaling_sp_train",
-            num_maps=50_000,
-        )
-
         # ── Self-play on validation ──────────────────────────────────────
         sp_rows = run_mode(
             evaluator,
             policy,
             base_config,
             VAL_MAP_DIR,
-            "control_agents",
+            "control_vehicles",
             cpt_path,
             "scaling_sp_val",
             num_maps=10_000,
         )
 
-        # ── Human-replay on validation ──────────────────────────────────
+        # ── Human-replay on interactive scenes ───────────────────────
         hr_rows = run_mode(
             evaluator,
             policy,
             base_config,
-            VAL_MAP_DIR,
+            INTERACTIVE_MAP_DIR,
             "control_sdc_only",
             cpt_path,
-            "scaling_hr_val",
-            num_maps=10_000,
+            "scaling_hr_interactive",
+            num_maps=1_000,
         )
 
         # Attach scaling metadata to every row
-        for row in sp_train_rows + sp_rows + hr_rows:
-            row["num_train_maps"] = n_maps
+        for row in sp_rows + hr_rows:
+            row["sp_maps"] = sp_maps
             row["is_regularized"] = is_reg
+            row["dynamics"] = dynamics
+            row["anchor_maps"] = anchor_maps  # None for unreg
 
-        all_rows.extend(sp_train_rows)
         all_rows.extend(sp_rows)
         all_rows.extend(hr_rows)
 
     return all_rows
 
 
+def make_wosac_config(base_config, map_dir, num_maps=None):
+    """Build a config suitable for WOSACEvaluator from the base config.
+
+    Settings aligned with run_wosac_eval_in_subprocess defaults.
+    """
+    num_maps = num_maps or WOSAC_SCENARIO_POOL_SIZE
+    config = copy.deepcopy(base_config)
+    config["env"]["map_dir"] = map_dir
+    config["env"]["num_maps"] = num_maps
+    config["env"]["num_agents"] = NUM_AGENTS_PER_VECENV
+    config["env"]["control_mode"] = WOSAC_CONTROL_MODE
+    config["env"]["goal_behavior"] = WOSAC_GOAL_BEHAVIOR
+    config["env"]["goal_radius"] = WOSAC_GOAL_RADIUS
+    config["env"]["init_mode"] = WOSAC_INIT_MODE
+    config["env"]["episode_length"] = 91
+    config["env"]["termination_mode"] = 1
+    config["env"]["fix_lambdas"] = True
+    config["env"]["fix_rewards"] = True
+    config["env"]["obs_partner_noise_speed"] = 0.0
+    config["env"]["obs_partner_noise_pos"] = 0.0
+    config["vec"] = dict(backend="PufferEnv", num_envs=1)
+    config.setdefault("eval", {})
+    config["eval"]["wosac_num_rollouts"] = WOSAC_NUM_ROLLOUTS
+    config["eval"]["wosac_target_scenarios"] = WOSAC_TARGET_SCENARIOS
+    config["eval"]["wosac_max_batches"] = WOSAC_MAX_BATCHES
+    config["eval"]["wosac_init_steps"] = WOSAC_INIT_STEPS
+    config["eval"]["wosac_filter_out_post_done"] = True
+    config["eval"]["wosac_sanity_check"] = False
+    return config
+
+
+WOSAC_METRICS = [
+    "realism_meta_score",
+    "kinematic_metrics",
+    "interactive_metrics",
+    "map_based_metrics",
+]
+
+
+def evaluate_scaling_wosac(base_config):
+    """Run WOSAC evaluation for all scaling checkpoints on the validation set.
+
+    Returns:
+        pd.DataFrame with one row per scenario per checkpoint, containing
+        WOSAC metrics and scaling metadata columns.
+    """
+    scaling_entries = []
+    for fname in sorted(os.listdir(SCALING_CHECKPOINTS_PATH)):
+        if not fname.endswith(".pt"):
+            continue
+        parsed = parse_scaling_checkpoint_name(fname)
+        if parsed is None:
+            continue
+        sp_maps, is_reg, dynamics, anchor_maps = parsed
+        scaling_entries.append(
+            (
+                os.path.join(SCALING_CHECKPOINTS_PATH, fname),
+                sp_maps,
+                is_reg,
+                dynamics,
+                anchor_maps,
+            )
+        )
+
+    scaling_entries.sort(key=lambda x: (x[1], x[2], x[4] or 0))
+    if not scaling_entries:
+        print("No scaling checkpoints found — skipping WOSAC eval.")
+        return pd.DataFrame()
+
+    print(f"\nWOSAC evaluation for {len(scaling_entries)} scaling checkpoints:")
+
+    all_dfs = []
+    for cpt_path, sp_maps, is_reg, dynamics, anchor_maps in scaling_entries:
+        print(f"\n{'─' * 60}")
+        print(f"WOSAC eval: {os.path.basename(cpt_path)}")
+        print(f"{'─' * 60}")
+
+        wosac_config = make_wosac_config(base_config, VAL_MAP_DIR, num_maps=10_000)
+        env = load_env(ENV_NAME, wosac_config)
+        base_config["load_model_path"] = cpt_path
+        policy = load_policy(base_config, env, ENV_NAME)
+        policy.eval()
+
+        wosac_eval = WOSACEvaluator(wosac_config)
+        try:
+            df_scenes = wosac_eval.evaluate(wosac_config, env, policy, drop_scene_duplicates=True)
+
+            # Keep only the metrics we need, reset index to get scenario_id as column
+            df_scenes = df_scenes[WOSAC_METRICS].copy()
+            df_scenes = df_scenes.reset_index()
+            df_scenes["checkpoint"] = cpt_path
+            df_scenes["sp_maps"] = sp_maps
+            df_scenes["is_regularized"] = is_reg
+            df_scenes["dynamics"] = dynamics
+            df_scenes["anchor_maps"] = anchor_maps
+
+            n = len(df_scenes)
+            meta = df_scenes["realism_meta_score"].mean()
+            print(f"  WOSAC: {n} scenarios, realism_meta_score={meta:.4f}")
+            all_dfs.append(df_scenes)
+        except Exception as e:
+            print(f"  WOSAC failed (non-fatal): {e}")
+
+        env.close()
+
+    if not all_dfs:
+        return pd.DataFrame()
+    return pd.concat(all_dfs, ignore_index=True)
+
+
 def main():
     base_config = load_config(ENV_NAME)
 
-    all_rows = []
-    for cpt_path in CHECKPOINTS:
-        print(f"\n{'=' * 60}")
-        print(f"Evaluating: {cpt_path}")
-        print(f"{'=' * 60}")
-        rows = evaluate_checkpoint(cpt_path, base_config)
-        all_rows.extend(rows)
+    df = pd.DataFrame()
+    wosac_df = pd.DataFrame()
 
-    # ── 6. Scaling analysis ──────────────────────────────────────────────────
-    scaling_rows = evaluate_scaling_checkpoints(base_config)
-    all_rows.extend(scaling_rows)
+    if not WOSAC_ONLY:
+        all_rows = []
+        for cpt_path in CHECKPOINTS:
+            print(f"\n{'=' * 60}")
+            print(f"Evaluating: {cpt_path}")
+            print(f"{'=' * 60}")
+            rows = evaluate_checkpoint(cpt_path, base_config)
+            all_rows.extend(rows)
 
-    df = pd.DataFrame(all_rows)
-    df.to_csv(OUTPUT_CSV, index=False)
-    print(f"\nResults saved to {OUTPUT_CSV} ({len(df)} rows)")
+        # ── Scaling analysis ─────────────────────────────────────────────────
+        scaling_rows = evaluate_scaling_checkpoints(base_config)
+        all_rows.extend(scaling_rows)
 
-    # Print summary per checkpoint and mode
-    if not df.empty:
-        summary = df.groupby(["checkpoint", "mode"])[["score", "collision_rate", "offroad_rate"]].mean()
-        print(f"\n{summary}")
+        df = pd.DataFrame(all_rows)
+        df.to_csv(OUTPUT_CSV, index=False)
+        print(f"\nResults saved to {OUTPUT_CSV} ({len(df)} rows)")
 
-    if MAKE_FIGURES and not df.empty:
+        if not df.empty:
+            summary = df.groupby(["checkpoint", "mode"])[["score", "collision_rate", "offroad_rate"]].mean()
+            print(f"\n{summary}")
+
+    # ── WOSAC scaling analysis ───────────────────────────────────────────────
+    wosac_df = evaluate_scaling_wosac(base_config)
+    if not wosac_df.empty:
+        wosac_df.to_csv(WOSAC_OUTPUT_CSV, index=False)
+        print(f"\nWOSAC results saved to {WOSAC_OUTPUT_CSV} ({len(wosac_df)} rows)")
+
+    # ── Figures ──────────────────────────────────────────────────────────────
+    if MAKE_FIGURES:
         from pufferlib.ocean.benchmark.plot import make_all_figures
 
-        make_all_figures(df)
+        make_all_figures(
+            df if not df.empty else None,
+            wosac_df if not wosac_df.empty else None,
+        )
 
     return df
 

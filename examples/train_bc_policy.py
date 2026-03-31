@@ -51,7 +51,7 @@ TRAIN_DEFAULTS = {
     "hidden_size": 512,
     "batch_size": 2048,
     "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
-    "epochs": 1500,
+    "epochs": 10,
     "num_maps": 50000,
     "eval_frequency": 10,  # Validation dataset
 }
