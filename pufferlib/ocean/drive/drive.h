@@ -1,3 +1,6 @@
+#ifndef DRIVE_H
+#define DRIVE_H
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -4671,3 +4674,5 @@ void c_step(Drive *env) {
 }
 
 #include "render.h"
+
+#endif // DRIVE_H
