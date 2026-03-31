@@ -362,11 +362,12 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             scratch_dir = os.environ.get("SCRATCH_DIR", "/scratch/" + os.environ.get("USER", ""))
             cache_exports = (
                 f"export XDG_CACHE_HOME={scratch_dir}/cache && "
+                f"export MPLCONFIGDIR={scratch_dir}/cache/matplotlib && "
                 f"export WANDB_CACHE_DIR={scratch_dir}/wandb_cache && "
                 f"export WANDB_CONFIG_DIR={scratch_dir}/wandb_config && "
                 f"export WANDB_DATA_DIR={scratch_dir}/wandb_data && "
                 f"export WANDB_DIR={scratch_dir}/wandb_data && "
-                f"mkdir -p {scratch_dir}/cache"
+                f"mkdir -p {scratch_dir}/cache/matplotlib"
             )
             inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && " + " ".join(full_cmd)
             full_cmd = [
