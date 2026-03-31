@@ -279,6 +279,11 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
             vids_exist = os.path.exists(topdown_tmp) and os.path.exists(agent_tmp)
 
+            if not vids_exist and result.stderr:
+                print(f"Visualize stderr: {result.stderr[:500]}")
+            if not vids_exist and result.stdout:
+                print(f"Visualize stdout: {result.stdout[:500]}")
+
             if result.returncode == 0 or (result.returncode == 1 and vids_exist):
                 videos = [
                     (
@@ -323,6 +328,4 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         print(f"Failed to generate GIF: {e}")
 
     finally:
-        # Clean up bin weights file
-        if os.path.exists(expected_weights_path):
-            os.remove(expected_weights_path)
+        pass
