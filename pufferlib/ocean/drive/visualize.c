@@ -231,11 +231,10 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .dt = conf.dt,
         .map_name = (char *)map_name,
         .init_steps = init_steps,
-        .max_controlled_agents = max_controlled_agents,
+        .num_controllable_agents = max_controlled_agents,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .compute_eval_metrics = conf.compute_eval_metrics,
-        .goal_behavior = goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,
     };
