@@ -234,9 +234,14 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .num_controllable_agents = max_controlled_agents,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
+        .traffic_light_behavior = conf.traffic_light_behavior,
         .compute_eval_metrics = conf.compute_eval_metrics,
         .init_mode = init_mode,
         .control_mode = control_mode,
+        .simulation_mode = conf.simulation_mode,
+        .num_target_waypoints = conf.num_target_waypoints,
+        .min_waypoint_spacing = conf.min_waypoint_spacing,
+        .max_waypoint_spacing = conf.max_waypoint_spacing,
     };
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override
@@ -406,7 +411,7 @@ int main(int argc, char *argv[]) {
     int init_steps = 0;
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
-    int max_controlled_agents = -1;
+    int max_controlled_agents = 32;
     int num_maps = 1;
     int scenario_length_cli = -1;
     int init_mode = 0;
