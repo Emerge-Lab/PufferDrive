@@ -247,8 +247,13 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
-        if render_maps is None:
-            render_maps = [None]
+        if render_maps is None or render_maps == "none":
+            # Auto-discover maps from the env's map_dir
+            map_dir = config.get("env", {}).get("map_dir", None) if isinstance(config.get("env"), dict) else getattr(env_cfg, "map_dir", None)
+            if map_dir and os.path.isdir(map_dir):
+                render_maps = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
+            if not render_maps:
+                render_maps = [None]
         elif isinstance(render_maps, (str, os.PathLike)):
             render_maps = [render_maps]
         else:
