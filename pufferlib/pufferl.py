@@ -40,6 +40,7 @@ import pufferlib
 import pufferlib.sweep
 import pufferlib.vector
 import pufferlib.pytorch
+import pufferlib.utils
 import pufferlib.viz
 
 import mediapy
