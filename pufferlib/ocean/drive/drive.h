@@ -3801,6 +3801,7 @@ static void compute_rewards(Drive *env, int i) {
 
     env->rewards[i] += speed_reward;
     env->logs[i].avg_speed_per_agent += agent->sim_speed;
+    agent->distance_since_spawn += agent->sim_speed * env->dt;
     env->logs[i].episode_return += speed_reward;
 
     // ADE reward (CUSTOM)
