@@ -3423,7 +3423,7 @@ void c_step(Drive *env) {
     float stopped_fraction = (float)stopped_count / (float)env->active_agent_count;
     int reached_stopped_threshold =
         (env->stopped_reset_threshold > 0.0f && stopped_fraction >= env->stopped_reset_threshold);
-    int reached_time_limit = (env->timestep + 1) >= env->episode_length;
+    int reached_time_limit = env->timestep >= env->episode_length;
     int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
     if (reached_time_limit || reached_early_termination || reached_stopped_threshold) {
         for (int i = 0; i < env->active_agent_count; i++) {

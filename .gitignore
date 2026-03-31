@@ -163,6 +163,8 @@ pufferlib/ocean/impulse_wars/benchmark/
 
 # Ignore data files
 data/
+!data/CarlaXODRs/
+!data/CarlaXODRs/**
 pufferlib/resources/drive/binaries/
 pufferlib/resources/drive/binaries/training/
 pufferlib/resources/drive/binaries/validation/
@@ -171,6 +173,10 @@ pufferlib/resources/drive/binaries/validation/
 !pufferlib/resources/drive/binaries/map_000.bin
 !pufferlib/resources/drive/binaries/training/map_000.bin
 pufferlib/resources/drive/sanity/sanity_binaries/
+
+# Keep carla map binaries
+!pufferlib/resources/drive/binaries/carla/**
+!pufferlib/resources/drive/binaries/carla_2D/**
 
 # Compiled drive binary in root
 /drive
