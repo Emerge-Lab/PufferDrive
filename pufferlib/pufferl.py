@@ -2372,7 +2372,7 @@ def ensure_drive_binary():
     print("Building visualize binary...")
     try:
         result = subprocess.run(
-            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
+            ["bash", "scripts/build_ocean.sh", "visualize", "fast"], capture_output=True, text=True, timeout=300
         )
 
         if result.returncode == 0:
