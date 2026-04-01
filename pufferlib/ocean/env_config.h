@@ -182,7 +182,10 @@ static int handler(void *config, const char *section, const char *name, const ch
     } else if (MATCH("env", "max_stop_sign_observations")) {
         env_config->max_stop_sign_observations = atoi(value);
     } else {
-        return 1; // Unknown section/name, skip silently
+        if (strcmp(section, "env") == 0) {
+            printf("Warning: unknown key '%s' in [env] section\n", name);
+        }
+        return 1; // Skip keys in non-env sections silently
     }
 
 #undef MATCH
