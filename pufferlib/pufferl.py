@@ -1962,6 +1962,10 @@ def eval_gigaflow(env_name, config, eval_config, policy, logger, global_step):
         for info_item in infos:
             if isinstance(info_item, dict):
                 all_infos.append(info_item)
+            elif isinstance(info_item, list):
+                for sub_item in info_item:
+                    if isinstance(sub_item, dict):
+                        all_infos.append(sub_item)
 
     # Aggregate and log metrics
     if all_infos:
