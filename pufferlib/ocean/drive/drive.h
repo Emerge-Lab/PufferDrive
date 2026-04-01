@@ -109,7 +109,7 @@
 #define EGO_FEATURES_JERK 9
 #define ROAD_FEATURES 7
 #define PARTNER_FEATURES 8
-#define TRAFFIC_LIGHT_FEATURES 6
+#define TRAFFIC_LIGHT_FEATURES 7
 #define STOP_SIGN_FEATURES 3
 #define STATIC_TARGET_FEATURES 3
 #define DYNAMIC_TARGET_FEATURES 5
@@ -3265,6 +3265,10 @@ void init(Drive *env) {
             }
         }
         generate_traffic_light_states(env);
+        // Initialize state-change tracking
+        for (int i = 0; i < env->num_traffic_elements; i++) {
+            env->traffic_elements[i].current_state_start_timestep = 0;
+        }
     }
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
 
@@ -4235,6 +4239,9 @@ static void compute_observations(Drive *env) {
             obs[obs_idx++] = rel_x2 / MAX_POSITION;
             obs[obs_idx++] = rel_y2 / MAX_POSITION;
             obs[obs_idx++] = rel_z;
+            // Elapsed time in current state (seconds, normalized by max green duration)
+            float elapsed = (env->timestep - traffic->current_state_start_timestep) * env->dt;
+            obs[obs_idx++] = fminf(elapsed / TL_DEFAULT_GREEN_DURATION, 1.0f);
             obs[obs_idx++] = normalize_traffic_light_state(state);
             lights_added++;
         }
@@ -4520,6 +4527,9 @@ void c_reset(Drive *env) {
 
     if (env->simulation_mode == SIMULATION_GIGAFLOW) {
         generate_traffic_light_states(env);
+        for (int i = 0; i < env->num_traffic_elements; i++) {
+            env->traffic_elements[i].current_state_start_timestep = 0;
+        }
         int num_reset = 0;
         for (int x = 0; x < env->active_agent_count; x++) {
             int agent_idx = env->active_agent_indices[x];
@@ -4591,6 +4601,17 @@ void c_step(Drive *env) {
     }
 
     env->timestep++;
+
+    // Update traffic light state-change tracking
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *tc = &env->traffic_elements[i];
+        if (tc->type != TRAFFIC_LIGHT || tc->states == NULL || env->timestep >= tc->state_length)
+            continue;
+        int prev_t = env->timestep - 1;
+        if (prev_t < 0 || tc->states[env->timestep] != tc->states[prev_t]) {
+            tc->current_state_start_timestep = env->timestep;
+        }
+    }
 
     // -> 1. Check for episode termination
     int early_reset = 0;

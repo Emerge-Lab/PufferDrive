@@ -301,6 +301,7 @@ struct TrafficControlElement {
     float heading;
     int num_controlled_lanes;
     int *controlled_lanes;
+    int current_state_start_timestep; // timestep when current state began
 };
 
 typedef struct {

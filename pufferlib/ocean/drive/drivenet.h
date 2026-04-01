@@ -161,9 +161,9 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model) {
     int ego_dim = (dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     int partner_features = PARTNER_FEATURES;         // 8
     int road_features = ROAD_FEATURES;               // 7
-    int traffic_light_features_raw = TRAFFIC_LIGHT_FEATURES; // 6
+    int traffic_light_features_raw = TRAFFIC_LIGHT_FEATURES; // 7
     int num_tl_states = 4; // NUM_TRAFFIC_LIGHT_STATES from datatypes.h
-    int traffic_light_features_onehot = traffic_light_features_raw - 1 + num_tl_states; // 5+4=9
+    int traffic_light_features_onehot = traffic_light_features_raw - 1 + num_tl_states; // 6+4=10
 
     // Observation counts (from drive.ini defaults)
     int max_partner_obs = 20;
@@ -338,7 +338,7 @@ void forward(DriveNet *net, float *observations, int *actions) {
         for (int obj = 0; obj < net->max_traffic_light_obs; obj++) {
             float *raw = &observations[b * obs_stride + raw_offset + obj * net->traffic_light_features_raw];
             float *out = &net->traffic_light_onehot_buf[(b * net->max_traffic_light_obs + obj) * net->traffic_light_features_onehot];
-            // Copy continuous features (first 5)
+            // Copy continuous features (first 6: rel_x1, rel_y1, rel_x2, rel_y2, rel_z, elapsed_time)
             for (int f = 0; f < net->traffic_light_features_raw - 1; f++) {
                 out[f] = raw[f];
             }
