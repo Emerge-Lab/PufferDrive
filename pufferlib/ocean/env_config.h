@@ -182,7 +182,7 @@ static int handler(void *config, const char *section, const char *name, const ch
     } else if (MATCH("env", "max_stop_sign_observations")) {
         env_config->max_stop_sign_observations = atoi(value);
     } else {
-        return 0; // Unknown section/name, indicate failure to handle
+        return 1; // Unknown section/name, skip silently
     }
 
 #undef MATCH
