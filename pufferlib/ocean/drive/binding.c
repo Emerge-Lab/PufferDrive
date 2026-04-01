@@ -1566,6 +1566,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             int agents_per_env = max_agents_per_env;
             int env_count = (num_agents + agents_per_env - 1) / agents_per_env;
             env_count--;
+            if (env_count < 1) env_count = 1;
 
             env_count = env_count > num_eval_scenarios ? num_eval_scenarios : env_count;
 

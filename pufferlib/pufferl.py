@@ -1918,17 +1918,16 @@ def eval_gigaflow(env_name, config, eval_config, policy, logger, global_step):
 
     # Build eval env kwargs from training env config + eval overrides
     env_kwargs = copy.deepcopy(config.get("env_config", {}))
-    num_eval_agents = eval_config.get("num_agents", 50)
     env_kwargs.update({
-        "num_agents": num_eval_agents,
-        "min_agents_per_env": eval_config.get("min_agents_per_env", 1),
-        "max_agents_per_env": eval_config.get("max_agents_per_env", num_eval_agents),
+        "num_agents": eval_config.get("num_agents", 50),
+        "min_agents_per_env": eval_config.get("min_agents_per_env", 50),
+        "max_agents_per_env": eval_config.get("max_agents_per_env", 50),
+        "eval_mode": 1 if eval_config.get("eval_mode", True) else 0,
         "dt": eval_config.get("dt", 0.066),
         "scenario_length": eval_config.get("scenario_length", 9000),
         "perceived_size_inflation": eval_config.get("perceived_size_inflation", 0.1),
         "traffic_light_behavior": eval_config.get("traffic_light_behavior", 0),
         "reward_randomization": eval_config.get("reward_randomization", False),
-        "eval_mode": 1 if eval_config.get("eval_mode", True) else 0,
         "num_maps": eval_config.get("num_maps", 8),
         "simulation_mode": "gigaflow",
         "termination_mode": 0,  # No early termination during eval
