@@ -343,17 +343,33 @@ def export_to_onnx(verify=True):
         dynamic_axes["trajectory"] = {0: "batch_size"}
 
     dummy_inputs = (dummy_obs, dummy_h, dummy_c)
-    torch.onnx.export(
-        onnx_policy,
-        dummy_inputs,
-        args.output,
-        export_params=True,
-        opset_version=args.opset,
-        do_constant_folding=True,
-        input_names=["observation", "lstm_h_in", "lstm_c_in"],
-        output_names=output_names,
-        dynamic_axes=dynamic_axes,
-    )
+    with torch.no_grad():
+        torch.onnx.export(
+            onnx_policy,
+            dummy_inputs,
+            args.output,
+            export_params=True,
+            opset_version=17,
+            do_constant_folding=True,
+            input_names=["observation", "lstm_h_in", "lstm_c_in"],
+            output_names=output_names,
+            dynamic_axes=dynamic_axes,
+        )
+
+    # Inlined weights into single onnx file
+    import onnx
+
+    model_proto = onnx.load(args.output, load_external_data=True)
+    data_file = args.output + ".data"
+    if os.path.exists(data_file):
+        os.remove(data_file)
+    # Patch dim[0] of all inputs and outputs to be symbolic "batch_size"
+    for tensor in list(model_proto.graph.input) + list(model_proto.graph.output):
+        dim = tensor.type.tensor_type.shape.dim[0]
+        dim.ClearField("dim_value")
+        dim.dim_param = "batch_size"
+    onnx.save(model_proto, args.output, save_as_external_data=False)
+    print(f"Inlined weights into single file: {args.output}")
 
     print("Export complete!")
     print("\nSample Inputs shapes:")
@@ -441,6 +457,7 @@ def export_to_onnx(verify=True):
         # Generate INI with gigaflow-matching coefficients pinned (min=max)
         import configparser
         import tempfile
+
         ini_config = configparser.ConfigParser()
         ini_config.read("pufferlib/config/ocean/drive.ini")
         # Gigaflow-matching coefficients (sign matches INI convention)
@@ -477,6 +494,7 @@ def export_to_onnx(verify=True):
 
         # Build visualize binary
         import subprocess
+
         subprocess.run(["bash", "scripts/build_ocean.sh", "visualize", "local"], check=True)
 
         # Pick a map
@@ -489,11 +507,16 @@ def export_to_onnx(verify=True):
             output_video = os.path.splitext(args.output)[0] + "_video.mp4"
             cmd = [
                 "./visualize",
-                "--config", ini_path,
-                "--policy-name", bin_path,
-                "--map-name", map_path,
-                "--view", "both",
-                "--output-topdown", output_video,
+                "--config",
+                ini_path,
+                "--policy-name",
+                bin_path,
+                "--map-name",
+                map_path,
+                "--view",
+                "both",
+                "--output-topdown",
+                output_video,
             ]
             print(f"Running: {' '.join(cmd)}")
             subprocess.run(cmd)

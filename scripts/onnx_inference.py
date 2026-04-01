@@ -2,11 +2,26 @@
 
 Handles observation construction, reward conditioning insertion, and action decoding.
 
-Usage:
+Usage (library):
     from scripts.onnx_inference import DrivePolicyONNX
 
     policy = DrivePolicyONNX("path/to/model.onnx")
     action, value, trajectory = policy.step(ego_state, partners, road_segments)
+
+Usage (CLI — single inference step + optional video render):
+    python -m scripts.onnx_inference \
+        --model experiments/puffer_drive_177505208138.onnx \
+        --bin experiments/puffer_drive_177505208138.bin \
+        --map resources/drive/binaries/carla_2D/map_000.bin
+
+    --model       Path to .onnx model file
+    --bin         Path to .bin policy weights (required with --map)
+    --map         Path to .bin map file for video rendering
+    --dynamics    Dynamics model: jerk (default) or classic
+    --ini-config  Path to INI config (default: pufferlib/config/ocean/drive.ini)
+                  The [safe_eval] reward conditioning values are used for rendering.
+    --verify      Path to .pt checkpoint to verify ONNX output against PyTorch
+    --steps       Number of verification steps (default: 5)
 """
 
 import numpy as np
@@ -28,22 +43,22 @@ SPEED_LIMIT = 20.0
 
 # Reward coefficient indices (must match datatypes.h)
 COEF_NAMES = [
-    "goal_radius",      # 0
-    "collision",         # 1
-    "offroad",           # 2
-    "comfort",           # 3
-    "lane_align",        # 4
-    "lane_center",       # 5
-    "velocity",          # 6
-    "traffic_light",     # 7
-    "center_bias",       # 8
-    "vel_align",         # 9
-    "overspeed",         # 10
-    "timestep",          # 11
-    "reverse",           # 12
-    "throttle",          # 13
-    "steer",             # 14
-    "acc",               # 15
+    "goal_radius",  # 0
+    "collision",  # 1
+    "offroad",  # 2
+    "comfort",  # 3
+    "lane_align",  # 4
+    "lane_center",  # 5
+    "velocity",  # 6
+    "traffic_light",  # 7
+    "center_bias",  # 8
+    "vel_align",  # 9
+    "overspeed",  # 10
+    "timestep",  # 11
+    "reverse",  # 12
+    "throttle",  # 13
+    "steer",  # 14
+    "acc",  # 15
 ]
 
 # Gigaflow-matching defaults
@@ -254,7 +269,7 @@ class DrivePolicyONNX:
         outputs = self.session.run(None, inputs)
 
         logits = outputs[0]  # [1, num_actions]
-        value = outputs[1]   # [1, 1]
+        value = outputs[1]  # [1, 1]
         self.lstm_h = outputs[2]
         self.lstm_c = outputs[3]
 
@@ -377,7 +392,10 @@ def verify_onnx_vs_pytorch(onnx_path, checkpoint_path, env_name="puffer_drive", 
     make_env = env_module.env_creator(env_name)
 
     vecenv = pufferlib.vector.make(
-        make_env, env_kwargs=config["env"], backend=pufferlib.vector.Serial, num_envs=1,
+        make_env,
+        env_kwargs=config["env"],
+        backend=pufferlib.vector.Serial,
+        num_envs=1,
     )
 
     # Load PyTorch policy
@@ -473,14 +491,17 @@ def verify_onnx_vs_pytorch(onnx_path, checkpoint_path, env_name="puffer_drive", 
         status = "PASS" if (logits_match and value_match and action_match) else "FAIL"
         if status == "FAIL":
             all_pass = False
-        print(f"         MODEL {status}"
-              f"  logits_close={logits_match}"
-              f"  value_close={value_match}"
-              f"  action_match={action_match} (pt={pt_action}, ort={ort_action})"
-              f"  max_logit_diff={np.abs(pt_logits_np[0:1] - ort_logits_np).max():.6f}")
+        print(
+            f"         MODEL {status}"
+            f"  logits_close={logits_match}"
+            f"  value_close={value_match}"
+            f"  action_match={action_match} (pt={pt_action}, ort={ort_action})"
+            f"  max_logit_diff={np.abs(pt_logits_np[0:1] - ort_logits_np).max():.6f}"
+        )
 
         # Step env
         import pufferlib.pytorch
+
         action, _, _ = pufferlib.pytorch.sample_logits(pt_logits)
         action_np = action.cpu().numpy().reshape(vecenv.action_space.shape)
         ob = vecenv.step(action_np)[0]
@@ -501,6 +522,14 @@ if __name__ == "__main__":
     parser.add_argument("--dynamics", type=str, default="jerk", choices=["jerk", "classic"])
     parser.add_argument("--verify", type=str, default=None, help="Path to .pt checkpoint to verify against")
     parser.add_argument("--steps", type=int, default=5, help="Number of verification steps")
+    parser.add_argument("--map", type=str, default=None, help="Path to .bin map file for video rendering")
+    parser.add_argument("--bin", type=str, default=None, help="Path to .bin policy weights for the visualize binary")
+    parser.add_argument(
+        "--ini-config",
+        type=str,
+        default="pufferlib/config/ocean/drive.ini",
+        help="Path to INI config for the visualize binary",
+    )
     args = parser.parse_args()
 
     if args.verify:
@@ -508,10 +537,17 @@ if __name__ == "__main__":
     else:
         policy = DrivePolicyONNX(args.model, dynamics_model=args.dynamics)
         ego = {
-            "rel_goal_x": 50.0, "rel_goal_y": 0.0, "rel_goal_z": 0.0,
-            "speed": 10.0, "width": 2.0, "length": 4.5,
-            "steering_angle": 0.0, "a_long": 0.0, "a_lat": 0.0,
-            "lane_center_dist": 0.0, "lane_angle": 1.0,
+            "rel_goal_x": 50.0,
+            "rel_goal_y": 0.0,
+            "rel_goal_z": 0.0,
+            "speed": 10.0,
+            "width": 2.0,
+            "length": 4.5,
+            "steering_angle": 0.0,
+            "a_long": 0.0,
+            "a_lat": 0.0,
+            "lane_center_dist": 0.0,
+            "lane_angle": 1.0,
         }
         action, value, trajectory = policy.step(ego)
         decoded = policy.decode_action(action)
@@ -519,3 +555,32 @@ if __name__ == "__main__":
         print(f"Value: {value:.4f}")
         if trajectory is not None:
             print(f"Trajectory: {trajectory.shape}, endpoint: ({trajectory[-1, 0]:.1f}, {trajectory[-1, 1]:.1f})")
+
+    if args.map:
+        if not args.bin:
+            parser.error("--bin is required when --map is provided")
+        import configparser
+        import os
+        from pufferlib.utils import generate_safe_eval_ini, render_videos
+
+        # Read [safe_eval] section and generate a temp INI with pinned reward bounds
+        cfg = configparser.ConfigParser()
+        cfg.read(args.ini_config)
+        safe_eval_config = dict(cfg["safe_eval"]) if cfg.has_section("safe_eval") else {}
+        tmp_ini = generate_safe_eval_ini(safe_eval_config, base_ini_path=args.ini_config)
+        print(f"Generated temporary INI for rendering with safe eval config: {tmp_ini}")
+        try:
+            render_videos(
+                config={"data_dir": ".", "env": "puffer_drive", "render_map": args.map},
+                run_id="onnx_inference",
+                wandb_log=False,
+                epoch=0,
+                global_step=0,
+                bin_path=args.bin,
+                render_async=False,
+                config_path=tmp_ini,
+                num_maps=1,
+            )
+        finally:
+            if os.path.exists(tmp_ini):
+                os.remove(tmp_ini)
