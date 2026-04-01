@@ -533,6 +533,24 @@ class PuffeRL:
                 quiet=True,  # Suppress verbose output during inline eval
             )
 
+        # Gigaflow self-play evaluation
+        eval_gf = self.config.get("eval_gigaflow", {})
+        if eval_gf.get("enabled", False) and (
+            self.epoch % eval_gf.get("eval_interval", 25) == 0 or done_training
+        ):
+            print(f"\nRunning gigaflow eval at step {self.global_step}...")
+            try:
+                eval_gigaflow(
+                    env_name=self.config["env"],
+                    config=self.config,
+                    eval_config=eval_gf,
+                    policy=self.uncompiled_policy,
+                    logger=self.logger,
+                    global_step=self.global_step,
+                )
+            except Exception as e:
+                print(f"Gigaflow eval failed: {e}")
+
         return logs
 
     def _ppo_minibatch_obs(self, obs, idx):
@@ -1419,7 +1437,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             experiment_dir=experiment_dir,
         )
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}),
+                        eval_gigaflow=args.get("eval_gigaflow", {}),
+                        package=args.get("package", "ocean"))
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
@@ -1889,6 +1909,80 @@ def _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet):
     # Also log to wandb/neptune if available
     if hasattr(logger, "log"):
         logger.log(log_dict, global_step)
+
+
+def eval_gigaflow(env_name, config, eval_config, policy, logger, global_step):
+    """Run periodic self-play evaluation under standardized gigaflow conditions."""
+    import copy
+
+    # Build eval env kwargs from training config + eval overrides
+    env_kwargs = copy.deepcopy(config.get("env", {}))
+    env_kwargs.update({
+        "num_agents": eval_config.get("num_agents", 50),
+        "min_agents_per_env": eval_config.get("min_agents_per_env", 50),
+        "max_agents_per_env": eval_config.get("max_agents_per_env", 50),
+        "dt": eval_config.get("dt", 0.066),
+        "scenario_length": eval_config.get("scenario_length", 9000),
+        "max_partner_observations": eval_config.get("max_partner_observations", 40),
+        "perceived_size_inflation": eval_config.get("perceived_size_inflation", 0.1),
+        "traffic_light_behavior": eval_config.get("traffic_light_behavior", 0),
+        "reward_randomization": eval_config.get("reward_randomization", False),
+        "eval_mode": 1 if eval_config.get("eval_mode", True) else 0,
+        "num_maps": eval_config.get("num_maps", 8),
+        "simulation_mode": "gigaflow",
+        "termination_mode": 0,  # No early termination during eval
+    })
+    if "map_dir" in eval_config:
+        env_kwargs["map_dir"] = eval_config["map_dir"]
+
+    # Create eval env
+    package = config.get("package", "ocean")
+    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+    env_module = importlib.import_module(module_name)
+    make_env = env_module.env_creator(env_name)
+    vecenv = pufferlib.vector.make(make_env, env_kwargs=env_kwargs, backend=pufferlib.PufferEnv, num_envs=1)
+
+    num_agents = vecenv.observation_space.shape[0]
+    device = config["train"]["device"]
+
+    # Run rollout
+    vecenv.async_reset(42)
+    ob, _, _, _, _, _, _ = vecenv.recv()
+    scenario_length = eval_config.get("scenario_length", 9000)
+
+    all_infos = []
+    for step in range(scenario_length):
+        with torch.no_grad():
+            ob_tensor = torch.as_tensor(ob).to(device)
+            logits, _ = policy.forward_eval(ob_tensor, {})
+            action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+            action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+        vecenv.send(action)
+        ob, _, _, _, info, _, _ = vecenv.recv()
+
+        for info_item in info:
+            if isinstance(info_item, dict):
+                all_infos.append(info_item)
+
+    # Aggregate and log metrics
+    if all_infos:
+        avg_metrics = {}
+        for key in all_infos[0]:
+            values = [d[key] for d in all_infos if isinstance(d.get(key), (int, float))]
+            if values:
+                avg_metrics[key] = sum(values) / len(values)
+
+        log_dict = {f"eval_gigaflow/{k}": v for k, v in avg_metrics.items()}
+        log_dict["eval_gigaflow/num_episodes"] = len(all_infos)
+        if hasattr(logger, "log"):
+            logger.log(log_dict, global_step)
+        print(f"Gigaflow eval: {len(all_infos)} episodes, "
+              f"collision_rate={avg_metrics.get('collision_rate', 'N/A')}, "
+              f"offroad_rate={avg_metrics.get('offroad_rate', 'N/A')}, "
+              f"score={avg_metrics.get('score', 'N/A')}")
+
+    vecenv.close()
 
 
 def eval_multi_scenarios(

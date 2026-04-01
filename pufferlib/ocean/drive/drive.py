@@ -71,6 +71,7 @@ class Drive(pufferlib.PufferEnv):
         max_partner_observations=16,
         max_traffic_light_observations=10,
         max_stop_sign_observations=10,
+        perceived_size_inflation=0.0,
         starting_map=0,
     ):
         self.dt = dt
@@ -124,6 +125,7 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         self.eval_mode = eval_mode
+        self.perceived_size_inflation = float(perceived_size_inflation)
         self.num_eval_scenarios = num_eval_scenarios
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
@@ -329,6 +331,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_randomization=self.reward_randomization,
                 compute_eval_metrics=self.compute_eval_metrics,
                 eval_mode=self.eval_mode,
+                perceived_size_inflation=self.perceived_size_inflation,
             )
             env_ids.append(env_id)
 
@@ -448,6 +451,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_randomization=self.reward_randomization,
                         compute_eval_metrics=self.compute_eval_metrics,
                         eval_mode=self.eval_mode,
+                        perceived_size_inflation=self.perceived_size_inflation,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)

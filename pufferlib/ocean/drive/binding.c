@@ -1833,6 +1833,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_randomization = (bool)unpack(kwargs, "reward_randomization");
     env->compute_eval_metrics = (bool)unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int)unpack(kwargs, "eval_mode");
+    env->perceived_size_inflation = (float)unpack(kwargs, "perceived_size_inflation");
 
     init(env);
     return 0;

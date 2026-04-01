@@ -321,6 +321,7 @@ struct Drive {
     int max_traffic_light_observations;
     int max_stop_sign_observations;
     int eval_mode;
+    float perceived_size_inflation; // inflate partner observed width/length (meters per side)
 };
 
 // ========================================
@@ -4031,8 +4032,8 @@ static void compute_observations(Drive *env) {
                 // Store observations with correct indexing
                 obs[obs_idx++] = rel_x / MAX_POSITION;
                 obs[obs_idx++] = rel_y / MAX_POSITION;
-                obs[obs_idx++] = other_entity->sim_width / MAX_VEH_WIDTH;
-                obs[obs_idx++] = other_entity->sim_length / MAX_VEH_LEN;
+                obs[obs_idx++] = (other_entity->sim_width + 2.0f * env->perceived_size_inflation) / MAX_VEH_WIDTH;
+                obs[obs_idx++] = (other_entity->sim_length + 2.0f * env->perceived_size_inflation) / MAX_VEH_LEN;
                 // relative heading
                 // Use cached trig values from other agent
                 float other_cos = other_entity->cos_heading;
