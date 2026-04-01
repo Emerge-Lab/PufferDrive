@@ -1945,9 +1945,8 @@ def eval_gigaflow(env_name, config, eval_config, policy, logger, global_step):
     num_agents = vecenv.observation_space.shape[0]
     device = config.get("device", "cuda")
 
-    # Run rollout
-    vecenv.async_reset(42)
-    ob, _, _, _, _, _, _ = vecenv.recv()
+    # Run rollout using step() directly so we get vec_log info
+    ob, _ = vecenv.reset()
     scenario_length = eval_config.get("scenario_length", 9000)
 
     all_infos = []
@@ -1958,10 +1957,9 @@ def eval_gigaflow(env_name, config, eval_config, policy, logger, global_step):
             action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
             action = action.cpu().numpy().reshape(vecenv.action_space.shape)
 
-        vecenv.send(action)
-        ob, _, _, _, info, _, _ = vecenv.recv()
+        ob, rewards, terminals, truncations, infos = vecenv.step(action)
 
-        for info_item in info:
+        for info_item in infos:
             if isinstance(info_item, dict):
                 all_infos.append(info_item)
 
