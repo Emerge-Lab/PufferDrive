@@ -322,7 +322,8 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                r = torch.sign(r) * torch.log1p(torch.abs(r))
+                if config.get("symlog_rewards", False):
+                    r = torch.sign(r) * torch.log1p(torch.abs(r))
 
             profile("eval_copy", epoch)
             with torch.no_grad():
@@ -1624,7 +1625,16 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             if isinstance(logits, torch.distributions.Normal):
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
-            ob = vecenv.step(action)[0]
+            step_result = vecenv.step(action)
+            ob = step_result[0]
+            step_info = step_result[4] if len(step_result) > 4 else []
+            for info_item in step_info:
+                if isinstance(info_item, dict):
+                    print("\n=== Episode Metrics ===")
+                    for k, v in sorted(info_item.items()):
+                        if isinstance(v, (int, float)):
+                            print(f"  {k}: {v:.4f}")
+                    print("=======================\n")
 
             if len(frames) > 0 and len(frames) == args["save_frames"]:
                 import imageio
