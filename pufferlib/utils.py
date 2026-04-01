@@ -284,7 +284,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
             if not vids_exist and result.stdout:
                 print(f"Visualize stdout: {result.stdout[:500]}")
 
-            if result.returncode == 0 or (result.returncode == 1 and vids_exist):
+            if vids_exist:
                 videos = [
                     (
                         topdown_tmp,
