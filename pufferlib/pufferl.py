@@ -1439,7 +1439,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}),
                         eval_gigaflow=args.get("eval_gigaflow", {}),
-                        package=args.get("package", "ocean"))
+                        package=args.get("package", "ocean"),
+                        env_config=args.get("env", {}))
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
@@ -1915,15 +1916,14 @@ def eval_gigaflow(env_name, config, eval_config, policy, logger, global_step):
     """Run periodic self-play evaluation under standardized gigaflow conditions."""
     import copy
 
-    # Build eval env kwargs from training config + eval overrides
-    env_kwargs = copy.deepcopy(config.get("env", {}))
+    # Build eval env kwargs from training env config + eval overrides
+    env_kwargs = copy.deepcopy(config.get("env_config", {}))
     env_kwargs.update({
         "num_agents": eval_config.get("num_agents", 50),
         "min_agents_per_env": eval_config.get("min_agents_per_env", 50),
         "max_agents_per_env": eval_config.get("max_agents_per_env", 50),
         "dt": eval_config.get("dt", 0.066),
         "scenario_length": eval_config.get("scenario_length", 9000),
-        "max_partner_observations": eval_config.get("max_partner_observations", 40),
         "perceived_size_inflation": eval_config.get("perceived_size_inflation", 0.1),
         "traffic_light_behavior": eval_config.get("traffic_light_behavior", 0),
         "reward_randomization": eval_config.get("reward_randomization", False),
@@ -1943,7 +1943,7 @@ def eval_gigaflow(env_name, config, eval_config, policy, logger, global_step):
     vecenv = pufferlib.vector.make(make_env, env_kwargs=env_kwargs, backend=pufferlib.PufferEnv, num_envs=1)
 
     num_agents = vecenv.observation_space.shape[0]
-    device = config["train"]["device"]
+    device = config.get("device", "cuda")
 
     # Run rollout
     vecenv.async_reset(42)
