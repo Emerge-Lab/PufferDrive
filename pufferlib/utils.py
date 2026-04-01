@@ -284,6 +284,13 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
             if not vids_exist and result.stdout:
                 print(f"Visualize stdout: {result.stdout[:500]}")
 
+            if result.returncode != 0:
+                print(f"Visualize exited with code {result.returncode} (map index {i})")
+                if result.stdout:
+                    print(f"  stdout: {result.stdout[:500]}")
+                if result.stderr:
+                    print(f"  stderr: {result.stderr[:500]}")
+
             if vids_exist:
                 videos = [
                     (
