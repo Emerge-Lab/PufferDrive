@@ -38,7 +38,7 @@ class CheckpointEvaluator:
         device = self.configs["train"]["device"]
 
         obs, info = env.reset()
-        terminals = np.zeros_like((num_agents, 1), dtype=bool)
+        terminals = np.zeros((num_agents, 1), dtype=bool)
 
         state = {}
         if self.configs["train"]["use_rnn"]:
@@ -53,7 +53,7 @@ class CheckpointEvaluator:
                 cur = driver.agent_offsets[render_env_idx]
                 render_env_done = terminals[cur].all()
                 if not render_env_done:
-                    driver.render(view_mode=view_mode, env_id=render_env_idx)
+                    driver.render(view_mode=view_mode, env_idx=render_env_idx)
 
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)

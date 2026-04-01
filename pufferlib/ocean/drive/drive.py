@@ -568,6 +568,10 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
+    def stop_recorder(self, env_idx: int = 0):
+        """Stop the ffmpeg recorder for the given env (flush video, no new recorder)."""
+        binding.vec_stop_recorder(self.c_envs, env_idx)
+
     def render(self, view_mode: RenderView = RenderView.FULL_SIM_STATE, draw_traces: bool = True, env_idx: int = 0):
         binding.vec_render(self.c_envs, int(view_mode), draw_traces, env_idx)
 
@@ -1041,7 +1045,7 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 if __name__ == "__main__":
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training_50k")
+    process_all_maps(data_folder="data/processed/interactive_data_validation")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

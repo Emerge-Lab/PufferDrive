@@ -1442,7 +1442,10 @@ void close_client(Client *client);
 
 void c_close(Drive *env) {
     if (env->client != NULL) {
-        close_client(env->client);
+        stop_recorder(env->client);
+        if (env->render_mode != RENDER_HEADLESS) {
+            close_client(env->client);
+        }
         env->client = NULL;
     }
     for (int i = 0; i < env->num_entities; i++) {
@@ -2561,6 +2564,51 @@ struct Client {
     int xvfb_display_num;
 };
 
+void stop_recorder(Client *client) {
+    if (client->recorder_pid > 0) {
+        close(client->recorder_pipefd[1]);
+        waitpid(client->recorder_pid, NULL, 0);
+        client->recorder_pid = 0;
+    }
+}
+
+void start_recorder(Client *client, const char *scenario_id, int width, int height) {
+    stop_recorder(client);
+
+    if (pipe(client->recorder_pipefd) == -1) {
+        fprintf(stderr, "Failed to create pipe for recorder\n");
+        return;
+    }
+
+    char size_str[64];
+    snprintf(size_str, sizeof(size_str), "%dx%d", width, height);
+
+    char filename[256];
+    snprintf(filename, sizeof(filename), "%s.mp4", scenario_id);
+
+    client->recorder_pid = fork();
+    if (client->recorder_pid == -1) {
+        fprintf(stderr, "Failed to fork recorder\n");
+        close(client->recorder_pipefd[0]);
+        close(client->recorder_pipefd[1]);
+        return;
+    }
+
+    if (client->recorder_pid == 0) {
+        close(client->recorder_pipefd[1]);
+        dup2(client->recorder_pipefd[0], STDIN_FILENO);
+        close(client->recorder_pipefd[0]);
+        for (int fd = 3; fd < 256; fd++)
+            close(fd);
+        execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
+               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "-loglevel", "error",
+               filename, NULL);
+        fprintf(stderr, "execlp ffmpeg failed\n");
+        _exit(1);
+    }
+    close(client->recorder_pipefd[0]);
+}
+
 Client *make_client(Drive *env) {
 
     Client *client = (Client *)calloc(1, sizeof(Client));
@@ -2664,42 +2712,6 @@ Client *make_client(Drive *env) {
     client->cycle_anim = LoadModelAnimations("resources/drive/cyclist.glb", &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
-    }
-
-    // Set up ffmpeg process for recording
-    if (env->render_mode == RENDER_HEADLESS) {
-        if (pipe(client->recorder_pipefd) == -1) {
-            fprintf(stderr, "Failed to create pipe\n");
-            free(client);
-            return NULL;
-        }
-
-        char size_str[64];
-        snprintf(size_str, sizeof(size_str), "%dx%d", (int)client->width, (int)client->height);
-
-        char filename[256];
-        snprintf(filename, sizeof(filename), "%s.mp4", env->scenario_id);
-
-        client->recorder_pid = fork();
-        if (client->recorder_pid == -1) {
-            fprintf(stderr, "Failed to fork\n");
-            free(client);
-            return NULL;
-        }
-
-        if (client->recorder_pid == 0) { // Child process
-            close(client->recorder_pipefd[1]);
-            dup2(client->recorder_pipefd[0], STDIN_FILENO);
-            close(client->recorder_pipefd[0]);
-            for (int fd = 3; fd < 256; fd++)
-                close(fd);
-            execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
-                   "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "-loglevel",
-                   "error", filename, NULL);
-            fprintf(stderr, "execlp ffmpeg failed\n");
-            _exit(1);
-        }
-        close(client->recorder_pipefd[0]);
     }
 
     return client;
@@ -3597,6 +3609,10 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
     Client *client = env->client;
 
+    if (env->render_mode == RENDER_HEADLESS && client->recorder_pid <= 0) {
+        start_recorder(client, env->scenario_id, (int)client->width, (int)client->height);
+    }
+
     if (env->render_mode == RENDER_HEADLESS) { // Headless rendering via ffmpeg
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
@@ -3827,15 +3843,14 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 }
 
 void close_client(Client *client) {
-    if (client->recorder_pid > 0) {
-        close(client->recorder_pipefd[1]);
-        waitpid(client->recorder_pid, NULL, 0);
-    }
+    stop_recorder(client);
+
     for (int i = 0; i < 6; i++)
         UnloadModel(client->cars[i]);
     UnloadModel(client->cyclist);
     UnloadModel(client->pedestrian);
     CloseWindow();
+
     if (client->xvfb_pid > 0) {
         kill(client->xvfb_pid, SIGTERM);
         waitpid(client->xvfb_pid, NULL, 0);

@@ -1103,10 +1103,9 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
                 float *discrete_action_src =
                     &env_actions_discrete[t * num_agents * discrete_action_dim + a * discrete_action_dim];
                 float *discrete_action_dst = (float *)PyArray_GETPTR3(expert_actions_discrete, t, agent_offset + a, 0);
-                                for (int d = 0; d < discrete_action_dim; d++) {
+                for (int d = 0; d < discrete_action_dim; d++) {
                     discrete_action_dst[d] = discrete_action_src[d];
                 }
-            
 
                 // Copy observations
                 float *obs_src = &env_obs[t * num_agents * max_obs + a * max_obs];
@@ -1120,6 +1119,25 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
         agent_offset += num_agents;
     }
 
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_stop_recorder(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_stop_recorder requires 2 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+    int env_idx = PyLong_AsLong(PyTuple_GetItem(args, 1));
+    if (env_idx < 0 || env_idx >= vec->num_envs) {
+        PyErr_SetString(PyExc_IndexError, "env_idx out of range");
+        return NULL;
+    }
+    Drive *drive = (Drive *)vec->envs[env_idx];
+    if (drive->client != NULL)
+        stop_recorder(drive->client);
     Py_RETURN_NONE;
 }
 
@@ -1153,6 +1171,7 @@ static PyMethodDef methods[] = {
      "Get road edge polyline counts from vectorized env"},
     {"vec_get_road_edge_polylines", vec_get_road_edge_polylines, METH_VARARGS,
      "Get road edge polylines from vectorized env"},
+    {"vec_stop_recorder", vec_stop_recorder, METH_VARARGS, "Stop the ffmpeg recorder for a specific env"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}};
 
