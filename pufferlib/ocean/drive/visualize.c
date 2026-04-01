@@ -74,10 +74,10 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
 
     // Top-down orthographic camera
     Camera3D camera = {0};
-    camera.position = (Vector3){0.0f, 0.0f, 500.0f}; // above the scene
-    camera.target = (Vector3){0.0f, 0.0f, 0.0f};     // look at origin
+    camera.position = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 500.0f};
+    camera.target = (Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0.0f};
     camera.up = (Vector3){0.0f, -1.0f, 0.0f};
-    camera.fovy = map_height;
+    camera.fovy = 2 * map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
 
     client->width = img_width;
@@ -192,10 +192,15 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     // Parse configuration from INI file
     env_init_config conf = {0}; // Initialize to zero
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
-    if (load_env_config(ini_file, &conf) < 0) {
-        fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
+    int ini_result = load_env_config(ini_file, &conf);
+    if (ini_result != 0) {
+        fprintf(stderr, "Error: Could not load %s (ini_parse returned %d).\n", ini_file, ini_result);
         return -1;
     }
+    printf("Config: max_partner=%d max_lane=%d max_boundary=%d max_tl=%d target_type=%d num_waypoints=%d\n",
+           conf.max_partner_observations, conf.max_lane_segment_observations,
+           conf.max_boundary_segment_observations, conf.max_traffic_light_observations,
+           conf.target_type, conf.num_target_waypoints);
 
     char map_buffer[100];
     if (map_name == NULL) {
@@ -224,24 +229,44 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     Drive env = {
         .dynamics_model = conf.dynamics_model,
+        .action_type = conf.action_type,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
         .reward_ade = conf.reward_ade,
+        .reward_comfort = conf.reward_comfort,
+        .reward_lane_align = conf.reward_lane_align,
+        .reward_lane_center = conf.reward_lane_center,
+        .reward_velocity = conf.reward_velocity,
+        .reward_reverse = conf.reward_reverse,
+        .reward_traffic_light_violation = conf.reward_traffic_light_violation,
+        .reward_timestep = conf.reward_timestep,
+        .reward_overspeed = conf.reward_overspeed,
+        .reward_vel_align = conf.reward_vel_align,
+        .reward_center_bias = conf.reward_center_bias,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
         .map_name = (char *)map_name,
-        .init_steps = init_steps,
-        .num_controllable_agents = max_controlled_agents,
+        .init_steps = (init_steps >= 0) ? init_steps : conf.init_steps,
+        .num_controllable_agents = (max_controlled_agents > 0) ? max_controlled_agents : conf.max_agents_per_env,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .traffic_light_behavior = conf.traffic_light_behavior,
         .compute_eval_metrics = conf.compute_eval_metrics,
-        .init_mode = init_mode,
-        .control_mode = control_mode,
+        .reward_randomization = conf.reward_randomization,
+        .reward_conditioning = conf.reward_conditioning,
+        .init_mode = (init_mode >= 0) ? init_mode : conf.init_mode,
+        .control_mode = (control_mode >= 0) ? control_mode : conf.control_mode,
         .simulation_mode = conf.simulation_mode,
         .num_target_waypoints = conf.num_target_waypoints,
         .min_waypoint_spacing = conf.min_waypoint_spacing,
         .max_waypoint_spacing = conf.max_waypoint_spacing,
+        .target_type = conf.target_type,
+        .max_partner_observations = conf.max_partner_observations,
+        .max_lane_segment_observations = conf.max_lane_segment_observations,
+        .max_boundary_segment_observations = conf.max_boundary_segment_observations,
+        .max_traffic_light_observations = conf.max_traffic_light_observations,
+        .max_stop_sign_observations = conf.max_stop_sign_observations,
+        .termination_mode = conf.termination_mode,
     };
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override
@@ -264,7 +289,10 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     float map_width = env.grid_map->bottom_right_x - env.grid_map->top_left_x;
     float map_height = env.grid_map->top_left_y - env.grid_map->bottom_right_y;
 
-    printf("Map size: %.1fx%.1f\n", map_width, map_height);
+    printf("Map size: %.1fx%.1f  grid: top_left=(%.1f,%.1f) bottom_right=(%.1f,%.1f)\n",
+           map_width, map_height,
+           env.grid_map->top_left_x, env.grid_map->top_left_y,
+           env.grid_map->bottom_right_x, env.grid_map->bottom_right_y);
     float scale = 6.0f; // Can be used to increase the video quality
 
     // Calculate video width and height; round to nearest even number

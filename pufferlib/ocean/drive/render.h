@@ -415,6 +415,61 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0},
                (Vector3){env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0}, PUFF_CYAN);
 
+    // Draw road edges (collision boundaries) as red lines
+    rlSetLineWidth(4.0f);
+    for (int i = 0; i < env->num_road_elements; i++) {
+        RoadMapElement *elem = &env->road_elements[i];
+        if (!is_road_edge(elem->type)) continue;
+        for (int j = 0; j < elem->segment_length - 1; j++) {
+            DrawLine3D(
+                (Vector3){elem->x[j], elem->y[j], elem->z[j] + 1.0f},
+                (Vector3){elem->x[j+1], elem->y[j+1], elem->z[j+1] + 1.0f},
+                RED);
+        }
+    }
+    // Draw drivable lanes as green lines
+    rlSetLineWidth(2.0f);
+    for (int i = 0; i < env->num_road_elements; i++) {
+        RoadMapElement *elem = &env->road_elements[i];
+        if (!is_drivable_road_lane(elem->type)) continue;
+        for (int j = 0; j < elem->segment_length - 1; j++) {
+            DrawLine3D(
+                (Vector3){elem->x[j], elem->y[j], elem->z[j] + 0.5f},
+                (Vector3){elem->x[j+1], elem->y[j+1], elem->z[j+1] + 0.5f},
+                GREEN);
+        }
+    }
+
+    // Draw traffic lights and stop signs
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *tc = &env->traffic_elements[i];
+        Vector3 p1 = {tc->stop_line[0], tc->stop_line[1], tc->stop_line[2] + 0.2f};
+        Vector3 p2 = {tc->stop_line[3], tc->stop_line[4], tc->stop_line[5] + 0.2f};
+
+        if (tc->type == TRAFFIC_LIGHT) {
+            // Get current state
+            int state = TL_STATE_DISABLED;
+            if (tc->states && env->timestep < tc->state_length) {
+                state = tc->states[env->timestep];
+            }
+            Color tl_color = GRAY;
+            if (is_traffic_light_red(state)) tl_color = RED;
+            else if (is_traffic_light_yellow(state)) tl_color = YELLOW;
+            else if (is_traffic_light_green(state)) tl_color = GREEN;
+
+            rlSetLineWidth(4.0f);
+            DrawLine3D(p1, p2, tl_color);
+            // Draw a sphere at midpoint for visibility
+            Vector3 mid = {(p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2 + 0.5f};
+            DrawSphere(mid, 0.8f, tl_color);
+        } else if (tc->type == STOP_SIGN) {
+            rlSetLineWidth(3.0f);
+            DrawLine3D(p1, p2, MAGENTA);
+            Vector3 mid = {(p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2 + 0.5f};
+            DrawSphere(mid, 0.6f, MAGENTA);
+        }
+    }
+
     for (int i = 0; i < env->num_total_agents; i++) {
         Agent *agent = &env->agents[i];
         // Draw objects
@@ -452,22 +507,20 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             float cos_heading = cosf(heading);
             float sin_heading = sinf(heading);
 
-            // Calculate half dimensions
+            // Compute corners fresh from current agent state
             float half_len = agent->sim_length * 0.5f;
-            float half_width = agent->sim_width * 0.5f;
-
-            // Calculate the four corners of the collision box
+            float half_wid = agent->sim_width * 0.5f;
+            float ch = cosf(agent->sim_heading);
+            float sh = sinf(agent->sim_heading);
             Vector3 corners[4] = {
-                (Vector3){position.x + (half_len * cos_heading - half_width * sin_heading),
-                          position.y + (half_len * sin_heading + half_width * cos_heading), position.z},
-
-                (Vector3){position.x + (half_len * cos_heading + half_width * sin_heading),
-                          position.y + (half_len * sin_heading - half_width * cos_heading), position.z},
-                (Vector3){position.x + (-half_len * cos_heading + half_width * sin_heading),
-                          position.y + (-half_len * sin_heading - half_width * cos_heading), position.z},
-                (Vector3){position.x + (-half_len * cos_heading - half_width * sin_heading),
-                          position.y + (-half_len * sin_heading + half_width * cos_heading), position.z},
-
+                {agent->sim_x + (-half_len * ch - half_wid * sh),
+                 agent->sim_y + (-half_len * sh + half_wid * ch), position.z},
+                {agent->sim_x + ( half_len * ch - half_wid * sh),
+                 agent->sim_y + ( half_len * sh + half_wid * ch), position.z},
+                {agent->sim_x + ( half_len * ch + half_wid * sh),
+                 agent->sim_y + ( half_len * sh - half_wid * ch), position.z},
+                {agent->sim_x + (-half_len * ch + half_wid * sh),
+                 agent->sim_y + (-half_len * sh - half_wid * ch), position.z},
             };
 
             if (agent_index == env->human_agent_idx && !agent->metrics_array[REACHED_GOAL_IDX]) {
@@ -483,24 +536,26 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 car_color = GOLD; // expert replay
             if (is_active_agent)
                 car_color = BLUE; // policy-controlled
-            if (is_active_agent && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0 ||
-                                    agent->metrics_array[RED_LIGHT_IDX] > 0))
-                car_color = RED;
+            if (is_active_agent && agent->metrics_array[COLLISION_IDX] > 0)
+                car_color = ORANGE;  // vehicle collision
+            if (is_active_agent && agent->metrics_array[OFFROAD_IDX] > 0)
+                car_color = RED;     // offroad
+            if (is_active_agent && agent->metrics_array[RED_LIGHT_IDX] > 0)
+                car_color = YELLOW;  // red light violation
             rlSetLineWidth(3.0f);
             for (int j = 0; j < 4; j++) {
                 DrawLine3D(corners[j], corners[(j + 1) % 4], car_color);
             }
             // --- Draw a heading arrow pointing forward ---
             Vector3 arrowStart = position;
-            Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
-                                position.y + sin_heading * half_len * 1.5f, position.z};
+            Vector3 arrowEnd = {position.x + agent->cos_heading * half_len * 1.5f,
+                                position.y + agent->sin_heading * half_len * 1.5f, position.z};
 
             DrawLine3D(arrowStart, arrowEnd, car_color);
             DrawSphere(arrowEnd, 0.2f, car_color); // arrow tip
 
         } else {
             rlPushMatrix();
-            // Translate to position, rotate around Y axis, then draw
             rlTranslatef(position.x, position.y, position.z);
             rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f); // Convert radians to degrees
             // Determine color based on status
@@ -530,29 +585,26 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
             DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, WHITE);
             {
-                float cos_heading = cosf(heading);
-                float sin_heading = sinf(heading);
+                // Corners in local space — rlRotatef already applies heading rotation
                 float half_len = agent->sim_length * 0.5f;
                 float half_width = agent->sim_width * 0.5f;
                 Vector3 corners[4] = {
-                    (Vector3){0 + (half_len * cos_heading - half_width * sin_heading),
-                              0 + (half_len * sin_heading + half_width * cos_heading), 0},
-                    (Vector3){0 + (half_len * cos_heading + half_width * sin_heading),
-                              0 + (half_len * sin_heading - half_width * cos_heading), 0},
-                    (Vector3){0 + (-half_len * cos_heading + half_width * sin_heading),
-                              0 + (-half_len * sin_heading - half_width * cos_heading), 0},
-                    (Vector3){0 + (-half_len * cos_heading - half_width * sin_heading),
-                              0 + (-half_len * sin_heading + half_width * cos_heading), 0},
+                    (Vector3){ half_len,  half_width, 0},
+                    (Vector3){ half_len, -half_width, 0},
+                    (Vector3){-half_len, -half_width, 0},
+                    (Vector3){-half_len,  half_width, 0},
                 };
                 Color wire_color = GRAY; // static
                 if (!is_active_agent && agent->mark_as_expert == 1)
                     wire_color = GOLD; // expert replay
                 if (is_active_agent)
                     wire_color = BLUE; // policy
-                if (is_active_agent &&
-                    (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0 ||
-                     agent->metrics_array[RED_LIGHT_IDX] > 0))
-                    wire_color = RED;
+                if (is_active_agent && agent->metrics_array[COLLISION_IDX] > 0)
+                    wire_color = ORANGE;  // vehicle collision
+                if (is_active_agent && agent->metrics_array[OFFROAD_IDX] > 0)
+                    wire_color = RED;     // offroad
+                if (is_active_agent && agent->metrics_array[RED_LIGHT_IDX] > 0)
+                    wire_color = YELLOW;  // red light violation
                 rlSetLineWidth(2.0f);
                 for (int j = 0; j < 4; j++) {
                     DrawLine3D(corners[j], corners[(j + 1) % 4], wire_color);

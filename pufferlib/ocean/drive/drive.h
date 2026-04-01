@@ -3503,6 +3503,8 @@ static void compute_metrics(Drive *env, int agent_idx) {
         corners[i][1] =
             agent->sim_y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
     }
+    // Store for rendering
+    memcpy(agent->render_corners, corners, sizeof(corners));
 
     GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25]; // Array big enough for all neighboring cells
     int list_size = get_neighbors_entities(env, agent->sim_x, agent->sim_y, entity_list, MAX_ENTITIES_PER_CELL * 25,
@@ -3539,6 +3541,9 @@ static void compute_metrics(Drive *env, int agent_idx) {
                 int next = (k + 1) % 4;
                 if (check_line_intersection(corners[k], corners[next], start, end)) {
                     is_offroad = true;
+                    printf("[OFFROAD] agent %d at (%.1f,%.1f,%.1f) hit edge elem %d geom %d at z=%.1f (dz=%.1f)\n",
+                           agent_idx, agent->sim_x, agent->sim_y, agent->sim_z,
+                           entity_idx, geometry_idx, element->z[geometry_idx], abs_dz);
                     break;
                 }
             }

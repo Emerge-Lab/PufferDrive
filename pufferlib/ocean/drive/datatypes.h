@@ -210,6 +210,7 @@ struct Agent {
     float sim_width;
     float sim_height;
     int sim_valid;
+    float render_corners[4][2]; // Bounding box corners computed by simulation
 
     // Route information
     int route_length;
