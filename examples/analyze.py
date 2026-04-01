@@ -49,14 +49,26 @@ SCALING_CHECKPOINTS_PATH = "models/cpts_scaling"
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_training"
-NUM_TOTAL_EVAL_AGENTS = 512  # * 4
-NUM_AGENTS_PER_VECENV = 512  # 1024
+NUM_TOTAL_EVAL_AGENTS = 100  # * 4
+NUM_AGENTS_PER_VECENV = 100  # 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "checkpoint_eval_results.csv"
 WOSAC_OUTPUT_CSV = "checkpoint_wosac_results.csv"
 MAKE_FIGURES = True
-WOSAC_ONLY = True
+RUN_WOSAC = False
+WOSAC_ONLY = False
+RUN_RENDER = True
+
+# ─── VIDEO RENDERING CONFIG ─────────────────────────────────────────────────
+CHECKPOINTS_TO_RENDER = [
+    "models/cpts_scaling/unreg_delta_10_maps.pt",
+    "models/cpts_scaling/reg_delta_1k_maps_anchor_100_maps.pt",
+]
+NUM_ENVS_TO_RENDER = 15
+RENDER_MAP_DIR = INTERACTIVE_MAP_DIR  # Which maps to render on
+RENDER_NUM_MAPS = 1000
+RENDER_OUTPUT_DIR = "eval_videos"
 
 # WOSAC evaluation settings (aligned with run_wosac_eval_in_subprocess defaults)
 WOSAC_NUM_ROLLOUTS = 6
@@ -500,6 +512,69 @@ def evaluate_scaling_wosac(base_config):
     return pd.concat(all_dfs, ignore_index=True)
 
 
+def make_render_config(base_config, map_dir, num_maps=1000):
+    """Build a config for human-replay rendering with headless ffmpeg output."""
+    config = make_eval_config(
+        base_config,
+        map_dir,
+        control_mode="control_sdc_only",
+        goal_behavior=0,
+        num_maps=num_maps,
+    )
+    config["env"]["render_mode"] = 1  # Headless ffmpeg
+    return config
+
+
+def render_checkpoint_videos(base_config):
+    """Render human-replay videos for each checkpoint in CHECKPOINTS_TO_RENDER.
+
+    Uses driver.reset_recorder() between env indices to flush the current mp4
+    and start a new one, keeping the raylib window alive across all renders.
+    """
+    import glob
+    import shutil
+
+    env = None
+
+    for cpt_path in CHECKPOINTS_TO_RENDER:
+        cpt_name = os.path.splitext(os.path.basename(cpt_path))[0]
+        cpt_video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name)
+        os.makedirs(cpt_video_dir, exist_ok=True)
+
+        print(f"\n{'=' * 60}")
+        print(f"Rendering videos: {cpt_name}")
+        print(f"{'=' * 60}")
+
+        # Create env once (or reuse across checkpoints — same map config)
+        if env is None:
+            config = make_render_config(base_config, RENDER_MAP_DIR, num_maps=RENDER_NUM_MAPS)
+            env = load_env(ENV_NAME, config)
+
+        base_config["load_model_path"] = cpt_path
+        policy = load_policy(base_config, env, ENV_NAME)
+        policy.eval()
+
+        evaluator = CheckpointEvaluator(base_config)
+
+        for env_idx in range(NUM_ENVS_TO_RENDER):
+            print(f"  Rendering env {env_idx + 1}/{NUM_ENVS_TO_RENDER}...")
+            evaluator.rollout(policy, env, render_env_idx=env_idx)
+            # Flush this scenario's mp4 and stop the recorder cleanly.
+            # The next c_render call will auto-start a new recorder.
+            env.driver_env.stop_recorder(env_idx)
+
+        # Move mp4s produced by ffmpeg into the checkpoint subdirectory
+        for mp4_path in glob.glob("*.mp4"):
+            dest = os.path.join(cpt_video_dir, os.path.basename(mp4_path))
+            shutil.move(mp4_path, dest)
+            print(f"  Saved: {dest}")
+
+    if env is not None:
+        env.close()
+
+    print(f"\nAll videos saved to {RENDER_OUTPUT_DIR}/")
+
+
 def main():
     base_config = load_config(ENV_NAME)
 
@@ -528,10 +603,11 @@ def main():
             print(f"\n{summary}")
 
     # ── WOSAC scaling analysis ───────────────────────────────────────────────
-    wosac_df = evaluate_scaling_wosac(base_config)
-    if not wosac_df.empty:
-        wosac_df.to_csv(WOSAC_OUTPUT_CSV, index=False)
-        print(f"\nWOSAC results saved to {WOSAC_OUTPUT_CSV} ({len(wosac_df)} rows)")
+    if RUN_WOSAC:
+        wosac_df = evaluate_scaling_wosac(base_config)
+        if not wosac_df.empty:
+            wosac_df.to_csv(WOSAC_OUTPUT_CSV, index=False)
+            print(f"\nWOSAC results saved to {WOSAC_OUTPUT_CSV} ({len(wosac_df)} rows)")
 
     # ── Figures ──────────────────────────────────────────────────────────────
     if MAKE_FIGURES:
@@ -541,6 +617,10 @@ def main():
             df if not df.empty else None,
             wosac_df if not wosac_df.empty else None,
         )
+
+    # ── Video rendering (last: env.close() may segfault in raylib cleanup) ──
+    if RUN_RENDER and CHECKPOINTS_TO_RENDER:
+        render_checkpoint_videos(base_config)
 
     return df
 

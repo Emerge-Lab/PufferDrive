@@ -192,3 +192,5 @@ docs/book/*
 !docs/book/assets/
 
 logs/*
+
+eval_videos/*
