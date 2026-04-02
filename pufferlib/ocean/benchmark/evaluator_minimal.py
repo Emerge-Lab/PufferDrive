@@ -15,7 +15,6 @@ class CheckpointEvaluator:
 
     def __init__(self, configs):
         self.configs = configs
-        self.sim_steps = 90
 
     def rollout(self, policy, env, render_env_idx=None, view_mode=None, deterministic=False):
         """Run a single rollout and return the per-env info logs.
@@ -48,7 +47,7 @@ class CheckpointEvaluator:
             )
 
         info_list = []
-        for time_idx in range(self.sim_steps):
+        for time_idx in range(env.episode_length):
             if render_env_idx is not None:
                 cur = driver.agent_offsets[render_env_idx]
                 render_env_done = terminals[cur].all()

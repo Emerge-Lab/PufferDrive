@@ -192,6 +192,7 @@ struct Log {
     float goals_sampled_this_episode;
     float offroad_rate;
     float collision_rate;
+    float at_fault_collision_rate;
     float completion_rate;
     float offroad_per_agent;
     float collisions_per_agent;
@@ -237,6 +238,7 @@ struct Entity {
     float init_goal_y;
     int mark_as_expert;
     int collision_state;
+    int at_fault_collision_state;
     int offroad_state;
     float x;
     float y;
@@ -411,6 +413,7 @@ void add_log(Drive *env) {
         env->log.collision_rate += env->logs[i].collision_rate;
         env->log.offroad_per_agent += env->logs[i].offroad_per_agent;
         env->log.collisions_per_agent += env->logs[i].collisions_per_agent;
+        env->log.at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
 
         float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
 
@@ -607,6 +610,7 @@ void set_start_position(Drive *env) {
         e->heading_y = sinf(e->heading);
         e->valid = e->traj_valid[step];
         e->collision_state = 0;
+        e->at_fault_collision_state = 0;
         e->offroad_state = 0;
         e->stopped = 0;
         e->removed = 0;
@@ -1178,6 +1182,19 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     }
 
     if (collided_with_agent) {
+        // Determine fault: was this agent moving toward the other?
+        Entity *other = &env->entities[car_collided_with_index];
+
+        // Vector from this agent to the other
+        float dx = other->x - agent->x;
+        float dy = other->y - agent->y;
+
+        float forward_dot = dx * agent->heading_x + dy * agent->heading_y;
+        float approach_dot = agent->vx * dx + agent->vy * dy;
+
+        if (forward_dot > 0 && approach_dot > 0) {
+            agent->at_fault_collision_state = 1;
+        }
         if (env->collision_behavior == STOP_AGENT && !agent->stopped) {
             agent->stopped = 1;
             agent->vx = agent->vy = 0.0f;
@@ -2208,6 +2225,8 @@ void c_step(Drive *env) {
         return;
     }
 
+    // printf("t = %d \n", env->timestep);
+
     // Re-assert terminal for agents already terminated in a prior step
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
@@ -2274,6 +2293,9 @@ void c_step(Drive *env) {
             env->logs[i].episode_return += r_collision;
             env->logs[i].collision_rate = 1.0f;
             env->logs[i].collisions_per_agent += 1.0f;
+            if (env->entities[agent_idx].at_fault_collision_state) {
+                env->logs[i].at_fault_collision_rate = 1.0f;
+            }
         }
 
         if (offroad_state == 1 && !agent_is_done) {

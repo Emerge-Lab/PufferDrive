@@ -224,9 +224,12 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
         return None
 
     scaling_df["anchor_maps"] = scaling_df["anchor_maps"].fillna(0).astype(int)
+    scaling_df["at_fault_collision_rate_pct"] = scaling_df["at_fault_collision_rate"] * 100
 
     agg = (
-        scaling_df.groupby(["sp_maps", "anchor_maps", "mode"])[["collision_rate_pct", "score_pct"]]
+        scaling_df.groupby(["sp_maps", "anchor_maps", "mode"])[
+            ["collision_rate_pct", "score_pct", "at_fault_collision_rate_pct"]
+        ]
         .agg(["mean", "sem"])
         .reset_index()
     )
@@ -238,6 +241,8 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
         "coll_sem",
         "score_mean",
         "score_sem",
+        "at_fault_coll_mean",
+        "at_fault_coll_sem",
     ]
     agg["anchor_label"] = agg["anchor_maps"].apply(
         lambda v: f"anchor = {_fmt_maps(v)}" if v > 0 else "no anchor (unreg)"
@@ -256,6 +261,13 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
             "Collision rate (%)",
             "Human-replay collision rate (%) — interactive",
         ),
+        (
+            "scaling_hr_interactive",
+            "at_fault_coll_mean",
+            "at_fault_coll_sem",
+            "At-fault collision rate (%)",
+            "Human-replay at-fault collision rate (%) — interactive",
+        ),
     ]
 
     return _scaling_scatter_common(
@@ -264,7 +276,7 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
         anchor_vals,
         color_map,
         marker_map,
-        figsize=(18, 5),
+        figsize=(24, 5),
         save_path=save_path,
     )
 

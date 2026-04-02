@@ -44,13 +44,14 @@ CHECKPOINTS = [
     # "models/rl/reg_self_play_50k.pt",
 ]
 
-SCALING_CHECKPOINTS_PATH = "models/cpts_scaling"
+SCALING_CHECKPOINTS_PATH = "models/cpts_scaling_all"
+DETERMINISTIC = True
 
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
-INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_training"
-NUM_TOTAL_EVAL_AGENTS = 100  # * 4
-NUM_AGENTS_PER_VECENV = 100  # 1024
+INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"
+NUM_TOTAL_EVAL_AGENTS = 4096  # * 4
+NUM_AGENTS_PER_VECENV = 1024  # 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "checkpoint_eval_results.csv"
@@ -62,13 +63,14 @@ RUN_RENDER = True
 
 # ─── VIDEO RENDERING CONFIG ─────────────────────────────────────────────────
 CHECKPOINTS_TO_RENDER = [
-    "models/cpts_scaling/unreg_delta_10_maps.pt",
+    "models/cpts_scaling/unreg_delta_1k_maps.pt",
     "models/cpts_scaling/reg_delta_1k_maps_anchor_100_maps.pt",
 ]
-NUM_ENVS_TO_RENDER = 15
+NUM_ENVS_TO_RENDER = 2
 RENDER_MAP_DIR = INTERACTIVE_MAP_DIR  # Which maps to render on
-RENDER_NUM_MAPS = 1000
+RENDER_NUM_MAPS = 100
 RENDER_OUTPUT_DIR = "eval_videos"
+RENDER_MODE = "worst_collision"  # "random" or "worst_collision"
 
 # WOSAC evaluation settings (aligned with run_wosac_eval_in_subprocess defaults)
 WOSAC_NUM_ROLLOUTS = 6
@@ -86,6 +88,7 @@ METRICS = [
     "n",
     "score",
     "collision_rate",
+    "at_fault_collision_rate",
     "collisions_per_agent",
     "offroad_rate",
     "offroad_per_agent",
@@ -123,20 +126,23 @@ def make_eval_config(base_config, map_dir, control_mode, goal_behavior=0, num_ma
     config["env"]["obs_partner_noise_speed"] = 0.0
     config["env"]["obs_partner_noise_pos"] = 0.0
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
+    config["env"]["async_resets"] = False
     return config
 
 
-def collect_scene_rows(info_list, checkpoint, mode, scene_offset=0, dataset=DATASET):
-    """Return one dict per scene (populated env log) with checkpoint/mode metadata."""
+def process_rollout_data(info_list, checkpoint, mode, scene_offset=0, dataset=DATASET):
+    """Return one dict per rollout (populated env log) with checkpoint/mode metadata."""
+
+    populated = [log for log in info_list if log and log.get("n", 0) > 0]
+    if not populated:
+        return []
     rows = []
-    for scene_idx, log in enumerate(info_list):
-        if not log or log.get("n", 0) <= 0:
-            continue
+    for i, log in enumerate(populated):
         row = {
             "checkpoint": checkpoint,
             "dataset": dataset,
             "mode": mode,
-            "scene_idx": scene_offset + scene_idx,
+            "scene_idx": scene_offset + i,  # TODO: Fix
         }
         for key in METRICS:
             row[key] = float(log.get(key, 0.0))
@@ -159,21 +165,26 @@ def run_mode(
     env = load_env(ENV_NAME, config)
     rows = []
     n_rounds = num_resample_rounds()
+    print(n_rounds)
 
     try:
         for round_idx in range(n_rounds):
+            print(round_idx)
             if round_idx > 0:
                 env.driver_env.resample_maps()
 
-            info_list = evaluator.rollout(policy, env)
+            rollout_stats = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
             scene_offset = round_idx * env.driver_env.num_envs
-            rows.extend(collect_scene_rows(info_list, checkpoint, mode_name, scene_offset))
+            rows.extend(process_rollout_data(rollout_stats, checkpoint, mode_name, scene_offset))
 
         n_scenes = len(rows)
         if n_scenes > 0:
             mean_score = np.mean([r["score"] for r in rows])
             mean_coll = np.mean([r["collision_rate"] for r in rows])
-            print(f"  {mode_name}: {n_scenes} scenes, score={mean_score:.3f}, collision_rate={mean_coll:.3f}")
+            mean_coll_fault = np.mean([r["at_fault_collision_rate"] for r in rows])
+            print(
+                f"  {mode_name}: {n_scenes} scenes, score={mean_score:.3f}, collision_rate={mean_coll:.3f}, at_fault_collision_rate={mean_coll_fault:.3f}"
+            )
         else:
             print(f"  {mode_name}: no populated scenes")
     except Exception as e:
@@ -210,9 +221,9 @@ def evaluate_checkpoint(checkpoint_path, base_config):
             if round_idx > 0:
                 env.driver_env.resample_maps()
 
-            info_list = evaluator.rollout(policy, env)
+            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
             scene_offset = round_idx * env.driver_env.num_envs
-            all_rows.extend(collect_scene_rows(info_list, checkpoint_path, "sp_train", scene_offset))
+            all_rows.extend(process_rollout_data(info_list, checkpoint_path, "sp_train", scene_offset))
 
         sp_rows = [r for r in all_rows if r["mode"] == "sp_train"]
         if sp_rows:
@@ -261,7 +272,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
             "control_sdc_only",
             checkpoint_path,
             "hr_interactive",
-            num_maps=1000,
+            num_maps=100,
         )
     )
 
@@ -350,55 +361,60 @@ def evaluate_scaling_checkpoints(base_config):
         print(f"  {os.path.basename(cpt_path)}  ->  sp={sp_maps}, {tag}, {dynamics}, {anchor_str}")
 
     all_rows = []
+
+    # Create envs once for all checkpoints
+    sp_config = make_eval_config(base_config, VAL_MAP_DIR, control_mode="control_vehicles", num_maps=10_000)
+    sp_env = load_env(ENV_NAME, sp_config)
+
+    hr_config = make_eval_config(base_config, INTERACTIVE_MAP_DIR, control_mode="control_sdc_only", num_maps=100)
+    hr_env = load_env(ENV_NAME, hr_config)
+
     for cpt_path, sp_maps, is_reg, dynamics, anchor_maps in scaling_entries:
         print(f"\n{'─' * 60}")
         print(f"Scaling eval: {os.path.basename(cpt_path)}")
         print(f"{'─' * 60}")
 
-        # Bootstrap an env so load_policy has a vecenv to inspect
-        init_config = make_eval_config(base_config, VAL_MAP_DIR, control_mode="control_vehicles", num_maps=10_000)
-        env = load_env(ENV_NAME, init_config)
         base_config["load_model_path"] = cpt_path
-        policy = load_policy(base_config, env, ENV_NAME)
+
+        # Load policy using sp_env (arbitrary — just needs a vecenv to inspect)
+        policy = load_policy(base_config, sp_env, ENV_NAME)
         policy.eval()
-        env.close()
 
         evaluator = CheckpointEvaluator(base_config)
 
         # ── Self-play on validation ──────────────────────────────────────
-        sp_rows = run_mode(
-            evaluator,
-            policy,
-            base_config,
-            VAL_MAP_DIR,
-            "control_vehicles",
-            cpt_path,
-            "scaling_sp_val",
-            num_maps=10_000,
-        )
+        sp_info = evaluator.rollout(policy, sp_env, deterministic=DETERMINISTIC)
+        sp_rows = process_rollout_data(sp_info, cpt_path, "scaling_sp_val")
 
-        # ── Human-replay on interactive scenes ───────────────────────
-        hr_rows = run_mode(
-            evaluator,
-            policy,
-            base_config,
-            INTERACTIVE_MAP_DIR,
-            "control_sdc_only",
-            cpt_path,
-            "scaling_hr_interactive",
-            num_maps=1_000,
-        )
+        if sp_rows:
+            mean_score = np.mean([r["score"] for r in sp_rows])
+            mean_coll = np.mean([r["collision_rate"] for r in sp_rows])
+            print(f"  scaling_sp_val: {len(sp_rows)} scenes, score={mean_score:.3f}, collision_rate={mean_coll:.3f}")
+
+        # ── Human-replay on interactive scenes ───────────────────────────
+        hr_info = evaluator.rollout(policy, hr_env, deterministic=DETERMINISTIC)
+        hr_rows = process_rollout_data(hr_info, cpt_path, "scaling_hr_interactive")
+
+        if hr_rows:
+            mean_score = np.mean([r["score"] for r in hr_rows])
+            mean_coll = np.mean([r["collision_rate"] for r in hr_rows])
+            mean_atfault_coll = np.mean([r["at_fault_collision_rate"] for r in hr_rows])
+            print(
+                f"  scaling_hr_interactive: {len(hr_rows)} scenes, score={mean_score:.3f}, collision_rate={mean_coll:.3f}, at_fault_collision_rate={mean_atfault_coll:.3f}"
+            )
 
         # Attach scaling metadata to every row
         for row in sp_rows + hr_rows:
             row["sp_maps"] = sp_maps
             row["is_regularized"] = is_reg
             row["dynamics"] = dynamics
-            row["anchor_maps"] = anchor_maps  # None for unreg
+            row["anchor_maps"] = anchor_maps
 
         all_rows.extend(sp_rows)
         all_rows.extend(hr_rows)
 
+    sp_env.close()
+    hr_env.close()
     return all_rows
 
 
@@ -422,6 +438,7 @@ def make_wosac_config(base_config, map_dir, num_maps=None):
     config["env"]["fix_rewards"] = True
     config["env"]["obs_partner_noise_speed"] = 0.0
     config["env"]["obs_partner_noise_pos"] = 0.0
+    config["env"]["async_resets"] = False
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
     config.setdefault("eval", {})
     config["eval"]["wosac_num_rollouts"] = WOSAC_NUM_ROLLOUTS
@@ -525,11 +542,36 @@ def make_render_config(base_config, map_dir, num_maps=1000):
     return config
 
 
+def select_render_envs(evaluator, policy, env, num_to_render):
+    """Run a non-rendering rollout and return env indices with the worst collision rates.
+
+    Returns:
+        List of (env_idx, collision_rate) tuples, sorted by collision rate descending,
+        truncated to num_to_render.
+    """
+    info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+    populated = [log for log in info_list if log and log.get("n", 0) > 0]
+    did_collide = np.array([log["collision_rate"] for log in populated])
+
+    print(f"average collision rate: {did_collide.mean()}, n = {did_collide.shape[0]}")
+
+    scored = []
+    for env_idx, log in enumerate(info_list):
+        if not log or log.get("n", 0) <= 0:
+            continue
+        scored.append((env_idx, log.get("collision_rate", 0.0)))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[:num_to_render]
+
+
 def render_checkpoint_videos(base_config):
     """Render human-replay videos for each checkpoint in CHECKPOINTS_TO_RENDER.
 
-    Uses driver.reset_recorder() between env indices to flush the current mp4
-    and start a new one, keeping the raylib window alive across all renders.
+    Supports two modes (RENDER_MODE):
+      - "random": render the first NUM_ENVS_TO_RENDER env indices
+      - "worst_collision": run a stats-only rollout first, then render
+        the NUM_ENVS_TO_RENDER envs with the highest collision rates
     """
     import glob
     import shutil
@@ -556,16 +598,46 @@ def render_checkpoint_videos(base_config):
 
         evaluator = CheckpointEvaluator(base_config)
 
-        for env_idx in range(NUM_ENVS_TO_RENDER):
-            print(f"  Rendering env {env_idx + 1}/{NUM_ENVS_TO_RENDER}...")
-            evaluator.rollout(policy, env, render_env_idx=env_idx)
-            # Flush this scenario's mp4 and stop the recorder cleanly.
-            # The next c_render call will auto-start a new recorder.
+        # Select which envs to render
+        collision_rates = {}  # scenario_id -> collision_rate for filename tagging
+        if RENDER_MODE == "worst_collision":
+            print(f"  Running stats rollout to find worst collisions...")
+            selected = select_render_envs(evaluator, policy, env, NUM_ENVS_TO_RENDER)
+            env_indices = [idx for idx, _ in selected]
+            collision_rates = {idx: rate for idx, rate in selected}
+            for idx, coll_rate in selected:
+                print(f"    env {idx}: collision_rate={coll_rate:.3f}")
+        else:
+            env_indices = list(range(NUM_ENVS_TO_RENDER))
+
+        # Build env_idx -> scenario_id mapping for filename tagging
+        scenario_ids = env.driver_env.scenario_ids
+        idx_to_scenario = {idx: scenario_ids[idx].rstrip("\x00") for idx in env_indices}
+
+        # Run a stats rollout for "random" mode to get collision rates
+        if RENDER_MODE == "random" and not collision_rates:
+            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            for idx in env_indices:
+                if idx < len(info_list) and info_list[idx]:
+                    collision_rates[idx] = info_list[idx].get("collision_rate", 0.0)
+
+        # Map scenario_id -> collision_rate
+        scenario_collision = {}
+        for idx in env_indices:
+            sid = idx_to_scenario.get(idx, "")
+            scenario_collision[sid] = collision_rates.get(idx, 0.0)
+
+        # Render selected envs
+        for i, env_idx in enumerate(env_indices):
+            print(f"  Rendering env {env_idx} ({i + 1}/{len(env_indices)})...")
+            evaluator.rollout(policy, env, render_env_idx=env_idx, deterministic=True)
             env.driver_env.stop_recorder(env_idx)
 
-        # Move mp4s produced by ffmpeg into the checkpoint subdirectory
+        # Move mp4s into the checkpoint subdirectory, tagging with collision rate
         for mp4_path in glob.glob("*.mp4"):
-            dest = os.path.join(cpt_video_dir, os.path.basename(mp4_path))
+            scenario_id = os.path.splitext(os.path.basename(mp4_path))[0]
+            coll_rate = scenario_collision.get(scenario_id, 0.0)
+            dest = os.path.join(cpt_video_dir, f"coll{coll_rate:.2f}_{scenario_id}.mp4")
             shutil.move(mp4_path, dest)
             print(f"  Saved: {dest}")
 
