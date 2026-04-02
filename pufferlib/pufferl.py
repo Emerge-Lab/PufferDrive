@@ -571,6 +571,7 @@ class PuffeRL:
                 reg_loss = -human_log_prob.mean()
 
             else:
+                unweighted_reg_loss = torch.tensor(0.0, device=device)
                 reg_loss = torch.tensor(0.0, device=device)
 
             adv = advantages[idx]
