@@ -51,7 +51,10 @@ def parse_args():
 
     # Job management
     parser.add_argument("--save_dir", type=str, required=True, help="Base directory for experiment outputs")
-    parser.add_argument("--prefix", type=str, default=None, help="Prefix for job names")
+    parser.add_argument("--prefix", type=str, default=None, help="Prefix for job names and wandb run name")
+    parser.add_argument("--wandb-name", type=str, default=None, help="Wandb run name (defaults to --prefix)")
+    parser.add_argument("--wandb-group", type=str, default=None, help="Wandb group name (overrides program config)")
+    parser.add_argument("--wandb-project", type=str, default=None, help="Wandb project name (overrides program config)")
     parser.add_argument("--dry", action="store_true", help="Dry run (don't submit, just print commands)")
 
     # Config files
@@ -140,15 +143,29 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
     all_main_args, overrides = process_main_args(args.args, args.program_config)
     name2commands = {}
 
+    # Keys to exclude from auto-generated job name (paths, wandb config, common overrides)
+    name_skip_keys = {
+        "config",
+        "config_path",
+        "map_dir",
+        "env.map_dir",
+        "init_mode",
+        "env.init_mode",
+        "total_timesteps",
+        "train.total_timesteps",
+        "wandb_project",
+        "wandb_group",
+        "wandb_name",
+    }
+    # Boolean flags that don't take values (store_true)
+    boolean_flags = {"wandb", "neptune"}
+
     for main_args in all_main_args:
         cmd = []
         name_entries = []
 
         if args.program_config is not None:
             name_entries.append(args.program_config.split("/")[-1].rsplit(".", 1)[0])
-
-        # Boolean flags that don't take values (store_true)
-        boolean_flags = {"wandb", "neptune"}
 
         for key, val in main_args.items():
             # Convert underscores to dashes for CLI compatibility
@@ -163,7 +180,7 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                 cmd.append(f"--{cli_key}")
                 cmd.append(str(val))
 
-            if key in overrides and key not in ["config", "config_path"]:
+            if key in overrides and key not in name_skip_keys:
                 display_key = key.split(".")[-1] if "." in key else key
                 name_entries.append(f"{display_key}{val}")
 
@@ -182,6 +199,15 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
 
         if args.prefix is not None:
             job_name = f"{args.prefix}_{job_name}"
+
+        # Wandb overrides: explicit flags take priority, then prefix for name
+        wandb_name = args.wandb_name or args.prefix
+        if wandb_name is not None:
+            cmd.extend(["--wandb-name", wandb_name])
+        if args.wandb_group is not None:
+            cmd.extend(["--wandb-group", args.wandb_group])
+        if args.wandb_project is not None:
+            cmd.extend(["--wandb-project", args.wandb_project])
 
         save_dir = os.path.join(args.save_dir, job_name)
         name2commands[job_name] = (cmd, save_dir)
@@ -239,10 +265,55 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
     def launch_training(args, from_config, cmd, save_dir, project_root, container_config=None):
         """Runs inside the SLURM allocation."""
+        import glob
         import os
+        import shutil
         import subprocess
         import sys
         import submitit
+
+        # Code isolation: symlink top-level entries, hard copy pufferlib/ source
+        # (symlink resources/ to avoid copying 3.7GB of maps/models).
+        isolated_root = os.path.join(save_dir, "code")
+        if os.path.exists(isolated_root):
+            version = 1
+            while os.path.exists(f"{isolated_root}_v{version}"):
+                version += 1
+            isolated_root = f"{isolated_root}_v{version}"
+        os.makedirs(isolated_root, exist_ok=True)
+        # Symlink each top-level entry (instant, avoids deep-copying data/)
+        for entry in os.listdir(project_root):
+            src = os.path.join(project_root, entry)
+            dst = os.path.join(isolated_root, entry)
+            if os.path.exists(dst) or os.path.islink(dst):
+                if os.path.isdir(dst) and not os.path.islink(dst):
+                    shutil.rmtree(dst)
+                else:
+                    os.remove(dst)
+            os.symlink(src, dst)
+        # Hard copy pufferlib/ so branch switches don't break running jobs.
+        # Previously used `cp -rs` (symlinks) which meant switching branches
+        # after submission would silently change the code running jobs use.
+        # We symlink resources/ (3.7GB of maps/models) to avoid slow copies,
+        # but hard copy everything else (source code, .so files).
+        pufferlib_dst = os.path.join(isolated_root, "pufferlib")
+        if os.path.islink(pufferlib_dst):
+            os.remove(pufferlib_dst)
+        elif os.path.isdir(pufferlib_dst):
+            shutil.rmtree(pufferlib_dst)
+        pufferlib_src = os.path.join(project_root, "pufferlib")
+        shutil.copytree(
+            pufferlib_src,
+            pufferlib_dst,
+            symlinks=False,
+            ignore=shutil.ignore_patterns("resources"),
+        )
+        # Symlink resources/ (large static data, safe to share)
+        resources_src = os.path.join(pufferlib_src, "resources")
+        resources_dst = os.path.join(pufferlib_dst, "resources")
+        if os.path.isdir(resources_src):
+            os.symlink(resources_src, resources_dst)
+        project_root = isolated_root
 
         # Change to project directory and set up environment
         os.chdir(project_root)
@@ -286,7 +357,18 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
         # Wrap with singularity if container mode is enabled
         if container_config is not None:
-            inner_cmd = f"cd {project_root} && " + " ".join(full_cmd)
+            env_setup = "source /ext3/env.sh"
+            # Redirect caches to scratch to avoid home quota issues
+            scratch_dir = os.environ.get("SCRATCH_DIR", "/scratch/" + os.environ.get("USER", ""))
+            cache_exports = (
+                f"export XDG_CACHE_HOME={scratch_dir}/cache && "
+                f"export WANDB_CACHE_DIR={scratch_dir}/wandb_cache && "
+                f"export WANDB_CONFIG_DIR={scratch_dir}/wandb_config && "
+                f"export WANDB_DATA_DIR={scratch_dir}/wandb_data && "
+                f"export WANDB_DIR={scratch_dir}/wandb_data && "
+                f"mkdir -p {scratch_dir}/cache"
+            )
+            inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && " + " ".join(full_cmd)
             full_cmd = [
                 "singularity",
                 "exec",
