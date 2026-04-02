@@ -296,14 +296,6 @@ class PuffeRL:
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 r = torch.clamp(r, -1, 1)
 
-                # Bootstrap value for truncated (but not terminal) episodes
-                # Use previous step's value as proxy for the pre-reset state
-                # (auto-reset overwrites obs, so current value is V(s_reset) not V(s_truncated))
-                trunc_mask = (t > 0) & (d == 0)
-                if trunc_mask.any() and l > 0:
-                    prev_values = self.values[batch_rows, l - 1]
-                    r = r + trunc_mask.float() * config["gamma"] * prev_values
-
             profile("eval_copy", epoch)
             with torch.no_grad():
                 if config["use_rnn"]:
@@ -313,6 +305,14 @@ class PuffeRL:
                 # Fast path for fully vectorized envs
                 l = self.ep_lengths[env_id.start].item()
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
+
+                # Bootstrap value for truncated (but not terminal) episodes
+                # Use previous step's value as proxy for the pre-reset state
+                # (auto-reset overwrites obs, so current value is V(s_reset) not V(s_truncated))
+                trunc_mask = (t > 0) & (d == 0)
+                if trunc_mask.any() and l > 0:
+                    prev_values = self.values[batch_rows, l - 1]
+                    r = r + trunc_mask.float() * config["gamma"] * prev_values
 
                 if config["cpu_offload"]:
                     self.observations[batch_rows, l] = o
