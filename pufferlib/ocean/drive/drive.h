@@ -213,6 +213,8 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
+    float total_distance_travelled;
+    float total_infractions;
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -1305,6 +1307,12 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        // Distance per infraction
+        int total_infractions = (offroad || collided) ? 1 : 0;
+        env->log.total_distance_travelled += agent->distance_since_spawn;
+        if (total_infractions > 0) {
+            env->log.total_infractions += 1.0f;
+        }
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
@@ -1385,6 +1393,7 @@ void set_start_position(Drive *env) {
         e->stopped = 0;
         e->removed = 0;
         e->respawn_count = 0;
+        e->distance_since_spawn = 0.0f;
 
         // Dynamics
         e->a_long = 0.0f;
@@ -2153,6 +2162,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->collided_before_goal = 0;
     agent->stopped = 0;
     agent->removed = 0;
+    agent->distance_since_spawn = 0.0f;
     agent->a_long = 0.0f;
     agent->a_lat = 0.0f;
     agent->jerk_long = 0.0f;
@@ -2475,6 +2485,11 @@ void c_step(Drive *env) {
         float prev_vy = env->agents[agent_idx].sim_vy;
 
         move_dynamics(env, i, agent_idx);
+
+        // Accumulate distance for avg_distance_per_infraction metric
+        float speed = sqrtf(env->agents[agent_idx].sim_vx * env->agents[agent_idx].sim_vx +
+                            env->agents[agent_idx].sim_vy * env->agents[agent_idx].sim_vy);
+        env->agents[agent_idx].distance_since_spawn += speed * env->dt;
 
         // Tiny jerk penalty for smoothness
         if (env->dynamics_model == CLASSIC) {

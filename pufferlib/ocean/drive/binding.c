@@ -360,6 +360,8 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
     assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
     assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
+    float avg_distance_per_infraction = log->total_distance_travelled / fmaxf(0.001f, log->total_infractions);
+    assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }
