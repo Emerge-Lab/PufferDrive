@@ -297,9 +297,12 @@ class PuffeRL:
                 r = torch.clamp(r, -1, 1)
 
                 # Bootstrap value for truncated (but not terminal) episodes
+                # Use previous step's value as proxy for the pre-reset state
+                # (auto-reset overwrites obs, so current value is V(s_reset) not V(s_truncated))
                 trunc_mask = (t > 0) & (d == 0)
-                if trunc_mask.any():
-                    r = r + trunc_mask.float() * config["gamma"] * value.flatten()
+                if trunc_mask.any() and l > 0:
+                    prev_values = self.values[batch_rows, l - 1]
+                    r = r + trunc_mask.float() * config["gamma"] * prev_values
 
             profile("eval_copy", epoch)
             with torch.no_grad():
