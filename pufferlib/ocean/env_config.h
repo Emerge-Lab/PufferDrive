@@ -36,6 +36,7 @@ typedef struct {
     int reg_mode;
     float obs_partner_noise_pos;
     float obs_partner_noise_speed;
+    bool async_resets;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -144,6 +145,9 @@ static int handler(void *config, const char *section, const char *name, const ch
             strncpy(env_config->anchor_policy_path, value, sizeof(env_config->anchor_policy_path) - 1);
             env_config->anchor_policy_path[sizeof(env_config->anchor_policy_path) - 1] = '\0';
         }
+    } else if (MATCH("env", "async_resets")) {
+        env_config->async_resets =
+            (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
     } else if (MATCH("env", "fix_rewards")) {
         env_config->fix_rewards = (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
     } else if (MATCH("env", "fix_lambdas")) {

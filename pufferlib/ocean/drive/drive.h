@@ -398,6 +398,7 @@ struct Drive {
     float obs_partner_noise_pos;
     float obs_partner_noise_speed;
     float obs_noise_road;
+    bool async_resets;
 };
 
 void add_log(Drive *env) {
@@ -1436,6 +1437,9 @@ void init(Drive *env) {
     env->dynamics_noise_pos = 0.0f; // 0.0125f; Gigaflow
     env->dynamics_noise_heading = 0.0f;
     env->obs_noise_road = 0.0f;
+    if (env->async_resets != 0 && env->async_resets != 1) {
+        env->async_resets = 1; // Default to async resets
+    }
 }
 
 void close_client(Client *client);
@@ -2195,6 +2199,15 @@ void c_step(Drive *env) {
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
 
+    // If async_resets is off and we already finished, just re-assert done signals
+    if (!env->async_resets && (env->timestep + 1) >= env->episode_length) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            env->truncations[i] = 1;
+            env->terminals[i] = 1;
+        }
+        return;
+    }
+
     // Re-assert terminal for agents already terminated in a prior step
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
@@ -2343,7 +2356,10 @@ void c_step(Drive *env) {
             env->truncations[i] = 1;
         }
         add_log(env);
-        c_reset(env);
+        if (env->async_resets) {
+            // printf("[async_resets=1] Episode done at t=%d, resetting\n", env->timestep);
+            c_reset(env);
+        }
         return;
     }
 
@@ -3668,6 +3684,12 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
             draw_scene(env, client, 1, 0, 0, 0);
             DrawText(TextFormat("t=%d", env->timestep), 10, 10, 20, PUFF_WHITE);
+            for (int i = 0; i < env->active_agent_count; i++) {
+                int idx = env->active_agent_indices[i];
+                if (env->entities[idx].collision_state > 0) {
+                    DrawText(TextFormat("COLLISION agent %d at t=%d", idx, env->timestep), 10, 30, 20, PUFF_RED);
+                }
+            }
 
         } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
             // Orthographic bird's-eye view centered on the selected agent,

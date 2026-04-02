@@ -71,6 +71,7 @@ class Drive(pufferlib.PufferEnv):
         lambda_value=0.0,
         obs_partner_noise_speed=0.0,
         obs_partner_noise_pos=0.0,
+        async_resets=True,
     ):
         # env
         self.dt = dt
@@ -103,6 +104,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_partner_noise_speed = obs_partner_noise_speed
         self.obs_partner_noise_pos = obs_partner_noise_pos
         self._dynamics_model_flag = DYNAMICS_MODEL_MAP[dynamics_model]
+        self.async_resets = bool(async_resets)
 
         # Observation space calculation
         self.ego_features = binding.EGO_FEATURES_JERK if dynamics_model == "jerk" else binding.EGO_FEATURES
@@ -254,6 +256,7 @@ class Drive(pufferlib.PufferEnv):
                 lambda_value=lambda_value,
                 fix_lambdas=self.fix_lambdas,
                 fix_reward=self.fix_rewards,
+                async_resets=self.async_resets,
             )
             self.env_ids.append(env_id)
 
@@ -343,6 +346,7 @@ class Drive(pufferlib.PufferEnv):
                 dynamics_model=self._dynamics_model_flag,
                 obs_partner_noise_pos=self.obs_partner_noise_pos,
                 obs_partner_noise_speed=self.obs_partner_noise_speed,
+                async_resets=int(self.async_resets),
             )
             self.env_ids.append(env_id)
         self.c_envs = binding.vectorize(*self.env_ids)

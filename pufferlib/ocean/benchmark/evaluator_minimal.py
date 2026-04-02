@@ -17,7 +17,7 @@ class CheckpointEvaluator:
         self.configs = configs
         self.sim_steps = 90
 
-    def rollout(self, policy, env, render_env_idx=None, view_mode=None):
+    def rollout(self, policy, env, render_env_idx=None, view_mode=None, deterministic=False):
         """Run a single rollout and return the per-env info logs.
 
         Args:
@@ -58,7 +58,18 @@ class CheckpointEvaluator:
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
                 logits, value = policy.forward_eval(ob_tensor, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+
+                if deterministic:
+                    # Greedy: pick highest-probability action per head
+                    if isinstance(logits, torch.Tensor):
+                        action = logits.argmax(dim=-1, keepdim=True).int()
+                    elif isinstance(logits, torch.distributions.Normal):
+                        action = logits.loc  # mean of the distribution
+                    else:  # multi-discrete (list of logit tensors)
+                        action = torch.stack([l.argmax(dim=-1) for l in logits], dim=-1).int()
+                else:
+                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+
                 action_np = action.cpu().numpy().reshape(env.action_space.shape)
 
             if isinstance(logits, torch.distributions.Normal):

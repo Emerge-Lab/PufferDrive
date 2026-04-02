@@ -204,6 +204,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         return -1;
     }
 
+    // async_resets: default to 1 (training behavior), set 0 for eval
+    env->async_resets = conf.async_resets;
+    if (kwargs && PyDict_GetItemString(kwargs, "async_resets")) {
+        env->async_resets = (int)unpack(kwargs, "async_resets");
+    }
 // Allow all settings to be overridden via kwargs (ini provides defaults)
 #define OVERRIDE_INT(field)                                                                                            \
     if (kwargs && PyDict_GetItemString(kwargs, #field)) {                                                              \
@@ -236,6 +241,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     OVERRIDE_INT(fix_rewards);
     OVERRIDE_INT(fix_lambdas);
     OVERRIDE_FLOAT(lambda_value);
+    OVERRIDE_INT(async_resets);
 
 #undef OVERRIDE_INT
 #undef OVERRIDE_FLOAT
@@ -273,6 +279,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->map_name = strdup(map_file);
     env->init_steps = init_steps;
     env->timestep = init_steps;
+    env->async_resets = conf.async_resets;
     init(env);
     return 0;
 }
