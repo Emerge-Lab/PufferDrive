@@ -511,7 +511,7 @@ class Drive(pufferlib.PufferEnv):
             self.c_envs = binding.vectorize(*env_ids)
 
             binding.vec_reset(self.c_envs, seed)
-            self.terminals[:] = 1
+            self.truncations[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):

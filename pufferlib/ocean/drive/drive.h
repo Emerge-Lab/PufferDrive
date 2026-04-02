@@ -252,6 +252,7 @@ struct Drive {
     float *actions;
     float *rewards;
     unsigned char *terminals;
+    unsigned char *truncations;
     Log log;
     Log *logs;
     int num_agents; // Max controlled agents
@@ -2453,6 +2454,7 @@ void c_reset(Drive *env) {
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
+    memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
 
     int originals_remaining = 0;
@@ -2466,6 +2468,9 @@ void c_step(Drive *env) {
     }
 
     if (env->timestep == env->episode_length || (!originals_remaining && env->termination_mode == 1)) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            env->truncations[i] = 1;
+        }
         add_log(env);
         c_reset(env);
         return;
