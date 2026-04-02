@@ -333,6 +333,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_bounds[REWARD_COEF_ACC] =
         (RewardBound){(float)unpack(kwargs, "reward_bound_acc_min"), (float)unpack(kwargs, "reward_bound_acc_max")};
 
+    env->goal_speed_tolerance = (float)unpack(kwargs, "goal_speed_tolerance");
     char *map_path = unpack_str(kwargs, "map_path");
     int max_agents = unpack(kwargs, "max_agents");
     int init_steps = unpack(kwargs, "init_steps");

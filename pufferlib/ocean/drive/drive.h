@@ -114,8 +114,8 @@
 #define MAX_CHECKED_LANES 32
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 11
-#define EGO_FEATURES_JERK 14
+#define EGO_FEATURES_CLASSIC 12
+#define EGO_FEATURES_JERK 15
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -299,6 +299,7 @@ struct Drive {
     float reward_reverse;
     float goal_radius;
     float goal_speed;
+    float goal_speed_tolerance;
     int logs_capacity;
     int goal_behavior;
     float goal_target_distance;
@@ -1985,6 +1986,7 @@ void compute_observations(Drive *env) {
         obs[4] = ego_entity->sim_width / MAX_VEH_WIDTH;
         obs[5] = ego_entity->sim_length / MAX_VEH_LEN;
         obs[6] = (ego_entity->collision_state > 0) ? 1.0f : 0.0f;
+        float normalized_goal_speed = (env->goal_speed < 0.0f) ? 0.0f : env->goal_speed / MAX_SPEED;
 
         if (env->dynamics_model == JERK) {
             obs[7] = ego_entity->steering_angle / M_PI;
@@ -1993,14 +1995,16 @@ void compute_observations(Drive *env) {
                 (ego_entity->a_long < 0) ? ego_entity->a_long / (-JERK_LONG[0]) : ego_entity->a_long / JERK_LONG[3];
             obs[9] = ego_entity->a_lat / JERK_LAT[2];
             obs[10] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[11] = fminf(speed_limit / MAX_SPEED, 1.0f);
-            obs[12] = lane_center_dist;
-            obs[13] = ego_entity->metrics_array[LANE_ANGLE_IDX];
+            obs[11] = normalized_goal_speed;
+            obs[12] = fminf(speed_limit / MAX_SPEED, 1.0f);
+            obs[13] = lane_center_dist;
+            obs[14] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         } else {
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
-            obs[8] = fminf(speed_limit / MAX_SPEED, 1.0f);
-            obs[9] = lane_center_dist;
-            obs[10] = ego_entity->metrics_array[LANE_ANGLE_IDX];
+            obs[8] = normalized_goal_speed;
+            obs[9] = fminf(speed_limit / MAX_SPEED, 1.0f);
+            obs[10] = lane_center_dist;
+            obs[11] = ego_entity->metrics_array[LANE_ANGLE_IDX];
         }
         int obs_idx = (env->reward_conditioning == 1) ? ego_dim - NUM_REWARD_COEFS : ego_dim;
         // Placeholder for reward conditioning encoder -
@@ -2534,9 +2538,12 @@ void c_step(Drive *env) {
         float current_speed = sqrtf(env->agents[agent_idx].sim_vx * env->agents[agent_idx].sim_vx +
                                     env->agents[agent_idx].sim_vy * env->agents[agent_idx].sim_vy);
 
-        // Reward agent if it is within X meters of goal and speed is below threshold
+        // Reward agent if it is within X meters of goal and speed is within threshold from goal_speed
         bool within_distance = distance_to_goal < env->goal_radius;
-        bool within_speed = current_speed <= env->goal_speed;
+        bool within_speed = 1;
+        if (env->goal_speed >= 0.0f) {
+            within_speed = fabsf(current_speed - env->goal_speed) <= env->goal_speed_tolerance;
+        }
 
         if (within_distance && within_speed && !env->agents[agent_idx].current_goal_reached) {
             if (env->goal_behavior == GOAL_RESPAWN && env->agents[agent_idx].respawn_timestep != -1) {
