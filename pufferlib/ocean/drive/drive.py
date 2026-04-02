@@ -27,7 +27,7 @@ class Drive(pufferlib.PufferEnv):
         reward_center_bias=0.0,
         reward_velocity=0.0025,
         reward_reverse=0.005,
-        reward_traffic_light_violation=1.0,
+        reward_stop_line=1.0,
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
@@ -93,7 +93,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_center_bias = reward_center_bias
         self.reward_velocity = reward_velocity
         self.reward_reverse = reward_reverse
-        self.reward_traffic_light_violation = reward_traffic_light_violation
+        self.reward_stop_line = reward_stop_line
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
@@ -291,7 +291,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_center_bias=self.reward_center_bias,
                 reward_velocity=self.reward_velocity,
                 reward_reverse=self.reward_reverse,
-                reward_traffic_light_violation=self.reward_traffic_light_violation,
+                reward_stop_line=self.reward_stop_line,
                 reward_timestep=self.reward_timestep,
                 reward_overspeed=self.reward_overspeed,
                 reward_ade=self.reward_ade,
@@ -410,7 +410,7 @@ class Drive(pufferlib.PufferEnv):
                         reward_center_bias=self.reward_center_bias,
                         reward_velocity=self.reward_velocity,
                         reward_reverse=self.reward_reverse,
-                        reward_traffic_light_violation=self.reward_traffic_light_violation,
+                        reward_stop_line=self.reward_stop_line,
                         reward_timestep=self.reward_timestep,
                         reward_overspeed=self.reward_overspeed,
                         reward_ade=self.reward_ade,

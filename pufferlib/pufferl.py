@@ -321,7 +321,8 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                r = torch.sign(r) * torch.log1p(torch.abs(r))
+                if config["normalize_rewards"]:
+                    r = torch.sign(r) * torch.log1p(torch.abs(r))
 
             profile("eval_copy", epoch)
             with torch.no_grad():
@@ -533,14 +534,6 @@ class PuffeRL:
 
         return logs
 
-    def _ppo_minibatch_obs(self, obs, idx):
-        obs_idx = idx.cpu() if obs.device.type == "cpu" and idx.device.type != "cpu" else idx
-        mb_obs = obs[obs_idx]
-        device = torch.device(self.config["device"])
-        if mb_obs.device != device:
-            mb_obs = mb_obs.to(device, non_blocking=self.config["cpu_offload"])
-        return mb_obs
-
     def _ppo_loss(
         self,
         mb_obs,
@@ -616,12 +609,13 @@ class PuffeRL:
             profile("train_misc", epoch)
             self.amp_context.__enter__()
 
-            shape = self.values.shape
-            advantages = torch.zeros(shape, device=device)
+            masks = self.masks.bool()
+            terminals = torch.maximum(self.terminals, (~masks).float())
+            advantages = torch.zeros_like(self.values, device=device)
             advantages = compute_puff_advantage(
                 self.values,
                 self.rewards,
-                self.terminals,
+                terminals,
                 self.ratio,
                 advantages,
                 config["gamma"],
@@ -629,6 +623,7 @@ class PuffeRL:
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
             )
+            advantages.masked_fill_(~masks, 0.0)
 
             adv = advantages.abs().sum(axis=1)
             prio_weights = torch.nan_to_num(adv**a, 0, 0, 0)
@@ -637,12 +632,15 @@ class PuffeRL:
             mb_prio = (self.segments * prio_probs[idx, None]) ** -anneal_beta
 
             profile("train_copy", epoch)
-            mb_obs = self._ppo_minibatch_obs(self.observations, idx)
+            mb_obs = self.observations[idx]
             mb_actions = self.actions[idx]
             mb_logprobs = self.logprobs[idx]
             mb_values = self.values[idx]
             mb_returns = advantages[idx] + mb_values
             mb_adv = advantages[idx]
+
+            if not config["use_rnn"]:
+                mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
 
             profile("train_forward", epoch)
             loss, newvalue, ratio, stats = self._ppo_loss(
@@ -748,7 +746,7 @@ class PuffeRL:
             for start in range(0, permutation.numel(), self.minibatch_size):
                 profile("train_copy", epoch)
                 mb_idx = permutation[start : start + self.minibatch_size]
-                mb_obs = self._ppo_minibatch_obs(flat_obs, mb_idx)
+                mb_obs = flat_obs[mb_idx]
                 mb_actions = flat_actions[mb_idx]
                 mb_logprobs = flat_logprobs[mb_idx]
                 mb_values = flat_values[mb_idx]

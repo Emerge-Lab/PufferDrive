@@ -133,7 +133,7 @@ void performance_test() {
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
-        .reward_traffic_light_violation = conf.reward_traffic_light_violation,
+        .reward_stop_line = conf.reward_stop_line,
         .reward_goal = conf.reward_goal,
         .reward_ade = conf.reward_ade,
         .reward_overspeed = conf.reward_overspeed,

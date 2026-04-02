@@ -276,7 +276,7 @@ struct Drive {
     float reward_center_bias;
     float reward_velocity;
     float reward_reverse;
-    float reward_traffic_light_violation;
+    float reward_stop_line;
     float reward_timestep;
     float reward_overspeed;
     float reward_ade;
@@ -466,7 +466,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {-0.5f, 0.5f},      // REWARD_COEF_CENTER_BIAS     α_center-bias ~ U(-0.5, 0.5)
     {0.0f, 5e-3f},      // REWARD_COEF_VELOCITY        α_velocity = 2.5e-3 (fixed)
     {2.5e-4f, 7.5e-3f}, // REWARD_COEF_REVERSE         α_reverse ~ U(2.5e-4, 7.5e-3)
-    {0.0f, 1.0f},       // REWARD_COEF_TRAFFIC_LIGHT   α_stop-line ~ U(0, 1)
+    {0.0f, 1.0f},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 1)
     {0.0f, 5e-5f},      // REWARD_COEF_TIMESTEP        α_timestep = 2.5e-5 (fixed)
     {0.0f, 1.0f},       // REWARD_COEF_OVERSPEED
     {0.8f, 1.25f},      // REWARD_COEF_THROTTLE        C_throttle
@@ -493,8 +493,8 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
                                                                      REWARD_BOUNDS[REWARD_COEF_LANE_ALIGN].max_val);
         agent->reward_coefs[REWARD_COEF_LANE_CENTER] = random_uniform(REWARD_BOUNDS[REWARD_COEF_LANE_CENTER].min_val,
                                                                       REWARD_BOUNDS[REWARD_COEF_LANE_CENTER].max_val);
-        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] = random_uniform(
-            REWARD_BOUNDS[REWARD_COEF_TRAFFIC_LIGHT].min_val, REWARD_BOUNDS[REWARD_COEF_TRAFFIC_LIGHT].max_val);
+        agent->reward_coefs[REWARD_COEF_STOP_LINE] =
+            random_uniform(REWARD_BOUNDS[REWARD_COEF_STOP_LINE].min_val, REWARD_BOUNDS[REWARD_COEF_STOP_LINE].max_val);
         agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = random_uniform(REWARD_BOUNDS[REWARD_COEF_CENTER_BIAS].min_val,
                                                                       REWARD_BOUNDS[REWARD_COEF_CENTER_BIAS].max_val);
         agent->reward_coefs[REWARD_COEF_VEL_ALIGN] =
@@ -519,7 +519,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = env->reward_lane_align;
         agent->reward_coefs[REWARD_COEF_LANE_CENTER] = env->reward_lane_center;
         agent->reward_coefs[REWARD_COEF_VELOCITY] = env->reward_velocity;
-        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] = env->reward_traffic_light_violation;
+        agent->reward_coefs[REWARD_COEF_STOP_LINE] = env->reward_stop_line;
         agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = env->reward_center_bias;
         agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = env->reward_vel_align;
         agent->reward_coefs[REWARD_COEF_OVERSPEED] = env->reward_overspeed;
@@ -3671,6 +3671,8 @@ static void compute_metrics(Drive *env, int agent_idx) {
         } else if (env->traffic_light_behavior == REMOVE_AGENT && !agent->removed) {
             agent->removed = 1;
         }
+
+        return; // early return: no goal reaching when red light violation
     }
 
     float distance_to_goal =
@@ -3715,7 +3717,7 @@ static void compute_rewards(Drive *env, int i) {
 
     // Red light violation reward (GIGAFLOW)
     if (agent->metrics_array[RED_LIGHT_IDX] > 0.0f) {
-        float reward_red_light = -agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT];
+        float reward_red_light = -agent->reward_coefs[REWARD_COEF_STOP_LINE];
 
         env->rewards[i] += reward_red_light;
         env->logs[i].red_light_violation_rate = 1.0f;
@@ -3806,6 +3808,7 @@ static void compute_rewards(Drive *env, int i) {
 
     env->rewards[i] += speed_reward;
     env->logs[i].avg_speed_per_agent += agent->sim_speed;
+    agent->distance_since_spawn += agent->sim_speed * env->dt;
     env->logs[i].episode_return += speed_reward;
 
     // ADE reward (CUSTOM)
@@ -4591,34 +4594,7 @@ void c_step(Drive *env) {
 
     env->timestep++;
 
-    // -> 1. Check for episode termination
-    int early_reset = 0;
-    // Special early reset condition for GIGAFLOW
-    if (env->simulation_mode == SIMULATION_GIGAFLOW && env->termination_mode == 1) {
-        int count_inactive = 0;
-        for (int i = 0; i < env->active_agent_count; i++) {
-            int agent_idx = env->active_agent_indices[i];
-            if (env->agents[agent_idx].removed || env->agents[agent_idx].stopped) {
-                count_inactive++;
-            }
-        }
-        float ratio_inactive = (float)count_inactive / (float)env->active_agent_count;
-        // If more than inactive_agent_threshold of agents are removed/stopped, reset the environment
-        if (ratio_inactive > env->inactive_agent_threshold) {
-            early_reset = 1;
-        }
-    }
-
-    if (env->timestep == env->scenario_length || early_reset) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            env->truncations[i] = 1;
-        }
-        add_log(env);
-        c_reset(env);
-        return;
-    }
-
-    // -> 2. Apply actions and move agents
+    // -> 1. Apply actions and move agents
     // Move static experts
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         int expert_idx = env->expert_static_agent_indices[i];
@@ -4633,7 +4609,7 @@ void c_step(Drive *env) {
         // move_expert(env, env->actions, agent_idx);
     }
 
-    // -> 3. Compute metrics and rewards
+    // -> 2. Compute metrics and rewards
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
 
@@ -4655,10 +4631,35 @@ void c_step(Drive *env) {
         }
     }
 
-    // -> 5. Compute observations
+    // -> 3. Check for episode truncation
+    int early_reset = 0;
+    if (env->simulation_mode == SIMULATION_GIGAFLOW && env->termination_mode == 1) {
+        int count_inactive = 0;
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            if (env->agents[agent_idx].removed || env->agents[agent_idx].stopped) {
+                count_inactive++;
+            }
+        }
+        float ratio_inactive = (float)count_inactive / (float)env->active_agent_count;
+        if (ratio_inactive > env->inactive_agent_threshold) {
+            early_reset = 1;
+        }
+    }
+
+    if (env->timestep == env->scenario_length || early_reset) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            env->truncations[i] = 1;
+        }
+        add_log(env);
+        c_reset(env);
+        return;
+    }
+
+    // -> 4. Compute observations
     compute_observations(env);
 
-    // -> 6. Update goals for agents that reached their goal
+    // -> 5. Update goals for agents that reached their goal
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];

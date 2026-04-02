@@ -12,7 +12,7 @@ typedef struct {
     int dynamics_model;
     float reward_vehicle_collision;
     float reward_offroad_collision;
-    float reward_traffic_light_violation;
+    float reward_stop_line;
     float reward_goal;
     float reward_ade;
     float reward_overspeed;
@@ -94,8 +94,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_vehicle_collision = atof(value);
     } else if (MATCH("env", "reward_offroad_collision")) {
         env_config->reward_offroad_collision = atof(value);
-    } else if (MATCH("env", "reward_traffic_light_violation")) {
-        env_config->reward_traffic_light_violation = atof(value);
+    } else if (MATCH("env", "reward_stop_line")) {
+        env_config->reward_stop_line = atof(value);
     } else if (MATCH("env", "reward_goal")) {
         env_config->reward_goal = atof(value);
     } else if (MATCH("env", "reward_ade")) {

@@ -1789,7 +1789,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_center_bias = (float)unpack(kwargs, "reward_center_bias");
     env->reward_velocity = (float)unpack(kwargs, "reward_velocity");
     env->reward_reverse = (float)unpack(kwargs, "reward_reverse");
-    env->reward_traffic_light_violation = (float)unpack(kwargs, "reward_traffic_light_violation");
+    env->reward_stop_line = (float)unpack(kwargs, "reward_stop_line");
     env->reward_timestep = (float)unpack(kwargs, "reward_timestep");
     env->reward_overspeed = (float)unpack(kwargs, "reward_overspeed");
     env->reward_ade = (float)unpack(kwargs, "reward_ade");

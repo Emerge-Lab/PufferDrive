@@ -83,7 +83,7 @@ puffer eval_multi_scenarios_render puffer_drive \
 | `reward_lane_align` | `0.025` | Lane heading alignment |
 | `reward_vel_align` | `1.0` | Speed matching road limit |
 | `reward_lane_center` | `0.0038` | Lane centering |
-| `reward_traffic_light_violation` | `1.0` | Red light penalty |
+| `reward_stop_line` | `1.0` | Stop line penalty |
 | `reward_overspeed` | `0.05` | Speeding penalty |
 
 ### `[train]` — PPO
