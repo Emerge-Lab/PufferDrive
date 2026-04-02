@@ -660,6 +660,7 @@ static PyObject *env_log(PyObject *self, PyObject *args) {
     int num_keys = sizeof(Log) / sizeof(float);
     for (int j = 0; j < num_keys; j++) {
         ((float *)&aggregate)[j] += ((float *)&env->log)[j];
+        ((float *)&env->log)[j] = 0.0f; // Zero out after consuming it
     }
 
     PyObject *dict = PyDict_New();
