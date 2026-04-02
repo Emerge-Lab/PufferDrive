@@ -315,21 +315,6 @@ def parse_scaling_checkpoint_name(filename):
 
 
 def evaluate_scaling_checkpoints(base_config):
-    """Evaluate all scaling checkpoints on validation set in sp and hr modes.
-
-    For each checkpoint in SCALING_CHECKPOINTS_PATH:
-      - Self-play on validation maps  (mode = "scaling_sp_val")
-      - Human-replay on validation maps (mode = "scaling_hr_val")
-
-    Extra columns added to each row:
-      - sp_maps: number of maps used for self-play training
-      - is_regularized: whether regularization was used
-      - dynamics: dynamics model name (e.g. "delta")
-      - anchor_maps: number of maps used to train the anchor (None for unreg)
-
-    Returns:
-        List of per-scene row dicts.
-    """
     scaling_entries = []
     for fname in sorted(os.listdir(SCALING_CHECKPOINTS_PATH)):
         if not fname.endswith(".pt"):
@@ -360,23 +345,45 @@ def evaluate_scaling_checkpoints(base_config):
         anchor_str = f"anchor={anchor_maps}" if anchor_maps is not None else "no anchor"
         print(f"  {os.path.basename(cpt_path)}  ->  sp={sp_maps}, {tag}, {dynamics}, {anchor_str}")
 
+    # Group checkpoints by dynamics model
+    dynamics_groups = {}
+    for entry in scaling_entries:
+        dyn = entry[3]  # dynamics field
+        dynamics_groups.setdefault(dyn, []).append(entry)
+
+    # Map dynamics name to config dynamics_model string
+    DYNAMICS_CONFIG_MAP = {
+        "delta": "delta_local",
+        "classic": "classic",
+        "jerk": "jerk",
+    }
+
     all_rows = []
 
-    # Create envs once for all checkpoints
-    sp_config = make_eval_config(base_config, VAL_MAP_DIR, control_mode="control_vehicles", num_maps=10_000)
-    sp_env = load_env(ENV_NAME, sp_config)
+    # Create one env pair (sp + hr) per dynamics model
+    envs = {}  # dynamics -> {"sp": env, "hr": env}
+    for dyn in dynamics_groups:
+        dyn_config_name = DYNAMICS_CONFIG_MAP.get(dyn, dyn)
 
-    hr_config = make_eval_config(base_config, INTERACTIVE_MAP_DIR, control_mode="control_sdc_only", num_maps=100)
-    hr_env = load_env(ENV_NAME, hr_config)
+        sp_config = make_eval_config(base_config, VAL_MAP_DIR, control_mode="control_vehicles", num_maps=10_000)
+        sp_config["env"]["dynamics_model"] = dyn_config_name
+        sp_env = load_env(ENV_NAME, sp_config)
+
+        hr_config = make_eval_config(base_config, INTERACTIVE_MAP_DIR, control_mode="control_sdc_only", num_maps=100)
+        hr_config["env"]["dynamics_model"] = dyn_config_name
+        hr_env = load_env(ENV_NAME, hr_config)
+
+        envs[dyn] = {"sp": sp_env, "hr": hr_env}
 
     for cpt_path, sp_maps, is_reg, dynamics, anchor_maps in scaling_entries:
         print(f"\n{'─' * 60}")
         print(f"Scaling eval: {os.path.basename(cpt_path)}")
         print(f"{'─' * 60}")
 
-        base_config["load_model_path"] = cpt_path
+        sp_env = envs[dynamics]["sp"]
+        hr_env = envs[dynamics]["hr"]
 
-        # Load policy using sp_env (arbitrary — just needs a vecenv to inspect)
+        base_config["load_model_path"] = cpt_path
         policy = load_policy(base_config, sp_env, ENV_NAME)
         policy.eval()
 
@@ -413,8 +420,11 @@ def evaluate_scaling_checkpoints(base_config):
         all_rows.extend(sp_rows)
         all_rows.extend(hr_rows)
 
-    sp_env.close()
-    hr_env.close()
+    # Close all envs
+    for dyn in envs:
+        envs[dyn]["sp"].close()
+        envs[dyn]["hr"].close()
+
     return all_rows
 
 

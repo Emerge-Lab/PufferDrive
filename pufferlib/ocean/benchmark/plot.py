@@ -208,16 +208,6 @@ def _build_anchor_style_maps(anchor_vals):
 
 
 def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
-    """Summary scaling figure: 3-column scatter plot.
-
-    x-axis: self-play training maps (sp_maps), log-scaled
-    color:  anchor maps (human data used to train anchor); unreg → 0
-    shape:  anchor maps
-
-    Subplot 0: Self-play score (scaling_sp_val)
-    Subplot 1: Self-play collision rate (scaling_sp_val)
-    Subplot 2: Human-replay collision rate / ZSC (scaling_hr_interactive)
-    """
     scaling_df = _prepare_scaling_metadata(df)
     if scaling_df is None:
         print("  No scaling data found — skipping plot_scaling_scatter.")
@@ -226,8 +216,11 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
     scaling_df["anchor_maps"] = scaling_df["anchor_maps"].fillna(0).astype(int)
     scaling_df["at_fault_collision_rate_pct"] = scaling_df["at_fault_collision_rate"] * 100
 
+    if "dynamics" not in scaling_df.columns:
+        scaling_df["dynamics"] = "delta"
+
     agg = (
-        scaling_df.groupby(["sp_maps", "anchor_maps", "mode"])[
+        scaling_df.groupby(["sp_maps", "anchor_maps", "dynamics", "mode"])[
             ["collision_rate_pct", "score_pct", "at_fault_collision_rate_pct"]
         ]
         .agg(["mean", "sem"])
@@ -236,6 +229,7 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
     agg.columns = [
         "sp_maps",
         "anchor_maps",
+        "dynamics",
         "mode",
         "coll_mean",
         "coll_sem",
@@ -244,12 +238,35 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
         "at_fault_coll_mean",
         "at_fault_coll_sem",
     ]
-    agg["anchor_label"] = agg["anchor_maps"].apply(
-        lambda v: f"anchor = {_fmt_maps(v)}" if v > 0 else "no anchor (unreg)"
+
+    agg["is_reg"] = agg["anchor_maps"] > 0
+    agg["series_key"] = agg.apply(lambda r: f"{r['dynamics']}_anchor{r['anchor_maps']}", axis=1)
+    agg["anchor_label"] = agg.apply(
+        lambda r: (
+            f"{r['dynamics']}, anchor = {_fmt_maps(r['anchor_maps'])}"
+            if r["anchor_maps"] > 0
+            else f"{r['dynamics']}, no anchor (unreg)"
+        ),
+        axis=1,
     )
 
-    anchor_vals = sorted(agg["anchor_maps"].unique())
-    color_map, marker_map = _build_anchor_style_maps(anchor_vals)
+    series_keys = sorted(agg["series_key"].unique())
+
+    # Assign colors: orange shades for regularized, blue/green for unregularized
+    unreg_colors = ["#1f77b4", "#2ca02c", "#17becf", "#9467bd"]  # blue, green, cyan, purple
+    reg_colors = ["#ff7f0e", "#d62728", "#e377c2", "#bcbd22"]  # orange, red, pink, olive
+
+    unreg_keys = [k for k in series_keys if "_anchor0" in k]
+    reg_keys = [k for k in series_keys if "_anchor0" not in k]
+
+    color_map = {}
+    for i, k in enumerate(unreg_keys):
+        color_map[k] = unreg_colors[i % len(unreg_colors)]
+    for i, k in enumerate(reg_keys):
+        color_map[k] = reg_colors[i % len(reg_colors)]
+
+    markers = ["X", "o", "s", "D", "^", "v", "P", "*"]
+    marker_map = {k: markers[i % len(markers)] for i, k in enumerate(series_keys)}
 
     subplot_specs = [
         ("scaling_sp_val", "score_mean", "score_sem", "Score (%)", "Self-play score (%) — validation"),
@@ -270,15 +287,43 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
         ),
     ]
 
-    return _scaling_scatter_common(
-        agg,
-        subplot_specs,
-        anchor_vals,
-        color_map,
-        marker_map,
-        figsize=(24, 5),
-        save_path=save_path,
-    )
+    _set_style(len(series_keys))
+    fig, axes = plt.subplots(1, len(subplot_specs), figsize=(24, 5))
+
+    for ax, (mode, y_col, yerr_col, ylabel, title) in zip(axes, subplot_specs):
+        mode_agg = agg[agg["mode"] == mode]
+        for sk in series_keys:
+            grp = mode_agg[mode_agg["series_key"] == sk].sort_values("sp_maps")
+            if grp.empty:
+                continue
+            label = grp["anchor_label"].iloc[0]
+            ax.errorbar(
+                grp["sp_maps"],
+                grp[y_col],
+                yerr=grp[yerr_col],
+                marker=marker_map[sk],
+                color=color_map[sk],
+                capsize=3,
+                linewidth=1.5,
+                markersize=8,
+                label=label,
+            )
+        ax.set_xscale("log")
+        ax.xaxis.set_major_formatter(
+            mticker.FuncFormatter(lambda x, _: f"{int(x / 1000)}k" if x >= 1000 else str(int(x)))
+        )
+        ax.set_xlabel("Self-play training maps")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.set_ylim(bottom=0)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.legend(fontsize=8, title="Policy")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
 
 
 def plot_scaling_wosac(wosac_df, save_path="eval_scaling_wosac.pdf"):
