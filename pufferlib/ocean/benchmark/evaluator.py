@@ -309,6 +309,7 @@ class WOSACEvaluator:
         agent_state: Dict,
         road_edge_polylines: Dict,
         aggregate_results: bool = False,
+        drop_last_scenario: bool = True,
     ) -> Dict:
         """Compute realism metrics comparing simulated and ground truth trajectories.
 
@@ -324,7 +325,13 @@ class WOSACEvaluator:
             Dictionary with scores per scenario_id
         """
         # Ensure the id order matches exactly for simulated and ground truth
-        assert np.array_equal(simulated_trajectories["id"][:, 0:1, 0], ground_truth_trajectories["id"]), (
+        simulated_ids = np.asarray(simulated_trajectories["id"])
+        if simulated_ids.ndim == 2:
+            simulated_ids = simulated_ids[:, 0:1]
+        else:
+            simulated_ids = simulated_ids[:, 0:1, 0]
+
+        assert np.array_equal(simulated_ids, ground_truth_trajectories["id"]), (
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
@@ -679,7 +686,7 @@ class WOSACEvaluator:
         df_scene_level["map_based_metrics"] = map_metrics
 
         # Safety: drop the last scenario (potentially incomplete) from the scene-level results
-        if last_scenario_id in df_scene_level.index:
+        if drop_last_scenario and last_scenario_id in df_scene_level.index:
             df_scene_level = df_scene_level.drop(last_scenario_id)
 
         if aggregate_results:
@@ -811,6 +818,110 @@ class WOSACEvaluator:
             plt.tight_layout()
 
             plt.savefig(f"trajectory_comparison_agent_{agent_idx}.png")
+
+
+class PlanningEvaluator:
+    def __init__(self, config: Dict):
+        self.config = config
+        self.sim_steps = 91 - self.config["env"]["init_steps"]
+        self.device = config.get("train", {}).get("device", "cuda")
+
+    @staticmethod
+    def _normalize_scenario_ids(scenario_ids):
+        scenario_ids = np.asarray(scenario_ids)
+        if scenario_ids.ndim == 1:
+            return scenario_ids[:, None]
+        if scenario_ids.ndim == 2:
+            return scenario_ids
+        return scenario_ids[:, :, 0]
+
+    def compute_metrics(
+        self,
+        combined_trajectories,
+        agent_state,
+        road_edge_polylines,
+        aggregate_results: bool = False,
+        ground_truth_trajectories=None,
+        goal_radius: float | None = None,
+        goal_speed: float | None = None,
+    ) -> Dict:
+        if "is_sdc" in combined_trajectories:
+            eval_mask = combined_trajectories["is_sdc"][:, 0]
+        else:
+            eval_mask = combined_trajectories["id"][:, 0] <= -2
+
+        x = combined_trajectories["x"]
+        y = combined_trajectories["y"]
+        heading = combined_trajectories["heading"]
+        valid = combined_trajectories["valid"]
+        agent_length = agent_state["length"]
+        agent_width = agent_state["width"]
+        scenario_ids = self._normalize_scenario_ids(combined_trajectories["scenario_id"])
+
+        eval_x = x[eval_mask]
+        eval_y = y[eval_mask]
+        eval_heading = heading[eval_mask]
+        eval_valid = valid[eval_mask]
+        eval_agent_length = agent_length[eval_mask]
+        eval_agent_width = agent_width[eval_mask]
+        eval_scenario_ids = scenario_ids[eval_mask]
+
+        _, collisions_per_step, _ = metrics.compute_interaction_features(
+            x, y, heading, scenario_ids, agent_length, agent_width, eval_mask, device=self.device
+        )
+
+        _, offroad_per_step = metrics.compute_map_features(
+            eval_x,
+            eval_y,
+            eval_heading,
+            eval_scenario_ids,
+            eval_agent_length,
+            eval_agent_width,
+            road_edge_polylines,
+            device=self.device,
+        )
+
+        collision_indication = np.any(np.where(eval_valid, collisions_per_step, False), axis=2).astype(float)
+        offroad_indication = np.any(np.where(eval_valid, offroad_per_step, False), axis=2).astype(float)
+        accuracy = 1.0 - (collision_indication + offroad_indication) + (collision_indication * offroad_indication)
+
+        scene_level_results = {
+            "collision_indication": collision_indication.flatten(),
+            "offroad_indication": offroad_indication.flatten(),
+            "accuracy": accuracy.flatten(),
+        }
+
+        if ground_truth_trajectories is not None and goal_radius is not None:
+            gt_x = ground_truth_trajectories["x"][eval_mask]
+            gt_y = ground_truth_trajectories["y"][eval_mask]
+            gt_valid = ground_truth_trajectories["valid"][eval_mask]
+
+            final_valid_idx = np.clip(gt_valid.sum(axis=2).astype(int) - 1, 0, gt_valid.shape[2] - 1)
+            goal_x = np.take_along_axis(gt_x[:, 0, :], final_valid_idx[:, 0, None], axis=1)[:, 0]
+            goal_y = np.take_along_axis(gt_y[:, 0, :], final_valid_idx[:, 0, None], axis=1)[:, 0]
+
+            goal_distance = np.sqrt((eval_x - goal_x[:, None, None]) ** 2 + (eval_y - goal_y[:, None, None]) ** 2)
+            linear_speed, _, _, _ = metrics.compute_kinematic_features(eval_x, eval_y, eval_heading)
+            speed_threshold = np.inf if goal_speed is None else goal_speed
+            reached_goal = np.any(
+                np.where(eval_valid, goal_distance <= goal_radius, False) &
+                np.where(np.isnan(linear_speed), False, linear_speed <= speed_threshold),
+                axis=2,
+            ).astype(float)
+
+            scene_level_results["goal_reached"] = reached_goal.flatten()
+            scene_level_results["score"] = (accuracy * reached_goal).flatten()
+
+        scene_level_results = pd.DataFrame(scene_level_results, index=eval_scenario_ids[:, 0])
+
+        if aggregate_results:
+            aggregate_metrics = scene_level_results.mean().to_dict()
+            aggregate_metrics["num_scenarios"] = scene_level_results.shape[0]
+            return {k: v.item() if hasattr(v, "item") else v for k, v in aggregate_metrics.items()}
+
+        print("\n Scene-level results:\n")
+        print(scene_level_results)
+        return scene_level_results
 
 
 class Evaluator:

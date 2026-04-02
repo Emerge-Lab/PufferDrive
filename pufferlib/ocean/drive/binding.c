@@ -79,15 +79,22 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int goal_behavior = unpack(kwargs, "goal_behavior");
     float goal_target_distance = unpack(kwargs, "goal_target_distance");
     int max_controlled_agents = unpack(kwargs, "max_controlled_agents");
+    int sequential_map_sampling = 0;
+    if (kwargs && PyDict_GetItemString(kwargs, "sequential_map_sampling")) {
+        sequential_map_sampling = unpack(kwargs, "sequential_map_sampling");
+    }
 
     // Deterministic map sampling
     int seed = unpack(kwargs, "seed");
-    srand(seed);
+    if (!sequential_map_sampling) {
+        srand(seed);
+    }
 
     int total_agent_count = 0;
     int env_count = 0;
-    int max_envs = num_agents;
+    int max_envs = sequential_map_sampling ? num_maps : num_agents;
     int maps_checked = 0;
+    int map_idx = 0;
 
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
@@ -95,12 +102,12 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // printf("map_dir: %s, num_maps: %d\n", map_dir, num_maps);
 
     // Getting env count
-    while (total_agent_count < num_agents && env_count < max_envs) {
+    while ((sequential_map_sampling && map_idx < max_envs) ||
+           (!sequential_map_sampling && total_agent_count < num_agents && env_count < max_envs)) {
         char map_file[512];
 
         // printf("Sampling map for env %d (total agents so far: %d)\n", env_count, total_agent_count);
-        //   Always sample randomly with replacement
-        int map_id = rand() % num_maps;
+        int map_id = sequential_map_sampling ? map_idx++ : rand() % num_maps;
 
         // printf("Sampling map_id: %d\n", map_id);
 
@@ -119,25 +126,27 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            maps_checked++;
+            if (!sequential_map_sampling) {
+                maps_checked++;
 
-            // Safeguard: if we've checked all available maps and found no active agents, raise an error
-            if (maps_checked >= num_maps) {
-                for (int j = 0; j < env->num_entities; j++) {
-                    free_entity(&env->entities[j]);
+                // Safeguard: if we've checked all available maps and found no active agents, raise an error
+                if (maps_checked >= num_maps) {
+                    for (int j = 0; j < env->num_entities; j++) {
+                        free_entity(&env->entities[j]);
+                    }
+                    free(env->entities);
+                    free(env->active_agent_indices);
+                    free(env->static_agent_indices);
+                    free(env->expert_static_agent_indices);
+                    free(env->tracks_to_predict_indices);
+                    free(env);
+                    Py_DECREF(agent_offsets);
+                    Py_DECREF(map_ids);
+                    char error_msg[256];
+                    sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
+                    PyErr_SetString(PyExc_ValueError, error_msg);
+                    return NULL;
                 }
-                free(env->entities);
-                free(env->active_agent_indices);
-                free(env->static_agent_indices);
-                free(env->expert_static_agent_indices);
-                free(env->tracks_to_predict_indices);
-                free(env);
-                Py_DECREF(agent_offsets);
-                Py_DECREF(map_ids);
-                char error_msg[256];
-                sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
-                PyErr_SetString(PyExc_ValueError, error_msg);
-                return NULL;
             }
 
             for (int j = 0; j < env->num_entities; j++) {
@@ -171,7 +180,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env);
     }
 
-    if (total_agent_count >= num_agents) {
+    if (!sequential_map_sampling && total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
 

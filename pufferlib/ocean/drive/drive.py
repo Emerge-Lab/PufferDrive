@@ -61,6 +61,7 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         max_controlled_agents=32,
         map_dir="resources/drive/binaries/training",
+        sequential_map_sampling=False,
         ini_file_path="pufferlib/config/ocean/drive.ini",
         reg_mode="None",
         anchor_cpt_path=None,
@@ -125,6 +126,7 @@ class Drive(pufferlib.PufferEnv):
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
         self.map_dir = map_dir
+        self.sequential_map_sampling = sequential_map_sampling
         str_to_reg_mode = {
             "None": RegMode.NONE,
             "log_prob_direct": RegMode.LOG_PROB_DIRECT,
@@ -208,6 +210,7 @@ class Drive(pufferlib.PufferEnv):
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
             max_controlled_agents=self.max_controlled_agents,
+            sequential_map_sampling=int(self.sequential_map_sampling),
         )
 
         self.num_agents = agent_offsets[-1]
@@ -258,7 +261,7 @@ class Drive(pufferlib.PufferEnv):
             self.env_ids.append(env_id)
 
         # Approximation to check if we should ever resample or not
-        self.needs_resampling = self.num_maps > (self.num_agents / 2)
+        self.needs_resampling = (not self.sequential_map_sampling) and self.num_maps > (self.num_agents / 2)
         self._resample_count = 0
         self.seed = seed
 
@@ -299,6 +302,7 @@ class Drive(pufferlib.PufferEnv):
             goal_speed=self.goal_speed,
             map_dir=self.map_dir,
             max_controlled_agents=self.max_controlled_agents,
+            sequential_map_sampling=int(self.sequential_map_sampling),
         )
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
@@ -426,6 +430,7 @@ class Drive(pufferlib.PufferEnv):
             "id": np.zeros(num_agents, dtype=np.int32),
             "is_vehicle": np.zeros(num_agents, dtype=bool),
             "is_track_to_predict": np.zeros(num_agents, dtype=bool),
+            "is_sdc": np.zeros(num_agents, dtype=bool),
             "scenario_id": np.zeros(num_agents, dtype="S16"),
         }
 
@@ -439,6 +444,7 @@ class Drive(pufferlib.PufferEnv):
             trajectories["id"],
             trajectories["is_vehicle"],
             trajectories["is_track_to_predict"],
+            trajectories["is_sdc"],
             trajectories["scenario_id"],
         )
 
