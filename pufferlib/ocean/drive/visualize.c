@@ -357,7 +357,9 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         + PARTNER_FEATURES * NN_INPUT_SIZE + NN_INPUT_SIZE                          // partner_encoder
         + NN_INPUT_SIZE * 2                                                         // partner_layernorm
         + NN_INPUT_SIZE * NN_INPUT_SIZE + NN_INPUT_SIZE                             // partner_encoder_two
-        + 3 * NN_INPUT_SIZE * NN_HIDDEN_SIZE + NN_HIDDEN_SIZE                       // shared_embedding
+        + 3 * NN_INPUT_SIZE * 1024 + 1024                                           // backbone_fc1
+        + 1024 * 1024 + 1024                                                        // backbone_fc2
+        + 1024 * NN_HIDDEN_SIZE + NN_HIDDEN_SIZE                                    // backbone_fc3
         + NN_HIDDEN_SIZE * _action_size + _action_size                              // actor
         + NN_HIDDEN_SIZE * 1 + 1;                                                   // value_fn
     int use_lstm = (weights->size > mlp_weights);
@@ -422,7 +424,23 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     if (render_topdown) {
         printf("Recording topdown view...\n"); fflush(stdout);
         for (int i = 0; i < frame_count; i++) {
-            if (i % 50 == 0) { printf("topdown frame %d/%d, active=%d, timestep=%d\n", i, frame_count, env.active_agent_count, env.timestep); fflush(stdout); }
+            if (i % 50 == 0) {
+                int stopped = 0, collided = 0, offroad = 0;
+                float total_speed = 0;
+                float total_goals = 0;
+                for (int a = 0; a < env.active_agent_count; a++) {
+                    int idx = env.active_agent_indices[a];
+                    if (env.agents[idx].stopped) stopped++;
+                    if (env.agents[idx].collision_state > 0) collided++;
+                    if (env.agents[idx].metrics_array[OFFROAD_IDX] > 0) offroad++;
+                    total_speed += sqrtf(env.agents[idx].sim_vx * env.agents[idx].sim_vx + env.agents[idx].sim_vy * env.agents[idx].sim_vy);
+                    total_goals += env.agents[idx].goals_reached_this_episode;
+                }
+                printf("frame %d/%d | agents=%d stopped=%d collided=%d offroad=%d avg_speed=%.2f goals=%.0f\n",
+                    i, frame_count, env.active_agent_count, stopped, collided, offroad,
+                    total_speed / env.active_agent_count, total_goals);
+                fflush(stdout);
+            }
             if (i % frame_skip == 0) {
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, show_human_logs, show_grid,
                                   img_width, img_height, zoom_in);

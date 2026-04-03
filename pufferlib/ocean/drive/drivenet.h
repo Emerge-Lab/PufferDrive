@@ -39,8 +39,11 @@ struct DriveNet {
     CatDim1 *cat1;
     CatDim1 *cat2;
     GELU *gelu;
-    Linear *shared_embedding;
-    ReLU *relu;
+    Linear *backbone_fc1;
+    ReLU *backbone_relu1;
+    Linear *backbone_fc2;
+    ReLU *backbone_relu2;
+    Linear *backbone_fc3;
     LSTM *lstm;
     Linear *actor;
     Linear *value_fn;
@@ -102,8 +105,11 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     net->cat1 = make_cat_dim1(num_agents, input_size, input_size);
     net->cat2 = make_cat_dim1(num_agents, input_size + input_size, input_size);
     net->gelu = make_gelu(num_agents, 3 * input_size);
-    net->shared_embedding = make_linear(weights, num_agents, input_size * 3, hidden_size);
-    net->relu = make_relu(num_agents, hidden_size);
+    net->backbone_fc1 = make_linear(weights, num_agents, input_size * 3, 1024);
+    net->backbone_relu1 = make_relu(num_agents, 1024);
+    net->backbone_fc2 = make_linear(weights, num_agents, 1024, 1024);
+    net->backbone_relu2 = make_relu(num_agents, 1024);
+    net->backbone_fc3 = make_linear(weights, num_agents, 1024, hidden_size);
     net->actor = make_linear(weights, num_agents, hidden_size, action_size);
     net->value_fn = make_linear(weights, num_agents, hidden_size, 1);
     if (use_lstm) {
@@ -139,8 +145,11 @@ void free_drivenet(DriveNet *net) {
     free(net->cat1);
     free(net->cat2);
     free(net->gelu);
-    free(net->shared_embedding);
-    free(net->relu);
+    free(net->backbone_fc1);
+    free(net->backbone_relu1);
+    free(net->backbone_fc2);
+    free(net->backbone_relu2);
+    free(net->backbone_fc3);
     free(net->multidiscrete);
     free(net->actor);
     free(net->value_fn);
@@ -267,15 +276,18 @@ void forward(DriveNet *net, float *observations, int *actions) {
     cat_dim1(net->cat1, net->ego_encoder_two->output, net->road_max->output);
     cat_dim1(net->cat2, net->cat1->output, net->partner_max->output);
     gelu(net->gelu, net->cat2->output);
-    linear(net->shared_embedding, net->gelu->output);
-    relu(net->relu, net->shared_embedding->output);
+    linear(net->backbone_fc1, net->gelu->output);
+    relu(net->backbone_relu1, net->backbone_fc1->output);
+    linear(net->backbone_fc2, net->backbone_relu1->output);
+    relu(net->backbone_relu2, net->backbone_fc2->output);
+    linear(net->backbone_fc3, net->backbone_relu2->output);
     if (net->use_lstm) {
-        lstm(net->lstm, net->relu->output);
+        lstm(net->lstm, net->backbone_fc3->output);
         linear(net->actor, net->lstm->state_h);
         linear(net->value_fn, net->lstm->state_h);
     } else {
-        linear(net->actor, net->relu->output);
-        linear(net->value_fn, net->relu->output);
+        linear(net->actor, net->backbone_fc3->output);
+        linear(net->value_fn, net->backbone_fc3->output);
     }
 
     // Get action by taking argmax of actor output
