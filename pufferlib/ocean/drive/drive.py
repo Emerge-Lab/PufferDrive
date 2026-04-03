@@ -351,7 +351,7 @@ class Drive(pufferlib.PufferEnv):
                 self.rewards[cur:nxt],
                 self.terminals[cur:nxt],
                 self.truncations[cur:nxt],
-                seed * num_envs + i,
+                seed + i,  # unique seed per sub-env so spawn positions differ
                 self.is_invalid_step[cur:nxt],
                 action_type=self._action_type_flag,
                 human_agent_idx=human_agent_idx,
@@ -414,6 +414,7 @@ class Drive(pufferlib.PufferEnv):
                 episode_length=(int(episode_length) if episode_length is not None else None),
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 map_path=self.map_files[map_ids[i]],
+                map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
                 init_steps=init_steps,
@@ -512,7 +513,7 @@ class Drive(pufferlib.PufferEnv):
                 self.rewards[cur:nxt],
                 self.terminals[cur:nxt],
                 self.truncations[cur:nxt],
-                seed * num_envs + i,
+                seed + i,  # unique seed per sub-env so spawn positions differ
                 self.is_invalid_step[cur:nxt],
                 action_type=self._action_type_flag,
                 human_agent_idx=self.human_agent_idx,
@@ -574,6 +575,7 @@ class Drive(pufferlib.PufferEnv):
                 dt=self.dt,
                 episode_length=(int(self.episode_length) if self.episode_length is not None else None),
                 map_path=self.map_files[map_ids[i]],
+                map_id=map_ids[i],
                 max_agents=nxt - cur,
                 ini_file="pufferlib/config/ocean/drive.ini",
                 init_steps=self.init_steps,
