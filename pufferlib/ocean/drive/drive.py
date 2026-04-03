@@ -87,7 +87,7 @@ class Drive(pufferlib.PufferEnv):
         reward_bound_acc_min=0.666,
         reward_bound_acc_max=1.5,
         min_avg_speed_to_consider_goal_attempt=2.0,
-        partner_obs_radius=50.0,
+        partner_obs_radius=100.0,
         # spawn settings
         min_agents_per_env=32,
         max_agents_per_env=64,

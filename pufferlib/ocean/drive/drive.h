@@ -2615,59 +2615,89 @@ void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs
     float cos_heading = cosf(ego_entity->sim_heading);
     float sin_heading = sinf(ego_entity->sim_heading);
 
-    // Get all agents in sim within vision range till partner_obs array is filled
     float obs_radius = (env->partner_obs_radius > 0.0f) ? env->partner_obs_radius : 50.0f;
-    int cars_seen = 0;
-    // Iterate over all created agents
-    for (int i = 0; i < env->num_created_agents && cars_seen < MAX_PARTNER_OBSERVATIONS; i++) {
-        Agent *partner = &env->agents[i];
-        if (ego_id == partner->id) {
-            continue; // Skip self
-        }
+    float obs_radius_sq = obs_radius * obs_radius;
 
-        float distance = relative_distance_3d(ego_entity->sim_x, ego_entity->sim_y, ego_entity->sim_z, partner->sim_x,
-                                              partner->sim_y, partner->sim_z);
+    // Collect candidate partners with squared distances for sorting
+    int candidate_indices[MAX_AGENTS];
+    float candidate_dist_sq[MAX_AGENTS];
+    int num_candidates = 0;
+
+    for (int i = 0; i < env->num_created_agents; i++) {
+        Agent *partner = &env->agents[i];
+        if (ego_id == partner->id)
+            continue;
+        if (partner->sim_x == INVALID_POSITION)
+            continue;
+        if (partner->type > CYCLIST)
+            continue;
+
+        float dx = partner->sim_x - ego_entity->sim_x;
+        float dy = partner->sim_y - ego_entity->sim_y;
+        float dz = partner->sim_z - ego_entity->sim_z;
+        float dist_sq = dx * dx + dy * dy + dz * dz;
+
+        if (dist_sq <= obs_radius_sq) {
+            candidate_indices[num_candidates] = i;
+            candidate_dist_sq[num_candidates] = dist_sq;
+            num_candidates++;
+            if (num_candidates >= MAX_AGENTS)
+                break;
+        }
+    }
+
+    // Simple insertion sort by distance (num_candidates is small)
+    for (int i = 1; i < num_candidates; i++) {
+        float key_dist = candidate_dist_sq[i];
+        int key_idx = candidate_indices[i];
+        int j = i - 1;
+        while (j >= 0 && candidate_dist_sq[j] > key_dist) {
+            candidate_dist_sq[j + 1] = candidate_dist_sq[j];
+            candidate_indices[j + 1] = candidate_indices[j];
+            j--;
+        }
+        candidate_dist_sq[j + 1] = key_dist;
+        candidate_indices[j + 1] = key_idx;
+    }
+
+    // Fill observation slots with closest partners
+    int cars_seen = 0;
+    for (int c = 0; c < num_candidates && cars_seen < MAX_PARTNER_OBSERVATIONS; c++) {
+        Agent *partner = &env->agents[candidate_indices[c]];
 
         float dx = partner->sim_x - ego_entity->sim_x;
         float dy = partner->sim_y - ego_entity->sim_y;
         float dz = partner->sim_z - ego_entity->sim_z;
 
-        if (distance <= obs_radius) {
-            // Rotate to ego vehicle's frame
-            float rel_x = dx * cos_heading + dy * sin_heading;
-            float rel_y = -dx * sin_heading + dy * cos_heading;
-            float rel_z = dz; // No rotation needed for vertical component
-            // Store observations with correct indexing
-            obs[obs_idx] = rel_x * 0.02f;
-            obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = rel_z * 0.02f;
-            obs[obs_idx + 3] = partner->sim_width / MAX_VEH_WIDTH;
-            obs[obs_idx + 4] = partner->sim_length / MAX_VEH_LEN;
-            // relative heading
-            float other_cos = cosf(partner->sim_heading);
-            float other_sin = sinf(partner->sim_heading);
-            float rel_heading_x =
-                other_cos * cos_heading + other_sin * sin_heading; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
-            float rel_heading_y =
-                other_sin * cos_heading - other_cos * sin_heading; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
+        // Rotate to ego vehicle's frame
+        float rel_x = dx * cos_heading + dy * sin_heading;
+        float rel_y = -dx * sin_heading + dy * cos_heading;
+        float rel_z = dz;
 
-            obs[obs_idx + 5] = rel_heading_x;
-            obs[obs_idx + 6] = rel_heading_y;
-            // relative speed
-            float rel_vx = partner->sim_vx - ego_entity->sim_vx;
-            float rel_vy = partner->sim_vy - ego_entity->sim_vy;
-            float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
-            float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
-            float rel_signed_speed = copysignf(rel_speed_magnitude, rel_v_dot_heading);
-            obs[obs_idx + 7] = rel_signed_speed / MAX_SPEED;
-            cars_seen++;
-            obs_idx += 8; // Move to next observation slot
-        }
+        obs[obs_idx] = rel_x * 0.02f;
+        obs[obs_idx + 1] = rel_y * 0.02f;
+        obs[obs_idx + 2] = rel_z * 0.02f;
+        obs[obs_idx + 3] = partner->sim_width / MAX_VEH_WIDTH;
+        obs[obs_idx + 4] = partner->sim_length / MAX_VEH_LEN;
+
+        float other_cos = cosf(partner->sim_heading);
+        float other_sin = sinf(partner->sim_heading);
+        obs[obs_idx + 5] = other_cos * cos_heading + other_sin * sin_heading;
+        obs[obs_idx + 6] = other_sin * cos_heading - other_cos * sin_heading;
+
+        float rel_vx = partner->sim_vx - ego_entity->sim_vx;
+        float rel_vy = partner->sim_vy - ego_entity->sim_vy;
+        float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
+        float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
+        obs[obs_idx + 7] = copysignf(rel_speed_magnitude, rel_v_dot_heading) / MAX_SPEED;
+
+        cars_seen++;
+        obs_idx += PARTNER_FEATURES;
     }
 
     // Pad remaining partner obs with zero
-    int remaining_partner_obs = (MAX_PARTNER_OBSERVATIONS - cars_seen) * 8;
-    memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
+    int remaining = (MAX_PARTNER_OBSERVATIONS - cars_seen) * PARTNER_FEATURES;
+    memset(&obs[obs_idx], 0, remaining * sizeof(float));
 }
 
 void compute_observations(Drive *env) {
