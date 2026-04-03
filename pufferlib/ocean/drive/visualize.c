@@ -340,8 +340,11 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
 
     Weights *weights = load_weights(policy_name);
-    printf("Active agents in map: %d\n", env.active_agent_count);
+    printf("Loaded weights: %zu\n", weights->size); fflush(stdout);
+    printf("Active agents in map: %d\n", env.active_agent_count); fflush(stdout);
+    printf("dynamics_model=%d reward_conditioning=%d\n", env.dynamics_model, env.reward_conditioning); fflush(stdout);
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
+    printf("DriveNet initialized\n"); fflush(stdout);
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;
     char filename_topdown[256];
@@ -372,7 +375,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     bool render_topdown = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "topdown") == 0);
     bool render_agent = (strcmp(view_mode, "both") == 0 || strcmp(view_mode, "agent") == 0);
 
-    printf("Rendering: %s\n", view_mode);
+    printf("episode_length=%d, frame_count=%d\n", env.episode_length, frame_count); fflush(stdout);
+    printf("Rendering: %s\n", view_mode); fflush(stdout);
 
     int rendered_frames = 0;
     double startTime = GetTime();
@@ -396,8 +400,9 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     }
 
     if (render_topdown) {
-        printf("Recording topdown view...\n");
+        printf("Recording topdown view...\n"); fflush(stdout);
         for (int i = 0; i < frame_count; i++) {
+            if (i % 50 == 0) { printf("topdown frame %d/%d, active=%d, timestep=%d\n", i, frame_count, env.active_agent_count, env.timestep); fflush(stdout); }
             if (i % frame_skip == 0) {
                 renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, show_human_logs, show_grid,
                                   img_width, img_height, zoom_in);

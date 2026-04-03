@@ -2525,6 +2525,7 @@ void allocate(Drive *env) {
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
     env->terminals = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
     env->truncations = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
+    env->is_invalid_step = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
 }
 
 void free_allocated(Drive *env) {
@@ -2533,6 +2534,7 @@ void free_allocated(Drive *env) {
     free(env->rewards);
     free(env->terminals);
     free(env->truncations);
+    free(env->is_invalid_step);
     c_close(env);
 }
 
