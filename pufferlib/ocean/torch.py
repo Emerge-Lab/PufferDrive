@@ -48,7 +48,11 @@ class Drive(nn.Module):
 
         self.shared_embedding = nn.Sequential(
             nn.GELU(),
-            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, hidden_size)),
+            pufferlib.pytorch.layer_init(nn.Linear(3 * input_size, 1024)),
+            nn.ReLU(),
+            pufferlib.pytorch.layer_init(nn.Linear(1024, 1024)),
+            nn.ReLU(),
+            pufferlib.pytorch.layer_init(nn.Linear(1024, hidden_size)),
         )
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
 
