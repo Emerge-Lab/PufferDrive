@@ -96,6 +96,7 @@ class Drive(pufferlib.PufferEnv):
         spawn_length_min=2.0,
         spawn_length_max=5.5,
         spawn_height=1.5,
+        randomize_respawn=1,
     ):
         # env
         self.dt = dt
@@ -127,6 +128,7 @@ class Drive(pufferlib.PufferEnv):
         self.episode_length = episode_length
         self.termination_mode = termination_mode
         self.resample_frequency = resample_frequency
+        self.randomize_respawn = randomize_respawn
         self.dynamics_model = dynamics_model
         # reward randomization bounds
         self.reward_bound_goal_radius_min = reward_bound_goal_radius_min
@@ -426,6 +428,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                randomize_respawn=self.randomize_respawn,
             )
             env_ids.append(env_id)
 
@@ -587,6 +590,7 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                randomize_respawn=self.randomize_respawn,
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
@@ -814,6 +818,9 @@ def save_map_binary(
         metadata = map_data.get("metadata", {})
         sdc_track_index = metadata.get("sdc_track_index", -1)  # -1 as default if not found
         tracks_to_predict = metadata.get("tracks_to_predict", [])
+
+        # Note: C load_map_binary does NOT read a scenario_id prefix.
+        # Do not write one here or the binary will be misaligned.
 
         # Write sdc_track_index
         f.write(struct.pack("i", sdc_track_index))
