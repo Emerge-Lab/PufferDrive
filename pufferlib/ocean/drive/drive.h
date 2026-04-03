@@ -2616,7 +2616,7 @@ void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs
     float sin_heading = sinf(ego_entity->sim_heading);
 
     // Get all agents in sim within vision range till partner_obs array is filled
-    float obs_radius = (env->partner_obs_radius > 0.0f) ? env->partner_obs_radius : 50.0f;
+    float obs_radius = env->partner_obs_radius;
     int cars_seen = 0;
     // Iterate over all created agents
     for (int i = 0; i < env->num_created_agents && cars_seen < MAX_PARTNER_OBSERVATIONS; i++) {

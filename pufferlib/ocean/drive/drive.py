@@ -162,6 +162,8 @@ class Drive(pufferlib.PufferEnv):
         self.reward_bound_acc_max = reward_bound_acc_max
         self.min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt
         self.partner_obs_radius = partner_obs_radius
+        if self.partner_obs_radius <= 0.0:
+            raise ValueError(f"partner_obs_radius must be > 0. Got: {self.partner_obs_radius}")
 
         # Observation space calculation
         if self.reward_conditioning:
