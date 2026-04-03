@@ -88,6 +88,7 @@ class Drive(pufferlib.PufferEnv):
         reward_bound_acc_max=1.5,
         min_avg_speed_to_consider_goal_attempt=2.0,
         stopped_reset_threshold=0.5,
+        partner_obs_radius=100.0,
         # spawn settings
         min_agents_per_env=32,
         max_agents_per_env=64,
@@ -164,6 +165,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_bound_acc_min = reward_bound_acc_min
         self.reward_bound_acc_max = reward_bound_acc_max
         self.min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt
+        self.partner_obs_radius = partner_obs_radius
 
         # Observation space calculation
         if self.reward_conditioning:
@@ -179,7 +181,7 @@ class Drive(pufferlib.PufferEnv):
         # Extract observation shapes from constants
         # These need to be defined in C, since they determine the shape of the arrays
         self.max_road_objects = binding.MAX_ROAD_SEGMENT_OBSERVATIONS
-        self.max_partner_objects = binding.MAX_AGENTS - 1
+        self.max_partner_objects = binding.MAX_PARTNER_OBSERVATIONS
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
 
@@ -329,6 +331,7 @@ class Drive(pufferlib.PufferEnv):
             reward_bound_acc_min=self.reward_bound_acc_min,
             reward_bound_acc_max=self.reward_bound_acc_max,
             min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
+            partner_obs_radius=self.partner_obs_radius,
             use_all_maps=self.use_all_maps,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
@@ -407,6 +410,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_acc_min=self.reward_bound_acc_min,
                 reward_bound_acc_max=self.reward_bound_acc_max,
                 min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
+                partner_obs_radius=self.partner_obs_radius,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 observation_window_size=self.observation_window_size,
@@ -498,6 +502,7 @@ class Drive(pufferlib.PufferEnv):
             reward_bound_acc_min=self.reward_bound_acc_min,
             reward_bound_acc_max=self.reward_bound_acc_max,
             min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
+            partner_obs_radius=self.partner_obs_radius,
             use_all_maps=self.use_all_maps,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
@@ -570,6 +575,7 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_acc_min=self.reward_bound_acc_min,
                 reward_bound_acc_max=self.reward_bound_acc_max,
                 min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
+                partner_obs_radius=self.partner_obs_radius,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 observation_window_size=self.observation_window_size,
@@ -618,11 +624,6 @@ class Drive(pufferlib.PufferEnv):
         if self.max_agents_per_env < self.min_agents_per_env:
             raise ValueError(
                 f"max_agents_per_env ({self.max_agents_per_env}) must be >= min_agents_per_env ({self.min_agents_per_env})"
-            )
-        if self.max_agents_per_env > binding.MAX_AGENTS:
-            # TODO: Check needs to be removed once MAX_PARTNER_OBS deprecates MAX_AGENTS
-            raise ValueError(
-                f"max_agents_per_env ({self.max_agents_per_env}) cannot exceed MAX_AGENTS ({binding.MAX_AGENTS}) defined in C code."
             )
         if self.spawn_width_min < 0.0:
             raise ValueError(f"spawn_width_min ({self.spawn_width_min}) must be non-negative")

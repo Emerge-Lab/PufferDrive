@@ -104,10 +104,10 @@
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 256
-#ifndef MAX_AGENTS // TODO: Needs to be replaced with MAX_PARTNER_OBS(agents in obs_radius) throughout observations code
-                   // and with env->max_agents_in_sim throughout all agent for loops
+#ifndef MAX_AGENTS
 #define MAX_AGENTS 128
 #endif
+#define MAX_PARTNER_OBSERVATIONS 32
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
@@ -401,6 +401,7 @@ struct Drive {
     int turn_off_normalization;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
+    float partner_obs_radius;
 
     // Shared map data (NULL if map data is owned by this env)
     SharedMapData *shared_map;
@@ -2519,7 +2520,8 @@ void allocate(Drive *env) {
     init(env);
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs =
+        ego_dim + PARTNER_FEATURES * (MAX_PARTNER_OBSERVATIONS) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float *)calloc(env->active_agent_count * max_obs, sizeof(float));
     env->actions = (float *)calloc(env->active_agent_count * 2, sizeof(float));
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
@@ -2843,10 +2845,106 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
 // void compute_rewards(void){}
 
+void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs_idx) {
+
+    int ego_idx = env->active_agent_indices[agent_idx];
+    Agent *ego_entity = &env->agents[ego_idx];
+    int ego_id = ego_entity->id;
+
+    // Ego stats
+    float cos_heading = cosf(ego_entity->sim_heading);
+    float sin_heading = sinf(ego_entity->sim_heading);
+
+    float obs_radius = (env->partner_obs_radius > 0.0f) ? env->partner_obs_radius : 100.0f;
+    float obs_radius_sq = obs_radius * obs_radius;
+
+    // Collect candidate partners with squared distances for sorting
+    int candidate_indices[MAX_AGENTS];
+    float candidate_dist_sq[MAX_AGENTS];
+    int num_candidates = 0;
+
+    for (int i = 0; i < env->num_created_agents; i++) {
+        Agent *partner = &env->agents[i];
+        if (ego_id == partner->id)
+            continue;
+        if (partner->sim_x == INVALID_POSITION)
+            continue;
+        if (partner->type > CYCLIST)
+            continue;
+
+        float dx = partner->sim_x - ego_entity->sim_x;
+        float dy = partner->sim_y - ego_entity->sim_y;
+        float dz = partner->sim_z - ego_entity->sim_z;
+        float dist_sq = dx * dx + dy * dy + dz * dz;
+
+        if (dist_sq <= obs_radius_sq) {
+            candidate_indices[num_candidates] = i;
+            candidate_dist_sq[num_candidates] = dist_sq;
+            num_candidates++;
+            if (num_candidates >= MAX_AGENTS)
+                break;
+        }
+    }
+
+    // Simple insertion sort by distance (num_candidates is small)
+    for (int i = 1; i < num_candidates; i++) {
+        float key_dist = candidate_dist_sq[i];
+        int key_idx = candidate_indices[i];
+        int j = i - 1;
+        while (j >= 0 && candidate_dist_sq[j] > key_dist) {
+            candidate_dist_sq[j + 1] = candidate_dist_sq[j];
+            candidate_indices[j + 1] = candidate_indices[j];
+            j--;
+        }
+        candidate_dist_sq[j + 1] = key_dist;
+        candidate_indices[j + 1] = key_idx;
+    }
+
+    // Fill observation slots with closest partners
+    int cars_seen = 0;
+    for (int c = 0; c < num_candidates && cars_seen < MAX_PARTNER_OBSERVATIONS; c++) {
+        Agent *partner = &env->agents[candidate_indices[c]];
+
+        float dx = partner->sim_x - ego_entity->sim_x;
+        float dy = partner->sim_y - ego_entity->sim_y;
+        float dz = partner->sim_z - ego_entity->sim_z;
+
+        // Rotate to ego vehicle's frame
+        float rel_x = dx * cos_heading + dy * sin_heading;
+        float rel_y = -dx * sin_heading + dy * cos_heading;
+        float rel_z = dz;
+
+        obs[obs_idx] = rel_x * 0.02f;
+        obs[obs_idx + 1] = rel_y * 0.02f;
+        obs[obs_idx + 2] = rel_z * 0.02f;
+        obs[obs_idx + 3] = partner->sim_width / MAX_VEH_WIDTH;
+        obs[obs_idx + 4] = partner->sim_length / MAX_VEH_LEN;
+
+        float other_cos = cosf(partner->sim_heading);
+        float other_sin = sinf(partner->sim_heading);
+        obs[obs_idx + 5] = other_cos * cos_heading + other_sin * sin_heading;
+        obs[obs_idx + 6] = other_sin * cos_heading - other_cos * sin_heading;
+
+        float rel_vx = partner->sim_vx - ego_entity->sim_vx;
+        float rel_vy = partner->sim_vy - ego_entity->sim_vy;
+        float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
+        float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
+        obs[obs_idx + 7] = copysignf(rel_speed_magnitude, rel_v_dot_heading) / MAX_SPEED;
+
+        cars_seen++;
+        obs_idx += PARTNER_FEATURES;
+    }
+
+    // Pad remaining partner obs with zero
+    int remaining = (MAX_PARTNER_OBSERVATIONS - cars_seen) * PARTNER_FEATURES;
+    memset(&obs[obs_idx], 0, remaining * sizeof(float));
+}
+
 void compute_observations(Drive *env) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs =
+        ego_dim + PARTNER_FEATURES * (MAX_PARTNER_OBSERVATIONS) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     for (int i = 0; i < env->active_agent_count; i++) {
@@ -2918,70 +3016,12 @@ void compute_observations(Drive *env) {
                 }
             }
         }
-        //
-        //  Relative Pos of other cars
 
-        int cars_seen = 0;
-        for (int j = 0; j < MAX_AGENTS; j++) {
-            int index = -1;
-            if (j < env->active_agent_count) {
-                index = env->active_agent_indices[j];
-            } else if (j < env->num_created_agents && env->static_agent_count > 0) {
-                index = env->static_agent_indices[j - env->active_agent_count];
-            }
-            if (index == -1)
-                continue;
-            if (env->agents[index].type > CYCLIST)
-                break;
-            if (index == env->active_agent_indices[i])
-                continue; // Skip self, but don't increment obs_idx
-            Agent *other_entity = &env->agents[index];
-            if (ego_entity->respawn_timestep != -1)
-                continue;
-            if (other_entity->respawn_timestep != -1)
-                continue;
-            // Store original relative positions
-            float dx = other_entity->sim_x - ego_entity->sim_x;
-            float dy = other_entity->sim_y - ego_entity->sim_y;
-            float dz = other_entity->sim_z - ego_entity->sim_z;
-            float dist = (dx * dx + dy * dy + dz * dz);
-            if (dist > 2500.0f)
-                continue;
-            // Rotate to ego vehicle's frame
-            float rel_x = dx * cos_heading + dy * sin_heading;
-            float rel_y = -dx * sin_heading + dy * cos_heading;
-            float rel_z = dz; // No rotation needed for vertical component
-            // Store observations with correct indexing
-            obs[obs_idx] = rel_x * 0.02f;
-            obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = rel_z * 0.02f;
-            obs[obs_idx + 3] = other_entity->sim_width / MAX_VEH_WIDTH;
-            obs[obs_idx + 4] = other_entity->sim_length / MAX_VEH_LEN;
-            // relative heading
-            float other_cos = cosf(other_entity->sim_heading);
-            float other_sin = sinf(other_entity->sim_heading);
-            float rel_heading_x =
-                other_cos * cos_heading + other_sin * sin_heading; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
-            float rel_heading_y =
-                other_sin * cos_heading - other_cos * sin_heading; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
+        // Partner vehicle observations
+        compute_partner_observations(env, obs, i, obs_idx);
+        obs_idx += MAX_PARTNER_OBSERVATIONS * PARTNER_FEATURES;
 
-            obs[obs_idx + 5] = rel_heading_x;
-            obs[obs_idx + 6] = rel_heading_y;
-            // relative speed
-            float rel_vx = other_entity->sim_vx - ego_entity->sim_vx;
-            float rel_vy = other_entity->sim_vy - ego_entity->sim_vy;
-            float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
-            float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
-            float rel_signed_speed = copysignf(rel_speed_magnitude, rel_v_dot_heading);
-            obs[obs_idx + 7] = rel_signed_speed / MAX_SPEED;
-            cars_seen++;
-            obs_idx += 8; // Move to next observation slot
-        }
-        int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 8;
-        memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
-        obs_idx += remaining_partner_obs;
-
-        // Map observations
+        // map observations
         GridMapEntity entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS];
         int grid_idx = getGridIndex(env, ego_entity->sim_x, ego_entity->sim_y);
         float max_observation_distance = 0.0f;
@@ -3935,7 +3975,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs =
+        ego_dim + PARTNER_FEATURES * (MAX_PARTNER_OBSERVATIONS) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     float *agent_obs = &observations[agent_index][0];
     // self
@@ -3967,7 +4008,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
     // First draw other agent observations
     int obs_idx = ego_dim; // Start after ego obs
-    for (int j = 0; j < MAX_AGENTS - 1; j++) {
+    for (int j = 0; j < MAX_PARTNER_OBSERVATIONS; j++) {
         if (agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 8; // Move to next agent observation
             continue;
@@ -4089,8 +4130,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         obs_idx += PARTNER_FEATURES; // Move to next agent observation (8 values per agent)
     }
     // Then draw map observations
-    int map_start_idx = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1); // Start after agent observations
-    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {          // Loop through potential map entities
+    int map_start_idx = ego_dim + PARTNER_FEATURES * (MAX_PARTNER_OBSERVATIONS); // Start after agent observations
+    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {                    // Loop through potential map entities
         int entity_idx = map_start_idx + k * 8;
         if (agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0) {
             continue;
@@ -4328,10 +4369,17 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 Vector3 model_size = {bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y,
                                       bounds.max.z - bounds.min.z};
                 Vector3 scale = {size.x / model_size.x, size.y / model_size.y, size.z / model_size.z};
-                // if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
-                //     rlPopMatrix();
-                //     continue;
-                // }
+                if ((obs_only || IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx) {
+                    int ego_active_idx = env->active_agent_indices[env->human_agent_idx];
+                    Agent *ego = &env->agents[ego_active_idx];
+                    float dist = relative_distance_3d(ego->sim_x, ego->sim_y, ego->sim_z, agent->sim_x, agent->sim_y,
+                                                      agent->sim_z);
+                    float obs_radius = env->partner_obs_radius;
+                    if (dist > obs_radius) {
+                        rlPopMatrix();
+                        continue;
+                    }
+                }
                 if (agent->type == CYCLIST) {
                     scale = (Vector3){0.01, 0.01, 0.01};
                     car_model = client->cyclist;
