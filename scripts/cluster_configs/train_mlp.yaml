@@ -1,0 +1,42 @@
+# MLP training configuration (no LSTM)
+# These args are passed to `puffer train puffer_drive`
+
+# Vectorization
+vec.num_workers: 16
+vec.num_envs: 16
+
+# Environment
+env.num_agents: 1024
+env.map_dir: "resources/drive/binaries/carla_2D"
+env.num_maps: 3
+
+# Training
+train.total_timesteps: 5_000_000_000
+train.checkpoint_interval: 100
+train.render: True
+train.render_interval: 100
+
+# PPO hyperparameters
+train.bptt_horizon: 128
+train.batch_size: 2097152
+train.minibatch_size: 32768
+train.max_minibatch_size: 32768
+train.adam_beta1: 0.9
+train.adam_beta2: 0.999
+train.adam_eps: 1e-8
+train.clip_coef: 0.2
+train.ent_coef: 0.01
+train.gae_lambda: 0.95
+train.gamma: 0.99
+train.learning_rate: 0.0005
+train.max_grad_norm: 0.5
+train.prio_alpha: 0.8499999999999999
+train.prio_beta0: 0.8499999999999999
+train.update_epochs: 1
+train.vf_clip_coef: 0.1999999999999999
+train.vf_coef: 0.5
+
+# W&B logging
+wandb: True
+wandb_project: pufferdrive
+wandb_group: cluster
