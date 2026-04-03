@@ -3411,7 +3411,7 @@ void c_step(Drive *env) {
             break;
         }
     }
-    int reached_time_limit = (env->timestep + 1) >= env->episode_length;
+    int reached_time_limit = env->timestep >= env->episode_length;
     int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
     if (reached_time_limit || reached_early_termination) {
         for (int i = 0; i < env->active_agent_count; i++) {
