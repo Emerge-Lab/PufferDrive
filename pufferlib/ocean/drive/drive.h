@@ -97,6 +97,7 @@
 #define VELOCITY_PROGRESS_IDX 7
 #define SPEED_LIMIT_IDX 8
 #define AVG_DISPLACEMENT_ERROR_IDX 9
+#define LANE_SIN_ANGLE_IDX 11
 #define LANE_ALIGNED_IDX 10
 
 // Grid cell size
@@ -119,7 +120,7 @@
 
 // Ego features depend on dynamics model
 #define EGO_FEATURES_CLASSIC 13
-#define EGO_FEATURES_JERK 16
+#define EGO_FEATURES_JERK 17
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -2765,12 +2766,14 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         // theta_f = angle relative to lane heading
         float theta_f = compute_heading_diff(agent->sim_heading, best_candidate_lane_heading);
         agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f); // Store cos(θ_f)
+        agent->metrics_array[LANE_SIN_ANGLE_IDX] = sinf(theta_f); // Store sin(θ_f) for direction
     } else {
         // Agent not on any lane - use "bad" values to indicate offroad state
         agent->current_lane_index = -1;
         agent->current_lane_geometry_idx = -1;
         agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION; // Max distance (far from lane)
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;
+        agent->metrics_array[LANE_SIN_ANGLE_IDX] = 0.0f;
     }
 
     // check if aligned with closest lane and set current lane
@@ -2995,7 +2998,8 @@ void compute_observations(Drive *env) {
             obs[12] = normalized_goal_speed_max;
             obs[13] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
             obs[14] = lane_center_dist;
-            obs[15] = ego_entity->metrics_array[LANE_ANGLE_IDX];
+            obs[15] = ego_entity->metrics_array[LANE_ANGLE_IDX]; // cos(θ_f)
+            obs[16] = ego_entity->metrics_array[LANE_SIN_ANGLE_IDX]; // sin(θ_f)
         } else {
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
             obs[8] = normalized_goal_speed_min;
