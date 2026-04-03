@@ -344,7 +344,26 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     printf("Loaded weights: %zu\n", weights->size); fflush(stdout);
     printf("Active agents in map: %d\n", env.active_agent_count); fflush(stdout);
     printf("dynamics_model=%d reward_conditioning=%d\n", env.dynamics_model, env.reward_conditioning); fflush(stdout);
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
+    // Detect MLP vs LSTM from weight count: calculate expected MLP-only weight count
+    int _ego_dim = (env.dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    if (env.reward_conditioning) _ego_dim += NUM_REWARD_COEFS;
+    int _action_size = (env.dynamics_model == CLASSIC) ? 7 * 13 : 4 * 3;
+    size_t mlp_weights = (size_t)(_ego_dim * NN_INPUT_SIZE + NN_INPUT_SIZE)        // ego_encoder
+        + NN_INPUT_SIZE * 2                                                         // ego_layernorm
+        + NN_INPUT_SIZE * NN_INPUT_SIZE + NN_INPUT_SIZE                             // ego_encoder_two
+        + (ROAD_FEATURES + 6) * NN_INPUT_SIZE + NN_INPUT_SIZE                       // road_encoder
+        + NN_INPUT_SIZE * 2                                                         // road_layernorm
+        + NN_INPUT_SIZE * NN_INPUT_SIZE + NN_INPUT_SIZE                             // road_encoder_two
+        + PARTNER_FEATURES * NN_INPUT_SIZE + NN_INPUT_SIZE                          // partner_encoder
+        + NN_INPUT_SIZE * 2                                                         // partner_layernorm
+        + NN_INPUT_SIZE * NN_INPUT_SIZE + NN_INPUT_SIZE                             // partner_encoder_two
+        + 3 * NN_INPUT_SIZE * NN_HIDDEN_SIZE + NN_HIDDEN_SIZE                       // shared_embedding
+        + NN_HIDDEN_SIZE * _action_size + _action_size                              // actor
+        + NN_HIDDEN_SIZE * 1 + 1;                                                   // value_fn
+    int use_lstm = (weights->size > mlp_weights);
+    printf("Weight count: %zu, MLP expected: %zu, using %s\n", weights->size, mlp_weights, use_lstm ? "LSTM" : "MLP");
+    fflush(stdout);
+    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning, use_lstm);
     printf("DriveNet initialized\n"); fflush(stdout);
 
     int frame_count = env.episode_length > 0 ? env.episode_length : TRAJECTORY_LENGTH_DEFAULT;

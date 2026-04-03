@@ -15,6 +15,7 @@ typedef struct DriveNet DriveNet;
 struct DriveNet {
     int num_agents;
     int ego_dim;
+    int use_lstm;
     float *obs_self;
     float *obs_partner;
     float *obs_road;
@@ -46,7 +47,7 @@ struct DriveNet {
     Multidiscrete *multidiscrete;
 };
 
-DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, int reward_conditioning) {
+DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, int reward_conditioning, int use_lstm) {
     DriveNet *net = calloc(1, sizeof(DriveNet));
     // Use constants directly from drive.h
     int ego_dim = (dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
@@ -76,6 +77,7 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
 
     net->num_agents = num_agents;
     net->ego_dim = ego_dim;
+    net->use_lstm = use_lstm;
     net->obs_self = calloc(num_agents * ego_dim, sizeof(float));
     net->obs_partner = calloc(num_agents * max_partners * partner_features, sizeof(float));
     net->obs_road = calloc(num_agents * max_road_obs * road_feat_onehot, sizeof(float));
@@ -104,9 +106,11 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     net->relu = make_relu(num_agents, hidden_size);
     net->actor = make_linear(weights, num_agents, hidden_size, action_size);
     net->value_fn = make_linear(weights, num_agents, hidden_size, 1);
-    net->lstm = make_lstm(weights, num_agents, hidden_size, NN_HIDDEN_SIZE);
-    memset(net->lstm->state_h, 0, num_agents * NN_HIDDEN_SIZE * sizeof(float));
-    memset(net->lstm->state_c, 0, num_agents * NN_HIDDEN_SIZE * sizeof(float));
+    if (use_lstm) {
+        net->lstm = make_lstm(weights, num_agents, hidden_size, NN_HIDDEN_SIZE);
+        memset(net->lstm->state_h, 0, num_agents * NN_HIDDEN_SIZE * sizeof(float));
+        memset(net->lstm->state_c, 0, num_agents * NN_HIDDEN_SIZE * sizeof(float));
+    }
     net->multidiscrete = make_multidiscrete(num_agents, logit_sizes, action_dim);
     return net;
 }
@@ -265,9 +269,14 @@ void forward(DriveNet *net, float *observations, int *actions) {
     gelu(net->gelu, net->cat2->output);
     linear(net->shared_embedding, net->gelu->output);
     relu(net->relu, net->shared_embedding->output);
-    lstm(net->lstm, net->relu->output);
-    linear(net->actor, net->lstm->state_h);
-    linear(net->value_fn, net->lstm->state_h);
+    if (net->use_lstm) {
+        lstm(net->lstm, net->relu->output);
+        linear(net->actor, net->lstm->state_h);
+        linear(net->value_fn, net->lstm->state_h);
+    } else {
+        linear(net->actor, net->relu->output);
+        linear(net->value_fn, net->relu->output);
+    }
 
     // Get action by taking argmax of actor output
     softmax_multidiscrete(net->multidiscrete, net->actor->output, actions);
