@@ -326,12 +326,14 @@ def render_videos(
             cmd.extend(["--output-topdown", output_topdown_map])
             cmd.extend(["--output-agent", output_agent_map])
 
-            print(f"Running render: {' '.join(cmd[:6])}...")
+            print(f"Running render: {' '.join(cmd)}")
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=1200, env=env_vars)
 
             vids_exist = os.path.exists(output_topdown_map) and os.path.exists(output_agent_map)
             print(f"Render exit code: {result.returncode}, vids_exist: {vids_exist}")
-            if result.returncode != 0 and result.stderr:
+            if result.stdout:
+                print(f"Render stdout: {result.stdout[-1000:]}")
+            if result.stderr:
                 print(f"Render stderr: {result.stderr[-500:]}")
 
             if result.returncode == 0 or (result.returncode == 1 and vids_exist):
