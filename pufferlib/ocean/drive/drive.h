@@ -238,6 +238,8 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
+    float total_distance_travelled;
+    float total_infractions;
     float avg_speed_per_agent;
     float max_observation_distance; // average max observation distance
     float observation_coverage;     // percentage of entities in obs window seen on average
@@ -1698,6 +1700,12 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        // Distance per infraction
+        int has_infraction = (offroad || collided) ? 1 : 0;
+        env->log.total_distance_travelled += agent->distance_since_spawn;
+        if (has_infraction) {
+            env->log.total_infractions += 1.0f;
+        }
         env->log.distance_without_collision += env->logs[i].distance_without_collision;
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -1947,6 +1955,7 @@ void set_start_position(Drive *env) {
         e->stopped = 0;
         e->removed = 0;
         e->respawn_count = 0;
+        e->distance_since_spawn = 0.0f;
 
         // Dynamics
         e->a_long = 0.0f;
@@ -3163,6 +3172,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->collided_before_goal = 0;
     agent->cumulative_displacement = 0.0f;
     agent->cumulative_displacement_since_last_goal = 0.0f;
+    agent->distance_since_spawn = 0.0f;
     agent->stopped = 0;
     agent->removed = 0;
     agent->a_long = 0.0f;
@@ -3494,6 +3504,11 @@ void c_step(Drive *env) {
         float prev_vy = env->agents[agent_idx].sim_vy;
 
         move_dynamics(env, i, agent_idx);
+
+        // Accumulate distance for avg_distance_per_infraction metric
+        float speed = sqrtf(env->agents[agent_idx].sim_vx * env->agents[agent_idx].sim_vx +
+                            env->agents[agent_idx].sim_vy * env->agents[agent_idx].sim_vy);
+        env->agents[agent_idx].distance_since_spawn += speed * env->dt;
 
         // Tiny jerk penalty for smoothness
         if (env->dynamics_model == CLASSIC) {
