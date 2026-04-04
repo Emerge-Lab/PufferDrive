@@ -410,6 +410,12 @@ class PuffeRL:
             flat_masks = masks.reshape(-1).bool()
             valid_idx = torch.nonzero(flat_masks, as_tuple=False).flatten()
 
+            # Keep top 20% by advantage magnitude
+            valid_abs_adv = flat_advantages[valid_idx].abs()
+            k = max(1, int(0.2 * valid_abs_adv.shape[0]))
+            topk_local = valid_abs_adv.topk(k).indices
+            valid_idx = valid_idx[topk_local]
+
             losses["masked_fraction"] = 1.0 - (valid_idx.numel() / max(flat_masks.numel(), 1))
 
             # Flat views (no copies — these are views into the original buffers)
