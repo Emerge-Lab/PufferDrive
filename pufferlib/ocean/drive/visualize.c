@@ -195,6 +195,9 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
              int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
              const char *output_agent, int num_maps, int zoom_in, const char *config_path) {
 
+    // Seed RNG so spawn positions vary between runs
+    srand(time(NULL));
+
     // Parse configuration from INI file
     env_init_config conf = {0};
     const char *ini_file = config_path ? config_path : "pufferlib/config/ocean/drive.ini";
