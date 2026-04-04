@@ -177,8 +177,14 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
                     cmd.append(f"--{cli_key}")
                 # Skip if False - don't add the flag at all
             else:
-                cmd.append(f"--{cli_key}")
-                cmd.append(str(val))
+                # Use = syntax for negative values to prevent argparse
+                # from interpreting them as flags (e.g. -2.5e-05)
+                str_val = str(val)
+                if str_val.startswith("-"):
+                    cmd.append(f"--{cli_key}={str_val}")
+                else:
+                    cmd.append(f"--{cli_key}")
+                    cmd.append(str_val)
 
             if key in overrides and key not in name_skip_keys:
                 display_key = key.split(".")[-1] if "." in key else key
