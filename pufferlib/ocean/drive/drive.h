@@ -241,6 +241,7 @@ struct Log {
     float avg_speed_per_agent;
     float max_observation_distance; // average max observation distance
     float observation_coverage;     // percentage of entities in obs window seen on average
+    float partner_obs_coverage;     // % of partners within radius that fit in the obs slots
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -1667,6 +1668,7 @@ void add_log(Drive *env) {
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
         env->log.max_observation_distance += env->logs[i].max_observation_distance / safe_timestep;
         env->log.observation_coverage += env->logs[i].observation_coverage / safe_timestep;
+        env->log.partner_obs_coverage += env->logs[i].partner_obs_coverage / safe_timestep;
         env->log.n += 1;
     }
 }
@@ -2605,7 +2607,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
 // void compute_rewards(void){}
 
-void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs_idx) {
+float compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs_idx) {
 
     int ego_idx = env->active_agent_indices[agent_idx];
     Agent *ego_entity = &env->agents[ego_idx];
@@ -2618,8 +2620,9 @@ void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs
     // Get all agents in sim within vision range till partner_obs array is filled
     float obs_radius = env->partner_obs_radius;
     int cars_seen = 0;
+    int partners_in_radius = 0;
     // Iterate over all created agents
-    for (int i = 0; i < env->num_created_agents && cars_seen < MAX_PARTNER_OBSERVATIONS; i++) {
+    for (int i = 0; i < env->num_created_agents; i++) {
         Agent *partner = &env->agents[i];
         if (ego_id == partner->id) {
             continue; // Skip self
@@ -2633,41 +2636,50 @@ void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs
         float dz = partner->sim_z - ego_entity->sim_z;
 
         if (distance <= obs_radius) {
-            // Rotate to ego vehicle's frame
-            float rel_x = dx * cos_heading + dy * sin_heading;
-            float rel_y = -dx * sin_heading + dy * cos_heading;
-            float rel_z = dz; // No rotation needed for vertical component
-            // Store observations with correct indexing
-            obs[obs_idx] = rel_x * 0.02f;
-            obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = rel_z * 0.02f;
-            obs[obs_idx + 3] = partner->sim_width / MAX_VEH_WIDTH;
-            obs[obs_idx + 4] = partner->sim_length / MAX_VEH_LEN;
-            // relative heading
-            float other_cos = cosf(partner->sim_heading);
-            float other_sin = sinf(partner->sim_heading);
-            float rel_heading_x =
-                other_cos * cos_heading + other_sin * sin_heading; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
-            float rel_heading_y =
-                other_sin * cos_heading - other_cos * sin_heading; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
+            partners_in_radius++;
+            if (cars_seen < MAX_PARTNER_OBSERVATIONS) {
+                // Rotate to ego vehicle's frame
+                float rel_x = dx * cos_heading + dy * sin_heading;
+                float rel_y = -dx * sin_heading + dy * cos_heading;
+                float rel_z = dz; // No rotation needed for vertical component
+                // Store observations with correct indexing
+                obs[obs_idx] = rel_x * 0.02f;
+                obs[obs_idx + 1] = rel_y * 0.02f;
+                obs[obs_idx + 2] = rel_z * 0.02f;
+                obs[obs_idx + 3] = partner->sim_width / MAX_VEH_WIDTH;
+                obs[obs_idx + 4] = partner->sim_length / MAX_VEH_LEN;
+                // relative heading
+                float other_cos = cosf(partner->sim_heading);
+                float other_sin = sinf(partner->sim_heading);
+                float rel_heading_x =
+                    other_cos * cos_heading + other_sin * sin_heading; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
+                float rel_heading_y =
+                    other_sin * cos_heading - other_cos * sin_heading; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
 
-            obs[obs_idx + 5] = rel_heading_x;
-            obs[obs_idx + 6] = rel_heading_y;
-            // relative speed
-            float rel_vx = partner->sim_vx - ego_entity->sim_vx;
-            float rel_vy = partner->sim_vy - ego_entity->sim_vy;
-            float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
-            float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
-            float rel_signed_speed = copysignf(rel_speed_magnitude, rel_v_dot_heading);
-            obs[obs_idx + 7] = rel_signed_speed / MAX_SPEED;
-            cars_seen++;
-            obs_idx += 8; // Move to next observation slot
+                obs[obs_idx + 5] = rel_heading_x;
+                obs[obs_idx + 6] = rel_heading_y;
+                // relative speed
+                float rel_vx = partner->sim_vx - ego_entity->sim_vx;
+                float rel_vy = partner->sim_vy - ego_entity->sim_vy;
+                float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
+                float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
+                float rel_signed_speed = copysignf(rel_speed_magnitude, rel_v_dot_heading);
+                obs[obs_idx + 7] = rel_signed_speed / MAX_SPEED;
+                cars_seen++;
+                obs_idx += 8; // Move to next observation slot
+            }
         }
     }
 
     // Pad remaining partner obs with zero
     int remaining_partner_obs = (MAX_PARTNER_OBSERVATIONS - cars_seen) * 8;
     memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
+
+    // Return coverage: fraction of partners within radius that fit in obs slots
+    if (partners_in_radius == 0) {
+        return 100.0f;
+    }
+    return ((float)cars_seen / (float)partners_in_radius) * 100.0f;
 }
 
 void compute_observations(Drive *env) {
@@ -2748,7 +2760,9 @@ void compute_observations(Drive *env) {
         }
 
         // Partner vehicle observations
-        compute_partner_observations(env, obs, i, obs_idx);
+        float coverage = compute_partner_observations(env, obs, i, obs_idx);
+        env->logs[i].partner_obs_coverage += coverage;
+
         obs_idx += MAX_PARTNER_OBSERVATIONS * PARTNER_FEATURES;
 
         // map observations
