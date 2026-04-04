@@ -399,96 +399,119 @@ class PuffeRL:
         )
 
         if not config["use_rnn"]:
-            # === MLP path: flatten, filter invalid + low-advantage, random minibatches ===
+            # === MLP path: flat views, EWMA threshold filtering, per-epoch permutation ===
             profile("train_copy", epoch)
+            masks = ~self.is_invalid_step.bool()
+            advantages = advantages.masked_fill(~masks, 0.0)
+            returns = advantages + self.values
+
+            # Flatten to 1D indices
+            flat_advantages = advantages.reshape(-1)
+            flat_masks = masks.reshape(-1).bool()
+            valid_idx = torch.nonzero(flat_masks, as_tuple=False).flatten()
+
+            # EWMA-based advantage filtering
+            ewma_beta = config.get("adv_filter_ewma_beta", 0.1)
+            threshold_scale = config.get("adv_filter_threshold_scale", 0.1)
+            valid_abs_adv = flat_advantages[valid_idx].abs()
+            current_max = valid_abs_adv.max().item() if valid_abs_adv.numel() > 0 else 0.0
+            if not hasattr(self, "ema_max"):
+                self.ema_max = current_max
+            else:
+                self.ema_max = ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
+            threshold = threshold_scale * self.ema_max
+
+            keep_mask = valid_abs_adv >= threshold
+            keep_idx = valid_idx[keep_mask]
+
+            losses["filter_threshold"] = threshold
+            losses["ema_max"] = self.ema_max
+            losses["kept_fraction"] = keep_idx.numel() / max(valid_idx.numel(), 1)
+            losses["masked_fraction"] = 1.0 - (valid_idx.numel() / max(flat_masks.numel(), 1))
+
+            # Flat views (no copies — these are views into the original buffers)
             obs_shape = self.vecenv.single_observation_space.shape
-            valid = ~self.is_invalid_step.flatten().bool()
-            flat_obs = self.observations.reshape(-1, *obs_shape)[valid]
-            flat_actions = self.actions.flatten()[valid]
-            flat_logprobs = self.logprobs.flatten()[valid]
-            flat_values = self.values.flatten()[valid]
-            flat_advantages = advantages.flatten()[valid]
-            flat_returns = flat_advantages + flat_values
+            flat_obs = self.observations.reshape(-1, *obs_shape)
+            flat_actions = self.actions.reshape(-1, *self.actions.shape[2:])
+            flat_logprobs = self.logprobs.reshape(-1)
+            flat_values = self.values.reshape(-1)
+            flat_returns = returns.reshape(-1)
 
-            # Keep only top 20% by advantage magnitude
-            abs_adv = flat_advantages.abs()
-            k = max(1, int(0.2 * abs_adv.shape[0]))
-            topk_indices = abs_adv.topk(k).indices
-            flat_obs = flat_obs[topk_indices]
-            flat_actions = flat_actions[topk_indices]
-            flat_logprobs = flat_logprobs[topk_indices]
-            flat_values = flat_values[topk_indices]
-            flat_advantages = flat_advantages[topk_indices]
-            flat_returns = flat_returns[topk_indices]
+            self.optimizer.zero_grad()
+            total_minibatches = 0
 
-            n_valid = flat_obs.shape[0]
-            minibatch_size = min(self.minibatch_size, n_valid)
-            total_minibatches = max(1, int(config["update_epochs"] * n_valid / minibatch_size))
+            for _ in range(config["update_epochs"]):
+                permutation = keep_idx[torch.randperm(keep_idx.numel(), device=device)]
+                for start in range(0, permutation.numel(), self.minibatch_size):
+                    profile("train_copy", epoch)
+                    mb_idx = permutation[start : start + self.minibatch_size]
+                    mb_obs = flat_obs[mb_idx]
+                    mb_actions = flat_actions[mb_idx]
+                    mb_logprobs = flat_logprobs[mb_idx]
+                    mb_values = flat_values[mb_idx]
+                    mb_returns = flat_returns[mb_idx]
+                    mb_adv = flat_advantages[mb_idx]
 
-            for mb in range(total_minibatches):
-                profile("train_misc", epoch, nest=True)
-                self.amp_context.__enter__()
+                    # Normalize advantages
+                    mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
-                # Random sample from valid timesteps
-                indices = torch.randperm(n_valid, device=device)[:minibatch_size]
-                mb_obs = flat_obs[indices]
-                mb_actions = flat_actions[indices]
-                mb_logprobs = flat_logprobs[indices]
-                mb_values = flat_values[indices]
-                mb_returns = flat_returns[indices]
-                mb_advantages = flat_advantages[indices]
+                    profile("train_forward", epoch)
+                    state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
+                    logits, newvalue = self.policy(mb_obs, state)
+                    actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
 
-                profile("train_forward", epoch)
-                state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
-                logits, newvalue = self.policy(mb_obs, state)
-                actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+                    profile("train_misc", epoch)
+                    logratio = newlogprob - mb_logprobs
+                    ratio = logratio.exp()
 
-                profile("train_misc", epoch)
-                logratio = newlogprob - mb_logprobs
-                ratio = logratio.exp()
+                    with torch.no_grad():
+                        old_approx_kl = (-logratio).mean()
+                        approx_kl = ((ratio - 1) - logratio).mean()
+                        clipfrac = ((ratio - 1.0).abs() > clip_coef).float().mean()
 
-                with torch.no_grad():
-                    old_approx_kl = (-logratio).mean()
-                    approx_kl = ((ratio - 1) - logratio).mean()
-                    clipfrac = ((ratio - 1.0).abs() > clip_coef).float().mean()
+                    # PPO losses — no masking needed, all samples are valid
+                    pg_loss1 = -mb_adv * ratio
+                    pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
+                    pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Normalize advantages
-                adv = mb_advantages
-                adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+                    newvalue = newvalue.flatten()
+                    v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
+                    v_loss_unclipped = (newvalue - mb_returns) ** 2
+                    v_loss_clipped = (v_clipped - mb_returns) ** 2
+                    v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
-                # Losses — no masking needed, all samples are valid
-                pg_loss1 = -adv * ratio
-                pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+                    entropy_loss = entropy.mean()
 
-                newvalue = newvalue.flatten()
-                v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
-                v_loss_unclipped = (newvalue - mb_returns) ** 2
-                v_loss_clipped = (v_clipped - mb_returns) ** 2
-                v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                    loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+                    self.amp_context.__enter__()
 
-                entropy_loss = entropy.mean()
+                    # Accumulate logging
+                    losses["policy_loss"] += pg_loss.item()
+                    losses["value_loss"] += v_loss.item()
+                    losses["entropy"] += entropy_loss.item()
+                    losses["old_approx_kl"] += old_approx_kl.item()
+                    losses["approx_kl"] += approx_kl.item()
+                    losses["clipfrac"] += clipfrac.item()
+                    losses["importance"] += ratio.mean().item()
 
-                loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
-                self.amp_context.__enter__()
+                    profile("learn", epoch)
+                    loss.backward()
+                    total_minibatches += 1
+                    if total_minibatches % self.accumulate_minibatches == 0:
+                        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+                        self.optimizer.step()
+                        self.optimizer.zero_grad()
 
-                # Logging
-                profile("train_misc", epoch)
-                losses["policy_loss"] += pg_loss.item() / total_minibatches
-                losses["value_loss"] += v_loss.item() / total_minibatches
-                losses["entropy"] += entropy_loss.item() / total_minibatches
-                losses["old_approx_kl"] += old_approx_kl.item() / total_minibatches
-                losses["approx_kl"] += approx_kl.item() / total_minibatches
-                losses["clipfrac"] += clipfrac.item() / total_minibatches
-                losses["importance"] += ratio.mean().item() / total_minibatches
+            # Final optimizer step for any remaining gradients
+            if total_minibatches % self.accumulate_minibatches != 0:
+                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
-                # Learn
-                profile("learn", epoch)
-                loss.backward()
-                if (mb + 1) % self.accumulate_minibatches == 0:
-                    torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
+            # Average the accumulated losses
+            total_minibatches = max(total_minibatches, 1)
+            for k in ["policy_loss", "value_loss", "entropy", "old_approx_kl", "approx_kl", "clipfrac", "importance"]:
+                losses[k] /= total_minibatches
 
         else:
             # === LSTM path: segment-based minibatches (original code) ===
