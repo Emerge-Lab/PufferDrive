@@ -399,34 +399,17 @@ class PuffeRL:
         )
 
         if not config["use_rnn"]:
-            # === MLP path: flat views, EWMA threshold filtering, per-epoch permutation ===
+            # === MLP path: flat views, filter invalid, per-epoch permutation ===
             profile("train_copy", epoch)
             masks = ~self.is_invalid_step.bool()
             advantages = advantages.masked_fill(~masks, 0.0)
             returns = advantages + self.values
 
-            # Flatten to 1D indices
+            # Flatten and get valid indices
             flat_advantages = advantages.reshape(-1)
             flat_masks = masks.reshape(-1).bool()
             valid_idx = torch.nonzero(flat_masks, as_tuple=False).flatten()
 
-            # EWMA-based advantage filtering
-            ewma_beta = config.get("adv_filter_ewma_beta", 0.1)
-            threshold_scale = config.get("adv_filter_threshold_scale", 0.1)
-            valid_abs_adv = flat_advantages[valid_idx].abs()
-            current_max = valid_abs_adv.max().item() if valid_abs_adv.numel() > 0 else 0.0
-            if not hasattr(self, "ema_max"):
-                self.ema_max = current_max
-            else:
-                self.ema_max = ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
-            threshold = threshold_scale * self.ema_max
-
-            keep_mask = valid_abs_adv >= threshold
-            keep_idx = valid_idx[keep_mask]
-
-            losses["filter_threshold"] = threshold
-            losses["ema_max"] = self.ema_max
-            losses["kept_fraction"] = keep_idx.numel() / max(valid_idx.numel(), 1)
             losses["masked_fraction"] = 1.0 - (valid_idx.numel() / max(flat_masks.numel(), 1))
 
             # Flat views (no copies — these are views into the original buffers)
@@ -441,7 +424,7 @@ class PuffeRL:
             total_minibatches = 0
 
             for _ in range(config["update_epochs"]):
-                permutation = keep_idx[torch.randperm(keep_idx.numel(), device=device)]
+                permutation = valid_idx[torch.randperm(valid_idx.numel(), device=device)]
                 for start in range(0, permutation.numel(), self.minibatch_size):
                     profile("train_copy", epoch)
                     mb_idx = permutation[start : start + self.minibatch_size]
