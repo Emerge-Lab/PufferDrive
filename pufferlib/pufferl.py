@@ -514,6 +514,9 @@ class PuffeRL:
 
         if self.epoch % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
+            self.save_trajectories()
+            if self.epoch == config["checkpoint_interval"]:
+                self.save_reproducibility()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
             if self.render and self.epoch % self.render_interval == 0:
@@ -855,6 +858,92 @@ class PuffeRL:
         torch.save(state, state_path + ".tmp")
         os.rename(state_path + ".tmp", state_path)
         return model_path
+
+    def save_trajectories(self):
+        """Save all trajectory buffers as a compressed numpy archive."""
+        run_id = self.logger.run_id
+        path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
+        os.makedirs(path, exist_ok=True)
+        traj_path = os.path.join(path, f"trajectories_{self.epoch:06d}.npz")
+
+        data = {
+            "observations": self.observations.cpu().numpy(),
+            "actions": self.actions.cpu().numpy(),
+            "rewards": self.rewards.cpu().numpy(),
+            "terminals": self.terminals.cpu().numpy(),
+            "truncations": self.truncations.cpu().numpy(),
+            "is_invalid_step": self.is_invalid_step.cpu().numpy(),
+            "values": self.values.cpu().numpy(),
+            "logprobs": self.logprobs.cpu().numpy(),
+            "epoch": self.epoch,
+            "global_step": self.global_step,
+        }
+
+        # Get current agent states (positions, headings, etc.)
+        try:
+            driver_env = getattr(self.vecenv, "driver_env", None)
+            if driver_env and hasattr(driver_env, "get_global_agent_state"):
+                agent_state = driver_env.get_global_agent_state()
+                for k, v in agent_state.items():
+                    data[f"agent_{k}"] = v
+        except Exception as e:
+            print(f"Warning: Could not save agent states: {e}")
+
+        np.savez_compressed(traj_path, **data)
+        print(f"Saved trajectories to {traj_path}")
+
+    def save_reproducibility(self):
+        """Save compiled .so, source files, config, and git info for reproducibility."""
+        run_id = self.logger.run_id
+        base_path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
+        repro_path = os.path.join(base_path, f"reproducibility_{self.epoch:06d}")
+        os.makedirs(repro_path, exist_ok=True)
+
+        # Copy .so files
+        import glob as glob_mod
+
+        for so_file in glob_mod.glob("pufferlib/ocean/drive/*.so"):
+            shutil.copy2(so_file, repro_path)
+
+        # Copy key source files
+        source_files = [
+            "pufferlib/ocean/drive/drive.h",
+            "pufferlib/ocean/drive/datatypes.h",
+            "pufferlib/ocean/drive/binding.c",
+            "pufferlib/ocean/drive/drive.py",
+            "pufferlib/ocean/drive/drivenet.h",
+            "pufferlib/ocean/torch.py",
+            "pufferlib/config/ocean/drive.ini",
+            "pufferlib/pufferl.py",
+        ]
+        for src in source_files:
+            if os.path.exists(src):
+                dst = os.path.join(repro_path, os.path.basename(src))
+                shutil.copy2(src, dst)
+
+        # Save git info
+        git_info_path = os.path.join(repro_path, "git_info.txt")
+        try:
+            commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+            diff = subprocess.run(["git", "diff", "--stat"], capture_output=True, text=True, timeout=5)
+            with open(git_info_path, "w") as f:
+                f.write(f"commit: {commit.stdout.strip()}\n")
+                f.write(f"diff:\n{diff.stdout}\n")
+        except Exception as e:
+            with open(git_info_path, "w") as f:
+                f.write(f"Could not capture git info: {e}\n")
+
+        # Save the active config
+        try:
+            env_config = self.config.get("env_config", {})
+            config_path = os.path.join(repro_path, "training_config.txt")
+            with open(config_path, "w") as f:
+                for k, v in sorted(self.config.items()):
+                    f.write(f"{k}: {v}\n")
+        except Exception as e:
+            print(f"Warning: Could not save config: {e}")
+
+        print(f"Saved reproducibility artifacts to {repro_path}")
 
     def print_dashboard(self, clear=False, idx=[0], c1="[cyan]", c2="[white]", b1="[bright_cyan]", b2="[bright_white]"):
         config = self.config
