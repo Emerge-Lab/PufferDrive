@@ -44,6 +44,7 @@ struct DriveNet {
     Linear *backbone_fc2;
     ReLU *backbone_relu2;
     Linear *backbone_fc3;
+    ReLU *backbone_relu3;
     LSTM *lstm;
     Linear *actor;
     Linear *value_fn;
@@ -110,6 +111,7 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     net->backbone_fc2 = make_linear(weights, num_agents, 1024, 1024);
     net->backbone_relu2 = make_relu(num_agents, 1024);
     net->backbone_fc3 = make_linear(weights, num_agents, 1024, hidden_size);
+    net->backbone_relu3 = make_relu(num_agents, hidden_size);
     net->actor = make_linear(weights, num_agents, hidden_size, action_size);
     net->value_fn = make_linear(weights, num_agents, hidden_size, 1);
     if (use_lstm) {
@@ -150,6 +152,7 @@ void free_drivenet(DriveNet *net) {
     free(net->backbone_fc2);
     free(net->backbone_relu2);
     free(net->backbone_fc3);
+    free(net->backbone_relu3);
     free(net->multidiscrete);
     free(net->actor);
     free(net->value_fn);
@@ -281,13 +284,14 @@ void forward(DriveNet *net, float *observations, int *actions) {
     linear(net->backbone_fc2, net->backbone_relu1->output);
     relu(net->backbone_relu2, net->backbone_fc2->output);
     linear(net->backbone_fc3, net->backbone_relu2->output);
+    relu(net->backbone_relu3, net->backbone_fc3->output);
     if (net->use_lstm) {
-        lstm(net->lstm, net->backbone_fc3->output);
+        lstm(net->lstm, net->backbone_relu3->output);
         linear(net->actor, net->lstm->state_h);
         linear(net->value_fn, net->lstm->state_h);
     } else {
-        linear(net->actor, net->backbone_fc3->output);
-        linear(net->value_fn, net->backbone_fc3->output);
+        linear(net->actor, net->backbone_relu3->output);
+        linear(net->value_fn, net->backbone_relu3->output);
     }
 
     // Get action by taking argmax of actor output
