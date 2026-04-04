@@ -2765,7 +2765,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         agent->metrics_array[LANE_DIST_IDX] = best_candidate_signed_lane_distance;
         // theta_f = angle relative to lane heading
         float theta_f = compute_heading_diff(agent->sim_heading, best_candidate_lane_heading);
-        agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f); // Store cos(θ_f)
+        agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f);     // Store cos(θ_f)
         agent->metrics_array[LANE_SIN_ANGLE_IDX] = sinf(theta_f); // Store sin(θ_f) for direction
     } else {
         // Agent not on any lane - use "bad" values to indicate offroad state
@@ -2998,7 +2998,7 @@ void compute_observations(Drive *env) {
             obs[12] = normalized_goal_speed_max;
             obs[13] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
             obs[14] = lane_center_dist;
-            obs[15] = ego_entity->metrics_array[LANE_ANGLE_IDX]; // cos(θ_f)
+            obs[15] = ego_entity->metrics_array[LANE_ANGLE_IDX];     // cos(θ_f)
             obs[16] = ego_entity->metrics_array[LANE_SIN_ANGLE_IDX]; // sin(θ_f)
         } else {
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;

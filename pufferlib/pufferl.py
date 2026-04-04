@@ -573,7 +573,9 @@ class PuffeRL:
 
                 # Losses
                 pg_loss1 = -adv[~mb_is_invalid_step] * ratio[~mb_is_invalid_step]
-                pg_loss2 = -adv[~mb_is_invalid_step] * torch.clamp(ratio[~mb_is_invalid_step], 1 - clip_coef, 1 + clip_coef)
+                pg_loss2 = -adv[~mb_is_invalid_step] * torch.clamp(
+                    ratio[~mb_is_invalid_step], 1 - clip_coef, 1 + clip_coef
+                )
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                 newvalue = newvalue.view(mb_returns.shape)
@@ -1022,6 +1024,7 @@ class PuffeRL:
 
         # Copy .so files
         import glob as glob_mod
+
         for so_file in glob_mod.glob("pufferlib/ocean/drive/*.so"):
             shutil.copy2(so_file, repro_path)
 
