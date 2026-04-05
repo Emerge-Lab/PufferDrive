@@ -3593,10 +3593,10 @@ void c_step(Drive *env) {
             env->agents[agent_idx].sim_traj_z[t] = env->agents[agent_idx].sim_z;
             env->agents[agent_idx].sim_traj_heading[t] = env->agents[agent_idx].sim_heading;
         }
-        if (i == 0 && env->timestep == 2) {
-            printf("sim_traj_record: t=%d, x=%.2f, ptr=%p, val_at_0=%.2f\n", t, env->agents[agent_idx].sim_x,
-                   (void *)env->agents[agent_idx].sim_traj_x,
-                   env->agents[agent_idx].sim_traj_x ? env->agents[agent_idx].sim_traj_x[0] : -999.0f);
+        if (i == 0 && env->timestep <= 3) {
+            printf("sim_traj_dbg: ts=%d t=%d ep_len=%d ptr=%p sim_x=%.2f cond=%d\n", env->timestep, t,
+                   env->episode_length, (void *)env->agents[agent_idx].sim_traj_x, env->agents[agent_idx].sim_x,
+                   (t >= 0 && t < env->episode_length && env->agents[agent_idx].sim_traj_x != NULL));
             fflush(stdout);
         }
 
