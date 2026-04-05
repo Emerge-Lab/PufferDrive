@@ -246,6 +246,7 @@ struct Log {
     float observation_coverage;     // percentage of entities in obs window seen on average
     float avg_goal_distance;        // average straight-line distance of goals when sampled
     float goal_distance_count;      // count for averaging
+    float partner_obs_coverage;     // % of partners within radius that fit in the obs slots
     // Per-component reward tracking
     float reward_goal_total;
     float reward_collision_total;
@@ -270,6 +271,11 @@ typedef struct {
     float min_val;
     float max_val;
 } RewardBound;
+
+typedef struct {
+    int idx;
+    float dist_sq;
+} AgentDistance;
 
 typedef struct GridMap GridMap;
 struct GridMap {
@@ -1732,6 +1738,7 @@ void add_log(Drive *env) {
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
         env->log.max_observation_distance += env->logs[i].max_observation_distance / safe_timestep;
         env->log.observation_coverage += env->logs[i].observation_coverage / safe_timestep;
+        env->log.partner_obs_coverage += env->logs[i].partner_obs_coverage / safe_timestep;
         env->log.n += 1;
     }
 }
@@ -2889,7 +2896,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
 // void compute_rewards(void){}
 
-void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs_idx) {
+float compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs_idx) {
 
     int ego_idx = env->active_agent_indices[agent_idx];
     Agent *ego_entity = &env->agents[ego_idx];
@@ -2982,6 +2989,12 @@ void compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs
     // Pad remaining partner obs with zero
     int remaining = (MAX_PARTNER_OBSERVATIONS - cars_seen) * PARTNER_FEATURES;
     memset(&obs[obs_idx], 0, remaining * sizeof(float));
+
+    // Return coverage: fraction of partners within radius that fit in obs slots
+    if (num_candidates == 0) {
+        return 100.0f;
+    }
+    return ((float)cars_seen / (float)num_candidates) * 100.0f;
 }
 
 void compute_observations(Drive *env) {
@@ -3063,7 +3076,9 @@ void compute_observations(Drive *env) {
         }
 
         // Partner vehicle observations
-        compute_partner_observations(env, obs, i, obs_idx);
+        float coverage = compute_partner_observations(env, obs, i, obs_idx);
+        env->logs[i].partner_obs_coverage += coverage;
+
         obs_idx += MAX_PARTNER_OBSERVATIONS * PARTNER_FEATURES;
 
         // map observations
