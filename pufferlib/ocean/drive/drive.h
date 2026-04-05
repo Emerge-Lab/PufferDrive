@@ -128,8 +128,8 @@
 #define MAX_CHECKED_LANES 32
 
 // Ego features depend on dynamics model
-#define EGO_FEATURES_CLASSIC 14
-#define EGO_FEATURES_JERK 17
+#define EGO_FEATURES_CLASSIC 13
+#define EGO_FEATURES_JERK 16
 
 // Observation normalization constants
 #define MAX_SPEED 100.0f
@@ -1505,11 +1505,6 @@ int collision_check(Drive *env, int agent_idx) {
     if (agent->sim_x == INVALID_POSITION)
         return -1;
 
-    // Skip collision checking for pedestrians because they are often too
-    // close to other entities at initialization.
-    if (agent->type == PEDESTRIAN)
-        return -1;
-
     int car_collided_with_index = -1;
 
     if (agent->respawn_timestep != -1)
@@ -1604,7 +1599,7 @@ static bool check_offroad(Drive *env, Agent *agent) {
         entity = &env->road_elements[entity_list[i].entity_idx];
 
         // Check for offroad collision with road edges (only for vehicles and cyclists)
-        if (entity->type == ROAD_EDGE && agent->type != PEDESTRIAN) {
+        if (entity->type == ROAD_EDGE) {
             int geometry_idx = entity_list[i].geometry_idx;
             if (entity->z[geometry_idx] > agent->sim_z + agent->sim_height / 2.0f ||
                 entity->z[geometry_idx] < agent->sim_z - agent->sim_height / 2.0f)
@@ -2805,7 +2800,6 @@ void compute_observations(Drive *env) {
             obs[13] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
             obs[14] = lane_center_dist;
             obs[15] = ego_entity->metrics_array[LANE_ANGLE_IDX];
-            obs[16] = ego_entity->type / 3.0f;
         } else {
             obs[7] = (ego_entity->respawn_timestep != -1) ? 1 : 0;
             obs[8] = normalized_goal_speed_min;
@@ -2813,7 +2807,6 @@ void compute_observations(Drive *env) {
             obs[10] = fminf(SPEED_LIMIT / MAX_SPEED, 1.0f);
             obs[11] = lane_center_dist;
             obs[12] = ego_entity->metrics_array[LANE_ANGLE_IDX];
-            obs[13] = ego_entity->type / 3.0f;
         }
         int obs_idx = (env->reward_conditioning == 1) ? ego_dim - NUM_REWARD_COEFS : ego_dim;
         // Placeholder for reward conditioning encoder -

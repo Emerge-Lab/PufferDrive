@@ -702,6 +702,9 @@ static PyObject *env_log(PyObject *self, PyObject *args) {
         return NULL;
     }
 
+    PyObject *num_agents_arg = PyTuple_GetItem(args, 1);
+    float num_agents = (float)PyLong_AsLong(num_agents_arg);
+
     // Aggregate this env's per-agent logs (same as vec_log but for one env)
     // Note: breaks horribly if you don't use floats
     Log aggregate = {0};
@@ -711,8 +714,15 @@ static PyObject *env_log(PyObject *self, PyObject *args) {
     }
 
     PyObject *dict = PyDict_New();
-    if (aggregate.n == 0.0f) {
+
+    // Mirror vec_log: only report when enough data has accumulated
+    if (aggregate.n < num_agents) {
         return dict;
+    }
+
+    // Reset log now that we've consumed it, mirroring vec_log
+    for (int j = 0; j < num_keys; j++) {
+        ((float *)&env->log)[j] = 0.0f;
     }
 
     // Average across agents in env
@@ -720,9 +730,16 @@ static PyObject *env_log(PyObject *self, PyObject *args) {
     for (int i = 0; i < num_keys; i++) {
         ((float *)&aggregate)[i] /= n;
     }
-    aggregate.n = (float)env->active_agent_count;
+
+    // Compute completion_rate from raw counts (mirrors vec_log)
+    if (aggregate.goals_attempted_this_episode > 0.0f) {
+        aggregate.completion_rate = aggregate.goals_reached_this_episode / aggregate.goals_attempted_this_episode;
+    } else {
+        aggregate.completion_rate = 0.0f;
+    }
 
     my_log(dict, &aggregate);
+    assign_to_dict(dict, "n", n);
 
     return dict;
 }
