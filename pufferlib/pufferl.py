@@ -990,7 +990,6 @@ class PuffeRL:
         traj_path = os.path.join(path, f"trajectories_{self.epoch:06d}.npz")
 
         data = {
-            "observations": self.observations.cpu().numpy(),
             "actions": self.actions.cpu().numpy(),
             "rewards": self.rewards.cpu().numpy(),
             "terminals": self.terminals.cpu().numpy(),
