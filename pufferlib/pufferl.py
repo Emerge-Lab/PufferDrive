@@ -1006,14 +1006,37 @@ class PuffeRL:
 
         try:
             driver_env = getattr(self.vecenv, "driver_env", None)
-            if driver_env:
-                # Sim trajectories (per-step x, y, z, heading)
-                if hasattr(driver_env, "get_sim_trajectories"):
-                    traj = driver_env.get_sim_trajectories()
-                    for k, v in traj.items():
-                        data[f"traj_{k}"] = v
 
-                # Map context
+            # Try multiprocessing path: trigger workers to save via notify
+            if hasattr(self.vecenv, "save_worker_trajectories"):
+                traj_tmp = getattr(driver_env, "_traj_save_dir", None) if driver_env else None
+                if traj_tmp:
+                    self.vecenv.save_worker_trajectories()
+                    # Read and concatenate all worker trajectory files
+                    import glob as glob_mod
+
+                    worker_files = sorted(glob_mod.glob(os.path.join(traj_tmp, "traj_worker_*.npz")))
+                    if worker_files:
+                        all_traj = {}
+                        map_files = None
+                        for f in worker_files:
+                            d = np.load(f, allow_pickle=True)
+                            for k in ["x", "y", "z", "heading", "lengths", "map_ids"]:
+                                if k in d:
+                                    all_traj.setdefault(k, []).append(d[k])
+                            if map_files is None and "map_files" in d:
+                                map_files = d["map_files"]
+                        for k, v in all_traj.items():
+                            key = f"traj_{k}" if k in ("x", "y", "z", "heading", "lengths") else k
+                            data[key] = np.concatenate(v)
+                        if map_files is not None:
+                            data["map_files"] = map_files
+
+            # Fallback: Serial mode — read directly from driver_env
+            elif driver_env and hasattr(driver_env, "get_sim_trajectories"):
+                traj = driver_env.get_sim_trajectories()
+                for k, v in traj.items():
+                    data[f"traj_{k}"] = v
                 if hasattr(driver_env, "map_ids"):
                     data["map_ids"] = np.array(driver_env.map_ids, dtype=np.int32)
                 if hasattr(driver_env, "agent_offsets"):
@@ -1902,7 +1925,13 @@ def load_env(env_name, args):
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
     make_env = env_module.env_creator(env_name)
-    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **args["vec"])
+    env_kwargs = args["env"]
+    # Set up trajectory save directory for worker notify mechanism
+    if args.get("train", {}).get("save_trajectories", True) and "data_dir" in args.get("train", {}):
+        traj_tmp = os.path.join(args["train"]["data_dir"], "traj_tmp")
+        os.makedirs(traj_tmp, exist_ok=True)
+        env_kwargs["traj_save_dir"] = traj_tmp
+    return pufferlib.vector.make(make_env, env_kwargs=env_kwargs, **args["vec"])
 
 
 def load_policy(args, vecenv, env_name=""):

@@ -222,6 +222,14 @@ def _worker_process(
     else:
         envs = Serial(env_creators, env_args, env_kwargs, num_envs, buf=buf, seed=seed * num_envs)
 
+    # Set worker index for trajectory saving via notify mechanism
+    if hasattr(envs, '_worker_idx'):
+        envs._worker_idx = worker_idx
+    elif hasattr(envs, 'envs'):
+        for env in envs.envs:
+            if hasattr(env, '_worker_idx'):
+                env._worker_idx = worker_idx
+
     semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
     start = time.time()
@@ -544,6 +552,12 @@ class Multiprocessing:
 
     def notify(self):
         self.buf["notify"][:] = True
+
+    def save_worker_trajectories(self):
+        """Trigger all workers to save trajectories via notify, wait for completion."""
+        self.buf["notify"][:] = True
+        while any(self.buf["notify"]):
+            time.sleep(0.01)
 
     def close(self):
         self.driver_env.close()

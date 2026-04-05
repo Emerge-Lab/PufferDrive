@@ -98,7 +98,12 @@ class Drive(pufferlib.PufferEnv):
         spawn_length_max=5.5,
         spawn_height=1.5,
         randomize_respawn=1,
+        # trajectory saving (set by pufferl.py, used by notify mechanism)
+        traj_save_dir=None,
     ):
+        # trajectory save state (worker index set by multiprocessing worker)
+        self._traj_save_dir = traj_save_dir
+        self._worker_idx = None
         # env
         self.dt = dt
         self.render_mode = render_mode
@@ -701,6 +706,17 @@ class Drive(pufferlib.PufferEnv):
             ep_len,
         )
         return traj
+
+    def notify(self):
+        """Called from worker process via notify mechanism. Saves trajectories to disk."""
+        if self._traj_save_dir is None or self._worker_idx is None:
+            return
+        traj = self.get_sim_trajectories()
+        traj["map_ids"] = self.map_ids
+        traj["agent_offsets"] = self.agent_offsets
+        traj["map_files"] = np.array(self.map_files)
+        path = os.path.join(self._traj_save_dir, f"traj_worker_{self._worker_idx}.npz")
+        np.savez_compressed(path, **traj)
 
     def get_ground_truth_trajectories(self):
         """Get ground truth trajectories for all active agents.
