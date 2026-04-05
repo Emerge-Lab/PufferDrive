@@ -535,6 +535,8 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
     assign_to_dict(dict, "max_observation_distance", log->max_observation_distance);
     assign_to_dict(dict, "observation_coverage", log->observation_coverage);
+    float avg_goal_dist = (log->goal_distance_count > 0) ? log->avg_goal_distance / log->goal_distance_count : 0.0f;
+    assign_to_dict(dict, "avg_goal_distance", avg_goal_dist);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }

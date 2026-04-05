@@ -207,6 +207,7 @@ struct Agent {
     float distance_since_spawn;
     int last_goal_reached_timestep;
     float score_for_current_goal;
+    float current_goal_sample_distance; // straight-line distance when goal was sampled
 
     // Goal positions (N sequential waypoints)
     float goal_positions_x[MAX_TARGET_WAYPOINTS];

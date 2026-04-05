@@ -244,6 +244,8 @@ struct Log {
     float avg_speed_per_agent;
     float max_observation_distance; // average max observation distance
     float observation_coverage;     // percentage of entities in obs window seen on average
+    float avg_goal_distance;        // average straight-line distance of goals when sampled
+    float goal_distance_count;      // count for averaging
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -3663,6 +3665,10 @@ void c_step(Drive *env) {
                 agent->prev_goal_y = agent->goal_position_y;
                 agent->prev_goal_z = agent->goal_position_z;
 
+                // Log the distance of the goal that was just reached
+                env->log.avg_goal_distance += agent->current_goal_sample_distance;
+                env->log.goal_distance_count += 1.0f;
+
                 sample_new_goal(env, agent_idx);
                 agent->current_goal_reached = 0;
                 agent->goals_reached_this_episode += 1.0f;
@@ -4767,6 +4773,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 agent->goal_position_x = point_x;
                 agent->goal_position_y = point_y;
                 agent->goal_position_z = point_z;
+                agent->current_goal_sample_distance = distance;
                 sample_new_goal_radius(env, agent);
                 agent->goals_sampled_this_episode += 1.0f;
                 return;
@@ -4791,6 +4798,9 @@ void sample_new_goal(Drive *env, int agent_idx) {
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goal_position_z = best_z;
+    float dx_goal = best_x - agent->sim_x;
+    float dy_goal = best_y - agent->sim_y;
+    agent->current_goal_sample_distance = sqrtf(dx_goal * dx_goal + dy_goal * dy_goal);
     sample_new_goal_radius(env, agent);
     agent->goals_sampled_this_episode += 1.0f;
 }
