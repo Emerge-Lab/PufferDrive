@@ -759,6 +759,41 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_get_sim_trajectories(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_sim_trajectories requires 7 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+
+    PyArrayObject *x_arr = (PyArrayObject *)PyTuple_GetItem(args, 1);
+    PyArrayObject *y_arr = (PyArrayObject *)PyTuple_GetItem(args, 2);
+    PyArrayObject *z_arr = (PyArrayObject *)PyTuple_GetItem(args, 3);
+    PyArrayObject *heading_arr = (PyArrayObject *)PyTuple_GetItem(args, 4);
+    PyArrayObject *lengths_arr = (PyArrayObject *)PyTuple_GetItem(args, 5);
+    int ep_len = (int)PyLong_AsLong(PyTuple_GetItem(args, 6));
+
+    float *x_base = (float *)PyArray_DATA(x_arr);
+    float *y_base = (float *)PyArray_DATA(y_arr);
+    float *z_base = (float *)PyArray_DATA(z_arr);
+    float *heading_base = (float *)PyArray_DATA(heading_arr);
+    int *lengths_base = (int *)PyArray_DATA(lengths_arr);
+
+    int offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *)vec->envs[i];
+        c_get_sim_trajectories(drive, &x_base[offset * ep_len], &y_base[offset * ep_len],
+                               &z_base[offset * ep_len], &heading_base[offset * ep_len],
+                               &lengths_base[offset], ep_len);
+        offset += drive->active_agent_count;
+    }
+
+    Py_RETURN_NONE;
+}
+
 static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 9) {
         PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 9 arguments");
@@ -1009,6 +1044,7 @@ static PyMethodDef methods[] = {
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
+    {"vec_get_sim_trajectories", vec_get_sim_trajectories, METH_VARARGS, "Get recorded sim trajectories from vectorized env"},
     {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},
     {"vec_get_global_ground_truth_trajectories", vec_get_global_ground_truth_trajectories, METH_VARARGS,
      "Get ground truth trajectories from vectorized env"},

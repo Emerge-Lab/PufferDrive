@@ -157,6 +157,12 @@ struct Agent {
     float *log_height;
     int *log_valid;
 
+    // Per-step simulation trajectory recording (for checkpoint replay)
+    float *sim_traj_x;
+    float *sim_traj_y;
+    float *sim_traj_z;
+    float *sim_traj_heading;
+
     // Simulation state
     float sim_x;
     float sim_y;
@@ -327,6 +333,10 @@ void free_agent(struct Agent *agent) {
     free(agent->log_width);
     free(agent->log_height);
     free(agent->log_valid);
+    free(agent->sim_traj_x);
+    free(agent->sim_traj_y);
+    free(agent->sim_traj_z);
+    free(agent->sim_traj_heading);
     free(agent->route);
     free(agent->path);
 }

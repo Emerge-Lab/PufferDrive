@@ -2288,6 +2288,15 @@ void finalize_env(Drive *env) {
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
+
+    // Allocate sim trajectory buffers for checkpoint replay
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int idx = env->active_agent_indices[i];
+        env->agents[idx].sim_traj_x = (float *)calloc(env->episode_length, sizeof(float));
+        env->agents[idx].sim_traj_y = (float *)calloc(env->episode_length, sizeof(float));
+        env->agents[idx].sim_traj_z = (float *)calloc(env->episode_length, sizeof(float));
+        env->agents[idx].sim_traj_heading = (float *)calloc(env->episode_length, sizeof(float));
+    }
 }
 
 void init(Drive *env) {
@@ -2573,6 +2582,24 @@ void c_get_global_agent_state(Drive *env, float *x_out, float *y_out, float *z_o
         id_out[i] = agent->id;
         length_out[i] = agent->sim_length;
         width_out[i] = agent->sim_width;
+    }
+}
+
+void c_get_sim_trajectories(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out,
+                            int *lengths_out, int ep_len) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int idx = env->active_agent_indices[i];
+        Agent *agent = &env->agents[idx];
+        int len = env->timestep;
+        if (len > ep_len)
+            len = ep_len;
+        lengths_out[i] = len;
+        if (agent->sim_traj_x != NULL) {
+            memcpy(&x_out[i * ep_len], agent->sim_traj_x, len * sizeof(float));
+            memcpy(&y_out[i * ep_len], agent->sim_traj_y, len * sizeof(float));
+            memcpy(&z_out[i * ep_len], agent->sim_traj_z, len * sizeof(float));
+            memcpy(&heading_out[i * ep_len], agent->sim_traj_heading, len * sizeof(float));
+        }
     }
 }
 
@@ -3552,6 +3579,15 @@ void c_step(Drive *env) {
         float prev_vy = env->agents[agent_idx].sim_vy;
 
         move_dynamics(env, i, agent_idx);
+
+        // Record sim trajectory for checkpoint replay
+        int t = env->timestep - 1;
+        if (t >= 0 && t < env->episode_length && env->agents[agent_idx].sim_traj_x != NULL) {
+            env->agents[agent_idx].sim_traj_x[t] = env->agents[agent_idx].sim_x;
+            env->agents[agent_idx].sim_traj_y[t] = env->agents[agent_idx].sim_y;
+            env->agents[agent_idx].sim_traj_z[t] = env->agents[agent_idx].sim_z;
+            env->agents[agent_idx].sim_traj_heading[t] = env->agents[agent_idx].sim_heading;
+        }
 
         // Accumulate distance for avg_distance_per_infraction metric
         float speed = sqrtf(env->agents[agent_idx].sim_vx * env->agents[agent_idx].sim_vx +

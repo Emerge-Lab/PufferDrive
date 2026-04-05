@@ -983,7 +983,10 @@ class PuffeRL:
         return model_path
 
     def save_trajectories(self):
-        """Save all trajectory buffers as a compressed numpy archive."""
+        """Save trajectory data + map context as a compressed numpy archive."""
+        if not self.config.get("save_trajectories", True):
+            return
+
         run_id = self.logger.run_id
         path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
         os.makedirs(path, exist_ok=True)
@@ -1001,15 +1004,24 @@ class PuffeRL:
             "global_step": self.global_step,
         }
 
-        # Get current agent states (positions, headings, etc.)
         try:
             driver_env = getattr(self.vecenv, "driver_env", None)
-            if driver_env and hasattr(driver_env, "get_global_agent_state"):
-                agent_state = driver_env.get_global_agent_state()
-                for k, v in agent_state.items():
-                    data[f"agent_{k}"] = v
+            if driver_env:
+                # Sim trajectories (per-step x, y, z, heading)
+                if hasattr(driver_env, "get_sim_trajectories"):
+                    traj = driver_env.get_sim_trajectories()
+                    for k, v in traj.items():
+                        data[f"traj_{k}"] = v
+
+                # Map context
+                if hasattr(driver_env, "map_ids"):
+                    data["map_ids"] = np.array(driver_env.map_ids, dtype=np.int32)
+                if hasattr(driver_env, "agent_offsets"):
+                    data["agent_offsets"] = np.array(driver_env.agent_offsets, dtype=np.int32)
+                if hasattr(driver_env, "map_files"):
+                    data["map_files"] = np.array([str(f) for f in driver_env.map_files])
         except Exception as e:
-            print(f"Warning: Could not save agent states: {e}")
+            print(f"Warning: Could not save trajectory data: {e}")
 
         np.savez_compressed(traj_path, **data)
         print(f"Saved trajectories to {traj_path}")

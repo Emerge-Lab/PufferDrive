@@ -672,6 +672,34 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
+    def get_sim_trajectories(self):
+        """Get recorded simulation trajectories for all active agents.
+
+        Returns:
+            dict with keys 'x', 'y', 'z', 'heading', 'lengths' containing numpy arrays.
+            x/y/z/heading are shape (num_agents, episode_length), lengths is (num_agents,).
+        """
+        assert self.episode_length is not None, "episode_length must be set for trajectory recording"
+        ep_len = self.episode_length
+        n = self.num_agents
+        traj = {
+            "x": np.zeros((n, ep_len), dtype=np.float32),
+            "y": np.zeros((n, ep_len), dtype=np.float32),
+            "z": np.zeros((n, ep_len), dtype=np.float32),
+            "heading": np.zeros((n, ep_len), dtype=np.float32),
+            "lengths": np.zeros(n, dtype=np.int32),
+        }
+        binding.vec_get_sim_trajectories(
+            self.c_envs,
+            traj["x"],
+            traj["y"],
+            traj["z"],
+            traj["heading"],
+            traj["lengths"],
+            ep_len,
+        )
+        return traj
+
     def get_ground_truth_trajectories(self):
         """Get ground truth trajectories for all active agents.
 
