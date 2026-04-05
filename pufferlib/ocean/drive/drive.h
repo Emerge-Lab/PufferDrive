@@ -2590,10 +2590,10 @@ void c_get_sim_trajectories(Drive *env, float *x_out, float *y_out, float *z_out
     for (int i = 0; i < env->active_agent_count; i++) {
         int idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[idx];
-        int len = env->timestep;
-        if (len > ep_len)
-            len = ep_len;
-        lengths_out[i] = len;
+        // Use full episode_length — buffer always contains the most recent episode's data
+        // (zeros for steps not yet reached in the current episode)
+        int len = ep_len;
+        lengths_out[i] = env->timestep; // how far into current episode
         if (agent->sim_traj_x != NULL) {
             memcpy(&x_out[i * ep_len], agent->sim_traj_x, len * sizeof(float));
             memcpy(&y_out[i * ep_len], agent->sim_traj_y, len * sizeof(float));
