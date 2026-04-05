@@ -537,6 +537,17 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "observation_coverage", log->observation_coverage);
     float avg_goal_dist = (log->goal_distance_count > 0) ? log->avg_goal_distance / log->goal_distance_count : 0.0f;
     assign_to_dict(dict, "avg_goal_distance", avg_goal_dist);
-    // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    // Per-component reward totals
+    assign_to_dict(dict, "reward_goal", log->reward_goal_total);
+    assign_to_dict(dict, "reward_collision", log->reward_collision_total);
+    assign_to_dict(dict, "reward_offroad", log->reward_offroad_total);
+    assign_to_dict(dict, "reward_lane_align", log->reward_lane_align_total);
+    assign_to_dict(dict, "reward_lane_center", log->reward_lane_center_total);
+    assign_to_dict(dict, "reward_velocity", log->reward_velocity_total);
+    assign_to_dict(dict, "reward_comfort", log->reward_comfort_total);
+    assign_to_dict(dict, "reward_timestep", log->reward_timestep_total);
+    assign_to_dict(dict, "reward_reverse", log->reward_reverse_total);
+    assign_to_dict(dict, "reward_overspeed", log->reward_overspeed_total);
+    assign_to_dict(dict, "reward_jerk", log->reward_jerk_total);
     return 0;
 }
