@@ -915,6 +915,14 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_get_world_mean(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+    Drive *drive = (Drive *)vec->envs[0];
+    return Py_BuildValue("(fff)", drive->world_mean_x, drive->world_mean_y, drive->world_mean_z);
+}
+
 static PyObject *vec_get_road_edge_counts(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec)
@@ -1048,6 +1056,7 @@ static PyMethodDef methods[] = {
     {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},
     {"vec_get_global_ground_truth_trajectories", vec_get_global_ground_truth_trajectories, METH_VARARGS,
      "Get ground truth trajectories from vectorized env"},
+    {"vec_get_world_mean", vec_get_world_mean, METH_VARARGS, "Get world mean (x,y,z) from first sub-env"},
     {"vec_get_road_edge_counts", vec_get_road_edge_counts, METH_VARARGS,
      "Get road edge polyline counts from vectorized env"},
     {"vec_get_road_edge_polylines", vec_get_road_edge_polylines, METH_VARARGS,

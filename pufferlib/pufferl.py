@@ -1019,6 +1019,7 @@ class PuffeRL:
                     if worker_files:
                         all_traj = {}
                         map_files = None
+                        world_mean = None
                         for f in worker_files:
                             d = np.load(f, allow_pickle=True)
                             for k in ["x", "y", "z", "heading", "lengths", "map_ids"]:
@@ -1026,11 +1027,15 @@ class PuffeRL:
                                     all_traj.setdefault(k, []).append(d[k])
                             if map_files is None and "map_files" in d:
                                 map_files = d["map_files"]
+                            if world_mean is None and "world_mean" in d:
+                                world_mean = d["world_mean"]
                         for k, v in all_traj.items():
                             key = f"traj_{k}" if k in ("x", "y", "z", "heading", "lengths") else k
                             data[key] = np.concatenate(v)
                         if map_files is not None:
                             data["map_files"] = map_files
+                        if world_mean is not None:
+                            data["world_mean"] = world_mean
 
             # Fallback: Serial mode — read directly from driver_env
             elif driver_env and hasattr(driver_env, "get_sim_trajectories"):
@@ -1043,6 +1048,8 @@ class PuffeRL:
                     data["agent_offsets"] = np.array(driver_env.agent_offsets, dtype=np.int32)
                 if hasattr(driver_env, "map_files"):
                     data["map_files"] = np.array([str(f) for f in driver_env.map_files])
+                if hasattr(driver_env, "world_mean"):
+                    data["world_mean"] = np.array(driver_env.world_mean, dtype=np.float32)
         except Exception as e:
             print(f"Warning: Could not save trajectory data: {e}")
 

@@ -444,6 +444,7 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
+        self.world_mean = binding.vec_get_world_mean(self.c_envs)
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -607,6 +608,7 @@ class Drive(pufferlib.PufferEnv):
             )
             env_ids.append(env_id)
         self.c_envs = binding.vectorize(*env_ids)
+        self.world_mean = binding.vec_get_world_mean(self.c_envs)
 
         binding.vec_reset(self.c_envs, seed)
         self.truncations[:] = 1
@@ -715,6 +717,7 @@ class Drive(pufferlib.PufferEnv):
         traj["map_ids"] = self.map_ids
         traj["agent_offsets"] = self.agent_offsets
         traj["map_files"] = np.array(self.map_files)
+        traj["world_mean"] = np.array(self.world_mean, dtype=np.float32)
         path = os.path.join(self._traj_save_dir, f"traj_worker_{self._worker_idx}.npz")
         np.savez_compressed(path, **traj)
 
