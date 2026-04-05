@@ -2296,6 +2296,11 @@ void finalize_env(Drive *env) {
         env->agents[idx].sim_traj_y = (float *)calloc(env->episode_length, sizeof(float));
         env->agents[idx].sim_traj_z = (float *)calloc(env->episode_length, sizeof(float));
         env->agents[idx].sim_traj_heading = (float *)calloc(env->episode_length, sizeof(float));
+        if (i == 0) {
+            printf("sim_traj alloc: agent %d, ep_len=%d, ptr=%p\n", idx, env->episode_length,
+                   (void *)env->agents[idx].sim_traj_x);
+            fflush(stdout);
+        }
     }
 }
 
