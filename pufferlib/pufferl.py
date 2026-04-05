@@ -491,9 +491,9 @@ class PuffeRL:
                 f_mean = filtered_adv[0]
                 f_std = 1.0
             else:
-                # In this case the batch contains no interesting agent, skip it.
-                # Also I might want later to make sure this never happens by increasing MAX AGENTS
-                pass
+                # In this case the batch contains only targets.
+                f_mean = 0.0
+                f_std = 1.0
 
             adv = mb_prio * (adv - f_mean) / (f_std + 1e-8)
 
@@ -1085,6 +1085,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         args["train"]["device"] = torch.cuda.current_device()
         torch.distributed.init_process_group(backend="nccl", world_size=world_size)
         policy = policy.to(local_rank)
+        target_policy = target_policy.to(local_rank)
         model = torch.nn.parallel.DistributedDataParallel(policy, device_ids=[local_rank], output_device=local_rank)
         if hasattr(policy, "lstm"):
             # model.lstm = policy.lstm
