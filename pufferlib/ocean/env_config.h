@@ -111,6 +111,8 @@ static int handler(void *config, const char *section, const char *name, const ch
             printf("Warning: Unknown dynamics_model value '%s', defaulting to JERK\n", value);
             env_config->dynamics_model = 1; // Default to JERK
         }
+    } else if (MATCH("env", "render_mode")) {
+        env_config->render_mode = atoi(value);
     } else if (MATCH("env", "goal_behavior")) {
         env_config->goal_behavior = atoi(value);
     } else if (MATCH("env", "reward_randomization")) {

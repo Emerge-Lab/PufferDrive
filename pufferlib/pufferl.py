@@ -514,12 +514,12 @@ class PuffeRL:
 
                 self.evaluator = Evaluator(self.full_args, self.logger)
                 if human_replay_eval:
-                    self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
+                    self.evaluator.hr_env = load_env(self.config["env"], self.evaluator.hr_eval_config)
                     self.evaluator.rollout(self.uncompiled_policy, mode="human_replay")
                     self.evaluator.hr_env.close()
                     self.evaluator.log_videos(eval_mode="human_replay", epoch=self.epoch)
                 if self_play_eval:
-                    self.evaluator.sp_env = load_env("puffer_drive", self.evaluator.sp_eval_config)
+                    self.evaluator.sp_env = load_env(self.config["env"], self.evaluator.sp_eval_config)
                     self.evaluator.rollout(self.uncompiled_policy, mode="self_play")
                     self.evaluator.sp_env.close()
                     self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
@@ -528,7 +528,9 @@ class PuffeRL:
 
                 del self.evaluator
 
-            if self.config["eval"]["wosac_realism_eval"]:
+            if self.config["eval"]["wosac_realism_eval"] and (
+                (self.epoch) % self.config["eval"]["eval_interval"] == 0 or done_training
+            ):
                 pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
         safe_eval_config = self.config.get("safe_eval", {})
