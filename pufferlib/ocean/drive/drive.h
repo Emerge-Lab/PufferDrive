@@ -3593,6 +3593,12 @@ void c_step(Drive *env) {
             env->agents[agent_idx].sim_traj_z[t] = env->agents[agent_idx].sim_z;
             env->agents[agent_idx].sim_traj_heading[t] = env->agents[agent_idx].sim_heading;
         }
+        if (i == 0 && env->timestep == 2) {
+            printf("sim_traj_record: t=%d, x=%.2f, ptr=%p, val_at_0=%.2f\n", t, env->agents[agent_idx].sim_x,
+                   (void *)env->agents[agent_idx].sim_traj_x,
+                   env->agents[agent_idx].sim_traj_x ? env->agents[agent_idx].sim_traj_x[0] : -999.0f);
+            fflush(stdout);
+        }
 
         // Accumulate distance for avg_distance_per_infraction metric
         float speed = sqrtf(env->agents[agent_idx].sim_vx * env->agents[agent_idx].sim_vx +
