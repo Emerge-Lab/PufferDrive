@@ -2622,7 +2622,6 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
     float cos_heading = cosf(ego_entity->sim_heading);
     float sin_heading = sinf(ego_entity->sim_heading);
 
-    // Collect candidates within radius
     float obs_radius = env->partner_obs_radius;
     int partners_in_radius = 0;
     AgentDistance candidates[MAX_AGENTS];
