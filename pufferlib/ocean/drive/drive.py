@@ -257,6 +257,7 @@ class Drive(pufferlib.PufferEnv):
                 fix_lambdas=self.fix_lambdas,
                 fix_reward=self.fix_rewards,
                 async_resets=self.async_resets,
+                dynamics_model=self._dynamics_model_flag,
             )
             self.env_ids.append(env_id)
 
