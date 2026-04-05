@@ -88,6 +88,8 @@ class Drive(pufferlib.PufferEnv):
         reward_bound_acc_max=1.5,
         min_avg_speed_to_consider_goal_attempt=2.0,
         partner_obs_radius=50.0,
+        partner_obs_norm=0.02,
+        road_obs_norm=0.02,
         # spawn settings
         min_agents_per_env=32,
         max_agents_per_env=64,
@@ -164,6 +166,8 @@ class Drive(pufferlib.PufferEnv):
         self.partner_obs_radius = partner_obs_radius
         if self.partner_obs_radius <= 0.0:
             raise ValueError(f"partner_obs_radius must be > 0. Got: {self.partner_obs_radius}")
+        self.partner_obs_norm = partner_obs_norm
+        self.road_obs_norm = road_obs_norm
 
         # Observation space calculation
         if self.reward_conditioning:
@@ -329,6 +333,8 @@ class Drive(pufferlib.PufferEnv):
             reward_bound_acc_max=self.reward_bound_acc_max,
             min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
             partner_obs_radius=self.partner_obs_radius,
+            partner_obs_norm=self.partner_obs_norm,
+            road_obs_norm=self.road_obs_norm,
             use_all_maps=self.use_all_maps,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
@@ -402,6 +408,8 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_acc_max=self.reward_bound_acc_max,
                 min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                 partner_obs_radius=self.partner_obs_radius,
+                partner_obs_norm=self.partner_obs_norm,
+                road_obs_norm=self.road_obs_norm,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 observation_window_size=self.observation_window_size,
@@ -491,6 +499,8 @@ class Drive(pufferlib.PufferEnv):
             reward_bound_acc_max=self.reward_bound_acc_max,
             min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
             partner_obs_radius=self.partner_obs_radius,
+            partner_obs_norm=self.partner_obs_norm,
+            road_obs_norm=self.road_obs_norm,
             use_all_maps=self.use_all_maps,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
@@ -562,6 +572,8 @@ class Drive(pufferlib.PufferEnv):
                 reward_bound_acc_max=self.reward_bound_acc_max,
                 min_avg_speed_to_consider_goal_attempt=self.min_avg_speed_to_consider_goal_attempt,
                 partner_obs_radius=self.partner_obs_radius,
+                partner_obs_norm=self.partner_obs_norm,
+                road_obs_norm=self.road_obs_norm,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 observation_window_size=self.observation_window_size,

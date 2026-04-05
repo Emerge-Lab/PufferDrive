@@ -289,6 +289,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .spawn_settings = spawn_settings,
         .map_name = (char *)map_name,
         .partner_obs_radius = conf.partner_obs_radius,
+        .partner_obs_norm = conf.partner_obs_norm,
+        .road_obs_norm = conf.road_obs_norm,
     };
 
     if (conf.init_mode == INIT_VARIABLE_AGENT_NUMBER) {

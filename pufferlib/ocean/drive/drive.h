@@ -367,6 +367,8 @@ struct Drive {
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
     float partner_obs_radius;
+    float partner_obs_norm;
+    float road_obs_norm;
 };
 
 // ========================================
@@ -2663,9 +2665,9 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
         float dz = partner->sim_z - ego_entity->sim_z;
         float rel_x = dx * cos_heading + dy * sin_heading;
         float rel_y = -dx * sin_heading + dy * cos_heading;
-        obs[obs_idx] = rel_x * 0.02f;
-        obs[obs_idx + 1] = rel_y * 0.02f;
-        obs[obs_idx + 2] = dz * 0.02f;
+        obs[obs_idx] = rel_x * env->partner_obs_norm;
+        obs[obs_idx + 1] = rel_y * env->partner_obs_norm;
+        obs[obs_idx + 2] = dz * env->partner_obs_norm;
         obs[obs_idx + 3] = partner->sim_width / MAX_VEH_WIDTH;
         obs[obs_idx + 4] = partner->sim_length / MAX_VEH_LEN;
         float other_cos = cosf(partner->sim_heading);
@@ -2835,9 +2837,9 @@ void compute_observations(Drive *env) {
             // Compute sin and cos of relative angle directly without atan2f
             float cos_angle = dx_norm * cos_heading + dy_norm * sin_heading;
             float sin_angle = -dx_norm * sin_heading + dy_norm * cos_heading;
-            obs[obs_idx] = x_obs * 0.02f;
-            obs[obs_idx + 1] = y_obs * 0.02f;
-            obs[obs_idx + 2] = z_obs * 0.02f;
+            obs[obs_idx] = x_obs * env->road_obs_norm;
+            obs[obs_idx + 1] = y_obs * env->road_obs_norm;
+            obs[obs_idx + 2] = z_obs * env->road_obs_norm;
             obs[obs_idx + 3] = length / MAX_ROAD_SEGMENT_LENGTH;
             obs[obs_idx + 4] = width / MAX_ROAD_SCALE;
             obs[obs_idx + 5] = cos_angle;

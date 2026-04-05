@@ -130,6 +130,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     float min_avg_speed_to_consider_goal_attempt = unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");
     float partner_obs_radius = unpack(kwargs, "partner_obs_radius");
+    float partner_obs_norm = unpack(kwargs, "partner_obs_norm");
+    float road_obs_norm = unpack(kwargs, "road_obs_norm");
 
     int use_all_maps = unpack(kwargs, "use_all_maps");
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
@@ -208,6 +210,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->polyline_max_segment_length = polyline_max_segment_length;
         env->min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt;
         env->partner_obs_radius = partner_obs_radius;
+        env->partner_obs_norm = partner_obs_norm;
+        env->road_obs_norm = road_obs_norm;
         // reward randomization bounds
         env->reward_bounds[REWARD_COEF_GOAL_RADIUS] =
             (RewardBound){reward_bound_goal_radius_min, reward_bound_goal_radius_max};
@@ -353,6 +357,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->polyline_reduction_threshold = (float)unpack(kwargs, "polyline_reduction_threshold");
     env->polyline_max_segment_length = (float)unpack(kwargs, "polyline_max_segment_length");
     env->partner_obs_radius = (float)unpack(kwargs, "partner_obs_radius");
+    env->partner_obs_norm = (float)unpack(kwargs, "partner_obs_norm");
+    env->road_obs_norm = (float)unpack(kwargs, "road_obs_norm");
 
     // reward randomization bounds
     env->reward_bounds[REWARD_COEF_GOAL_RADIUS] = (RewardBound){(float)unpack(kwargs, "reward_bound_goal_radius_min"),
