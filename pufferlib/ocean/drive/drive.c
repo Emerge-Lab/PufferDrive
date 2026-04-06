@@ -3,7 +3,6 @@
 #include "libgen.h"
 #include "../env_config.h"
 #include <string.h>
-#include "../env_config.h"
 
 // Use this test if the network changes to ensure that the forward pass
 // matches the torch implementation to the 3rd or ideally 4th decimal place
@@ -21,7 +20,8 @@ void test_drivenet() {
 
     // Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights *weights = load_weights("puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, 0);
+    int reward_conditioning = 0;
+    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, reward_conditioning);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {
@@ -43,6 +43,9 @@ void demo() {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         exit(1);
     }
+
+    // Set different seed each time
+    srand(time(NULL));
 
     // Note: Use below hardcoded settings for 2.0 demo purposes. Since the policy was
     // trained with these exact settings, changing them may lead to
@@ -107,7 +110,13 @@ void demo() {
         .spawn_settings = spawn_settings,
         .map_name = "resources/drive/binaries/carla_2D/map_001.bin",
         .reward_conditioning = conf.reward_conditioning,
+        .partner_obs_radius = conf.partner_obs_radius,
     };
+
+    if (conf.init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        env.num_agents = conf.min_agents_per_env + rand() % (conf.max_agents_per_env - conf.min_agents_per_env + 1);
+    }
+
     allocate(&env);
     if (env.active_agent_count == 0) {
         fprintf(stderr, "Error: No active agents found in map '%s' with init_mode=%d. Cannot run demo.\n", env.map_name,
