@@ -580,9 +580,7 @@ static float mixed_uniform(float a) {
 
 // void compute_heading_diff(void){}
 
-static float reward_bound_midpoint(const RewardBound *bound) {
-    return 0.5f * (bound->min_val + bound->max_val);
-}
+static float reward_bound_midpoint(const RewardBound *bound) { return 0.5f * (bound->min_val + bound->max_val); }
 
 // Generate per-agent reward conditioning coefficients
 // Full function, but wont be FULLY used as of yet - should be compatible for later iterations
@@ -641,7 +639,8 @@ static void sample_new_goal_radius(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(
             env->reward_bounds[REWARD_COEF_GOAL_RADIUS].min_val, env->reward_bounds[REWARD_COEF_GOAL_RADIUS].max_val);
     } else {
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = reward_bound_midpoint(&env->reward_bounds[REWARD_COEF_GOAL_RADIUS]);
+        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] =
+            reward_bound_midpoint(&env->reward_bounds[REWARD_COEF_GOAL_RADIUS]);
     }
 }
 
