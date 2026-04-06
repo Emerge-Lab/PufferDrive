@@ -55,8 +55,8 @@ static Env *unpack_env(PyObject *args) {
 
 // Python function to initialize the environment
 static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "Environment requires 5 arguments");
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "Environment requires 7 arguments");
         return NULL;
     }
 
@@ -169,6 +169,22 @@ static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
     Py_DECREF(py_seed);
 
     PyObject *empty_args = PyTuple_New(0);
+    PyObject *inv = PyTuple_GetItem(args, 6);
+    if (!PyObject_TypeCheck(inv, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "is_invalid_step must be a NumPy array");
+        return NULL;
+    }
+    PyArrayObject *is_invalid_step = (PyArrayObject *)inv;
+    if (!PyArray_ISCONTIGUOUS(is_invalid_step)) {
+        PyErr_SetString(PyExc_ValueError, "is_invalid_step must be contiguous");
+        return NULL;
+    }
+    if (PyArray_NDIM(is_invalid_step) != 1) {
+        PyErr_SetString(PyExc_ValueError, "is_invalid_step must be 1D");
+        return NULL;
+    }
+    env->is_invalid_step = PyArray_DATA(is_invalid_step);
+
     my_init(env, empty_args, kwargs);
     Py_DECREF(kwargs);
     if (PyErr_Occurred()) {
