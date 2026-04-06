@@ -1023,6 +1023,17 @@ def process_all_maps(
             if not success:
                 print(f"  {name}: {error}")
 
+    # Write manifest.json mapping each bin to its source JSON
+    manifest = {}
+    for i, map_path, binary_path, *_ in tasks:
+        _, _, success, _ = results[i]
+        if success:
+            manifest[f"map_{i:03d}.bin"] = map_path.name
+    manifest_path = binary_dir / "manifest.json"
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"Wrote manifest to {manifest_path} ({len(manifest)} entries)")
+
 
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
