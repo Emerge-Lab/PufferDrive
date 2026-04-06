@@ -4637,6 +4637,25 @@ void c_step(Drive *env) {
         compute_rewards(env, i);
     }
 
+    // Adversarial reward: agent 0 is the target in both replay and gigaflow modes.
+    if (env->active_agent_count > 0) {
+        float target_reward = env->rewards[0];
+
+        for (int i = 1; i < env->active_agent_count; i++) {
+
+            // Weight given to the "base" = drive reward. 0 is full adversarial mode.
+            float base_weight = 0.0f;
+
+            // Downscale the base reward.
+            env->logs[i].episode_return *= base_weight;
+            env->rewards[i] *= base_weight;
+
+            // Assign adversarial reward.
+            env->rewards[i] -= target_reward;
+            env->logs[i].episode_return -= target_reward;
+        }
+    }
+
     // Mark terminals for stopped or removed agents
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
