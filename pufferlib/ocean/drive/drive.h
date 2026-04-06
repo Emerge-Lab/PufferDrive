@@ -580,6 +580,10 @@ static float mixed_uniform(float a) {
 
 // void compute_heading_diff(void){}
 
+static float reward_bound_midpoint(const RewardBound *bound) {
+    return 0.5f * (bound->min_val + bound->max_val);
+}
+
 // Generate per-agent reward conditioning coefficients
 // Full function, but wont be FULLY used as of yet - should be compatible for later iterations
 static void generate_reward_coefs(Drive *env, Agent *agent) {
@@ -616,21 +620,14 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_STEER] = mixed_uniform(1.25f);
         agent->reward_coefs[REWARD_COEF_ACC] = mixed_uniform(1.5f);
     } else {
-        // Fixed coefficients
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
-        agent->reward_coefs[REWARD_COEF_COLLISION] = env->reward_vehicle_collision;
-        agent->reward_coefs[REWARD_COEF_OFFROAD] = env->reward_offroad_collision;
-        agent->reward_coefs[REWARD_COEF_COMFORT] = env->reward_comfort;
-        agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = env->reward_lane_align;
-        agent->reward_coefs[REWARD_COEF_LANE_CENTER] = env->reward_lane_center;
-        agent->reward_coefs[REWARD_COEF_VELOCITY] = env->reward_velocity;
-        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] = env->reward_traffic_light_violation;
-        agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = 0.0f;
-        agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = 1.0f;
-        agent->reward_coefs[REWARD_COEF_OVERSPEED] = env->reward_overspeed;
-        agent->reward_coefs[REWARD_COEF_TIMESTEP] = env->reward_timestep;
-        agent->reward_coefs[REWARD_COEF_REVERSE] = env->reward_reverse;
-        // Dynamic conditioning coefficients
+        // Use midpoint of reward bounds when randomization is off
+        for (int i = 0; i < NUM_REWARD_COEFS; i++) {
+            agent->reward_coefs[i] = reward_bound_midpoint(&env->reward_bounds[i]);
+        }
+        // Fixed values (same as randomized branch)
+        agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
+        agent->reward_coefs[REWARD_COEF_TIMESTEP] = -2.5e-5f;
+        // Dynamic conditioning: midpoint of mixed_uniform is 1.0
         agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
@@ -644,8 +641,7 @@ static void sample_new_goal_radius(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(
             env->reward_bounds[REWARD_COEF_GOAL_RADIUS].min_val, env->reward_bounds[REWARD_COEF_GOAL_RADIUS].max_val);
     } else {
-        // Fixed coefficients
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
+        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = reward_bound_midpoint(&env->reward_bounds[REWARD_COEF_GOAL_RADIUS]);
     }
 }
 

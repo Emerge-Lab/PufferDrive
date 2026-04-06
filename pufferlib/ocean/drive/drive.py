@@ -26,7 +26,7 @@ class Drive(pufferlib.PufferEnv):
         goal_behavior=0,
         reward_randomization=0,
         turn_off_normalization=1,
-        reward_conditioning=0,
+        reward_conditioning=1,
         min_goal_distance=5.0,
         max_goal_distance=20.0,
         goal_radius=2.0,
