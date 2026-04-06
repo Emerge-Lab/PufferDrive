@@ -44,12 +44,17 @@ class DriveBackbone(nn.Module):
         ego_dim,
         encoder_gigaflow,
         dropout,
+        strip_last_partner_feature=False,
     ):
         super().__init__()
 
         # Observation dimensions from environment config
         self.max_partner_observations = env.max_partner_observations
         self.partner_features_count = env.partner_features
+        self.strip_last_partner_feature = strip_last_partner_feature
+        self.partner_encoder_features = (
+            self.partner_features_count - 1 if strip_last_partner_feature else self.partner_features_count
+        )
         # Road features size (lanes + boundaries)
         self.max_lane_segment_observations = env.max_lane_segment_observations
         self.max_boundary_segment_observations = env.max_boundary_segment_observations
@@ -88,7 +93,11 @@ class DriveBackbone(nn.Module):
             )
             num_feature_sets += 1
         if self.max_partner_observations > 0:
-            self.partner_encoder = self._create_encoder(self.partner_features_count, input_size, encoder_gigaflow)
+            self.partner_encoder = self._create_encoder(
+                self.partner_encoder_features,
+                input_size,
+                encoder_gigaflow,
+            )
             num_feature_sets += 1
         if self.max_traffic_control_observations > 0:
             self.traffic_control_encoder = self._create_encoder(
@@ -158,6 +167,8 @@ class DriveBackbone(nn.Module):
         # Encode Partners
         if self.max_partner_observations > 0:
             partner_objects = partner_observations.view(-1, self.max_partner_observations, self.partner_features_count)
+            if self.strip_last_partner_feature:
+                partner_objects = partner_objects[..., :-1]
             partner_encoded = self.partner_encoder(partner_objects)
             partner_features, _ = partner_encoded.max(dim=1)
             feature_list.append(partner_features)
@@ -310,6 +321,114 @@ class Drive(nn.Module):
         Args:
             hidden: The hidden state for the actor (policy).
         """
+        if self.is_continuous:
+            parameters = self.actor_head(hidden)
+            loc, scale = torch.split(parameters, self.atn_dim, dim=1)
+            std = torch.nn.functional.softplus(scale) + 1e-4
+            action = torch.distributions.Normal(loc, std)
+        else:
+            action = self.actor_head(hidden)
+            action = torch.split(action, self.atn_dim, dim=1)
+
+        value = self.critic_head(hidden)
+
+        return action, value
+
+
+class TargetDrive(nn.Module):
+    def __init__(
+        self,
+        env,
+        input_size: int,
+        backbone_hidden_size: int,
+        backbone_num_layers: int,
+        actor_hidden_size: int,
+        actor_num_layers: int,
+        critic_hidden_size: int,
+        critic_num_layers: int,
+        encoder_gigaflow: bool,
+        dropout: int,
+        split_network: bool,
+    ):
+        super().__init__()
+
+        self.split_network = split_network
+        self.ego_dim = env.ego_features
+
+        backbone_args = {
+            "env": env,
+            "input_size": input_size,
+            "backbone_hidden_size": backbone_hidden_size,
+            "backbone_num_layers": backbone_num_layers,
+            "ego_dim": self.ego_dim,
+            "encoder_gigaflow": encoder_gigaflow,
+            "dropout": dropout,
+            "strip_last_partner_feature": True,
+        }
+
+        self.actor_backbone = DriveBackbone(**backbone_args)
+
+        if self.split_network:
+            self.critic_backbone = DriveBackbone(**backbone_args)
+        else:
+            self.critic_backbone = self.actor_backbone
+
+        self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
+        if self.is_continuous:
+            self.atn_dim = (env.single_action_space.shape[0],) * 2
+        else:
+            self.atn_dim = env.single_action_space.nvec.tolist()
+
+        backbone_out_dim = self.actor_backbone.out_dim
+        actor_head_layers = []
+        actor_in = backbone_out_dim
+        for _ in range(actor_num_layers):
+            actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, actor_hidden_size)))
+            actor_head_layers.append(nn.ReLU())
+            actor_in = actor_hidden_size
+        actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, sum(self.atn_dim)), std=0.01))
+        self.actor_head = nn.Sequential(*actor_head_layers)
+
+        critic_head_layers = []
+        critic_in = backbone_out_dim
+        for _ in range(critic_num_layers):
+            critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, critic_hidden_size)))
+            critic_head_layers.append(nn.ReLU())
+            critic_in = critic_hidden_size
+        critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
+        self.critic_head = nn.Sequential(*critic_head_layers)
+
+    def forward(self, observations, state=None):
+        actor_hidden = self.actor_backbone(observations, self.ego_dim)
+
+        if self.split_network:
+            critic_hidden = self.critic_backbone(observations, self.ego_dim)
+        else:
+            critic_hidden = actor_hidden
+
+        if self.is_continuous:
+            params = self.actor_head(actor_hidden)
+            loc, scale = torch.split(params, self.atn_dim, dim=1)
+            std = torch.nn.functional.softplus(scale) + 1e-4
+            actions = torch.distributions.Normal(loc, std)
+        else:
+            actions = torch.split(self.actor_head(actor_hidden), self.atn_dim, dim=1)
+
+        value = self.critic_head(critic_hidden)
+
+        return actions, value
+
+    def forward_train(self, x, state=None):
+        return self.forward(x, state)
+
+    def forward_eval(self, x, state=None):
+        return self.forward(x, state)
+
+    def encode_observations(self, observations, state=None):
+        assert not self.split_network, "LSTM wrapper doesn't support split_network=True"
+        return self.actor_backbone(observations, self.ego_dim)
+
+    def decode_actions(self, hidden):
         if self.is_continuous:
             parameters = self.actor_head(hidden)
             loc, scale = torch.split(parameters, self.atn_dim, dim=1)

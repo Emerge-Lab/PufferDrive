@@ -108,7 +108,7 @@
 #define EGO_FEATURES_CLASSIC 7
 #define EGO_FEATURES_JERK 9
 #define ROAD_FEATURES 7
-#define PARTNER_FEATURES 8
+#define PARTNER_FEATURES 9
 #define TRAFFIC_CONTROL_FEATURES 7
 #define STATIC_TARGET_FEATURES 3
 #define DYNAMIC_TARGET_FEATURES 5
@@ -4056,6 +4056,7 @@ static void compute_observations(Drive *env) {
                 obs[obs_idx++] = rel_heading_y;
                 obs[obs_idx++] = other_entity->sim_speed / MAX_SPEED;
                 obs[obs_idx++] = dz / MAX_POSITION;
+                obs[obs_idx++] = (index == env->active_agent_indices[0]) ? 1.0f : 0.0f;
                 cars_seen++;
             }
         }
