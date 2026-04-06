@@ -3071,8 +3071,21 @@ void set_active_agents(Drive *env) {
     int *static_agent_indices = (int *)malloc(max_agents * sizeof(int));
     int *expert_static_agent_indices = (int *)malloc(max_agents * sizeof(int));
 
+    // In replay mode, agent 0 is the canonical target / SDC for the
+    // adversarial setup. Seed it first so downstream code can rely on the
+    // invariant that the target occupies active-agent slot 0.
+    if (env->simulation_mode == SIMULATION_REPLAY && env->num_total_agents > 0) {
+        active_agent_indices[0] = 0;
+        env->active_agent_count++;
+        env->num_agents++;
+        env->agents[0].active_agent = 1;
+    }
+
     // Iterate through entities to find agents to create and/or control
     for (int i = 0; i < env->num_total_agents && env->num_agents < max_agents; i++) {
+        if (env->simulation_mode == SIMULATION_REPLAY && i == 0) {
+            continue;
+        }
 
         Agent *agent = &env->agents[i];
 
