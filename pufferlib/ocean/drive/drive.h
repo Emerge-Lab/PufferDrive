@@ -1677,11 +1677,9 @@ void add_log(Drive *env) {
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
         // Distance per infraction
-        int has_infraction = (offroad || collided) ? 1 : 0;
+        float infraction_count = env->logs[i].offroad_per_agent + env->logs[i].collisions_per_agent;
         env->log.total_distance_travelled += agent->distance_since_spawn;
-        if (has_infraction) {
-            env->log.total_infractions += 1.0f;
-        }
+        env->log.total_infractions += infraction_count;
         env->log.distance_without_collision += env->logs[i].distance_without_collision;
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -4427,6 +4425,8 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 agent->goal_position_z = point_z;
                 sample_new_goal_radius(env, agent);
                 agent->goals_sampled_this_episode += 1.0f;
+                env->log.avg_goal_distance += distance;
+                env->log.goal_distance_count += 1.0f;
                 return;
                 // if not check whether is closer than the previous best alternative point
             } else if (distance_error < best_distance_error) {
@@ -4449,6 +4449,10 @@ void sample_new_goal(Drive *env, int agent_idx) {
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goal_position_z = best_z;
+    float goal_dist = sqrtf((best_x - agent->sim_x) * (best_x - agent->sim_x) +
+                            (best_y - agent->sim_y) * (best_y - agent->sim_y));
+    env->log.avg_goal_distance += goal_dist;
+    env->log.goal_distance_count += 1.0f;
     sample_new_goal_radius(env, agent);
     agent->goals_sampled_this_episode += 1.0f;
 }
