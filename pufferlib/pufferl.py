@@ -481,11 +481,61 @@ class PuffeRL:
             ratio = logratio.exp()
             self.ratio[idx] = ratio.detach()
 
+            # Compute advantages
+            adv = advantages[idx]
+            adv = compute_puff_advantage(
+                mb_values,
+                mb_rewards,
+                mb_terminals,
+                ratio,
+                adv,
+                config["gamma"],
+                config["gae_lambda"],
+                config["vtrace_rho_clip"],
+                config["vtrace_c_clip"],
+            )
+            adv = mb_advantages
+            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+
+            # --- Masked advantage normalization ---
+            # Only compute mean/std over valid timesteps
+            valid_adv = adv[mb_masks == 1]
+            if valid_adv.numel() > 0:
+                adv_mean = valid_adv.mean()
+                adv_std = valid_adv.std() + 1e-8
+            else:
+                adv_mean = adv.mean()
+                adv_std = adv.std() + 1e-8
+            adv = (adv - adv_mean) / adv_std
+            adv = adv * mb_masks  # zero out invalid timesteps
+
+            valid_count = mb_masks.sum().clamp(min=1)
+
+            # Policy loss - already zeroed by adv*mb_masks but mean is diluted
+            pg_loss1 = -adv * ratio
+            pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
+            pg_loss = (torch.max(pg_loss1, pg_loss2) * mb_masks).sum() / valid_count
+
+            # Value loss
+            newvalue = newvalue.view(mb_returns.shape)
+            v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
+            v_loss_unclipped = (newvalue - mb_returns) ** 2
+            v_loss_clipped = (v_clipped - mb_returns) ** 2
+            v_loss = 0.5 * (torch.max(v_loss_unclipped, v_loss_clipped) * mb_masks).sum() / valid_count
+
+            # Entropy loss
+            entropy_loss = (entropy.reshape(mb_masks.shape) * mb_masks).sum() / valid_count
+
+            # Ratio - zero out dead steps so they don't pollute vtrace importance weights
+            ratio_masked = ratio * mb_masks
+            self.ratio[idx] = ratio_masked.detach()
+
             with torch.no_grad():
                 old_approx_kl = (-logratio).mean()
                 approx_kl = ((ratio - 1) - logratio).mean()
                 clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
+            # Regularization
             if self.reg_mode == "kl_anchor":
                 # Flatten the batch and time dimensions for feeding into the BC anchor policy since it is trained without memory
                 # [B, rollout_horizon, obs_dim] -> [B * rollout_horizon, obs_dim]
@@ -574,52 +624,8 @@ class PuffeRL:
                 unweighted_reg_loss = torch.tensor(0.0, device=device)
                 reg_loss = torch.tensor(0.0, device=device)
 
-            adv = advantages[idx]
-            adv = compute_puff_advantage(
-                mb_values,
-                mb_rewards,
-                mb_terminals,
-                ratio,
-                adv,
-                config["gamma"],
-                config["gae_lambda"],
-                config["vtrace_rho_clip"],
-                config["vtrace_c_clip"],
-            )
-            adv = mb_advantages
-            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-
-            # --- Masked advantage normalization ---
-            # Only compute mean/std over valid timesteps
-            valid_adv = adv[mb_masks == 1]
-            if valid_adv.numel() > 0:
-                adv_mean = valid_adv.mean()
-                adv_std = valid_adv.std() + 1e-8
-            else:
-                adv_mean = adv.mean()
-                adv_std = adv.std() + 1e-8
-            adv = (adv - adv_mean) / adv_std
-            adv = adv * mb_masks  # zero out invalid timesteps
-
-            pg_loss1 = -adv * ratio
-            pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
-            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-
-            newvalue = newvalue.view(mb_returns.shape)
-            v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
-            v_loss_unclipped = (newvalue - mb_returns) ** 2
-            v_loss_clipped = (v_clipped - mb_returns) ** 2
-            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
-
-            entropy_loss = entropy.mean()
-
-            # Get current entropy coefficient
-            if config["anneal_entropy"]:
-                # Cosine annealing from initial to 0.0
-                current_ent_coef = 0.5 * self.ent_coef_initial * (1 + np.cos(np.pi * self.epoch / self.total_epochs))
-            else:
-                current_ent_coef = config["ent_coef"]
-            loss = pg_loss + config["vf_coef"] * v_loss - current_ent_coef * entropy_loss + reg_loss
+            # Compute total loss
+            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss + reg_loss
             # loss = reg_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
@@ -813,7 +819,13 @@ class PuffeRL:
         if os.path.exists(model_path):
             return model_path
 
-        torch.save(self.uncompiled_policy.state_dict(), model_path)
+        torch.save(
+            {
+                "model_state_dict": self.uncompiled_policy.state_dict(),
+                "full_args": self.full_args,
+            },
+            model_path,
+        )
 
         state = {
             "optimizer_state_dict": self.optimizer.state_dict(),
@@ -1739,6 +1751,15 @@ def load_env(env_name, args):
     return pufferlib.vector.make(make_env, env_kwargs=args["env"], **args["vec"])
 
 
+def _load_state_dict(checkpoint, device):
+    """Handle both bare state dicts and new checkpoint dicts."""
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    else:
+        state_dict = checkpoint
+    return {k.replace("module.", ""): v for k, v in state_dict.items()}
+
+
 def load_policy(args, vecenv, env_name=""):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
@@ -1764,18 +1785,16 @@ def load_policy(args, vecenv, env_name=""):
         else:
             raise pufferlib.APIUsageError("No run id provided for eval")
 
-        state_dict = torch.load(path, map_location=device)
-        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        policy.load_state_dict(state_dict)
+        checkpoint = torch.load(path, map_location=device)
+        policy.load_state_dict(_load_state_dict(checkpoint, device))
 
     load_path = args["load_model_path"]
     if load_path == "latest":
         load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
 
     if load_path is not None:
-        state_dict = torch.load(load_path, map_location=device)
-        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        policy.load_state_dict(state_dict)
+        checkpoint = torch.load(load_path, map_location=device)
+        policy.load_state_dict(_load_state_dict(checkpoint, device))
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
         # optim_state = torch.load(state_path)['optimizer_state_dict']
         # pufferl.optimizer.load_state_dict(optim_state)
