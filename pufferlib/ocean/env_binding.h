@@ -654,11 +654,22 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         }
 
         float n = aggregate.n;
+        float target_episode_return = aggregate.target_episode_return;
+        float did_target_collide = aggregate.did_target_collide;
+        float did_target_offroad = aggregate.did_target_offroad;
+        float did_target_fail = aggregate.did_target_fail;
 
         // Average across agents
         for (int i = 0; i < num_keys; i++) {
             ((float *)&aggregate)[i] /= n;
         }
+
+        // Target metrics are per-scenario signals, not per-agent averages.
+        aggregate.target_episode_return = target_episode_return;
+        aggregate.did_target_collide = did_target_collide;
+        aggregate.did_target_offroad = did_target_offroad;
+        aggregate.did_target_fail = did_target_fail;
+
         // User populates dict
         my_log(dict, env, &aggregate, n);
         assign_to_dict(dict, "n", n);

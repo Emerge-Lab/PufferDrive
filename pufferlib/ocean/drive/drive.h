@@ -168,12 +168,16 @@ typedef struct TrafficControlElement TrafficControlElement;
 struct Log {
     float n;
     float episode_return;
+    float target_episode_return;
     float episode_length;
     float expert_static_car_count;
     float static_car_count;
     float score;
     float offroad_rate;
     float collision_rate;
+    float did_target_collide;
+    float did_target_offroad;
+    float did_target_fail;
     float red_light_violation_rate;
     float num_waypoints_reached;
     float num_goals_reached;
@@ -2617,6 +2621,21 @@ static void add_log(Drive *env) {
 
         env->log.n += 1;
     }
+
+    if (env->active_agent_count > 0) {
+        env->log.target_episode_return += env->logs[0].episode_return;
+
+        if (env->logs[0].collision_rate > 0.0f) {
+            env->log.did_target_collide += 1.0f;
+            env->log.did_target_fail += 1.0f;
+        }
+
+        if (env->logs[0].offroad_rate > 0.0f) {
+            env->log.did_target_offroad += 1.0f;
+            env->log.did_target_fail += 1.0f;
+        }
+    }
+
     // Log composition counts per agent so vec_log averaging recovers the per-env value
     env->log.expert_static_car_count += env->expert_static_agent_count;
     env->log.static_car_count += env->static_agent_count;

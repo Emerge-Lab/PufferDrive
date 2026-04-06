@@ -1848,6 +1848,10 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "episode_length", log->episode_length);
     assign_to_dict(dict, "collision_rate", log->collision_rate);
     assign_to_dict(dict, "episode_return", log->episode_return);
+    assign_to_dict(dict, "target_episode_return", log->target_episode_return);
+    assign_to_dict(dict, "did_target_collide", log->did_target_collide);
+    assign_to_dict(dict, "did_target_offroad", log->did_target_offroad);
+    assign_to_dict(dict, "did_target_fail", log->did_target_fail);
     assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
