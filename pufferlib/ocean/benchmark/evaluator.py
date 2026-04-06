@@ -909,6 +909,7 @@ class Evaluator:
         if needs_stats_first:
             env_logs = self._run_rollout(policy, env, per_env_logs=True)
             render_env_idx = self.select_render_env(env_logs)
+
         else:
             render_env_idx = self.select_render_env([{}] * driver.num_envs)
 
@@ -955,7 +956,7 @@ class Evaluator:
         for time_idx in range(self.sim_steps):
             if mode == "human_replay" and not terminals[render_env_idx]:
                 driver.render(view_mode=view_mode, env_idx=render_env_idx)
-            elif mode == "self_play":
+            elif mode == "self_play" and render_env_idx is not None:
                 driver.render(view_mode=view_mode, env_idx=render_env_idx)
 
             # Get action from policy
