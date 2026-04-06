@@ -341,7 +341,7 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
         self.truncations[:] = 0
-        return self.observations, []
+        return self.observations, [{"agent_offsets": self.agent_offsets}]
 
     def step(self, actions):
         self.actions[:] = actions
@@ -385,6 +385,9 @@ class Drive(pufferlib.PufferEnv):
 
                 # In eval mode, don't wrap counter - allows termination condition to work correctly
                 self.starting_map_counter = self.starting_map_counter + num_envs
+                self.agent_offsets = agent_offsets
+                self.map_ids = map_ids
+                self.num_envs = num_envs
                 env_ids = []
                 for i in range(num_envs):
                     cur = agent_offsets[i]
@@ -453,6 +456,7 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs, self.random_seed)
                 # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
                 self.truncations[:] = 1
+        info.append({"agent_offsets": self.agent_offsets})
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):
