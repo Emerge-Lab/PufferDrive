@@ -1377,6 +1377,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
+        args["env"]["init_mode"] = "create_all_valid"  # must spawn all agents so non-SDC can follow expert trajectories
         args["env"]["episode_length"] = 91  # WOMD scenario length
 
         vecenv = vecenv or load_env(env_name, args)
@@ -1812,7 +1813,7 @@ def render(env_name, args=None):
     # Renders first num_maps from map_dir using visualize binary
     try:
         map_dir = render_configs["map_dir"]
-        num_maps = render_configs.get("num_maps", 1)
+        num_maps = render_configs.get("num_maps", "auto")
         view_mode = render_configs["view_mode"]
         render_policy_path = render_configs["policy_path"]
         overwork = render_configs.get("overwork", False)
@@ -1820,6 +1821,9 @@ def render(env_name, args=None):
         output_dir = render_configs["output_dir"]
     except KeyError as e:
         raise pufferlib.APIUsageError(f"Missing render config: {e}")
+
+    human_replay_render = render_configs.get("human_replay_render", False)
+    human_replay_control_mode = render_configs.get("human_replay_control_mode", "control_sdc_only")
 
     cpu_cores = psutil.cpu_count(logical=False)
     if num_workers > cpu_cores and not overwork:
@@ -1833,14 +1837,30 @@ def render(env_name, args=None):
             )
         )
 
-    if num_maps > len(os.listdir(map_dir)):
-        num_maps = len(os.listdir(map_dir))
+    available_maps = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+    if num_maps == "auto" or num_maps > available_maps:
+        print(f"Generating videos for all {available_maps} maps in {map_dir}")
+        num_maps = available_maps
 
     render_maps = [os.path.join(map_dir, f) for f in sorted(os.listdir(map_dir)) if f.endswith(".bin")][:num_maps]
     os.makedirs(output_dir, exist_ok=True)
 
     # Rebuild visualize binary
     ensure_drive_binary()
+
+    # Generate a human-replay INI override if requested (control_mode = control_sdc_only)
+    human_replay_ini = None
+    if human_replay_render:
+        human_replay_ini = pufferlib.utils.generate_env_ini(
+            {
+                "control_mode": f'"{human_replay_control_mode}"',
+                "init_mode": "create_all_valid",
+            },
+            prefix="human_replay_render_",
+        )
+        print(
+            f"Human-replay render: control_mode={human_replay_control_mode}, all non-SDC agents use expert trajectories."
+        )
 
     def render_task(map_path):
         base_cmd = (
@@ -1850,6 +1870,8 @@ def render(env_name, args=None):
         )
         cmd = base_cmd.copy()
         cmd.extend(["--map-name", map_path])
+        if human_replay_ini:
+            cmd.extend(["--config", human_replay_ini])
         if render_configs.get("show_grid", False):
             cmd.append("--show-grid")
         if render_configs.get("obs_only", False):
@@ -1857,7 +1879,7 @@ def render(env_name, args=None):
         if render_configs.get("show_lasers", False):
             cmd.append("--lasers")
         if render_configs.get("show_human_logs", False):
-            cmd.append("--show-human-logs")
+            cmd.append("--log-trajectories")
         if render_configs.get("zoom_in", False):
             cmd.append("--zoom-in")
         cmd.extend(["--view", view_mode])
@@ -1873,18 +1895,27 @@ def render(env_name, args=None):
 
         env_vars = os.environ.copy()
         env_vars["ASAN_OPTIONS"] = "exitcode=0"
+        print(f"Running: {' '.join(cmd)}")
         try:
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
+            if result.stdout:
+                print(f"[{map_name}] stdout: {result.stdout[-1000:]}")
+            if result.stderr:
+                print(f"[{map_name}] stderr: {result.stderr[-1000:]}")
             if result.returncode != 0:
-                print(f"Error rendering {map_name}: {result.stderr}")
+                print(f"Error rendering {map_name}: exit code {result.returncode}")
         except subprocess.TimeoutExpired:
             print(f"Timeout rendering {map_name}: exceeded 600 seconds")
 
-    if render_maps:
-        print(f"Rendering {len(render_maps)} from {map_dir} with {num_workers} workers...")
-        with ThreadPool(num_workers) as pool:
-            pool.map(render_task, render_maps)
-        print(f"Finished rendering videos to {output_dir}")
+    try:
+        if render_maps:
+            print(f"Rendering {len(render_maps)} maps from {map_dir} with {num_workers} workers...")
+            with ThreadPool(num_workers) as pool:
+                pool.map(render_task, render_maps)
+            print(f"Finished rendering videos to {output_dir}")
+    finally:
+        if human_replay_ini and os.path.exists(human_replay_ini):
+            os.remove(human_replay_ini)
 
 
 def main():

@@ -169,6 +169,9 @@ pufferlib/resources/drive/binaries/
 pufferlib/resources/drive/binaries/training/
 pufferlib/resources/drive/binaries/validation/
 
+# Ignore all video files
+*.mp4
+
 # But keep map_000.bin for the training test
 !pufferlib/resources/drive/binaries/map_000.bin
 !pufferlib/resources/drive/binaries/training/map_000.bin

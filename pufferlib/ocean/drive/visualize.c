@@ -193,11 +193,12 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
 
 int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
              int show_human_logs, int frame_skip, const char *view_mode, const char *output_topdown,
-             const char *output_agent, int num_maps, int zoom_in) {
+             const char *output_agent, int num_maps, int zoom_in, const char *ini_file) {
 
     // Parse configuration from INI file
     env_init_config conf = {0};
-    const char *ini_file = "pufferlib/config/ocean/drive.ini";
+    if (ini_file == NULL)
+        ini_file = "pufferlib/config/ocean/drive.ini";
     if (ini_parse(ini_file, handler, &conf) < 0) {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         return -1;
@@ -350,25 +351,29 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     char filename_topdown[256];
     char filename_agent[256];
 
-    if (output_topdown != NULL && output_agent != NULL) {
+    char policy_base[256];
+    strcpy(policy_base, policy_name);
+    *strrchr(policy_base, '.') = '\0';
+
+    char map[256];
+    strcpy(map, basename((char *)map_name));
+    *strrchr(map, '.') = '\0';
+
+    char video_dir[256];
+    sprintf(video_dir, "%s/video", policy_base);
+    char mkdir_cmd[512];
+    snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", video_dir);
+    system(mkdir_cmd);
+
+    if (output_topdown != NULL) {
         strcpy(filename_topdown, output_topdown);
+    } else {
+        sprintf(filename_topdown, "%s/video/%s_topdown.mp4", policy_base, map);
+    }
+
+    if (output_agent != NULL) {
         strcpy(filename_agent, output_agent);
     } else {
-        char policy_base[256];
-        strcpy(policy_base, policy_name);
-        *strrchr(policy_base, '.') = '\0';
-
-        char map[256];
-        strcpy(map, basename((char *)map_name));
-        *strrchr(map, '.') = '\0';
-
-        char video_dir[256];
-        sprintf(video_dir, "%s/video", policy_base);
-        char mkdir_cmd[512];
-        snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", video_dir);
-        system(mkdir_cmd);
-
-        sprintf(filename_topdown, "%s/video/%s_topdown.mp4", policy_base, map);
         sprintf(filename_agent, "%s/video/%s_agent.mp4", policy_base, map);
     }
 
@@ -555,6 +560,6 @@ int main(int argc, char *argv[]) {
     }
 
     eval_gif(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
-             output_agent, num_maps, zoom_in);
+             output_agent, num_maps, zoom_in, ini_file);
     return 0;
 }
