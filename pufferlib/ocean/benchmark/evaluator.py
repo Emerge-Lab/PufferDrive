@@ -835,7 +835,6 @@ class Evaluator:
     def __init__(self, configs, logger=None):
         self.configs = configs
         self.logger = logger
-        self.sim_steps = 90
         self.self_play_stats = None
         self.human_replay_stats = None
         self.sp_env = None
@@ -867,8 +866,6 @@ class Evaluator:
         backend = eval_config["eval"].get("backend", "PufferEnv")
         eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
         eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
-        if self.configs["eval"]["human_replay_eval"]:
-            eval_config["env"]["episode_length"] = 91  # WOMD scenario length
         eval_config["vec"] = dict(backend=backend, num_envs=1)
 
         self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
@@ -883,6 +880,8 @@ class Evaluator:
         self.hr_eval_config["env"]["render_mode"] = (
             0  # primary env: stats only; render envs created per-view in rollout()
         )
+        if self.configs["eval"]["human_replay_eval"]:
+            self.hr_eval_config["env"]["episode_length"] = 91  # WOMD scenario length
 
         self.sp_eval_config = copy.deepcopy(eval_config)
         self.sp_eval_config["env"]["control_mode"] = "control_agents"
@@ -1011,7 +1010,8 @@ class Evaluator:
             )
 
         info_list = []
-        for time_idx in range(self.sim_steps):
+        episode_length = env.driver_env.episode_length
+        for time_idx in range(episode_length):
             if render_env_idx is not None:
                 driver.render(view_mode=view_mode, env_id=render_env_idx)
 
