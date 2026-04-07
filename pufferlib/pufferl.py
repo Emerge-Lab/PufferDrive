@@ -80,6 +80,18 @@ HIDDEN_DASHBOARD_METRICS = {
 }
 
 
+def _move_state_to_device(value, device):
+    if torch.is_tensor(value):
+        return value.to(device)
+    if isinstance(value, dict):
+        return {k: _move_state_to_device(v, device) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_move_state_to_device(v, device) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_move_state_to_device(v, device) for v in value)
+    return value
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization
@@ -266,9 +278,9 @@ class PuffeRL:
         from pufferlib.mfpbt.types import TrainerState
 
         return TrainerState(
-            model_state=copy.deepcopy(self.uncompiled_policy.state_dict()),
-            optimizer_state=copy.deepcopy(self.optimizer.state_dict()),
-            scheduler_state=copy.deepcopy(self.scheduler.state_dict()),
+            model_state=_move_state_to_device(copy.deepcopy(self.uncompiled_policy.state_dict()), "cpu"),
+            optimizer_state=_move_state_to_device(copy.deepcopy(self.optimizer.state_dict()), "cpu"),
+            scheduler_state=_move_state_to_device(copy.deepcopy(self.scheduler.state_dict()), "cpu"),
             extra_state={
                 "config_learning_rate": self.config["learning_rate"],
                 "epoch": self.epoch,
@@ -286,6 +298,10 @@ class PuffeRL:
     def import_trainer_state(self, trainer_state):
         self.uncompiled_policy.load_state_dict(copy.deepcopy(trainer_state.model_state))
         self.optimizer.load_state_dict(copy.deepcopy(trainer_state.optimizer_state))
+        device = next(self.uncompiled_policy.parameters()).device
+        for state in self.optimizer.state.values():
+            for key, value in list(state.items()):
+                state[key] = _move_state_to_device(value, device)
 
         if trainer_state.scheduler_state is not None:
             self.scheduler.load_state_dict(copy.deepcopy(trainer_state.scheduler_state))
