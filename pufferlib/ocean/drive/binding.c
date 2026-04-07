@@ -446,8 +446,6 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "max_observation_distance", log->max_observation_distance);
     assign_to_dict(dict, "observation_coverage", log->observation_coverage);
     assign_to_dict(dict, "partner_obs_coverage", log->partner_obs_coverage);
-    float avg_goal_dist = (log->goal_distance_count > 0) ? log->avg_goal_distance / log->goal_distance_count : 0.0f;
-    assign_to_dict(dict, "avg_goal_distance", avg_goal_dist);
     // Per-component reward totals
     assign_to_dict(dict, "reward_goal", log->reward_goal_total);
     assign_to_dict(dict, "reward_collision", log->reward_collision_total);

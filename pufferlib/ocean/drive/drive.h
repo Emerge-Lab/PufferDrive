@@ -244,8 +244,6 @@ struct Log {
     float max_observation_distance; // average max observation distance
     float observation_coverage;     // percentage of entities in obs window seen on average
     float partner_obs_coverage;     // % of partners within radius that fit in the obs slots
-    float avg_goal_distance;        // average straight-line distance of goals when sampled
-    float goal_distance_count;      // count for averaging
     // Per-component reward tracking
     float reward_goal_total;
     float reward_collision_total;
