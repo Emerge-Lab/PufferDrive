@@ -186,7 +186,7 @@ def run_driving_behaviour_class_eval_in_subprocess(config, class_name, class_cfg
             flag = f"--env.reward-bound-{key.replace('_', '-')}"
             cmd += [f"{flag}-min={val}", f"{flag}-max={val}"]
 
-        print(f"[DrivingBehavioursEval] Running eval for {class_name} with command: {' '.join(cmd)}")
+        print(f"[DrivingBehavioursEval] Running eval for {class_name}")
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
 

@@ -769,6 +769,7 @@ class PuffeRL:
         for class_name, class_cfg in evaluator.classes:
             print(f'Class render_cfg for "{class_name}": {class_cfg}')
             if not class_cfg.get("render_eval", False):
+                print(f"DrivingBehavioursEval: render disabled for {class_name}")
                 continue
             print(f"DrivingBehavioursEval: rendering videos for {num_ran}/{len(evaluator.classes)} classes")
             short = class_name[len(DrivingBehavioursEvaluator.EVAL_SECTIONS_PREFIX) :]
@@ -791,7 +792,8 @@ class PuffeRL:
                 render_ini = pufferlib.utils.generate_env_ini(
                     {
                         "control_mode": '"control_sdc_only"',
-                        "init_mode": "create_all_valid",
+                        "init_mode": '"create_all_valid"',
+                        "map_dir": f'"{map_dir}"',
                     },
                     prefix=f"driving_behaviours_{class_name}_render_",
                 )
