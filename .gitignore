@@ -169,10 +169,7 @@ pufferlib/resources/drive/binaries/
 pufferlib/resources/drive/binaries/training/
 pufferlib/resources/drive/binaries/validation/
 
-# Ignore all video files
-*.mp4
-
-# But keep map_000.bin for the training test
+# Keep map_000.bin for the training test
 !pufferlib/resources/drive/binaries/map_000.bin
 !pufferlib/resources/drive/binaries/training/map_000.bin
 pufferlib/resources/drive/sanity/sanity_binaries/
@@ -180,6 +177,13 @@ pufferlib/resources/drive/sanity/sanity_binaries/
 # Keep carla map binaries
 !pufferlib/resources/drive/binaries/carla/**
 !pufferlib/resources/drive/binaries/carla_2D/**
+
+# Keep driving behaviour eval scenario binaries
+!pufferlib/resources/drive/binaries/dense_traffic/**
+!pufferlib/resources/drive/binaries/lane_change/**
+!pufferlib/resources/drive/binaries/obstacles/**
+!pufferlib/resources/drive/binaries/vru_interaction/**
+!pufferlib/resources/drive/binaries/lead_vehicle_interaction/**
 
 # Compiled drive binary in root
 /drive
