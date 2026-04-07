@@ -7,8 +7,9 @@ from .types import AgentState
 
 
 class MFPBT_Logger:
-    def __init__(self, directory: str):
+    def __init__(self, directory: str, tune_hyperparameters: list[str] | None = None):
         self.directory = directory
+        self.tune_hyperparameters = tune_hyperparameters or []
         os.makedirs(directory, exist_ok=True)
         self.agent_history_path = os.path.join(directory, "agent_history.csv")
         self.round_summary_path = os.path.join(directory, "round_summary.csv")
@@ -19,9 +20,12 @@ class MFPBT_Logger:
         agents: list[AgentState],
         frequencies: list[int],
         need_explore: list[bool],
+        round_duration_sec: float | None = None,
+        avg_round_duration_sec: float | None = None,
+        eta_seconds: float | None = None,
     ) -> None:
         self._append_agent_rows(round_index, agents, frequencies, need_explore)
-        self._append_round_summary(round_index, agents)
+        self._append_round_summary(round_index, agents, round_duration_sec, avg_round_duration_sec, eta_seconds)
 
     def _append_agent_rows(
         self,
@@ -66,7 +70,14 @@ class MFPBT_Logger:
 
         self._append_rows(self.agent_history_path, fieldnames, rows)
 
-    def _append_round_summary(self, round_index: int, agents: list[AgentState]) -> None:
+    def _append_round_summary(
+        self,
+        round_index: int,
+        agents: list[AgentState],
+        round_duration_sec: float | None,
+        avg_round_duration_sec: float | None,
+        eta_seconds: float | None,
+    ) -> None:
         fieldnames = [
             "round_index",
             "best_global_id",
@@ -75,7 +86,11 @@ class MFPBT_Logger:
             "min_selection_score",
             "max_env_steps",
             "mean_env_steps",
+            "round_duration_sec",
+            "avg_round_duration_sec",
+            "eta_seconds",
         ]
+        fieldnames.extend([f"mean_{hp_name}" for hp_name in self.tune_hyperparameters])
 
         scores = [agent.selection_score for agent in agents]
         env_steps = [agent.env_steps for agent in agents]
@@ -88,7 +103,15 @@ class MFPBT_Logger:
             "min_selection_score": min(scores),
             "max_env_steps": max(env_steps),
             "mean_env_steps": sum(env_steps) / len(env_steps),
+            "round_duration_sec": round_duration_sec,
+            "avg_round_duration_sec": avg_round_duration_sec,
+            "eta_seconds": eta_seconds,
         }
+        for hp_name in self.tune_hyperparameters:
+            values = [
+                agent.hyperparameters.get(hp_name) for agent in agents if agent.hyperparameters.get(hp_name) is not None
+            ]
+            row[f"mean_{hp_name}"] = sum(values) / len(values) if values else None
 
         self._append_rows(self.round_summary_path, fieldnames, [row])
 

@@ -51,13 +51,28 @@ checkpoint_path: checkpoint.pt
 # If set, only the final folder name is used inside the run folder.
 # log_dir: logs
 
-# Initial hyperparameter values for the starting population.
+# Default hyperparameter values. These are also used for any hyperparameter
+# that is not randomly sampled at initialization.
 hyperparameters:
   learning_rate: 0.0005
+  # ent_coef: 0.01
+
+# Optional per-agent random initialization rules applied on top of hyperparameters.
+# This is useful for the initial MF-PBT population.
+initial_hyperparameter_sampling:
+  learning_rate:
+    distribution: log_uniform
+    min: 1.0e-5
+    max: 1.0e-3
+  # ent_coef:
+  #   distribution: log_uniform
+  #   min: 1.0e-4
+  #   max: 1.0e-1
 
 # Hyperparameters that MF-PBT is allowed to copy and perturb.
 tune_hyperparameters:
   - learning_rate
+  # - ent_coef
 
 # Multiplicative perturbation factors used after internal exploit.
 perturb_factors:

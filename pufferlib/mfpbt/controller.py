@@ -5,6 +5,8 @@ import os
 import time
 from collections import defaultdict
 
+import numpy as np
+
 from .checkpoint import load_experiment_checkpoint, save_experiment_checkpoint
 from .config import MFPBTConfig
 from .display import MFPBTProgressDisplay
@@ -27,16 +29,43 @@ class MFPBTController:
         self.explore_fns = {hp_name: perturbation(config.perturb_factors) for hp_name in config.tune_hyperparameters}
         self.csv_logger = self._build_csv_logger()
         self.display = MFPBTProgressDisplay(config.num_rounds, config.round_train_env_steps, config.frequencies)
+        self.round_durations = []
 
     def _build_csv_logger(self):
         if self.config.log_dir is not None:
-            return MFPBT_Logger(self.config.log_dir)
+            return MFPBT_Logger(self.config.log_dir, self.config.tune_hyperparameters)
 
         if self.checkpoint_path:
             checkpoint_dir = os.path.dirname(self.checkpoint_path) or "."
-            return MFPBT_Logger(os.path.join(checkpoint_dir, "logs"))
+            return MFPBT_Logger(os.path.join(checkpoint_dir, "logs"), self.config.tune_hyperparameters)
 
         return None
+
+    def _sample_initial_hyperparameters(self):
+        hyperparameters = copy.deepcopy(self.config.hyperparameters)
+        for hp_name, spec in self.config.initial_hyperparameter_sampling.items():
+            if spec["distribution"] == "log_uniform":
+                sample = np.random.uniform(np.log10(spec["min"]), np.log10(spec["max"]))
+                hyperparameters[hp_name] = float(10**sample)
+        return hyperparameters
+
+    def _timing_stats(self, round_index: int):
+        if not self.round_durations:
+            return None, None
+
+        avg_round_duration = sum(self.round_durations) / len(self.round_durations)
+        remaining_rounds = max(self.config.num_rounds - (round_index + 1), 0)
+        eta_seconds = avg_round_duration * remaining_rounds
+        return avg_round_duration, eta_seconds
+
+    def _render_display(self, round_index: int, agents: list[AgentState]) -> None:
+        avg_round_duration, eta_seconds = self._timing_stats(round_index)
+        self.display.render(
+            round_index=round_index,
+            agents=agents,
+            avg_round_duration=avg_round_duration,
+            eta_seconds=eta_seconds,
+        )
 
     def initialize_experiment(self) -> ExperimentState:
         if self.checkpoint_path:
@@ -62,14 +91,14 @@ class MFPBTController:
                         parent_hps=global_id,
                         parent_network=global_id,
                     ),
-                    hyperparameters=copy.deepcopy(self.config.hyperparameters),
+                    hyperparameters=self._sample_initial_hyperparameters(),
                     trainer_state=TrainerState(model_state={}, optimizer_state={}),
                 )
             )
 
         state = ExperimentState(round_index=0, frequencies=list(self.config.frequencies), agents=agents)
         self.display.initialize_agents(state.agents)
-        self.display.render(round_index=state.round_index, agents=state.agents)
+        self._render_display(round_index=state.round_index, agents=state.agents)
         return state
 
     def _global_ranking(self, agents: list[AgentState]) -> list[int]:
@@ -92,8 +121,9 @@ class MFPBTController:
         return local_rankings
 
     def run_round(self, experiment_state: ExperimentState, seeds: list[int] | None = None) -> ExperimentState:
+        round_start_time = time.time()
         self.display.begin_round(experiment_state.agents)
-        self.display.render(round_index=experiment_state.round_index, agents=experiment_state.agents)
+        self._render_display(round_index=experiment_state.round_index, agents=experiment_state.agents)
         updated_agents = self.scheduler.run_round(
             experiment_state.agents,
             round_budget=self.config.round_train_env_steps,
@@ -130,21 +160,28 @@ class MFPBTController:
         if self.checkpoint_path:
             save_experiment_checkpoint(next_state, self.checkpoint_path)
 
+        round_duration = time.time() - round_start_time
+        self.round_durations.append(round_duration)
+        avg_round_duration, eta_seconds = self._timing_stats(experiment_state.round_index)
+
         if self.csv_logger is not None:
             self.csv_logger.log_round(
                 round_index=experiment_state.round_index,
                 agents=updated_agents,
                 frequencies=self.config.frequencies,
                 need_explore=need_explore,
+                round_duration_sec=round_duration,
+                avg_round_duration_sec=avg_round_duration,
+                eta_seconds=eta_seconds,
             )
 
-        self.display.render(round_index=experiment_state.round_index, agents=updated_agents)
+        self._render_display(round_index=experiment_state.round_index, agents=updated_agents)
 
         return next_state
 
     def _handle_display_event(self, event, round_index, agents):
         self.display.handle_event(event)
-        self.display.render(round_index=round_index, agents=agents)
+        self._render_display(round_index=round_index, agents=agents)
 
     def close(self) -> None:
         self.scheduler.close()

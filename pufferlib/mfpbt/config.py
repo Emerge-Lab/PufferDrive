@@ -26,6 +26,7 @@ class MFPBTConfig:
     checkpoint_path: str | None = None
     log_dir: str | None = None
     hyperparameters: dict[str, Any] = field(default_factory=dict)
+    initial_hyperparameter_sampling: dict[str, dict[str, Any]] = field(default_factory=dict)
     tune_hyperparameters: list[str] = field(default_factory=list)
     perturb_factors: list[float] = field(default_factory=lambda: [0.8, 1.25])
     start_method: str = "spawn"
@@ -64,8 +65,16 @@ class MFPBTConfig:
         if self.eval_num_carla_maps <= 0:
             raise ValueError("eval_num_carla_maps must be positive")
         for hp_name in self.tune_hyperparameters:
-            if hp_name not in self.hyperparameters:
-                raise ValueError(f"Missing initial value for tuned hyperparameter: {hp_name}")
+            if hp_name not in self.hyperparameters and hp_name not in self.initial_hyperparameter_sampling:
+                raise ValueError(f"Missing initial value or sampling rule for tuned hyperparameter: {hp_name}")
+        for hp_name, spec in self.initial_hyperparameter_sampling.items():
+            distribution = spec.get("distribution")
+            if distribution != "log_uniform":
+                raise ValueError(f"Unsupported initial sampling distribution for {hp_name}: {distribution}")
+            if spec["min"] <= 0 or spec["max"] <= 0:
+                raise ValueError(f"log_uniform sampling requires positive min/max for {hp_name}")
+            if spec["min"] >= spec["max"]:
+                raise ValueError(f"initial sampling min must be < max for {hp_name}")
 
 
 def load_mfpbt_config(path: str | Path) -> MFPBTConfig:

@@ -319,9 +319,11 @@ class PuffeRL:
         self.losses = extra_state.get("losses", {})
 
     def set_hyperparameters(self, hyperparameters):
+        for key, value in hyperparameters.items():
+            self.config[key] = value
+
         if "learning_rate" in hyperparameters:
             learning_rate = hyperparameters["learning_rate"]
-            self.config["learning_rate"] = learning_rate
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = learning_rate
 

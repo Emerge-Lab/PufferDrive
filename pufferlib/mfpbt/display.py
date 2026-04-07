@@ -40,7 +40,13 @@ class MFPBTProgressDisplay:
             if event.agent is not None and math.isfinite(event.agent.selection_score):
                 state.selection_score = event.agent.selection_score
 
-    def render(self, round_index: int, agents: list[AgentState]) -> None:
+    def render(
+        self,
+        round_index: int,
+        agents: list[AgentState],
+        avg_round_duration: float | None = None,
+        eta_seconds: float | None = None,
+    ) -> None:
         current_round = round_index + 1
         total_steps = current_round * self.round_train_env_steps
         best_score = max(
@@ -52,10 +58,15 @@ class MFPBTProgressDisplay:
             default=float("-inf"),
         )
 
+        avg_round_str = _format_duration(avg_round_duration)
+        eta_str = _format_duration(eta_seconds)
+
         lines = [
             f"Current round: {current_round}/{self.num_rounds}",
             f"Steps: {total_steps}",
             f"Best score: {best_score if math.isfinite(best_score) else 'n/a'}",
+            f"Avg round time: {avg_round_str}",
+            f"ETA: {eta_str}",
             "",
             "Agents:",
             "gid pop freq gpu status score",
@@ -75,3 +86,17 @@ class MFPBTProgressDisplay:
             )
 
         print("\033[2J\033[H" + "\n".join(lines), flush=True)
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "n/a"
+    seconds = max(int(seconds), 0)
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"

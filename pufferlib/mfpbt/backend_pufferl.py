@@ -57,8 +57,8 @@ class PufferLTrainerBackend(TrainerBackend):
         args = copy.deepcopy(self.base_args)
         train_args = args["train"]
 
-        if "learning_rate" in hyperparameters:
-            train_args["learning_rate"] = hyperparameters["learning_rate"]
+        for key, value in hyperparameters.items():
+            train_args[key] = value
 
         train_args["device"] = "cuda" if torch.cuda.is_available() else "cpu"
         train_args["render"] = False
@@ -102,8 +102,8 @@ class PufferLTrainerBackend(TrainerBackend):
                 args[section] = values
 
         train_args = args["train"]
-        if "learning_rate" in hyperparameters:
-            train_args["learning_rate"] = hyperparameters["learning_rate"]
+        for key, value in hyperparameters.items():
+            train_args[key] = value
 
         train_args["device"] = "cuda" if torch.cuda.is_available() else "cpu"
         if seed is not None:
