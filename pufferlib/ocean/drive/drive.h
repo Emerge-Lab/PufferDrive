@@ -608,8 +608,8 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
                                                                     env->reward_bounds[REWARD_COEF_OVERSPEED].max_val);
         agent->reward_coefs[REWARD_COEF_REVERSE] = random_uniform(env->reward_bounds[REWARD_COEF_REVERSE].min_val,
                                                                   env->reward_bounds[REWARD_COEF_REVERSE].max_val);
-        // Fixed values (Must fall within the bounds defined above)
-        agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
+        agent->reward_coefs[REWARD_COEF_VELOCITY] = random_uniform(env->reward_bounds[REWARD_COEF_VELOCITY].min_val,
+                                                                    env->reward_bounds[REWARD_COEF_VELOCITY].max_val);
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = -2.5e-5f;
         // Dynamic conditioning (Mixed Uniform)
         agent->reward_coefs[REWARD_COEF_THROTTLE] = mixed_uniform(1.25f);
