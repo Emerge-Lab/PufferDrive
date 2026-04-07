@@ -37,3 +37,18 @@ class ExperimentState:
     frequencies: list[int]
     agents: list[AgentState] = field(default_factory=list)
     checkpoint_stage: str = "post_evolution"
+
+
+@dataclass
+class WorkerTask:
+    agent: AgentState | None
+    round_budget: int
+    seed: int | None = None
+    stop: bool = False
+
+
+@dataclass
+class WorkerResult:
+    agent: AgentState
+    worker_id: int
+    device_id: int

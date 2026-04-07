@@ -1,0 +1,45 @@
+# Total number of MF-PBT agents across all populations.
+num_agents: 32
+
+# One evolution frequency per population.
+# Population i evolves when (round_index + 1) % frequencies[i] == 0.
+frequencies:
+  - 1
+  - 10
+  - 25
+  - 50
+
+# Number of CUDA devices used by the worker pool.
+num_devices: 4
+
+# Maximum number of concurrent agent jobs per device.
+# Total concurrency = num_devices * num_agents_per_device.
+num_agents_per_device: 2
+
+# Per-round training budget for each agent, expressed as additional env steps.
+round_train_env_steps: 10_000_000
+
+# Post-round evaluation metric used for ranking and genetics.
+selection_metric: puffer_score
+
+# Path to the full MF-PBT experiment checkpoint written by the controller.
+# This is intended to store the whole experiment state, not just model weights:
+# round index, agent metadata, hyperparameters, scores, env_steps,
+# and full trainer states for restart.
+checkpoint_path: experiments/mfpbt/checkpoint.pt
+
+# Initial hyperparameter values for the starting population.
+hyperparameters:
+  learning_rate: 0.0005
+
+# Hyperparameters that MF-PBT is allowed to copy and perturb.
+tune_hyperparameters:
+  - learning_rate
+
+# Multiplicative perturbation factors used after internal exploit.
+perturb_factors:
+  - 0.8
+  - 1.25
+
+# Multiprocessing start method for MF-PBT workers.
+start_method: spawn
