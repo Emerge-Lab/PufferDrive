@@ -57,6 +57,10 @@ import signal  # Aggressively exit on ctrl+c
 import multiprocessing
 import queue
 
+import copy
+import traceback
+import gc
+
 signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 
 # Assume advantage kernel has been built if CUDA compiler is available
@@ -579,6 +583,18 @@ class PuffeRL:
         ):
             self._run_safe_eval()
 
+        behaviours_eval_enabled = self.config.get("eval", {}).get("driving_behaviours_eval", False)
+        behaviours_eval_interval = int(
+            self.config.get("eval", {}).get("driving_behaviours_eval_interval", self.render_interval)
+        )
+        if (
+            is_main
+            and behaviours_eval_enabled
+            and behaviours_eval_interval > 0
+            and (self.epoch % behaviours_eval_interval == 0 or done_training)
+        ):
+            self._run_driving_behaviours_eval()
+
     def _render_videos(
         self,
         bin_path,
@@ -636,8 +652,6 @@ class PuffeRL:
 
     def _run_safe_eval(self):
         """Run safe eval in-process using SafeEvaluator, then render videos."""
-        import copy
-        import traceback
 
         vecenv = None
         bin_path = None
@@ -708,6 +722,100 @@ class PuffeRL:
                             os.remove(f)
                         except OSError:
                             pass
+
+    def _run_driving_behaviours_eval(self):
+        """Run serial driving behaviours evals across all 5 classes, then render videos."""
+        behaviours_config = self.config.get("driving_behaviours_eval")
+        if not behaviours_config:
+            print("DrivingBehavioursEval: no config loaded, skipping.")
+            return
+
+        from pufferlib.ocean.benchmark.evaluator import DrivingBehavioursEvaluator
+
+        env_name = self.config["env"]
+        render_enabled = self.config.get("train", {}).get("render", False)
+        evaluator = DrivingBehavioursEvaluator(
+            env_name=env_name,
+            behaviours_config=behaviours_config,
+            device=self.config["device"],
+            logger=self.logger,
+        )
+        print(f"DrivingBehavioursEval: loaded config for {len(evaluator.classes)} classes")
+
+        # Close training env to free memory before creating eval envs
+        self.vecenv.close()
+        gc.collect()
+
+        all_results = {}
+        num_ran = 0
+
+        # Evaluate on all driving behaviour classes
+        for class_name, class_cfg in evaluator.classes:
+            if not class_cfg.get("human_replay_eval", False):
+                continue
+            short = class_name[len(DrivingBehavioursEvaluator.EVAL_SECTIONS_PREFIX) :]
+            self.msg = f"Running driving behaviours eval: {short}..."
+            try:
+                results = evaluator.evaluate_class(class_cfg, self.uncompiled_policy)
+                all_results[class_name] = results
+                num_ran += 1
+                print(f"[DrivingBehavioursEval] {short}: {results}")
+            except Exception as e:
+                print(f"DrivingBehavioursEval: eval failed for {short}: {e}")
+                traceback.print_exc()
+
+        evaluator.log_stats(all_results, global_step=self.global_step)
+
+        # Reopen training env before rendering (export uses self.vecenv)
+        reopen_args = {
+            "package": self.config["package"],
+            "env": self.config["env_config"],
+            "vec": self.config["vec_config"],
+        }
+        self.vecenv = load_env(env_name, reopen_args)
+
+        # Render a video for each driving behaviour class
+        if render_enabled:
+            for class_name, class_cfg in evaluator.classes:
+                if not class_cfg.get("render_eval", False):
+                    continue
+                short = class_name[len(DrivingBehavioursEvaluator.EVAL_SECTIONS_PREFIX) :]
+                map_dir = class_cfg.get("map_dir", "")
+                if isinstance(map_dir, str):
+                    map_dir = map_dir.strip('"')
+                try:
+                    model_dir = os.path.join(self.config["data_dir"], f"{env_name}_{self.logger.run_id}")
+                    bin_path = f"{model_dir}_driving_behaviours_{class_name}_epoch_{self.epoch:06d}.bin"
+
+                    export(
+                        args={"env_name": env_name, "load_model_path": "unused", **self.config},
+                        env_name=env_name,
+                        vecenv=self.vecenv,
+                        policy=self.uncompiled_policy,
+                        path=bin_path,
+                        silent=True,
+                    )
+
+                    render_ini = pufferlib.utils.generate_env_ini(
+                        {
+                            "control_mode": '"control_sdc_only"',
+                            "init_mode": "create_all_valid",
+                        },
+                        prefix=f"driving_behaviours_{class_name}_render_",
+                    )
+
+                    self._render_videos(
+                        bin_path=bin_path,
+                        map_dir=map_dir,
+                        wandb_prefix=f"driving_behaviours/{short}",
+                        config_path=render_ini,
+                        cleanup_files=[bin_path, render_ini],
+                    )
+                except Exception as e:
+                    print(f"DrivingBehavioursEval: render failed for {short}: {e}")
+                    traceback.print_exc()
+
+        self.msg = f"Driving behaviours eval complete: {num_ran}/{len(evaluator.classes)} classes evaluated"
 
     def _reap_render_processes(self):
         """Remove finished render processes from the tracking list."""
@@ -1271,6 +1379,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         env_config=args.get("env", {}),
         eval=args.get("eval", {}),
         safe_eval=args.get("safe_eval", {}),
+        driving_behaviours_eval=args.get("driving_behaviours_eval"),
+        package=args.get("package"),
+        vec_config=args.get("vec", {}),
     )
     if "vec" in args and "num_workers" in args["vec"]:
         train_config["num_workers"] = args["vec"]["num_workers"]
@@ -1803,6 +1914,22 @@ def load_config(env_name, config_dir=None):
         prev[subkey] = value
 
     args["train"]["use_rnn"] = args["rnn_name"] is not None
+
+    # Load driving behaviours eval config if specified
+    behaviours_config_path = args.get("eval", {}).get("driving_behaviours_eval_config")
+    if behaviours_config_path:
+        behaviours_config_path = behaviours_config_path.strip('"')
+        if os.path.exists(behaviours_config_path):
+            print(f"Loading driving behaviours eval config from {behaviours_config_path}")
+            bp = configparser.ConfigParser()
+            bp.read(behaviours_config_path)
+            behaviours = {}
+            for section in bp.sections():
+                behaviours[section] = {k: puffer_type(v) for k, v in bp[section].items()}
+            args["driving_behaviours_eval"] = behaviours
+        else:
+            print(f"Warning: driving_behaviours_eval_config not found: {behaviours_config_path}")
+
     return args
 
 

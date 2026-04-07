@@ -537,6 +537,8 @@ class Multiprocessing:
         self.driver_env.close()
         for p in self.processes:
             p.terminate()
+        for p in self.processes:
+            p.join(timeout=5)
 
 
 class Ray:

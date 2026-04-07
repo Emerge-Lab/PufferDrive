@@ -964,3 +964,126 @@ class SafeEvaluator:
         if global_step is not None:
             payload["train_step"] = global_step
         self.logger.wandb.log(payload)
+
+
+class DrivingBehavioursEvaluator:
+    """Evaluates a policy on the 5 driving behaviour classes using live in-process weights."""
+
+    # Sections in driving_behaviours_eval.ini that describe scenario classes
+    EVAL_SECTIONS_PREFIX = "eval_"
+    REWARD_SECTION = "eval_driving_rewards"
+
+    def __init__(self, env_name: str, behaviours_config: Dict, device="cuda", logger=None):
+        self.env_name = env_name
+        self.behaviours_config = behaviours_config
+        if isinstance(device, int):
+            device = f"cuda:{device}"
+        self.device = device
+        self.logger = logger
+        self.reward_config = behaviours_config.get(self.REWARD_SECTION, {})
+        self.classes = [
+            (name, cfg)
+            for name, cfg in behaviours_config.items()
+            if name.startswith(self.EVAL_SECTIONS_PREFIX) and name != self.REWARD_SECTION
+        ]
+
+    def _build_class_env_config(self, class_cfg: Dict) -> Dict:
+        """Build env config for one scenario class with fixed reward conditioning."""
+        import re
+        import sys
+        from pufferlib.pufferl import load_config
+
+        original_argv = sys.argv
+        sys.argv = ["pufferl"]
+        try:
+            eval_config = load_config(self.env_name)
+        finally:
+            sys.argv = original_argv
+
+        eval_config["vec"] = dict(backend="PufferEnv", num_envs=1)
+        eval_config["train"]["device"] = self.device
+        eval_config["env"]["control_mode"] = "control_sdc_only"
+        eval_config["env"]["init_mode"] = "create_all_valid"
+        eval_config["env"]["episode_length"] = 91
+        eval_config["env"]["resample_frequency"] = 0
+
+        map_dir = class_cfg.get("map_dir", "")
+        if isinstance(map_dir, str):
+            map_dir = map_dir.strip('"')
+        eval_config["env"]["map_dir"] = map_dir
+        # Set num_maps to the number of available bins so we cover all scenarios
+        available_maps = len([f for f in os.listdir(map_dir) if f.endswith(".bin")]) if os.path.isdir(map_dir) else 1
+        eval_config["env"]["num_maps"] = available_maps
+
+        # Discover valid reward bound names
+        valid_bounds = set()
+        for key in eval_config["env"]:
+            m = re.match(r"reward_bound_(.+)_min$", key)
+            if m:
+                valid_bounds.add(m.group(1))
+
+        # Fix reward conditioning to eval_driving_rewards values
+        for key, val in self.reward_config.items():
+            if key not in valid_bounds:
+                continue
+            eval_config["env"][f"reward_bound_{key}_min"] = float(val)
+            eval_config["env"][f"reward_bound_{key}_max"] = float(val)
+
+        return eval_config
+
+    def evaluate_class(self, class_cfg: Dict, policy) -> Dict:
+        """Run human-replay rollouts on all maps in the class map_dir and return averaged metrics."""
+        from collections import defaultdict
+        from pufferlib.pufferl import load_env
+
+        print(f"Evaluating class")
+
+        eval_config = self._build_class_env_config(class_cfg)
+        num_maps = eval_config["env"]["num_maps"]
+        print(f"Built eval config for class with map_dir: {eval_config['env']['map_dir']}")
+
+        vecenv = load_env(self.env_name, eval_config)
+        print(f"Loaded vecenv")
+        policy.eval()
+        print(f"Set policy to eval mode")
+        rollout_evaluator = HumanReplayEvaluator(eval_config)
+        all_stats = defaultdict(list)
+        print(f"Starting rollouts for class with {num_maps} maps")
+        try:
+            for _ in range(num_maps):
+                result = rollout_evaluator.rollout(eval_config, vecenv, policy) or {}
+                for k, v in result.items():
+                    try:
+                        all_stats[k].append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+                # Reset for next map
+                vecenv.reset()
+        finally:
+            vecenv.close()
+            import gc
+
+            gc.collect()
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        return {k: float(np.mean(v)) for k, v in all_stats.items() if v}
+
+    def log_stats(self, all_results: Dict[str, Dict], global_step=None):
+        """Log per-class metrics to wandb under driving_behaviours/<class>/<metric>."""
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            return
+        payload = {}
+        for class_name, metrics in all_results.items():
+            short = class_name[len(self.EVAL_SECTIONS_PREFIX) :]
+            for k, v in metrics.items():
+                try:
+                    payload[f"driving_behaviours/{short}/{k}"] = float(v)
+                except (TypeError, ValueError):
+                    pass
+        if global_step is not None:
+            payload["train_step"] = global_step
+        if payload:
+            self.logger.wandb.log(payload)
