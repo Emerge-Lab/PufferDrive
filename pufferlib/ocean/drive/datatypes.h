@@ -203,6 +203,7 @@ struct Agent {
     float cumulative_displacement;
     int displacement_sample_count;
     float cumulative_displacement_since_last_goal;
+    float distance_since_spawn;
     int last_goal_reached_timestep;
     float score_for_current_goal;
 

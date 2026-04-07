@@ -456,6 +456,10 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
     assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
     assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
+    float avg_distance_per_infraction = (log->total_infractions > 0)
+                                            ? log->total_distance_travelled / log->total_infractions
+                                            : log->total_distance_travelled;
+    assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
     assign_to_dict(dict, "distance_without_collision", log->distance_without_collision);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
