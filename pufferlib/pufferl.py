@@ -469,19 +469,23 @@ class PuffeRL:
             adv = (adv - adv_mean) / adv_std
 
             # Losses
+            # TODO: switch to pre-filtering valid indices when we remove the LSTM,
+            # so we don't waste compute on invalid steps at all.
+            # For now, use .sum()/minibatch_size to keep gradient magnitude constant
+            # across minibatches regardless of how many steps are invalid.
             pg_loss1 = -adv[~mb_is_invalid_step] * ratio[~mb_is_invalid_step]
             pg_loss2 = -adv[~mb_is_invalid_step] * torch.clamp(ratio[~mb_is_invalid_step], 1 - clip_coef, 1 + clip_coef)
             pg_loss = torch.max(pg_loss1, pg_loss2)
-            pg_loss = pg_loss.mean()
+            pg_loss = pg_loss.sum() / minibatch_size
 
             newvalue = newvalue.view(mb_returns.shape)
             v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
-            v_loss = v_loss[~mb_is_invalid_step].mean()
+            v_loss = v_loss[~mb_is_invalid_step].sum() / minibatch_size
 
-            entropy_loss = entropy[~mb_is_invalid_step.reshape(-1)].mean()
+            entropy_loss = entropy[~mb_is_invalid_step.reshape(-1)].sum() / minibatch_size
 
             loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
             self.amp_context.__enter__()  # TODO: AMP needs some debugging
