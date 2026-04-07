@@ -25,6 +25,7 @@ class PufferLTrainerBackend(TrainerBackend):
         eval_num_scenarios: int | None = None,
         eval_num_agents: int | None = None,
         eval_num_carla_maps: int = 8,
+        trainer_state_dir: str | None = None,
     ):
         super().__init__(device_id=device_id)
         self.env_name = env_name
@@ -35,6 +36,22 @@ class PufferLTrainerBackend(TrainerBackend):
         self.eval_num_scenarios = eval_num_scenarios
         self.eval_num_agents = eval_num_agents
         self.eval_num_carla_maps = eval_num_carla_maps
+        self.trainer_state_dir = trainer_state_dir
+        if self.trainer_state_dir is not None:
+            os.makedirs(self.trainer_state_dir, exist_ok=True)
+
+    def _load_agent_trainer_state(self, agent: AgentState):
+        if agent.trainer_state.checkpoint_path:
+            return torch.load(agent.trainer_state.checkpoint_path, weights_only=False)
+        return agent.trainer_state
+
+    def _save_agent_trainer_state(self, global_id: int, trainer_state):
+        if self.trainer_state_dir is None:
+            return trainer_state
+
+        path = os.path.join(self.trainer_state_dir, f"agent_{global_id}_{time.time_ns()}.pt")
+        torch.save(trainer_state, path)
+        return agent_state_placeholder(path)
 
     def _make_train_args(self, hyperparameters: dict, round_budget: int) -> dict:
         args = copy.deepcopy(self.base_args)
@@ -110,8 +127,9 @@ class PufferLTrainerBackend(TrainerBackend):
         pufferl = PuffeRL(train_config, vecenv, policy, logger=None)
 
         try:
-            if agent.trainer_state.model_state:
-                pufferl.import_trainer_state(agent.trainer_state)
+            loaded_trainer_state = self._load_agent_trainer_state(agent)
+            if loaded_trainer_state.model_state or loaded_trainer_state.checkpoint_path is not None:
+                pufferl.import_trainer_state(loaded_trainer_state)
             pufferl.set_hyperparameters(agent.hyperparameters)
 
             target_steps = agent.env_steps + round_budget
@@ -131,7 +149,10 @@ class PufferLTrainerBackend(TrainerBackend):
             )
 
             updated_agent = copy.deepcopy(agent)
-            updated_agent.trainer_state = pufferl.export_trainer_state()
+            exported_trainer_state = pufferl.export_trainer_state()
+            updated_agent.trainer_state = self._save_agent_trainer_state(
+                agent.metadata.global_id, exported_trainer_state
+            )
             updated_agent.selection_score = float(eval_metrics[self.selection_metric])
             updated_agent.env_steps = int(pufferl.global_step)
             return updated_agent
@@ -139,3 +160,9 @@ class PufferLTrainerBackend(TrainerBackend):
             pufferl.vecenv.close()
             pufferl.utilization.stop()
             time.sleep(0.05)
+
+
+def agent_state_placeholder(path: str):
+    from .types import TrainerState
+
+    return TrainerState(model_state={}, optimizer_state={}, checkpoint_path=path)

@@ -107,6 +107,7 @@ def main():
         eval_num_scenarios=mfpbt_config.eval_num_scenarios,
         eval_num_agents=mfpbt_config.eval_num_agents,
         eval_num_carla_maps=mfpbt_config.eval_num_carla_maps,
+        trainer_state_dir=os.path.join(run_dir, "trainer_states"),
     )
     run_mfpbt(mfpbt_config, scheduler, num_rounds=mfpbt_config.num_rounds)
 

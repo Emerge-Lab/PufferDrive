@@ -11,6 +11,7 @@ class TrainerState:
     scheduler_state: dict[str, Any] | None = None
     normalizer_state: Any = None
     extra_state: dict[str, Any] | None = None
+    checkpoint_path: str | None = None
 
 
 @dataclass
