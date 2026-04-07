@@ -1681,12 +1681,10 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
-        // Distance per infraction
-        int has_infraction = (offroad || collided) ? 1 : 0;
+        // Distance per infraction (count actual events, not boolean)
+        float infraction_count = env->logs[i].offroad_per_agent + env->logs[i].collisions_per_agent;
         env->log.total_distance_travelled += agent->distance_since_spawn;
-        if (has_infraction) {
-            env->log.total_infractions += 1.0f;
-        }
+        env->log.total_infractions += infraction_count;
         env->log.distance_without_collision += env->logs[i].distance_without_collision;
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
