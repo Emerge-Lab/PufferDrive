@@ -2901,7 +2901,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->collided_before_goal = 0;
     agent->cumulative_displacement = 0.0f;
     agent->cumulative_displacement_since_last_goal = 0.0f;
-    agent->distance_since_spawn = 0.0f;
+    // Keep distance_since_spawn across respawns — only reset in c_reset/set_start_position
     agent->stopped = 0;
     agent->removed = 0;
     agent->a_long = 0.0f;
