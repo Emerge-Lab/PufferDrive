@@ -241,6 +241,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         // Get map file path from Python list
         PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
         const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
+        env->num_agents = num_agents;
+        env->spawn_settings.max_agents_in_sim = num_agents;
         load_map_binary(map_file_path, env);
         set_active_agents(env);
 
@@ -271,14 +273,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 return NULL;
             }
 
-            // Store map_id
-            PyObject *map_id_obj = PyLong_FromLong(map_id);
-            PyList_SetItem(map_ids, env_count, map_id_obj);
-            // Store agent offset
-            PyObject *offset = PyLong_FromLong(total_agent_count);
-            PyList_SetItem(agent_offsets, env_count, offset);
-            total_agent_count += env->active_agent_count;
-            env_count++;
             for (int j = 0; j < env->num_objects; j++) {
                 free_agent(&env->agents[j]);
             }
@@ -294,6 +288,31 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env);
             continue;
         }
+
+        // Store map_id and agent offset for valid maps
+        PyObject *map_id_obj = PyLong_FromLong(map_id);
+        PyList_SetItem(map_ids, env_count, map_id_obj);
+        PyObject *offset = PyLong_FromLong(total_agent_count);
+        PyList_SetItem(agent_offsets, env_count, offset);
+        total_agent_count += env->active_agent_count;
+        env_count++;
+        for (int j = 0; j < env->num_objects; j++) {
+            free_agent(&env->agents[j]);
+        }
+        for (int j = 0; j < env->num_roads; j++) {
+            free_road_element(&env->road_elements[j]);
+        }
+        free(env->agents);
+        free(env->road_elements);
+        free(env->road_scenario_ids);
+        free(env->active_agent_indices);
+        free(env->static_agent_indices);
+        free(env->expert_static_agent_indices);
+        if (env->tracks_to_predict_indices != NULL) {
+            free(env->tracks_to_predict_indices);
+            env->tracks_to_predict_indices = NULL;
+        }
+        free(env);
     }
 
     if (total_agent_count >= num_agents) {
@@ -410,6 +429,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->spawn_settings = spawn_settings;
 
     env->num_agents = max_agents;
+    env->spawn_settings.max_agents_in_sim = max_agents;
     if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         env->spawn_settings.max_agents_in_sim =
             max_agents_per_env; // INIT_VARIABLE_AGENT_NUMBER only supports controlled agents
