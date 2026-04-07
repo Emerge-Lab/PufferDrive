@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import copy
+import os
 import time
 from collections import defaultdict
 
 from .checkpoint import load_experiment_checkpoint, save_experiment_checkpoint
 from .config import MFPBTConfig
 from .genetics import apply_mf_pbt_genetics, mf_pbt_genetics, perturbation
+from .logging import MFPBT_Logger
 from .scheduler import WorkerPoolScheduler
 from .types import AgentMetadata, AgentState, ExperimentState, TrainerState
 
@@ -22,6 +24,17 @@ class MFPBTController:
         self.scheduler = scheduler
         self.checkpoint_path = checkpoint_path or config.checkpoint_path
         self.explore_fns = {hp_name: perturbation(config.perturb_factors) for hp_name in config.tune_hyperparameters}
+        self.csv_logger = self._build_csv_logger()
+
+    def _build_csv_logger(self):
+        if self.config.log_dir is not None:
+            return MFPBT_Logger(self.config.log_dir)
+
+        if self.checkpoint_path:
+            checkpoint_dir = os.path.dirname(self.checkpoint_path) or "."
+            return MFPBT_Logger(os.path.join(checkpoint_dir, "logs"))
+
+        return None
 
     def initialize_experiment(self) -> ExperimentState:
         if self.checkpoint_path:
@@ -103,6 +116,14 @@ class MFPBTController:
 
         if self.checkpoint_path:
             save_experiment_checkpoint(next_state, self.checkpoint_path)
+
+        if self.csv_logger is not None:
+            self.csv_logger.log_round(
+                round_index=experiment_state.round_index,
+                agents=updated_agents,
+                frequencies=self.config.frequencies,
+                need_explore=need_explore,
+            )
 
         return next_state
 

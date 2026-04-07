@@ -40,6 +40,10 @@ eval_simulation_mode: gigaflow
 # and full trainer states for restart.
 checkpoint_path: experiments/mfpbt/checkpoint.pt
 
+# Optional directory for MF-PBT CSV logs.
+# If omitted, logs are written next to checkpoint_path under a logs/ folder.
+# log_dir: experiments/mfpbt/logs
+
 # Initial hyperparameter values for the starting population.
 hyperparameters:
   learning_rate: 0.0005

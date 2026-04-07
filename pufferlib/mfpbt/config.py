@@ -22,6 +22,7 @@ class MFPBTConfig:
     eval_num_agents: int | None = None
     eval_num_carla_maps: int = 8
     checkpoint_path: str | None = None
+    log_dir: str | None = None
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     tune_hyperparameters: list[str] = field(default_factory=list)
     perturb_factors: list[float] = field(default_factory=lambda: [0.8, 1.25])

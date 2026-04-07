@@ -931,7 +931,7 @@ class PuffeRL:
 
         current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
 
-        if current_score > self.best_score:
+        if self.config.get("save_best_model", True) and current_score > self.best_score:
             self.best_score = current_score
 
             best_state_file = os.path.join(path, f"best_models/best_trainer_state_{self.epoch:06d}.pt")
