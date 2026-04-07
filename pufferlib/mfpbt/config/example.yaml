@@ -25,6 +25,15 @@ round_train_env_steps: 10_000_000
 # Post-round evaluation metric used for ranking and genetics.
 selection_metric: puffer_score
 
+# MF-PBT evaluation mode. Defaults to gigaflow in the MF-PBT controller.
+eval_simulation_mode: gigaflow
+
+# Optional MF-PBT-specific evaluation overrides.
+# eval_map_dir: pufferlib/resources/drive/binaries/carla
+# eval_num_scenarios: 250
+# eval_num_agents: 512
+# eval_num_carla_maps: 8
+
 # Path to the full MF-PBT experiment checkpoint written by the controller.
 # This is intended to store the whole experiment state, not just model weights:
 # round index, agent metadata, hyperparameters, scores, env_steps,

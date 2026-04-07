@@ -1765,7 +1765,7 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
                 "simulation_mode": "gigaflow",
                 "resample_frequency": 500,
                 "scenario_length": 500,
-                "map_dir": "pufferlib/resources/drive/binaries/carla",
+                "map_dir": map_dir or "pufferlib/resources/drive/binaries/carla",
                 "num_maps": num_carla_maps,
                 "num_agents": num_agents,
                 "termination_mode": 0.0,
@@ -1778,10 +1778,9 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
                 "simulation_mode": "replay",
                 "resample_frequency": 91,
                 "scenario_length": 91,
-                "map_dir": "pufferlib/resources/drive/binaries/eval",
+                "map_dir": map_dir or "pufferlib/resources/drive/binaries/eval",
                 "num_maps": num_scenarios,
                 "num_agents": num_agents,
-                "reward_traffic_light_violation": 1.0,
                 "termination_mode": 0.0,
             }
         }

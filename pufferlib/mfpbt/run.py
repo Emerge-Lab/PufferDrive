@@ -66,6 +66,11 @@ def main():
         env_name=args.env_name,
         base_args=base_args,
         selection_metric=mfpbt_config.selection_metric,
+        eval_simulation_mode=mfpbt_config.eval_simulation_mode,
+        eval_map_dir=mfpbt_config.eval_map_dir,
+        eval_num_scenarios=mfpbt_config.eval_num_scenarios,
+        eval_num_agents=mfpbt_config.eval_num_agents,
+        eval_num_carla_maps=mfpbt_config.eval_num_carla_maps,
     )
     run_mfpbt(mfpbt_config, scheduler, num_rounds=mfpbt_config.num_rounds)
 

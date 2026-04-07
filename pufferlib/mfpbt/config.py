@@ -16,6 +16,11 @@ class MFPBTConfig:
     num_rounds: int
     round_train_env_steps: int
     selection_metric: str = "puffer_score"
+    eval_simulation_mode: str = "gigaflow"
+    eval_map_dir: str | None = None
+    eval_num_scenarios: int | None = None
+    eval_num_agents: int | None = None
+    eval_num_carla_maps: int = 8
     checkpoint_path: str | None = None
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     tune_hyperparameters: list[str] = field(default_factory=list)
@@ -51,6 +56,10 @@ class MFPBTConfig:
             raise ValueError("num_rounds must be positive")
         if self.round_train_env_steps <= 0:
             raise ValueError("round_train_env_steps must be positive")
+        if self.eval_simulation_mode not in ("gigaflow", "replay"):
+            raise ValueError("eval_simulation_mode must be 'gigaflow' or 'replay'")
+        if self.eval_num_carla_maps <= 0:
+            raise ValueError("eval_num_carla_maps must be positive")
         for hp_name in self.tune_hyperparameters:
             if hp_name not in self.hyperparameters:
                 raise ValueError(f"Missing initial value for tuned hyperparameter: {hp_name}")

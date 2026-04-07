@@ -20,11 +20,21 @@ class PufferLTrainerBackend(TrainerBackend):
         env_name: str,
         base_args: dict,
         selection_metric: str,
+        eval_simulation_mode: str = "gigaflow",
+        eval_map_dir: str | None = None,
+        eval_num_scenarios: int | None = None,
+        eval_num_agents: int | None = None,
+        eval_num_carla_maps: int = 8,
     ):
         super().__init__(device_id=device_id)
         self.env_name = env_name
         self.base_args = base_args
         self.selection_metric = selection_metric
+        self.eval_simulation_mode = eval_simulation_mode
+        self.eval_map_dir = eval_map_dir
+        self.eval_num_scenarios = eval_num_scenarios
+        self.eval_num_agents = eval_num_agents
+        self.eval_num_carla_maps = eval_num_carla_maps
 
     def _make_train_args(self, hyperparameters: dict, round_budget: int) -> dict:
         args = copy.deepcopy(self.base_args)
@@ -47,12 +57,22 @@ class PufferLTrainerBackend(TrainerBackend):
 
     def _make_eval_args(self, hyperparameters: dict, global_step: int, seed: int | None, global_id: int) -> dict:
         eval_cfg = self.base_args["eval"]
+        simulation_mode = self.eval_simulation_mode
+        num_agents = self.eval_num_agents or eval_cfg["num_agents"]
+        num_scenarios = self.eval_num_scenarios or eval_cfg["multi_scenario_num_scenarios"]
+        if self.eval_map_dir is not None:
+            map_dir = self.eval_map_dir
+        elif simulation_mode == "gigaflow":
+            map_dir = "pufferlib/resources/drive/binaries/carla"
+        else:
+            map_dir = eval_cfg["map_dir"]
+
         eval_overrides = build_eval_overrides(
-            simulation_mode=eval_cfg["multi_scenario_simulation_mode"],
-            num_agents=eval_cfg["num_agents"],
-            num_scenarios=eval_cfg["multi_scenario_num_scenarios"],
-            map_dir=eval_cfg["map_dir"],
-            num_carla_maps=eval_cfg.get("num_carla_maps", 8),
+            simulation_mode=simulation_mode,
+            num_agents=num_agents,
+            num_scenarios=num_scenarios,
+            map_dir=map_dir,
+            num_carla_maps=self.eval_num_carla_maps,
         )
 
         args = copy.deepcopy(self.base_args)
@@ -71,8 +91,8 @@ class PufferLTrainerBackend(TrainerBackend):
             train_args["seed"] = seed
 
         args["global_step"] = global_step
-        args["num_scenarios"] = eval_cfg["multi_scenario_num_scenarios"]
-        args["eval_simulation"] = eval_cfg["multi_scenario_simulation_mode"]
+        args["num_scenarios"] = num_scenarios
+        args["eval_simulation"] = simulation_mode
         args["inline_eval"] = True
         args["eval_results_dir"] = tempfile.mkdtemp(prefix=f"mfpbt_eval_agent_{global_id}_")
         return args
