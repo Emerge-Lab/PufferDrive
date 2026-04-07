@@ -302,6 +302,10 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env->active_agent_indices);
         free(env->static_agent_indices);
         free(env->expert_static_agent_indices);
+        if (env->tracks_to_predict_indices != NULL) {
+            free(env->tracks_to_predict_indices);
+            env->tracks_to_predict_indices = NULL;
+        }
         free(env);
     }
 
