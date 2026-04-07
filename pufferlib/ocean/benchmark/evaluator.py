@@ -1111,7 +1111,7 @@ class SafeEvaluator:
     args dict — only the env_name, safe_eval config, and device.
     """
 
-    def __init__(self, env_name: str, safe_eval_config: Dict, device="cuda", logger=None):
+    def __init__(self, env_name: str, safe_eval_config: Dict, device="cuda", logger=None, full_config=None):
         self.env_name = env_name
         self.logger = logger
         self.safe_eval_config = safe_eval_config
@@ -1122,6 +1122,30 @@ class SafeEvaluator:
             device = f"cuda:{device}"
         self.device = device
         self.stats = None
+        self.render_safe_eval = safe_eval_config.get("render_safe_eval", False)
+        # Resolve view modes from [eval].render_view_mode
+        from pufferlib.ocean.drive.drive import RenderView
+
+        _VIEW_MODE_MAP = {
+            "sim_state": [RenderView.FULL_SIM_STATE],
+            "topdown": [RenderView.FULL_SIM_STATE],
+            "bev": [RenderView.BEV_AGENT_OBS],
+            "agent": [RenderView.BEV_AGENT_OBS],
+            "persp": [RenderView.AGENT_PERSP],
+            "both": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP],
+            "all": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP, RenderView.BEV_AGENT_OBS],
+        }
+        self._view_suffix = {
+            RenderView.FULL_SIM_STATE: "sim_state",
+            RenderView.AGENT_PERSP: "persp",
+            RenderView.BEV_AGENT_OBS: "bev",
+        }
+        view_mode_str = "sim_state"
+        if full_config is not None:
+            view_mode_str = (
+                str(full_config.get("eval", {}).get("render_view_mode", "sim_state")).lower().strip('"').strip("'")
+            )
+        self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
 
     def _build_eval_env_config(self):
         """Build env config with safe reward conditioning values applied.
@@ -1233,6 +1257,85 @@ class SafeEvaluator:
 
         self.stats = {k: float(np.mean(v)) for k, v in all_stats.items() if len(v) > 0}
         return self.stats
+
+    def render(self, eval_config, policy):
+        """Run a single rollout with rendering enabled, one env per view mode.
+
+        Always renders env index 0 (first env). Uses [eval].render_view_mode.
+        Produces .mp4 files on disk (flushed when each render_env is closed).
+        """
+        from pufferlib.ocean.drive.drive import RenderView
+        from pufferlib.pufferl import load_env
+        import copy
+
+        multi_view = len(self.render_view_modes) > 1
+        for view_mode in self.render_view_modes:
+            suffix = f"_{self._view_suffix[view_mode]}" if multi_view else ""
+            render_cfg = copy.deepcopy(eval_config)
+            render_cfg["env"]["render_mode"] = 1
+            render_env = load_env(self.env_name, render_cfg)
+            driver = render_env.driver_env
+            if suffix:
+                driver.set_video_suffix(suffix, env_id=0)
+            try:
+                num_agents = render_env.observation_space.shape[0]
+                use_rnn = hasattr(policy, "hidden_size")
+                ob, _ = render_env.reset()
+                state = {}
+                if use_rnn:
+                    state = dict(
+                        lstm_h=torch.zeros(num_agents, policy.hidden_size, device=self.device),
+                        lstm_c=torch.zeros(num_agents, policy.hidden_size, device=self.device),
+                    )
+                for _ in range(self.episode_length):
+                    driver.render(view_mode=view_mode, env_id=0)
+                    with torch.no_grad():
+                        ob_t = torch.as_tensor(ob).to(self.device)
+                        logits, value = policy.forward_eval(ob_t, state)
+                        action, _, _ = pufferlib.pytorch.sample_logits(logits)
+                        action_np = action.cpu().numpy().reshape(render_env.action_space.shape)
+                    if isinstance(logits, torch.distributions.Normal):
+                        action_np = np.clip(action_np, render_env.action_space.low, render_env.action_space.high)
+                    ob, _, _, truncs, _ = render_env.step(action_np)
+                    if truncs.all():
+                        break
+            finally:
+                render_env.close()
+
+    def log_videos(self, epoch):
+        """Glob .mp4 files produced by render() and log them to wandb under render/safe_eval."""
+        import os
+        import glob
+
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            for p in glob.glob("*.mp4"):
+                os.remove(p)
+            return
+
+        import wandb
+
+        video_files = glob.glob("*.mp4")
+        if not video_files:
+            print("Warning: safe_eval render produced no mp4 files")
+            return
+
+        multi_view = len(self.render_view_modes) > 1
+        _known_suffixes = {"_sim_state", "_persp", "_bev"}
+        for p in video_files:
+            stem = os.path.splitext(os.path.basename(p))[0]
+            view_tag = ""
+            if multi_view:
+                for s in _known_suffixes:
+                    if stem.endswith(s):
+                        view_tag = s[1:]
+                        stem = stem[: -len(s)]
+                        break
+            caption = f"scene_{stem}_epoch_{epoch}_safe_eval"
+            wandb_key = f"render/safe_eval/{view_tag}" if view_tag else "render/safe_eval"
+            self.logger.wandb.log({wandb_key: wandb.Video(p, format="mp4", caption=caption)})
+
+        for p in video_files:
+            os.remove(p)
 
     def log_stats(self, global_step=None):
         """Log collected metrics to wandb."""

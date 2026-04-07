@@ -557,7 +557,9 @@ class PuffeRL:
             self.msg = "Running safe eval..."
             env_name = self.config["env"]
             safe_eval_config = self.config.get("safe_eval", {})
-            evaluator = SafeEvaluator(env_name, safe_eval_config, device=self.config["device"], logger=self.logger)
+            evaluator = SafeEvaluator(
+                env_name, safe_eval_config, device=self.config["device"], logger=self.logger, full_config=self.config
+            )
             eval_config = evaluator._build_eval_env_config()
 
             vecenv = load_env(env_name, eval_config)
@@ -571,6 +573,11 @@ class PuffeRL:
 
             metrics = evaluator.evaluate(vecenv, policy)
             evaluator.log_stats(global_step=self.global_step)
+
+            if evaluator.render_safe_eval:
+                self.msg = "Rendering safe eval..."
+                evaluator.render(eval_config, policy)
+                evaluator.log_videos(epoch=self.epoch)
 
             self.msg = f"Safe eval: {len(metrics)} metrics logged"
         except Exception as e:
