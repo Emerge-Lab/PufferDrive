@@ -733,7 +733,6 @@ class PuffeRL:
         from pufferlib.ocean.benchmark.evaluator import DrivingBehavioursEvaluator
 
         env_name = self.config["env"]
-        render_enabled = self.config.get("train", {}).get("render", False)
         evaluator = DrivingBehavioursEvaluator(
             env_name=env_name,
             behaviours_config=behaviours_config,
@@ -767,45 +766,46 @@ class PuffeRL:
                 num_ran += 1
 
         # Render a video for each driving behaviour class
-        if render_enabled:
-            for class_name, class_cfg in evaluator.classes:
-                if not class_cfg.get("render_eval", False):
-                    continue
-                short = class_name[len(DrivingBehavioursEvaluator.EVAL_SECTIONS_PREFIX) :]
-                map_dir = class_cfg.get("map_dir", "")
-                if isinstance(map_dir, str):
-                    map_dir = map_dir.strip('"')
-                try:
-                    model_dir = os.path.join(self.config["data_dir"], f"{env_name}_{self.logger.run_id}")
-                    bin_path = f"{model_dir}_driving_behaviours_{class_name}_epoch_{self.epoch:06d}.bin"
+        for class_name, class_cfg in evaluator.classes:
+            print(f'Class render_cfg for "{class_name}": {class_cfg}')
+            if not class_cfg.get("render_eval", False):
+                continue
+            print(f"DrivingBehavioursEval: rendering videos for {num_ran}/{len(evaluator.classes)} classes")
+            short = class_name[len(DrivingBehavioursEvaluator.EVAL_SECTIONS_PREFIX) :]
+            map_dir = class_cfg.get("map_dir", "")
+            if isinstance(map_dir, str):
+                map_dir = map_dir.strip('"')
+            try:
+                model_dir = os.path.join(self.config["data_dir"], f"{env_name}_{self.logger.run_id}")
+                bin_path = f"{model_dir}_driving_behaviours_{class_name}_epoch_{self.epoch:06d}.bin"
 
-                    export(
-                        args={"env_name": env_name, "load_model_path": "unused", **self.config},
-                        env_name=env_name,
-                        vecenv=self.vecenv,
-                        policy=self.uncompiled_policy,
-                        path=bin_path,
-                        silent=True,
-                    )
+                export(
+                    args={"env_name": env_name, "load_model_path": "unused", **self.config},
+                    env_name=env_name,
+                    vecenv=self.vecenv,
+                    policy=self.uncompiled_policy,
+                    path=bin_path,
+                    silent=True,
+                )
 
-                    render_ini = pufferlib.utils.generate_env_ini(
-                        {
-                            "control_mode": '"control_sdc_only"',
-                            "init_mode": "create_all_valid",
-                        },
-                        prefix=f"driving_behaviours_{class_name}_render_",
-                    )
+                render_ini = pufferlib.utils.generate_env_ini(
+                    {
+                        "control_mode": '"control_sdc_only"',
+                        "init_mode": "create_all_valid",
+                    },
+                    prefix=f"driving_behaviours_{class_name}_render_",
+                )
 
-                    self._render_videos(
-                        bin_path=bin_path,
-                        map_dir=map_dir,
-                        wandb_prefix=f"driving_behaviours/{short}",
-                        config_path=render_ini,
-                        cleanup_files=[bin_path, render_ini],
-                    )
-                except Exception as e:
-                    print(f"DrivingBehavioursEval: render failed for {short}: {e}")
-                    traceback.print_exc()
+                self._render_videos(
+                    bin_path=bin_path,
+                    map_dir=map_dir,
+                    wandb_prefix=f"driving_behaviours/{short}",
+                    config_path=render_ini,
+                    cleanup_files=[bin_path, render_ini],
+                )
+            except Exception as e:
+                print(f"DrivingBehavioursEval: render failed for {short}: {e}")
+                traceback.print_exc()
 
         self.msg = f"Driving behaviours eval complete: {num_ran}/{len(evaluator.classes)} classes evaluated"
 
