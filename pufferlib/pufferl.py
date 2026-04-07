@@ -261,6 +261,53 @@ class PuffeRL:
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
 
+    def export_trainer_state(self):
+        from pufferlib.mfpbt.types import TrainerState
+
+        return TrainerState(
+            model_state=copy.deepcopy(self.uncompiled_policy.state_dict()),
+            optimizer_state=copy.deepcopy(self.optimizer.state_dict()),
+            scheduler_state=copy.deepcopy(self.scheduler.state_dict()),
+            extra_state={
+                "config_learning_rate": self.config["learning_rate"],
+                "epoch": self.epoch,
+                "global_step": self.global_step,
+                "last_log_step": self.last_log_step,
+                "last_log_time": self.last_log_time,
+                "start_time": self.start_time,
+                "best_score": self.best_score,
+                "ema_max": self.ema_max,
+                "last_stats": dict(self.last_stats),
+                "losses": dict(self.losses),
+            },
+        )
+
+    def import_trainer_state(self, trainer_state):
+        self.uncompiled_policy.load_state_dict(copy.deepcopy(trainer_state.model_state))
+        self.optimizer.load_state_dict(copy.deepcopy(trainer_state.optimizer_state))
+
+        if trainer_state.scheduler_state is not None:
+            self.scheduler.load_state_dict(copy.deepcopy(trainer_state.scheduler_state))
+
+        extra_state = trainer_state.extra_state or {}
+        self.config["learning_rate"] = extra_state.get("config_learning_rate", self.config["learning_rate"])
+        self.epoch = extra_state.get("epoch", self.epoch)
+        self.global_step = extra_state.get("global_step", self.global_step)
+        self.last_log_step = extra_state.get("last_log_step", self.last_log_step)
+        self.last_log_time = extra_state.get("last_log_time", self.last_log_time)
+        self.start_time = extra_state.get("start_time", self.start_time)
+        self.best_score = extra_state.get("best_score", self.best_score)
+        self.ema_max = extra_state.get("ema_max", self.ema_max)
+        self.last_stats = defaultdict(list, extra_state.get("last_stats", {}))
+        self.losses = extra_state.get("losses", {})
+
+    def set_hyperparameters(self, hyperparameters):
+        if "learning_rate" in hyperparameters:
+            learning_rate = hyperparameters["learning_rate"]
+            self.config["learning_rate"] = learning_rate
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = learning_rate
+
     @property
     def uptime(self):
         return time.time() - self.start_time
@@ -860,10 +907,21 @@ class PuffeRL:
         torch.save(self.uncompiled_policy.state_dict(), model_path)
 
         state = {
+            "model_state_dict": self.uncompiled_policy.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),
             "global_step": self.global_step,
             "agent_step": self.global_step,
             "update": self.epoch,
+            "epoch": self.epoch,
+            "learning_rate": self.config["learning_rate"],
+            "best_score": self.best_score,
+            "ema_max": self.ema_max,
+            "last_log_step": self.last_log_step,
+            "last_log_time": self.last_log_time,
+            "start_time": self.start_time,
+            "last_stats": dict(self.last_stats),
+            "losses": dict(self.losses),
             "model_name": model_name,
             "run_id": run_id,
         }
@@ -2425,6 +2483,16 @@ def load_policy(args, vecenv, env_name=""):
         # pufferl.optimizer.load_state_dict(optim_state)
 
     return policy
+
+
+def export_pufferl_trainer_state(pufferl):
+    return pufferl.export_trainer_state()
+
+
+def import_pufferl_trainer_state(pufferl, trainer_state, hyperparameters=None):
+    pufferl.import_trainer_state(trainer_state)
+    if hyperparameters is not None:
+        pufferl.set_hyperparameters(hyperparameters)
 
 
 def load_config(env_name, config_dir=None):
