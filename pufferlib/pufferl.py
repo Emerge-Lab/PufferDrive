@@ -2081,6 +2081,7 @@ def eval_multi_scenarios(
 
     # Close vectorized environment to avoid file descriptor leaks
     vecenv.close()
+    return avg_infos
 
 
 def eval_multi_scenarios_render(
@@ -2495,7 +2496,7 @@ def import_pufferl_trainer_state(pufferl, trainer_state, hyperparameters=None):
         pufferl.set_hyperparameters(hyperparameters)
 
 
-def load_config(env_name, config_dir=None):
+def load_config(env_name, config_dir=None, argv=None):
     parser = argparse.ArgumentParser(
         description=f":blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]"
         " demo options. Shows valid args for your env and policy",
@@ -2535,7 +2536,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument(
         "--eval_simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
     )
-    args = parser.parse_known_args()[0]
+    args = parser.parse_known_args(argv)[0]
 
     if config_dir is None:
         puffer_dir = os.path.dirname(os.path.realpath(__file__))
@@ -2575,7 +2576,7 @@ def load_config(env_name, config_dir=None):
     )
 
     # Unpack to nested dict
-    parsed = vars(parser.parse_args())
+    parsed = vars(parser.parse_args(argv))
     args = defaultdict(dict)
     for key, value in parsed.items():
         next = args

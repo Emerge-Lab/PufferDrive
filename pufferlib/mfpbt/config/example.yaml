@@ -16,6 +16,9 @@ num_devices: 4
 # Total concurrency = num_devices * num_agents_per_device.
 num_agents_per_device: 2
 
+# Number of MF-PBT rounds to run.
+num_rounds: 100
+
 # Per-round training budget for each agent, expressed as additional env steps.
 round_train_env_steps: 10_000_000
 

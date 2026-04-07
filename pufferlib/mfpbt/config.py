@@ -13,6 +13,7 @@ class MFPBTConfig:
     frequencies: list[int]
     num_devices: int
     num_agents_per_device: int
+    num_rounds: int
     round_train_env_steps: int
     selection_metric: str = "puffer_score"
     checkpoint_path: str | None = None
@@ -46,6 +47,8 @@ class MFPBTConfig:
             raise ValueError("num_agents must be divisible by num_populations")
         if self.num_agents_per_population % 4 != 0:
             raise ValueError("num_agents_per_population must be divisible by 4")
+        if self.num_rounds <= 0:
+            raise ValueError("num_rounds must be positive")
         if self.round_train_env_steps <= 0:
             raise ValueError("round_train_env_steps must be positive")
         for hp_name in self.tune_hyperparameters:

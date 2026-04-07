@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
 import queue
 from collections.abc import Callable
 
@@ -16,6 +17,7 @@ def _worker_main(
     result_queue,
     backend_kwargs: dict,
 ) -> None:
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(device_id)
     backend = backend_factory(device_id=device_id, **backend_kwargs)
 
     try:
