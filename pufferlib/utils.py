@@ -151,6 +151,9 @@ def run_driving_behaviour_class_eval_in_subprocess(config, class_name, class_cfg
         if isinstance(map_dir, str):
             map_dir = map_dir.strip('"')
 
+        # control_sdc_only needs exactly 1 agent per sub-env (map).
+        available_maps = len([f for f in os.listdir(map_dir) if f.endswith(".bin")]) if os.path.isdir(map_dir) else 1
+
         cmd = [
             sys.executable,
             "-m",
@@ -165,20 +168,25 @@ def run_driving_behaviour_class_eval_in_subprocess(config, class_name, class_cfg
             "True",
             "--eval.human-replay-control-mode",
             "control_sdc_only",
-            "--env.map-dir",
+            "--eval.map-dir",
             map_dir,
-            "--env.init-mode",
-            "create_all_valid",
-            "--env.episode-length",
-            "91",
+            # Load exactly the maps available in the eval set.
+            "--env.num-maps",
+            str(available_maps),
+            # One agent per map (control_sdc_only) avoids OOM and matches coverage.
+            "--eval.human-replay-num-agents",
+            str(available_maps),
             "--env.resample-frequency",
             "0",
         ]
 
-        # Fix reward conditioning: set both min and max to the eval value
+        # Pass safe reward conditioning: set both min and max to the eval value.
+        # Use --flag=value form so argparse doesn't mistake negative numbers for flags.
         for key, val in reward_config.items():
-            cmd += [f"--env.reward-bound-{key.replace('_', '-')}-min", str(val)]
-            cmd += [f"--env.reward-bound-{key.replace('_', '-')}-max", str(val)]
+            flag = f"--env.reward-bound-{key.replace('_', '-')}"
+            cmd += [f"{flag}-min={val}", f"{flag}-max={val}"]
+
+        print(f"[DrivingBehavioursEval] Running eval for {class_name} with command: {' '.join(cmd)}")
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
 

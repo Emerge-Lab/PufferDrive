@@ -742,6 +742,9 @@ class PuffeRL:
         )
         print(f"DrivingBehavioursEval: loaded config for {len(evaluator.classes)} classes")
 
+        # Saving checkpoint even though it's not checkpoint interval because eval in subprocess needs it
+        self.save_checkpoint()
+
         all_results = {}
         num_ran = 0
 
