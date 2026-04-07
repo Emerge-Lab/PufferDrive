@@ -258,6 +258,8 @@ struct Log {
     float reward_reverse_total;
     float reward_overspeed_total;
     float reward_jerk_total;
+    float alive_fraction;
+    float alive_fraction_count;
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -1682,7 +1684,7 @@ void add_log(Drive *env) {
         float infraction_count = env->logs[i].offroad_per_agent + env->logs[i].collisions_per_agent;
         env->log.total_distance_travelled += agent->distance_since_spawn;
         env->log.total_infractions += infraction_count;
-        env->log.distance_without_collision += env->logs[i].distance_without_collision;
+        // distance_without_collision now computed fleet-wide in my_log as total_distance / total_collisions
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
@@ -2316,6 +2318,7 @@ void allocate(Drive *env) {
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
     env->terminals = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
     env->truncations = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
+    env->is_invalid_step = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
 }
 
 void free_allocated(Drive *env) {
@@ -2324,6 +2327,7 @@ void free_allocated(Drive *env) {
     free(env->rewards);
     free(env->terminals);
     free(env->truncations);
+    free(env->is_invalid_step);
     c_close(env);
 }
 
@@ -3251,9 +3255,7 @@ void c_step(Drive *env) {
         }
         compute_agent_metrics(env, agent_idx);
         int collision_state = agent->collision_state;
-        if (collision_state == NO_COLLISION) {
-            env->logs[i].distance_without_collision = agent->cumulative_displacement;
-        }
+        // distance_without_collision is now computed fleet-wide in my_log
         float cos_heading = cosf(agent->sim_heading);
         float sin_heading = sinf(agent->sim_heading);
         float speed_magnitude = sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy);
@@ -3316,6 +3318,8 @@ void c_step(Drive *env) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
                 env->log.reward_goal_total += env->reward_goal_post_respawn;
+                env->log.avg_goal_distance += agent->sampled_goal_distance;
+                env->log.goal_distance_count += 1.0f;
                 agent->current_goal_reached = 1;
             } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!agent->current_goal_reached)) {
                 env->rewards[i] += env->reward_goal;
@@ -3331,6 +3335,9 @@ void c_step(Drive *env) {
                 }
                 env->logs[i].score += agent->score_for_current_goal;
                 agent->score_for_current_goal = 0.0f;
+
+                env->log.avg_goal_distance += agent->sampled_goal_distance;
+                env->log.goal_distance_count += 1.0f;
 
                 agent->prev_goal_x = agent->goal_position_x;
                 agent->prev_goal_y = agent->goal_position_y;
@@ -3489,6 +3496,8 @@ void c_step(Drive *env) {
         }
     }
     float stopped_fraction = (float)stopped_count / (float)env->active_agent_count;
+    env->log.alive_fraction += 1.0f - stopped_fraction;
+    env->log.alive_fraction_count += 1.0f;
     int reached_stopped_threshold =
         (env->stopped_reset_threshold > 0.0f && stopped_fraction >= env->stopped_reset_threshold);
     int reached_time_limit = env->timestep >= env->episode_length;
@@ -4447,8 +4456,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 agent->goal_position_z = point_z;
                 sample_new_goal_radius(env, agent);
                 agent->goals_sampled_this_episode += 1.0f;
-                env->log.avg_goal_distance += distance;
-                env->log.goal_distance_count += 1.0f;
+                agent->sampled_goal_distance = distance;
                 return;
                 // if not check whether is closer than the previous best alternative point
             } else if (distance_error < best_distance_error) {
@@ -4473,8 +4481,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
     agent->goal_position_z = best_z;
     float goal_dist = sqrtf((best_x - agent->sim_x) * (best_x - agent->sim_x) +
                             (best_y - agent->sim_y) * (best_y - agent->sim_y));
-    env->log.avg_goal_distance += goal_dist;
-    env->log.goal_distance_count += 1.0f;
+    agent->sampled_goal_distance = goal_dist;
     sample_new_goal_radius(env, agent);
     agent->goals_sampled_this_episode += 1.0f;
 }

@@ -439,7 +439,9 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
     float avg_distance_per_infraction = log->total_distance_travelled / fmaxf(0.001f, log->total_infractions);
     assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
-    assign_to_dict(dict, "distance_without_collision", log->distance_without_collision);
+    float distance_without_collision =
+        log->total_distance_travelled / fmaxf(0.001f, log->collisions_per_agent);
+    assign_to_dict(dict, "distance_without_collision", distance_without_collision);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
@@ -461,5 +463,7 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "reward_reverse", log->reward_reverse_total);
     assign_to_dict(dict, "reward_overspeed", log->reward_overspeed_total);
     assign_to_dict(dict, "reward_jerk", log->reward_jerk_total);
+    float alive_frac = (log->alive_fraction_count > 0) ? log->alive_fraction / log->alive_fraction_count : 1.0f;
+    assign_to_dict(dict, "alive_fraction", alive_frac);
     return 0;
 }
