@@ -742,37 +742,26 @@ class PuffeRL:
         )
         print(f"DrivingBehavioursEval: loaded config for {len(evaluator.classes)} classes")
 
-        # Close training env to free memory before creating eval envs
-        self.vecenv.close()
-        gc.collect()
-
         all_results = {}
         num_ran = 0
 
-        # Evaluate on all driving behaviour classes
+        # Evaluate on all driving behaviour classes via subprocess (no load_env in training process)
         for class_name, class_cfg in evaluator.classes:
             if not class_cfg.get("human_replay_eval", False):
                 continue
             short = class_name[len(DrivingBehavioursEvaluator.EVAL_SECTIONS_PREFIX) :]
             self.msg = f"Running driving behaviours eval: {short}..."
-            try:
-                results = evaluator.evaluate_class(class_cfg, self.uncompiled_policy)
+            results = pufferlib.utils.run_driving_behaviour_class_eval_in_subprocess(
+                config=self.config,
+                class_name=class_name,
+                class_cfg=class_cfg,
+                reward_config=evaluator.reward_config,
+                logger=self.logger,
+                global_step=self.global_step,
+            )
+            if results:
                 all_results[class_name] = results
                 num_ran += 1
-                print(f"[DrivingBehavioursEval] {short}: {results}")
-            except Exception as e:
-                print(f"DrivingBehavioursEval: eval failed for {short}: {e}")
-                traceback.print_exc()
-
-        evaluator.log_stats(all_results, global_step=self.global_step)
-
-        # Reopen training env before rendering (export uses self.vecenv)
-        reopen_args = {
-            "package": self.config["package"],
-            "env": self.config["env_config"],
-            "vec": self.config["vec_config"],
-        }
-        self.vecenv = load_env(env_name, reopen_args)
 
         # Render a video for each driving behaviour class
         if render_enabled:

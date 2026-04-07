@@ -129,6 +129,94 @@ def run_human_replay_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run human replay evaluation: {e}")
 
 
+def run_driving_behaviour_class_eval_in_subprocess(config, class_name, class_cfg, reward_config, logger, global_step):
+    """
+    Run a single driving behaviour class eval in a subprocess via human replay.
+    Uses the latest checkpoint and passes class-specific map_dir and reward bounds as CLI args.
+    Logs results to wandb under driving_behaviours/<short>/<metric>.
+    """
+    EVAL_SECTIONS_PREFIX = "eval_"
+    try:
+        run_id = logger.run_id
+        model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
+        model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+
+        if not model_files:
+            print(f"[DrivingBehavioursEval] No model files found, skipping {class_name}")
+            return {}
+
+        latest_cpt = max(model_files, key=os.path.getctime)
+
+        map_dir = class_cfg.get("map_dir", "")
+        if isinstance(map_dir, str):
+            map_dir = map_dir.strip('"')
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "pufferlib.pufferl",
+            "eval",
+            config["env"],
+            "--load-model-path",
+            latest_cpt,
+            "--eval.wosac-realism-eval",
+            "False",
+            "--eval.human-replay-eval",
+            "True",
+            "--eval.human-replay-control-mode",
+            "control_sdc_only",
+            "--env.map-dir",
+            map_dir,
+            "--env.init-mode",
+            "create_all_valid",
+            "--env.episode-length",
+            "91",
+            "--env.resample-frequency",
+            "0",
+        ]
+
+        # Fix reward conditioning: set both min and max to the eval value
+        for key, val in reward_config.items():
+            cmd += [f"--env.reward-bound-{key.replace('_', '-')}-min", str(val)]
+            cmd += [f"--env.reward-bound-{key.replace('_', '-')}-max", str(val)]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
+
+        if result.returncode != 0:
+            print(
+                f"[DrivingBehavioursEval] Subprocess failed for {class_name} "
+                f"(exit {result.returncode}):\n{result.stderr}"
+            )
+            return {}
+
+        stdout = result.stdout
+        if "HUMAN_REPLAY_METRICS_START" not in stdout or "HUMAN_REPLAY_METRICS_END" not in stdout:
+            print(f"[DrivingBehavioursEval] No metrics found in subprocess output for {class_name}")
+            return {}
+
+        start = stdout.find("HUMAN_REPLAY_METRICS_START") + len("HUMAN_REPLAY_METRICS_START")
+        end = stdout.find("HUMAN_REPLAY_METRICS_END")
+        metrics = json.loads(stdout[start:end].strip())
+
+        short = class_name[len(EVAL_SECTIONS_PREFIX) :]
+        print(f"[DrivingBehavioursEval] {short}: {metrics}")
+
+        if hasattr(logger, "wandb") and logger.wandb:
+            payload = {f"driving_behaviours/{short}/{k}": float(v) for k, v in metrics.items()}
+            if global_step is not None:
+                payload["train_step"] = global_step
+            logger.wandb.log(payload)
+
+        return metrics
+
+    except subprocess.TimeoutExpired:
+        print(f"[DrivingBehavioursEval] Subprocess timed out for {class_name}")
+        return {}
+    except Exception as e:
+        print(f"[DrivingBehavioursEval] Failed for {class_name}: {e}")
+        return {}
+
+
 def run_wosac_eval_in_subprocess(config, logger, global_step):
     """
     Run WOSAC evaluation in a subprocess and log metrics to wandb.
