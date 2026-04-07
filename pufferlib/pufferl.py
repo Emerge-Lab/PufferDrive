@@ -1785,8 +1785,8 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
     # Common reward coefficients (same for both modes)
     common_env = {
         "eval_mode": 1,
-        "collision_behavior": 1,
-        "offroad_behavior": 1,
+        "collision_behavior": 0,
+        "offroad_behavior": 0,
         "reward_randomization": False,
         "min_agents_per_env": 30,
         "max_agents_per_env": 30,
@@ -1983,6 +1983,75 @@ def _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet):
         logger.log(log_dict, global_step)
 
 
+def _load_target_policy_for_eval(args, vecenv, env_name, target_policy=None):
+    if target_policy is not None:
+        target_policy.eval()
+        return target_policy
+
+    target_policy_path = args["train"].get("target_policy")
+    if target_policy_path is None or str(target_policy_path).lower() == "none":
+        raise pufferlib.APIUsageError("Adversarial eval requires train.target_policy")
+
+    target_args = copy.deepcopy(args)
+    target_args["load_model_path"] = target_policy_path
+    target_args["policy_name"] = "TargetDrive"
+    target_policy = load_policy(target_args, vecenv, env_name)
+    target_policy.eval()
+    return target_policy
+
+
+def _build_eval_target_mask(infos, vecenv, device):
+    num_agents_per_worker = vecenv.driver_env.num_agents
+    num_agents_per_batch = vecenv.agents_per_batch
+    target_mask = torch.zeros(num_agents_per_batch, dtype=torch.bool, device=device)
+
+    if infos is None:
+        return target_mask
+    if isinstance(infos, dict):
+        infos = [infos]
+    elif infos and isinstance(infos[0], list):
+        flattened_infos = []
+        for sub_infos in infos:
+            flattened_infos.extend(sub_infos)
+        infos = flattened_infos
+
+    env_counter = 0
+    for information in infos:
+        agent_offsets = information.get("agent_offsets")
+        if agent_offsets is None:
+            continue
+
+        agent_offsets = torch.as_tensor(agent_offsets, dtype=torch.int64, device=device)
+        target_mask[agent_offsets[:-1] + env_counter * num_agents_per_worker] = True
+        env_counter += 1
+
+    return target_mask
+
+
+def _extract_episode_summaries(infos):
+    if not infos:
+        return []
+    if isinstance(infos, dict):
+        return [infos] if "map_name" in infos else []
+    if isinstance(infos, list):
+        if not infos:
+            return []
+        if isinstance(infos[0], dict):
+            return [summary for summary in infos if isinstance(summary, dict) and "map_name" in summary]
+        if isinstance(infos[0], list):
+            summaries = []
+            for sub_infos in infos:
+                if isinstance(sub_infos, dict):
+                    if "map_name" in sub_infos:
+                        summaries.append(sub_infos)
+                elif isinstance(sub_infos, list):
+                    for summary in sub_infos:
+                        if isinstance(summary, dict) and "map_name" in summary:
+                            summaries.append(summary)
+            return summaries
+    return []
+
+
 def eval_multi_scenarios(
     env_name, args=None, vecenv=None, policy=None, logger=None, metric_prefix="validation", quiet=False
 ):
@@ -2098,19 +2167,19 @@ def eval_multi_scenarios(
                 ob, _, _, _, infos = vecenv.step(action)
 
                 # Multi-worker backend returns infos as list of lists (one per worker)
-                if infos and infos[0]:
-                    for sub_env in infos:
-                        for env_idx, summary in enumerate(sub_env):
-                            env_map_name = summary["map_name"].split("/")[-1].split(".")[0]
-                            summary["episode_id"] = env_idx
-                            summary["map_name"] = env_map_name
-                            scenarios_processed += 1
-                            pbar.update(1)
+                summaries = _extract_episode_summaries(infos)
+                if summaries:
+                    for env_idx, summary in enumerate(summaries):
+                        env_map_name = summary["map_name"].split("/")[-1].split(".")[0]
+                        summary["episode_id"] = env_idx
+                        summary["map_name"] = env_map_name
+                        scenarios_processed += 1
+                        pbar.update(1)
 
-                            for k, v in summary.items():
-                                if k not in global_infos:
-                                    global_infos[k] = []
-                                global_infos[k].append(v)
+                        for k, v in summary.items():
+                            if k not in global_infos:
+                                global_infos[k] = []
+                            global_infos[k].append(v)
 
     avg_infos = _export_metrics(
         global_infos,
@@ -2273,8 +2342,9 @@ def eval_multi_scenarios_render(
                 ob, _, _, _, infos = vecenv.step(action)
 
                 # Serial backend returns infos as single list (infos[0] is the env's info list)
-                if infos and infos[0]:
-                    for env_idx, summary in enumerate(infos[0]):
+                summaries = _extract_episode_summaries(infos)
+                if summaries:
+                    for env_idx, summary in enumerate(summaries):
                         env_map_name = summary["map_name"].split("/")[-1].split(".")[0]
                         summary["episode_id"] = batch_start + env_idx
                         summary["env_id"] = env_idx
@@ -2315,6 +2385,204 @@ def eval_multi_scenarios_render(
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
 
     # Close vectorized environment to avoid file descriptor leaks
+    vecenv.close()
+
+
+def render_adversarial(
+    env_name,
+    args=None,
+    vecenv=None,
+    policy=None,
+    target_policy=None,
+    logger=None,
+    metric_prefix="validation",
+    quiet=False,
+):
+    np.random.seed(42)
+    torch.manual_seed(42)
+
+    if args is None:
+        tmp_args = load_config(env_name)
+        model_path = tmp_args.get("load_model_path")
+        num_agents_eval = tmp_args["eval"]["num_agents"]
+        map_dir = tmp_args["eval"]["map_dir"]
+        eval_overrides = build_eval_overrides(
+            simulation_mode=tmp_args["eval_simulation"],
+            num_agents=num_agents_eval,
+            num_scenarios=tmp_args["num_scenarios"],
+            map_dir=map_dir,
+            num_carla_maps=tmp_args.get("num_carla_maps", 8),
+        )
+        args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
+
+    backend = args["vec"]["backend"]
+    if backend != "PufferEnv":
+        backend = "Serial"
+
+    args["vec"] = dict(backend=backend, num_envs=1)
+    args["env"]["num_eval_scenarios"] = args["num_scenarios"]
+
+    vecenv = vecenv or load_env(env_name, args)
+
+    policy = policy or load_policy(args, vecenv, env_name)
+    target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy)
+    num_agents = vecenv.observation_space.shape[0]
+    device = args["train"]["device"]
+
+    state = {}
+    target_state = {}
+    if args["train"]["use_rnn"]:
+        state = dict(
+            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        )
+        target_state = dict(
+            lstm_h=torch.zeros(num_agents, target_policy.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, target_policy.hidden_size, device=device),
+        )
+
+    if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
+        eval_folder = args["eval_results_dir"]
+    else:
+        model_path = args["load_model_path"]
+        model_filename_with_ext = os.path.basename(model_path)
+        model_name = os.path.splitext(model_filename_with_ext)[0]
+        models_dir = os.path.dirname(model_path)
+        experiment_dir = os.path.dirname(models_dir)
+        experiment_name = os.path.basename(experiment_dir)
+        eval_folder = os.path.join("benchmark", experiment_name, model_name, f"{args['eval_simulation']}_adversarial")
+    os.makedirs(eval_folder, exist_ok=True)
+
+    if args["render"]:
+        gif_folder = eval_folder + "/gif"
+        os.makedirs(gif_folder, exist_ok=True)
+
+    global_infos = {}
+    num_scenarios = args["num_scenarios"]
+
+    scenarios_processed = 0
+    with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
+        while scenarios_processed < num_scenarios:
+            ob, infos = vecenv.reset()
+
+            scenarios = vecenv.get_state()
+            num_envs_in_batch = len(scenarios)
+            batch_start = scenarios_processed
+
+            remaining_after_this = num_scenarios - scenarios_processed - num_envs_in_batch
+            vecenv.envs[0].batch_size_eval = max(1, remaining_after_this)
+
+            map_names = []
+            for env_idx in range(num_envs_in_batch):
+                map_names.append(scenarios[env_idx]["map_name"].split("/")[-1].split(".")[0])
+
+            if args["train"]["use_rnn"]:
+                state = dict(
+                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+                )
+                target_state = dict(
+                    lstm_h=torch.zeros(num_agents, target_policy.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, target_policy.hidden_size, device=device),
+                )
+
+            if args["render"]:
+                agent_histories = [[] for _ in range(num_envs_in_batch)]
+                traffic_histories = [[] for _ in range(num_envs_in_batch)]
+                trajectory_histories = [[] for _ in range(num_envs_in_batch)]
+                all_agents_obs_histories = [[] for _ in range(num_envs_in_batch)]
+
+            for t in range(args["env"]["scenario_length"]):
+                if args["render"]:
+                    current_scenarios = vecenv.get_state()
+                    start_obs_index = 0
+
+                    for env_idx in range(num_envs_in_batch):
+                        env_scenario = current_scenarios[env_idx]
+
+                        agent_histories[env_idx].append(
+                            pufferlib.viz.fill_agents_state(
+                                env_scenario, use_trajectory="trajectory" in args["env"]["action_type"]
+                            )
+                        )
+                        traffic_histories[env_idx].append(pufferlib.viz.fill_traffics_state(env_scenario, t))
+
+                        if "trajectory" in args["env"]["action_type"]:
+                            trajectory_histories[env_idx].append(pufferlib.viz.fill_trajectories(env_scenario, t))
+
+                        if args["render_obs"]:
+                            step_obs_dict = {}
+                            if env_idx > 0:
+                                start_obs_index += current_scenarios[env_idx - 1]["active_agent_count"]
+                            for agent_idx in range(env_scenario["active_agent_count"]):
+                                agent_id = env_scenario["active_agent_indices"][agent_idx]
+                                step_obs_dict[int(agent_id)] = pufferlib.viz.extract_obs_frame(
+                                    ob,
+                                    env_scenario,
+                                    args,
+                                    timestep=t,
+                                    obs_index=start_obs_index + agent_idx,
+                                    agent_idx=agent_idx,
+                                    head_north=True,
+                                )
+                            all_agents_obs_histories[env_idx].append(step_obs_dict)
+
+                with torch.no_grad():
+                    ob_tensor = torch.as_tensor(ob).to(device)
+                    logits, _ = policy.forward_eval(ob_tensor, state)
+                    action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+
+                    target_logits, _ = target_policy.forward_eval(ob_tensor, target_state)
+                    target_action, _, _ = pufferlib.pytorch.sample_logits(target_logits, deterministic=True)
+
+                    target_mask = _build_eval_target_mask(infos, vecenv, device)
+                    action = torch.where(target_mask[:, None], target_action, action)
+                    action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+                if isinstance(logits, torch.distributions.Normal):
+                    action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+                ob, _, _, _, infos = vecenv.step(action)
+
+                summaries = _extract_episode_summaries(infos)
+                if summaries:
+                    for env_idx, summary in enumerate(summaries):
+                        env_map_name = summary["map_name"].split("/")[-1].split(".")[0]
+                        summary["episode_id"] = batch_start + env_idx
+                        summary["env_id"] = env_idx
+                        summary["map_name"] = env_map_name
+
+                        for k, v in summary.items():
+                            if k not in global_infos:
+                                global_infos[k] = []
+                            global_infos[k].append(v)
+
+            if args["render"]:
+                for env_idx in range(num_envs_in_batch):
+                    global_episode_id = batch_start + env_idx
+                    if global_episode_id >= num_scenarios:
+                        break
+                    env_map_name = map_names[env_idx]
+
+                    pufferlib.viz.generate_interactive_replay(
+                        current_scenarios[env_idx],
+                        agent_histories[env_idx],
+                        traffic_histories[env_idx],
+                        trajectory_histories[env_idx],
+                        all_agents_obs_histories[env_idx],
+                        f"{gif_folder}/{env_map_name}_{global_episode_id:03d}.html",
+                        head_north=True,
+                        use_rear_axle=args["env"]["use_rear_axle"],
+                    )
+
+            scenarios_processed += num_envs_in_batch
+            pbar.update(num_envs_in_batch)
+
+    if args["render"]:
+        pufferlib.viz.build_gallery_index(gif_folder)
+
+    avg_infos = _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
+    _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
     vecenv.close()
 
 
@@ -2633,7 +2901,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, eval_adversarial, eval_multi_scenarios, eval_multi_scenarios_render, render_adversarial, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -2647,6 +2915,9 @@ def main():
         eval_multi_scenarios(env_name=env_name)
     elif mode == "eval_multi_scenarios_render":
         eval_multi_scenarios_render(env_name=env_name)
+        print("")
+    elif mode == "render_adversarial":
+        render_adversarial(env_name=env_name)
         print("")
     elif mode == "sweep":
         sweep(env_name=env_name)
