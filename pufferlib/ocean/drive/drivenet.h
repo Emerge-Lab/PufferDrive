@@ -10,6 +10,7 @@
 
 #define NN_INPUT_SIZE 64
 #define NN_HIDDEN_SIZE 256
+#define NN_EMBED_SIZE 1024
 
 typedef struct DriveNet DriveNet;
 struct DriveNet {
@@ -38,9 +39,13 @@ struct DriveNet {
     CatDim1 *cat1;
     CatDim1 *cat2;
     GELU *gelu;
-    Linear *shared_embedding;
-    ReLU *relu;
-    LSTM *lstm;
+    // shared_embedding: 3 linear layers with ReLU between them
+    Linear *shared_embedding_1;
+    ReLU *shared_relu_1;
+    Linear *shared_embedding_2;
+    ReLU *shared_relu_2;
+    Linear *shared_embedding_3;
+    ReLU *final_relu;
     Linear *actor;
     Linear *value_fn;
     Multidiscrete *multidiscrete;
@@ -59,6 +64,7 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     int road_features = ROAD_FEATURES;
     int input_size = NN_INPUT_SIZE;
     int hidden_size = NN_HIDDEN_SIZE;
+    int embed_size = NN_EMBED_SIZE;
     int road_feat_onehot = road_features + 6; // one-hot extra 6 features for road
 
     // Determine action space size based on dynamics model
@@ -86,6 +92,7 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     net->partner_layernorm_output = calloc(num_agents * max_partners * input_size, sizeof(float));
     net->road_layernorm_output = calloc(num_agents * max_road_obs * input_size, sizeof(float));
 
+    // Weights are loaded in the exact order they appear in the checkpoint
     net->ego_encoder = make_linear(weights, num_agents, ego_dim, input_size);
     net->ego_layernorm = make_layernorm(weights, num_agents, input_size);
     net->ego_encoder_two = make_linear(weights, num_agents, input_size, input_size);
@@ -100,13 +107,16 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     net->cat1 = make_cat_dim1(num_agents, input_size, input_size);
     net->cat2 = make_cat_dim1(num_agents, input_size + input_size, input_size);
     net->gelu = make_gelu(num_agents, 3 * input_size);
-    net->shared_embedding = make_linear(weights, num_agents, input_size * 3, hidden_size);
-    net->relu = make_relu(num_agents, hidden_size);
+    // shared_embedding: GELU -> Linear(192,1024) -> ReLU -> Linear(1024,1024) -> ReLU -> Linear(1024,256)
+    net->shared_embedding_1 = make_linear(weights, num_agents, input_size * 3, embed_size);
+    net->shared_relu_1 = make_relu(num_agents, embed_size);
+    net->shared_embedding_2 = make_linear(weights, num_agents, embed_size, embed_size);
+    net->shared_relu_2 = make_relu(num_agents, embed_size);
+    net->shared_embedding_3 = make_linear(weights, num_agents, embed_size, hidden_size);
+    net->final_relu = make_relu(num_agents, hidden_size);
+    // actor and value read from shared_embedding output (no LSTM)
     net->actor = make_linear(weights, num_agents, hidden_size, action_size);
     net->value_fn = make_linear(weights, num_agents, hidden_size, 1);
-    net->lstm = make_lstm(weights, num_agents, hidden_size, NN_HIDDEN_SIZE);
-    memset(net->lstm->state_h, 0, num_agents * NN_HIDDEN_SIZE * sizeof(float));
-    memset(net->lstm->state_c, 0, num_agents * NN_HIDDEN_SIZE * sizeof(float));
     net->multidiscrete = make_multidiscrete(num_agents, logit_sizes, action_dim);
     return net;
 }
@@ -135,12 +145,15 @@ void free_drivenet(DriveNet *net) {
     free(net->cat1);
     free(net->cat2);
     free(net->gelu);
-    free(net->shared_embedding);
-    free(net->relu);
+    free(net->shared_embedding_1);
+    free(net->shared_relu_1);
+    free(net->shared_embedding_2);
+    free(net->shared_relu_2);
+    free(net->shared_embedding_3);
+    free(net->final_relu);
     free(net->multidiscrete);
     free(net->actor);
     free(net->value_fn);
-    free(net->lstm);
     free(net);
 }
 
@@ -263,11 +276,16 @@ void forward(DriveNet *net, float *observations, int *actions) {
     cat_dim1(net->cat1, net->ego_encoder_two->output, net->road_max->output);
     cat_dim1(net->cat2, net->cat1->output, net->partner_max->output);
     gelu(net->gelu, net->cat2->output);
-    linear(net->shared_embedding, net->gelu->output);
-    relu(net->relu, net->shared_embedding->output);
-    lstm(net->lstm, net->relu->output);
-    linear(net->actor, net->lstm->state_h);
-    linear(net->value_fn, net->lstm->state_h);
+    // shared_embedding: 3 layers with ReLU
+    linear(net->shared_embedding_1, net->gelu->output);
+    relu(net->shared_relu_1, net->shared_embedding_1->output);
+    linear(net->shared_embedding_2, net->shared_relu_1->output);
+    relu(net->shared_relu_2, net->shared_embedding_2->output);
+    linear(net->shared_embedding_3, net->shared_relu_2->output);
+    relu(net->final_relu, net->shared_embedding_3->output);
+    // Actor and value from embedding output (no LSTM)
+    linear(net->actor, net->final_relu->output);
+    linear(net->value_fn, net->final_relu->output);
 
     // Get action by taking argmax of actor output
     softmax_multidiscrete(net->multidiscrete, net->actor->output, actions);
