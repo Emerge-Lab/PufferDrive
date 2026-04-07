@@ -47,6 +47,7 @@ class PufferLTrainerBackend(TrainerBackend):
         train_args["render"] = False
         train_args["checkpoint_interval"] = 10**18
         train_args["save_best_model"] = False
+        train_args["quiet"] = True
         train_args["total_timesteps"] = round_budget
 
         eval_args = args.get("eval", {})

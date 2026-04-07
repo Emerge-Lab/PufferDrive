@@ -6,7 +6,7 @@ import queue
 from collections.abc import Callable
 
 from .backend import TrainerBackend
-from .types import AgentState, WorkerResult, WorkerTask
+from .types import AgentState, WorkerEvent, WorkerResult, WorkerTask
 
 
 def _worker_main(
@@ -26,8 +26,24 @@ def _worker_main(
             if task.stop:
                 break
 
+            result_queue.put(
+                WorkerEvent(
+                    event_type="started",
+                    global_id=task.agent.metadata.global_id,
+                    worker_id=worker_id,
+                    device_id=device_id,
+                )
+            )
             updated_agent = backend.run_round(task.agent, task.round_budget, seed=task.seed)
-            result_queue.put(WorkerResult(agent=updated_agent, worker_id=worker_id, device_id=device_id))
+            result_queue.put(
+                WorkerEvent(
+                    event_type="completed",
+                    global_id=updated_agent.metadata.global_id,
+                    worker_id=worker_id,
+                    device_id=device_id,
+                    agent=updated_agent,
+                )
+            )
     finally:
         backend.close()
 
@@ -73,6 +89,7 @@ class WorkerPoolScheduler:
         agents: list[AgentState],
         round_budget: int,
         seeds: list[int] | None = None,
+        event_callback: Callable[[WorkerEvent], None] | None = None,
     ) -> list[AgentState]:
         seeds = seeds or [None] * len(agents)
         if len(seeds) != len(agents):
@@ -88,6 +105,13 @@ class WorkerPoolScheduler:
             except queue.Empty:
                 if any(not worker.is_alive() for worker in self.workers):
                     raise RuntimeError("MF-PBT worker died during round execution")
+                continue
+
+            if isinstance(result, WorkerEvent):
+                if event_callback is not None:
+                    event_callback(result)
+                if result.event_type == "completed" and result.agent is not None:
+                    results_by_id[result.agent.metadata.global_id] = result.agent
                 continue
 
             results_by_id[result.agent.metadata.global_id] = result.agent

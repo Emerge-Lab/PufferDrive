@@ -52,3 +52,12 @@ class WorkerResult:
     agent: AgentState
     worker_id: int
     device_id: int
+
+
+@dataclass
+class WorkerEvent:
+    event_type: str
+    global_id: int
+    worker_id: int
+    device_id: int
+    agent: AgentState | None = None

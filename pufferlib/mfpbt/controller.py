@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from .checkpoint import load_experiment_checkpoint, save_experiment_checkpoint
 from .config import MFPBTConfig
+from .display import MFPBTProgressDisplay
 from .genetics import apply_mf_pbt_genetics, mf_pbt_genetics, perturbation
 from .logging import MFPBT_Logger
 from .scheduler import WorkerPoolScheduler
@@ -25,6 +26,7 @@ class MFPBTController:
         self.checkpoint_path = checkpoint_path or config.checkpoint_path
         self.explore_fns = {hp_name: perturbation(config.perturb_factors) for hp_name in config.tune_hyperparameters}
         self.csv_logger = self._build_csv_logger()
+        self.display = MFPBTProgressDisplay(config.num_rounds, config.round_train_env_steps, config.frequencies)
 
     def _build_csv_logger(self):
         if self.config.log_dir is not None:
@@ -39,7 +41,10 @@ class MFPBTController:
     def initialize_experiment(self) -> ExperimentState:
         if self.checkpoint_path:
             try:
-                return load_experiment_checkpoint(self.checkpoint_path)
+                state = load_experiment_checkpoint(self.checkpoint_path)
+                self.display.initialize_agents(state.agents)
+                self.display.render(round_index=state.round_index, agents=state.agents)
+                return state
             except FileNotFoundError:
                 pass
 
@@ -62,7 +67,10 @@ class MFPBTController:
                 )
             )
 
-        return ExperimentState(round_index=0, frequencies=list(self.config.frequencies), agents=agents)
+        state = ExperimentState(round_index=0, frequencies=list(self.config.frequencies), agents=agents)
+        self.display.initialize_agents(state.agents)
+        self.display.render(round_index=state.round_index, agents=state.agents)
+        return state
 
     def _global_ranking(self, agents: list[AgentState]) -> list[int]:
         ranked = sorted(agents, key=lambda agent: (agent.selection_score, -agent.metadata.global_id), reverse=True)
@@ -84,10 +92,15 @@ class MFPBTController:
         return local_rankings
 
     def run_round(self, experiment_state: ExperimentState, seeds: list[int] | None = None) -> ExperimentState:
+        self.display.begin_round(experiment_state.agents)
+        self.display.render(round_index=experiment_state.round_index, agents=experiment_state.agents)
         updated_agents = self.scheduler.run_round(
             experiment_state.agents,
             round_budget=self.config.round_train_env_steps,
             seeds=seeds,
+            event_callback=lambda event: self._handle_display_event(
+                event, experiment_state.round_index, experiment_state.agents
+            ),
         )
 
         global_ranking = self._global_ranking(updated_agents)
@@ -125,7 +138,13 @@ class MFPBTController:
                 need_explore=need_explore,
             )
 
+        self.display.render(round_index=experiment_state.round_index, agents=updated_agents)
+
         return next_state
+
+    def _handle_display_event(self, event, round_index, agents):
+        self.display.handle_event(event)
+        self.display.render(round_index=round_index, agents=agents)
 
     def close(self) -> None:
         self.scheduler.close()

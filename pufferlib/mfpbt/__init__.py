@@ -3,10 +3,11 @@ from .backend_pufferl import PufferLTrainerBackend
 from .checkpoint import load_experiment_checkpoint, save_experiment_checkpoint
 from .config import MFPBTConfig, load_mfpbt_config
 from .controller import MFPBTController, run_mfpbt
+from .display import MFPBTProgressDisplay
 from .genetics import apply_mf_pbt_genetics, mf_pbt_genetics, perturbation
 from .logging import MFPBT_Logger
 from .scheduler import WorkerPoolScheduler
-from .types import AgentMetadata, AgentState, ExperimentState, TrainerState, WorkerResult, WorkerTask
+from .types import AgentMetadata, AgentState, ExperimentState, TrainerState, WorkerEvent, WorkerResult, WorkerTask
 
 __all__ = [
     "AgentMetadata",
@@ -15,9 +16,11 @@ __all__ = [
     "MFPBTController",
     "MFPBTConfig",
     "MFPBT_Logger",
+    "MFPBTProgressDisplay",
     "PufferLTrainerBackend",
     "TrainerBackend",
     "TrainerState",
+    "WorkerEvent",
     "WorkerPoolScheduler",
     "WorkerResult",
     "WorkerTask",

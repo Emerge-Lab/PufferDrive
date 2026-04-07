@@ -259,7 +259,8 @@ class PuffeRL:
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
-        self.print_dashboard(clear=True)
+        if not self.config.get("quiet", False):
+            self.print_dashboard(clear=True)
 
     def export_trainer_state(self):
         from pufferlib.mfpbt.types import TrainerState
@@ -466,7 +467,8 @@ class PuffeRL:
         if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
             self.losses = losses
             logs = self.mean_and_log()
-            self.print_dashboard()
+            if not self.config.get("quiet", False):
+                self.print_dashboard()
             self.stats = defaultdict(list)
             self.last_log_time = time.time()
             self.last_log_step = self.global_step
@@ -502,7 +504,8 @@ class PuffeRL:
                         )
 
                     except Exception as e:
-                        print(f"Failed to export model weights: {e}")
+                        if not self.config.get("quiet", False):
+                            print(f"Failed to export model weights: {e}")
 
         if self.config["eval"]["wosac_realism_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
@@ -937,7 +940,8 @@ class PuffeRL:
             best_state_file = os.path.join(path, f"best_models/best_trainer_state_{self.epoch:06d}.pt")
             os.makedirs(os.path.dirname(best_state_file), exist_ok=True)
             shutil.copy(model_path, best_state_file)
-            print(f"New best model saved at epoch {self.epoch} with puffer_score {self.best_score:.4f}")
+            if not self.config.get("quiet", False):
+                print(f"New best model saved at epoch {self.epoch} with puffer_score {self.best_score:.4f}")
 
         return model_path
 
@@ -1981,11 +1985,12 @@ def eval_multi_scenarios(
         env_kwargs_list.append(worker_kwargs)
         current_start += worker_num_scenario
 
-    print(f"Distributing {num_scenarios} scenarios across {num_workers} workers:")
-    for j, w in enumerate(env_kwargs_list):
-        start = w["starting_map"]
-        count = w["num_eval_scenarios"]
-        print(f"  Worker {j}: maps {start}-{start + count - 1} ({count} scenarios)")
+    if not quiet:
+        print(f"Distributing {num_scenarios} scenarios across {num_workers} workers:")
+        for j, w in enumerate(env_kwargs_list):
+            start = w["starting_map"]
+            count = w["num_eval_scenarios"]
+            print(f"  Worker {j}: maps {start}-{start + count - 1} ({count} scenarios)")
 
     args["vec"] = dict(backend=backend, num_envs=num_workers, num_workers=num_workers, batch_size=num_workers)
 
@@ -2075,7 +2080,8 @@ def eval_multi_scenarios(
         verify_coverage=True,
         simulation_mode=args["env"]["simulation_mode"],
     )
-    print(f"\nTotal evaluation time: {time.time() - t0:.2f} seconds for {num_scenarios} scenarios.")
+    if not quiet:
+        print(f"\nTotal evaluation time: {time.time() - t0:.2f} seconds for {num_scenarios} scenarios.")
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
 
     # Close vectorized environment to avoid file descriptor leaks
