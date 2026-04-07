@@ -3374,23 +3374,21 @@ void c_step(Drive *env) {
             // env->logs[i].lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f; <-
             // Commented becaue this is already catered by us
 
-            // Lane align: cos(θ) + vel_align * min(cos(θ)*v, 0)
-            // Positive when aligned (reward), extra penalty when driving fast against lane
-            float vel_against_penalty =
-                agent->reward_coefs[REWARD_COEF_VEL_ALIGN] * fminf(cos_theta * speed_magnitude, 0.0f);
+            // Lane align: max(cos(θ), 0) — always ≥ 0, maximal when perfectly aligned
             float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt *
-                                      (cos_theta + vel_against_penalty);
+                                      fmaxf(cos_theta, 0.0f);
 
             env->rewards[i] += lane_align_reward;
             env->logs[i].episode_return += lane_align_reward;
             env->log.reward_lane_align_total += lane_align_reward;
 
-            // Lane center: α * dt * (exp_decay - dist_term)
-            // Positive when centered (reward), negative when far from center (penalty)
+            // Lane center: exp(-d²) — always ≥ 0, maximal when perfectly centered
+            // Only rewarded when facing roughly forward (cos > 0.5)
             float adjusted_dist = fabsf(lane_center_distance - agent->reward_coefs[REWARD_COEF_CENTER_BIAS]);
-            float exp_decay = 0.05f / expf(adjusted_dist - 0.5f);
-            float lane_center_reward = agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt *
-                                       (exp_decay - (cos_theta > 0.5f) * adjusted_dist);
+            float lane_center_reward = (cos_theta > 0.5f)
+                                           ? agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt *
+                                                 expf(-adjusted_dist * adjusted_dist)
+                                           : 0.0f;
 
             env->rewards[i] += lane_center_reward;
             env->logs[i].episode_return += lane_center_reward;
