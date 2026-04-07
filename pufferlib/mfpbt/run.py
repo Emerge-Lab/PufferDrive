@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import argparse
 import copy
+from dataclasses import asdict
+from datetime import datetime
+import os
+
+import yaml
 
 from pufferlib.pufferl import load_config
 
@@ -9,6 +14,31 @@ from .backend_pufferl import PufferLTrainerBackend
 from .config import load_mfpbt_config
 from .controller import run_mfpbt
 from .scheduler import WorkerPoolScheduler
+
+
+def _prepare_run_directory(env_name: str, config_path: str, mfpbt_config):
+    run_name = mfpbt_config.run_name or f"{env_name}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    run_dir = os.path.join(mfpbt_config.experiment_root, run_name)
+    os.makedirs(run_dir, exist_ok=False)
+
+    checkpoint_name = os.path.basename(mfpbt_config.checkpoint_path or "checkpoint.pt")
+    mfpbt_config.checkpoint_path = os.path.join(run_dir, checkpoint_name)
+
+    if mfpbt_config.log_dir is None:
+        mfpbt_config.log_dir = os.path.join(run_dir, "logs")
+    else:
+        log_dir_name = os.path.basename(os.path.normpath(mfpbt_config.log_dir))
+        mfpbt_config.log_dir = os.path.join(run_dir, log_dir_name)
+
+    resolved_config_path = os.path.join(run_dir, "mfpbt_config_resolved.yaml")
+    with open(resolved_config_path, "w") as handle:
+        yaml.safe_dump(asdict(mfpbt_config), handle, sort_keys=False)
+
+    original_config_copy = os.path.join(run_dir, "mfpbt_config_input.yaml")
+    with open(config_path, "r") as src, open(original_config_copy, "w") as dst:
+        dst.write(src.read())
+
+    return run_dir
 
 
 def main():
@@ -57,6 +87,12 @@ def main():
         mfpbt_config.validate()
     base_args = load_config(args.env_name, argv=[])
     base_args = copy.deepcopy(base_args)
+    base_args["wandb"] = False
+    base_args["neptune"] = False
+    base_args["tb"] = False
+
+    run_dir = _prepare_run_directory(args.env_name, args.config, mfpbt_config)
+    print(f"MF-PBT run directory: {run_dir}")
 
     scheduler = WorkerPoolScheduler(
         PufferLTrainerBackend,

@@ -21,6 +21,8 @@ class MFPBTConfig:
     eval_num_scenarios: int | None = None
     eval_num_agents: int | None = None
     eval_num_carla_maps: int = 8
+    experiment_root: str = "experiments/mfpbt"
+    run_name: str | None = None
     checkpoint_path: str | None = None
     log_dir: str | None = None
     hyperparameters: dict[str, Any] = field(default_factory=dict)

@@ -34,15 +34,22 @@ eval_simulation_mode: gigaflow
 # eval_num_agents: 512
 # eval_num_carla_maps: 8
 
+# Base directory where MF-PBT creates one fresh run folder per launch.
+experiment_root: experiments/mfpbt
+
+# Optional fixed run name. If omitted, MF-PBT uses env name + timestamp.
+# run_name: my_debug_run
+
 # Path to the full MF-PBT experiment checkpoint written by the controller.
 # This is intended to store the whole experiment state, not just model weights:
 # round index, agent metadata, hyperparameters, scores, env_steps,
-# and full trainer states for restart.
-checkpoint_path: experiments/mfpbt/checkpoint.pt
+# and full trainer states for restart. The filename is placed inside the run folder.
+checkpoint_path: checkpoint.pt
 
 # Optional directory for MF-PBT CSV logs.
-# If omitted, logs are written next to checkpoint_path under a logs/ folder.
-# log_dir: experiments/mfpbt/logs
+# If omitted, logs are written inside the run folder under logs/.
+# If set, only the final folder name is used inside the run folder.
+# log_dir: logs
 
 # Initial hyperparameter values for the starting population.
 hyperparameters:
