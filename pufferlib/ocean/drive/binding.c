@@ -436,7 +436,9 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
     assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
     assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
-    float avg_distance_per_infraction = log->total_distance_travelled / fmaxf(0.001f, log->total_infractions);
+    float avg_distance_per_infraction = (log->total_infractions > 0)
+                                            ? log->total_distance_travelled / log->total_infractions
+                                            : log->total_distance_travelled;
     assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
     assign_to_dict(dict, "distance_without_collision", log->distance_without_collision);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
@@ -446,17 +448,6 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "max_observation_distance", log->max_observation_distance);
     assign_to_dict(dict, "observation_coverage", log->observation_coverage);
     assign_to_dict(dict, "partner_obs_coverage", log->partner_obs_coverage);
-    // Per-component reward totals
-    assign_to_dict(dict, "reward_goal", log->reward_goal_total);
-    assign_to_dict(dict, "reward_collision", log->reward_collision_total);
-    assign_to_dict(dict, "reward_offroad", log->reward_offroad_total);
-    assign_to_dict(dict, "reward_lane_align", log->reward_lane_align_total);
-    assign_to_dict(dict, "reward_lane_center", log->reward_lane_center_total);
-    assign_to_dict(dict, "reward_velocity", log->reward_velocity_total);
-    assign_to_dict(dict, "reward_comfort", log->reward_comfort_total);
-    assign_to_dict(dict, "reward_timestep", log->reward_timestep_total);
-    assign_to_dict(dict, "reward_reverse", log->reward_reverse_total);
-    assign_to_dict(dict, "reward_overspeed", log->reward_overspeed_total);
-    assign_to_dict(dict, "reward_jerk", log->reward_jerk_total);
+    // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }

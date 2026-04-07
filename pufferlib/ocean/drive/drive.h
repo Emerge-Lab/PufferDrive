@@ -244,18 +244,6 @@ struct Log {
     float max_observation_distance; // average max observation distance
     float observation_coverage;     // percentage of entities in obs window seen on average
     float partner_obs_coverage;     // % of partners within radius that fit in the obs slots
-    // Per-component reward tracking
-    float reward_goal_total;
-    float reward_collision_total;
-    float reward_offroad_total;
-    float reward_lane_align_total;
-    float reward_lane_center_total;
-    float reward_velocity_total;
-    float reward_comfort_total;
-    float reward_timestep_total;
-    float reward_reverse_total;
-    float reward_overspeed_total;
-    float reward_jerk_total;
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -606,8 +594,8 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
                                                                     env->reward_bounds[REWARD_COEF_OVERSPEED].max_val);
         agent->reward_coefs[REWARD_COEF_REVERSE] = random_uniform(env->reward_bounds[REWARD_COEF_REVERSE].min_val,
                                                                   env->reward_bounds[REWARD_COEF_REVERSE].max_val);
-        agent->reward_coefs[REWARD_COEF_VELOCITY] = random_uniform(env->reward_bounds[REWARD_COEF_VELOCITY].min_val,
-                                                                    env->reward_bounds[REWARD_COEF_VELOCITY].max_val);
+        // Fixed values (Must fall within the bounds defined above)
+        agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = -2.5e-5f;
         // Dynamic conditioning (Mixed Uniform)
         agent->reward_coefs[REWARD_COEF_THROTTLE] = mixed_uniform(1.25f);
@@ -2899,7 +2887,6 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->collided_before_goal = 0;
     agent->cumulative_displacement = 0.0f;
     agent->cumulative_displacement_since_last_goal = 0.0f;
-    // Keep distance_since_spawn across respawns — only reset in c_reset/set_start_position
     agent->stopped = 0;
     agent->removed = 0;
     agent->a_long = 0.0f;
@@ -3230,7 +3217,6 @@ void c_step(Drive *env) {
             float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
-            env->log.reward_jerk_total += jerk_penalty;
         }
     }
 
@@ -3261,7 +3247,6 @@ void c_step(Drive *env) {
                 }
                 env->rewards[i] += reward_collision;
                 env->logs[i].episode_return += reward_collision;
-                env->log.reward_collision_total += reward_collision;
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].collisions_per_agent += 1.0f;
 
@@ -3273,11 +3258,9 @@ void c_step(Drive *env) {
                 if (env->reward_conditioning) {
                     env->rewards[i] += agent->reward_coefs[REWARD_COEF_OFFROAD];
                     env->logs[i].episode_return += agent->reward_coefs[REWARD_COEF_OFFROAD];
-                    env->log.reward_offroad_total += agent->reward_coefs[REWARD_COEF_OFFROAD];
                 } else {
                     env->rewards[i] += env->reward_offroad_collision;
                     env->logs[i].episode_return += env->reward_offroad_collision;
-                    env->log.reward_offroad_total += env->reward_offroad_collision;
                 }
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].offroad_per_agent += 1.0f;
@@ -3306,12 +3289,10 @@ void c_step(Drive *env) {
             if (env->goal_behavior == GOAL_RESPAWN && agent->respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
-                env->log.reward_goal_total += env->reward_goal_post_respawn;
                 agent->current_goal_reached = 1;
             } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!agent->current_goal_reached)) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
-                env->log.reward_goal_total += env->reward_goal;
 
                 // Compute score for this goal segment
                 if (!agent->collided_before_goal) {
@@ -3385,7 +3366,6 @@ void c_step(Drive *env) {
 
             env->rewards[i] += lane_align_reward;
             env->logs[i].episode_return += lane_align_reward;
-            env->log.reward_lane_align_total += lane_align_reward;
 
             // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05/(exp(|x_f - bias| - 0.5))
             float adjusted_dist = fabsf(lane_center_distance - agent->reward_coefs[REWARD_COEF_CENTER_BIAS]);
@@ -3395,23 +3375,22 @@ void c_step(Drive *env) {
 
             env->rewards[i] += lane_center_reward;
             env->logs[i].episode_return += lane_center_reward;
-            env->log.reward_lane_center_total += lane_center_reward;
+            // OTHER REWARDS (From Gigaflow)
 
             // Red light violation reward (GIGAFLOW) - OMITTED
 
             // Comfort reward (GIGAFLOW)
+
             float comfort_penalty = agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
 
             env->rewards[i] += comfort_penalty;
             env->logs[i].episode_return += comfort_penalty;
-            env->log.reward_comfort_total += comfort_penalty;
 
             // Velocity reward (GIGAFLOW)
             float velocity_reward = agent->reward_coefs[REWARD_COEF_VELOCITY] * env->dt * velocity_progress;
 
             env->rewards[i] += velocity_reward;
             env->logs[i].episode_return += velocity_reward;
-            env->log.reward_velocity_total += velocity_reward;
 
             // Timestep reward (GIGAFLOW)
             float accel = sqrtf(agent->a_long * agent->a_long + agent->a_lat * agent->a_lat);
@@ -3421,7 +3400,6 @@ void c_step(Drive *env) {
 
                 env->rewards[i] += timestep_penalty;
                 env->logs[i].episode_return += timestep_penalty;
-                env->log.reward_timestep_total += timestep_penalty;
             }
 
             // Reverse reward (GIGAFLOW)
@@ -3430,7 +3408,6 @@ void c_step(Drive *env) {
 
                 env->rewards[i] += reverse_penalty;
                 env->logs[i].episode_return += reverse_penalty;
-                env->log.reward_reverse_total += reverse_penalty;
             }
 
             // Over speed reward (GIGAFLOW++)
@@ -3438,7 +3415,6 @@ void c_step(Drive *env) {
 
             env->rewards[i] += speed_reward;
             env->logs[i].episode_return += speed_reward;
-            env->log.reward_overspeed_total += speed_reward;
         }
     }
 
