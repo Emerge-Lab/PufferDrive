@@ -864,8 +864,6 @@ class Evaluator:
         # Create separate evaluation environments based on specified configs
         eval_config["env"]["termination_mode"] = 0
         backend = eval_config["eval"].get("backend", "PufferEnv")
-        eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
-        eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
         eval_config["vec"] = dict(backend=backend, num_envs=1)
 
         self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
@@ -875,15 +873,35 @@ class Evaluator:
         self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
         self.render_view_suffix = _VIEW_SUFFIX
 
+        # --- Human replay config ---
+        hr_control_mode = (
+            str(self.configs["eval"].get("human_replay_control_mode", "control_sdc_only")).strip('"').strip("'")
+        )
+        hr_num_agents = int(self.configs["eval"].get("human_replay_num_agents", 16))
+        hr_map_dir = (
+            str(self.configs["eval"].get("hr_map_dir", "resources/drive/binaries/training")).strip('"').strip("'")
+        )
+
         self.hr_eval_config = copy.deepcopy(eval_config)
-        self.hr_eval_config["env"]["control_mode"] = "control_sdc_only"
+        self.hr_eval_config["env"]["map_dir"] = hr_map_dir
+        self.hr_eval_config["env"]["num_agents"] = hr_num_agents
+        self.hr_eval_config["env"]["control_mode"] = hr_control_mode
+        self.hr_eval_config["env"]["init_mode"] = "create_all_valid"
         self.hr_eval_config["env"]["render_mode"] = (
             0  # primary env: stats only; render envs created per-view in rollout()
         )
         if self.configs["eval"]["human_replay_eval"]:
             self.hr_eval_config["env"]["episode_length"] = 91  # WOMD scenario length
 
+        # --- Self-play config ---
+        sp_map_dir = (
+            str(self.configs["eval"].get("sp_map_dir", "resources/drive/binaries/carla_2D")).strip('"').strip("'")
+        )
+        sp_num_agents = int(self.configs["eval"].get("num_eval_agents", 64))
+
         self.sp_eval_config = copy.deepcopy(eval_config)
+        self.sp_eval_config["env"]["map_dir"] = sp_map_dir
+        self.sp_eval_config["env"]["num_agents"] = sp_num_agents
         self.sp_eval_config["env"]["control_mode"] = "control_agents"
         self.sp_eval_config["env"]["render_mode"] = (
             0  # primary env: stats only; render envs created per-view in rollout()
