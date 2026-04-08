@@ -408,8 +408,9 @@ def render_videos(
             render_maps = list(render_maps)
 
         generated_videos = {"output_topdown": [], "output_agent": []}
-        output_topdown = f"resources/drive/{wandb_prefix}_output_topdown_{epoch}"
-        output_agent = f"resources/drive/{wandb_prefix}_output_agent_{epoch}"
+        file_prefix = wandb_prefix.replace("/", "_")
+        output_topdown = f"resources/drive/{file_prefix}_output_topdown_{epoch}"
+        output_agent = f"resources/drive/{file_prefix}_output_agent_{epoch}"
 
         for i, map_path in enumerate(render_maps):
             cmd = list(base_cmd)  # copy
