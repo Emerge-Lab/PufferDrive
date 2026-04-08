@@ -2924,6 +2924,8 @@ void move_expert(Drive *env, float *actions, int agent_idx) {
     agent->sim_heading = agent->log_heading[t];
     agent->heading_x = cosf(agent->sim_heading);
     agent->heading_y = sinf(agent->sim_heading);
+    agent->sim_vx = agent->log_velocity_x[t];
+    agent->sim_vy = agent->log_velocity_y[t];
 }
 
 void move_dynamics(Drive *env, int action_idx, int agent_idx) {
