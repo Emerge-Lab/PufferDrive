@@ -364,6 +364,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->reward_randomization = (int)unpack(kwargs, "reward_randomization");
+    env->stopped_reset_threshold = (float)unpack(kwargs, "stopped_reset_threshold");
     env->turn_off_normalization = (int)unpack(kwargs, "turn_off_normalization");
     env->reward_conditioning = (int)unpack(kwargs, "reward_conditioning");
     env->min_goal_distance = (float)unpack(kwargs, "min_goal_distance");
@@ -468,6 +469,21 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "max_observation_distance", log->max_observation_distance);
     assign_to_dict(dict, "observation_coverage", log->observation_coverage);
     assign_to_dict(dict, "partner_obs_coverage", log->partner_obs_coverage);
-    // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    float avg_goal_dist = (log->goal_distance_count > 0) ? log->avg_goal_distance / log->goal_distance_count : 0.0f;
+    assign_to_dict(dict, "avg_goal_distance", avg_goal_dist);
+    // Per-component reward totals
+    assign_to_dict(dict, "reward_goal", log->reward_goal_total);
+    assign_to_dict(dict, "reward_collision", log->reward_collision_total);
+    assign_to_dict(dict, "reward_offroad", log->reward_offroad_total);
+    assign_to_dict(dict, "reward_lane_align", log->reward_lane_align_total);
+    assign_to_dict(dict, "reward_lane_center", log->reward_lane_center_total);
+    assign_to_dict(dict, "reward_velocity", log->reward_velocity_total);
+    assign_to_dict(dict, "reward_comfort", log->reward_comfort_total);
+    assign_to_dict(dict, "reward_timestep", log->reward_timestep_total);
+    assign_to_dict(dict, "reward_reverse", log->reward_reverse_total);
+    assign_to_dict(dict, "reward_overspeed", log->reward_overspeed_total);
+    assign_to_dict(dict, "reward_jerk", log->reward_jerk_total);
+    float alive_frac = (log->alive_fraction_count > 0) ? log->alive_fraction / log->alive_fraction_count : 1.0f;
+    assign_to_dict(dict, "alive_fraction", alive_frac);
     return 0;
 }

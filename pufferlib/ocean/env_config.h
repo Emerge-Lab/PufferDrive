@@ -85,6 +85,7 @@ typedef struct {
     float partner_obs_radius;
     float partner_obs_norm;
     float road_obs_norm;
+    float stopped_reset_threshold;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -267,6 +268,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->partner_obs_norm = atof(value);
     } else if (MATCH("env", "road_obs_norm")) {
         env_config->road_obs_norm = atof(value);
+    } else if (MATCH("env", "stopped_reset_threshold")) {
+        env_config->stopped_reset_threshold = atof(value);
     } else if (MATCH("env", "min_agents_per_env")) {
         env_config->min_agents_per_env = atoi(value);
     } else if (MATCH("env", "max_agents_per_env")) {

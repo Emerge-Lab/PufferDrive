@@ -244,6 +244,22 @@ struct Log {
     float max_observation_distance; // average max observation distance
     float observation_coverage;     // percentage of entities in obs window seen on average
     float partner_obs_coverage;     // % of partners within radius that fit in the obs slots
+    float avg_goal_distance;        // average straight-line distance of goals when sampled
+    float goal_distance_count;      // count for averaging
+    // Per-component reward tracking
+    float reward_goal_total;
+    float reward_collision_total;
+    float reward_offroad_total;
+    float reward_lane_align_total;
+    float reward_lane_center_total;
+    float reward_velocity_total;
+    float reward_comfort_total;
+    float reward_timestep_total;
+    float reward_reverse_total;
+    float reward_overspeed_total;
+    float reward_jerk_total;
+    float alive_fraction;
+    float alive_fraction_count;
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -296,6 +312,7 @@ struct Drive {
     float *rewards;
     unsigned char *terminals;
     unsigned char *truncations;
+    unsigned char *is_invalid_step;
     Log log;
     Log *logs;
     int num_agents; // Max controlled agents
@@ -363,6 +380,7 @@ struct Drive {
     int *tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    float stopped_reset_threshold;
     int reward_randomization;
     int reward_conditioning;
     int turn_off_normalization;
@@ -566,6 +584,8 @@ static float mixed_uniform(float a) {
 
 // void compute_heading_diff(void){}
 
+static float reward_bound_midpoint(const RewardBound *bound) { return 0.5f * (bound->min_val + bound->max_val); }
+
 // Generate per-agent reward conditioning coefficients
 // Full function, but wont be FULLY used as of yet - should be compatible for later iterations
 static void generate_reward_coefs(Drive *env, Agent *agent) {
@@ -602,21 +622,14 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_STEER] = mixed_uniform(1.25f);
         agent->reward_coefs[REWARD_COEF_ACC] = mixed_uniform(1.5f);
     } else {
-        // Fixed coefficients
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
-        agent->reward_coefs[REWARD_COEF_COLLISION] = env->reward_vehicle_collision;
-        agent->reward_coefs[REWARD_COEF_OFFROAD] = env->reward_offroad_collision;
-        agent->reward_coefs[REWARD_COEF_COMFORT] = env->reward_comfort;
-        agent->reward_coefs[REWARD_COEF_LANE_ALIGN] = env->reward_lane_align;
-        agent->reward_coefs[REWARD_COEF_LANE_CENTER] = env->reward_lane_center;
-        agent->reward_coefs[REWARD_COEF_VELOCITY] = env->reward_velocity;
-        agent->reward_coefs[REWARD_COEF_TRAFFIC_LIGHT] = env->reward_traffic_light_violation;
-        agent->reward_coefs[REWARD_COEF_CENTER_BIAS] = 0.0f;
-        agent->reward_coefs[REWARD_COEF_VEL_ALIGN] = 1.0f;
-        agent->reward_coefs[REWARD_COEF_OVERSPEED] = env->reward_overspeed;
-        agent->reward_coefs[REWARD_COEF_TIMESTEP] = env->reward_timestep;
-        agent->reward_coefs[REWARD_COEF_REVERSE] = env->reward_reverse;
-        // Dynamic conditioning coefficients
+        // Use midpoint of reward bounds when randomization is off
+        for (int i = 0; i < NUM_REWARD_COEFS; i++) {
+            agent->reward_coefs[i] = reward_bound_midpoint(&env->reward_bounds[i]);
+        }
+        // Fixed values (same as randomized branch)
+        agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
+        agent->reward_coefs[REWARD_COEF_TIMESTEP] = -2.5e-5f;
+        // Dynamic conditioning: midpoint of mixed_uniform is 1.0
         agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
@@ -630,8 +643,8 @@ static void sample_new_goal_radius(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(
             env->reward_bounds[REWARD_COEF_GOAL_RADIUS].min_val, env->reward_bounds[REWARD_COEF_GOAL_RADIUS].max_val);
     } else {
-        // Fixed coefficients
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
+        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] =
+            reward_bound_midpoint(&env->reward_bounds[REWARD_COEF_GOAL_RADIUS]);
     }
 }
 
@@ -2307,6 +2320,7 @@ void allocate(Drive *env) {
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
     env->terminals = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
     env->truncations = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
+    env->is_invalid_step = (unsigned char *)calloc(env->active_agent_count, sizeof(unsigned char));
 }
 
 void free_allocated(Drive *env) {
@@ -2315,6 +2329,7 @@ void free_allocated(Drive *env) {
     free(env->rewards);
     free(env->terminals);
     free(env->truncations);
+    free(env->is_invalid_step);
     c_close(env);
 }
 
@@ -2889,6 +2904,7 @@ void respawn_agent(Drive *env, int agent_idx) {
     agent->collided_before_goal = 0;
     agent->cumulative_displacement = 0.0f;
     agent->cumulative_displacement_since_last_goal = 0.0f;
+    agent->distance_since_spawn = 0.0f;
     agent->stopped = 0;
     agent->removed = 0;
     agent->a_long = 0.0f;
@@ -3189,6 +3205,7 @@ void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
+    memset(env->is_invalid_step, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
 
     // Move static experts
@@ -3221,6 +3238,7 @@ void c_step(Drive *env) {
             float jerk_penalty = -0.0002f * sqrtf(delta_vx * delta_vx + delta_vy * delta_vy) / env->dt;
             env->rewards[i] += jerk_penalty;
             env->logs[i].episode_return += jerk_penalty;
+            env->log.reward_jerk_total += jerk_penalty;
         }
     }
 
@@ -3230,11 +3248,18 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[agent_idx];
         agent->collision_state = 0;
         agent->aabb_collision_state = 0;
+        // log the agent is stopped before computing the metrics. this way we get stopped AFTER the collision (stopped
+        // is true on the first step where it can't move)
+        env->is_invalid_step[i] = (unsigned char)agent->stopped;
+        // Skip metrics and rewards entirely for stopped agents — they can't act,
+        // so their metrics are meaningless and would pollute logged statistics.
+        if (agent->stopped) {
+            env->rewards[i] = 0.0f;
+            continue;
+        }
         compute_agent_metrics(env, agent_idx);
         int collision_state = agent->collision_state;
-        if (collision_state == NO_COLLISION) {
-            env->logs[i].distance_without_collision = agent->cumulative_displacement;
-        }
+        // distance_without_collision is now computed fleet-wide in my_log
         float cos_heading = cosf(agent->sim_heading);
         float sin_heading = sinf(agent->sim_heading);
         float speed_magnitude = sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy);
@@ -3251,6 +3276,7 @@ void c_step(Drive *env) {
                 }
                 env->rewards[i] += reward_collision;
                 env->logs[i].episode_return += reward_collision;
+                env->log.reward_collision_total += reward_collision;
                 env->logs[i].collision_rate = 1.0f;
                 env->logs[i].collisions_per_agent += 1.0f;
 
@@ -3262,9 +3288,11 @@ void c_step(Drive *env) {
                 if (env->reward_conditioning) {
                     env->rewards[i] += agent->reward_coefs[REWARD_COEF_OFFROAD];
                     env->logs[i].episode_return += agent->reward_coefs[REWARD_COEF_OFFROAD];
+                    env->log.reward_offroad_total += agent->reward_coefs[REWARD_COEF_OFFROAD];
                 } else {
                     env->rewards[i] += env->reward_offroad_collision;
                     env->logs[i].episode_return += env->reward_offroad_collision;
+                    env->log.reward_offroad_total += env->reward_offroad_collision;
                 }
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].offroad_per_agent += 1.0f;
@@ -3293,10 +3321,14 @@ void c_step(Drive *env) {
             if (env->goal_behavior == GOAL_RESPAWN && agent->respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
+                env->log.reward_goal_total += env->reward_goal_post_respawn;
+                env->log.avg_goal_distance += agent->sampled_goal_distance;
+                env->log.goal_distance_count += 1.0f;
                 agent->current_goal_reached = 1;
             } else if (env->goal_behavior == GOAL_GENERATE_NEW && (!agent->current_goal_reached)) {
                 env->rewards[i] += env->reward_goal;
                 env->logs[i].episode_return += env->reward_goal;
+                env->log.reward_goal_total += env->reward_goal;
 
                 // Compute score for this goal segment
                 if (!agent->collided_before_goal) {
@@ -3307,6 +3339,9 @@ void c_step(Drive *env) {
                 }
                 env->logs[i].score += agent->score_for_current_goal;
                 agent->score_for_current_goal = 0.0f;
+
+                env->log.avg_goal_distance += agent->sampled_goal_distance;
+                env->log.goal_distance_count += 1.0f;
 
                 agent->prev_goal_x = agent->goal_position_x;
                 agent->prev_goal_y = agent->goal_position_y;
@@ -3370,6 +3405,7 @@ void c_step(Drive *env) {
 
             env->rewards[i] += lane_align_reward;
             env->logs[i].episode_return += lane_align_reward;
+            env->log.reward_lane_align_total += lane_align_reward;
 
             // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05/(exp(|x_f - bias| - 0.5))
             float adjusted_dist = fabsf(lane_center_distance - agent->reward_coefs[REWARD_COEF_CENTER_BIAS]);
@@ -3379,22 +3415,23 @@ void c_step(Drive *env) {
 
             env->rewards[i] += lane_center_reward;
             env->logs[i].episode_return += lane_center_reward;
-            // OTHER REWARDS (From Gigaflow)
+            env->log.reward_lane_center_total += lane_center_reward;
 
             // Red light violation reward (GIGAFLOW) - OMITTED
 
             // Comfort reward (GIGAFLOW)
-
             float comfort_penalty = agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
 
             env->rewards[i] += comfort_penalty;
             env->logs[i].episode_return += comfort_penalty;
+            env->log.reward_comfort_total += comfort_penalty;
 
             // Velocity reward (GIGAFLOW)
             float velocity_reward = agent->reward_coefs[REWARD_COEF_VELOCITY] * env->dt * velocity_progress;
 
             env->rewards[i] += velocity_reward;
             env->logs[i].episode_return += velocity_reward;
+            env->log.reward_velocity_total += velocity_reward;
 
             // Timestep reward (GIGAFLOW)
             float accel = sqrtf(agent->a_long * agent->a_long + agent->a_lat * agent->a_lat);
@@ -3404,6 +3441,7 @@ void c_step(Drive *env) {
 
                 env->rewards[i] += timestep_penalty;
                 env->logs[i].episode_return += timestep_penalty;
+                env->log.reward_timestep_total += timestep_penalty;
             }
 
             // Reverse reward (GIGAFLOW)
@@ -3412,6 +3450,7 @@ void c_step(Drive *env) {
 
                 env->rewards[i] += reverse_penalty;
                 env->logs[i].episode_return += reverse_penalty;
+                env->log.reward_reverse_total += reverse_penalty;
             }
 
             // Over speed reward (GIGAFLOW++)
@@ -3419,6 +3458,7 @@ void c_step(Drive *env) {
 
             env->rewards[i] += speed_reward;
             env->logs[i].episode_return += speed_reward;
+            env->log.reward_overspeed_total += speed_reward;
         }
     }
 
@@ -3452,9 +3492,21 @@ void c_step(Drive *env) {
             break;
         }
     }
+    int stopped_count = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        if (env->agents[agent_idx].stopped) {
+            stopped_count++;
+        }
+    }
+    float stopped_fraction = (float)stopped_count / (float)env->active_agent_count;
+    env->log.alive_fraction += 1.0f - stopped_fraction;
+    env->log.alive_fraction_count += 1.0f;
+    int reached_stopped_threshold =
+        (env->stopped_reset_threshold > 0.0f && stopped_fraction >= env->stopped_reset_threshold);
     int reached_time_limit = env->timestep >= env->episode_length;
     int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
-    if (reached_time_limit || reached_early_termination) {
+    if (reached_time_limit || reached_early_termination || reached_stopped_threshold) {
         for (int i = 0; i < env->active_agent_count; i++) {
             env->truncations[i] = 1;
         }
@@ -4408,6 +4460,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 agent->goal_position_z = point_z;
                 sample_new_goal_radius(env, agent);
                 agent->goals_sampled_this_episode += 1.0f;
+                agent->sampled_goal_distance = distance;
                 return;
                 // if not check whether is closer than the previous best alternative point
             } else if (distance_error < best_distance_error) {
@@ -4430,6 +4483,9 @@ void sample_new_goal(Drive *env, int agent_idx) {
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goal_position_z = best_z;
+    float goal_dist = sqrtf((best_x - agent->sim_x) * (best_x - agent->sim_x) +
+                            (best_y - agent->sim_y) * (best_y - agent->sim_y));
+    agent->sampled_goal_distance = goal_dist;
     sample_new_goal_radius(env, agent);
     agent->goals_sampled_this_episode += 1.0f;
 }
