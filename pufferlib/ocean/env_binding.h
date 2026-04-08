@@ -597,9 +597,20 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             PyObject *dict = PyDict_New();
             Env *env = vec->envs[i];
             float n = env->log.n;
+            float target_n = env->log.target_n;
+            float target_episode_return = env->log.target_episode_return;
+            float did_target_collide = env->log.did_target_collide;
+            float did_target_offroad = env->log.did_target_offroad;
+            float did_target_fail = env->log.did_target_fail;
             // Average across agents
             for (int i = 0; i < num_keys; i++) {
                 ((float *)&env->log)[i] /= n;
+            }
+            if (target_n > 0.0f) {
+                env->log.target_episode_return = target_episode_return / target_n;
+                env->log.did_target_collide = did_target_collide / target_n;
+                env->log.did_target_offroad = did_target_offroad / target_n;
+                env->log.did_target_fail = did_target_fail / target_n;
             }
             my_log(dict, env, &env->log, n);
             assign_to_dict(dict, "n", n);
@@ -654,6 +665,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         }
 
         float n = aggregate.n;
+        float target_n = aggregate.target_n;
         float target_episode_return = aggregate.target_episode_return;
         float did_target_collide = aggregate.did_target_collide;
         float did_target_offroad = aggregate.did_target_offroad;
@@ -665,10 +677,12 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         }
 
         // Target metrics are per-scenario signals, not per-agent averages.
-        aggregate.target_episode_return = target_episode_return;
-        aggregate.did_target_collide = did_target_collide;
-        aggregate.did_target_offroad = did_target_offroad;
-        aggregate.did_target_fail = did_target_fail;
+        if (target_n > 0.0f) {
+            aggregate.target_episode_return = target_episode_return / target_n;
+            aggregate.did_target_collide = did_target_collide / target_n;
+            aggregate.did_target_offroad = did_target_offroad / target_n;
+            aggregate.did_target_fail = did_target_fail / target_n;
+        }
 
         // User populates dict
         my_log(dict, env, &aggregate, n);

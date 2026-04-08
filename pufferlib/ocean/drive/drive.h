@@ -167,6 +167,7 @@ typedef struct TrafficControlElement TrafficControlElement;
 
 struct Log {
     float n;
+    float target_n;
     float episode_return;
     float target_episode_return;
     float episode_length;
@@ -2623,6 +2624,7 @@ static void add_log(Drive *env) {
     }
 
     if (env->active_agent_count > 0) {
+        env->log.target_n += 1.0f;
         env->log.target_episode_return += env->logs[0].episode_return;
 
         if (env->logs[0].collision_rate > 0.0f) {
