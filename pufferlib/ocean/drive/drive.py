@@ -94,10 +94,15 @@ class Drive(pufferlib.PufferEnv):
         spawn_width_max=2.5,
         spawn_length_min=2.0,
         spawn_length_max=5.5,
-        spawn_height=1.5,
+                spawn_height=1.5,
+        # dynamic noise
+        dynamic_noise_scale=0.0,
     ):
         # env
         self.dt = dt
+        self.dynamic_noise_scale = dynamic_noise_scale
+
+       
         self.render_mode = render_mode
         self.num_maps = num_maps
         self.report_interval = report_interval
@@ -585,6 +590,12 @@ class Drive(pufferlib.PufferEnv):
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
+        
+        # Apply dynamic noise to velocity components of observations
+        if self.dynamic_noise_scale > 0 and self.observations.shape[1] > 2:
+            noise = np.random.normal(0, self.dynamic_noise_scale, (self.observations.shape[0], 2)).astype(np.float32)
+            self.observations[:, 1:3] += noise
+        
         info = []
         if self.tick % self.report_interval == 0:
             log = binding.vec_log(self.c_envs, self.num_agents)
