@@ -129,6 +129,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     float reward_bound_acc_max = unpack(kwargs, "reward_bound_acc_max");
 
     float min_avg_speed_to_consider_goal_attempt = unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");
+    float partner_obs_radius = unpack(kwargs, "partner_obs_radius");
+    float partner_obs_norm = unpack(kwargs, "partner_obs_norm");
+    float road_obs_norm = unpack(kwargs, "road_obs_norm");
 
     int use_all_maps = unpack(kwargs, "use_all_maps");
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
@@ -206,6 +209,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->polyline_reduction_threshold = polyline_reduction_threshold;
         env->polyline_max_segment_length = polyline_max_segment_length;
         env->min_avg_speed_to_consider_goal_attempt = min_avg_speed_to_consider_goal_attempt;
+        env->partner_obs_radius = partner_obs_radius;
+        env->partner_obs_norm = partner_obs_norm;
+        env->road_obs_norm = road_obs_norm;
         // reward randomization bounds
         env->reward_bounds[REWARD_COEF_GOAL_RADIUS] =
             (RewardBound){reward_bound_goal_radius_min, reward_bound_goal_radius_max};
@@ -235,6 +241,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         // Get map file path from Python list
         PyObject *map_file_obj = PyList_GetItem(map_files_list, map_id);
         const char *map_file_path = PyUnicode_AsUTF8(map_file_obj);
+        env->num_agents = num_agents;
+        env->spawn_settings.max_agents_in_sim = num_agents;
         load_map_binary(map_file_path, env);
         set_active_agents(env);
 
@@ -265,14 +273,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 return NULL;
             }
 
-            // Store map_id
-            PyObject *map_id_obj = PyLong_FromLong(map_id);
-            PyList_SetItem(map_ids, env_count, map_id_obj);
-            // Store agent offset
-            PyObject *offset = PyLong_FromLong(total_agent_count);
-            PyList_SetItem(agent_offsets, env_count, offset);
-            total_agent_count += env->active_agent_count;
-            env_count++;
             for (int j = 0; j < env->num_objects; j++) {
                 free_agent(&env->agents[j]);
             }
@@ -288,6 +288,31 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env);
             continue;
         }
+
+        // Store map_id and agent offset for valid maps
+        PyObject *map_id_obj = PyLong_FromLong(map_id);
+        PyList_SetItem(map_ids, env_count, map_id_obj);
+        PyObject *offset = PyLong_FromLong(total_agent_count);
+        PyList_SetItem(agent_offsets, env_count, offset);
+        total_agent_count += env->active_agent_count;
+        env_count++;
+        for (int j = 0; j < env->num_objects; j++) {
+            free_agent(&env->agents[j]);
+        }
+        for (int j = 0; j < env->num_roads; j++) {
+            free_road_element(&env->road_elements[j]);
+        }
+        free(env->agents);
+        free(env->road_elements);
+        free(env->road_scenario_ids);
+        free(env->active_agent_indices);
+        free(env->static_agent_indices);
+        free(env->expert_static_agent_indices);
+        if (env->tracks_to_predict_indices != NULL) {
+            free(env->tracks_to_predict_indices);
+            env->tracks_to_predict_indices = NULL;
+        }
+        free(env);
     }
 
     if (total_agent_count >= num_agents) {
@@ -350,6 +375,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->observation_window_size = (float)unpack(kwargs, "observation_window_size");
     env->polyline_reduction_threshold = (float)unpack(kwargs, "polyline_reduction_threshold");
     env->polyline_max_segment_length = (float)unpack(kwargs, "polyline_max_segment_length");
+    env->partner_obs_radius = (float)unpack(kwargs, "partner_obs_radius");
+    env->partner_obs_norm = (float)unpack(kwargs, "partner_obs_norm");
+    env->road_obs_norm = (float)unpack(kwargs, "road_obs_norm");
 
     // reward randomization bounds
     env->reward_bounds[REWARD_COEF_GOAL_RADIUS] = (RewardBound){(float)unpack(kwargs, "reward_bound_goal_radius_min"),
@@ -401,6 +429,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->spawn_settings = spawn_settings;
 
     env->num_agents = max_agents;
+    env->spawn_settings.max_agents_in_sim = max_agents;
     if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
         env->spawn_settings.max_agents_in_sim =
             max_agents_per_env; // INIT_VARIABLE_AGENT_NUMBER only supports controlled agents
@@ -427,6 +456,10 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
     assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
     assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
+    float avg_distance_per_infraction = (log->total_infractions > 0)
+                                            ? log->total_distance_travelled / log->total_infractions
+                                            : log->total_distance_travelled;
+    assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
     assign_to_dict(dict, "distance_without_collision", log->distance_without_collision);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
@@ -434,6 +467,7 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
     assign_to_dict(dict, "max_observation_distance", log->max_observation_distance);
     assign_to_dict(dict, "observation_coverage", log->observation_coverage);
+    assign_to_dict(dict, "partner_obs_coverage", log->partner_obs_coverage);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }
