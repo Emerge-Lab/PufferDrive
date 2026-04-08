@@ -368,8 +368,10 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 f"export WANDB_DIR={scratch_dir}/wandb_data && "
                 f"mkdir -p {scratch_dir}/cache"
             )
-            heartbeat = "python scripts/gpu_heartbeat.py &"
-            inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && {heartbeat} " + " ".join(full_cmd)
+            heartbeat = "python scripts/gpu_heartbeat.py & HEARTBEAT_PID=$!"
+            cleanup = "kill $HEARTBEAT_PID 2>/dev/null"
+            train_cmd = " ".join(full_cmd)
+            inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && {heartbeat} && {train_cmd}; {cleanup}"
             full_cmd = [
                 "singularity",
                 "exec",
