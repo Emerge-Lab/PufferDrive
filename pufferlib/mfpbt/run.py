@@ -102,6 +102,7 @@ def main():
         env_name=args.env_name,
         base_args=base_args,
         selection_metric=mfpbt_config.selection_metric,
+        selection_source=mfpbt_config.selection_source,
         eval_simulation_mode=mfpbt_config.eval_simulation_mode,
         eval_map_dir=mfpbt_config.eval_map_dir,
         eval_num_scenarios=mfpbt_config.eval_num_scenarios,

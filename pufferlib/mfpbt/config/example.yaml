@@ -10,7 +10,7 @@ frequencies:
   - 50
 
 # Number of CUDA devices used by the worker pool.
-num_devices: 1
+num_devices: 8
 
 # Maximum number of concurrent agent jobs per device.
 # Total concurrency = num_devices * num_agents_per_device.
@@ -24,6 +24,11 @@ round_train_env_steps: 4_000_000
 
 # Post-round evaluation metric used for ranking and genetics.
 selection_metric: avg_distance_per_infraction
+
+# Where selection is measured from:
+# - eval: run eval_multi_scenarios after each round
+# - train: skip eval and reuse the metric collected during training
+selection_source: train
 
 # MF-PBT evaluation mode. Defaults to gigaflow in the MF-PBT controller.
 eval_simulation_mode: gigaflow

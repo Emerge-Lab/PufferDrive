@@ -16,6 +16,7 @@ class MFPBTConfig:
     num_rounds: int
     round_train_env_steps: int
     selection_metric: str = "avg_distance_per_infraction"
+    selection_source: str = "eval"
     eval_simulation_mode: str = "gigaflow"
     eval_map_dir: str | None = None
     eval_num_scenarios: int | None = None
@@ -60,6 +61,8 @@ class MFPBTConfig:
             raise ValueError("num_rounds must be positive")
         if self.round_train_env_steps <= 0:
             raise ValueError("round_train_env_steps must be positive")
+        if self.selection_source not in ("eval", "train"):
+            raise ValueError("selection_source must be 'eval' or 'train'")
         if self.eval_simulation_mode not in ("gigaflow", "replay"):
             raise ValueError("eval_simulation_mode must be 'gigaflow' or 'replay'")
         if self.eval_num_carla_maps <= 0:

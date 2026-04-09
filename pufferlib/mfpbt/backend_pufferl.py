@@ -20,6 +20,7 @@ class PufferLTrainerBackend(TrainerBackend):
         env_name: str,
         base_args: dict,
         selection_metric: str,
+        selection_source: str = "eval",
         eval_simulation_mode: str = "gigaflow",
         eval_map_dir: str | None = None,
         eval_num_scenarios: int | None = None,
@@ -31,6 +32,7 @@ class PufferLTrainerBackend(TrainerBackend):
         self.env_name = env_name
         self.base_args = base_args
         self.selection_metric = selection_metric
+        self.selection_source = selection_source
         self.eval_simulation_mode = eval_simulation_mode
         self.eval_map_dir = eval_map_dir
         self.eval_num_scenarios = eval_num_scenarios
@@ -117,6 +119,25 @@ class PufferLTrainerBackend(TrainerBackend):
         args["eval_results_dir"] = tempfile.mkdtemp(prefix=f"mfpbt_eval_agent_{global_id}_")
         return args
 
+    def _selection_score_from_train(self, pufferl, last_logs):
+        metric_keys = [f"environment/{self.selection_metric}", self.selection_metric]
+        if last_logs is not None:
+            for key in metric_keys:
+                if key in last_logs:
+                    return float(last_logs[key])
+
+        for key in (self.selection_metric,):
+            if key in pufferl.stats:
+                value = pufferl.stats[key]
+                if isinstance(value, (int, float)):
+                    return float(value)
+            if key in pufferl.last_stats:
+                value = pufferl.last_stats[key]
+                if isinstance(value, (int, float)):
+                    return float(value)
+
+        raise KeyError(f"Training logs did not contain selection metric '{self.selection_metric}'")
+
     def run_round(self, agent: AgentState, round_budget: int, seed: int | None = None) -> AgentState:
         round_train_args = self._make_train_args(agent.hyperparameters, agent.env_steps + round_budget)
         if seed is not None:
@@ -134,27 +155,35 @@ class PufferLTrainerBackend(TrainerBackend):
             pufferl.set_hyperparameters(agent.hyperparameters)
 
             target_steps = agent.env_steps + round_budget
+            last_logs = None
             while pufferl.global_step < target_steps:
                 pufferl.evaluate()
-                pufferl.train()
-
-            eval_args = self._make_eval_args(agent.hyperparameters, pufferl.global_step, seed, agent.metadata.global_id)
-            eval_metrics = eval_multi_scenarios(
-                self.env_name,
-                args=eval_args,
-                vecenv=None,
-                policy=pufferl.uncompiled_policy,
-                logger=None,
-                metric_prefix="validation",
-                quiet=True,
-            )
+                logs = pufferl.train()
+                if logs is not None:
+                    last_logs = logs
+            if self.selection_source == "eval":
+                eval_args = self._make_eval_args(
+                    agent.hyperparameters, pufferl.global_step, seed, agent.metadata.global_id
+                )
+                eval_metrics = eval_multi_scenarios(
+                    self.env_name,
+                    args=eval_args,
+                    vecenv=None,
+                    policy=pufferl.uncompiled_policy,
+                    logger=None,
+                    metric_prefix="validation",
+                    quiet=True,
+                )
+                selection_score = float(eval_metrics[self.selection_metric])
+            else:
+                selection_score = self._selection_score_from_train(pufferl, last_logs)
 
             updated_agent = copy.deepcopy(agent)
             exported_trainer_state = pufferl.export_trainer_state()
             updated_agent.trainer_state = self._save_agent_trainer_state(
                 agent.metadata.global_id, exported_trainer_state
             )
-            updated_agent.selection_score = float(eval_metrics[self.selection_metric])
+            updated_agent.selection_score = selection_score
             updated_agent.env_steps = int(pufferl.global_step)
             return updated_agent
         finally:
