@@ -17,7 +17,7 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-CPT_PATH = "models/cpts_test/unreg_classic_50k_maps.pt"
+CPT_PATH = "models/scaling_cpts/unreg_classic_test.pt"
 
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
