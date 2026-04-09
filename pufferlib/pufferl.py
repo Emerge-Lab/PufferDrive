@@ -494,11 +494,10 @@ class PuffeRL:
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
             )
-            adv = mb_advantages
-            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
-            # --- Masked advantage normalization ---
-            # Only compute mean/std over valid timesteps
+            adv = mb_advantages
+
+            # Masked advantage normalization: Only compute mean/std over non-terminated timesteps
             valid_adv = adv[mb_masks == 1]
             if valid_adv.numel() > 0:
                 adv_mean = valid_adv.mean()
@@ -511,7 +510,7 @@ class PuffeRL:
 
             valid_count = mb_masks.sum().clamp(min=1)
 
-            # Policy loss - already zeroed by adv*mb_masks but mean is diluted
+            # Policy loss
             pg_loss1 = -adv * ratio
             pg_loss2 = -adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
             pg_loss = (torch.max(pg_loss1, pg_loss2) * mb_masks).sum() / valid_count
@@ -526,15 +525,18 @@ class PuffeRL:
             # Entropy loss
             entropy_loss = (entropy.reshape(mb_masks.shape) * mb_masks).sum() / valid_count
 
-            # Ratio - zero out dead steps so they don't pollute vtrace importance weights
+            # Store masked ratio for vtrace importance weights; dead steps should not
+            # influence future advantage estimates
             ratio_masked = ratio * mb_masks
             self.ratio[idx] = ratio_masked.detach()
 
             with torch.no_grad():
-                old_approx_kl = (-logratio).mean()
-                approx_kl = ((ratio - 1) - logratio).mean()
-                clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
-
+                # KL and clipfrac diagnostics — exclude dead timesteps
+                masked_logratio = logratio * mb_masks
+                masked_ratio = ratio * mb_masks
+                old_approx_kl = ((-logratio) * mb_masks).sum() / valid_count
+                approx_kl = (((ratio - 1) - logratio) * mb_masks).sum() / valid_count
+                clipfrac = (((ratio - 1.0).abs() > config["clip_coef"]) * mb_masks).sum() / valid_count
             # Regularization
             if self.reg_mode == "kl_anchor":
                 # Flatten the batch and time dimensions for feeding into the BC anchor policy since it is trained without memory
@@ -640,7 +642,7 @@ class PuffeRL:
             losses["old_approx_kl"] += old_approx_kl.item() / self.total_minibatches
             losses["approx_kl"] += approx_kl.item() / self.total_minibatches
             losses["clipfrac"] += clipfrac.item() / self.total_minibatches
-            losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["importance"] += (ratio * mb_masks).sum().item() / valid_count.item() / self.total_minibatches
             losses["reg_loss"] += unweighted_reg_loss / self.total_minibatches
 
             # Learn on accumulated minibatches
