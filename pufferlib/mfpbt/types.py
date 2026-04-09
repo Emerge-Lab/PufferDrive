@@ -62,3 +62,7 @@ class WorkerEvent:
     worker_id: int
     device_id: int
     agent: AgentState | None = None
+    pid: int | None = None
+    exitcode: int | None = None
+    error_message: str | None = None
+    traceback_text: str | None = None

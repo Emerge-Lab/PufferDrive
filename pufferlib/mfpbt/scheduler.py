@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import queue
+import traceback
 from collections.abc import Callable
 
 import torch
@@ -19,6 +20,7 @@ def _worker_main(
     result_queue,
     backend_kwargs: dict,
 ) -> None:
+    current_global_id = -1
     if torch.cuda.is_available():
         torch.cuda.set_device(device_id)
     backend = backend_factory(device_id=device_id, **backend_kwargs)
@@ -28,6 +30,7 @@ def _worker_main(
             task = task_queue.get()
             if task.stop:
                 break
+            current_global_id = task.agent.metadata.global_id
 
             result_queue.put(
                 WorkerEvent(
@@ -35,6 +38,7 @@ def _worker_main(
                     global_id=task.agent.metadata.global_id,
                     worker_id=worker_id,
                     device_id=device_id,
+                    pid=os.getpid(),
                 )
             )
             updated_agent = backend.run_round(task.agent, task.round_budget, seed=task.seed)
@@ -45,8 +49,23 @@ def _worker_main(
                     worker_id=worker_id,
                     device_id=device_id,
                     agent=updated_agent,
+                    pid=os.getpid(),
                 )
             )
+            current_global_id = -1
+    except Exception as error:
+        result_queue.put(
+            WorkerEvent(
+                event_type="failed",
+                global_id=current_global_id,
+                worker_id=worker_id,
+                device_id=device_id,
+                pid=os.getpid(),
+                error_message=str(error),
+                traceback_text=traceback.format_exc(),
+            )
+        )
+        raise
     finally:
         backend.close()
 
@@ -106,13 +125,30 @@ class WorkerPoolScheduler:
             try:
                 result = self.result_queue.get(timeout=1.0)
             except queue.Empty:
-                if any(not worker.is_alive() for worker in self.workers):
-                    raise RuntimeError("MF-PBT worker died during round execution")
+                dead_workers = [worker for worker in self.workers if not worker.is_alive()]
+                if dead_workers:
+                    worker_status = ", ".join(
+                        f"pid={worker.pid}, exitcode={worker.exitcode}" for worker in dead_workers
+                    )
+                    raise RuntimeError(f"MF-PBT worker died during round execution: {worker_status}")
                 continue
 
             if isinstance(result, WorkerEvent):
                 if event_callback is not None:
                     event_callback(result)
+                if result.event_type == "failed":
+                    details = [
+                        f"worker_id={result.worker_id}",
+                        f"gpu={result.device_id}",
+                        f"pid={result.pid}",
+                        f"agent={result.global_id}",
+                    ]
+                    if result.error_message:
+                        details.append(f"error={result.error_message}")
+                    message = "MF-PBT worker failed: " + ", ".join(details)
+                    if result.traceback_text:
+                        message += f"\n{result.traceback_text}"
+                    raise RuntimeError(message)
                 if result.event_type == "completed" and result.agent is not None:
                     results_by_id[result.agent.metadata.global_id] = result.agent
                 continue
@@ -126,4 +162,7 @@ class WorkerPoolScheduler:
             self.task_queue.put(WorkerTask(agent=None, round_budget=0, stop=True))
 
         for worker in self.workers:
-            worker.join()
+            worker.join(timeout=5)
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=5)
