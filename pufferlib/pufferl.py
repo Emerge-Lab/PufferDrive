@@ -1560,15 +1560,6 @@ def controlled_exp(env_name, args=None):
     if "controlled_exp" not in args:
         raise pufferlib.APIUsageError("No [controlled_exp.*] sections found in config")
 
-    # Map num_maps values to corresponding map directories
-    map_dir_lookup = {
-        100: "resources/drive/binaries/training_100",
-        1000: "resources/drive/binaries/training_1k",
-        10000: "resources/drive/binaries/training_10k",
-        20000: "resources/drive/binaries/training_20k",
-        50000: "resources/drive/binaries/training_50k",
-    }
-
     # Extract parameters from controlled_exp namespace
     params = {}
     for section, section_config in args["controlled_exp"].items():
@@ -1597,12 +1588,6 @@ def controlled_exp(env_name, args=None):
         for key, value in zip(keys, combo):
             section, param = key.split(".")
             exp_args[section][param] = value
-
-        # Auto-set map_dir based on num_maps if present in sweep
-        if "env.num_maps" in keys:
-            num_maps = exp_args["env"]["num_maps"]
-            if num_maps in map_dir_lookup:
-                exp_args["env"]["map_dir"] = map_dir_lookup[num_maps]
 
         # Create descriptive name (exclude map_dir)
         run_name_parts = []
