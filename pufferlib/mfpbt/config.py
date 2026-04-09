@@ -15,7 +15,7 @@ class MFPBTConfig:
     num_agents_per_device: int
     num_rounds: int
     round_train_env_steps: int
-    selection_metric: str = "puffer_score"
+    selection_metric: str = "avg_distance_per_infraction"
     eval_simulation_mode: str = "gigaflow"
     eval_map_dir: str | None = None
     eval_num_scenarios: int | None = None
