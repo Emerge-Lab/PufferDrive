@@ -136,13 +136,6 @@ class PuffeRL:
             self.render_queue = multiprocessing.Queue()
             self.render_processes = []
 
-        # LSTM
-        if config["use_rnn"]:
-            n = vecenv.agents_per_batch
-            h = policy.hidden_size
-            self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
-            self.lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
-
         # Minibatching & gradient accumulation
         minibatch_size = config["minibatch_size"]
         max_minibatch_size = config["max_minibatch_size"]
@@ -258,11 +251,6 @@ class PuffeRL:
         config = self.config
         device = config["device"]
 
-        if config["use_rnn"]:
-            for k in self.lstm_h:
-                self.lstm_h[k] = torch.zeros(self.lstm_h[k].shape, device=device)
-                self.lstm_c[k] = torch.zeros(self.lstm_c[k].shape, device=device)
-
         self.full_rows = 0
         while self.full_rows < self.segments:
             profile("env", epoch)
@@ -290,21 +278,13 @@ class PuffeRL:
                     mask=mask,
                 )
 
-                if config["use_rnn"]:
-                    state["lstm_h"] = self.lstm_h[env_id.start]
-                    state["lstm_c"] = self.lstm_c[env_id.start]
+                action, logprob, value = self.policy.forward_eval(o_device, state)
 
-                logits, value = self.policy.forward_eval(o_device, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 if config.get("clamp_reward", True):
                     r = torch.clamp(r, -1, 1)
 
             profile("eval_copy", epoch)
             with torch.no_grad():
-                if config["use_rnn"]:
-                    self.lstm_h[env_id.start] = state["lstm_h"]
-                    self.lstm_c[env_id.start] = state["lstm_c"]
-
                 # Fast path for fully vectorized envs
                 l = self.ep_lengths[env_id.start].item()
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
@@ -338,8 +318,6 @@ class PuffeRL:
                     self.full_rows += num_full
 
                 action = action.cpu().numpy()
-                if isinstance(logits, torch.distributions.Normal):
-                    action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
 
             profile("eval_misc", epoch)
             for i in info:
@@ -413,17 +391,8 @@ class PuffeRL:
             mb_advantages = advantages[idx]
 
             profile("train_forward", epoch)
-            if not config["use_rnn"]:
-                mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
 
-            state = dict(
-                action=mb_actions,
-                lstm_h=None,
-                lstm_c=None,
-            )
-
-            logits, newvalue = self.policy(mb_obs, state)
-            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+            newvalue, newlogprob, entropy = self.policy.forward_train(mb_obs, mb_actions)
 
             profile("train_misc", epoch)
             newlogprob = newlogprob.reshape(mb_logprobs.shape)
@@ -1248,11 +1217,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         torch.distributed.init_process_group(backend="nccl", world_size=world_size)
         policy = policy.to(local_rank)
         model = torch.nn.parallel.DistributedDataParallel(policy, device_ids=[local_rank], output_device=local_rank)
-        if hasattr(policy, "lstm"):
-            # model.lstm = policy.lstm
-            model.hidden_size = policy.hidden_size
-
-        model.forward_eval = policy.forward_eval
         policy = model.to(local_rank)
 
     # Only rank 0 should create the logger to avoid duplicate runs
@@ -1412,11 +1376,6 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         device = args["train"]["device"]
 
         state = {}
-        if args["train"]["use_rnn"]:
-            state = dict(
-                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-            )
 
         frames = []
         while True:
@@ -1681,17 +1640,15 @@ def load_env(env_name, args):
 
 def load_policy(args, vecenv, env_name=""):
     package = args["package"]
-    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
-    env_module = importlib.import_module(module_name)
+    if package == "ocean":
+        policies_module = importlib.import_module("pufferlib.ocean.policies")
+    else:
+        env_module = importlib.import_module(f"pufferlib.environments.{package}")
+        policies_module = env_module.torch
 
     device = args["train"]["device"]
-    policy_cls = getattr(env_module.torch, args["policy_name"])
+    policy_cls = getattr(policies_module, args["policy_name"])
     policy = policy_cls(vecenv.driver_env, **args["policy"])
-
-    rnn_name = args["rnn_name"]
-    if rnn_name is not None:
-        rnn_cls = getattr(env_module.torch, args["rnn_name"])
-        policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"])
 
     policy = policy.to(device)
 
@@ -1801,7 +1758,6 @@ def load_config(env_name, config_dir=None):
 
         prev[subkey] = value
 
-    args["train"]["use_rnn"] = args["rnn_name"] is not None
     return args
 
 

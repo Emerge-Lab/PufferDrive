@@ -6,9 +6,6 @@ import numpy as np
 
 import pufferlib.utils
 import pufferlib.vector
-import pufferlib.models
-
-from pufferlib.ocean.torch import Drive
 
 
 def load_config(env_name, config_dir=None):
@@ -86,12 +83,10 @@ def export_weights():
     vecenv = pufferlib.vector.make(make_env, env_kwargs=env_kwargs, backend=pufferlib.vector.Serial, num_envs=1)
 
     # Initialize Policy
-    print("Initializing Policy...")
-    policy = Drive(vecenv.driver_env, **config["policy"])
-
-    if config["base"]["rnn_name"]:
-        print("Wrapping with LSTM...")
-        policy = pufferlib.models.LSTMWrapper(vecenv.driver_env, policy, **config["rnn"])
+    policy_name = config["base"]["policy_name"]
+    policy_cls = getattr(__import__("pufferlib.ocean.policies", fromlist=[policy_name]), policy_name)
+    print(f"Initializing {policy_name}...")
+    policy = policy_cls(vecenv.driver_env, **config["policy"])
 
     # Load Checkpoint
     print(f"Loading checkpoint from {args.checkpoint}...")
