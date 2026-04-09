@@ -92,6 +92,16 @@ def _move_state_to_device(value, device):
     return value
 
 
+def _is_cuda_device(device):
+    if isinstance(device, torch.device):
+        return device.type == "cuda"
+    if isinstance(device, str):
+        return device.startswith("cuda")
+    if isinstance(device, int):
+        return True
+    return False
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization
@@ -131,7 +141,7 @@ class PuffeRL:
             horizon,
             *obs_space.shape,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
-            pin_memory=device == "cuda" and config["cpu_offload"],
+            pin_memory=_is_cuda_device(device) and config["cpu_offload"],
             device="cpu" if config["cpu_offload"] else device,
         )
         self.actions = torch.zeros(
@@ -248,7 +258,7 @@ class PuffeRL:
         # Automatic mixed precision
         precision = config["precision"]
         self.amp_context = contextlib.nullcontext()
-        if config.get("amp", True) and config["device"] == "cuda":
+        if config.get("amp", True) and _is_cuda_device(config["device"]):
             self.amp_context = torch.amp.autocast(device_type="cuda", dtype=getattr(torch, precision))
         if precision not in ("float32", "bfloat16"):
             raise pufferlib.APIUsageError(f"Invalid precision: {precision}: use float32 or bfloat16")
@@ -492,7 +502,10 @@ class PuffeRL:
             self.last_log_step = self.global_step
             profile.clear()
 
-        if self.epoch % config["checkpoint_interval"] == 0 or done_training:
+        should_save_checkpoint = self.config.get("enable_checkpointing", True) and (
+            self.epoch % config["checkpoint_interval"] == 0 or done_training
+        )
+        if should_save_checkpoint:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 

@@ -5,6 +5,8 @@ import os
 import queue
 from collections.abc import Callable
 
+import torch
+
 from .backend import TrainerBackend
 from .types import AgentState, WorkerEvent, WorkerResult, WorkerTask
 
@@ -17,7 +19,8 @@ def _worker_main(
     result_queue,
     backend_kwargs: dict,
 ) -> None:
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(device_id)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(device_id)
     backend = backend_factory(device_id=device_id, **backend_kwargs)
 
     try:

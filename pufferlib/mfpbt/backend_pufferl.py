@@ -60,9 +60,10 @@ class PufferLTrainerBackend(TrainerBackend):
         for key, value in hyperparameters.items():
             train_args[key] = value
 
-        train_args["device"] = "cuda" if torch.cuda.is_available() else "cpu"
+        train_args["device"] = f"cuda:{self.device_id}" if torch.cuda.is_available() else "cpu"
         train_args["render"] = False
         train_args["checkpoint_interval"] = 10**18
+        train_args["enable_checkpointing"] = False
         train_args["save_best_model"] = False
         train_args["quiet"] = True
         train_args["total_timesteps"] = round_budget
@@ -105,7 +106,7 @@ class PufferLTrainerBackend(TrainerBackend):
         for key, value in hyperparameters.items():
             train_args[key] = value
 
-        train_args["device"] = "cuda" if torch.cuda.is_available() else "cpu"
+        train_args["device"] = f"cuda:{self.device_id}" if torch.cuda.is_available() else "cpu"
         if seed is not None:
             train_args["seed"] = seed
 
