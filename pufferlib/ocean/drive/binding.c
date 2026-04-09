@@ -468,6 +468,12 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "max_observation_distance", log->max_observation_distance);
     assign_to_dict(dict, "observation_coverage", log->observation_coverage);
     assign_to_dict(dict, "partner_obs_coverage", log->partner_obs_coverage);
+    float at_fault_collision_pct =
+        (log->collisions_per_agent > 0) ? log->at_fault_collision_count / log->collisions_per_agent : 0.0f;
+    assign_to_dict(dict, "at_fault_collision_pct", at_fault_collision_pct);
+    float not_at_fault_collision_pct =
+        (log->collisions_per_agent > 0) ? log->not_at_fault_collision_count / log->collisions_per_agent : 0.0f;
+    assign_to_dict(dict, "not_at_fault_collision_pct", not_at_fault_collision_pct);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }

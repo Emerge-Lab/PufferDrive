@@ -144,10 +144,12 @@
 // Offsets
 #define COLLISION_RANGE 5
 #define Z_RANGE 3
-#define Z_BUFFER 4.0f                // 4.0m buffer for different z level checking
-#define SPEED_LIMIT 20.0f            // Hardcoded speed limit value
-#define COMFORT_JERK_THRESHOLD 5.0f  // For JERK model comfort
-#define COMFORT_ACCEL_THRESHOLD 3.0f // For JERK and CLASSIC model comfort
+#define Z_BUFFER 4.0f                           // 4.0m buffer for different z level checking
+#define SPEED_LIMIT 20.0f                       // Hardcoded speed limit value
+#define COMFORT_JERK_THRESHOLD 5.0f             // For JERK model comfort
+#define COMFORT_ACCEL_THRESHOLD 3.0f            // For JERK and CLASSIC model comfort
+#define STATIONARY_SPEED_THRESHOLD 0.05f        // Speed below which we consider the agent stationary
+#define HEAD_ON_COLLISION_ANGLE_THRESHOLD 30.0f // Degrees within which a collision is considered head-on
 
 // Metrics Heuristics
 #define MIN_GOAL_SEGMENT_TIME_TO_ANALYZE_AGENT 1.0f
@@ -241,9 +243,11 @@ struct Log {
     float total_distance_travelled;
     float total_infractions;
     float avg_speed_per_agent;
-    float max_observation_distance; // average max observation distance
-    float observation_coverage;     // percentage of entities in obs window seen on average
-    float partner_obs_coverage;     // % of partners within radius that fit in the obs slots
+    float max_observation_distance;     // average max observation distance
+    float observation_coverage;         // percentage of entities in obs window seen on average
+    float partner_obs_coverage;         // % of partners within radius that fit in the obs slots
+    float at_fault_collision_count;     // count of at-fault collisions (ratio computed in my_log)
+    float not_at_fault_collision_count; // count of not at-fault collisions (ratio computed in my_log)
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -1504,6 +1508,52 @@ int collision_check(Drive *env, int agent_idx) {
     return car_collided_with_index;
 }
 
+float dot_product(float v1_x, float v1_y, float v2_x, float v2_y) { return v1_x * v2_x + v1_y * v2_y; }
+
+float get_partner_relative_angle(Drive *env, int ego_agent_idx, int partner_agent_idx) {
+    Agent *ego = &env->agents[ego_agent_idx];
+    Agent *partner = &env->agents[partner_agent_idx];
+
+    float dx = partner->sim_x - ego->sim_x;
+    float dy = partner->sim_y - ego->sim_y;
+    float norm = sqrtf(dx * dx + dy * dy);
+
+    float ego_x = cosf(ego->sim_heading);
+    float ego_y = sinf(ego->sim_heading);
+
+    float relative_angle = acosf(dot_product(dx, dy, ego_x, ego_y) / norm);
+
+    return relative_angle;
+}
+
+void classify_collision_type(Drive *env, int ego_agent_idx, int collided_with_idx) {
+    Agent *ego = &env->agents[ego_agent_idx];
+    Agent *collided_entity = &env->agents[collided_with_idx];
+
+    float ego_speed_magnitude = sqrtf(ego->sim_vx * ego->sim_vx + ego->sim_vy * ego->sim_vy);
+    float partner_speed_magnitude =
+        sqrtf(collided_entity->sim_vx * collided_entity->sim_vx + collided_entity->sim_vy * collided_entity->sim_vy);
+
+    // Stationary cases
+    if (ego_speed_magnitude < STATIONARY_SPEED_THRESHOLD) {
+        ego->current_collision_type = STATIONARY_EGO_COLLISION;
+        return;
+    } else if (partner_speed_magnitude < STATIONARY_SPEED_THRESHOLD) {
+        ego->current_collision_type = STATIONARY_AGENT_COLLISION;
+        return;
+    }
+
+    // Both agents are moving
+    float relative_angle = get_partner_relative_angle(env, ego_agent_idx, collided_with_idx);
+    if (relative_angle < HEAD_ON_COLLISION_ANGLE_THRESHOLD * (M_PI / 180.0f)) {
+        ego->current_collision_type = ACTIVE_FRONT_COLLISION;
+    } else if (relative_angle > (180.0f - HEAD_ON_COLLISION_ANGLE_THRESHOLD) * (M_PI / 180.0f)) {
+        ego->current_collision_type = ACTIVE_REAR_COLLISION;
+    } else {
+        ego->current_collision_type = ACTIVE_LATERAL_COLLISION;
+    }
+}
+
 bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2]) {
     if (fmax(p1[0], p2[0]) < fmin(q1[0], q2[0]) || fmin(p1[0], p2[0]) > fmax(q1[0], q2[0]) ||
         fmax(p1[1], p2[1]) < fmin(q1[1], q2[1]) || fmin(p1[1], p2[1]) > fmax(q1[1], q2[1]))
@@ -2588,10 +2638,20 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
     // Check for vehicle collisions
     int car_collided_with_index = collision_check(env, agent_idx);
-    if (car_collided_with_index != -1)
+    if (car_collided_with_index != -1) {
         collided = VEHICLE_COLLISION;
+        agent->collision_state = collided;
 
-    agent->collision_state = collided;
+        classify_collision_type(env, agent_idx, car_collided_with_index);
+
+        // Determine at-fault
+        CollisionType ct = env->agents[agent_idx].current_collision_type;
+        int at_fault =
+            (ct == STATIONARY_AGENT_COLLISION || ct == ACTIVE_FRONT_COLLISION || ct == ACTIVE_LATERAL_COLLISION);
+        int not_fault_ct = (ct == ACTIVE_REAR_COLLISION || ct == STATIONARY_EGO_COLLISION);
+        env->log.at_fault_collision_count += at_fault;
+        env->log.not_at_fault_collision_count += not_fault_ct;
+    }
 
     if (collided == VEHICLE_COLLISION) {
         if (env->collision_behavior == STOP_AGENT && !agent->stopped) {

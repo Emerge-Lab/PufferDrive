@@ -139,6 +139,27 @@ int unnormalize_traffic_light_state(int norm_state) {
     }
 }
 
+/**
+ * @brief Categorizes the type of collision an agent is involved in.
+ *
+ * - STATIONARY_PARTNER_COLLISION: ego hit a stationary partner agent
+ *
+ * - STATIONARY_EGO_COLLISION:     ego was stationary when hit by another agent
+ *
+ * - ACTIVE_FRONT_COLLISION:       ego collided with something ahead of it
+ *
+ * - ACTIVE_REAR_COLLISION:        ego was hit from behind while moving
+ *
+ * - ACTIVE_LATERAL_COLLISION:     ego was involved in a side collision while moving
+ */
+typedef enum {
+    STATIONARY_AGENT_COLLISION,
+    STATIONARY_EGO_COLLISION,
+    ACTIVE_FRONT_COLLISION,
+    ACTIVE_REAR_COLLISION,
+    ACTIVE_LATERAL_COLLISION,
+} CollisionType;
+
 struct Agent {
     int id;
     int type;
@@ -195,6 +216,7 @@ struct Agent {
     float goals_attempted_this_episode; // goals reached + last goal(if this segment can be judged as an attempt)
     int current_goal_reached;
     int collided_before_goal;
+    CollisionType current_collision_type;
     float init_goal_x;
     float init_goal_y;
     float init_goal_z;
