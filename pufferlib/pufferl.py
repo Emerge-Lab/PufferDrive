@@ -1785,7 +1785,7 @@ def load_policy(args, vecenv, env_name=""):
         else:
             raise pufferlib.APIUsageError("No run id provided for eval")
 
-        checkpoint = torch.load(path, map_location=device)
+        checkpoint = torch.load(load_path, map_location=device, weights_only=False)
         policy.load_state_dict(_load_state_dict(checkpoint, device))
 
     load_path = args["load_model_path"]
@@ -1793,7 +1793,7 @@ def load_policy(args, vecenv, env_name=""):
         load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
 
     if load_path is not None:
-        checkpoint = torch.load(load_path, map_location=device)
+        checkpoint = torch.load(load_path, map_location=device, weights_only=False)
         policy.load_state_dict(_load_state_dict(checkpoint, device))
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
         # optim_state = torch.load(state_path)['optimizer_state_dict']
