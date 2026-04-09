@@ -178,7 +178,7 @@ def _build_anchor_style_maps(anchor_vals):
 
 
 def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
-    """Scaling scatter plot: 4-column layout.
+    """Scaling scatter plot: 5-column layout.
 
     x-axis: self-play training maps (sp_maps), log-scaled
     color/shape: anchor maps
@@ -186,8 +186,9 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
     Subplots:
       0) Self-play score (validation)
       1) Self-play collision rate (validation)
-      2) Human-replay collision rate (interactive)
-      3) Human-replay at-fault collision rate (interactive)
+      2) Self-play offroad rate (validation)
+      3) Human-replay collision rate (interactive)
+      4) Human-replay at-fault collision rate (interactive)
     """
     scaling_df = _prepare_scaling_metadata(df)
     if scaling_df is None:
@@ -196,13 +197,14 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
 
     scaling_df["anchor_maps"] = scaling_df["anchor_maps"].fillna(0).astype(int)
     scaling_df["at_fault_collision_rate_pct"] = scaling_df["at_fault_collision_rate"] * 100
+    scaling_df["offroad_rate_pct"] = scaling_df["offroad_rate"] * 100
 
     if "dynamics" not in scaling_df.columns:
         scaling_df["dynamics"] = "delta"
 
     agg = (
         scaling_df.groupby(["sp_maps", "anchor_maps", "dynamics", "mode"])[
-            ["collision_rate_pct", "score", "at_fault_collision_rate_pct"]
+            ["collision_rate_pct", "score", "at_fault_collision_rate_pct", "offroad_rate_pct"]
         ]
         .agg(["mean", "sem"])
         .reset_index()
@@ -218,6 +220,8 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
         "score_sem",
         "at_fault_coll_mean",
         "at_fault_coll_sem",
+        "offroad_mean",
+        "offroad_sem",
     ]
 
     agg["series_key"] = agg.apply(lambda r: f"{r['dynamics']}_anchor{r['anchor_maps']}", axis=1)
@@ -253,6 +257,13 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
         ("scaling_sp_val", "score_mean", "score_sem", "Score", "Self-play score — validation"),
         ("scaling_sp_val", "coll_mean", "coll_sem", "Collision rate (%)", "Self-play collision rate (%) — validation"),
         (
+            "scaling_sp_val",
+            "offroad_mean",
+            "offroad_sem",
+            "Offroad rate (%)",
+            "Self-play offroad rate (%) — validation",
+        ),
+        (
             "scaling_hr_interactive",
             "coll_mean",
             "coll_sem",
@@ -269,7 +280,7 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
     ]
 
     _set_style(len(series_keys))
-    fig, axes = plt.subplots(1, len(subplot_specs), figsize=(24, 5))
+    fig, axes = plt.subplots(1, len(subplot_specs), figsize=(30, 5))
 
     for ax, (mode, y_col, yerr_col, ylabel, title) in zip(axes, subplot_specs):
         mode_agg = agg[agg["mode"] == mode]
@@ -370,7 +381,7 @@ def plot_scaling_wosac(wosac_df, save_path="eval_scaling_wosac.pdf"):
     """WOSAC scaling figure: 4-column scatter plot.
 
     x-axis: self-play training maps (sp_maps), log-scaled
-    color:  anchor maps; unreg → 0
+    color:  anchor maps; unreg -> 0
     shape:  anchor maps
 
     Subplots: realism_meta_score, kinematic_metrics, interactive_metrics, map_based_metrics
@@ -448,8 +459,8 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
     Rows:   one per (sp_maps, anchor_maps) configuration
     Columns:
       - Self-play maps (metadata), Anchor data
-      - Self-play (validation): score, collision rate, at-fault collision rate
-      - Human-replay (interactive): score, collision rate, at-fault collision rate
+      - Self-play (test): score, collision rate, offroad rate
+      - Human-replay (test): score, collision rate, at-fault collision rate
     """
     scaling_modes = ["scaling_sp_val", "scaling_hr_interactive"]
     scaling_df = df[df["mode"].isin(scaling_modes)].copy()
@@ -459,8 +470,12 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
 
     scaling_df["anchor_maps"] = scaling_df["anchor_maps"].fillna(0).astype(int)
 
-    metrics = ["score", "collision_rate", "at_fault_collision_rate"]
-    available_metrics = [m for m in metrics if m in scaling_df.columns]
+    # Self-play metrics: score, collision_rate, offroad_rate
+    # Human-replay metrics: score, collision_rate, at_fault_collision_rate
+    sp_metrics = ["score", "collision_rate", "offroad_rate"]
+    hr_metrics = ["score", "collision_rate", "at_fault_collision_rate"]
+    all_metrics = list(set(sp_metrics + hr_metrics))
+    available_metrics = [m for m in all_metrics if m in scaling_df.columns]
 
     agg = scaling_df.groupby(["sp_maps", "anchor_maps", "mode"])[available_metrics].agg(["mean", "sem"]).reset_index()
     flat_cols = ["sp_maps", "anchor_maps", "mode"]
@@ -479,24 +494,30 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
     merged = sp.merge(hr, on=["sp_maps", "anchor_maps"], how="outer")
     merged = merged.sort_values(["sp_maps", "anchor_maps"]).reset_index(drop=True)
 
+    has_offroad = "offroad_rate" in available_metrics
     has_at_fault = "at_fault_collision_rate" in available_metrics
 
     # --- Collect all values for normalization ---
     score_cols = ["sp_score_mean", "hr_score_mean"]
     coll_cols = ["sp_collision_rate_mean", "hr_collision_rate_mean"]
+    if has_offroad:
+        coll_cols.append("sp_offroad_rate_mean")
     if has_at_fault:
-        coll_cols += ["sp_at_fault_collision_rate_mean", "hr_at_fault_collision_rate_mean"]
+        coll_cols.append("hr_at_fault_collision_rate_mean")
 
-    all_scores = merged[score_cols].values.flatten()
+    existing_score_cols = [c for c in score_cols if c in merged.columns]
+    existing_coll_cols = [c for c in coll_cols if c in merged.columns]
+
+    all_scores = merged[existing_score_cols].values.flatten()
     all_scores = all_scores[~np.isnan(all_scores)]
-    all_colls = merged[coll_cols].values.flatten()
+    all_colls = merged[existing_coll_cols].values.flatten()
     all_colls = all_colls[~np.isnan(all_colls)]
 
     score_min, score_max = (all_scores.min(), all_scores.max()) if len(all_scores) > 0 else (0, 1)
     coll_min, coll_max = (all_colls.min(), all_colls.max()) if len(all_colls) > 0 else (0, 1)
 
     def _score_intensity(val):
-        """Map score to green intensity 5–50 (darker = better = higher score)."""
+        """Map score to green intensity 5-50 (darker = better = higher score)."""
         if np.isnan(val):
             return 0
         if score_max == score_min:
@@ -505,7 +526,7 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
         return int(5 + t * 45)
 
     def _coll_intensity(val):
-        """Map collision rate to red intensity 5–50 (lighter = better = lower rate)."""
+        """Map collision rate to red intensity 5-50 (lighter = better = lower rate)."""
         if np.isnan(val):
             return 0
         if coll_max == coll_min:
@@ -528,7 +549,7 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
         return f"\\cellcolor{{green!{intensity}}} {text}"
 
     def _fmt_coll(mean, sem, is_best=False):
-        """Format collision rate (as %) with red cellcolor. Bold if best in column."""
+        """Format collision/offroad rate (as %) with red cellcolor. Bold if best in column."""
         if np.isnan(mean):
             return "---"
         intensity = _coll_intensity(mean)
@@ -548,8 +569,9 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
         return _maps_to_human_time(anchor_maps)
 
     # --- Build LaTeX ---
-    n_metric_cols = 2 + int(has_at_fault)
-    col_spec = "rr" + "|" + "r" * n_metric_cols + "|" + "r" * n_metric_cols
+    n_sp_metric_cols = 2 + int(has_offroad)  # score, coll, offroad
+    n_hr_metric_cols = 2 + int(has_at_fault)  # score, coll, at-fault
+    col_spec = "rr" + "|" + "r" * n_sp_metric_cols + "|" + "r" * n_hr_metric_cols
 
     lines = []
     lines.append(
@@ -563,31 +585,32 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
     lines.append(r"\begin{tabular}{" + col_spec + "}")
     lines.append(r"\toprule")
 
-    sp_header = r"\multicolumn{" + str(n_metric_cols) + r"}{c|}{Self-play (test)}"
-    hr_header = r"\multicolumn{" + str(n_metric_cols) + r"}{c}{Human-replay (test)}"
+    sp_header = r"\multicolumn{" + str(n_sp_metric_cols) + r"}{c|}{Self-play (test)}"
+    hr_header = r"\multicolumn{" + str(n_hr_metric_cols) + r"}{c}{Human-replay (test)}"
     lines.append(r" & & " + sp_header + " & " + hr_header + r" \\")
 
-    metric_headers = ["Score", "Coll. (\\%)"]
+    sp_metric_headers = ["Score", "Coll. (\\%)"]
+    if has_offroad:
+        sp_metric_headers.append("Offroad (\\%)")
+    hr_metric_headers = ["Score", "Coll. (\\%)"]
     if has_at_fault:
-        metric_headers.append("At-fault (\\%)")
+        hr_metric_headers.append("At-fault (\\%)")
     header2 = (
         "\\makecell{Self-play maps \\\\ (metadata)} & Anchor data & "
-        + " & ".join(metric_headers)
+        + " & ".join(sp_metric_headers)
         + " & "
-        + " & ".join(metric_headers)
+        + " & ".join(hr_metric_headers)
         + r" \\"
     )
     lines.append(header2)
     lines.append(r"\midrule")
 
-    # --- Compute best value per column (highest score, lowest collision rate) ---
+    # --- Compute best value per column (highest score, lowest collision/offroad/at-fault rate) ---
     best = {}
-    for col in score_cols:
-        if col in merged.columns:
-            best[col] = merged[col].max()  # higher is better
-    for col in coll_cols:
-        if col in merged.columns:
-            best[col] = merged[col].min()  # lower is better
+    for col in existing_score_cols:
+        best[col] = merged[col].max()
+    for col in existing_coll_cols:
+        best[col] = merged[col].min()
 
     def _is_best(col, val):
         if col not in best or np.isnan(val):
@@ -599,7 +622,7 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
         anchor_str = _anchor_label(int(row["anchor_maps"]))
         cells = [sp_maps_str, anchor_str]
 
-        # Self-play
+        # Self-play: score, collision rate, offroad rate
         cells.append(
             _fmt_score(
                 row.get("sp_score_mean", np.nan),
@@ -614,18 +637,16 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
                 is_best=_is_best("sp_collision_rate_mean", row.get("sp_collision_rate_mean", np.nan)),
             )
         )
-        if has_at_fault:
+        if has_offroad:
             cells.append(
                 _fmt_coll(
-                    row.get("sp_at_fault_collision_rate_mean", np.nan),
-                    row.get("sp_at_fault_collision_rate_sem", np.nan),
-                    is_best=_is_best(
-                        "sp_at_fault_collision_rate_mean", row.get("sp_at_fault_collision_rate_mean", np.nan)
-                    ),
+                    row.get("sp_offroad_rate_mean", np.nan),
+                    row.get("sp_offroad_rate_sem", np.nan),
+                    is_best=_is_best("sp_offroad_rate_mean", row.get("sp_offroad_rate_mean", np.nan)),
                 )
             )
 
-        # Human-replay
+        # Human-replay: score, collision rate, at-fault collision rate
         cells.append(
             _fmt_score(
                 row.get("hr_score_mean", np.nan),

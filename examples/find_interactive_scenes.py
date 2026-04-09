@@ -18,10 +18,11 @@ Usage:
 
     # With visualization of top 50
     python examples/find_interactive_scenes.py \
-        --data_folder data/processed/training \
-        --top_k 100 \
+        --data_folder data/processed/validation_10k \
+        --output_folder data/processed/interactive_data_validation \
+        --top_k 1000 \
         --visualize \
-        --vis_top_k 50
+        --vis_top_k 50 \
         --prioritize_intersections
 
     # Cap file count for quick testing
