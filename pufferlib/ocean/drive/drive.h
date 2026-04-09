@@ -203,6 +203,10 @@ struct Log {
     float static_agent_count;
     float perc_controlled;
     float perc_other;
+    float route_progress;      // Longitudinal continuous route completion
+    float lateral_error_avg;   // Average lateral displacement from initial heading axis
+    float l2_samples;          // Sample count for L2 decomposition
+    float rear_collision_rate; // Fraction of steps with a rear collision event
     float n;
 };
 
@@ -239,6 +243,12 @@ struct Entity {
     int mark_as_expert;
     int collision_state;
     int at_fault_collision_state;
+    int rear_collision_state;
+    float init_x; // Position at episode start (for L2 decomposition)
+    float init_y;
+    float init_heading_x; // Heading at episode start
+    float init_heading_y;
+    float init_dist_to_goal; // Distance to goal at episode start (for progress normalization)
     int offroad_state;
     float x;
     float y;
@@ -312,6 +322,58 @@ float clip(float value, float min, float max) {
     if (value > max)
         return max;
     return value;
+}
+
+float compute_route_progress_and_lateral(Entity *e, float px, float py, int init_steps, float *lateral_out) {
+    if (e->traj_x == NULL || e->traj_valid == NULL) {
+        *lateral_out = 0.0f;
+        return 0.0f;
+    }
+
+    float cumulative = 0.0f;
+    float d_p = 0.0f;
+    float d_q = 0.0f;
+    float d_xt = 0.0f;
+    float best_dist_sq = 1e30f;
+    float best_x = px, best_y = py; // closest point on trajectory
+    float prev_x = e->traj_x[0], prev_y = e->traj_y[0];
+
+    for (int t = 0; t < e->array_size; t++) {
+        if (!e->traj_valid[t]) {
+            prev_x = e->traj_x[t];
+            prev_y = e->traj_y[t];
+            continue;
+        }
+        if (t > 0 && e->traj_valid[t - 1]) {
+            float dx = e->traj_x[t] - prev_x;
+            float dy = e->traj_y[t] - prev_y;
+            cumulative += sqrtf(dx * dx + dy * dy);
+        }
+        if (t == init_steps)
+            d_p = cumulative;
+        d_q = cumulative;
+
+        float dx = px - e->traj_x[t];
+        float dy = py - e->traj_y[t];
+        float dist_sq = dx * dx + dy * dy;
+        if (dist_sq < best_dist_sq) {
+            best_dist_sq = dist_sq;
+            d_xt = cumulative;
+            best_x = e->traj_x[t];
+            best_y = e->traj_y[t];
+        }
+        prev_x = e->traj_x[t];
+        prev_y = e->traj_y[t];
+    }
+
+    // Lateral error = Euclidean distance to closest point on expert trajectory
+    *lateral_out = sqrtf(best_dist_sq);
+
+    float denom = d_q - d_p;
+    if (denom < 1e-3f)
+        return 0.0f;
+    float ratio = (d_xt - d_p) / denom;
+    return ratio < 0.0f ? 0.0f : ratio;
 }
 
 typedef struct GridMapEntity GridMapEntity;
@@ -414,16 +476,28 @@ void add_log(Drive *env) {
         env->log.offroad_per_agent += env->logs[i].offroad_per_agent;
         env->log.collisions_per_agent += env->logs[i].collisions_per_agent;
         env->log.at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
+        env->log.rear_collision_rate += env->logs[i].rear_collision_rate; // NEW
 
-        float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
-
-        // Update score, which is an aggregate measure whether the agent fully solved its task
-        float threshold = 1.0f; // Default threshold for 1 goal (must complete it)
-        if (e->goals_sampled_this_episode > 1) {
-            // For multiple goals, require n-1 goals to be reached
-            threshold = (e->goals_sampled_this_episode - 1.0f) / e->goals_sampled_this_episode;
+        // Route progress ratio
+        if (env->logs[i].route_progress > 0.0f) {
+            // Already set to 1.0 because agent reached goal
+            env->log.route_progress += env->logs[i].route_progress;
+        } else {
+            // Agent timed out without reaching goal: compute from final position
+            float unused_lateral = 0.0f;
+            env->log.route_progress +=
+                compute_route_progress_and_lateral(e, e->x, e->y, env->init_steps, &unused_lateral);
         }
 
+        if (env->logs[i].l2_samples > 0.0f) {
+            env->log.lateral_error_avg += env->logs[i].lateral_error_avg / env->logs[i].l2_samples;
+        }
+
+        float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
+        float threshold = 1.0f;
+        if (e->goals_sampled_this_episode > 1) {
+            threshold = (e->goals_sampled_this_episode - 1.0f) / e->goals_sampled_this_episode;
+        }
         if (frac_goal_reached >= threshold && !e->failure_before_goal) {
             env->log.score += 1.0f;
         }
@@ -434,7 +508,6 @@ void add_log(Drive *env) {
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
 
-        // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
         env->log.static_agent_count += env->static_agent_count;
@@ -444,7 +517,6 @@ void add_log(Drive *env) {
         env->log.n += 1;
     }
 }
-
 void init_action_space() {
     // Classic discrete action space
     float accel_step = (ACCEL_MAX - ACCEL_MIN) / (NUM_ACCEL_BINS - 1);
@@ -614,6 +686,11 @@ void set_start_position(Drive *env) {
         e->offroad_state = 0;
         e->stopped = 0;
         e->removed = 0;
+        // NEW: capture episode-start state for metrics
+        e->init_x = e->x;
+        e->init_y = e->y;
+        e->init_heading_x = e->heading_x;
+        e->init_heading_y = e->heading_y;
 
         // Dynamics
         e->a_long = 0.0f;
@@ -1195,6 +1272,17 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         if (forward_dot > 0 && approach_dot > 0) {
             agent->at_fault_collision_state = 1;
         }
+
+        // NEW: rear collision — other agent hit us from behind
+        // i.e. the other agent is behind us and moving toward us
+        float dx_rev = agent->x - other->x;
+        float dy_rev = agent->y - other->y;
+        float other_forward_dot = dx_rev * other->heading_x + dy_rev * other->heading_y;
+        float other_approach_dot = other->vx * dx_rev + other->vy * dy_rev;
+        if (other_forward_dot > 0 && other_approach_dot > 0) {
+            agent->rear_collision_state = 1;
+        }
+
         if (env->collision_behavior == STOP_AGENT && !agent->stopped) {
             agent->stopped = 1;
             agent->vx = agent->vy = 0.0f;
@@ -2112,6 +2200,17 @@ void c_reset(Drive *env) {
             env->entities[agent_idx].goal_position_y = env->entities[agent_idx].init_goal_y;
         }
 
+        // Snapshot initial distance to goal for progress normalization
+        env->entities[agent_idx].init_dist_to_goal =
+            relative_distance_2d(env->entities[agent_idx].x, env->entities[agent_idx].y,
+                                 env->entities[agent_idx].goal_position_x, env->entities[agent_idx].goal_position_y);
+        // Also snapshot start position/heading (set_start_position already ran, but
+        // reset clears logs after set_start_position, so capture here too)
+        env->entities[agent_idx].init_x = env->entities[agent_idx].x;
+        env->entities[agent_idx].init_y = env->entities[agent_idx].y;
+        env->entities[agent_idx].init_heading_x = env->entities[agent_idx].heading_x;
+        env->entities[agent_idx].init_heading_y = env->entities[agent_idx].heading_y;
+
         // Conditioning
         // printf("lam %f \n", env->lambda_value);
 
@@ -2254,8 +2353,6 @@ void c_step(Drive *env) {
         if (env->entities[agent_idx].removed)
             continue;
 
-        env->entities[agent_idx].collision_state = 0;
-
         if (env->control_mode == CONTROL_REPLAY_LOGS) {
             // Teleport agents along their logged trajectories; ignore policy actions
             move_expert(env, env->actions, agent_idx);
@@ -2278,6 +2375,7 @@ void c_step(Drive *env) {
 
         env->entities[agent_idx].collision_state = 0;
         env->entities[agent_idx].offroad_state = 0;
+        env->entities[agent_idx].rear_collision_state = 0;
 
         if (agent_is_done)
             continue;
@@ -2335,12 +2433,31 @@ void c_step(Drive *env) {
                 env->entities[agent_idx].current_goal_reached = 0;
             }
         }
+
+        // NEW: per-step metrics accumulation (only while agent is alive)
+        if (!agent_is_done && !env->entities[agent_idx].removed) {
+
+            // --- Per-step lateral deviation from expert trajectory ---
+            float lateral_err = 0.0f;
+            compute_route_progress_and_lateral(&env->entities[agent_idx], env->entities[agent_idx].x,
+                                               env->entities[agent_idx].y, env->init_steps, &lateral_err);
+            env->logs[i].lateral_error_avg += lateral_err;
+            env->logs[i].l2_samples += 1.0f;
+
+            // --- Rear collision ---
+            if (env->entities[agent_idx].rear_collision_state) {
+                env->logs[i].rear_collision_rate = 1.0f;
+            }
+        }
     }
+
     // Handle agents
     if (env->goal_behavior == GOAL_REMOVE) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             if (env->entities[agent_idx].current_goal_reached) {
+                // Route progress = 1 by definition when goal is reached
+                env->logs[i].route_progress = 1.0f;
                 env->terminals[i] = 1;
                 env->entities[agent_idx].removed = 1;
                 env->entities[agent_idx].stopped = 1;

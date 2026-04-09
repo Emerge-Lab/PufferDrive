@@ -17,10 +17,11 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-CPT_PATH = "models/unreg_classic_test2.pt"
+CPT_PATH = "models/cpts_test/unreg_classic_50k_maps.pt"
 
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
+VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 NUM_AGENTS_PER_VECENV = 1024
 DETERMINISTIC = True
 OUTPUT_CSV = "single_checkpoint_eval.csv"
@@ -35,10 +36,13 @@ METRICS = [
     "score",
     "collision_rate",
     "at_fault_collision_rate",
+    "rear_collision_rate",
     "collisions_per_agent",
     "offroad_rate",
     "offroad_per_agent",
     "completion_rate",
+    "route_progress",
+    "lateral_error_avg",
     "episode_length",
     "episode_return",
     "perc_controlled",
@@ -133,9 +137,10 @@ def run_eval_and_render(checkpoint_path, base_config):
 
     all_rows = []
 
-    for mode_name, control_mode in [
-        ("sp_train", "control_vehicles"),
-        ("hr_train", "control_sdc_only"),
+    for mode_name, map_dir, control_mode, num_maps in [
+        ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
+        ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
+        ("hr_train", TRAIN_MAP_DIR, "control_sdc_only", 50_000),
     ]:
         print(f"\n{'─' * 60}")
         print(f"Mode: {mode_name}")
@@ -143,10 +148,10 @@ def run_eval_and_render(checkpoint_path, base_config):
 
         config = make_eval_config(
             cpt_config,
-            TRAIN_MAP_DIR,
+            map_dir,
             episode_len=91,
             control_mode=control_mode,
-            num_maps=50_000,
+            num_maps=num_maps,
         )
         env = load_env(ENV_NAME, config)
         policy = load_policy(cpt_config, env, ENV_NAME)
@@ -200,8 +205,13 @@ def main():
             scenes=("score", "count"),
             score=("score", "mean"),
             collision_rate=("collision_rate", "mean"),
+            at_fault_collision_rate=("at_fault_collision_rate", "mean"),
+            rear_collision_rate=("rear_collision_rate", "mean"),
             offroad_rate=("offroad_rate", "mean"),
+            route_progress=("route_progress", "mean"),
+            lateral_error_avg=("lateral_error_avg", "mean"),
         )
+        print(f"\n{summary}")
 
     return df
 
