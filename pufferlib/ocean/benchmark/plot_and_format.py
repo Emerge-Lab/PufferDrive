@@ -3,6 +3,9 @@
 import re
 import warnings
 
+import os
+from pathlib import Path
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -10,6 +13,11 @@ import numpy as np
 import seaborn as sns
 
 DPI = 600
+
+
+def _ensure_dir(path):
+    """Create parent directories for *path* if they don't already exist."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
 def _set_style(n_policies):
@@ -61,7 +69,16 @@ def _maps_to_human_time(maps):
     return f"{minutes:.1f} minutes"
 
 
-def plot_scores(df, save_path="eval_scores.pdf"):
+def _maps_to_human_hours(maps: int) -> float:
+    """Convert map count to hours of human driving data.
+
+    Each map is a 9-second scenario with ~5 controlled agents on average:
+        hours = (maps × 9s × 5) / 3600
+    """
+    return (maps * 9 * 5) / 3600
+
+
+def plot_scores(df, save_path="results/figures/eval_scores.pdf"):
     """Figure 1: Self-play and human-replay scores on validation sets.
 
     Three columns:
@@ -95,6 +112,7 @@ def plot_scores(df, save_path="eval_scores.pdf"):
         sns.despine(ax=ax)
 
     plt.tight_layout()
+    _ensure_dir(save_path)
     plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
     plt.show()
     return fig
@@ -163,6 +181,7 @@ def _scaling_scatter_common(
         sns.despine(ax=ax)
 
     plt.tight_layout()
+    _ensure_dir(save_path)
     plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
     plt.show()
     return fig
@@ -177,7 +196,7 @@ def _build_anchor_style_maps(anchor_vals):
     return color_map, marker_map
 
 
-def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
+def plot_scaling_scatter(df, save_path="results/figures/eval_scaling_scatter.pdf"):
     """Scaling scatter plot: 5-column layout.
 
     x-axis: self-play training maps (sp_maps), log-scaled
@@ -315,12 +334,13 @@ def plot_scaling_scatter(df, save_path="eval_scaling_scatter.pdf"):
         sns.despine(ax=ax)
 
     plt.tight_layout()
+    _ensure_dir(save_path)
     plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
     plt.show()
     return fig
 
 
-def plot_scaling_barplot(df, save_path="eval_scaling_barplot.pdf"):
+def plot_scaling_barplot(df, save_path="results/figures/eval_scaling_barplot.pdf"):
     """Bar plots for 50k self-play checkpoints on training set: score, collision rate, offroad rate."""
     scaling_df = df[df["mode"] == "scaling_sp_train"].copy()
     if scaling_df.empty:
@@ -372,12 +392,13 @@ def plot_scaling_barplot(df, save_path="eval_scaling_barplot.pdf"):
         sns.despine(ax=ax)
 
     plt.tight_layout()
+    _ensure_dir(save_path)
     plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
     plt.show()
     return fig
 
 
-def plot_scaling_wosac(wosac_df, save_path="eval_scaling_wosac.pdf"):
+def plot_scaling_wosac(wosac_df, save_path="results/figures/eval_scaling_wosac.pdf"):
     """WOSAC scaling figure: 4-column scatter plot.
 
     x-axis: self-play training maps (sp_maps), log-scaled
@@ -445,7 +466,7 @@ def plot_scaling_wosac(wosac_df, save_path="eval_scaling_wosac.pdf"):
     )
 
 
-def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
+def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_table.tex"):
     """Generate a LaTeX-formatted table with heatmap coloring.
 
     Score columns use a Greens colormap (darker = higher = better).
@@ -680,6 +701,7 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
 
     latex_str = "\n".join(lines)
 
+    _ensure_dir(save_path)
     with open(save_path, "w") as f:
         f.write(latex_str)
 
@@ -687,7 +709,311 @@ def generate_scaling_latex_table(df, save_path="eval_scaling_table.tex"):
     return latex_str
 
 
-def make_all_figures(df=None, wosac_df=None):
+# ---------------------------------------------------------------------------
+# Anchor evaluation plot
+# ---------------------------------------------------------------------------
+
+
+def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
+    """Three-subplot summary figure for BC anchor evaluation.
+
+    All subplots share the same x-axis: hours of human driving data used to
+    train the anchor (num_maps_trained via _maps_to_human_hours).
+
+    Subplot 0 — Open-loop: validation accuracy (one point per checkpoint).
+    Subplot 1 — Closed-loop: route progress, self-play vs human-replay.
+    Subplot 2 — Closed-loop: score, self-play vs human-replay.
+    """
+    if anchor_df is None or anchor_df.empty:
+        print("  No anchor eval data — skipping plot_anchor_eval.")
+        return None
+
+    MODE_STYLES = {
+        "cl_selfplay": dict(color="black", marker="o", label="Self-play"),
+        "cl_humanreplay": dict(color="green", marker="s", label="Human-replay (control SDC only)"),
+    }
+
+    # Open-loop: one point per checkpoint
+    ol_df = (
+        anchor_df[["checkpoint", "num_maps_trained", "ol_val_accuracy", "ol_val_loss"]]
+        .drop_duplicates(subset="checkpoint")
+        .copy()
+    )
+    ol_df["human_hours"] = ol_df["num_maps_trained"].apply(_maps_to_human_hours)
+    ol_df = ol_df.sort_values("human_hours")
+
+    # Closed-loop: mean ± SEM per (checkpoint, mode)
+    cl_df = (
+        anchor_df[anchor_df["mode"].isin(["cl_selfplay", "cl_humanreplay"])]
+        .groupby(["checkpoint", "num_maps_trained", "mode"])[["route_progress", "score"]]
+        .agg(["mean", "sem"])
+        .reset_index()
+    )
+    cl_df.columns = [
+        "checkpoint",
+        "num_maps_trained",
+        "mode",
+        "route_progress_mean",
+        "route_progress_sem",
+        "score_mean",
+        "score_sem",
+    ]
+    cl_df["human_hours"] = cl_df["num_maps_trained"].apply(_maps_to_human_hours)
+    cl_df = cl_df.sort_values("human_hours")
+
+    _set_style(len(MODE_STYLES))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
+
+    # ── Subplot 0: open-loop validation accuracy (%) ─────────────────────────
+    ax = axes[0]
+    ax.plot(
+        ol_df["human_hours"],
+        ol_df["ol_val_accuracy"] * 100,
+        color="#1f77b4",
+        marker="D",
+        linewidth=1.5,
+        markersize=8,
+    )
+    ax.set_xscale("log")
+    ax.set_xlabel("Human driving demonstrations (hours)")
+    ax.set_ylabel("Validation accuracy (%)")
+    ax.set_title("Open-loop: validation accuracy")
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    sns.despine(ax=ax)
+
+    # ── Subplot 1: open-loop validation loss ──────────────────────────────────
+    ax = axes[1]
+    ax.plot(
+        ol_df["human_hours"],
+        ol_df["ol_val_loss"],
+        color="#d62728",
+        marker="o",
+        linewidth=1.5,
+        markersize=8,
+    )
+    ax.set_xscale("log")
+    ax.set_xlabel("Human driving demonstrations (hours)")
+    ax.set_ylabel("Validation loss")
+    ax.set_title("Open-loop: validation loss")
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    sns.despine(ax=ax)
+
+    # ── Subplots 2 & 3: closed-loop route progress and score ──────────────────
+    cl_specs = [
+        ("route_progress_mean", "route_progress_sem", "Route progress", "Closed-loop: route progress"),
+        ("score_mean", "score_sem", "Score", "Closed-loop: score"),
+    ]
+    for ax, (y_mean, y_sem, ylabel, title) in zip(axes[2:], cl_specs):
+        for mode, style in MODE_STYLES.items():
+            grp = cl_df[cl_df["mode"] == mode].sort_values("human_hours")
+            if grp.empty:
+                continue
+            ax.errorbar(
+                grp["human_hours"],
+                grp[y_mean],
+                yerr=grp[y_sem],
+                color=style["color"],
+                marker=style["marker"],
+                label=style["label"],
+                linewidth=1.5,
+                capsize=3,
+                markersize=8,
+            )
+        ax.set_xscale("log")
+        ax.set_xlabel("Human driving demonstrations (hours)")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.legend(fontsize=9)
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
+def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eval_table.tex"):
+    """LaTeX table for BC anchor evaluation results.
+
+    Rows:    one per checkpoint (num_maps_trained), sorted ascending.
+    Columns: Human data (hours) | OL val accuracy (%) | OL val loss
+             | CL self-play route progress | CL self-play score
+             | CL human-replay route progress | CL human-replay score
+
+    Uses the same green/red cellcolor heatmap convention as
+    generate_scaling_latex_table: green = higher is better (accuracy, progress,
+    score), red = lower is better (loss).
+
+    Required LaTeX packages:
+      \\usepackage{booktabs}
+      \\usepackage[table]{xcolor}
+      \\usepackage{graphicx}
+      \\usepackage{bm}
+    """
+    if anchor_df is None or anchor_df.empty:
+        print("  No anchor eval data -- skipping generate_anchor_latex_table.")
+        return None
+
+    # Open-loop: one row per checkpoint
+    ol = (
+        anchor_df[["checkpoint", "num_maps_trained", "ol_val_accuracy", "ol_val_loss"]]
+        .drop_duplicates(subset="checkpoint")
+        .copy()
+    )
+    ol["human_hours"] = ol["num_maps_trained"].apply(_maps_to_human_hours)
+
+    # Closed-loop: mean +/- SEM per (checkpoint, mode)
+    cl = (
+        anchor_df[anchor_df["mode"].isin(["cl_selfplay", "cl_humanreplay"])]
+        .groupby(["checkpoint", "num_maps_trained", "mode"])[["route_progress", "score"]]
+        .agg(["mean", "sem"])
+        .reset_index()
+    )
+    cl.columns = [
+        "checkpoint",
+        "num_maps_trained",
+        "mode",
+        "route_progress_mean",
+        "route_progress_sem",
+        "score_mean",
+        "score_sem",
+    ]
+
+    sp = cl[cl["mode"] == "cl_selfplay"].drop(columns="mode").copy()
+    sp = sp.rename(columns={c: f"sp_{c}" for c in sp.columns if c not in ("checkpoint", "num_maps_trained")})
+    hr = cl[cl["mode"] == "cl_humanreplay"].drop(columns="mode").copy()
+    hr = hr.rename(columns={c: f"hr_{c}" for c in hr.columns if c not in ("checkpoint", "num_maps_trained")})
+
+    merged = ol.merge(sp, on=["checkpoint", "num_maps_trained"], how="left")
+    merged = merged.merge(hr, on=["checkpoint", "num_maps_trained"], how="left")
+    merged = merged.sort_values("num_maps_trained").reset_index(drop=True)
+
+    # Colour intensity helpers (mirrors generate_scaling_latex_table)
+    def _intensity(val, col_vals, higher_is_better=True):
+        """Map value to xcolor intensity 5-50.
+
+        For green (higher_is_better=True):  high value -> high intensity (dark green).
+        For red   (higher_is_better=False): low value  -> low intensity  (light red),
+                                            high value -> high intensity (dark red).
+        """
+        finite = col_vals.dropna()
+        if finite.empty or np.isnan(val):
+            return 0
+        vmin, vmax = finite.min(), finite.max()
+        if vmax == vmin:
+            return 25
+        t = (val - vmin) / (vmax - vmin)
+        # t is already 0 for min, 1 for max.
+        # Green: darker = higher = better  -> use t as-is.
+        # Red:   lighter = lower  = better -> use t as-is too (low val -> light red).
+        return int(5 + t * 45)
+
+    def _fmt_green(val, col, sem=None, is_best=False, scale=1.0, decimals=3):
+        if np.isnan(val):
+            return "---"
+        intensity = _intensity(val, merged[col], higher_is_better=True)
+        v = val * scale
+        s = sem * scale if (sem is not None and not np.isnan(sem)) else None
+        fmt = f".{decimals}f"
+        if s:
+            text = f"$\\bm{{{v:{fmt}} \\pm {s:{fmt}}}}$" if is_best else f"${v:{fmt}} \\pm {s:{fmt}}$"
+        else:
+            text = f"\\textbf{{{v:{fmt}}}}" if is_best else f"{v:{fmt}}"
+        return f"\\cellcolor{{green!{intensity}}} {text}"
+
+    def _fmt_red(val, col, sem=None, is_best=False, decimals=3):
+        if np.isnan(val):
+            return "---"
+        intensity = _intensity(val, merged[col], higher_is_better=False)
+        fmt = f".{decimals}f"
+        if sem is not None and not np.isnan(sem):
+            text = f"$\\bm{{{val:{fmt}} \\pm {sem:{fmt}}}}$" if is_best else f"${val:{fmt}} \\pm {sem:{fmt}}$"
+        else:
+            text = f"\\textbf{{{val:{fmt}}}}" if is_best else f"{val:{fmt}}"
+        return f"\\cellcolor{{red!{intensity}}} {text}"
+
+    best = {
+        "ol_val_accuracy": merged["ol_val_accuracy"].max(),
+        "ol_val_loss": merged["ol_val_loss"].min(),
+        "sp_route_progress_mean": merged["sp_route_progress_mean"].max(),
+        "sp_score_mean": merged["sp_score_mean"].max(),
+        "hr_route_progress_mean": merged["hr_route_progress_mean"].max(),
+        "hr_score_mean": merged["hr_score_mean"].max(),
+    }
+
+    def _is_best(col, val):
+        return not np.isnan(val) and np.isclose(val, best[col])
+
+    # Build LaTeX
+    col_spec = "r|rr|rr|rr"
+    lines = [
+        r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, \usepackage{graphicx}, \usepackage{bm}",
+        r"\begin{table}[ht]",
+        r"\centering",
+        r"\caption{BC anchor evaluation. Open-loop metrics on the held-out validation set; closed-loop metrics averaged over validation scenes.}",
+        r"\label{tab:anchor_results}",
+        r"\resizebox{\textwidth}{!}{%",
+        r"\begin{tabular}{" + col_spec + "}",
+        r"\toprule",
+        r" & \multicolumn{2}{c|}{Open-loop} & \multicolumn{2}{c|}{Closed-loop self-play} & \multicolumn{2}{c}{Closed-loop human-replay (SDC only)} \\",
+        r"Human data (h) & Acc. (\%) & Loss & Route prog. & Score & Route prog. & Score \\",
+        r"\midrule",
+    ]
+
+    for _, row in merged.iterrows():
+        cells = [f"{row['human_hours']:.1f}"]
+        cells.append(
+            _fmt_green(
+                row["ol_val_accuracy"],
+                "ol_val_accuracy",
+                scale=100,
+                decimals=1,
+                is_best=_is_best("ol_val_accuracy", row["ol_val_accuracy"]),
+            )
+        )
+        cells.append(
+            _fmt_red(
+                row["ol_val_loss"],
+                "ol_val_loss",
+                decimals=3,
+                is_best=_is_best("ol_val_loss", row["ol_val_loss"]),
+            )
+        )
+        for col_mean, col_sem, key in [
+            ("sp_route_progress_mean", "sp_route_progress_sem", "sp_route_progress_mean"),
+            ("sp_score_mean", "sp_score_sem", "sp_score_mean"),
+            ("hr_route_progress_mean", "hr_route_progress_sem", "hr_route_progress_mean"),
+            ("hr_score_mean", "hr_score_sem", "hr_score_mean"),
+        ]:
+            cells.append(
+                _fmt_green(
+                    row.get(col_mean, np.nan),
+                    key,
+                    sem=row.get(col_sem, np.nan),
+                    decimals=3,
+                    is_best=_is_best(key, row.get(col_mean, np.nan)),
+                )
+            )
+        lines.append(" & ".join(cells) + r" \\")
+
+    lines += [r"\bottomrule", r"\end{tabular}}", r"\end{table}"]
+    latex_str = "\n".join(lines)
+
+    _ensure_dir(save_path)
+    with open(save_path, "w") as f:
+        f.write(latex_str)
+    print(f"  LaTeX table written to {save_path}")
+    return latex_str
+
+
+# ---------------------------------------------------------------------------
+# Master entry point
+# ---------------------------------------------------------------------------
+
+
+def make_all_figures(df=None, wosac_df=None, anchor_df=None):
     """Generate all evaluation figures."""
     print("\nGenerating figures...")
     if df is not None and not df.empty:
@@ -700,17 +1026,24 @@ def make_all_figures(df=None, wosac_df=None):
         generate_scaling_latex_table(df)
     plot_scaling_wosac(wosac_df)
     print("  Saved eval_scaling_wosac.pdf")
+    if anchor_df is not None and not anchor_df.empty:
+        plot_anchor_eval(anchor_df)
+        print("  Saved eval_anchor.pdf")
+        generate_anchor_latex_table(anchor_df)
+        print("  Saved anchor_eval_table.tex")
 
 
 if __name__ == "__main__":
     import os
     import pandas as pd
 
-    EVAL_CSV = "checkpoint_eval_results.csv"
-    WOSAC_CSV = "checkpoint_wosac_results.csv"
+    EVAL_CSV = "results/checkpoint_eval_results.csv"
+    WOSAC_CSV = "results/checkpoint_wosac_results.csv"
+    ANCHOR_CSV = "results/anchor_eval.csv"
 
     df = None
     wosac_df = None
+    anchor_df = None
 
     if os.path.exists(EVAL_CSV):
         df = pd.read_csv(EVAL_CSV)
@@ -724,4 +1057,10 @@ if __name__ == "__main__":
     else:
         print(f"{WOSAC_CSV} not found — skipping WOSAC figures.")
 
-    make_all_figures(df, wosac_df)
+    if os.path.exists(ANCHOR_CSV):
+        anchor_df = pd.read_csv(ANCHOR_CSV)
+        print(f"Loaded {ANCHOR_CSV} ({len(anchor_df)} rows)")
+    else:
+        print(f"{ANCHOR_CSV} not found — skipping anchor eval figure.")
+
+    make_all_figures(df, wosac_df, anchor_df)

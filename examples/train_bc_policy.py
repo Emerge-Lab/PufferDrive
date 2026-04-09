@@ -26,22 +26,22 @@ from pufferlib.ocean.drive import binding
 import pufferlib
 import pufferlib.models
 
-CHECKPOINT_PATH = "models"
+CHECKPOINT_PATH = "models/anchors"
 os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Sweep config
 # ---------------------------------------------------------------------------
 SWEEP_CONFIG = {
-    "method": "bayes",
+    "method": "grid",
     "metric": {"name": "best_avg_loss", "goal": "minimize"},
     "parameters": {
-        "learning_rate": {"distribution": "log_uniform_values", "min": 3e-5, "max": 1e-3},
-        "input_size": {"values": [64, 128]},
-        "hidden_size": {"values": [512, 1024]},
+        "learning_rate": {"values": [1e-4]},
+        "input_size": {"values": [128]},
+        "hidden_size": {"values": [512]},
         "batch_size": {"values": [2048]},
-        "resample_every_n_epochs": {"values": [1, 5, 10]},
-        "num_maps": {"values": [50000]},
+        "resample_every_n_epochs": {"values": [1]},
+        "num_maps": {"values": [10, 100, 1000, 10000]},
     },
 }
 
@@ -51,9 +51,10 @@ TRAIN_DEFAULTS = {
     "hidden_size": 512,
     "batch_size": 2048,
     "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
-    "epochs": 10,
-    "num_maps": 50000,
+    "epochs": 1000,
+    "num_maps": 10,
     "eval_frequency": 10,  # Validation dataset
+    "val_patience": 10,  # Stop if val loss doesn't improve for this many eval checks
 }
 
 
@@ -156,6 +157,103 @@ class BCPolicy(nn.Module):
         if self.num_heads == 1:
             return dists[0].entropy().mean().item()
         return {f"entropy_head_{i}": d.entropy().mean().item() for i, d in enumerate(dists)}
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint helpers
+# ---------------------------------------------------------------------------
+
+
+def save_checkpoint(path: str, policy: BCPolicy, metrics: dict):
+    """Save model weights and performance metrics together.
+
+    The checkpoint dict contains:
+        "model_state_dict" : policy.state_dict()
+        "metrics"          : {
+            "num_maps"         : int,
+            "val_accuracy"     : float,
+            "train_accuracy"   : float,
+            "train_loss"       : float,
+            "val_loss"         : float,
+        }
+
+    Metrics are explicitly cast to plain Python scalars so the checkpoint
+    is safe to load with weights_only=True (numpy scalars are not allowlisted
+    by default in PyTorch >= 2.6).
+    """
+    clean_metrics = {k: v.item() if hasattr(v, "item") else v for k, v in metrics.items()}
+    checkpoint = {
+        "model_state_dict": policy.state_dict(),
+        "metrics": clean_metrics,
+    }
+    torch.save(checkpoint, path)
+
+
+def load_bc_policy(
+    checkpoint_path: str,
+    obs_dim: int,
+    input_size: int,
+    max_partner_objects: int,
+    partner_features: int,
+    max_road_objects: int,
+    road_features: int,
+    ego_dim: int,
+    hidden_size: int,
+    output_sizes: list,
+    device: str = "cpu",
+) -> tuple[BCPolicy, dict]:
+    """Load a BCPolicy from a checkpoint file.
+
+    Supports both the legacy format (bare state_dict) and the new format
+    (dict with 'model_state_dict' and 'metrics' keys).
+
+    Returns:
+        policy  : BCPolicy with weights loaded, set to eval() and frozen.
+        metrics : Performance metrics dict (empty dict for legacy checkpoints).
+    """
+    policy = BCPolicy(
+        obs_dim=obs_dim,
+        input_size=input_size,
+        max_partner_objects=max_partner_objects,
+        partner_features=partner_features,
+        max_road_objects=max_road_objects,
+        road_features=road_features,
+        ego_dim=ego_dim,
+        hidden_size=hidden_size,
+        output_sizes=output_sizes,
+    ).to(device)
+
+    import numpy as np
+
+    # weights_only=True is the safe default in PyTorch >= 2.6. Legacy checkpoints
+    # may contain numpy scalars in the metrics dict, so we allowlist that type.
+    with torch.serialization.safe_globals([np.core.multiarray.scalar]):
+        raw = torch.load(checkpoint_path, map_location=device, weights_only=True)
+
+    if isinstance(raw, dict) and "model_state_dict" in raw:
+        # New format
+        policy.load_state_dict(raw["model_state_dict"])
+        metrics = raw.get("metrics", {})
+    else:
+        # Legacy format: raw is the state_dict itself
+        policy.load_state_dict(raw)
+        metrics = {}
+
+    policy.eval()
+    for p in policy.parameters():
+        p.requires_grad = False
+
+    if metrics:
+        print(
+            f"Loaded BC policy from {checkpoint_path} | "
+            f"num_maps={metrics.get('num_maps', 'N/A')}  "
+            f"val_acc={metrics.get('val_accuracy', float('nan')):.4f}  "
+            f"val_loss={metrics.get('val_loss', float('nan')):.4f}"
+        )
+    else:
+        print(f"Loaded BC policy from {checkpoint_path} (legacy checkpoint, no metrics)")
+
+    return policy, metrics
 
 
 # ---------------------------------------------------------------------------
@@ -378,10 +476,11 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     epochs = config.epochs
     num_maps = config.num_maps
     eval_frequency = config.eval_frequency
+    val_patience = config.val_patience
 
     print(
-        f"dynamics={dynamics_model}  lr={lr}  hidden={hidden_size}  num_maps={num_maps}"
-        f"batch={batch_size}  resample_every={resample_every}"
+        f"dynamics={dynamics_model}  lr={lr}  hidden={hidden_size}  num_maps={num_maps}  "
+        f"batch={batch_size}  resample_every={resample_every}  val_patience={val_patience}"
     )
 
     # Train env
@@ -395,7 +494,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     env = load_env("puffer_drive", args)
     driver_env = env.driver_env
 
-    # Validation env: Same as train but uses different set of maps
+    # Validation env: same config but uses a held-out set of maps
     val_args = build_env_args(dynamics_model, num_maps=10000)
     val_args["env"]["map_dir"] = "resources/drive/binaries/validation"
     val_env = load_env("puffer_drive", val_args)
@@ -421,18 +520,30 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     wandb.log({"model/param_count": param_count})
 
     optimizer = Adam(policy.parameters(), lr=lr)
-    # Train
+
+    # Train data
     dataset = load_data(driver_env)
     minibatches = len(dataset) // batch_size
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     data_iter = iter(dataloader)
 
-    # Validation
+    # Validation data
     val_dataset = load_data(val_driver_env)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     best_avg_loss = float("inf")
     global_step = 0
+
+    # Metrics tracked for the final checkpoint
+    last_train_accuracy = float("nan")
+    last_train_loss = float("nan")
+    last_val_accuracy = float("nan")
+    last_val_loss = float("nan")
+
+    # Early stopping state (tracked in units of eval checks, not epochs)
+    best_val_loss = float("inf")
+    val_patience_counter = 0
+    stop_training = False
 
     for epoch in range(epochs):
         if epoch > 0 and epoch % resample_every == 0:
@@ -441,6 +552,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
             data_iter = iter(dataloader)
 
         epoch_losses = []
+        epoch_accuracies = []
         for _ in range(minibatches):
             try:
                 batch_obs, batch_actions = next(data_iter)
@@ -460,6 +572,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
 
             accuracy = compute_accuracy(policy, batch_obs, batch_actions)
             epoch_losses.append(loss.item())
+            epoch_accuracies.append(accuracy)
 
             # Log statistics
             wandb.log(
@@ -478,27 +591,85 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
             global_step += 1
 
         avg_loss = np.mean(epoch_losses)
+        last_train_loss = avg_loss
+        last_train_accuracy = np.mean(epoch_accuracies)
+
         if avg_loss < best_avg_loss:
             best_avg_loss = avg_loss
 
         wandb.log({"train/avg_loss": avg_loss, "train/best_avg_loss": best_avg_loss})
 
+        # ------------------------------------------------------------------
+        # Validation + patience-based early stopping
+        # ------------------------------------------------------------------
         if epoch % eval_frequency == 0:
             val_metrics = evaluate(policy, val_dataloader, device)
-            wandb.log({"val/" + k: v for k, v in val_metrics.items()})
-            print(f"  val: loss={val_metrics['loss']:.4f}  acc={val_metrics['accuracy']:.4f}")
+            last_val_loss = val_metrics["loss"]
+            last_val_accuracy = val_metrics["accuracy"]
+
+            if last_val_loss < best_val_loss:
+                best_val_loss = last_val_loss
+                val_patience_counter = 0
+            else:
+                val_patience_counter += 1
+
+            wandb.log(
+                {
+                    **{"val/" + k: v for k, v in val_metrics.items()},
+                    "early_stopping/patience_counter": val_patience_counter,
+                    "early_stopping/best_val_loss": best_val_loss,
+                }
+            )
+            print(
+                f"  val: loss={last_val_loss:.4f}  acc={last_val_accuracy:.4f}  "
+                f"patience={val_patience_counter}/{val_patience}"
+            )
+
+            if val_patience_counter >= val_patience:
+                print(
+                    f"Early stopping at epoch {epoch + 1}: val loss has not improved for "
+                    f"{val_patience} consecutive eval checks (best val loss={best_val_loss:.4f})"
+                )
+                stop_training = True
 
         print(f"Epoch {epoch + 1}/{epochs}: loss={avg_loss:.4f}  best={best_avg_loss:.4f}")
 
-        if avg_loss < 0.001:
-            print(f"Early stopping at epoch {epoch + 1}")
+        if stop_training:
             break
 
+        # Hard floor on train loss (original safety-net criterion)
+        if avg_loss < 0.001:
+            print(f"Early stopping at epoch {epoch + 1}: train loss below threshold")
+            break
+
+    # Final validation pass so saved metrics always reflect the last weights
+    final_val_metrics = evaluate(policy, val_dataloader, device)
+    last_val_loss = final_val_metrics["loss"]
+    last_val_accuracy = final_val_metrics["accuracy"]
+    wandb.log({"val/final_" + k: v for k, v in final_val_metrics.items()})
+
+    # ------------------------------------------------------------------
+    # Save checkpoint: weights + performance metrics
+    # ------------------------------------------------------------------
+    checkpoint_metrics = {
+        "num_maps": num_maps,
+        "val_accuracy": last_val_accuracy,
+        "train_accuracy": last_train_accuracy,
+        "train_loss": last_train_loss,
+        "val_loss": last_val_loss,
+    }
+
     save_path = f"{CHECKPOINT_PATH}/bc_{dynamics_model}_{num_maps}maps_{run.id}.pt"
-    torch.save(policy.state_dict(), save_path)
+    save_checkpoint(save_path, policy, checkpoint_metrics)
     wandb.save(save_path, base_path=".")
-    print(f"Saved checkpoint: {save_path}")
+    print(
+        f"Saved checkpoint: {save_path}\n"
+        f"  num_maps={num_maps}  val_acc={last_val_accuracy:.4f}  val_loss={last_val_loss:.4f}  "
+        f"  train_acc={last_train_accuracy:.4f}  train_loss={last_train_loss:.4f}"
+    )
     wandb.summary["best_avg_loss"] = best_avg_loss
+    wandb.summary["best_val_loss"] = best_val_loss
+    wandb.summary.update({"checkpoint_metrics/" + k: v for k, v in checkpoint_metrics.items()})
 
     save_action_distribution_plot(
         policy,
@@ -530,6 +701,7 @@ def parse_args():
         if name == "train":
             p.add_argument("--map-dir", type=str, default=None, help="Override map_dir")
             p.add_argument("--num-maps", type=int, default=None, help="Override num_maps")
+            p.add_argument("--val-patience", type=int, default=None, help="Override val_patience")
         if name == "sweep":
             p.add_argument("--count", type=int, default=50, help="Number of sweep runs")
 

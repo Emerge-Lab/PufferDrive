@@ -1,0 +1,18 @@
+% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, \usepackage{graphicx}, \usepackage{bm}
+\begin{table}[ht]
+\centering
+\caption{BC anchor evaluation. Open-loop metrics on the held-out validation set; closed-loop metrics averaged over validation scenes.}
+\label{tab:anchor_results}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{r|rr|rr|rr}
+\toprule
+ & \multicolumn{2}{c|}{Open-loop} & \multicolumn{2}{c|}{Closed-loop self-play} & \multicolumn{2}{c}{Closed-loop human-replay (SDC only)} \\
+Human data (h) & Acc. (\%) & Loss & Route prog. & Score & Route prog. & Score \\
+\midrule
+0.1 & \cellcolor{green!5} 68.5 & \cellcolor{red!50} 2.616 & \cellcolor{green!5} $0.690 \pm 0.013$ & \cellcolor{green!5} $0.229 \pm 0.014$ & \cellcolor{green!5} $0.719 \pm 0.008$ & \cellcolor{green!5} $0.264 \pm 0.010$ \\
+1.2 & \cellcolor{green!42} 83.6 & \cellcolor{red!7} 0.615 & \cellcolor{green!48} $0.834 \pm 0.011$ & \cellcolor{green!38} $0.431 \pm 0.017$ & \cellcolor{green!49} $0.837 \pm 0.007$ & \cellcolor{green!42} $0.470 \pm 0.011$ \\
+12.5 & \cellcolor{green!49} 86.5 & \cellcolor{red!6} 0.611 & \cellcolor{green!50} $\bm{0.839 \pm 0.011}$ & \cellcolor{green!46} $0.480 \pm 0.018$ & \cellcolor{green!50} $\bm{0.837 \pm 0.007}$ & \cellcolor{green!49} $0.505 \pm 0.011$ \\
+125.0 & \cellcolor{green!50} \textbf{86.8} & \cellcolor{red!5} \textbf{0.519} & \cellcolor{green!49} $0.839 \pm 0.011$ & \cellcolor{green!50} $\bm{0.502 \pm 0.018}$ & \cellcolor{green!46} $0.828 \pm 0.007$ & \cellcolor{green!50} $\bm{0.508 \pm 0.011}$ \\
+\bottomrule
+\end{tabular}}
+\end{table}

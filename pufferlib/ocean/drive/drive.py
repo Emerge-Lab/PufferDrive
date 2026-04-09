@@ -462,14 +462,18 @@ class Drive(pufferlib.PufferEnv):
         data = {}
 
         if self.reg_mode == RegMode.KL_ANCHOR:
-            from examples.train_bc_policy import BCPolicy
+            from examples.train_bc_policy import BCPolicy, load_bc_policy
 
             if self.dynamics_model == "delta_local":
                 output_sizes = [binding.NUM_DX_BINS, binding.NUM_DY_BINS, binding.NUM_YAW_BINS]
             else:
                 output_sizes = [self.joint_action_space_size]
 
-            bc_policy = BCPolicy(
+            if self.anchor_cpt_path is None:
+                self.anchor_cpt_path = f"models/bc_{self.dynamics_model}_{self.num_maps}.pt"
+
+            bc_anchor, metrics = load_bc_policy(
+                checkpoint_path=self.anchor_cpt_path,
                 obs_dim=self.num_obs,
                 input_size=128,
                 max_partner_objects=self.max_partner_objects,
@@ -479,17 +483,12 @@ class Drive(pufferlib.PufferEnv):
                 ego_dim=self.ego_features,
                 hidden_size=512,
                 output_sizes=output_sizes,
-            ).to(device)
+                device=device,
+            )
 
-            if self.anchor_cpt_path is None:
-                self.anchor_cpt_path = f"models/bc_{self.dynamics_model}_{self.num_maps}.pt"
-
-            bc_policy.load_state_dict(torch.load(self.anchor_cpt_path, map_location=device))
-            bc_policy.eval()
-            for p in bc_policy.parameters():
-                p.requires_grad = False
-            bc_anchor = bc_policy
-            print(f"Loaded BC anchor policy from {self.anchor_cpt_path}")
+            # Open-loop checkpoint metrics
+            if metrics:
+                data.update({"anchor/" + k: v for k, v in metrics.items()})
 
         elif self.reg_mode == RegMode.LOG_PROB_DIRECT:
             total_samples, unique_samples = self._prepare_human_data()
