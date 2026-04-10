@@ -1,13 +1,6 @@
-from .backend import TrainerBackend
-from .backend_pufferl import PufferLTrainerBackend
-from .checkpoint import load_experiment_checkpoint, save_experiment_checkpoint
-from .config import MFPBTConfig, load_mfpbt_config
-from .controller import MFPBTController, run_mfpbt
-from .display import MFPBTProgressDisplay
-from .genetics import apply_mf_pbt_genetics, mf_pbt_genetics, perturbation
-from .logging import MFPBT_Logger
-from .scheduler import WorkerPoolScheduler
-from .types import AgentMetadata, AgentState, ExperimentState, TrainerState, WorkerEvent, WorkerResult, WorkerTask
+from __future__ import annotations
+
+from importlib import import_module
 
 __all__ = [
     "AgentMetadata",
@@ -32,3 +25,37 @@ __all__ = [
     "run_mfpbt",
     "save_experiment_checkpoint",
 ]
+
+_EXPORTS = {
+    "TrainerBackend": (".backend", "TrainerBackend"),
+    "PufferLTrainerBackend": (".backend_pufferl", "PufferLTrainerBackend"),
+    "load_experiment_checkpoint": (".checkpoint", "load_experiment_checkpoint"),
+    "save_experiment_checkpoint": (".checkpoint", "save_experiment_checkpoint"),
+    "MFPBTConfig": (".config", "MFPBTConfig"),
+    "load_mfpbt_config": (".config", "load_mfpbt_config"),
+    "MFPBTController": (".controller", "MFPBTController"),
+    "run_mfpbt": (".controller", "run_mfpbt"),
+    "MFPBTProgressDisplay": (".display", "MFPBTProgressDisplay"),
+    "apply_mf_pbt_genetics": (".genetics", "apply_mf_pbt_genetics"),
+    "mf_pbt_genetics": (".genetics", "mf_pbt_genetics"),
+    "perturbation": (".genetics", "perturbation"),
+    "MFPBT_Logger": (".logging", "MFPBT_Logger"),
+    "WorkerPoolScheduler": (".scheduler", "WorkerPoolScheduler"),
+    "AgentMetadata": (".types", "AgentMetadata"),
+    "AgentState": (".types", "AgentState"),
+    "ExperimentState": (".types", "ExperimentState"),
+    "TrainerState": (".types", "TrainerState"),
+    "WorkerEvent": (".types", "WorkerEvent"),
+    "WorkerResult": (".types", "WorkerResult"),
+    "WorkerTask": (".types", "WorkerTask"),
+}
+
+
+def __getattr__(name: str):
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = _EXPORTS[name]
+    value = getattr(import_module(module_name, __name__), attr_name)
+    globals()[name] = value
+    return value
