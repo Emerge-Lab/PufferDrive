@@ -26,6 +26,7 @@ class MFPBTConfig:
     experiment_root: str = "experiments/mfpbt"
     run_name: str | None = None
     checkpoint_path: str | None = None
+    archive_interval_rounds: int = 50
     log_dir: str | None = None
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     initial_hyperparameter_sampling: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -64,6 +65,8 @@ class MFPBTConfig:
             raise ValueError("num_rounds must be positive")
         if self.round_train_env_steps <= 0:
             raise ValueError("round_train_env_steps must be positive")
+        if self.archive_interval_rounds < 0:
+            raise ValueError("archive_interval_rounds must be non-negative")
         if self.selection_source not in ("eval", "train"):
             raise ValueError("selection_source must be 'eval' or 'train'")
         if self.eval_simulation_mode not in ("gigaflow", "replay"):

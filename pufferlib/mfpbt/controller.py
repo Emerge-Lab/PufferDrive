@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import copy
 import os
+import shutil
 import time
 from collections import defaultdict
 
 import numpy as np
 
-from .checkpoint import load_experiment_checkpoint, save_experiment_checkpoint
+from .checkpoint import load_experiment_checkpoint, save_archive_checkpoint, save_experiment_checkpoint
 from .config import MFPBTConfig
 from .display import MFPBTProgressDisplay
 from .genetics import apply_mf_pbt_genetics, mf_pbt_genetics, perturbation
@@ -30,6 +31,11 @@ class MFPBTController:
         self.csv_logger = self._build_csv_logger()
         self.display = MFPBTProgressDisplay(config.num_rounds, config.round_train_env_steps, config.frequencies)
         self.round_durations = []
+        self.archive_root = None
+        self.latest_archive_dir = None
+        if self.checkpoint_path:
+            checkpoint_dir = os.path.dirname(self.checkpoint_path) or "."
+            self.archive_root = os.path.join(checkpoint_dir, "archive")
 
     def agent_seed(self, global_id: int) -> int:
         return int(self.config.seed + global_id)
@@ -163,6 +169,7 @@ class MFPBTController:
 
         if self.checkpoint_path:
             save_experiment_checkpoint(next_state, self.checkpoint_path)
+        self._maybe_save_archive(next_state)
 
         round_duration = time.time() - round_start_time
         self.round_durations.append(round_duration)
@@ -182,6 +189,20 @@ class MFPBTController:
         self._render_display(round_index=experiment_state.round_index, agents=updated_agents)
 
         return next_state
+
+    def _maybe_save_archive(self, experiment_state: ExperimentState) -> None:
+        if self.archive_root is None or self.config.archive_interval_rounds <= 0:
+            return
+
+        if experiment_state.round_index % self.config.archive_interval_rounds != 0:
+            return
+
+        archive_dir = os.path.join(self.archive_root, f"round_{experiment_state.round_index:06d}")
+        save_archive_checkpoint(experiment_state, archive_dir)
+
+        if self.latest_archive_dir is not None and self.latest_archive_dir != archive_dir:
+            shutil.rmtree(self.latest_archive_dir, ignore_errors=True)
+        self.latest_archive_dir = archive_dir
 
     def _handle_display_event(self, event, round_index, agents):
         self.display.handle_event(event)

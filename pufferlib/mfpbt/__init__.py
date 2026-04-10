@@ -23,6 +23,7 @@ __all__ = [
     "mf_pbt_genetics",
     "perturbation",
     "run_mfpbt",
+    "save_archive_checkpoint",
     "save_experiment_checkpoint",
 ]
 
@@ -30,6 +31,7 @@ _EXPORTS = {
     "TrainerBackend": (".backend", "TrainerBackend"),
     "PufferLTrainerBackend": (".backend_pufferl", "PufferLTrainerBackend"),
     "load_experiment_checkpoint": (".checkpoint", "load_experiment_checkpoint"),
+    "save_archive_checkpoint": (".checkpoint", "save_archive_checkpoint"),
     "save_experiment_checkpoint": (".checkpoint", "save_experiment_checkpoint"),
     "MFPBTConfig": (".config", "MFPBTConfig"),
     "load_mfpbt_config": (".config", "load_mfpbt_config"),

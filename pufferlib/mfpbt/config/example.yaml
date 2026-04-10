@@ -55,6 +55,10 @@ experiment_root: experiments/mfpbt
 # and full trainer states for restart. The filename is placed inside the run folder.
 checkpoint_path: checkpoint.pt
 
+# Every N rounds, MF-PBT also writes one archival checkpoint directory and
+# deletes the previous archive. Set to 0 to disable archival saves.
+archive_interval_rounds: 50
+
 # Optional directory for MF-PBT CSV logs.
 # If omitted, logs are written inside the run folder under logs/.
 # If set, only the final folder name is used inside the run folder.

@@ -51,8 +51,10 @@ class PufferLTrainerBackend(TrainerBackend):
         if self.trainer_state_dir is None:
             return trainer_state
 
-        path = os.path.join(self.trainer_state_dir, f"agent_{global_id}_{time.time_ns()}.pt")
-        torch.save(trainer_state, path)
+        path = os.path.join(self.trainer_state_dir, f"agent_{global_id}.pt")
+        tmp_path = f"{path}.tmp"
+        torch.save(trainer_state, tmp_path)
+        os.replace(tmp_path, path)
         return agent_state_placeholder(path)
 
     def _make_train_args(self, hyperparameters: dict, round_budget: int) -> dict:
