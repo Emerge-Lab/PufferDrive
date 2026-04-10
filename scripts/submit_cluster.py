@@ -83,6 +83,13 @@ def parse_args():
         "--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)"
     )
 
+    # GPU heartbeat: keeps utilization above threshold to prevent job reclamation on NYU cluster
+    parser.add_argument(
+        "--heartbeat",
+        action="store_true",
+        help="Run scripts/gpu_heartbeat.py in background alongside training",
+    )
+
     # Container settings
     parser.add_argument("--container", action="store_true", help="Run inside Singularity container")
     parser.add_argument(
@@ -355,6 +362,20 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         # Add save_dir to command
         full_cmd = base_cmd + cmd + ["--train.data-dir", save_dir]
 
+        # If heartbeat is enabled, wrap the training command in a brace group that:
+        #   1. backgrounds python scripts/gpu_heartbeat.py
+        #   2. runs training in the foreground
+        #   3. kills the heartbeat on training exit, preserving training's exit code
+        # Brace groups `{ ... ; }` run in the current shell (unlike parens) so the
+        # preceding `cd` and env exports still apply to the training command. The `&`
+        # backgrounds only the python call, not the whole compound statement.
+        def wrap_with_heartbeat(train_cmd_str):
+            hb = "python scripts/gpu_heartbeat.py > /tmp/gpu_heartbeat.log 2>&1 & HEARTBEAT_PID=$!"
+            return (
+                f"{{ {hb}; {train_cmd_str}; TRAIN_EXIT=$?; "
+                f"kill $HEARTBEAT_PID 2>/dev/null; exit $TRAIN_EXIT; }}"
+            )
+
         # Wrap with singularity if container mode is enabled
         if container_config is not None:
             env_setup = "source /ext3/env.sh"
@@ -368,7 +389,10 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 f"export WANDB_DIR={scratch_dir}/wandb_data && "
                 f"mkdir -p {scratch_dir}/cache"
             )
-            inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && " + " ".join(full_cmd)
+            train_str = " ".join(full_cmd)
+            if args.heartbeat:
+                train_str = wrap_with_heartbeat(train_str)
+            inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && {train_str}"
             full_cmd = [
                 "singularity",
                 "exec",
@@ -388,6 +412,10 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                     inner_cmd,
                 ]
             )
+        elif args.heartbeat:
+            # No container: still need to wrap in bash -c so the brace group parses.
+            train_str = " ".join(full_cmd)
+            full_cmd = ["bash", "-c", wrap_with_heartbeat(train_str)]
 
         print(f">>> Job: {job_name}")
         print(f">>> Working directory: {project_root}")
