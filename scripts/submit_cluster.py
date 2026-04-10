@@ -101,7 +101,7 @@ def parse_args():
     parser.add_argument(
         "--container_overlay",
         type=str,
-        default="/scratch/ev2237/containers/pufferdrive/overlay.ext3",
+        default=f"/scratch/{os.environ.get('USER', '')}/images/PufferDrive/overlay-15GB-500K.ext3",
         help="Singularity overlay path",
     )
 
