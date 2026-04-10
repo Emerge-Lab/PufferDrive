@@ -108,7 +108,7 @@ void demo() {
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .spawn_settings = spawn_settings,
-        .map_name = "resources/drive/binaries/longitudinal/map_000.bin",
+        .map_name = "resources/drive/binaries/carla_2D/map_001.bin",
         .reward_conditioning = conf.reward_conditioning,
         .partner_obs_radius = conf.partner_obs_radius,
     };
