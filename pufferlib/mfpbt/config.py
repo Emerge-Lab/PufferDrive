@@ -15,6 +15,7 @@ class MFPBTConfig:
     num_agents_per_device: int
     num_rounds: int
     round_train_env_steps: int
+    seed: int = 123
     selection_metric: str = "avg_distance_per_infraction"
     selection_source: str = "eval"
     eval_simulation_mode: str = "gigaflow"
@@ -45,6 +46,8 @@ class MFPBTConfig:
         return self.num_devices * self.num_agents_per_device
 
     def validate(self) -> None:
+        if self.seed < 0:
+            raise ValueError("seed must be non-negative")
         if self.num_devices <= 0:
             raise ValueError("num_devices must be positive")
         if self.num_agents_per_device <= 0:

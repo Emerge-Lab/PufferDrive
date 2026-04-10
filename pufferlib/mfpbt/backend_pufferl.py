@@ -111,6 +111,7 @@ class PufferLTrainerBackend(TrainerBackend):
         train_args["device"] = f"cuda:{self.device_id}" if torch.cuda.is_available() else "cpu"
         if seed is not None:
             train_args["seed"] = seed
+            args["vec"]["seed"] = seed
 
         args["global_step"] = global_step
         args["num_scenarios"] = num_scenarios
@@ -118,6 +119,19 @@ class PufferLTrainerBackend(TrainerBackend):
         args["inline_eval"] = True
         args["eval_results_dir"] = tempfile.mkdtemp(prefix=f"mfpbt_eval_agent_{global_id}_")
         return args
+
+    def _selection_score_from_eval(self, pufferl, hyperparameters: dict, seed: int | None, global_id: int) -> float:
+        eval_args = self._make_eval_args(hyperparameters, pufferl.global_step, seed, global_id)
+        eval_metrics = eval_multi_scenarios(
+            self.env_name,
+            args=eval_args,
+            vecenv=None,
+            policy=pufferl.uncompiled_policy,
+            logger=None,
+            metric_prefix="validation",
+            quiet=True,
+        )
+        return float(eval_metrics[self.selection_metric])
 
     def _selection_score_from_train(self, pufferl, last_logs):
         metric_keys = [f"environment/{self.selection_metric}", self.selection_metric]
@@ -142,6 +156,7 @@ class PufferLTrainerBackend(TrainerBackend):
         round_train_args = self._make_train_args(agent.hyperparameters, agent.env_steps + round_budget)
         if seed is not None:
             round_train_args["train"]["seed"] = seed
+            round_train_args["vec"]["seed"] = seed
 
         vecenv = load_env(self.env_name, round_train_args)
         policy = load_policy(round_train_args, vecenv, self.env_name)
@@ -162,21 +177,16 @@ class PufferLTrainerBackend(TrainerBackend):
                 if logs is not None:
                     last_logs = logs
             if self.selection_source == "eval":
-                eval_args = self._make_eval_args(
-                    agent.hyperparameters, pufferl.global_step, seed, agent.metadata.global_id
+                selection_score = self._selection_score_from_eval(
+                    pufferl, agent.hyperparameters, seed, agent.metadata.global_id
                 )
-                eval_metrics = eval_multi_scenarios(
-                    self.env_name,
-                    args=eval_args,
-                    vecenv=None,
-                    policy=pufferl.uncompiled_policy,
-                    logger=None,
-                    metric_prefix="validation",
-                    quiet=True,
-                )
-                selection_score = float(eval_metrics[self.selection_metric])
             else:
-                selection_score = self._selection_score_from_train(pufferl, last_logs)
+                try:
+                    selection_score = self._selection_score_from_train(pufferl, last_logs)
+                except KeyError:
+                    selection_score = self._selection_score_from_eval(
+                        pufferl, agent.hyperparameters, seed, agent.metadata.global_id
+                    )
 
             updated_agent = copy.deepcopy(agent)
             exported_trainer_state = pufferl.export_trainer_state()

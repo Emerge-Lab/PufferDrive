@@ -1,3 +1,7 @@
+# Base MF-PBT seed. Agent i uses seed + i, so the whole experiment is reproducible
+# while each agent still gets a different seed.
+seed: 123
+
 # Total number of MF-PBT agents across all populations.
 num_agents: 32
 

@@ -31,6 +31,9 @@ class MFPBTController:
         self.display = MFPBTProgressDisplay(config.num_rounds, config.round_train_env_steps, config.frequencies)
         self.round_durations = []
 
+    def agent_seed(self, global_id: int) -> int:
+        return int(self.config.seed + global_id)
+
     def _build_csv_logger(self):
         if self.config.log_dir is not None:
             return MFPBT_Logger(self.config.log_dir, self.config.tune_hyperparameters)
@@ -41,11 +44,12 @@ class MFPBTController:
 
         return None
 
-    def _sample_initial_hyperparameters(self):
+    def _sample_initial_hyperparameters(self, global_id: int):
+        rng = np.random.default_rng(self.agent_seed(global_id))
         hyperparameters = copy.deepcopy(self.config.hyperparameters)
         for hp_name, spec in self.config.initial_hyperparameter_sampling.items():
             if spec["distribution"] == "log_uniform":
-                sample = np.random.uniform(np.log10(spec["min"]), np.log10(spec["max"]))
+                sample = rng.uniform(np.log10(spec["min"]), np.log10(spec["max"]))
                 hyperparameters[hp_name] = float(10**sample)
         return hyperparameters
 
@@ -91,7 +95,7 @@ class MFPBTController:
                         parent_hps=global_id,
                         parent_network=global_id,
                     ),
-                    hyperparameters=self._sample_initial_hyperparameters(),
+                    hyperparameters=self._sample_initial_hyperparameters(global_id),
                     trainer_state=TrainerState(model_state={}, optimizer_state={}),
                 )
             )
@@ -198,7 +202,7 @@ def run_mfpbt(
 
     try:
         for _ in range(num_rounds):
-            seeds = [time.time_ns() & 0xFFFFFFFF for _ in range(config.num_agents)]
+            seeds = [controller.agent_seed(global_id) for global_id in range(config.num_agents)]
             state = controller.run_round(state, seeds=seeds)
     finally:
         controller.close()
