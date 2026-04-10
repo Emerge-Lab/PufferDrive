@@ -471,17 +471,15 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
 
     Score columns use a Greens colormap (darker = higher = better).
     Collision rate columns use a Reds colormap (lighter = lower = better).
+    Colors are normalized per column.
+    Unregularized rows come first and have a light-blue background in the anchor column.
 
     Required LaTeX packages:
       \\usepackage{booktabs}
       \\usepackage[table]{xcolor}
       \\usepackage{graphicx}   % for \\resizebox
-
-    Rows:   one per (sp_maps, anchor_maps) configuration
-    Columns:
-      - Self-play maps (metadata), Anchor data
-      - Self-play (test): score, collision rate, offroad rate
-      - Human-replay (test): score, collision rate, at-fault collision rate
+      \\usepackage{makecell}
+      \\usepackage{bm}
     """
     scaling_modes = ["scaling_sp_val", "scaling_hr_interactive"]
     scaling_df = df[df["mode"].isin(scaling_modes)].copy()
@@ -491,10 +489,15 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
 
     scaling_df["anchor_maps"] = scaling_df["anchor_maps"].fillna(0).astype(int)
 
-    # Self-play metrics: score, collision_rate, offroad_rate
-    # Human-replay metrics: score, collision_rate, at_fault_collision_rate
     sp_metrics = ["score", "collision_rate", "offroad_rate"]
-    hr_metrics = ["score", "collision_rate", "at_fault_collision_rate"]
+    hr_metrics = [
+        "score",
+        "collision_rate",
+        "at_fault_collision_rate",
+        "rear_collision_rate",
+        "route_progress",
+        "lateral_error_avg",
+    ]
     all_metrics = list(set(sp_metrics + hr_metrics))
     available_metrics = [m for m in all_metrics if m in scaling_df.columns]
 
@@ -513,120 +516,83 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
     hr = hr.rename(columns=hr_rename)
 
     merged = sp.merge(hr, on=["sp_maps", "anchor_maps"], how="outer")
-    merged = merged.sort_values(["sp_maps", "anchor_maps"]).reset_index(drop=True)
+
+    # unreg rows first, then reg rows, each sorted by sp_maps
+    unreg = merged[merged["anchor_maps"] == 0].sort_values("sp_maps")
+    reg = merged[merged["anchor_maps"] != 0].sort_values(["sp_maps", "anchor_maps"])
+    merged = pd.concat([unreg, reg]).reset_index(drop=True)
 
     has_offroad = "offroad_rate" in available_metrics
     has_at_fault = "at_fault_collision_rate" in available_metrics
+    has_rear = "rear_collision_rate" in available_metrics
+    has_route_prog = "route_progress" in available_metrics
+    has_lateral = "lateral_error_avg" in available_metrics
 
-    # --- Collect all values for normalization ---
-    score_cols = ["sp_score_mean", "hr_score_mean"]
-    coll_cols = ["sp_collision_rate_mean", "hr_collision_rate_mean"]
+    # higher is better -> green (max = best, darker = higher)
+    # lower is better  -> red   (min = best, lighter = lower)
+    score_mean_cols = ["sp_score_mean", "hr_score_mean"]
+    if has_route_prog:
+        score_mean_cols.append("hr_route_progress_mean")
+
+    coll_mean_cols = ["sp_collision_rate_mean", "hr_collision_rate_mean"]
     if has_offroad:
-        coll_cols.append("sp_offroad_rate_mean")
+        coll_mean_cols.append("sp_offroad_rate_mean")
     if has_at_fault:
-        coll_cols.append("hr_at_fault_collision_rate_mean")
+        coll_mean_cols.append("hr_at_fault_collision_rate_mean")
+    if has_rear:
+        coll_mean_cols.append("hr_rear_collision_rate_mean")
+    if has_lateral:
+        coll_mean_cols.append("hr_lateral_error_avg_mean")
 
-    existing_score_cols = [c for c in score_cols if c in merged.columns]
-    existing_coll_cols = [c for c in coll_cols if c in merged.columns]
+    existing_score_cols = [c for c in score_mean_cols if c in merged.columns]
+    existing_coll_cols = [c for c in coll_mean_cols if c in merged.columns]
 
-    all_scores = merged[existing_score_cols].values.flatten()
-    all_scores = all_scores[~np.isnan(all_scores)]
-    all_colls = merged[existing_coll_cols].values.flatten()
-    all_colls = all_colls[~np.isnan(all_colls)]
+    # Per-column min/max for normalization
+    col_min = {}
+    col_max = {}
+    for c in existing_score_cols + existing_coll_cols:
+        vals = merged[c].dropna()
+        col_min[c] = vals.min() if not vals.empty else 0
+        col_max[c] = vals.max() if not vals.empty else 1
 
-    score_min, score_max = (all_scores.min(), all_scores.max()) if len(all_scores) > 0 else (0, 1)
-    coll_min, coll_max = (all_colls.min(), all_colls.max()) if len(all_colls) > 0 else (0, 1)
-
-    def _score_intensity(val):
-        """Map score to green intensity 5-50 (darker = better = higher score)."""
+    def _intensity(val, col, higher_is_better):
         if np.isnan(val):
             return 0
-        if score_max == score_min:
+        vmin, vmax = col_min.get(col, 0), col_max.get(col, 1)
+        if vmax == vmin:
             return 25
-        t = (val - score_min) / (score_max - score_min)
+        t = (val - vmin) / (vmax - vmin)
+        # green: darker = higher = better -> t as-is
+        # red:   lighter = lower = better -> t as-is (low val -> light = low intensity)
         return int(5 + t * 45)
 
-    def _coll_intensity(val):
-        """Map collision rate to red intensity 5-50 (lighter = better = lower rate)."""
-        if np.isnan(val):
-            return 0
-        if coll_max == coll_min:
-            return 25
-        t = (val - coll_min) / (coll_max - coll_min)
-        return int(5 + t * 45)
-
-    def _fmt_score(mean, sem, is_best=False):
-        """Format score with green cellcolor. Bold if best in column."""
+    def _fmt_score(mean, sem, col, is_best=False):
         if np.isnan(mean):
             return "---"
-        intensity = _score_intensity(mean)
+        intensity = _intensity(mean, col, higher_is_better=True)
         if not (np.isnan(sem) or sem == 0):
-            if is_best:
-                text = f"$\\bm{{{mean:.3f} \\pm {sem:.3f}}}$"
-            else:
-                text = f"${mean:.3f} \\pm {sem:.3f}$"
+            text = f"$\\bm{{{mean:.3f} \\pm {sem:.3f}}}$" if is_best else f"${mean:.3f} \\pm {sem:.3f}$"
         else:
             text = f"\\textbf{{{mean:.3f}}}" if is_best else f"{mean:.3f}"
         return f"\\cellcolor{{green!{intensity}}} {text}"
 
-    def _fmt_coll(mean, sem, is_best=False):
-        """Format collision/offroad rate (as %) with red cellcolor. Bold if best in column."""
+    def _fmt_coll(mean, sem, col, is_best=False, as_pct=True, decimals=1):
         if np.isnan(mean):
             return "---"
-        intensity = _coll_intensity(mean)
-        m_pct, s_pct = mean * 100, sem * 100
-        if not (np.isnan(s_pct) or s_pct == 0):
-            if is_best:
-                text = f"$\\bm{{{m_pct:.1f} \\pm {s_pct:.1f}}}$"
-            else:
-                text = f"${m_pct:.1f} \\pm {s_pct:.1f}$"
+        intensity = _intensity(mean, col, higher_is_better=False)
+        m_val = mean * 100 if as_pct else mean
+        s_val = sem * 100 if as_pct else sem
+        fmt = f".{decimals}f"
+        if not (np.isnan(s_val) or s_val == 0):
+            text = f"$\\bm{{{m_val:{fmt}} \\pm {s_val:{fmt}}}}$" if is_best else f"${m_val:{fmt}} \\pm {s_val:{fmt}}$"
         else:
-            text = f"\\textbf{{{m_pct:.1f}}}" if is_best else f"{m_pct:.1f}"
+            text = f"\\textbf{{{m_val:{fmt}}}}" if is_best else f"{m_val:{fmt}}"
         return f"\\cellcolor{{red!{intensity}}} {text}"
 
     def _anchor_label(anchor_maps):
-        if anchor_maps == 0:
-            return "0 (unreg.)"
-        return _maps_to_human_time(anchor_maps)
+        return "0 (unreg.)" if anchor_maps == 0 else _maps_to_human_time(anchor_maps)
 
-    # --- Build LaTeX ---
-    n_sp_metric_cols = 2 + int(has_offroad)  # score, coll, offroad
-    n_hr_metric_cols = 2 + int(has_at_fault)  # score, coll, at-fault
-    col_spec = "rr" + "|" + "r" * n_sp_metric_cols + "|" + "r" * n_hr_metric_cols
-
-    lines = []
-    lines.append(
-        r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, \usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
-    )
-    lines.append(r"\begin{table}[ht]")
-    lines.append(r"\centering")
-    lines.append(r"\caption{Scaling evaluation results on held-out test maps.}")
-    lines.append(r"\label{tab:scaling_results}")
-    lines.append(r"\resizebox{\textwidth}{!}{%")
-    lines.append(r"\begin{tabular}{" + col_spec + "}")
-    lines.append(r"\toprule")
-
-    sp_header = r"\multicolumn{" + str(n_sp_metric_cols) + r"}{c|}{Self-play (test)}"
-    hr_header = r"\multicolumn{" + str(n_hr_metric_cols) + r"}{c}{Human-replay (test)}"
-    lines.append(r" & & " + sp_header + " & " + hr_header + r" \\")
-
-    sp_metric_headers = ["Score", "Coll. (\\%)"]
-    if has_offroad:
-        sp_metric_headers.append("Offroad (\\%)")
-    hr_metric_headers = ["Score", "Coll. (\\%)"]
-    if has_at_fault:
-        hr_metric_headers.append("At-fault (\\%)")
-    header2 = (
-        "\\makecell{Self-play maps \\\\ (metadata)} & Anchor data & "
-        + " & ".join(sp_metric_headers)
-        + " & "
-        + " & ".join(hr_metric_headers)
-        + r" \\"
-    )
-    lines.append(header2)
-    lines.append(r"\midrule")
-
-    # --- Compute best value per column (highest score, lowest collision/offroad/at-fault rate) ---
+    # best: max for score cols, min for coll cols
     best = {}
     for col in existing_score_cols:
         best[col] = merged[col].max()
@@ -638,16 +604,73 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
             return False
         return np.isclose(val, best[col])
 
-    for _, row in merged.iterrows():
-        sp_maps_str = _fmt_maps(int(row["sp_maps"]))
-        anchor_str = _anchor_label(int(row["anchor_maps"]))
-        cells = [sp_maps_str, anchor_str]
+    n_sp_metric_cols = 2 + int(has_offroad)
+    n_hr_metric_cols = 2 + int(has_at_fault) + int(has_rear) + int(has_route_prog) + int(has_lateral)
+    col_spec = "rr" + "|" + "r" * n_sp_metric_cols + "|" + "r" * n_hr_metric_cols
 
-        # Self-play: score, collision rate, offroad rate
+    lines = []
+    lines.append(
+        r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, \usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
+    )
+    lines.append(r"\begin{table}[ht]")
+    lines.append(r"\centering")
+    lines.append(
+        r"\caption{Scaling evaluation on held-out Waymo scenarios. Self-play scores are reported on 10k randomly sampled validation scenarios; human-replay metrics are reported on 200 interactive validation scenarios.}"
+    )
+    lines.append(r"\label{tab:scaling_results}")
+    lines.append(r"\resizebox{\textwidth}{!}{%")
+    lines.append(r"\begin{tabular}{" + col_spec + "}")
+    lines.append(r"\toprule")
+
+    sp_header = r"\multicolumn{" + str(n_sp_metric_cols) + r"}{c|}{Self-play (test)}"
+    hr_header = r"\multicolumn{" + str(n_hr_metric_cols) + r"}{c}{Human-replay (test)}"
+    lines.append(r" & & " + sp_header + " & " + hr_header + r" \\")
+
+    sp_metric_headers = ["Score $\\uparrow$", "Coll. (\\%) $\\downarrow$"]
+    if has_offroad:
+        sp_metric_headers.append("Offroad (\\%) $\\downarrow$")
+    hr_metric_headers = ["Score $\\uparrow$", "Coll. (\\%) $\\downarrow$"]
+    if has_at_fault:
+        hr_metric_headers.append("At-fault (\\%) $\\downarrow$")
+    if has_rear:
+        hr_metric_headers.append("Rear coll. (\\%) $\\downarrow$")
+    if has_route_prog:
+        hr_metric_headers.append("Route prog. (\\%) $\\uparrow$")
+    if has_lateral:
+        hr_metric_headers.append("Lateral L2 $\\downarrow$")
+
+    header2 = (
+        "\\makecell{Self-play maps \\\\ (metadata)} & \\makecell{Anchor data \\\\ (human demonstrations)} & "
+        + " & ".join(sp_metric_headers)
+        + " & "
+        + " & ".join(hr_metric_headers)
+        + r" \\"
+    )
+    lines.append(header2)
+    lines.append(r"\midrule")
+
+    prev_was_unreg = None
+    for _, row in merged.iterrows():
+        is_unreg = int(row["anchor_maps"]) == 0
+
+        # separator line between unreg and reg blocks
+        if prev_was_unreg is True and not is_unreg:
+            lines.append(r"\midrule")
+        prev_was_unreg = is_unreg
+
+        anchor_cell = (
+            f"\\cellcolor{{blue!10}} {_anchor_label(int(row['anchor_maps']))}"
+            if is_unreg
+            else f"\\cellcolor[HTML]{{FDCFF1}} {_anchor_label(int(row['anchor_maps']))}"
+        )
+        cells = [_fmt_maps(int(row["sp_maps"])), anchor_cell]
+
+        # SP: score, collision rate, offroad
         cells.append(
             _fmt_score(
                 row.get("sp_score_mean", np.nan),
                 row.get("sp_score_sem", np.nan),
+                col="sp_score_mean",
                 is_best=_is_best("sp_score_mean", row.get("sp_score_mean", np.nan)),
             )
         )
@@ -655,6 +678,7 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
             _fmt_coll(
                 row.get("sp_collision_rate_mean", np.nan),
                 row.get("sp_collision_rate_sem", np.nan),
+                col="sp_collision_rate_mean",
                 is_best=_is_best("sp_collision_rate_mean", row.get("sp_collision_rate_mean", np.nan)),
             )
         )
@@ -663,15 +687,17 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
                 _fmt_coll(
                     row.get("sp_offroad_rate_mean", np.nan),
                     row.get("sp_offroad_rate_sem", np.nan),
+                    col="sp_offroad_rate_mean",
                     is_best=_is_best("sp_offroad_rate_mean", row.get("sp_offroad_rate_mean", np.nan)),
                 )
             )
 
-        # Human-replay: score, collision rate, at-fault collision rate
+        # HR: score, collision, at-fault, rear, route progress, lateral L2
         cells.append(
             _fmt_score(
                 row.get("hr_score_mean", np.nan),
                 row.get("hr_score_sem", np.nan),
+                col="hr_score_mean",
                 is_best=_is_best("hr_score_mean", row.get("hr_score_mean", np.nan)),
             )
         )
@@ -679,6 +705,7 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
             _fmt_coll(
                 row.get("hr_collision_rate_mean", np.nan),
                 row.get("hr_collision_rate_sem", np.nan),
+                col="hr_collision_rate_mean",
                 is_best=_is_best("hr_collision_rate_mean", row.get("hr_collision_rate_mean", np.nan)),
             )
         )
@@ -687,9 +714,39 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
                 _fmt_coll(
                     row.get("hr_at_fault_collision_rate_mean", np.nan),
                     row.get("hr_at_fault_collision_rate_sem", np.nan),
+                    col="hr_at_fault_collision_rate_mean",
                     is_best=_is_best(
                         "hr_at_fault_collision_rate_mean", row.get("hr_at_fault_collision_rate_mean", np.nan)
                     ),
+                )
+            )
+        if has_rear:
+            cells.append(
+                _fmt_coll(
+                    row.get("hr_rear_collision_rate_mean", np.nan),
+                    row.get("hr_rear_collision_rate_sem", np.nan),
+                    col="hr_rear_collision_rate_mean",
+                    is_best=_is_best("hr_rear_collision_rate_mean", row.get("hr_rear_collision_rate_mean", np.nan)),
+                )
+            )
+        if has_route_prog:
+            cells.append(
+                _fmt_score(
+                    row.get("hr_route_progress_mean", np.nan),
+                    row.get("hr_route_progress_sem", np.nan),
+                    col="hr_route_progress_mean",
+                    is_best=_is_best("hr_route_progress_mean", row.get("hr_route_progress_mean", np.nan)),
+                )
+            )
+        if has_lateral:
+            cells.append(
+                _fmt_coll(
+                    row.get("hr_lateral_error_avg_mean", np.nan),
+                    row.get("hr_lateral_error_avg_sem", np.nan),
+                    col="hr_lateral_error_avg_mean",
+                    is_best=_is_best("hr_lateral_error_avg_mean", row.get("hr_lateral_error_avg_mean", np.nan)),
+                    as_pct=False,
+                    decimals=2,
                 )
             )
 
@@ -700,11 +757,9 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
     lines.append(r"\end{table}")
 
     latex_str = "\n".join(lines)
-
     _ensure_dir(save_path)
     with open(save_path, "w") as f:
         f.write(latex_str)
-
     print(f"  LaTeX table written to {save_path}")
     return latex_str
 
@@ -1069,7 +1124,7 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     anchor_vals = sorted(agg["anchor_maps"].unique())
 
     _cb = sns.color_palette("colorblind")
-    REG_COLORS = ["#f4a6c0", "#e8729a", "#d63b73", "#a8174a", "#6b0f2e"]
+    REG_COLORS = ["#f4a6c0", "#f454c4", "#d63b73", "#a8174a", "#6b0f2e"]
     color_map = {0: "black"}
     color_map.update({a: REG_COLORS[i] for i, a in enumerate(a for a in anchor_vals if a != 0)})
     markers = ["^", "s", "o", "D", "P", "X", "v", "*"]
@@ -1164,6 +1219,7 @@ def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatib
         "route_progress",
         "lateral_error_avg",
     ]
+
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         print(f"  Missing columns {missing} — skipping plot_compatibility_tradeoff_bar.")
@@ -1187,14 +1243,15 @@ def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatib
     ]
 
     _set_style(2)
-    fig = plt.figure(figsize=(14, 3.5))
-    gs = fig.add_gridspec(1, 4)
+    fig = plt.figure(figsize=(20, 4))
+    gs = fig.add_gridspec(1, 5)
 
     ax0 = fig.add_subplot(gs[0])
     ax1 = fig.add_subplot(gs[1], sharey=ax0)
     ax2 = fig.add_subplot(gs[2], sharey=ax0)
     ax3 = fig.add_subplot(gs[3])
-    axes = [ax0, ax1, ax2, ax3]
+    ax4 = fig.add_subplot(gs[4])
+    axes = [ax0, ax1, ax2, ax3, ax4]
 
     axes[1].tick_params(labelleft=False)
     axes[2].tick_params(labelleft=False)
@@ -1223,6 +1280,10 @@ def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatib
         ax.set_ylim(bottom=0)
         ax.grid(axis="y", alpha=0.3, linestyle="--")
         sns.despine(ax=ax)
+
+    if ax in (axes[0], axes[1], axes[2]):
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+        ax.tick_params(axis="y", which="minor", length=3, color="gray")
 
     plt.tight_layout()
     _ensure_dir(save_path)
