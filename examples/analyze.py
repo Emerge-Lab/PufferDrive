@@ -56,7 +56,7 @@ NUM_TOTAL_EVAL_AGENTS = 1024 * 5
 NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
-OUTPUT_CSV = "checkpoint_eval_results.csv"
+OUTPUT_CSV = "results/checkpoint_eval_results.csv"
 MAKE_FIGURES = True
 RUN_RENDER = False
 
@@ -75,10 +75,13 @@ METRICS = [
     "score",
     "collision_rate",
     "at_fault_collision_rate",
+    "rear_collision_rate",
     "collisions_per_agent",
     "offroad_rate",
     "offroad_per_agent",
     "completion_rate",
+    "route_progress",
+    "lateral_error_avg",
     "episode_length",
     "episode_return",
     "perc_controlled",
@@ -106,7 +109,7 @@ def _parse_num(s):
     return n
 
 
-def make_eval_config(cpt_config, map_dir, control_mode, num_maps, lambda_value, episode_length=None):
+def make_eval_config(cpt_config, map_dir, control_mode, num_maps, lambda_value, episode_length=150):
     """Build an eval-ready config from the checkpoint config.
 
     Takes everything from the checkpoint and only overwrites eval-specific fields:
@@ -568,6 +571,8 @@ def main():
             scenes=("score", "count"),
             score=("score", "mean"),
             collision_rate=("collision_rate", "mean"),
+            at_fault_collision_rate=("at_fault_collision_rate", "mean"),
+            rear_collision_rate=("rear_collision_rate", "mean"),
             offroad_rate=("offroad_rate", "mean"),
         )
         print(f"\n{summary}")

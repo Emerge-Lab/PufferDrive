@@ -17,7 +17,8 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-CPT_PATH = "models/scaling_cpts/unreg_classic_50k_maps.pt"
+# CPT_PATH = "models/scaling_cpts/reg_delta_10k_maps_anchor_10k_maps.pt"
+CPT_PATH = "models/scaling_cpts/unreg_classic_10k_maps.pt"  # "models/scaling_cpts/unreg_classic_50k_maps.pt"
 
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
@@ -29,8 +30,10 @@ OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 1
+NUM_ENVS_TO_RENDER = 20
 RENDER_MODE = "worst_collision"  # "first", "random", or "worst_collision"
+
+EPISODE_LENGTHS = [120]
 
 METRICS = [
     "n",
@@ -118,20 +121,19 @@ def render_envs(evaluator, policy, env, env_indices, video_dir):
         print(f"    Saved: {dest}")
 
 
-def process_rollout_data(info_list, checkpoint, mode):
-    """Return one dict per populated env log."""
+def process_rollout_data(info_list, checkpoint, mode, episode_len):
     rows = []
     for i, log in enumerate(info_list):
         if not log or log.get("n", 0) == 0:
             continue
-        row = {"checkpoint": checkpoint, "mode": mode, "scene_idx": i}
+        row = {"checkpoint": checkpoint, "mode": mode, "episode_len": episode_len, "scene_idx": i}
         for key in METRICS:
             row[key] = float(log.get(key, 0.0))
         rows.append(row)
     return rows
 
 
-def run_eval_and_render(checkpoint_path, base_config):
+def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- add param
     cpt_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
     cpt_config, _ = load_checkpoint_config(checkpoint_path, base_config)
     cpt_config["load_model_path"] = checkpoint_path
@@ -139,19 +141,19 @@ def run_eval_and_render(checkpoint_path, base_config):
     all_rows = []
 
     for mode_name, map_dir, control_mode, num_maps in [
-        ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
-        ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
-        ("hr_train", TRAIN_MAP_DIR, "control_sdc_only", 50_000),
+        # ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
+        # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
+        # ("hr_train", TRAIN_MAP_DIR, "control_sdc_only", 50_000),
         ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", 200),
     ]:
         print(f"\n{'─' * 60}")
-        print(f"Mode: {mode_name}")
+        print(f"Mode: {mode_name} | Episode length: {episode_len}")
         print(f"{'─' * 60}")
 
         config = make_eval_config(
             cpt_config,
             map_dir,
-            episode_len=91,
+            episode_len=episode_len,  # <-- now variable
             control_mode=control_mode,
             num_maps=num_maps,
         )
@@ -169,7 +171,7 @@ def run_eval_and_render(checkpoint_path, base_config):
             info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
             env_indices = list(range(min(NUM_ENVS_TO_RENDER, env.driver_env.num_envs)))
 
-        rows = process_rollout_data(info_list, checkpoint_path, mode_name)
+        rows = process_rollout_data(info_list, checkpoint_path, mode_name, episode_len)  # <-- pass it
         all_rows.extend(rows)
 
         if rows:
@@ -180,7 +182,7 @@ def run_eval_and_render(checkpoint_path, base_config):
                 f"offroad_rate={np.mean([r['offroad_rate'] for r in rows]):.3f}"
             )
 
-        video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, mode_name)
+        video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, f"ep{episode_len}", mode_name)  # <-- ep len in path
         print(f"  Rendering {len(env_indices)} scenarios -> {video_dir}")
         render_envs(evaluator, policy, env, env_indices, video_dir)
 
@@ -196,14 +198,20 @@ def main():
     print(f"Evaluating: {CPT_PATH}")
     print(f"{'=' * 60}")
 
-    all_rows = run_eval_and_render(CPT_PATH, base_config)
+    all_rows = []
+    for episode_len in EPISODE_LENGTHS:
+        print(f"\n{'#' * 60}")
+        print(f"Episode length: {episode_len}")
+        print(f"{'#' * 60}")
+        rows = run_eval_and_render(CPT_PATH, base_config, episode_len=episode_len)
+        all_rows.extend(rows)
 
     df = pd.DataFrame(all_rows)
     # df.to_csv(OUTPUT_CSV, index=False)
     # print(f"\nResults saved to {OUTPUT_CSV} ({len(df)} rows)")
 
     if not df.empty:
-        summary = df.groupby("mode").agg(
+        summary = df.groupby(["episode_len", "mode"]).agg(
             scenes=("score", "count"),
             score=("score", "mean"),
             collision_rate=("collision_rate", "mean"),

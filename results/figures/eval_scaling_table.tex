@@ -1,0 +1,25 @@
+% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, \usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}
+\begin{table}[ht]
+\centering
+\caption{Scaling evaluation results on held-out test maps.}
+\label{tab:scaling_results}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{rr|rrr|rrr}
+\toprule
+ & & \multicolumn{3}{c|}{Self-play (test)} & \multicolumn{3}{c}{Human-replay (test)} \\
+\makecell{Self-play maps \\ (metadata)} & Anchor data & Score & Coll. (\%) & Offroad (\%) & Score & Coll. (\%) & At-fault (\%) \\
+\midrule
+10 & 0 (unreg.) & \cellcolor{green!31} $0.730 \pm 0.010$ & \cellcolor{red!20} $15.3 \pm 0.9$ & \cellcolor{red!22} $17.1 \pm 0.8$ & \cellcolor{green!5} $0.353 \pm 0.007$ & \cellcolor{red!50} $44.5 \pm 0.7$ & \cellcolor{red!44} $39.5 \pm 0.7$ \\
+10 & 1.2 hours & \cellcolor{green!28} $0.678 \pm 0.011$ & \cellcolor{red!13} $8.2 \pm 0.7$ & \cellcolor{red!19} $14.5 \pm 0.8$ & \cellcolor{green!13} $0.471 \pm 0.007$ & \cellcolor{red!27} $22.8 \pm 0.6$ & \cellcolor{red!16} $11.7 \pm 0.4$ \\
+10 & 125 hours & \cellcolor{green!36} $0.799 \pm 0.010$ & \cellcolor{red!11} $6.7 \pm 0.6$ & \cellcolor{red!13} $8.1 \pm 0.6$ & \cellcolor{green!25} $0.633 \pm 0.007$ & \cellcolor{red!29} $24.1 \pm 0.6$ & \cellcolor{red!17} $12.0 \pm 0.5$ \\
+100 & 0 (unreg.) & \cellcolor{green!45} $0.914 \pm 0.006$ & \cellcolor{red!10} $5.7 \pm 0.5$ & \cellcolor{red!8} $4.1 \pm 0.4$ & \cellcolor{green!18} $0.540 \pm 0.007$ & \cellcolor{red!45} $39.6 \pm 0.7$ & \cellcolor{red!37} $32.0 \pm 0.7$ \\
+100 & 1.2 hours & \cellcolor{green!28} $0.682 \pm 0.010$ & \cellcolor{red!6} $1.8 \pm 0.3$ & \cellcolor{red!7} $2.2 \pm 0.3$ & \cellcolor{green!21} $0.589 \pm 0.007$ & \cellcolor{red!21} $16.1 \pm 0.5$ & \cellcolor{red!11} $6.3 \pm 0.3$ \\
+100 & 12.5 hours & \cellcolor{green!36} $0.798 \pm 0.009$ & \cellcolor{red!6} $1.3 \pm 0.3$ & \cellcolor{red!5} $0.5 \pm 0.2$ & \cellcolor{green!29} $0.701 \pm 0.006$ & \cellcolor{red!15} $10.7 \pm 0.4$ & \cellcolor{red!8} $3.9 \pm 0.3$ \\
+100 & 125 hours & \cellcolor{green!39} $0.836 \pm 0.008$ & \cellcolor{red!6} $1.5 \pm 0.3$ & \cellcolor{red!6} $1.4 \pm 0.3$ & \cellcolor{green!29} $0.702 \pm 0.006$ & \cellcolor{red!18} $13.5 \pm 0.5$ & \cellcolor{red!7} $2.8 \pm 0.2$ \\
+1k & 0 (unreg.) & \cellcolor{green!49} $0.970 \pm 0.004$ & \cellcolor{red!6} $2.1 \pm 0.3$ & \cellcolor{red!6} $1.2 \pm 0.2$ & \cellcolor{green!33} $0.749 \pm 0.006$ & \cellcolor{red!23} $18.2 \pm 0.5$ & \cellcolor{red!19} $14.8 \pm 0.5$ \\
+10k & 0 (unreg.) & \cellcolor{green!49} $0.978 \pm 0.003$ & \cellcolor{red!5} $1.0 \pm 0.2$ & \cellcolor{red!5} $0.8 \pm 0.2$ & \cellcolor{green!36} $0.789 \pm 0.006$ & \cellcolor{red!18} $13.1 \pm 0.5$ & \cellcolor{red!13} $8.6 \pm 0.4$ \\
+10k & 125 hours & \cellcolor{green!30} $0.707 \pm 0.010$ & \cellcolor{red!5} $\bm{0.2 \pm 0.1}$ & \cellcolor{red!5} $\bm{0.2 \pm 0.1}$ & \cellcolor{green!21} $0.588 \pm 0.007$ & \cellcolor{red!7} $\bm{2.4 \pm 0.2}$ & \cellcolor{red!5} $\bm{0.4 \pm 0.1}$ \\
+50k & 0 (unreg.) & \cellcolor{green!50} $\bm{0.982 \pm 0.003}$ & \cellcolor{red!5} $0.9 \pm 0.2$ & \cellcolor{red!5} $0.6 \pm 0.1$ & \cellcolor{green!41} $\bm{0.858 \pm 0.005}$ & \cellcolor{red!13} $8.4 \pm 0.4$ & \cellcolor{red!10} $5.8 \pm 0.3$ \\
+\bottomrule
+\end{tabular}}
+\end{table}

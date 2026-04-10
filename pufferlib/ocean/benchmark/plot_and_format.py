@@ -256,8 +256,8 @@ def plot_scaling_scatter(df, save_path="results/figures/eval_scaling_scatter.pdf
     series_keys = sorted(agg["series_key"].unique())
 
     # Assign colors: orange shades for regularized, blue/green for unregularized
-    unreg_colors = ["#1f77b4", "#2ca02c", "#17becf", "#9467bd"]
-    reg_colors = ["#ff7f0e", "#d62728", "#e377c2", "#bcbd22"]
+    unreg_colors = ["k", "#2ca02c", "#17becf"]
+    reg_colors = ["#ff7f0e", "#d62728", "#e377c2", "#9467bd", "#bcbd22"]
 
     unreg_keys = [k for k in series_keys if "_anchor0" in k]
     reg_keys = [k for k in series_keys if "_anchor0" not in k]
@@ -1008,6 +1008,229 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
     return latex_str
 
 
+def plot_data_requirements(df, save_path="results/figures/eval_data_requirements.pdf"):
+    """Master summary figure: how much data is needed for human-compatible policies?
+
+    3 subplots, all using scaling modes.
+    x-axis: self-play training maps (sp_maps), log scale
+    Color and shape both encode anchor maps (unreg = black).
+    All y-axes reported in percentage [%].
+
+    Subplot 0: SP collision rate [%]
+    Subplot 1: HR at-fault collision rate [%]
+    Subplot 2: Delta at-fault = SP - HR [%] (positive = SP better = ZSC gap exists)
+               Green striped line at 0 = "no ZSC gap"
+    """
+    scaling_modes = ["scaling_sp_val", "scaling_hr_interactive"]
+    df = df[df["mode"].isin(scaling_modes)].copy()
+    if df.empty:
+        print("  No scaling data — skipping plot_data_requirements.")
+        return None
+
+    df["anchor_maps"] = df["anchor_maps"].fillna(0).astype(int)
+    if "dynamics" not in df.columns:
+        df["dynamics"] = "delta"
+
+    hr = df[df["mode"] == "scaling_hr_interactive"]
+    sp = df[df["mode"] == "scaling_sp_val"]
+
+    hr_agg = (
+        hr.groupby(["sp_maps", "anchor_maps"])[["at_fault_collision_rate", "collision_rate"]]
+        .mean()
+        .reset_index()
+        .rename(
+            columns={
+                "at_fault_collision_rate": "hr_atfault",
+                "collision_rate": "hr_collision_rate",
+            }
+        )
+    )
+    sp_agg = (
+        sp.groupby(["sp_maps", "anchor_maps"])[["at_fault_collision_rate", "collision_rate"]]
+        .mean()
+        .reset_index()
+        .rename(
+            columns={
+                "at_fault_collision_rate": "sp_atfault",
+                "collision_rate": "sp_collision_rate",
+            }
+        )
+    )
+    agg = hr_agg.merge(sp_agg, on=["sp_maps", "anchor_maps"], how="left")
+
+    # Convert all metrics to percentage
+    agg["hr_atfault"] = agg["hr_atfault"] * 100
+    agg["sp_atfault"] = agg["sp_atfault"] * 100
+    agg["hr_collision_rate"] = agg["hr_collision_rate"] * 100
+    agg["sp_collision_rate"] = agg["sp_collision_rate"] * 100
+    # Recompute delta after scaling to percentages
+    agg["delta_atfault"] = agg["sp_atfault"] - agg["hr_atfault"]
+
+    anchor_vals = sorted(agg["anchor_maps"].unique())
+
+    _cb = sns.color_palette("colorblind")
+    REG_COLORS = ["#f4a6c0", "#e8729a", "#d63b73", "#a8174a", "#6b0f2e"]
+    color_map = {0: "black"}
+    color_map.update({a: REG_COLORS[i] for i, a in enumerate(a for a in anchor_vals if a != 0)})
+    markers = ["^", "s", "o", "D", "P", "X", "v", "*"]
+    marker_map = {a: markers[i % len(markers)] for i, a in enumerate(anchor_vals)}
+
+    def _anchor_label(a):
+        return "no anchor (unreg)" if a == 0 else f"{_maps_to_human_time(a)} anchor"
+
+    _set_style(len(anchor_vals))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    subplot_specs = [
+        ("sp_collision_rate", "Self-play collision rate [%]"),
+        ("hr_collision_rate", "Human-replay collision rate [%]"),
+        ("hr_atfault", "Human-replay at-fault collision rate [%]"),
+        ("delta_atfault", "\u0394 at-fault (SP \u2212 HR) [%]"),
+    ]
+
+    fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
+
+    for ax, (y_col, ylabel) in zip(axes, subplot_specs):
+        for anchor in anchor_vals:
+            subset = agg[agg["anchor_maps"] == anchor].sort_values("sp_maps")
+            if subset.empty:
+                continue
+            ax.plot(
+                subset["sp_maps"],
+                subset[y_col],
+                color=color_map[anchor],
+                marker=marker_map[anchor],
+                markersize=8,
+                linewidth=1.2,
+                linestyle="-",
+                zorder=3,
+                label=_anchor_label(anchor),
+            )
+
+        ax.set_xscale("log")
+        ax.xaxis.set_major_formatter(
+            mticker.FuncFormatter(lambda x, _: f"{int(x / 1000)}k" if x >= 1000 else str(int(x)))
+        )
+        ax.set_xlabel("Self-play training maps")
+        ax.set_ylabel(ylabel)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+
+        if y_col == "delta_atfault":
+            ax.axhline(0, color="#2e7cf8", linestyle="--", linewidth=2.0, alpha=0.9, zorder=2)
+            ax.text(
+                min(agg["sp_maps"]) * 1.1,
+                0.2,
+                "No ZSC gap",
+                fontsize=14,
+                color="#2e7cf8",
+                ha="left",
+                va="bottom",
+                # fontweight="bold",
+            )
+        else:
+            ax.set_ylim(bottom=0)
+
+        ax.legend(fontsize=8, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
+def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatibility_tradeoff_bar.pdf"):
+    """Bar chart comparing two checkpoints across four HR metrics.
+
+    4 subplots, one per metric. Two bars per subplot: unreg vs reg.
+    Raw values, no normalization.
+    """
+    CHECKPOINTS_OF_INTEREST = {
+        "models/scaling_cpts/unreg_classic_50k_maps.pt": "unregularized",
+        "models/scaling_cpts/reg_delta_10k_maps_anchor_10k_maps.pt": "regularized",
+    }
+
+    df = df[df["mode"] == "scaling_hr_interactive"].copy()
+    df = df[df["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
+    if df.empty:
+        print("  No data for checkpoints of interest — skipping plot_compatibility_tradeoff_bar.")
+        return None
+
+    required_cols = [
+        "collision_rate",
+        "at_fault_collision_rate",
+        "rear_collision_rate",
+        "route_progress",
+        "lateral_error_avg",
+    ]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        print(f"  Missing columns {missing} — skipping plot_compatibility_tradeoff_bar.")
+        return None
+
+    agg = df.groupby("checkpoint")[required_cols].agg(["mean", "sem"]).reset_index()
+    agg.columns = ["checkpoint"] + [f"{m}_{s}" for m in required_cols for s in ["mean", "sem"]]
+    agg["label"] = agg["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
+
+    # unreg first (black), reg second (pink)
+    agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
+    agg = agg.sort_values("is_reg").reset_index(drop=True)
+    colors = ["black" if not r else "#d63b73" for r in agg["is_reg"]]
+
+    subplot_specs = [
+        ("collision_rate", "HR collision rate [%]", True),
+        ("at_fault_collision_rate", "HR at-fault collision rate [%]", True),
+        ("rear_collision_rate", "HR rear collision rate [%]", True),
+        ("route_progress", "HR route progress [%]", True),
+        ("lateral_error_avg", "HR lateral L2 distance", False),
+    ]
+
+    _set_style(2)
+    fig = plt.figure(figsize=(14, 3.5))
+    gs = fig.add_gridspec(1, 4)
+
+    ax0 = fig.add_subplot(gs[0])
+    ax1 = fig.add_subplot(gs[1], sharey=ax0)
+    ax2 = fig.add_subplot(gs[2], sharey=ax0)
+    ax3 = fig.add_subplot(gs[3])
+    axes = [ax0, ax1, ax2, ax3]
+
+    axes[1].tick_params(labelleft=False)
+    axes[2].tick_params(labelleft=False)
+
+    for ax, (col, ylabel, as_pct) in zip(axes, subplot_specs):
+        means = agg[f"{col}_mean"].values * (100 if as_pct else 1)
+        sems = agg[f"{col}_sem"].values * (100 if as_pct else 1)
+        labels = agg["label"].values
+        x = np.arange(len(labels))
+
+        for i, (mean, sem, color) in enumerate(zip(means, sems, colors)):
+            ax.bar(
+                x[i],
+                mean,
+                yerr=sem,
+                color=color,
+                alpha=0.8,
+                width=0.5,
+                capsize=4,
+                error_kw=dict(lw=1.2),
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=9)
+        ax.set_ylabel(ylabel)
+        ax.set_ylim(bottom=0)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Master entry point
 # ---------------------------------------------------------------------------
@@ -1023,7 +1246,11 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
         print("  Saved eval_scaling_barplot.pdf")
         plot_scaling_scatter(df)
         print("  Saved eval_scaling_scatter.pdf")
+        plot_data_requirements(df)
+        print("  Saved eval_data_requirements.pdf")
         generate_scaling_latex_table(df)
+        plot_compatibility_tradeoff_bar(df)
+        print("  Saved eval_compatibility_tradeoff_bar.pdf")
     plot_scaling_wosac(wosac_df)
     print("  Saved eval_scaling_wosac.pdf")
     if anchor_df is not None and not anchor_df.empty:
