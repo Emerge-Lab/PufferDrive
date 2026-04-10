@@ -111,6 +111,8 @@ void demo() {
         .map_name = "resources/drive/binaries/carla_2D/map_001.bin",
         .reward_conditioning = conf.reward_conditioning,
         .partner_obs_radius = conf.partner_obs_radius,
+        .road_obs_norm = conf.road_obs_norm,
+        .partner_obs_norm = conf.partner_obs_norm,
     };
 
     if (conf.init_mode == INIT_VARIABLE_AGENT_NUMBER) {
