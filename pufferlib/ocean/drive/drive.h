@@ -296,6 +296,7 @@ struct Drive {
     float *rewards;
     unsigned char *terminals;
     unsigned char *truncations;
+    unsigned char *is_invalid_step;
     Log log;
     Log *logs;
     int num_agents; // Max controlled agents
@@ -363,6 +364,7 @@ struct Drive {
     int *tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    float stopped_reset_threshold;
     int reward_randomization;
     int reward_conditioning;
     int turn_off_normalization;
@@ -3187,6 +3189,7 @@ void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
+    memset(env->is_invalid_step, 0, env->active_agent_count * sizeof(unsigned char));
     env->timestep++;
 
     // Move static experts
@@ -3228,6 +3231,15 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[agent_idx];
         agent->collision_state = 0;
         agent->aabb_collision_state = 0;
+        // log the agent is stopped before computing the metrics. this way we get stopped AFTER the collision (stopped
+        // is true on the first step where it can't move)
+        env->is_invalid_step[i] = (unsigned char)agent->stopped;
+        // Skip metrics and rewards entirely for stopped agents — they can't act,
+        // so their metrics are meaningless and would pollute logged statistics.
+        if (agent->stopped) {
+            env->rewards[i] = 0.0f;
+            continue;
+        }
         compute_agent_metrics(env, agent_idx);
         int collision_state = agent->collision_state;
         if (collision_state == NO_COLLISION) {
@@ -3450,9 +3462,19 @@ void c_step(Drive *env) {
             break;
         }
     }
+    int stopped_count = 0;
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int agent_idx = env->active_agent_indices[i];
+        if (env->agents[agent_idx].stopped) {
+            stopped_count++;
+        }
+    }
+    float stopped_fraction = (float)stopped_count / (float)env->active_agent_count;
+    int reached_stopped_threshold =
+        (env->stopped_reset_threshold > 0.0f && stopped_fraction >= env->stopped_reset_threshold);
     int reached_time_limit = env->timestep >= env->episode_length;
     int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
-    if (reached_time_limit || reached_early_termination) {
+    if (reached_time_limit || reached_early_termination || reached_stopped_threshold) {
         for (int i = 0; i < env->active_agent_count; i++) {
             env->truncations[i] = 1;
         }
