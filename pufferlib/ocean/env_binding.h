@@ -993,6 +993,54 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
     Py_RETURN_NONE;
 }
 
+// Copy per-step sim trajectory data from the vectorized env into preallocated
+// numpy arrays. Args: (vec_env, x_arr, y_arr, z_arr, heading_arr, lengths_arr, ep_len).
+// x/y/z/heading_arr are float32 shape (total_agents, ep_len); lengths_arr is int32
+// shape (total_agents,). Iterates sub-envs in order, concatenating by agent offset.
+static PyObject *vec_get_sim_trajectories(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_sim_trajectories requires 7 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+
+    PyArrayObject *x_arr = (PyArrayObject *)PyTuple_GetItem(args, 1);
+    PyArrayObject *y_arr = (PyArrayObject *)PyTuple_GetItem(args, 2);
+    PyArrayObject *z_arr = (PyArrayObject *)PyTuple_GetItem(args, 3);
+    PyArrayObject *heading_arr = (PyArrayObject *)PyTuple_GetItem(args, 4);
+    PyArrayObject *lengths_arr = (PyArrayObject *)PyTuple_GetItem(args, 5);
+    int ep_len = (int)PyLong_AsLong(PyTuple_GetItem(args, 6));
+
+    float *x_base = (float *)PyArray_DATA(x_arr);
+    float *y_base = (float *)PyArray_DATA(y_arr);
+    float *z_base = (float *)PyArray_DATA(z_arr);
+    float *heading_base = (float *)PyArray_DATA(heading_arr);
+    int *lengths_base = (int *)PyArray_DATA(lengths_arr);
+
+    int offset = 0;
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *)vec->envs[i];
+        c_get_sim_trajectories(drive, &x_base[offset * ep_len], &y_base[offset * ep_len], &z_base[offset * ep_len],
+                               &heading_base[offset * ep_len], &lengths_base[offset], ep_len);
+        offset += drive->active_agent_count;
+    }
+
+    Py_RETURN_NONE;
+}
+
+// Return (world_mean_x, world_mean_y, world_mean_z) from env 0. All envs in a
+// vec share the same map-centering convention so env 0 is representative.
+static PyObject *vec_get_world_mean(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+    Drive *drive = (Drive *)vec->envs[0];
+    return Py_BuildValue("(fff)", drive->world_mean_x, drive->world_mean_y, drive->world_mean_z);
+}
+
 static PyObject *vec_get_road_edge_counts(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec)
@@ -1131,6 +1179,9 @@ static PyMethodDef methods[] = {
      "Get road edge polyline counts from vectorized env"},
     {"vec_get_road_edge_polylines", vec_get_road_edge_polylines, METH_VARARGS,
      "Get road edge polylines from vectorized env"},
+    {"vec_get_sim_trajectories", vec_get_sim_trajectories, METH_VARARGS,
+     "Get per-step sim trajectories from vectorized env"},
+    {"vec_get_world_mean", vec_get_world_mean, METH_VARARGS, "Get world mean (x,y,z) from first sub-env"},
     {"env_log", env_log, METH_VARARGS, "Log a single environment"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}};

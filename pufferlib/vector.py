@@ -215,6 +215,16 @@ def _worker_process(
     else:
         envs = Serial(env_creators, env_args, env_kwargs, num_envs, buf=buf, seed=seed * num_envs)
 
+    # Tag the env(s) with this worker index so env.notify() (e.g. trajectory save
+    # in Drive) can pick a per-worker output filename. Works for both native
+    # PufferEnvs and Serial-wrapped ones.
+    if hasattr(envs, "_worker_idx"):
+        envs._worker_idx = worker_idx
+    if hasattr(envs, "envs"):
+        for env in envs.envs:
+            if hasattr(env, "_worker_idx"):
+                env._worker_idx = worker_idx
+
     semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
     start = time.time()
@@ -532,6 +542,17 @@ class Multiprocessing:
 
     def notify(self):
         self.buf["notify"][:] = True
+
+    def save_worker_trajectories(self):
+        """Trigger every worker to call env.notify(), then block until all finish.
+
+        Used by PuffeRL.save_trajectories() to fan out a trajectory-save request
+        across workers. Each worker's env.notify() writes a per-worker npz and
+        clears its own notify flag; we spin until all flags are down.
+        """
+        self.buf["notify"][:] = True
+        while any(self.buf["notify"]):
+            time.sleep(0.01)
 
     def close(self):
         self.driver_env.close()

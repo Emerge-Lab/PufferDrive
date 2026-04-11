@@ -2295,6 +2295,17 @@ void init(Drive *env) {
     set_start_position(env);
     init_goal_positions(env);
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
+
+    // Allocate per-step sim trajectory buffers (episode_length floats per agent).
+    // Used by save_trajectories() at checkpoint time for offline rendering. Recorded
+    // in c_step after move_dynamics; retrieved via c_get_sim_trajectories.
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int idx = env->active_agent_indices[i];
+        env->agents[idx].sim_traj_x = (float *)calloc(env->episode_length, sizeof(float));
+        env->agents[idx].sim_traj_y = (float *)calloc(env->episode_length, sizeof(float));
+        env->agents[idx].sim_traj_z = (float *)calloc(env->episode_length, sizeof(float));
+        env->agents[idx].sim_traj_heading = (float *)calloc(env->episode_length, sizeof(float));
+    }
 }
 
 void close_client(Client *client);
@@ -2413,6 +2424,27 @@ void c_get_global_ground_truth_trajectories(Drive *env, float *x_out, float *y_o
             z_out[out_idx] = agent->log_trajectory_z[t] + env->world_mean_z;
             heading_out[out_idx] = agent->log_heading[t];
             valid_out[out_idx] = agent->log_valid[t];
+        }
+    }
+}
+
+// Copy recorded per-step sim trajectory for all active agents into the output
+// arrays. x_out/y_out/z_out/heading_out are (active_agent_count, ep_len) float
+// buffers written row-major. lengths_out receives the current timestep for
+// each agent (how far the episode has progressed). Slots past `lengths_out[i]`
+// are either zeros (fresh episode) or stale data from a prior episode — the
+// caller should use `lengths_out` to slice down.
+void c_get_sim_trajectories(Drive *env, float *x_out, float *y_out, float *z_out, float *heading_out, int *lengths_out,
+                            int ep_len) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int idx = env->active_agent_indices[i];
+        Agent *agent = &env->agents[idx];
+        lengths_out[i] = env->timestep;
+        if (agent->sim_traj_x != NULL) {
+            memcpy(&x_out[i * ep_len], agent->sim_traj_x, ep_len * sizeof(float));
+            memcpy(&y_out[i * ep_len], agent->sim_traj_y, ep_len * sizeof(float));
+            memcpy(&z_out[i * ep_len], agent->sim_traj_z, ep_len * sizeof(float));
+            memcpy(&heading_out[i * ep_len], agent->sim_traj_heading, ep_len * sizeof(float));
         }
     }
 }
@@ -3250,6 +3282,17 @@ void c_step(Drive *env) {
         float prev_vy = env->agents[agent_idx].sim_vy;
 
         move_dynamics(env, i, agent_idx);
+
+        // Record per-step sim trajectory for checkpoint replay. env->timestep was
+        // incremented at the top of c_step, so the state we just moved to corresponds
+        // to step index (timestep - 1) within the current episode.
+        int t = env->timestep - 1;
+        if (t >= 0 && t < env->episode_length && env->agents[agent_idx].sim_traj_x != NULL) {
+            env->agents[agent_idx].sim_traj_x[t] = env->agents[agent_idx].sim_x;
+            env->agents[agent_idx].sim_traj_y[t] = env->agents[agent_idx].sim_y;
+            env->agents[agent_idx].sim_traj_z[t] = env->agents[agent_idx].sim_z;
+            env->agents[agent_idx].sim_traj_heading[t] = env->agents[agent_idx].sim_heading;
+        }
 
         // Accumulate distance for avg_distance_per_infraction metric
         float speed = sqrtf(env->agents[agent_idx].sim_vx * env->agents[agent_idx].sim_vx +

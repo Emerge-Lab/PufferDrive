@@ -506,6 +506,10 @@ class PuffeRL:
 
         if self.epoch % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
+            self.save_trajectories()
+            # Snapshot reproducibility artifacts once per run on the first checkpoint.
+            if self.epoch == config["checkpoint_interval"]:
+                self.save_reproducibility()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
             if self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training:
@@ -671,6 +675,146 @@ class PuffeRL:
         torch.save(state, state_path + ".tmp")
         os.rename(state_path + ".tmp", state_path)
         return model_path
+
+    def save_trajectories(self):
+        """Save per-checkpoint rollout trajectories + map context as a compressed npz.
+
+        Dumps the rolling policy-side buffers (actions, rewards, values, logprobs,
+        terminals, truncations) along with C-side per-step agent xyz/heading recorded
+        during the current episode, plus map context (map_ids, map_files, agent_offsets,
+        world_mean) needed to align coordinates back to the source map for offline
+        rendering.
+
+        Multiprocessing path: fan out via ``vecenv.save_worker_trajectories`` — each
+        worker writes its own npz into a temp dir, and we concatenate here.
+
+        Serial / native PufferEnv path: read directly from the driver env.
+
+        Opt out by setting ``save_trajectories: False`` in the train config.
+        """
+        if not self.config.get("save_trajectories", True):
+            return
+        if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
+            return
+
+        run_id = self.logger.run_id
+        path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
+        os.makedirs(path, exist_ok=True)
+        traj_path = os.path.join(path, f"trajectories_{self.epoch:06d}.npz")
+
+        data = {
+            "actions": self.actions.cpu().numpy(),
+            "rewards": self.rewards.cpu().numpy(),
+            "terminals": self.terminals.cpu().numpy(),
+            "truncations": self.truncations.cpu().numpy(),
+            "values": self.values.cpu().numpy(),
+            "logprobs": self.logprobs.cpu().numpy(),
+            "epoch": self.epoch,
+            "global_step": self.global_step,
+        }
+
+        try:
+            driver_env = getattr(self.vecenv, "driver_env", None)
+
+            # Multiprocessing: fan out notify() to workers, then stitch their files.
+            if hasattr(self.vecenv, "save_worker_trajectories"):
+                traj_tmp = getattr(driver_env, "_traj_save_dir", None) if driver_env else None
+                if traj_tmp:
+                    self.vecenv.save_worker_trajectories()
+                    worker_files = sorted(glob.glob(os.path.join(traj_tmp, "traj_worker_*.npz")))
+                    if worker_files:
+                        all_traj = {}
+                        map_files = None
+                        world_mean = None
+                        for f in worker_files:
+                            d = np.load(f, allow_pickle=True)
+                            for k in ("x", "y", "z", "heading", "lengths", "map_ids"):
+                                if k in d:
+                                    all_traj.setdefault(k, []).append(d[k])
+                            if map_files is None and "map_files" in d:
+                                map_files = d["map_files"]
+                            if world_mean is None and "world_mean" in d:
+                                world_mean = d["world_mean"]
+                        for k, v in all_traj.items():
+                            key = f"traj_{k}" if k in ("x", "y", "z", "heading", "lengths") else k
+                            data[key] = np.concatenate(v)
+                        if map_files is not None:
+                            data["map_files"] = map_files
+                        if world_mean is not None:
+                            data["world_mean"] = world_mean
+
+            # Serial / native PufferEnv: read directly from the driver.
+            elif driver_env is not None and hasattr(driver_env, "get_sim_trajectories"):
+                traj = driver_env.get_sim_trajectories()
+                for k, v in traj.items():
+                    data[f"traj_{k}"] = v
+                if hasattr(driver_env, "map_ids"):
+                    data["map_ids"] = np.array(driver_env.map_ids, dtype=np.int32)
+                if hasattr(driver_env, "agent_offsets"):
+                    data["agent_offsets"] = np.array(driver_env.agent_offsets, dtype=np.int32)
+                if hasattr(driver_env, "map_files"):
+                    data["map_files"] = np.array([str(f) for f in driver_env.map_files])
+                if hasattr(driver_env, "world_mean"):
+                    data["world_mean"] = np.array(driver_env.world_mean, dtype=np.float32)
+        except Exception as e:
+            print(f"Warning: save_trajectories failed to collect C-side data: {e}")
+
+        np.savez_compressed(traj_path, **data)
+        print(f"Saved trajectories to {traj_path}")
+
+    def save_reproducibility(self):
+        """Snapshot the compiled .so, key source files, config, and git info once per run.
+
+        Intended for exact experiment replay: you can reproduce a checkpoint's
+        behavior by checking out the git commit (or applying the saved diff)
+        and loading the saved .so. Called once on the first checkpoint of a run.
+        """
+        if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
+            return
+
+        run_id = self.logger.run_id
+        base_path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
+        repro_path = os.path.join(base_path, f"reproducibility_{self.epoch:06d}")
+        os.makedirs(repro_path, exist_ok=True)
+
+        for so_file in glob.glob("pufferlib/ocean/drive/*.so"):
+            shutil.copy2(so_file, repro_path)
+
+        source_files = [
+            "pufferlib/ocean/drive/drive.h",
+            "pufferlib/ocean/drive/datatypes.h",
+            "pufferlib/ocean/drive/binding.c",
+            "pufferlib/ocean/drive/drive.py",
+            "pufferlib/ocean/drive/drivenet.h",
+            "pufferlib/ocean/env_binding.h",
+            "pufferlib/config/ocean/drive.ini",
+            "pufferlib/pufferl.py",
+        ]
+        for src in source_files:
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(repro_path, os.path.basename(src)))
+
+        git_info_path = os.path.join(repro_path, "git_info.txt")
+        try:
+            commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+            diff = subprocess.run(["git", "diff"], capture_output=True, text=True, timeout=10)
+            with open(git_info_path, "w") as f:
+                f.write(f"commit: {commit.stdout.strip()}\n\n")
+                f.write("diff:\n")
+                f.write(diff.stdout)
+        except Exception as e:
+            with open(git_info_path, "w") as f:
+                f.write(f"Could not capture git info: {e}\n")
+
+        try:
+            config_path = os.path.join(repro_path, "training_config.txt")
+            with open(config_path, "w") as f:
+                for k, v in sorted(self.config.items()):
+                    f.write(f"{k}: {v}\n")
+        except Exception as e:
+            print(f"Warning: could not snapshot config: {e}")
+
+        print(f"Saved reproducibility artifacts to {repro_path}")
 
     def print_dashboard(self, clear=False, idx=[0], c1="[cyan]", c2="[white]", b1="[bright_cyan]", b2="[bright_white]"):
         config = self.config
@@ -1044,6 +1188,14 @@ class WandbLogger:
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     args = args or load_config(env_name)
+
+    # If trajectory saving is on, pre-create a shared scratch dir under data_dir
+    # and thread it into args["env"] so every worker inherits it via env_kwargs.
+    # PuffeRL.save_trajectories() later globs traj_worker_*.npz from this dir.
+    if args.get("train", {}).get("save_trajectories", True) and "data_dir" in args.get("train", {}):
+        traj_save_dir = os.path.join(args["train"]["data_dir"], "traj_tmp")
+        os.makedirs(traj_save_dir, exist_ok=True)
+        args.setdefault("env", {})["traj_save_dir"] = traj_save_dir
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     if "LOCAL_RANK" in os.environ:

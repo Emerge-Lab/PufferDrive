@@ -105,7 +105,15 @@ class Drive(pufferlib.PufferEnv):
         spawn_length_min=2.0,
         spawn_length_max=5.5,
         spawn_height=1.5,
+        # Trajectory saving: set by pufferl.py when save_trajectories is enabled.
+        # In multiprocessing mode each worker writes a per-worker npz under this
+        # dir via the notify() mechanism; the driver concatenates them afterward.
+        traj_save_dir=None,
     ):
+        # Trajectory save state; _worker_idx is assigned by _worker_process in
+        # vector.py so notify() knows which per-worker file to write.
+        self._traj_save_dir = traj_save_dir
+        self._worker_idx = None
         # env
         self.dt = dt
         self.render_mode = render_mode
@@ -442,6 +450,9 @@ class Drive(pufferlib.PufferEnv):
             self.env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*self.env_ids)
+        # Cache world_mean once — all sub-envs share the same centering convention.
+        # Used by save_trajectories() to lift sim coordinates back to world frame.
+        self.world_mean = binding.vec_get_world_mean(self.c_envs)
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -605,6 +616,8 @@ class Drive(pufferlib.PufferEnv):
             )
             self.env_ids.append(env_id)
         self.c_envs = binding.vectorize(*self.env_ids)
+        # Refresh cached world_mean after resample (new maps → new centering)
+        self.world_mean = binding.vec_get_world_mean(self.c_envs)
 
         binding.vec_reset(self.c_envs, seed)
         self.truncations[:] = 1
@@ -763,6 +776,54 @@ class Drive(pufferlib.PufferEnv):
 
     def close(self):
         binding.vec_close(self.c_envs)
+
+    def get_sim_trajectories(self):
+        """Retrieve the per-step sim trajectories recorded in C for the current episode.
+
+        Returns a dict with numpy arrays:
+            x, y, z, heading: (num_agents, episode_length) float32
+            lengths: (num_agents,) int32 — number of valid steps in the current episode
+
+        Slots past ``lengths[i]`` are either zeros (fresh episode) or stale from a
+        prior episode in the same buffer; callers should slice by ``lengths``.
+        """
+        assert self.episode_length is not None, "episode_length must be set for trajectory recording"
+        ep_len = self.episode_length
+        n = self.num_agents
+        traj = {
+            "x": np.zeros((n, ep_len), dtype=np.float32),
+            "y": np.zeros((n, ep_len), dtype=np.float32),
+            "z": np.zeros((n, ep_len), dtype=np.float32),
+            "heading": np.zeros((n, ep_len), dtype=np.float32),
+            "lengths": np.zeros(n, dtype=np.int32),
+        }
+        binding.vec_get_sim_trajectories(
+            self.c_envs,
+            traj["x"],
+            traj["y"],
+            traj["z"],
+            traj["heading"],
+            traj["lengths"],
+            ep_len,
+        )
+        return traj
+
+    def notify(self):
+        """Called via the notify mechanism in pufferlib.vector on every worker.
+
+        Each worker writes its own trajectory npz under ``_traj_save_dir`` with
+        a filename keyed by ``_worker_idx``. The driver later concatenates these
+        worker files in ``PuffeRL.save_trajectories``.
+        """
+        if self._traj_save_dir is None or self._worker_idx is None:
+            return
+        traj = self.get_sim_trajectories()
+        traj["map_ids"] = np.array(self.map_ids, dtype=np.int32)
+        traj["agent_offsets"] = np.array(self.agent_offsets, dtype=np.int32)
+        traj["map_files"] = np.array([str(f) for f in self.map_files])
+        traj["world_mean"] = np.array(self.world_mean, dtype=np.float32)
+        path = os.path.join(self._traj_save_dir, f"traj_worker_{self._worker_idx}.npz")
+        np.savez_compressed(path, **traj)
 
     def env_log(self, env_idx):
         """Get log statistics for a single environment."""
