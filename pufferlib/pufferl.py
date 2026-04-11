@@ -1626,13 +1626,17 @@ def render(env_name, args=None):
     def render_one_map(map_path):
         """Render a single map file in one or more view modes, moving resulting mp4(s) to output_dir.
 
-        Each view mode runs a separate rollout so that each gets its own ffmpeg
-        pipe and output file.  Output files are named {scenario_id}_{view}.mp4
-        when multiple views are requested, or {scenario_id}.mp4 for a single view.
+        Each view mode runs a separate rollout via the shared
+        :func:`pufferlib.ocean.drive.rollout.rollout_loop` helper, so that each
+        gets its own ffmpeg pipe and output file. Output files are named
+        ``{scenario_id}_{view}.mp4`` for multi-view runs or ``{scenario_id}.mp4``
+        for single-view runs — the C binding writes the correct name directly
+        via ``set_video_suffix``, no post-hoc renaming required.
         """
+        from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
+
         map_name = os.path.splitext(os.path.basename(map_path))[0]
 
-        # View-mode suffix labels used in output filenames
         _VIEW_SUFFIX = {
             RenderView.FULL_SIM_STATE: "sim_state",
             RenderView.AGENT_PERSP: "persp",
@@ -1649,7 +1653,7 @@ def render(env_name, args=None):
                     **args["env"],
                     "num_maps": 1,
                     "map_dir": tmp_map_dir,
-                    "render_mode": 1,  # headless ffmpeg → writes {scenario_id}.mp4 in cwd
+                    "render_mode": 1,  # headless ffmpeg → writes {scenario_id}[suffix].mp4 in cwd
                 }
                 if render_init_mode is not None:
                     env_overrides["init_mode"] = render_init_mode
@@ -1666,46 +1670,38 @@ def render(env_name, args=None):
                 policy = load_policy(map_args, env, env_name)
                 policy.eval()
 
-                ob, _ = env.reset()
-                driver = env.driver_env
-
-                state = {}
-                if map_args["train"]["use_rnn"]:
-                    n = env.agents_per_batch if hasattr(env, "agents_per_batch") else ob.shape[0]
-                    state = dict(
-                        lstm_h=torch.zeros(n, policy.hidden_size, device=device),
-                        lstm_c=torch.zeros(n, policy.hidden_size, device=device),
-                    )
-
-                # Remove any stale mp4 from a previous run
-                stale = os.path.join(os.getcwd(), f"{map_name}.mp4")
+                # Clean up any stale mp4 from a previous run and snapshot cwd so
+                # we can find the new file(s) created during this rollout.
+                suffix = f"_{_VIEW_SUFFIX[view_mode]}" if multi else ""
+                stale = os.path.join(os.getcwd(), f"{map_name}{suffix}.mp4")
                 if os.path.exists(stale):
                     os.remove(stale)
-
                 before = set(glob.glob(os.path.join(os.getcwd(), "*.mp4")))
 
-                for _ in range(max_frames):
-                    driver.render(view_mode=view_mode, draw_traces=draw_traces)
-
-                    with torch.no_grad():
-                        ob_t = torch.as_tensor(ob).to(device)
-                        logits, _ = policy.forward_eval(ob_t, state)
-                        action, _, _ = pufferlib.pytorch.sample_logits(logits)
-                        action = action.cpu().numpy().reshape(env.action_space.shape)
-
-                    ob, _, done, truncated, _ = env.step(action)
-                    if done.all() or truncated.all():
-                        break
+                rollout_loop(
+                    policy=policy,
+                    env=env,
+                    device=device,
+                    use_rnn=map_args["train"]["use_rnn"],
+                    max_steps=max_frames,
+                    render_ctx=RenderContext(
+                        view_mode=view_mode,
+                        env_id=0,
+                        draw_traces=draw_traces,
+                        video_suffix=suffix,
+                    ),
+                )
 
                 env.close()
 
+                # Move the newly produced mp4(s) to output_dir. With
+                # set_video_suffix, filenames are correct by construction — no
+                # post-hoc renaming needed.
                 after = set(glob.glob(os.path.join(os.getcwd(), "*.mp4")))
                 new_mp4s = after - before
                 if new_mp4s:
                     for src in sorted(new_mp4s):
-                        base = os.path.splitext(os.path.basename(src))[0]
-                        suffix = f"_{_VIEW_SUFFIX[view_mode]}" if multi else ""
-                        dst = os.path.join(output_dir, f"{base}{suffix}.mp4")
+                        dst = os.path.join(output_dir, os.path.basename(src))
                         shutil.move(src, dst)
                         print(f"  Saved {dst}")
                 else:
