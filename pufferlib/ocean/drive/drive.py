@@ -4,15 +4,22 @@ import json
 import struct
 import os
 import pufferlib
+from enum import IntEnum
 from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
 
+class RenderView(IntEnum):
+    FULL_SIM_STATE = 0  # Orthographic top-down, fully observable simulator state (zoomed in, origin-centered)
+    BEV_AGENT_OBS = 1  # Orthographic top-down, only show what the selected agent can observe
+    AGENT_PERSP = 2  # Third-person perspective following selected agent
+
+
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
-        render_mode=None,
+        render_mode=RenderView.FULL_SIM_STATE,
         report_interval=1,
         width=1280,
         height=1024,
@@ -345,7 +352,7 @@ class Drive(pufferlib.PufferEnv):
         self.map_ids = map_ids
         self.num_envs = num_envs
         super().__init__(buf=buf)
-        env_ids = []
+        self.env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i + 1]
@@ -430,10 +437,11 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                render_mode=render_mode,
             )
-            env_ids.append(env_id)
+            self.env_ids.append(env_id)
 
-        self.c_envs = binding.vectorize(*env_ids)
+        self.c_envs = binding.vectorize(*self.env_ids)
 
     def reset(self, seed=0):
         binding.vec_reset(self.c_envs, seed)
@@ -508,7 +516,7 @@ class Drive(pufferlib.PufferEnv):
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
-        env_ids = []
+        self.env_ids = []
         seed = np.random.randint(0, 2**32 - 1)
         for i in range(num_envs):
             cur = agent_offsets[i]
@@ -593,23 +601,29 @@ class Drive(pufferlib.PufferEnv):
                 spawn_length_min=self.spawn_length_min,
                 spawn_length_max=self.spawn_length_max,
                 spawn_height=self.spawn_height,
+                render_mode=self.render_mode,
             )
-            env_ids.append(env_id)
-        self.c_envs = binding.vectorize(*env_ids)
+            self.env_ids.append(env_id)
+        self.c_envs = binding.vectorize(*self.env_ids)
 
         binding.vec_reset(self.c_envs, seed)
         self.truncations[:] = 1
 
-    def step(self, actions):
+    def step(self, actions, per_env_logs=False):
         self.terminals[:] = 0
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
         info = []
         if self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs, self.num_agents)
-            if log:
-                info.append(log)
+            if per_env_logs:  # Get the stats for every separate env
+                logs = self.get_env_logs()
+                if any(logs):
+                    info = logs
+            else:  # Default: Aggregate across vectorized envs
+                log = binding.vec_log(self.c_envs, self.num_agents)
+                if log:
+                    info.append(log)
 
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.resample_maps()
@@ -736,11 +750,33 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self):
-        binding.vec_render(self.c_envs, 0)
+    def render(self, view_mode: RenderView = RenderView.FULL_SIM_STATE, draw_traces: bool = True, env_id: int = 0):
+        binding.vec_render(self.c_envs, int(view_mode), draw_traces, env_id)
+
+    def set_video_suffix(self, suffix: str, env_id: int = 0):
+        """Set the suffix appended to the mp4 filename for headless rendering.
+
+        Must be called before the first render() call of a rollout.
+        E.g. set_video_suffix("_bev", env_id=0) → {scenario_id}_bev.mp4
+        """
+        binding.vec_set_video_suffix(self.c_envs, env_id, suffix)
 
     def close(self):
         binding.vec_close(self.c_envs)
+
+    def env_log(self, env_idx):
+        """Get log statistics for a single environment."""
+        num_agents = self.agent_offsets[env_idx + 1] - self.agent_offsets[env_idx]
+        return binding.env_log(self.env_ids[env_idx], num_agents)
+
+    def get_env_logs(self):
+        """Get log statistics for all environments (unaggregated)."""
+        return [self.env_log(i) for i in range(self.num_envs)]
+
+    @property
+    def scenario_ids(self) -> list[str]:
+        """Return scenario ID string for each env, stripping null padding."""
+        return [s.rstrip("\x00") for s in binding.vec_get_scenario_ids(self.c_envs)]
 
 
 def calculate_area(p1, p2, p3):

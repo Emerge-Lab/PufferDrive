@@ -197,7 +197,7 @@ static PyObject *env_reset(PyObject *self, PyObject *args) {
 static PyObject *env_step(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
     if (num_args != 1) {
-        PyErr_SetString(PyExc_TypeError, "vec_render requires 1 argument");
+        PyErr_SetString(PyExc_TypeError, "env_step requires 1 argument");
         return NULL;
     }
 
@@ -209,13 +209,34 @@ static PyObject *env_step(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-// Python function to step the environment
+// Python function to render the environment
 static PyObject *env_render(PyObject *self, PyObject *args) {
+    int num_args = PyTuple_Size(args);
+    if (num_args != 3) {
+        PyErr_SetString(PyExc_TypeError, "env_render requires 3 arguments (env_handle, view_mode, draw_traces)");
+        return NULL;
+    }
     Env *env = unpack_env(args);
     if (!env) {
         return NULL;
     }
-    c_render(env);
+
+    PyObject *view_mode_arg = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(view_mode_arg, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
+        return NULL;
+    }
+    int view_mode = PyLong_AsLong(view_mode_arg);
+
+    PyObject *show_traces_arg = PyTuple_GetItem(args, 2);
+    if (!PyObject_TypeCheck(show_traces_arg, &PyBool_Type)) {
+        PyErr_SetString(PyExc_TypeError, "draw_traces must be a boolean");
+        return NULL;
+    }
+    bool draw_traces = PyObject_IsTrue(show_traces_arg);
+
+    c_render(env, view_mode, draw_traces);
+
     Py_RETURN_NONE;
 }
 
@@ -529,10 +550,40 @@ static PyObject *vec_step(PyObject *self, PyObject *arg) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_video_suffix(PyObject *self, PyObject *args) {
+    // Set a suffix appended to the mp4 filename for headless rendering.
+    // Call this before the first vec_render of each rollout when using multi-view.
+    // Args: (vec_env_ptr, env_id, suffix_str)
+    int num_args = PyTuple_Size(args);
+    if (num_args != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_video_suffix requires 3 arguments: (vec, env_id, suffix)");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+    int env_id = (int)PyLong_AsLong(PyTuple_GetItem(args, 1));
+    const char *suffix = PyUnicode_AsUTF8(PyTuple_GetItem(args, 2));
+    if (!suffix) {
+        PyErr_SetString(PyExc_TypeError, "suffix must be a string");
+        return NULL;
+    }
+    if (env_id < 0 || env_id >= vec->num_envs) {
+        PyErr_SetString(PyExc_IndexError, "env_id out of range");
+        return NULL;
+    }
+    Drive *env = (Drive *)vec->envs[env_id];
+    strncpy(env->video_suffix, suffix, sizeof(env->video_suffix) - 1);
+    env->video_suffix[sizeof(env->video_suffix) - 1] = '\0';
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_render(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
-    if (num_args != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_render requires 2 arguments");
+    if (num_args != 4) {
+        PyErr_SetString(PyExc_TypeError, "vec_render requires 4 arguments");
         return NULL;
     }
 
@@ -542,14 +593,24 @@ static PyObject *vec_render(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    PyObject *env_id_arg = PyTuple_GetItem(args, 1);
-    if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 1), &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
+        return NULL;
+    }
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 2), &PyBool_Type)) {
+        PyErr_SetString(PyExc_TypeError, "draw_traces must be a boolean");
+        return NULL;
+    }
+    if (!PyObject_TypeCheck(PyTuple_GetItem(args, 3), &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
         return NULL;
     }
-    int env_id = PyLong_AsLong(env_id_arg);
 
-    c_render(vec->envs[env_id]);
+    int view_mode = PyLong_AsLong(PyTuple_GetItem(args, 1));
+    bool draw_traces = PyObject_IsTrue(PyTuple_GetItem(args, 2));
+    int env_id = PyLong_AsLong(PyTuple_GetItem(args, 3));
+
+    c_render(vec->envs[env_id], view_mode, draw_traces);
     Py_RETURN_NONE;
 }
 
@@ -629,6 +690,60 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     return dict;
 }
 
+static PyObject *env_log(PyObject *self, PyObject *args) {
+    int num_args = PyTuple_Size(args);
+    if (num_args != 2) {
+        PyErr_SetString(PyExc_TypeError, "env_log requires 2 arguments");
+        return NULL;
+    }
+
+    Env *env = unpack_env(args);
+    if (!env) {
+        return NULL;
+    }
+
+    PyObject *num_agents_arg = PyTuple_GetItem(args, 1);
+    float num_agents = (float)PyLong_AsLong(num_agents_arg);
+
+    // Aggregate this env's per-agent logs (same as vec_log but for one env)
+    // Note: breaks horribly if you don't use floats
+    Log aggregate = {0};
+    int num_keys = sizeof(Log) / sizeof(float);
+    for (int j = 0; j < num_keys; j++) {
+        ((float *)&aggregate)[j] += ((float *)&env->log)[j];
+    }
+
+    PyObject *dict = PyDict_New();
+
+    // Mirror vec_log: only report when enough data has accumulated
+    if (aggregate.n < num_agents) {
+        return dict;
+    }
+
+    // Reset log now that we've consumed it, mirroring vec_log
+    for (int j = 0; j < num_keys; j++) {
+        ((float *)&env->log)[j] = 0.0f;
+    }
+
+    // Average across agents in env
+    float n = aggregate.n;
+    for (int i = 0; i < num_keys; i++) {
+        ((float *)&aggregate)[i] /= n;
+    }
+
+    // Compute completion_rate from raw counts (mirrors vec_log)
+    if (aggregate.goals_attempted_this_episode > 0.0f) {
+        aggregate.completion_rate = aggregate.goals_reached_this_episode / aggregate.goals_attempted_this_episode;
+    } else {
+        aggregate.completion_rate = 0.0f;
+    }
+
+    my_log(dict, &aggregate);
+    assign_to_dict(dict, "n", n);
+
+    return dict;
+}
+
 static PyObject *vec_close(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
@@ -684,6 +799,20 @@ static PyObject *get_global_agent_state(PyObject *self, PyObject *args) {
 
     Py_RETURN_NONE;
 }
+
+static PyObject *vec_get_scenario_ids(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec)
+        return NULL;
+
+    PyObject *list = PyList_New(vec->num_envs);
+    for (int i = 0; i < vec->num_envs; i++) {
+        // scenario_id is char[16], may not be null-terminated at byte 16
+        PyList_SET_ITEM(list, i, PyUnicode_FromStringAndSize(vec->envs[i]->scenario_id, 16));
+    }
+    return list;
+}
+
 static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 8) {
         PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 8 arguments");
@@ -989,7 +1118,9 @@ static PyMethodDef methods[] = {
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
+    {"vec_set_video_suffix", vec_set_video_suffix, METH_VARARGS, "Set mp4 filename suffix for the given env"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
+    {"vec_get_scenario_ids", vec_get_scenario_ids, METH_VARARGS, "Get scenario IDs for all envs"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
@@ -1000,6 +1131,7 @@ static PyMethodDef methods[] = {
      "Get road edge polyline counts from vectorized env"},
     {"vec_get_road_edge_polylines", vec_get_road_edge_polylines, METH_VARARGS,
      "Get road edge polylines from vectorized env"},
+    {"env_log", env_log, METH_VARARGS, "Log a single environment"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}};
 
