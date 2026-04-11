@@ -1031,14 +1031,59 @@ static PyObject *vec_get_sim_trajectories(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-// Return (world_mean_x, world_mean_y, world_mean_z) from env 0. All envs in a
-// vec share the same map-centering convention so env 0 is representative.
+// Return (world_mean_x, world_mean_y, world_mean_z) from env 0 ONLY.
+//
+// IMPORTANT: each sub-env in a vec has its OWN world_mean, computed in
+// set_means() from its own map's road + agent points. Different maps have
+// different world_means (potentially many kilometers apart in source-Waymo
+// coordinates). This function's return value is therefore only correct
+// for env 0; consumers that need to align other envs' trajectories with
+// their source maps must call vec_get_all_world_means below instead.
+//
+// Kept for backwards compatibility with code that historically assumed a
+// single shared world_mean (e.g. older saved trajectories_*.npz files).
 static PyObject *vec_get_world_mean(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec)
         return NULL;
     Drive *drive = (Drive *)vec->envs[0];
     return Py_BuildValue("(fff)", drive->world_mean_x, drive->world_mean_y, drive->world_mean_z);
+}
+
+// Fill an (num_envs, 3) float32 numpy array with each sub-env's world_mean.
+// This is the function callers should use when they need to align per-env
+// trajectories with their source maps (the sub-envs may carry different
+// maps, each with its own centering offset).
+static PyObject *vec_get_all_world_means(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_all_world_means requires 2 arguments (vec, out)");
+        return NULL;
+    }
+    PyObject *vec_caps = PyTuple_GetItem(args, 0);
+    PyArrayObject *out_arr = (PyArrayObject *)PyTuple_GetItem(args, 1);
+
+    PyObject *single_arg = PyTuple_Pack(1, vec_caps);
+    if (!single_arg)
+        return NULL;
+    VecEnv *vec = unpack_vecenv(single_arg);
+    Py_DECREF(single_arg);
+    if (!vec)
+        return NULL;
+
+    if (!PyArray_Check(out_arr) || PyArray_TYPE(out_arr) != NPY_FLOAT32 || PyArray_NDIM(out_arr) != 2 ||
+        PyArray_DIM(out_arr, 0) != vec->num_envs || PyArray_DIM(out_arr, 1) != 3) {
+        PyErr_Format(PyExc_ValueError, "out must be a (num_envs=%d, 3) float32 array", vec->num_envs);
+        return NULL;
+    }
+
+    float *base = (float *)PyArray_DATA(out_arr);
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *drive = (Drive *)vec->envs[i];
+        base[i * 3 + 0] = drive->world_mean_x;
+        base[i * 3 + 1] = drive->world_mean_y;
+        base[i * 3 + 2] = drive->world_mean_z;
+    }
+    Py_RETURN_NONE;
 }
 
 static PyObject *vec_get_road_edge_counts(PyObject *self, PyObject *args) {
@@ -1181,7 +1226,10 @@ static PyMethodDef methods[] = {
      "Get road edge polylines from vectorized env"},
     {"vec_get_sim_trajectories", vec_get_sim_trajectories, METH_VARARGS,
      "Get per-step sim trajectories from vectorized env"},
-    {"vec_get_world_mean", vec_get_world_mean, METH_VARARGS, "Get world mean (x,y,z) from first sub-env"},
+    {"vec_get_world_mean", vec_get_world_mean, METH_VARARGS,
+     "Get world mean (x,y,z) from first sub-env (legacy; per-env world_means differ)"},
+    {"vec_get_all_world_means", vec_get_all_world_means, METH_VARARGS,
+     "Fill (num_envs, 3) float32 array with each sub-env's world_mean"},
     {"env_log", env_log, METH_VARARGS, "Log a single environment"},
     MY_METHODS,
     {NULL, NULL, 0, NULL}};

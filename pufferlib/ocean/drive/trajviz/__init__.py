@@ -289,7 +289,6 @@ def render_npz(
         "agent_offsets",
         "map_ids",
         "map_files",
-        "world_mean",
     )
     missing = [k for k in required if k not in data.files]
     if missing:
@@ -302,9 +301,32 @@ def render_npz(
     agent_offsets = np.asarray(data["agent_offsets"], dtype=np.int64)
     map_ids = np.asarray(data["map_ids"], dtype=np.int64)
     map_files = [str(m) for m in np.asarray(data["map_files"]).tolist()]
-    world_mean = np.asarray(data["world_mean"], dtype=np.float32)
 
     num_envs = len(map_ids)
+    # world_means (plural, per-env, shape (num_envs, 3)) is the right key —
+    # each Drive sub-env in a vec has its own world_mean computed from its
+    # own map's geometry, so different maps have different centerings. The
+    # legacy single world_mean (env 0 only) leads to mis-aligned roads for
+    # any env_id != 0 with a different map. Prefer the new key; fall back
+    # to the legacy one with a warning so older saved npz files still
+    # render (incorrectly for non-env-0, but at least they render).
+    if "world_means" in data.files:
+        world_means = np.asarray(data["world_means"], dtype=np.float32)
+        if world_means.shape != (num_envs, 3):
+            raise ValueError(f"world_means has shape {world_means.shape}, expected ({num_envs}, 3)")
+    elif "world_mean" in data.files:
+        legacy = np.asarray(data["world_mean"], dtype=np.float32)
+        if num_envs > 1:
+            print(
+                f"  WARNING: {npz_path.name} has only the legacy single "
+                f"world_mean key (env 0). Roads for non-env-0 trajectories "
+                f"with different maps will be mis-aligned. Re-save with the "
+                f"current pufferl to get per-env world_means."
+            )
+        world_means = np.broadcast_to(legacy[None, :], (num_envs, 3)).copy()
+    else:
+        raise ValueError(f"{npz_path} has neither world_means nor world_mean")
+
     if len(agent_offsets) == num_envs:
         # Some saved npz omit the trailing offset; reconstruct from the
         # total agent count.
@@ -317,7 +339,11 @@ def render_npz(
         renderer = Renderer(width=width, height=height)
 
     out_paths: list[Path] = []
-    map_cache: dict[int, tuple] = {}
+    # Cache key includes the per-env world_mean tuple, not just the
+    # map_id, so that if two sub-envs ever shared a map_id but used
+    # different world_means (edge case under heterogeneous init_modes)
+    # we don't return the wrong centering.
+    map_cache: dict[tuple, tuple] = {}
 
     try:
         for env_id in range(num_envs):
@@ -326,15 +352,17 @@ def render_npz(
                 continue
 
             mid = int(map_ids[env_id])
-            if mid not in map_cache:
+            wm_env = world_means[env_id]
+            cache_key = (mid, float(wm_env[0]), float(wm_env[1]), float(wm_env[2]))
+            if cache_key not in map_cache:
                 mp = _resolve_map_path(map_files[mid], maps_dir)
                 if mp is None:
                     print(f"  env {env_id}: map {map_files[mid]} not found, skipping")
                     continue
                 roads_raw = map_io.load_map_roads(mp)
-                roads = map_io.mean_center_roads(roads_raw, world_mean)
-                map_cache[mid] = map_io.roads_to_csr(roads)
-            road_xy, road_offsets, road_types = map_cache[mid]
+                roads = map_io.mean_center_roads(roads_raw, wm_env)
+                map_cache[cache_key] = map_io.roads_to_csr(roads)
+            road_xy, road_offsets, road_types = map_cache[cache_key]
 
             # Slice trajectories for this env and stack into (T, A, 3)
             ex = traj_x[a0:a1]

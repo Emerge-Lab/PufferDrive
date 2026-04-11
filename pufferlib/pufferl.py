@@ -726,6 +726,7 @@ class PuffeRL:
                         all_traj = {}
                         map_files = None
                         world_mean = None
+                        all_world_means = []  # per-env, concatenated across workers
                         for f in worker_files:
                             d = np.load(f, allow_pickle=True)
                             for k in ("x", "y", "z", "heading", "lengths", "map_ids"):
@@ -735,6 +736,8 @@ class PuffeRL:
                                 map_files = d["map_files"]
                             if world_mean is None and "world_mean" in d:
                                 world_mean = d["world_mean"]
+                            if "world_means" in d:
+                                all_world_means.append(d["world_means"])
                         for k, v in all_traj.items():
                             key = f"traj_{k}" if k in ("x", "y", "z", "heading", "lengths") else k
                             data[key] = np.concatenate(v)
@@ -742,6 +745,12 @@ class PuffeRL:
                             data["map_files"] = map_files
                         if world_mean is not None:
                             data["world_mean"] = world_mean
+                        # Concatenate per-env world_means across workers so
+                        # offline tooling can align each env's trajectory
+                        # with its own source map. See drive.py docstring on
+                        # Drive.get_world_means for why this matters.
+                        if all_world_means:
+                            data["world_means"] = np.concatenate(all_world_means, axis=0)
 
             # Serial / native PufferEnv: read directly from the driver.
             elif driver_env is not None and hasattr(driver_env, "get_sim_trajectories"):
@@ -756,6 +765,8 @@ class PuffeRL:
                     data["map_files"] = np.array([str(f) for f in driver_env.map_files])
                 if hasattr(driver_env, "world_mean"):
                     data["world_mean"] = np.array(driver_env.world_mean, dtype=np.float32)
+                if hasattr(driver_env, "get_world_means"):
+                    data["world_means"] = driver_env.get_world_means()
         except Exception as e:
             print(f"Warning: save_trajectories failed to collect C-side data: {e}")
 

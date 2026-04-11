@@ -349,6 +349,17 @@ Key design points:
   same length cap. The Python wrapper pads shorter episodes with zeros
   and uses `agent_lengths` to mark valid steps. Episodes with very
   different lengths waste GPU work on the trailing zeros.
+
+- **Per-env `world_means`**: each Drive sub-env in a vec computes its
+  own `world_mean` from its own map's geometry, so a `Drive(num_maps=N)`
+  with N different maps has N different centerings. Saved trajectory
+  files (`trajectories_*.npz`) carry both `world_means` (plural,
+  per-env, shape `(num_envs, 3)`) and the legacy `world_mean` (singular,
+  env 0 only, kept for back-compat). `render_npz` prefers the plural
+  key and falls back to the singular one with a warning. If you load
+  an old npz that only has `world_mean`, non-env-0 sub-envs with
+  different maps will have their roads mis-aligned by up to kilometers
+  — re-save with the current pufferl to fix.
 - **No NPC / expert-replay agents**: trajviz only renders the
   controlled agents from `get_sim_trajectories`. The other 18 vehicles
   in a typical Waymo scenario (the WOSAC "context" tracks) are not

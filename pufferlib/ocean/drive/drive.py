@@ -808,6 +808,21 @@ class Drive(pufferlib.PufferEnv):
         )
         return traj
 
+    def get_world_means(self) -> np.ndarray:
+        """Per-env world_means as a (num_envs, 3) float32 array.
+
+        Each Drive sub-env in a vec computes its own world_mean in
+        ``set_means()`` from its own map's road + agent points. Different
+        maps therefore have different world_means (potentially many
+        kilometers apart in source-Waymo coordinates), and any code that
+        needs to align per-env trajectories with their source maps must
+        use this per-env array — NOT ``self.world_mean`` (singular),
+        which only carries env 0's value and is kept for back-compat.
+        """
+        out = np.zeros((self.num_envs, 3), dtype=np.float32)
+        binding.vec_get_all_world_means(self.c_envs, out)
+        return out
+
     def notify(self):
         """Called via the notify mechanism in pufferlib.vector on every worker.
 
@@ -821,6 +836,12 @@ class Drive(pufferlib.PufferEnv):
         traj["map_ids"] = np.array(self.map_ids, dtype=np.int32)
         traj["agent_offsets"] = np.array(self.agent_offsets, dtype=np.int32)
         traj["map_files"] = np.array([str(f) for f in self.map_files])
+        # world_means (plural): per-env, shape (num_envs, 3). The right
+        # array for offline tooling that needs to align each env's
+        # trajectory with its own source map. world_mean (singular,
+        # legacy) is env 0 only and is kept for back-compat with older
+        # consumers.
+        traj["world_means"] = self.get_world_means()
         traj["world_mean"] = np.array(self.world_mean, dtype=np.float32)
         path = os.path.join(self._traj_save_dir, f"traj_worker_{self._worker_idx}.npz")
         np.savez_compressed(path, **traj)
