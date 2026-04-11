@@ -2629,7 +2629,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     // FORMAT COMES IN
     agent->metrics_array[SPEED_LIMIT_IDX] = (speed_magnitude > SPEED_LIMIT + 2.0f) ? 1.0f : 0.0f;
 
-    // Check for vehicle collisions (skip for pedestrians)
+    // Check for vehicle collisions
     int car_collided_with_index = -1;
     car_collided_with_index = collision_check(env, agent_idx);
     if (car_collided_with_index != -1) {
