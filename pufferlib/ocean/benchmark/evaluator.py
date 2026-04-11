@@ -1000,57 +1000,29 @@ class Evaluator:
     def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False, view_mode=None, view_suffix=""):
         """Run a single rollout. If render_env_idx is not None, render that env.
 
-        view_mode: RenderView enum to use when rendering (defaults to FULL_SIM_STATE).
-        view_suffix: appended to the mp4 filename when logging multiple views, e.g. "_bev".
+        Thin wrapper around :func:`pufferlib.ocean.drive.rollout.rollout_loop`.
+        The shared helper owns the actual forward-sample-step-break loop; this
+        method just builds the RenderContext when rendering is requested.
         """
         from pufferlib.ocean.drive.drive import RenderView
+        from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
 
-        driver = env.driver_env
-        num_agents = env.observation_space.shape[0]
-        device = self.configs["train"]["device"]
-        if view_mode is None:
-            view_mode = RenderView.FULL_SIM_STATE
-
-        # Set video filename suffix in C before the first render call of this rollout.
-        # This ensures each view produces a uniquely named mp4 (e.g. {scenario_id}_bev.mp4).
-        if render_env_idx is not None and view_suffix:
-            driver.set_video_suffix(view_suffix, env_id=render_env_idx)
-
-        # Reset environment
-        obs, info = env.reset()
-
-        # Initialize RNN state if needed
-        state = {}
-        if self.configs["train"]["use_rnn"]:
-            state = dict(
-                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+        render_ctx = None
+        if render_env_idx is not None:
+            render_ctx = RenderContext(
+                view_mode=view_mode if view_mode is not None else RenderView.FULL_SIM_STATE,
+                env_id=render_env_idx,
+                video_suffix=view_suffix,
             )
 
-        info_list = []
-        episode_length = env.driver_env.episode_length
-        for time_idx in range(episode_length):
-            if render_env_idx is not None:
-                driver.render(view_mode=view_mode, env_id=render_env_idx)
-
-            # Get action from policy
-            with torch.no_grad():
-                ob_tensor = torch.as_tensor(obs).to(device)
-                logits, value = policy.forward_eval(ob_tensor, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                action_np = action.cpu().numpy().reshape(env.action_space.shape)
-
-            # Clip continuous actions to valid range
-            if isinstance(logits, torch.distributions.Normal):
-                action_np = np.clip(action_np, env.action_space.low, env.action_space.high)
-
-            # Step environment
-            obs, rewards, dones, truncs, info_list = env.step(action_np, per_env_logs=per_env_logs)
-
-            if truncs.all():
-                break
-
-        return info_list
+        return rollout_loop(
+            policy=policy,
+            env=env,
+            device=self.configs["train"]["device"],
+            use_rnn=self.configs["train"]["use_rnn"],
+            render_ctx=render_ctx,
+            per_env_logs=per_env_logs,
+        )
 
     def log_videos(self, eval_mode, epoch):
         """Log all mp4s in local path to wandb after env close has flushed ffmpeg pipes."""
@@ -1165,6 +1137,13 @@ class SafeEvaluator:
             )
         self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
 
+        # Authoritative RNN flag comes from the training config. PuffeRL passes
+        # its flattened train_config as full_config, where args["train"]["use_rnn"]
+        # (set in load_config from rnn_name) lives at the top level. We previously
+        # used hasattr(policy, "hidden_size") as a proxy, which is fragile because
+        # non-RNN policies can also expose hidden_size.
+        self.use_rnn = bool(full_config.get("use_rnn", False)) if full_config is not None else False
+
     def _build_eval_env_config(self):
         """Build env config with safe reward conditioning values applied.
 
@@ -1227,7 +1206,7 @@ class SafeEvaluator:
 
         policy.eval()
         num_agents = vecenv.observation_space.shape[0]
-        use_rnn = hasattr(policy, "hidden_size")
+        use_rnn = self.use_rnn
 
         ob, _ = vecenv.reset()
         state = {}
@@ -1281,10 +1260,13 @@ class SafeEvaluator:
 
         Always renders env index 0 (first env). Uses [eval].render_view_mode.
         Produces .mp4 files on disk (flushed when each render_env is closed).
+
+        Thin wrapper around :func:`pufferlib.ocean.drive.rollout.rollout_loop`.
         """
-        from pufferlib.ocean.drive.drive import RenderView
-        from pufferlib.pufferl import load_env
         import copy
+
+        from pufferlib.pufferl import load_env
+        from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
 
         multi_view = len(self.render_view_modes) > 1
         for view_mode in self.render_view_modes:
@@ -1292,31 +1274,19 @@ class SafeEvaluator:
             render_cfg = copy.deepcopy(eval_config)
             render_cfg["env"]["render_mode"] = 1
             render_env = load_env(self.env_name, render_cfg)
-            driver = render_env.driver_env
-            if suffix:
-                driver.set_video_suffix(suffix, env_id=0)
             try:
-                num_agents = render_env.observation_space.shape[0]
-                use_rnn = hasattr(policy, "hidden_size")
-                ob, _ = render_env.reset()
-                state = {}
-                if use_rnn:
-                    state = dict(
-                        lstm_h=torch.zeros(num_agents, policy.hidden_size, device=self.device),
-                        lstm_c=torch.zeros(num_agents, policy.hidden_size, device=self.device),
-                    )
-                for _ in range(self.episode_length):
-                    driver.render(view_mode=view_mode, env_id=0)
-                    with torch.no_grad():
-                        ob_t = torch.as_tensor(ob).to(self.device)
-                        logits, value = policy.forward_eval(ob_t, state)
-                        action, _, _ = pufferlib.pytorch.sample_logits(logits)
-                        action_np = action.cpu().numpy().reshape(render_env.action_space.shape)
-                    if isinstance(logits, torch.distributions.Normal):
-                        action_np = np.clip(action_np, render_env.action_space.low, render_env.action_space.high)
-                    ob, _, _, truncs, _ = render_env.step(action_np)
-                    if truncs.all():
-                        break
+                rollout_loop(
+                    policy=policy,
+                    env=render_env,
+                    device=self.device,
+                    use_rnn=self.use_rnn,
+                    max_steps=self.episode_length,
+                    render_ctx=RenderContext(
+                        view_mode=view_mode,
+                        env_id=0,
+                        video_suffix=suffix,
+                    ),
+                )
             finally:
                 render_env.close()
 
