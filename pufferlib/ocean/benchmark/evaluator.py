@@ -1137,10 +1137,11 @@ class SafeEvaluator:
             )
         self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
 
-        # Authoritative RNN flag comes from the training config. PuffeRL passes
-        # its flattened train_config as full_config, where args["train"]["use_rnn"]
-        # (set in load_config from rnn_name) lives at the top level. We previously
-        # used hasattr(policy, "hidden_size") as a proxy, which is fragile because
+        # Authoritative RNN flag comes from `full_config`, which PuffeRL passes
+        # in flattened form for this evaluator. In this code path the flag
+        # lives at `full_config["use_rnn"]` (no `train` nesting) — it is set
+        # during config loading from `rnn_name`. We previously used
+        # hasattr(policy, "hidden_size") as a proxy, which is fragile because
         # non-RNN policies can also expose hidden_size.
         self.use_rnn = bool(full_config.get("use_rnn", False)) if full_config is not None else False
 

@@ -77,10 +77,13 @@ def rollout_loop(
     driver = env.driver_env
     num_agents = env.observation_space.shape[0]
 
-    # Set the video filename suffix before the first render call so the C
-    # binding names the mp4 correctly up front (e.g. {scenario_id}_bev.mp4).
-    # Without this, callers have to glob-diff cwd and rename post hoc.
-    if render_ctx is not None and render_ctx.video_suffix:
+    # Set (or clear) the video filename suffix before the first render call so
+    # the C binding names the mp4 correctly up front (e.g. {scenario_id}_bev.mp4).
+    # Without this, callers have to glob-diff cwd and rename post hoc. We call
+    # this unconditionally whenever render_ctx is provided — including the
+    # empty-string case — so reused envs can't leak a stale suffix from a
+    # prior rollout into the default-filename path.
+    if render_ctx is not None:
         driver.set_video_suffix(render_ctx.video_suffix, env_id=render_ctx.env_id)
 
     obs, _ = env.reset()
@@ -118,7 +121,17 @@ def rollout_loop(
         if isinstance(logits, torch.distributions.Normal):
             action_np = np.clip(action_np, env.action_space.low, env.action_space.high)
 
-        obs, _, _, truncs, info = env.step(action_np, per_env_logs=per_env_logs)
+        # Only pass per_env_logs when the caller explicitly asked for it.
+        # pufferlib.vector.Serial.step == pufferlib.vector.step, whose
+        # signature is (vecenv, actions) with no kwargs — passing per_env_logs
+        # unconditionally would raise TypeError on render_one_map's Serial
+        # backend. The per_env_logs=True path is only exercised by the
+        # Evaluator with a native PufferEnv backend where Drive.step does
+        # accept the kwarg.
+        if per_env_logs:
+            obs, _, _, truncs, info = env.step(action_np, per_env_logs=True)
+        else:
+            obs, _, _, truncs, info = env.step(action_np)
 
         # truncs.all() is set in the single c_step where the env auto-resets
         # (time limit or early termination). Breaking here exits the loop
