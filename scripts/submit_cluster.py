@@ -371,10 +371,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         # backgrounds only the python call, not the whole compound statement.
         def wrap_with_heartbeat(train_cmd_str):
             hb = "python scripts/gpu_heartbeat.py > /tmp/gpu_heartbeat.log 2>&1 & HEARTBEAT_PID=$!"
-            return (
-                f"{{ {hb}; {train_cmd_str}; TRAIN_EXIT=$?; "
-                f"kill $HEARTBEAT_PID 2>/dev/null; exit $TRAIN_EXIT; }}"
-            )
+            return f"{{ {hb}; {train_cmd_str}; TRAIN_EXIT=$?; kill $HEARTBEAT_PID 2>/dev/null; exit $TRAIN_EXIT; }}"
 
         # Wrap with singularity if container mode is enabled
         if container_config is not None:
