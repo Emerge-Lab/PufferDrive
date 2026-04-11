@@ -41,6 +41,59 @@
 static void *writer_thread_main(void *arg);
 static int do_blocking_write(FfmpegPipe *p, const void *data, size_t bytes);
 
+/* ----- encoder selection -----
+ *
+ * trajviz can use either libx264 (CPU, the default) or h264_nvenc
+ * (NVIDIA hardware encoder, opt-in). Selection is via the
+ * TRAJVIZ_ENCODER env var:
+ *
+ *   - unset / "libx264" / "x264"        → CPU encoding (default)
+ *   - "nvenc" / "h264_nvenc"            → NVIDIA NVENC
+ *
+ * Why libx264 is the default even on NVIDIA boxes:
+ *
+ * NVENC is a poor fit for our current "one ffmpeg subprocess per
+ * output stream" architecture. Two reasons:
+ *
+ *   1. NVENC session creation is expensive (~100 ms per session).
+ *      We spawn 2N ffmpeg processes per render_batch call (one per
+ *      output MP4 file). For short 90-frame episodes the per-session
+ *      startup cost dominates the actual encode time, and per-episode
+ *      wall time ends up ~2× slower than libx264.
+ *
+ *   2. NVIDIA's NVENC driver still effectively caps concurrent
+ *      sessions per process (the "consumer key" limit was nominally
+ *      removed in driver 530+, but ffmpeg's nvenc wrapper trips on
+ *      it anyway at batch_size ≥ 8 with errors like
+ *      "OpenEncodeSessionEx failed: incompatible client key (21)").
+ *
+ * Both problems go away if you use ONE persistent NVENC session and
+ * feed it many frames — which is what direct integration of the NVENC
+ * C API would do, or what a single-ffmpeg-multi-input architecture
+ * would do. Until trajviz has either of those, libx264 is the
+ * faster path on a 16-core CPU.
+ *
+ * Setting TRAJVIZ_ENCODER=nvenc still works for single-episode
+ * rendering (no concurrent sessions, NVENC startup is amortized over
+ * the whole episode) — it's just not the default.
+ */
+typedef enum {
+    ENCODER_LIBX264 = 0,
+    ENCODER_NVENC = 1,
+} EncoderChoice;
+
+static EncoderChoice select_encoder(void) {
+    const char *enc = getenv("TRAJVIZ_ENCODER");
+    if (enc && *enc) {
+        if (strcmp(enc, "libx264") == 0 || strcmp(enc, "x264") == 0)
+            return ENCODER_LIBX264;
+        if (strcmp(enc, "nvenc") == 0 || strcmp(enc, "h264_nvenc") == 0)
+            return ENCODER_NVENC;
+        fprintf(stderr, "[trajviz] unknown TRAJVIZ_ENCODER=%s; using libx264\n", enc);
+    }
+    return ENCODER_LIBX264;
+}
+
 int ffmpeg_pipe_open(FfmpegPipe *p, int width, int height, int fps, const char *out_mp4) {
     if (!p || !out_mp4)
         return -1;
@@ -77,14 +130,35 @@ int ffmpeg_pipe_open(FfmpegPipe *p, int width, int height, int fps, const char *
     if (bypass) {
         n = snprintf(cmd, sizeof(cmd), "cat > /dev/null");
     } else {
-        n = snprintf(cmd, sizeof(cmd),
-                     "%s -y -hide_banner -loglevel error "
-                     "-f rawvideo -pix_fmt rgba "
-                     "-s %dx%d -r %d -i - "
-                     "-c:v libx264 -pix_fmt yuv420p "
-                     "-preset veryfast -crf 20 "
-                     "'%s'",
-                     ffmpeg_bin, width, height, fps, out_mp4);
+        EncoderChoice enc = select_encoder();
+        /* One-time stderr line so the user knows which encoder we picked. */
+        static int logged_encoder = 0;
+        if (!logged_encoder) {
+            fprintf(stderr, "[trajviz] encoder: %s\n", enc == ENCODER_NVENC ? "h264_nvenc (GPU)" : "libx264 (CPU)");
+            logged_encoder = 1;
+        }
+        if (enc == ENCODER_NVENC) {
+            /* p4 = balanced default; tune hq (high quality) since
+             * latency doesn't matter in offline batch; -cq 23 is roughly
+             * libx264 -crf 20 in file size on this content. */
+            n = snprintf(cmd, sizeof(cmd),
+                         "%s -y -hide_banner -loglevel error "
+                         "-f rawvideo -pix_fmt rgba "
+                         "-s %dx%d -r %d -i - "
+                         "-c:v h264_nvenc -pix_fmt yuv420p "
+                         "-preset p4 -tune hq -cq 23 "
+                         "'%s'",
+                         ffmpeg_bin, width, height, fps, out_mp4);
+        } else {
+            n = snprintf(cmd, sizeof(cmd),
+                         "%s -y -hide_banner -loglevel error "
+                         "-f rawvideo -pix_fmt rgba "
+                         "-s %dx%d -r %d -i - "
+                         "-c:v libx264 -pix_fmt yuv420p "
+                         "-preset veryfast -crf 20 "
+                         "'%s'",
+                         ffmpeg_bin, width, height, fps, out_mp4);
+        }
     }
     if (n < 0 || n >= (int)sizeof(cmd)) {
         fprintf(stderr, "[trajviz] ffmpeg command too long\n");

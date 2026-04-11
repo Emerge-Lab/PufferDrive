@@ -216,10 +216,67 @@ The curve plateaus at `batch_size = 4` — past that, the CPU encoders
 `batch_size = 16` doesn't help and consumes more pipe memory. Pick the
 smallest size that gives you the throughput you need.
 
+### Choosing an encoder (libx264 vs NVENC)
+
+Trajviz can use either CPU encoding (libx264) or NVIDIA hardware encoding
+(h264_nvenc). The default is **libx264** even on NVIDIA-equipped hosts.
+The choice is controlled by the `TRAJVIZ_ENCODER` env var:
+
+- unset (default) → `libx264 -preset veryfast -crf 20`
+- `TRAJVIZ_ENCODER=nvenc` → `h264_nvenc -preset p4 -tune hq -cq 23`
+
+**Why libx264 is the default even on NVIDIA boxes.** Counter-intuitively,
+NVENC turned out to be the wrong fit for trajviz's "spawn one ffmpeg
+subprocess per output MP4 per render call" architecture. Two reasons:
+
+1. **NVENC session creation is expensive (~100 ms per session).** trajviz
+   spawns 2N ffmpeg processes per `render_batch` call (one per output
+   MP4 file). For short episodes (≤500 frames) the per-session startup
+   cost is a meaningful fraction of the total wall time.
+
+2. **NVIDIA's driver throttles concurrent NVENC sessions per process.**
+   The "consumer-key" cap on simultaneous NVENC sessions was nominally
+   removed in driver 530+, but ffmpeg's `h264_nvenc` wrapper still
+   trips on it (`OpenEncodeSessionEx failed: incompatible client key
+   (21)`) at batch_size ≥ 8 — exactly the throughput regime where you'd
+   most want hardware encoding.
+
+3. **In steady state, libx264 `-preset veryfast` and NVENC `-preset p4`
+   are tied per-frame** at 720p on a modern multi-core CPU (~2.3 ms/frame
+   either way). libx264 is genuinely fast at fast presets, and a 16-core
+   CPU running 16 parallel libx264 instances out-throughputs a single
+   NVENC engine serializing 16 streams.
+
+Empirical results on RTX 4080 + 16-core CPU, measured per-episode wall
+time (1280×720, both views, libx264 vs nvenc, lower is better):
+
+| batch | T=90 frames    | T=500 frames   | T=1000 frames  |
+|-------|----------------|----------------|----------------|
+| 1     | 350 / 790 ms   | 1162 / 1540 ms | 2203 / 2284 ms |
+| 4     | 273 / 815 ms   | 1139 / 1442 ms | 5157 / 5432 ms |
+
+Format: `libx264_ms / nvenc_ms`. NVENC closes the gap as episodes get
+longer (the startup cost amortizes) but never actually wins on this
+hardware in this architecture.
+
+**The only paths that would unlock NVENC for trajviz** are
+(a) holding **one persistent NVENC session per renderer** by switching
+from "spawn-one-ffmpeg-per-output" to a single long-lived ffmpeg with
+multi-input/multi-output, or (b) **direct integration of the NVENC C API**
+(`libnvidia-encode`) with `VK_KHR_external_memory_fd` to import VkImage
+atlases as CUDA arrays — frames never leave VRAM. Both are larger
+refactors than the current architecture.
+
+If you have a workload that doesn't match the typical trajviz pattern
+(e.g. one very long single-episode render where session startup is
+fully amortized), `TRAJVIZ_ENCODER=nvenc` is a one-line opt-in that
+gets you NVENC encoding via ffmpeg.
+
 ### Debugging knobs
 
 The C side honors a few env vars for benchmarking:
 
+- `TRAJVIZ_ENCODER={libx264|nvenc}` — pick the video encoder. See above.
 - `TRAJVIZ_NO_FFMPEG=1` — replace the ffmpeg subprocess with `cat > /dev/null`.
   Skips encoding cost; useful for measuring "render + readback + pipe write" alone.
 - `TRAJVIZ_NO_WRITE=1` — skip the `write()` to the pipe entirely. The
@@ -300,9 +357,13 @@ Key design points:
 - **No 3D follow-cam**: the `RenderView.AGENT_PERSP` view from the
   raylib visualizer (3D car meshes from `.glb`) is not implemented.
 - **CPU-bound by libx264**: the encoder is the wall once batching is
-  amortized. NVENC integration (Vulkan video encode or libnvidia-encode)
-  would close the remaining 12% gap to the pure-GPU ceiling but adds a
-  CUDA dependency.
+  amortized. NVENC via the simple `-c:v h264_nvenc` opt-in does **not**
+  win on this hardware (see "Choosing an encoder" above) because trajviz
+  spawns a fresh ffmpeg subprocess per output and pays NVENC's session
+  startup tax every render. Closing the remaining ~12% gap to the
+  pure-GPU ceiling requires either a single long-lived ffmpeg with
+  multi-input/multi-output or direct `libnvidia-encode` integration with
+  `VK_KHR_external_memory_fd`. Both are larger refactors than v1.
 - **batch_size cap of 16**: enforced by `TRAJVIZ_BATCH_MAX` in
   `trajviz.c`. The atlas image height grows linearly with batch_size,
   and 16 × 720 = 11520 px is well under Vulkan's 16384 limit. Raising
