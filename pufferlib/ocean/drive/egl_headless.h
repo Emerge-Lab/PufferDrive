@@ -175,15 +175,22 @@ static int egl_switch_to_gpu(void) {
 }
 
 static void egl_headless_cleanup(void) {
+    // Release the EGL context but do NOT call eglTerminate.
+    // NVIDIA's unified driver shares state between EGL and CUDA; terminating
+    // the EGL display corrupts the CUDA context, causing "no kernel image
+    // is available for execution on the device" on the next CUDA op.
+    // The context/surface/display are lightweight and will be cleaned up
+    // when the process exits.
     if (g_egl_ctx.context) {
         eglMakeCurrent(g_egl_ctx.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         eglDestroyContext(g_egl_ctx.display, g_egl_ctx.context);
     }
     if (g_egl_ctx.surface)
         eglDestroySurface(g_egl_ctx.display, g_egl_ctx.surface);
-    if (g_egl_ctx.display)
-        eglTerminate(g_egl_ctx.display);
-    memset(&g_egl_ctx, 0, sizeof(g_egl_ctx));
+    // Intentionally do NOT call eglTerminate(g_egl_ctx.display) — it breaks CUDA.
+    g_egl_ctx.context = NULL;
+    g_egl_ctx.surface = NULL;
+    g_egl_ctx.active = 0;
 }
 
 #endif // EGL_HEADLESS_H
