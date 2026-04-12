@@ -259,6 +259,8 @@ if not NO_OCEAN:
                     '-DINI_INLINE_COMMENT_PREFIXES="#"',
                 ]
             )
+            if system == "Linux":
+                c_ext.extra_link_args.extend(["-lEGL", "-lGL", "-ldl"])
 
         if "impulse_wars" in c_ext.name:
             print(f"Adding {c_ext.name} to extra objects")

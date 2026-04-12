@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <stdlib.h>
@@ -14,6 +16,10 @@
 #include <time.h>
 #include "error.h"
 #include "datatypes.h"
+
+#ifdef __linux__
+#include "egl_headless.h"
+#endif
 
 #define RENDER_WINDOW 0
 #define RENDER_HEADLESS 1
@@ -3531,15 +3537,13 @@ struct Client {
     pid_t recorder_pid;
     pid_t xvfb_pid;
     int xvfb_display_num;
+    int egl_mode; // 1 = EGL headless GPU rendering (no Xvfb/InitWindow)
 };
 
 Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
 
     if (env->render_mode == RENDER_HEADLESS && getenv("DISPLAY") == NULL) {
-
-        // Use a per-process display number so multiple rendering jobs on the same
-        // node don't collide. Range :100-:999 avoids the system default :0.
         client->xvfb_display_num = 100 + (getpid() % 900);
 
         char lock_file[32], socket_file[32], display_str[16];
@@ -3547,7 +3551,6 @@ Client *make_client(Drive *env) {
         snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", client->xvfb_display_num);
         snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", client->xvfb_display_num);
 
-        // Clean up a stale lock only if the owning process is already dead
         FILE *f = fopen(lock_file, "r");
         if (f) {
             pid_t pid = -1;
@@ -3569,9 +3572,6 @@ Client *make_client(Drive *env) {
         }
 
         setenv("DISPLAY", display_str, 1);
-        // Xvfb starts asynchronously after fork(), so we poll until it creates its
-        // lock file (max 2s) then wait an extra 200ms for GLX to finish initializing.
-        // Without this, raylib's InitWindow() would try to connect before Xvfb is ready.
         for (int i = 0; i < 20 && access(lock_file, F_OK) != 0; i++)
             usleep(100000);
         usleep(200000);
@@ -3583,36 +3583,27 @@ Client *make_client(Drive *env) {
         SetConfigFlags(FLAG_MSAA_4X_HINT);
         SetTargetFPS(30);
 
-        // Set up camera for interactive window
-        Vector3 target_pos = {0, 0, 1}; // Y is up, Z is depth
-
-        client->default_camera_position = (Vector3){
-            0,      // Same X as target
-            120.0f, // 20 units above target
-            175.0f  // 20 units behind target
-        };
+        Vector3 target_pos = {0, 0, 1};
+        client->default_camera_position = (Vector3){0, 120.0f, 175.0f};
         client->default_camera_target = target_pos;
         client->camera.position = client->default_camera_position;
         client->camera.target = client->default_camera_target;
-        client->camera.up = (Vector3){0.0f, -1.0f, 0.0f}; // Y is up
+        client->camera.up = (Vector3){0.0f, -1.0f, 0.0f};
         client->camera.fovy = 45.0f;
         client->camera.projection = CAMERA_PERSPECTIVE;
-
     } else { // Headless rendering
-        SetConfigFlags(FLAG_WINDOW_HIDDEN);
-        SetTargetFPS(6000);
-
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        float scale = 6.0f; // Controls the resolution of the output video
+        float scale = 6.0f;
         int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
         int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
-
         client->width = img_width;
         client->height = img_height;
+        SetConfigFlags(FLAG_WINDOW_HIDDEN);
+        SetTargetFPS(6000);
     }
 
-    SetTraceLogLevel(LOG_WARNING); // Only show warnings and errors
+    SetTraceLogLevel(LOG_WARNING);
     InitWindow(client->width, client->height, "PufferDrive");
 
     // Load assets
@@ -3629,6 +3620,27 @@ Client *make_client(Drive *env) {
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
+
+#ifdef __linux__
+    // After InitWindow loaded glad + rlgl on the Xvfb/Mesa context, try to switch
+    // to a GPU-backed EGL context. GL function pointers from glad remain valid
+    // (they're just dlsym addresses). We re-init rlgl so its render batches and
+    // default texture are allocated on the GPU.
+    if (env->render_mode == RENDER_HEADLESS) {
+        if (egl_headless_init((int)client->width, (int)client->height)) {
+            if (egl_switch_to_gpu()) {
+                rlglClose();
+                rlglInit((int)client->width, (int)client->height);
+                rlViewport(0, 0, (int)client->width, (int)client->height);
+                rlEnableDepthTest();
+                client->egl_mode = 1;
+            }
+        }
+        if (!client->egl_mode) {
+            fprintf(stderr, "[drive] EGL GPU unavailable, using Xvfb/Mesa (software rendering)\n");
+        }
+    }
+#endif
 
     // Set up ffmpeg process for recording
     if (env->render_mode == RENDER_HEADLESS) {
@@ -3660,13 +3672,34 @@ Client *make_client(Drive *env) {
             close(client->recorder_pipefd[0]);
             for (int fd = 3; fd < 256; fd++)
                 close(fd);
-            execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
-                   "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "-loglevel",
-                   "error", filename, NULL);
+#ifdef __linux__
+            if (client->egl_mode) {
+                // GPU available — use NVENC for hardware-accelerated encoding
+                execlp("ffmpeg", "ffmpeg", "-y",
+                       "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
+                       "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23",
+                       "-pix_fmt", "yuv420p", "-loglevel", "error", filename, NULL);
+                // If NVENC fails (e.g. too many sessions), fall through to libx264
+            }
+#endif
+            execlp("ffmpeg", "ffmpeg", "-y",
+                   "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
+                   "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23",
+                   "-loglevel", "error", filename, NULL);
             fprintf(stderr, "execlp ffmpeg failed\n");
             _exit(1);
         }
         close(client->recorder_pipefd[0]);
+
+        // Increase pipe buffer to reduce write() blocking on large frames
+#ifdef __linux__
+        {
+            int pipe_sz = fcntl(client->recorder_pipefd[1], F_SETPIPE_SZ, 4 * 1024 * 1024);
+            if (pipe_sz > 0) {
+                fprintf(stderr, "[drive] Pipe buffer set to %d bytes\n", pipe_sz);
+            }
+        }
+#endif
     }
 
     return client;
@@ -4332,6 +4365,24 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
     }
     Client *client = env->client;
 
+    // Per-stage timing. Enabled with DRIVE_RENDER_PROFILE=1 in the environment.
+    // Prints rolling averages every DRIVE_RENDER_PROFILE_EVERY frames (default 60).
+    // Stages: draw = BeginDrawing..draw_scene..EndDrawing (includes flush),
+    //         read = rlReadScreenPixels (glReadPixels + CPU buffer alloc),
+    //         pipe = write() to ffmpeg.
+    static int profile_enabled = -1;
+    static int profile_every = 0;
+    static int profile_frame = 0;
+    static double acc_draw = 0.0, acc_read = 0.0, acc_pipe = 0.0;
+    if (profile_enabled < 0) {
+        const char *e = getenv("DRIVE_RENDER_PROFILE");
+        profile_enabled = (e && e[0] == '1') ? 1 : 0;
+        const char *n = getenv("DRIVE_RENDER_PROFILE_EVERY");
+        profile_every = (n && atoi(n) > 0) ? atoi(n) : 60;
+    }
+    double t_draw_start = 0.0, t_draw_end = 0.0, t_read_end = 0.0, t_pipe_end = 0.0;
+    if (profile_enabled) t_draw_start = GetTime();
+
     if (env->render_mode == RENDER_HEADLESS) { // Headless rendering via ffmpeg
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
@@ -4339,9 +4390,8 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         Camera3D camera = {0};
 
         if (view_mode == VIEW_MODE_SIM_STATE) {
-            // Orthographic bird's-eye view over the entire map (fully observable)
-            camera.position = (Vector3){0.0, 0.0, 400.0f}; // Above the scene
-            camera.target = (Vector3){0.0, 0.0, 0.0};      // Look at origin
+            camera.position = (Vector3){0.0, 0.0, 400.0f};
+            camera.target = (Vector3){0.0, 0.0, 0.0};
             camera.up = (Vector3){0.0f, -1.0f, 0.0f};
             camera.projection = CAMERA_ORTHOGRAPHIC;
             camera.fovy = map_height;
@@ -4350,37 +4400,30 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             ClearBackground(ROAD_COLOR);
             BeginMode3D(camera);
 
-            if (draw_traces) { // Show logged trajectories of active agents and expert static agents
+            if (draw_traces) {
                 for (int i = 0; i < env->active_agent_count; i++) {
                     int idx = env->active_agent_indices[i];
                     for (int t = env->init_steps; t < env->episode_length; t++) {
                         Color agent_color = LIGHTBLUE;
-                        if (env->agents[idx].type == PEDESTRIAN) {
-                            agent_color = LIGHT_ORANGE;
-                        } else if (env->agents[idx].type == CYCLIST) {
-                            agent_color = LIGHT_PURPLE;
-                        }
-                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t], env->agents[idx].log_trajectory_y[t],
-                                             env->agents[idx].log_trajectory_z[t]},
-                                   0.15f, agent_color);
+                        if (env->agents[idx].type == PEDESTRIAN) agent_color = LIGHT_ORANGE;
+                        else if (env->agents[idx].type == CYCLIST) agent_color = LIGHT_PURPLE;
+                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t],
+                                             env->agents[idx].log_trajectory_y[t],
+                                             env->agents[idx].log_trajectory_z[t]}, 0.15f, agent_color);
                     }
                 }
-
                 for (int i = 0; i < env->expert_static_agent_count; i++) {
                     int idx = env->expert_static_agent_indices[i];
                     for (int t = env->init_steps; t < env->episode_length; t++) {
-                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t], env->agents[idx].log_trajectory_y[t],
-                                             env->agents[idx].log_trajectory_z[t]},
-                                   0.15f, EXPERT_REPLAY);
+                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t],
+                                             env->agents[idx].log_trajectory_y[t],
+                                             env->agents[idx].log_trajectory_z[t]}, 0.15f, EXPERT_REPLAY);
                     }
                 }
             }
-
             draw_scene(env, client, 1, 0, 0, 0);
 
         } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
-            // Orthographic bird's-eye view centered on the selected agent,
-            // showing only that agent's observations
             int agent_idx = env->active_agent_indices[env->human_agent_idx];
             Agent *agent = &env->agents[agent_idx];
 
@@ -4396,12 +4439,11 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             BeginMode3D(camera);
             draw_scene(env, client, 1, 1, 0, 0);
 
-        } else { // First-person perspective from a selected agent
+        } else {
             int agent_idx = env->active_agent_indices[env->human_agent_idx];
             Agent *agent = &env->agents[agent_idx];
 
             Camera3D camera = {0};
-            // Position camera behind and above the agent
             camera.position = (Vector3){agent->sim_x - (25.0f * cosf(agent->sim_heading)),
                                         agent->sim_y - (25.0f * sinf(agent->sim_heading)), 15.0f};
             camera.target = (Vector3){agent->sim_x + 40.0f * cosf(agent->sim_heading),
@@ -4416,12 +4458,36 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             draw_scene(env, client, 0, 0, 0, 1);
         }
 
+        EndMode3D();
         EndDrawing();
 
+        if (profile_enabled) t_draw_end = GetTime();
+
         unsigned char *screen_data = rlReadScreenPixels((int)client->width, (int)client->height);
+        if (profile_enabled) t_read_end = GetTime();
         if (screen_data) {
             write(client->recorder_pipefd[1], screen_data, (int)client->width * (int)client->height * 4);
             RL_FREE(screen_data);
+        }
+        if (profile_enabled) {
+            t_pipe_end = GetTime();
+            acc_draw += (t_draw_end - t_draw_start);
+            acc_read += (t_read_end - t_draw_end);
+            acc_pipe += (t_pipe_end - t_read_end);
+            profile_frame++;
+            if (profile_frame % profile_every == 0) {
+                double n = (double)profile_every;
+                double ms_draw = 1000.0 * acc_draw / n;
+                double ms_read = 1000.0 * acc_read / n;
+                double ms_pipe = 1000.0 * acc_pipe / n;
+                double ms_tot = ms_draw + ms_read + ms_pipe;
+                fprintf(stderr,
+                        "[drive-render-profile] %dx%d frame=%d avg over %d: "
+                        "draw=%.2fms read=%.2fms pipe=%.2fms total=%.2fms (%.1f FPS)\n",
+                        (int)client->width, (int)client->height, profile_frame, profile_every,
+                        ms_draw, ms_read, ms_pipe, ms_tot, ms_tot > 0 ? 1000.0 / ms_tot : 0.0);
+                acc_draw = acc_read = acc_pipe = 0.0;
+            }
         }
     } else { // Pop-up window
         BeginDrawing();
@@ -4497,20 +4563,29 @@ void close_client(Client *client) {
         close(client->recorder_pipefd[1]);
         waitpid(client->recorder_pid, NULL, 0);
     }
-    for (int i = 0; i < 6; i++)
-        UnloadModel(client->cars[i]);
-    UnloadModel(client->cyclist);
-    UnloadModel(client->pedestrian);
-    CloseWindow();
-    if (client->xvfb_pid > 0) {
-        kill(client->xvfb_pid, SIGTERM);
-        waitpid(client->xvfb_pid, NULL, 0);
-        char lock_file[32], socket_file[32];
-        snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", client->xvfb_display_num);
-        snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", client->xvfb_display_num);
-        unlink(lock_file);
-        unlink(socket_file);
-        unsetenv("DISPLAY");
+
+#ifdef __linux__
+    if (client->egl_mode) {
+        rlglClose();
+        egl_headless_cleanup();
+    } else
+#endif
+    {
+        for (int i = 0; i < 6; i++)
+            UnloadModel(client->cars[i]);
+        UnloadModel(client->cyclist);
+        UnloadModel(client->pedestrian);
+        CloseWindow();
+        if (client->xvfb_pid > 0) {
+            kill(client->xvfb_pid, SIGTERM);
+            waitpid(client->xvfb_pid, NULL, 0);
+            char lock_file[32], socket_file[32];
+            snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", client->xvfb_display_num);
+            snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", client->xvfb_display_num);
+            unlink(lock_file);
+            unlink(socket_file);
+            unsetenv("DISPLAY");
+        }
     }
 
     free(client);
