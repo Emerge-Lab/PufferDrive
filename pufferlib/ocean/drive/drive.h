@@ -3561,7 +3561,11 @@ struct Client {
     pid_t recorder_pid;
     pid_t xvfb_pid;
     int xvfb_display_num;
-    int egl_mode; // 1 = EGL headless GPU rendering (no Xvfb/InitWindow)
+    // 1 = GL context is EGL-on-GPU. Xvfb + InitWindow still run at startup
+    // to let raylib/GLFW load glad function pointers; after that we switch
+    // the active context to EGL via egl_switch_to_gpu. Affects which cleanup
+    // path runs in close_client and which readback path runs in c_render.
+    int egl_mode;
     // Cached static road geometry (rebuilt once per episode, drawn every frame)
     Mesh road_tri_mesh;     // curb triangles — uploaded to GPU VBO, drawn with one DrawMesh call
     Material road_material; // default material for road mesh
@@ -4687,7 +4691,10 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             draw_scene(env, client, 0, 0, 0, 1);
         }
 
-        EndMode3D();
+        // NOTE: draw_scene() already calls EndMode3D() internally (see the
+        // EndMode3D at the end of the road-drawing block), so we don't repeat
+        // it here — a second call would pop past the projection matrix stack.
+
 #ifdef DRIVE_HAS_EGL
         if (client->egl_mode) {
             // EGL headless: just flush the rlgl batch. Skip EndDrawing's
@@ -4748,27 +4755,55 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                     // IOV_MAX on Linux is 1024, so frames taller than 1024 rows
                     // need multiple writev calls. Split the flip into chunks
                     // of at most IOV_MAX rows, each chunk in top-down order.
+                    // Within each chunk we also loop to handle short writes
+                    // (pipe can return < chunk_bytes when interrupted by a
+                    // signal or when the kernel pipe buffer is partially full)
+                    // by shrinking the head iovec and retrying.
                     int iov_max = 1024;
                     int rows_remaining = h;
                     int row_top = 0; // next top-down row we're about to emit
                     ssize_t total_written = 0;
-                    while (rows_remaining > 0) {
+                    int io_error = 0;
+                    while (rows_remaining > 0 && !io_error) {
                         int chunk = rows_remaining < iov_max ? rows_remaining : iov_max;
                         struct iovec iov[1024];
+                        size_t chunk_bytes = 0;
                         for (int i = 0; i < chunk; i++) {
                             // Top-down row (row_top + i) corresponds to
                             // bottom-up source row (h - 1 - (row_top + i)).
                             int src_row = h - 1 - (row_top + i);
                             iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
                             iov[i].iov_len = row_bytes;
+                            chunk_bytes += row_bytes;
                         }
-                        ssize_t written = writev(client->recorder_pipefd[1], iov, chunk);
-                        if (written < 0) {
-                            fprintf(stderr, "[drive-pbo] frame=%d writev chunk=%d failed errno=%d(%s)\n",
-                                    client->pbo_frame_count, chunk, errno, strerror(errno));
-                            break;
+                        struct iovec *cur = iov;
+                        int cur_cnt = chunk;
+                        size_t cur_remaining = chunk_bytes;
+                        while (cur_remaining > 0) {
+                            ssize_t written = writev(client->recorder_pipefd[1], cur, cur_cnt);
+                            if (written < 0) {
+                                if (errno == EINTR)
+                                    continue; // signal, retry
+                                fprintf(stderr, "[drive-pbo] frame=%d writev chunk=%d failed errno=%d(%s)\n",
+                                        client->pbo_frame_count, cur_cnt, errno, strerror(errno));
+                                io_error = 1;
+                                break;
+                            }
+                            total_written += written;
+                            cur_remaining -= (size_t)written;
+                            // Advance past fully-consumed iovecs and shrink
+                            // the head iovec by any partial bytes.
+                            size_t consumed = (size_t)written;
+                            while (cur_cnt > 0 && consumed >= cur[0].iov_len) {
+                                consumed -= cur[0].iov_len;
+                                cur++;
+                                cur_cnt--;
+                            }
+                            if (cur_cnt > 0 && consumed > 0) {
+                                cur[0].iov_base = (unsigned char *)cur[0].iov_base + consumed;
+                                cur[0].iov_len -= consumed;
+                            }
                         }
-                        total_written += written;
                         row_top += chunk;
                         rows_remaining -= chunk;
                     }
@@ -4794,7 +4829,19 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             if (profile_enabled)
                 t_read_end = GetTime();
             if (screen_data) {
-                write(client->recorder_pipefd[1], screen_data, frame_bytes);
+                // Loop to handle short writes and EINTR on the blocking pipe.
+                size_t remaining = (size_t)frame_bytes;
+                unsigned char *p = screen_data;
+                while (remaining > 0) {
+                    ssize_t written = write(client->recorder_pipefd[1], p, remaining);
+                    if (written < 0) {
+                        if (errno == EINTR)
+                            continue;
+                        break;
+                    }
+                    p += written;
+                    remaining -= (size_t)written;
+                }
                 RL_FREE(screen_data);
             }
         }
@@ -4902,16 +4949,40 @@ void close_client(Client *client) {
             int iov_max = 1024;
             int rows_remaining = h;
             int row_top = 0;
-            while (rows_remaining > 0) {
+            int io_error = 0;
+            while (rows_remaining > 0 && !io_error) {
                 int chunk = rows_remaining < iov_max ? rows_remaining : iov_max;
                 struct iovec iov[1024];
+                size_t chunk_bytes = 0;
                 for (int i = 0; i < chunk; i++) {
                     int src_row = h - 1 - (row_top + i);
                     iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
                     iov[i].iov_len = row_bytes;
+                    chunk_bytes += row_bytes;
                 }
-                if (writev(client->recorder_pipefd[1], iov, chunk) < 0)
-                    break;
+                struct iovec *cur = iov;
+                int cur_cnt = chunk;
+                size_t cur_remaining = chunk_bytes;
+                while (cur_remaining > 0) {
+                    ssize_t written = writev(client->recorder_pipefd[1], cur, cur_cnt);
+                    if (written < 0) {
+                        if (errno == EINTR)
+                            continue;
+                        io_error = 1;
+                        break;
+                    }
+                    cur_remaining -= (size_t)written;
+                    size_t consumed = (size_t)written;
+                    while (cur_cnt > 0 && consumed >= cur[0].iov_len) {
+                        consumed -= cur[0].iov_len;
+                        cur++;
+                        cur_cnt--;
+                    }
+                    if (cur_cnt > 0 && consumed > 0) {
+                        cur[0].iov_base = (unsigned char *)cur[0].iov_base + consumed;
+                        cur[0].iov_len -= consumed;
+                    }
+                }
                 row_top += chunk;
                 rows_remaining -= chunk;
             }
