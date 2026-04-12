@@ -3538,6 +3538,10 @@ struct Client {
     pid_t xvfb_pid;
     int xvfb_display_num;
     int egl_mode; // 1 = EGL headless GPU rendering (no Xvfb/InitWindow)
+    // PBO double-buffer for async glReadPixels (GPU→CPU DMA)
+    unsigned int pbo[2];
+    int pbo_index;       // which PBO to read INTO this frame (0 or 1)
+    int pbo_frame_count; // total frames rendered (0 = first frame, no previous PBO to read)
 };
 
 Client *make_client(Drive *env) {
@@ -3674,12 +3678,19 @@ Client *make_client(Drive *env) {
                 close(fd);
 #ifdef __linux__
             if (client->egl_mode) {
-                // GPU available — use NVENC for hardware-accelerated encoding
+                // GPU path: PBO readback skips row flip, so ffmpeg must vflip.
+                // Try NVENC first; fall through to libx264 if unavailable.
                 execlp("ffmpeg", "ffmpeg", "-y",
                        "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
+                       "-vf", "vflip",
                        "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23",
                        "-pix_fmt", "yuv420p", "-loglevel", "error", filename, NULL);
-                // If NVENC fails (e.g. too many sessions), fall through to libx264
+                // NVENC failed — try libx264 with vflip
+                execlp("ffmpeg", "ffmpeg", "-y",
+                       "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
+                       "-vf", "vflip",
+                       "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23",
+                       "-loglevel", "error", filename, NULL);
             }
 #endif
             execlp("ffmpeg", "ffmpeg", "-y",
@@ -4463,12 +4474,63 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
         if (profile_enabled) t_draw_end = GetTime();
 
-        unsigned char *screen_data = rlReadScreenPixels((int)client->width, (int)client->height);
-        if (profile_enabled) t_read_end = GetTime();
-        if (screen_data) {
-            write(client->recorder_pipefd[1], screen_data, (int)client->width * (int)client->height * 4);
-            RL_FREE(screen_data);
+        int w = (int)client->width, h = (int)client->height;
+        int frame_bytes = w * h * 4;
+
+#ifdef __linux__
+        if (client->egl_mode) {
+            // PBO double-buffer: async GPU→CPU readback overlapped with next frame's draw.
+            // Frame flow:
+            //   Frame 0: kick off async read into PBO 0 (nothing to write yet)
+            //   Frame N: map PBO[prev] (blocks until its DMA finishes), write to pipe,
+            //            kick off async read into PBO[curr]
+            // Net effect: readback DMA is hidden behind the next frame's draw time.
+
+            // Create PBOs on first use
+            if (client->pbo[0] == 0) {
+                glGenBuffers(2, client->pbo);
+                for (int i = 0; i < 2; i++) {
+                    glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[i]);
+                    glBufferData(GL_PIXEL_PACK_BUFFER, frame_bytes, NULL, GL_STREAM_READ);
+                }
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            }
+
+            int curr = client->pbo_index;
+            int prev = 1 - curr;
+
+            // Kick off async read into current PBO
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[curr]);
+            glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+            if (profile_enabled) t_read_end = GetTime();
+
+            // Map previous PBO and write to pipe (skip frame 0 — no previous data)
+            if (client->pbo_frame_count > 0) {
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
+                unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+                if (ptr) {
+                    write(client->recorder_pipefd[1], ptr, frame_bytes);
+                    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+                }
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            }
+
+            client->pbo_index = prev;
+            client->pbo_frame_count++;
+        } else
+#endif
+        {
+            // Synchronous fallback (Xvfb/Mesa path)
+            unsigned char *screen_data = rlReadScreenPixels(w, h);
+            if (profile_enabled) t_read_end = GetTime();
+            if (screen_data) {
+                write(client->recorder_pipefd[1], screen_data, frame_bytes);
+                RL_FREE(screen_data);
+            }
         }
+
         if (profile_enabled) {
             t_pipe_end = GetTime();
             acc_draw += (t_draw_end - t_draw_start);
@@ -4559,6 +4621,21 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 }
 
 void close_client(Client *client) {
+#ifdef __linux__
+    // Flush the last PBO frame before closing the pipe
+    if (client->egl_mode && client->pbo_frame_count > 0 && client->pbo[0] != 0) {
+        int prev = 1 - client->pbo_index;
+        int frame_bytes = (int)client->width * (int)client->height * 4;
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
+        unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        if (ptr) {
+            write(client->recorder_pipefd[1], ptr, frame_bytes);
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glDeleteBuffers(2, client->pbo);
+    }
+#endif
     if (client->recorder_pid > 0) {
         close(client->recorder_pipefd[1]);
         waitpid(client->recorder_pid, NULL, 0);
