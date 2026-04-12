@@ -3551,42 +3551,16 @@ struct Client {
     int pbo_frame_count; // total frames rendered (0 = first frame, no previous PBO to read)
 };
 
+// Persistent state: Xvfb + GLFW + EGL are initialized once per process and
+// reused across render envs. This avoids glfwTerminate (which prevents re-init)
+// and eglTerminate (which corrupts CUDA state).
+static int g_glfw_ready = 0;
+static int g_egl_available = -1; // -1 = untested, 0 = no, 1 = yes
+static pid_t g_xvfb_pid = 0;
+static int g_xvfb_display_num = 0;
+
 Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
-
-    if (env->render_mode == RENDER_HEADLESS && getenv("DISPLAY") == NULL) {
-        client->xvfb_display_num = 100 + (getpid() % 900);
-
-        char lock_file[32], socket_file[32], display_str[16];
-        snprintf(display_str, sizeof(display_str), ":%d", client->xvfb_display_num);
-        snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", client->xvfb_display_num);
-        snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", client->xvfb_display_num);
-
-        FILE *f = fopen(lock_file, "r");
-        if (f) {
-            pid_t pid = -1;
-            fscanf(f, "%d", &pid);
-            fclose(f);
-            if (pid > 0 && kill(pid, 0) != 0) {
-                unlink(lock_file);
-                unlink(socket_file);
-            }
-        }
-
-        client->xvfb_pid = fork();
-        if (client->xvfb_pid == 0) {
-            close(STDOUT_FILENO);
-            close(STDERR_FILENO);
-            execlp("Xvfb", "Xvfb", display_str, "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac", "-noreset",
-                   NULL);
-            _exit(1);
-        }
-
-        setenv("DISPLAY", display_str, 1);
-        for (int i = 0; i < 20 && access(lock_file, F_OK) != 0; i++)
-            usleep(100000);
-        usleep(200000);
-    }
 
     if (env->render_mode == RENDER_WINDOW) {
         client->width = 1280;
@@ -3602,6 +3576,9 @@ Client *make_client(Drive *env) {
         client->camera.up = (Vector3){0.0f, -1.0f, 0.0f};
         client->camera.fovy = 45.0f;
         client->camera.projection = CAMERA_PERSPECTIVE;
+
+        SetTraceLogLevel(LOG_WARNING);
+        InitWindow(client->width, client->height, "PufferDrive");
     } else { // Headless rendering
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
@@ -3610,14 +3587,50 @@ Client *make_client(Drive *env) {
         int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
         client->width = img_width;
         client->height = img_height;
-        SetConfigFlags(FLAG_WINDOW_HIDDEN);
-        SetTargetFPS(6000);
+
+        // Init Xvfb + GLFW once per process (loads glad GL function pointers)
+        if (!g_glfw_ready) {
+            if (getenv("DISPLAY") == NULL) {
+                g_xvfb_display_num = 100 + (getpid() % 900);
+                char lock_file[32], socket_file[32], display_str[16];
+                snprintf(display_str, sizeof(display_str), ":%d", g_xvfb_display_num);
+                snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", g_xvfb_display_num);
+                snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", g_xvfb_display_num);
+
+                FILE *f = fopen(lock_file, "r");
+                if (f) {
+                    pid_t pid = -1;
+                    fscanf(f, "%d", &pid);
+                    fclose(f);
+                    if (pid > 0 && kill(pid, 0) != 0) {
+                        unlink(lock_file);
+                        unlink(socket_file);
+                    }
+                }
+
+                g_xvfb_pid = fork();
+                if (g_xvfb_pid == 0) {
+                    close(STDOUT_FILENO);
+                    close(STDERR_FILENO);
+                    execlp("Xvfb", "Xvfb", display_str, "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac",
+                           "-noreset", NULL);
+                    _exit(1);
+                }
+                setenv("DISPLAY", display_str, 1);
+                for (int i = 0; i < 20 && access(lock_file, F_OK) != 0; i++)
+                    usleep(100000);
+                usleep(200000);
+            }
+
+            SetConfigFlags(FLAG_WINDOW_HIDDEN);
+            SetTargetFPS(6000);
+            SetTraceLogLevel(LOG_WARNING);
+            InitWindow(img_width, img_height, "PufferDrive");
+            g_glfw_ready = 1;
+        }
     }
 
-    SetTraceLogLevel(LOG_WARNING);
-    InitWindow(client->width, client->height, "PufferDrive");
-
-    // Load assets
+    // Load assets (needed for perspective view mode=0)
     client->cars[0] = LoadModel("resources/drive/RedCar.glb");
     client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
     client->cars[2] = LoadModel("resources/drive/BlueCar.glb");
@@ -3633,22 +3646,27 @@ Client *make_client(Drive *env) {
     }
 
 #ifdef __linux__
-    // After InitWindow loaded glad + rlgl on the Xvfb/Mesa context, try to switch
-    // to a GPU-backed EGL context. GL function pointers from glad remain valid
-    // (they're just dlsym addresses). We re-init rlgl so its render batches and
-    // default texture are allocated on the GPU.
+    // EGL GPU context: create per render env (different maps = different resolutions).
+    // The EGL display is persistent (never terminated — eglTerminate breaks CUDA).
+    // We destroy the old surface+context and create fresh ones for the new resolution,
+    // then re-init rlgl so render batches live on the current GPU context.
     if (env->render_mode == RENDER_HEADLESS) {
-        if (egl_headless_init((int)client->width, (int)client->height)) {
-            if (egl_switch_to_gpu()) {
-                rlglClose();
-                rlglInit((int)client->width, (int)client->height);
-                rlViewport(0, 0, (int)client->width, (int)client->height);
-                rlEnableDepthTest();
-                client->egl_mode = 1;
+        if (g_egl_available != 0) {
+            // Destroy previous EGL surface+context if they exist
+            egl_headless_cleanup();
+            if (egl_headless_init((int)client->width, (int)client->height)) {
+                if (egl_switch_to_gpu()) {
+                    rlglInit((int)client->width, (int)client->height);
+                    rlViewport(0, 0, (int)client->width, (int)client->height);
+                    rlEnableDepthTest();
+                    client->egl_mode = 1;
+                    g_egl_available = 1;
+                }
             }
-        }
-        if (!client->egl_mode) {
-            fprintf(stderr, "[drive] EGL GPU unavailable, using Xvfb/Mesa (software rendering)\n");
+            if (!client->egl_mode && g_egl_available < 0) {
+                g_egl_available = 0; // Don't retry on future render envs
+                fprintf(stderr, "[drive] EGL GPU unavailable, using Xvfb/Mesa (software rendering)\n");
+            }
         }
     }
 #endif
@@ -4811,13 +4829,8 @@ void close_client(Client *client) {
         waitpid(client->recorder_pid, NULL, 0);
     }
 
-#ifdef __linux__
-    if (client->egl_mode) {
-        rlglClose();
-        egl_headless_cleanup();
-    }
-#endif
     if (!client->egl_mode) {
+        // Non-EGL: full cleanup (window mode or Xvfb fallback)
         for (int i = 0; i < 6; i++)
             UnloadModel(client->cars[i]);
         UnloadModel(client->cyclist);
@@ -4834,9 +4847,9 @@ void close_client(Client *client) {
             unsetenv("DISPLAY");
         }
     }
-    // In EGL mode: skip CloseWindow (glfwTerminate prevents re-init) and skip
-    // killing Xvfb (next make_client will reuse it via DISPLAY env var).
-    // The GLFW window + Xvfb are harmless — rendering uses the EGL pbuffer.
+    // EGL mode: don't touch GLFW/Xvfb/EGL — they persist across render envs.
+    // EGL surface+context cleanup happens at the START of the next make_client
+    // (or never, if this is the last render env — process exit handles it).
 
     free(client);
 }
