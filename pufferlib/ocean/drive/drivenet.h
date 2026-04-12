@@ -53,7 +53,7 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model, in
     if (reward_conditioning) {
         ego_dim += NUM_REWARD_COEFS; // Add 16 conditioning features
     }
-    int max_partners = MAX_AGENTS - 1;
+    int max_partners = MAX_PARTNER_OBSERVATIONS;
     int max_road_obs = MAX_ROAD_SEGMENT_OBSERVATIONS;
     int partner_features = PARTNER_FEATURES;
     int road_features = ROAD_FEATURES;
@@ -146,7 +146,7 @@ void free_drivenet(DriveNet *net) {
 
 void forward(DriveNet *net, float *observations, int *actions) {
     int ego_dim = net->ego_dim;
-    int max_partners = MAX_AGENTS - 1;
+    int max_partners = MAX_PARTNER_OBSERVATIONS;
     int max_road_obs = MAX_ROAD_SEGMENT_OBSERVATIONS;
     int partner_features = PARTNER_FEATURES;
     int road_features = ROAD_FEATURES;

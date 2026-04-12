@@ -3,7 +3,6 @@
 #include "libgen.h"
 #include "../env_config.h"
 #include <string.h>
-#include "../env_config.h"
 
 // Use this test if the network changes to ensure that the forward pass
 // matches the torch implementation to the 3rd or ideally 4th decimal place
@@ -21,7 +20,7 @@ void test_drivenet() {
 
     // Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights *weights = load_weights("puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, 0);
+    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC, 1);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {
@@ -35,7 +34,7 @@ void test_drivenet() {
     free(weights);
 }
 
-void demo() {
+void demo(const char *map_name_arg, const char *policy_name_arg, int view_mode, int draw_traces) {
     // Read configuration from INI file
     env_init_config conf = {0};
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
@@ -43,6 +42,9 @@ void demo() {
         fprintf(stderr, "Error: Could not load %s. Cannot determine environment configuration.\n", ini_file);
         exit(1);
     }
+
+    // Set different seed each time
+    srand(time(NULL));
 
     // Note: Use below hardcoded settings for 2.0 demo purposes. Since the policy was
     // trained with these exact settings, changing them may lead to
@@ -80,18 +82,22 @@ void demo() {
     };
 
     Drive env = {
-        .human_agent_idx = 0,
-        .action_type = 0, // Demo doesn't support continuous action space
+        .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_lane_align = conf.reward_lane_align,
+        .reward_lane_center = conf.reward_lane_center,
         .reward_goal = conf.reward_goal,
         .reward_goal_post_respawn = conf.reward_goal_post_respawn,
         .goal_radius = conf.goal_radius,
+        .min_goal_speed = conf.min_goal_speed,
         .goal_behavior = conf.goal_behavior,
+        .reward_randomization = conf.reward_randomization,
+        .reward_conditioning = conf.reward_conditioning,
+        .turn_off_normalization = conf.turn_off_normalization,
         .min_goal_distance = conf.min_goal_distance,
         .max_goal_distance = conf.max_goal_distance,
-        .min_goal_speed = conf.min_goal_speed,
         .max_goal_speed = conf.max_goal_speed,
         .dt = conf.dt,
         .episode_length = conf.episode_length,
@@ -105,9 +111,34 @@ void demo() {
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .spawn_settings = spawn_settings,
-        .map_name = "resources/drive/binaries/carla_2D/map_001.bin",
-        .reward_conditioning = conf.reward_conditioning,
+        .reward_bounds =
+            {
+                {conf.reward_bound_goal_radius_min, conf.reward_bound_goal_radius_max},
+                {conf.reward_bound_collision_min, conf.reward_bound_collision_max},
+                {conf.reward_bound_offroad_min, conf.reward_bound_offroad_max},
+                {conf.reward_bound_comfort_min, conf.reward_bound_comfort_max},
+                {conf.reward_bound_lane_align_min, conf.reward_bound_lane_align_max},
+                {conf.reward_bound_lane_center_min, conf.reward_bound_lane_center_max},
+                {conf.reward_bound_velocity_min, conf.reward_bound_velocity_max},
+                {conf.reward_bound_traffic_light_min, conf.reward_bound_traffic_light_max},
+                {conf.reward_bound_center_bias_min, conf.reward_bound_center_bias_max},
+                {conf.reward_bound_vel_align_min, conf.reward_bound_vel_align_max},
+                {conf.reward_bound_overspeed_min, conf.reward_bound_overspeed_max},
+                {conf.reward_bound_timestep_min, conf.reward_bound_timestep_max},
+                {conf.reward_bound_reverse_min, conf.reward_bound_reverse_max},
+                {conf.reward_bound_throttle_min, conf.reward_bound_throttle_max},
+                {conf.reward_bound_steer_min, conf.reward_bound_steer_max},
+                {conf.reward_bound_acc_min, conf.reward_bound_acc_max},
+            },
+        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .render_mode = RENDER_WINDOW,
+        .partner_obs_radius = conf.partner_obs_radius,
     };
+
+    if (conf.init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        env.num_agents = conf.min_agents_per_env + rand() % (conf.max_agents_per_env - conf.min_agents_per_env + 1);
+    }
+
     allocate(&env);
     if (env.active_agent_count == 0) {
         fprintf(stderr, "Error: No active agents found in map '%s' with init_mode=%d. Cannot run demo.\n", env.map_name,
@@ -116,8 +147,8 @@ void demo() {
         return;
     }
     c_reset(&env);
-    c_render(&env);
-    Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
+    c_render(&env, view_mode, draw_traces);
+    Weights *weights = load_weights(policy_name_arg ? policy_name_arg : "resources/drive/puffer_drive_weights.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;
@@ -183,13 +214,14 @@ void demo() {
         }
 
         c_step(&env);
-        c_render(&env);
+        c_render(&env, view_mode, draw_traces);
     }
 
     close_client(env.client);
     free_allocated(&env);
     free_drivenet(net);
     free(weights);
+    return;
 }
 
 void performance_test() {
@@ -234,61 +266,19 @@ void performance_test() {
 }
 
 int main(int argc, char *argv[]) {
-    // Visualization-only parameters (not in [env] section)
-    int show_grid = 0;
-    int obs_only = 0;
-    int lasers = 0;
-    int show_human_logs = 0;
-    int frame_skip = 1;
-    int zoom_in = 0;
-    const char *view_mode = "both";
-
-    // File paths and num_maps (not in [env] section)
     const char *map_name = NULL;
-    const char *policy_name = "resources/drive/puffer_drive_weights.bin";
-    const char *output_topdown = NULL;
-    const char *output_agent = NULL;
-    int num_maps = 1;
+    const char *policy_name = NULL;
+    int view_mode = VIEW_MODE_SIM_STATE; // Default: full sim-state bird's-eye view
+    int draw_traces = 1;                 // Default: show logged trajectories
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--show-grid") == 0) {
-            show_grid = 1;
-        } else if (strcmp(argv[i], "--obs-only") == 0) {
-            obs_only = 1;
-        } else if (strcmp(argv[i], "--lasers") == 0) {
-            lasers = 1;
-        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
-            show_human_logs = 1;
-        } else if (strcmp(argv[i], "--frame-skip") == 0) {
-            if (i + 1 < argc) {
-                frame_skip = atoi(argv[i + 1]);
-                i++;
-                if (frame_skip <= 0) {
-                    frame_skip = 1;
-                }
-            }
-        } else if (strcmp(argv[i], "--zoom-in") == 0) {
-            zoom_in = 1;
-        } else if (strcmp(argv[i], "--view") == 0) {
-            if (i + 1 < argc) {
-                view_mode = argv[i + 1];
-                i++;
-                if (strcmp(view_mode, "both") != 0 && strcmp(view_mode, "topdown") != 0 &&
-                    strcmp(view_mode, "agent") != 0) {
-                    fprintf(stderr, "Error: --view must be 'both', 'topdown', or 'agent'\n");
-                    return 1;
-                }
-            } else {
-                fprintf(stderr, "Error: --view option requires a value (both/topdown/agent)\n");
-                return 1;
-            }
-        } else if (strcmp(argv[i], "--map-name") == 0) {
+        if (strcmp(argv[i], "--map-name") == 0) {
             if (i + 1 < argc) {
                 map_name = argv[i + 1];
                 i++;
             } else {
-                fprintf(stderr, "Error: --map-name option requires a map file path\n");
+                fprintf(stderr, "Error: --map-name requires a map file path\n");
                 return 1;
             }
         } else if (strcmp(argv[i], "--policy-name") == 0) {
@@ -296,30 +286,34 @@ int main(int argc, char *argv[]) {
                 policy_name = argv[i + 1];
                 i++;
             } else {
-                fprintf(stderr, "Error: --policy-name option requires a policy file path\n");
+                fprintf(stderr, "Error: --policy-name requires a policy file path\n");
                 return 1;
             }
-        } else if (strcmp(argv[i], "--output-topdown") == 0) {
+        } else if (strcmp(argv[i], "--view") == 0) {
             if (i + 1 < argc) {
-                output_topdown = argv[i + 1];
+                const char *v = argv[i + 1];
                 i++;
+                if (strcmp(v, "sim_state") == 0 || strcmp(v, "topdown") == 0) {
+                    view_mode = VIEW_MODE_SIM_STATE;
+                } else if (strcmp(v, "bev") == 0 || strcmp(v, "agent") == 0) {
+                    view_mode = VIEW_MODE_BEV_AGENT_OBS;
+                } else if (strcmp(v, "persp") == 0) {
+                    view_mode = VIEW_MODE_AGENT_PERSP;
+                } else {
+                    fprintf(stderr, "Error: --view must be 'sim_state', 'bev', 'persp', or 'zoom_out'\n");
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "Error: --view requires a value (sim_state/bev/persp/zoom_out)\n");
+                return 1;
             }
-        } else if (strcmp(argv[i], "--output-agent") == 0) {
-            if (i + 1 < argc) {
-                output_agent = argv[i + 1];
-                i++;
-            }
-        } else if (strcmp(argv[i], "--num-maps") == 0) {
-            if (i + 1 < argc) {
-                num_maps = atoi(argv[i + 1]);
-                i++;
-            }
+        } else if (strcmp(argv[i], "--no-traces") == 0) {
+            draw_traces = 0;
         }
     }
 
     // performance_test();
-    demo(map_name, policy_name, show_grid, obs_only, lasers, show_human_logs, frame_skip, view_mode, output_topdown,
-         output_agent, num_maps, zoom_in);
+    demo(map_name, policy_name, view_mode, draw_traces);
     // test_drivenet();
     return 0;
 }
