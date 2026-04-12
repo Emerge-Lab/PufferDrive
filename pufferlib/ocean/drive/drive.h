@@ -70,6 +70,7 @@
 #define LANE_DISTANCE_NORMALIZATION 4.0f
 #define LANE_SWITCH_THRESHOLD 0.05f // Hysteresis: new lane must be 5% better to switch
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
+#define ZERO_THRESHOLD 1e-6f
 
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
@@ -1517,6 +1518,10 @@ float get_partner_relative_angle(Drive *env, int ego_agent_idx, int partner_agen
     float dx = partner->sim_x - ego->sim_x;
     float dy = partner->sim_y - ego->sim_y;
     float norm = sqrtf(dx * dx + dy * dy);
+
+    if (norm < ZERO_THRESHOLD) {
+        return 0.0f; // Agents are at the same position, treat as head-on
+    }
 
     float ego_x = cosf(ego->sim_heading);
     float ego_y = sinf(ego->sim_heading);
