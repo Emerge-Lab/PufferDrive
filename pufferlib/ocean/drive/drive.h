@@ -1,3 +1,13 @@
+// _GNU_SOURCE is set via -D_GNU_SOURCE in setup.py's drive extension build
+// flags so GNU extensions (F_SETPIPE_SZ, writev, etc.) are visible regardless
+// of which header is included first. Don't define it here — drive.c pulls in
+// drivenet.h -> <time.h> before drive.h, so defining it mid-stream would be
+// too late.
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/uio.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -12,6 +22,36 @@
 #include <time.h>
 #include "error.h"
 #include "datatypes.h"
+
+// EGL is optional: only compile in the EGL headless path if the headers
+// are available. CI environments without libegl1-mesa-dev skip this entirely
+// and fall back to Xvfb/Mesa software rendering.
+#if defined(__linux__) && defined(__has_include)
+#if __has_include(<EGL/egl.h>)
+#define DRIVE_HAS_EGL 1
+#endif
+#endif
+
+#ifdef DRIVE_HAS_EGL
+// GL_GLEXT_PROTOTYPES must come before any GL/gl.h include so glext declares
+// the modern buffer-object entry points (glGenBuffers, glBindBuffer,
+// glBufferData, glMapBuffer, glUnmapBuffer, glDeleteBuffers). Without a
+// declaration, gcc defaults their return type to implicit int, and
+// glMapBuffer's void* pointer gets truncated to 32 bits and sign-extended,
+// producing EFAULT writes like 0xffffffff9cbf1000.
+#define GL_GLEXT_PROTOTYPES 1
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include "egl_headless.h"
+#endif
+
+#define RENDER_WINDOW 0
+#define RENDER_HEADLESS 1
+
+// View modes
+#define VIEW_MODE_SIM_STATE 0
+#define VIEW_MODE_BEV_AGENT_OBS 1
+#define VIEW_MODE_AGENT_PERSP 2
 
 // constants for strings, data etc.
 #define SCENARIO_ID_STR_LENGTH 16
@@ -104,10 +144,10 @@
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 256
-#ifndef MAX_AGENTS // TODO: Needs to be replaced with MAX_PARTNER_OBS(agents in obs_radius) throughout observations code
-                   // and with env->max_agents_in_sim throughout all agent for loops
+#ifndef MAX_AGENTS
 #define MAX_AGENTS 128
 #endif
+#define MAX_PARTNER_OBSERVATIONS 32
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
@@ -200,6 +240,13 @@ const Color PUFF_BACKGROUND2 = (Color){18, 72, 72, 255};
 const Color LIGHTGREEN = (Color){152, 255, 152, 255};
 const Color LIGHTYELLOW = (Color){255, 255, 152, 255};
 const Color SOFT_YELLOW = (Color){245, 245, 220, 255};
+const Color ROAD_COLOR = (Color){35, 35, 37, 255};
+const Color LIGHTBLUE = (Color){167, 204, 255, 255};
+const Color DEEPBLUE = (Color){45, 112, 226, 255};
+const Color EXPERT_REPLAY = (Color){162, 220, 183, 255};
+const Color EXPERT_REPLAY_SMALL = (Color){95, 112, 93, 255};
+const Color LIGHT_ORANGE = (Color){255, 160, 80, 255};
+const Color LIGHT_PURPLE = (Color){204, 204, 255, 255};
 
 struct timespec ts;
 
@@ -238,9 +285,12 @@ struct Log {
     float active_agent_count;
     float expert_static_agent_count;
     float static_agent_count;
+    float total_distance_travelled;
+    float total_infractions;
     float avg_speed_per_agent;
     float max_observation_distance; // average max observation distance
     float observation_coverage;     // percentage of entities in obs window seen on average
+    float partner_obs_coverage;     // % of partners within radius that fit in the obs slots
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -253,6 +303,11 @@ typedef struct {
     float min_val;
     float max_val;
 } RewardBound;
+
+typedef struct {
+    int idx;
+    float dist_sq;
+} AgentDistance;
 
 typedef struct GridMap GridMap;
 struct GridMap {
@@ -345,6 +400,7 @@ struct Drive {
     float max_goal_distance;
     char *ini_file;
     char scenario_id[SCENARIO_ID_STR_LENGTH];
+    char video_suffix[64]; // Optional suffix appended to mp4 filename (e.g. "_bev")
     int collision_behavior;
     int offroad_behavior;
     int randomize_respawn;
@@ -359,8 +415,12 @@ struct Drive {
     int reward_randomization;
     int reward_conditioning;
     int turn_off_normalization;
+    int render_mode;
     RewardBound reward_bounds[NUM_REWARD_COEFS];
     float min_avg_speed_to_consider_goal_attempt;
+    float partner_obs_radius;
+    float partner_obs_norm;
+    float road_obs_norm;
 };
 
 // ========================================
@@ -610,18 +670,6 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
-    }
-}
-
-static void sample_new_goal_radius(Drive *env, Agent *agent) {
-
-    if (env->reward_randomization) {
-        // Standard Uniform Randomization
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(
-            env->reward_bounds[REWARD_COEF_GOAL_RADIUS].min_val, env->reward_bounds[REWARD_COEF_GOAL_RADIUS].max_val);
-    } else {
-        // Fixed coefficients
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
     }
 }
 
@@ -1057,6 +1105,24 @@ void load_map_binary(const char *filename, Drive *env) {
     FILE *file = fopen(filename, "rb");
     if (!file)
         return;
+
+    // Populate scenario_id from the filename stem (e.g. "/path/to/abc123def456.bin" → "abc123def456")
+    // This is the string used by make_client to name the output mp4.
+    {
+        const char *base = filename;
+        // Find last '/' or '\\'
+        for (const char *p = filename; *p; p++) {
+            if (*p == '/' || *p == '\\')
+                base = p + 1;
+        }
+        // Copy up to SCENARIO_ID_STR_LENGTH chars, stopping at '.' or end
+        int i = 0;
+        while (i < SCENARIO_ID_STR_LENGTH - 1 && base[i] && base[i] != '.') {
+            env->scenario_id[i] = base[i];
+            i++;
+        }
+        env->scenario_id[i] = '\0';
+    }
 
     // Read sdc_track_index
     fread(&env->sdc_track_index, sizeof(int), 1, file);
@@ -1551,7 +1617,7 @@ static bool check_offroad(Drive *env, Agent *agent) {
         RoadMapElement *entity;
         entity = &env->road_elements[entity_list[i].entity_idx];
 
-        // Check for offroad collision with road edges
+        // Check for offroad collision with road edges (only for vehicles and cyclists)
         if (entity->type == ROAD_EDGE) {
             int geometry_idx = entity_list[i].geometry_idx;
             if (entity->z[geometry_idx] > agent->sim_z + agent->sim_height / 2.0f ||
@@ -1657,6 +1723,10 @@ void add_log(Drive *env) {
         env->log.speed_at_goal += env->logs[i].speed_at_goal;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        // Distance per infraction (count actual events, not boolean)
+        float infraction_count = env->logs[i].offroad_per_agent + env->logs[i].collisions_per_agent;
+        env->log.total_distance_travelled += agent->distance_since_spawn;
+        env->log.total_infractions += infraction_count;
         env->log.distance_without_collision += env->logs[i].distance_without_collision;
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -1667,6 +1737,7 @@ void add_log(Drive *env) {
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
         env->log.max_observation_distance += env->logs[i].max_observation_distance / safe_timestep;
         env->log.observation_coverage += env->logs[i].observation_coverage / safe_timestep;
+        env->log.partner_obs_coverage += env->logs[i].partner_obs_coverage / safe_timestep;
         env->log.n += 1;
     }
 }
@@ -1906,6 +1977,7 @@ void set_start_position(Drive *env) {
         e->stopped = 0;
         e->removed = 0;
         e->respawn_count = 0;
+        e->distance_since_spawn = 0.0f;
 
         // Dynamics
         e->a_long = 0.0f;
@@ -2038,7 +2110,6 @@ int spawn_active_agents(Drive *env, int num_agents_to_create) {
 void spawn_agents_with_counts(Drive *env) {
     // Currently only creates active agents
     int num_agents_to_create = env->num_agents;
-
     int successfully_created = spawn_active_agents(env, num_agents_to_create);
     env->num_created_agents = successfully_created;
 
@@ -2245,7 +2316,13 @@ void init(Drive *env) {
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
 }
 
+void close_client(Client *client);
+
 void c_close(Drive *env) {
+    if (env->client != NULL) {
+        close_client(env->client);
+        env->client = NULL;
+    }
     free_agents(env->agents, env->num_objects);
     for (int i = 0; i < env->num_roads; i++) {
         free_road_element(&env->road_elements[i]);
@@ -2274,6 +2351,7 @@ void c_close(Drive *env) {
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
     free(env->tracks_to_predict_indices);
+    env->tracks_to_predict_indices = NULL;
     free(env->ini_file);
 }
 
@@ -2282,7 +2360,8 @@ void allocate(Drive *env) {
     init(env);
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs =
+        ego_dim + PARTNER_FEATURES * (MAX_PARTNER_OBSERVATIONS) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float *)calloc(env->active_agent_count * max_obs, sizeof(float));
     env->actions = (float *)calloc(env->active_agent_count * 2, sizeof(float));
     env->rewards = (float *)calloc(env->active_agent_count, sizeof(float));
@@ -2570,10 +2649,11 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     agent->metrics_array[SPEED_LIMIT_IDX] = (speed_magnitude > SPEED_LIMIT + 2.0f) ? 1.0f : 0.0f;
 
     // Check for vehicle collisions
-    int car_collided_with_index = collision_check(env, agent_idx);
-    if (car_collided_with_index != -1)
+    int car_collided_with_index = -1;
+    car_collided_with_index = collision_check(env, agent_idx);
+    if (car_collided_with_index != -1) {
         collided = VEHICLE_COLLISION;
-
+    }
     agent->collision_state = collided;
 
     if (collided == VEHICLE_COLLISION) {
@@ -2604,10 +2684,90 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
 
 // void compute_rewards(void){}
 
+float compute_partner_observations(Drive *env, float *obs, int agent_idx, int obs_idx) {
+
+    int ego_idx = env->active_agent_indices[agent_idx];
+    Agent *ego_entity = &env->agents[ego_idx];
+    int ego_id = ego_entity->id;
+
+    // Ego stats
+    float cos_heading = cosf(ego_entity->sim_heading);
+    float sin_heading = sinf(ego_entity->sim_heading);
+
+    float obs_radius = env->partner_obs_radius;
+    int partners_in_radius = 0;
+    AgentDistance candidates[MAX_AGENTS];
+    for (int i = 0; i < env->num_created_agents; i++) {
+        Agent *partner = &env->agents[i];
+        if (ego_id == partner->id)
+            continue;
+        float dx = partner->sim_x - ego_entity->sim_x;
+        float dy = partner->sim_y - ego_entity->sim_y;
+        float dz = partner->sim_z - ego_entity->sim_z;
+        float dist_sq = dx * dx + dy * dy + dz * dz;
+        if (dist_sq <= obs_radius * obs_radius) {
+            candidates[partners_in_radius].idx = i;
+            candidates[partners_in_radius].dist_sq = dist_sq;
+            partners_in_radius++;
+        }
+    }
+
+    // Partial selection sort: pick nearest min(partners_in_radius, MAX_PARTNER_OBSERVATIONS)
+    int cars_seen = (partners_in_radius < MAX_PARTNER_OBSERVATIONS) ? partners_in_radius : MAX_PARTNER_OBSERVATIONS;
+    for (int k = 0; k < cars_seen; k++) {
+        int min_idx = k;
+        for (int j = k + 1; j < partners_in_radius; j++) {
+            if (candidates[j].dist_sq < candidates[min_idx].dist_sq)
+                min_idx = j;
+        }
+        if (min_idx != k) {
+            AgentDistance tmp = candidates[k];
+            candidates[k] = candidates[min_idx];
+            candidates[min_idx] = tmp;
+        }
+    }
+
+    // Write observations for nearest cars_seen agents
+    for (int k = 0; k < cars_seen; k++) {
+        Agent *partner = &env->agents[candidates[k].idx];
+        float dx = partner->sim_x - ego_entity->sim_x;
+        float dy = partner->sim_y - ego_entity->sim_y;
+        float dz = partner->sim_z - ego_entity->sim_z;
+        float rel_x = dx * cos_heading + dy * sin_heading;
+        float rel_y = -dx * sin_heading + dy * cos_heading;
+        obs[obs_idx] = rel_x * env->partner_obs_norm;
+        obs[obs_idx + 1] = rel_y * env->partner_obs_norm;
+        obs[obs_idx + 2] = dz * env->partner_obs_norm;
+        obs[obs_idx + 3] = partner->sim_width / MAX_VEH_WIDTH;
+        obs[obs_idx + 4] = partner->sim_length / MAX_VEH_LEN;
+        float other_cos = cosf(partner->sim_heading);
+        float other_sin = sinf(partner->sim_heading);
+        obs[obs_idx + 5] = other_cos * cos_heading + other_sin * sin_heading;
+        obs[obs_idx + 6] = other_sin * cos_heading - other_cos * sin_heading;
+        float rel_vx = partner->sim_vx - ego_entity->sim_vx;
+        float rel_vy = partner->sim_vy - ego_entity->sim_vy;
+        float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
+        float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
+        obs[obs_idx + 7] = copysignf(rel_speed_magnitude, rel_v_dot_heading) / MAX_SPEED;
+        obs_idx += 8;
+    }
+
+    // Pad remaining partner obs with zero
+    int remaining_partner_obs = (MAX_PARTNER_OBSERVATIONS - cars_seen) * 8;
+    memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
+
+    // Return coverage: fraction of partners within radius that fit in obs slots
+    if (partners_in_radius == 0) {
+        return 100.0f;
+    }
+    return ((float)cars_seen / (float)partners_in_radius) * 100.0f;
+}
+
 void compute_observations(Drive *env) {
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs =
+        ego_dim + PARTNER_FEATURES * (MAX_PARTNER_OBSERVATIONS) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     for (int i = 0; i < env->active_agent_count; i++) {
@@ -2679,70 +2839,14 @@ void compute_observations(Drive *env) {
                 }
             }
         }
-        //
-        //  Relative Pos of other cars
 
-        int cars_seen = 0;
-        for (int j = 0; j < MAX_AGENTS; j++) {
-            int index = -1;
-            if (j < env->active_agent_count) {
-                index = env->active_agent_indices[j];
-            } else if (j < env->num_created_agents && env->static_agent_count > 0) {
-                index = env->static_agent_indices[j - env->active_agent_count];
-            }
-            if (index == -1)
-                continue;
-            if (env->agents[index].type > CYCLIST)
-                break;
-            if (index == env->active_agent_indices[i])
-                continue; // Skip self, but don't increment obs_idx
-            Agent *other_entity = &env->agents[index];
-            if (ego_entity->respawn_timestep != -1)
-                continue;
-            if (other_entity->respawn_timestep != -1)
-                continue;
-            // Store original relative positions
-            float dx = other_entity->sim_x - ego_entity->sim_x;
-            float dy = other_entity->sim_y - ego_entity->sim_y;
-            float dz = other_entity->sim_z - ego_entity->sim_z;
-            float dist = (dx * dx + dy * dy + dz * dz);
-            if (dist > 2500.0f)
-                continue;
-            // Rotate to ego vehicle's frame
-            float rel_x = dx * cos_heading + dy * sin_heading;
-            float rel_y = -dx * sin_heading + dy * cos_heading;
-            float rel_z = dz; // No rotation needed for vertical component
-            // Store observations with correct indexing
-            obs[obs_idx] = rel_x * 0.02f;
-            obs[obs_idx + 1] = rel_y * 0.02f;
-            obs[obs_idx + 2] = rel_z * 0.02f;
-            obs[obs_idx + 3] = other_entity->sim_width / MAX_VEH_WIDTH;
-            obs[obs_idx + 4] = other_entity->sim_length / MAX_VEH_LEN;
-            // relative heading
-            float other_cos = cosf(other_entity->sim_heading);
-            float other_sin = sinf(other_entity->sim_heading);
-            float rel_heading_x =
-                other_cos * cos_heading + other_sin * sin_heading; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
-            float rel_heading_y =
-                other_sin * cos_heading - other_cos * sin_heading; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
+        // Partner vehicle observations
+        float coverage = compute_partner_observations(env, obs, i, obs_idx);
+        env->logs[i].partner_obs_coverage += coverage;
 
-            obs[obs_idx + 5] = rel_heading_x;
-            obs[obs_idx + 6] = rel_heading_y;
-            // relative speed
-            float rel_vx = other_entity->sim_vx - ego_entity->sim_vx;
-            float rel_vy = other_entity->sim_vy - ego_entity->sim_vy;
-            float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
-            float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
-            float rel_signed_speed = copysignf(rel_speed_magnitude, rel_v_dot_heading);
-            obs[obs_idx + 7] = rel_signed_speed / MAX_SPEED;
-            cars_seen++;
-            obs_idx += 8; // Move to next observation slot
-        }
-        int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 8;
-        memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
-        obs_idx += remaining_partner_obs;
+        obs_idx += MAX_PARTNER_OBSERVATIONS * PARTNER_FEATURES;
 
-        // Map observations
+        // map observations
         GridMapEntity entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS];
         int grid_idx = getGridIndex(env, ego_entity->sim_x, ego_entity->sim_y);
         float max_observation_distance = 0.0f;
@@ -2803,9 +2907,9 @@ void compute_observations(Drive *env) {
             // Compute sin and cos of relative angle directly without atan2f
             float cos_angle = dx_norm * cos_heading + dy_norm * sin_heading;
             float sin_angle = -dx_norm * sin_heading + dy_norm * cos_heading;
-            obs[obs_idx] = x_obs * 0.02f;
-            obs[obs_idx + 1] = y_obs * 0.02f;
-            obs[obs_idx + 2] = z_obs * 0.02f;
+            obs[obs_idx] = x_obs * env->road_obs_norm;
+            obs[obs_idx + 1] = y_obs * env->road_obs_norm;
+            obs[obs_idx + 2] = z_obs * env->road_obs_norm;
             obs[obs_idx + 3] = length / MAX_ROAD_SEGMENT_LENGTH;
             obs[obs_idx + 4] = width / MAX_ROAD_SCALE;
             obs[obs_idx + 5] = cos_angle;
@@ -2972,6 +3076,8 @@ void move_expert(Drive *env, float *actions, int agent_idx) {
     agent->sim_heading = agent->log_heading[t];
     agent->heading_x = cosf(agent->sim_heading);
     agent->heading_y = sinf(agent->sim_heading);
+    agent->sim_vx = agent->log_velocity_x[t];
+    agent->sim_vy = agent->log_velocity_y[t];
 }
 
 void move_dynamics(Drive *env, int action_idx, int agent_idx) {
@@ -3266,6 +3372,11 @@ void c_step(Drive *env) {
 
         move_dynamics(env, i, agent_idx);
 
+        // Accumulate distance for avg_distance_per_infraction metric
+        float speed = sqrtf(env->agents[agent_idx].sim_vx * env->agents[agent_idx].sim_vx +
+                            env->agents[agent_idx].sim_vy * env->agents[agent_idx].sim_vy);
+        env->agents[agent_idx].distance_since_spawn += speed * env->dt;
+
         // Tiny jerk penalty for smoothness
         if (env->dynamics_model == CLASSIC) {
             float delta_vx = env->agents[agent_idx].sim_vx - prev_vx;
@@ -3504,7 +3615,7 @@ void c_step(Drive *env) {
             break;
         }
     }
-    int reached_time_limit = (env->timestep + 1) >= env->episode_length;
+    int reached_time_limit = env->timestep >= env->episode_length;
     int reached_early_termination = (!originals_remaining && env->termination_mode == 1);
     if (reached_time_limit || reached_early_termination) {
         for (int i = 0; i < env->active_agent_count; i++) {
@@ -3537,16 +3648,108 @@ struct Client {
     int car_assignments[MAX_AGENTS]; // To keep car model assignments consistent per vehicle
     Vector3 default_camera_position;
     Vector3 default_camera_target;
+    int recorder_pipefd[2];
+    pid_t recorder_pid;
+    pid_t xvfb_pid;
+    int xvfb_display_num;
+    // 1 = GL context is EGL-on-GPU. Xvfb + InitWindow still run at startup
+    // to let raylib/GLFW load glad function pointers; after that we switch
+    // the active context to EGL via egl_switch_to_gpu. Affects which cleanup
+    // path runs in close_client and which readback path runs in c_render.
+    int egl_mode;
+    // Cached static road geometry (rebuilt once per episode, drawn every frame)
+    Mesh road_tri_mesh;     // curb triangles — uploaded to GPU VBO, drawn with one DrawMesh call
+    Material road_material; // default material for road mesh
+    float *road_line_verts; // lane/road lines — small, drawn via rlgl
+    unsigned char *road_line_colors;
+    int road_line_count; // number of lines (verts = count * 2)
+    int road_cache_valid;
+    // PBO double-buffer for async glReadPixels (GPU→CPU DMA)
+    unsigned int pbo[2];
+    int pbo_index;       // which PBO to read INTO this frame (0 or 1)
+    int pbo_frame_count; // total frames rendered (0 = first frame, no previous PBO to read)
 };
+
+// Persistent state: Xvfb + GLFW + EGL are initialized once per process and
+// reused across render envs. This avoids glfwTerminate (which prevents re-init)
+// and eglTerminate (which corrupts CUDA state).
+static int g_glfw_ready = 0;
+static int g_egl_available = -1; // -1 = untested, 0 = no, 1 = yes
+static pid_t g_xvfb_pid = 0;
+static int g_xvfb_display_num = 0;
 
 Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
-    client->width = 1280;
-    client->height = 704;
-    SetConfigFlags(FLAG_MSAA_4X_HINT);
-    InitWindow(client->width, client->height, "PufferDrive");
-    SetTargetFPS(30);
-    client->puffers = LoadTexture("resources/puffers_128.png");
+
+    if (env->render_mode == RENDER_WINDOW) {
+        client->width = 1280;
+        client->height = 704;
+        SetConfigFlags(FLAG_MSAA_4X_HINT);
+        SetTargetFPS(30);
+
+        Vector3 target_pos = {0, 0, 1};
+        client->default_camera_position = (Vector3){0, 120.0f, 175.0f};
+        client->default_camera_target = target_pos;
+        client->camera.position = client->default_camera_position;
+        client->camera.target = client->default_camera_target;
+        client->camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+        client->camera.fovy = 45.0f;
+        client->camera.projection = CAMERA_PERSPECTIVE;
+
+        SetTraceLogLevel(LOG_WARNING);
+        InitWindow(client->width, client->height, "PufferDrive");
+    } else { // Headless rendering
+        float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
+        float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+        float scale = 6.0f;
+        int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
+        int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
+        client->width = img_width;
+        client->height = img_height;
+
+        // Init Xvfb + GLFW once per process (loads glad GL function pointers)
+        if (!g_glfw_ready) {
+            if (getenv("DISPLAY") == NULL) {
+                g_xvfb_display_num = 100 + (getpid() % 900);
+                char lock_file[32], socket_file[32], display_str[16];
+                snprintf(display_str, sizeof(display_str), ":%d", g_xvfb_display_num);
+                snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", g_xvfb_display_num);
+                snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", g_xvfb_display_num);
+
+                FILE *f = fopen(lock_file, "r");
+                if (f) {
+                    pid_t pid = -1;
+                    fscanf(f, "%d", &pid);
+                    fclose(f);
+                    if (pid > 0 && kill(pid, 0) != 0) {
+                        unlink(lock_file);
+                        unlink(socket_file);
+                    }
+                }
+
+                g_xvfb_pid = fork();
+                if (g_xvfb_pid == 0) {
+                    close(STDOUT_FILENO);
+                    close(STDERR_FILENO);
+                    execlp("Xvfb", "Xvfb", display_str, "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac",
+                           "-noreset", NULL);
+                    _exit(1);
+                }
+                setenv("DISPLAY", display_str, 1);
+                for (int i = 0; i < 20 && access(lock_file, F_OK) != 0; i++)
+                    usleep(100000);
+                usleep(200000);
+            }
+
+            SetConfigFlags(FLAG_WINDOW_HIDDEN);
+            SetTargetFPS(6000);
+            SetTraceLogLevel(LOG_WARNING);
+            InitWindow(img_width, img_height, "PufferDrive");
+            g_glfw_ready = 1;
+        }
+    }
+
+    // Load assets (needed for perspective view mode=0)
     client->cars[0] = LoadModel("resources/drive/RedCar.glb");
     client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
     client->cars[2] = LoadModel("resources/drive/BlueCar.glb");
@@ -3560,26 +3763,102 @@ Client *make_client(Drive *env) {
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
-    // Get initial target position from first active agent
-    Vector3 target_pos = {
-        0,
-        0, // Y is up
-        1  // Z is depth
-    };
 
-    // Set up camera to look at target from above and behind
-    client->default_camera_position = (Vector3){
-        0,      // Same X as target
-        120.0f, // 20 units above target
-        40.0f   // 20 units behind target
-    };
-    client->default_camera_target = target_pos;
-    client->camera.position = client->default_camera_position;
-    client->camera.target = client->default_camera_target;
-    client->camera.up = (Vector3){0.0f, -1.0f, 0.0f}; // Y is up
-    client->camera.fovy = 45.0f;
-    client->camera.projection = CAMERA_PERSPECTIVE;
-    client->camera_zoom = 1.0f;
+#ifdef DRIVE_HAS_EGL
+    // EGL GPU context: create per render env (different maps = different resolutions).
+    // The EGL display is persistent (never terminated — eglTerminate breaks CUDA).
+    // We destroy the old surface+context and create fresh ones for the new resolution,
+    // then re-init rlgl so render batches live on the current GPU context.
+    if (env->render_mode == RENDER_HEADLESS) {
+        if (g_egl_available != 0) {
+            if (!g_egl_ctx.active) {
+                // First time: create EGL context and switch to GPU
+                if (egl_headless_init((int)client->width, (int)client->height)) {
+                    if (egl_switch_to_gpu()) {
+                        rlglInit((int)client->width, (int)client->height);
+                        rlViewport(0, 0, (int)client->width, (int)client->height);
+                        rlEnableDepthTest();
+                        g_egl_available = 1;
+                    }
+                }
+                if (g_egl_available < 0) {
+                    g_egl_available = 0;
+                    fprintf(stderr, "[drive] EGL GPU unavailable, using Xvfb/Mesa (software rendering)\n");
+                }
+            } else {
+                // Subsequent render envs: EGL context persists (keeps model/texture
+                // uploads valid). The pbuffer was sized for the first client — grow
+                // it if this client needs more pixels so glReadPixels doesn't read
+                // uninitialized memory outside the framebuffer bounds.
+                egl_headless_resize((int)client->width, (int)client->height);
+                rlViewport(0, 0, (int)client->width, (int)client->height);
+            }
+            if (g_egl_available == 1) {
+                client->egl_mode = 1;
+            }
+        }
+    }
+#endif
+
+    // Set up ffmpeg process for recording
+    if (env->render_mode == RENDER_HEADLESS) {
+        if (pipe(client->recorder_pipefd) == -1) {
+            fprintf(stderr, "Failed to create pipe\n");
+            free(client);
+            return NULL;
+        }
+
+        char size_str[64];
+        snprintf(size_str, sizeof(size_str), "%dx%d", (int)client->width, (int)client->height);
+
+        char filename[320];
+        if (env->video_suffix[0] != '\0')
+            snprintf(filename, sizeof(filename), "%s%s.mp4", env->scenario_id, env->video_suffix);
+        else
+            snprintf(filename, sizeof(filename), "%s.mp4", env->scenario_id);
+
+        client->recorder_pid = fork();
+        if (client->recorder_pid == -1) {
+            fprintf(stderr, "Failed to fork\n");
+            free(client);
+            return NULL;
+        }
+
+        if (client->recorder_pid == 0) { // Child process
+            close(client->recorder_pipefd[1]);
+            dup2(client->recorder_pipefd[0], STDIN_FILENO);
+            close(client->recorder_pipefd[0]);
+            for (int fd = 3; fd < 256; fd++)
+                close(fd);
+#ifdef DRIVE_HAS_EGL
+            if (client->egl_mode) {
+                // GPU/PBO path: same ffmpeg command as non-EGL (video may be vertically
+                // flipped but this confirms PBO data reaches ffmpeg).
+                execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
+                       "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", filename,
+                       NULL);
+            }
+#endif
+            execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
+                   "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", filename, NULL);
+            fprintf(stderr, "execlp ffmpeg failed\n");
+            _exit(1);
+        }
+        close(client->recorder_pipefd[0]);
+        fprintf(stderr, "[drive] ffmpeg forked: pid=%d pipe_write_fd=%d size=%s file=%s egl=%d\n", client->recorder_pid,
+                client->recorder_pipefd[1], size_str, filename, client->egl_mode);
+
+        // Increase pipe buffer to reduce write() blocking on large frames
+#ifdef DRIVE_HAS_EGL
+        {
+            int pipe_sz = fcntl(client->recorder_pipefd[1], F_SETPIPE_SZ, 4 * 1024 * 1024);
+            if (pipe_sz > 0) {
+                fprintf(stderr, "[drive] Pipe buffer set to %d bytes\n", pipe_sz);
+            }
+        }
+#endif
+    }
+
     return client;
 }
 
@@ -3670,7 +3949,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
     int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
     ego_dim = (env->reward_conditioning == 1) ? ego_dim + NUM_REWARD_COEFS : ego_dim;
-    int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
+    int max_obs =
+        ego_dim + PARTNER_FEATURES * (MAX_PARTNER_OBSERVATIONS) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     float *agent_obs = &observations[agent_index][0];
     // self
@@ -3685,24 +3965,31 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float goal_y = agent_obs[1] * 200;
     float goal_z = agent_obs[2] * 200;
 
+    int agent_type = env->agents[active_idx].type;
+    Color goal_color = LIGHTBLUE;
+    if (agent_type == PEDESTRIAN)
+        goal_color = LIGHT_ORANGE;
+    else if (agent_type == CYCLIST)
+        goal_color = LIGHT_PURPLE;
+
     if (mode == 0) {
-        DrawSphere((Vector3){goal_x, goal_y, goal_z}, 0.5f, LIGHTGREEN);
+        DrawSphere((Vector3){goal_x, goal_y, goal_z}, 0.5f, goal_color);
         DrawCircle3D((Vector3){goal_x, goal_y, goal_z}, env->agents[active_idx].reward_coefs[REWARD_COEF_GOAL_RADIUS],
-                     (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
+                     (Vector3){0, 0, 1}, 90.0f, Fade(goal_color, 0.3f));
     }
 
     if (mode == 1) {
         float goal_x_world = px + (goal_x * heading_self_x - goal_y * heading_self_y);
         float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
         float goal_z_world = pz + goal_z;
-        DrawSphere((Vector3){goal_x_world, goal_y_world, goal_z_world}, 0.5f, LIGHTGREEN);
+        DrawSphere((Vector3){goal_x_world, goal_y_world, goal_z_world}, 0.5f, goal_color);
         DrawCircle3D((Vector3){goal_x_world, goal_y_world, goal_z_world},
                      env->agents[active_idx].reward_coefs[REWARD_COEF_GOAL_RADIUS], (Vector3){0, 0, 1}, 90.0f,
-                     Fade(LIGHTGREEN, 0.3f));
+                     Fade(goal_color, 0.3f));
     }
     // First draw other agent observations
     int obs_idx = ego_dim; // Start after ego obs
-    for (int j = 0; j < MAX_AGENTS - 1; j++) {
+    for (int j = 0; j < MAX_PARTNER_OBSERVATIONS; j++) {
         if (agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
             obs_idx += 8; // Move to next agent observation
             continue;
@@ -3824,8 +4111,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         obs_idx += PARTNER_FEATURES; // Move to next agent observation (8 values per agent)
     }
     // Then draw map observations
-    int map_start_idx = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1); // Start after agent observations
-    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {          // Loop through potential map entities
+    int map_start_idx = ego_dim + PARTNER_FEATURES * (MAX_PARTNER_OBSERVATIONS); // Start after agent observations
+    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {                    // Loop through potential map entities
         int entity_idx = map_start_idx + k * 8;
         if (agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0) {
             continue;
@@ -3873,6 +4160,156 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             DrawCube((Vector3){x_middle, y_middle, z_middle}, 0.5f, 0.5f, 0.5f, lineColor);
             DrawLine3D((Vector3){x_start, y_start, z_middle}, (Vector3){x_end, y_end, z_middle}, BLUE);
         }
+    }
+}
+
+// Build cached road geometry from env->road_elements. Call once per episode.
+// Curb triangles are uploaded to a GPU VBO (Mesh) for single-draw-call rendering.
+// Lane/road lines are kept in CPU arrays for rlgl replay (small count, not worth VBO).
+void build_road_cache(Drive *env, Client *client) {
+    // First pass: count triangles and lines
+    int tri_count = 0, line_count = 0;
+    for (int i = 0; i < env->num_roads; i++) {
+        RoadMapElement *road = &env->road_elements[i];
+        int segs = road->segment_length - 1;
+        if (segs <= 0)
+            continue;
+        if (road->type == ROAD_EDGE)
+            tri_count += segs * 14;
+        else if (road->type == ROAD_LANE || road->type == ROAD_LINE)
+            line_count += segs;
+    }
+
+    int num_tri_verts = tri_count * 3;
+    float *tri_verts = (float *)RL_CALLOC(num_tri_verts * 3, sizeof(float));
+    unsigned char *tri_colors = (unsigned char *)RL_CALLOC(num_tri_verts * 4, sizeof(unsigned char));
+    free(client->road_line_verts);
+    free(client->road_line_colors);
+    client->road_line_verts = (float *)malloc(line_count * 2 * 3 * sizeof(float));
+    client->road_line_colors = (unsigned char *)malloc(line_count * 2 * 4);
+    int actual_tri_count = 0;
+    client->road_line_count = 0;
+
+#define PUSH_TRI(vx1, vy1, vz1, vx2, vy2, vz2, vx3, vy3, vz3, cr, cg, cb, ca)                                          \
+    do {                                                                                                               \
+        int _ti = actual_tri_count * 9;                                                                                \
+        int _ci = actual_tri_count * 12;                                                                               \
+        tri_verts[_ti + 0] = vx1;                                                                                      \
+        tri_verts[_ti + 1] = vy1;                                                                                      \
+        tri_verts[_ti + 2] = vz1;                                                                                      \
+        tri_verts[_ti + 3] = vx2;                                                                                      \
+        tri_verts[_ti + 4] = vy2;                                                                                      \
+        tri_verts[_ti + 5] = vz2;                                                                                      \
+        tri_verts[_ti + 6] = vx3;                                                                                      \
+        tri_verts[_ti + 7] = vy3;                                                                                      \
+        tri_verts[_ti + 8] = vz3;                                                                                      \
+        for (int _v = 0; _v < 3; _v++) {                                                                               \
+            tri_colors[_ci + _v * 4 + 0] = cr;                                                                         \
+            tri_colors[_ci + _v * 4 + 1] = cg;                                                                         \
+            tri_colors[_ci + _v * 4 + 2] = cb;                                                                         \
+            tri_colors[_ci + _v * 4 + 3] = ca;                                                                         \
+        }                                                                                                              \
+        actual_tri_count++;                                                                                            \
+    } while (0)
+
+#define PUSH_LINE(vx1, vy1, vz1, vx2, vy2, vz2, cr, cg, cb, ca)                                                        \
+    do {                                                                                                               \
+        int _li = client->road_line_count * 6;                                                                         \
+        int _ci = client->road_line_count * 8;                                                                         \
+        client->road_line_verts[_li + 0] = vx1;                                                                        \
+        client->road_line_verts[_li + 1] = vy1;                                                                        \
+        client->road_line_verts[_li + 2] = vz1;                                                                        \
+        client->road_line_verts[_li + 3] = vx2;                                                                        \
+        client->road_line_verts[_li + 4] = vy2;                                                                        \
+        client->road_line_verts[_li + 5] = vz2;                                                                        \
+        for (int _v = 0; _v < 2; _v++) {                                                                               \
+            client->road_line_colors[_ci + _v * 4 + 0] = cr;                                                           \
+            client->road_line_colors[_ci + _v * 4 + 1] = cg;                                                           \
+            client->road_line_colors[_ci + _v * 4 + 2] = cb;                                                           \
+            client->road_line_colors[_ci + _v * 4 + 3] = ca;                                                           \
+        }                                                                                                              \
+        client->road_line_count++;                                                                                     \
+    } while (0)
+
+    // Second pass: build geometry
+    for (int i = 0; i < env->num_roads; i++) {
+        RoadMapElement *road = &env->road_elements[i];
+        for (int j = 0; j < road->segment_length - 1; j++) {
+            float sx = road->x[j], sy = road->y[j], sz = road->z[j];
+            float ex = road->x[j + 1], ey = road->y[j + 1], ez = road->z[j + 1];
+
+            if (road->type == ROAD_EDGE) {
+                float curb_height = 0.5f, curb_width = 0.3f;
+                float dx = ex - sx, dy = ey - sy;
+                float len = sqrtf(dx * dx + dy * dy);
+                if (len < 1e-6f)
+                    continue;
+                float nx = -dy / len, ny = dx / len;
+                float hw = curb_width / 2;
+
+                float b1x = sx - nx * hw, b1y = sy - ny * hw, b2x = sx + nx * hw, b2y = sy + ny * hw;
+                float b3x = ex + nx * hw, b3y = ey + ny * hw, b4x = ex - nx * hw, b4y = ey - ny * hw;
+                float t1x = b1x, t1y = b1y, t1z = sz + curb_height;
+                float t2x = b2x, t2y = b2y, t2z = sz + curb_height;
+                float t3x = b3x, t3y = b3y, t3z = ez + curb_height;
+                float t4x = b4x, t4y = b4y, t4z = ez + curb_height;
+
+                PUSH_TRI(b1x, b1y, sz, b2x, b2y, sz, b3x, b3y, ez, 160, 160, 160, 255);
+                PUSH_TRI(b1x, b1y, sz, b3x, b3y, ez, b4x, b4y, ez, 160, 160, 160, 255);
+                PUSH_TRI(t1x, t1y, t1z, t3x, t3y, t3z, t2x, t2y, t2z, 220, 220, 220, 255);
+                PUSH_TRI(t1x, t1y, t1z, t4x, t4y, t4z, t3x, t3y, t3z, 220, 220, 220, 255);
+                PUSH_TRI(b1x, b1y, sz, t1x, t1y, t1z, b2x, b2y, sz, 180, 180, 180, 255);
+                PUSH_TRI(t1x, t1y, t1z, t2x, t2y, t2z, b2x, b2y, sz, 180, 180, 180, 255);
+                PUSH_TRI(b2x, b2y, sz, t2x, t2y, t2z, b3x, b3y, ez, 180, 180, 180, 255);
+                PUSH_TRI(t2x, t2y, t2z, t3x, t3y, t3z, b3x, b3y, ez, 180, 180, 180, 255);
+                PUSH_TRI(b3x, b3y, ez, t3x, t3y, t3z, b4x, b4y, ez, 180, 180, 180, 255);
+                PUSH_TRI(t3x, t3y, t3z, t4x, t4y, t4z, b4x, b4y, ez, 180, 180, 180, 255);
+                PUSH_TRI(b4x, b4y, ez, t4x, t4y, t4z, b1x, b1y, sz, 180, 180, 180, 255);
+                PUSH_TRI(t4x, t4y, t4z, t1x, t1y, t1z, b1x, b1y, sz, 180, 180, 180, 255);
+            } else if (road->type == ROAD_LANE) {
+                Color c = Fade(SOFT_YELLOW, 0.25f);
+                PUSH_LINE(sx, sy, sz, ex, ey, ez, c.r, c.g, c.b, c.a);
+            } else if (road->type == ROAD_LINE) {
+                PUSH_LINE(sx, sy, sz, ex, ey, ez, 255, 255, 255, 255);
+            }
+        }
+    }
+#undef PUSH_TRI
+#undef PUSH_LINE
+
+    // Upload curb triangles to GPU as a Mesh (single VBO draw call per frame)
+    Mesh mesh = {0};
+    mesh.vertexCount = actual_tri_count * 3;
+    mesh.triangleCount = actual_tri_count;
+    mesh.vertices = tri_verts;
+    mesh.colors = tri_colors;
+    UploadMesh(&mesh, false); // static draw — data goes to GPU, CPU arrays kept for UnloadMesh
+    client->road_tri_mesh = mesh;
+    client->road_material = LoadMaterialDefault();
+
+    client->road_cache_valid = 1;
+    fprintf(stderr, "[drive] Road cache: %d triangles (VBO), %d lines (rlgl)\n", actual_tri_count,
+            client->road_line_count);
+}
+
+// Draw cached road geometry: VBO for curbs, rlgl for lines
+void draw_road_cached(Client *client) {
+    // Curb triangles — single GPU draw call via Mesh VBO
+    if (client->road_tri_mesh.vertexCount > 0) {
+        DrawMesh(client->road_tri_mesh, client->road_material, MatrixIdentity());
+    }
+    // Lane/road lines — small count, rlgl replay is fine
+    if (client->road_line_count > 0) {
+        rlSetLineWidth(2.0f);
+        rlBegin(RL_LINES);
+        int nv = client->road_line_count * 2;
+        for (int i = 0; i < nv; i++) {
+            rlColor4ub(client->road_line_colors[i * 4], client->road_line_colors[i * 4 + 1],
+                       client->road_line_colors[i * 4 + 2], client->road_line_colors[i * 4 + 3]);
+            rlVertex3f(client->road_line_verts[i * 3], client->road_line_verts[i * 3 + 1],
+                       client->road_line_verts[i * 3 + 2]);
+        }
+        rlEnd();
     }
 }
 
@@ -4008,27 +4445,39 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     continue;
                 }
 
-                // --- Draw the car  ---
-                Color car_color = GRAY; // default for static
-                if (is_expert)
-                    car_color = GOLD; // expert replay
-                if (is_active_agent)
-                    car_color = BLUE; // policy-controlled
-                if (is_active_agent && agent->aabb_collision_state > 0)
-                    car_color = LIGHTGREEN;
-                if (is_active_agent && agent->collision_state > 0)
-                    car_color = RED;
-                rlSetLineWidth(3.0f);
-                for (int j = 0; j < 4; j++) {
-                    DrawLine3D(corners[j], corners[(j + 1) % 4], car_color);
+                // Draw the agent bounding boxes
+                Color agent_color = GRAY;
+                if (is_expert) {
+                    if (agent->type == PEDESTRIAN || agent->type == CYCLIST)
+                        agent_color = EXPERT_REPLAY_SMALL;
+                    else
+                        agent_color = EXPERT_REPLAY;
                 }
+                if (is_active_agent) {
+                    if (agent->type == PEDESTRIAN)
+                        agent_color = LIGHT_ORANGE;
+                    else if (agent->type == CYCLIST)
+                        agent_color = LIGHT_PURPLE;
+                    else
+                        agent_color = BLUE;
+                }
+                if (is_active_agent && agent->collision_state > 0)
+                    agent_color = RED;
+
+                rlPushMatrix();
+                rlTranslatef(position.x, position.y, position.z);
+                rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f);
+                DrawCube((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, Fade(agent_color, 0.5f));
+                DrawCubeWires((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, agent_color);
+                rlPopMatrix();
+
                 // --- Draw a heading arrow pointing forward ---
                 Vector3 arrowStart = position;
                 Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
                                     position.y + sin_heading * half_len * 1.5f, position.z};
 
-                DrawLine3D(arrowStart, arrowEnd, car_color);
-                DrawSphere(arrowEnd, 0.2f, car_color); // arrow tip
+                DrawLine3D(arrowStart, arrowEnd, agent_color);
+                DrawSphere(arrowEnd, 0.2f, agent_color); // arrow tip
 
             } else { // Agent view
                 rlPushMatrix();
@@ -4063,10 +4512,17 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 Vector3 model_size = {bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y,
                                       bounds.max.z - bounds.min.z};
                 Vector3 scale = {size.x / model_size.x, size.y / model_size.y, size.z / model_size.z};
-                // if((obs_only ||  IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx){
-                //     rlPopMatrix();
-                //     continue;
-                // }
+                if ((obs_only || IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx) {
+                    int ego_active_idx = env->active_agent_indices[env->human_agent_idx];
+                    Agent *ego = &env->agents[ego_active_idx];
+                    float dist = relative_distance_3d(ego->sim_x, ego->sim_y, ego->sim_z, agent->sim_x, agent->sim_y,
+                                                      agent->sim_z);
+                    float obs_radius = env->partner_obs_radius;
+                    if (dist > obs_radius) {
+                        rlPopMatrix();
+                        continue;
+                    }
+                }
                 if (agent->type == CYCLIST) {
                     scale = (Vector3){0.01, 0.01, 0.01};
                     car_model = client->cyclist;
@@ -4087,7 +4543,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     };
                     Color wire_color = GRAY; // static
                     if (!is_active_agent && agent->mark_as_expert == 1)
-                        wire_color = GOLD; // expert replay
+                        wire_color = EXPERT_REPLAY; // expert replay
                     if (is_active_agent)
                         wire_color = BLUE; // policy
                     if (is_active_agent && agent->aabb_collision_state > 0)
@@ -4123,13 +4579,20 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 continue;
             }
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
+
+                Color goal_color = DEEPBLUE;
+                if (agent->type == PEDESTRIAN)
+                    goal_color = LIGHT_ORANGE;
+                else if (agent->type == CYCLIST)
+                    goal_color = LIGHT_PURPLE;
+
                 DrawSphere(
                     (Vector3){
                         agent->goal_position_x,
                         agent->goal_position_y,
                         agent->goal_position_z,
                     },
-                    0.5f, DARKGREEN);
+                    0.5f, goal_color);
 
                 DrawCircle3D(
                     (Vector3){
@@ -4137,33 +4600,29 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                         agent->goal_position_y,
                         agent->goal_position_z,
                     },
-                    agent->reward_coefs[REWARD_COEF_GOAL_RADIUS], (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
+                    agent->reward_coefs[REWARD_COEF_GOAL_RADIUS], (Vector3){0, 0, 1}, 90.0f, Fade(goal_color, 0.3f));
             }
         }
     }
 
-    // Draw road elements
-    for (int i = 0; i < env->num_roads; i++) {
-        RoadMapElement *road = &env->road_elements[i];
-        for (int j = 0; j < road->segment_length - 1; j++) {
-            Vector3 start = {road->x[j], road->y[j], road->z[j]};
-            Vector3 end = {road->x[j + 1], road->y[j + 1], road->z[j + 1]};
-            Color lineColor = GRAY;
-            if (road->type == ROAD_LANE)
-                lineColor = Fade(SOFT_YELLOW, 0.25f);
-            else if (road->type == ROAD_LINE)
-                lineColor = WHITE;
-            else if (road->type == ROAD_EDGE)
-                lineColor = WHITE;
-            else if (road->type == DRIVEWAY)
-                lineColor = RED;
-
-            if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-                if (road->type == ROAD_EDGE) {
-                    draw_road_edge(env, start.x, start.y, end.x, end.y, start.z, end.z);
-                } else if (road->type == ROAD_LANE || road->type == ROAD_LINE) {
-                    rlSetLineWidth(2.0f);
-                    DrawLine3D(start, end, lineColor);
+    // Draw road elements (cached or immediate)
+    if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
+        if (client->road_cache_valid) {
+            draw_road_cached(client);
+        } else {
+            // Fallback: immediate mode (first frame before cache is built, or interactive)
+            for (int i = 0; i < env->num_roads; i++) {
+                RoadMapElement *road = &env->road_elements[i];
+                for (int j = 0; j < road->segment_length - 1; j++) {
+                    Vector3 start = {road->x[j], road->y[j], road->z[j]};
+                    Vector3 end = {road->x[j + 1], road->y[j + 1], road->z[j + 1]};
+                    if (road->type == ROAD_EDGE) {
+                        draw_road_edge(env, start.x, start.y, end.x, end.y, start.z, end.z);
+                    } else if (road->type == ROAD_LANE || road->type == ROAD_LINE) {
+                        Color lineColor = (road->type == ROAD_LANE) ? Fade(SOFT_YELLOW, 0.25f) : WHITE;
+                        rlSetLineWidth(2.0f);
+                        DrawLine3D(start, end, lineColor);
+                    }
                 }
             }
         }
@@ -4201,97 +4660,465 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     }
 }
 
-void c_render(Drive *env) {
+void c_render(Drive *env, int view_mode, int draw_traces) {
+
+    // Create client on first render call
     if (env->client == NULL) {
         env->client = make_client(env);
     }
     Client *client = env->client;
-    BeginDrawing();
-    Color road = (Color){35, 35, 37, 255};
-    ClearBackground(road);
-    BeginMode3D(client->camera);
-    handle_camera_controls(env->client);
-    draw_scene(env, client, 0, 0, 0, 0);
 
-    if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
-        env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
+    // Build road cache on first render (static geometry, reused every frame)
+    if (!client->road_cache_valid) {
+        build_road_cache(env, client);
     }
 
-    // Draw debug info
-    DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,
-                        client->camera.position.z),
-             10, 10, 20, PUFF_WHITE);
-    DrawText(TextFormat("Camera Target: (%.2f, %.2f, %.2f)", client->camera.target.x, client->camera.target.y,
-                        client->camera.target.z),
-             10, 30, 20, PUFF_WHITE);
-    DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
+    // Per-stage timing. Enabled with DRIVE_RENDER_PROFILE=1 in the environment.
+    // Prints rolling averages every DRIVE_RENDER_PROFILE_EVERY frames (default 60).
+    // Stages: draw = BeginDrawing..draw_scene..EndDrawing (includes flush),
+    //         read = rlReadScreenPixels (glReadPixels + CPU buffer alloc),
+    //         pipe = write() to ffmpeg.
+    static int profile_enabled = -1;
+    static int profile_every = 0;
+    static int profile_frame = 0;
+    static double acc_draw = 0.0, acc_read = 0.0, acc_pipe = 0.0;
+    if (profile_enabled < 0) {
+        const char *e = getenv("DRIVE_RENDER_PROFILE");
+        profile_enabled = (e && e[0] == '1') ? 1 : 0;
+        const char *n = getenv("DRIVE_RENDER_PROFILE_EVERY");
+        profile_every = (n && atoi(n) > 0) ? atoi(n) : 60;
+    }
+    double t_draw_start = 0.0, t_draw_end = 0.0, t_read_end = 0.0, t_pipe_end = 0.0;
+    if (profile_enabled)
+        t_draw_start = GetTime();
 
-    int human_idx = env->active_agent_indices[env->human_agent_idx];
-    DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
-    DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
+    if (env->render_mode == RENDER_HEADLESS) { // Headless rendering via ffmpeg
+        float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
+        float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
 
-    // Display current action values - yellow when controlling, white otherwise
-    Color action_color = IsKeyDown(KEY_LEFT_SHIFT) ? YELLOW : PUFF_WHITE;
+        Camera3D camera = {0};
 
-    if (env->action_type == 0) { // discrete
-        int *action_array = (int *)env->actions;
-        int action_val = action_array[env->human_agent_idx];
+        if (view_mode == VIEW_MODE_SIM_STATE) {
+            camera.position = (Vector3){0.0, 0.0, 400.0f};
+            camera.target = (Vector3){0.0, 0.0, 0.0};
+            camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+            camera.projection = CAMERA_ORTHOGRAPHIC;
+            camera.fovy = map_height;
 
-        if (env->dynamics_model == CLASSIC) {
-            int num_steer = 13;
-            int accel_idx = action_val / num_steer;
-            int steer_idx = action_val % num_steer;
-            float accel_value = ACCELERATION_VALUES[accel_idx];
-            float steer_value = STEERING_VALUES[steer_idx];
+            BeginDrawing();
+            ClearBackground(ROAD_COLOR);
+            BeginMode3D(camera);
 
-            DrawText(TextFormat("Acceleration: %.2f m/s^2", accel_value), 10, 110, 20, action_color);
-            DrawText(TextFormat("Steering: %.3f", steer_value), 10, 130, 20, action_color);
-        } else if (env->dynamics_model == JERK) {
-            int num_lat = 3;
-            int jerk_long_idx = action_val / num_lat;
-            int jerk_lat_idx = action_val % num_lat;
-            float jerk_long_value = JERK_LONG[jerk_long_idx];
-            float jerk_lat_value = JERK_LAT[jerk_lat_idx];
+            if (draw_traces) {
+                // Points are ~500x cheaper than spheres (2 verts vs ~500 tris) — lets us
+                // draw full trajectory breadcrumbs for every agent every frame.
+                for (int i = 0; i < env->active_agent_count; i++) {
+                    int idx = env->active_agent_indices[i];
+                    // Bound by the agent's actual trajectory length. Spawned agents
+                    // (init_variable_agent_number) have trajectory_length == 1, so
+                    // iterating up to episode_length would be an OOB read.
+                    int t_end = env->episode_length;
+                    if (t_end > env->agents[idx].trajectory_length)
+                        t_end = env->agents[idx].trajectory_length;
+                    for (int t = env->init_steps; t < t_end; t++) {
+                        Color agent_color = LIGHTBLUE;
+                        if (env->agents[idx].type == PEDESTRIAN)
+                            agent_color = LIGHT_ORANGE;
+                        else if (env->agents[idx].type == CYCLIST)
+                            agent_color = LIGHT_PURPLE;
+                        DrawPoint3D((Vector3){env->agents[idx].log_trajectory_x[t],
+                                              env->agents[idx].log_trajectory_y[t],
+                                              env->agents[idx].log_trajectory_z[t]},
+                                    agent_color);
+                    }
+                }
+                for (int i = 0; i < env->expert_static_agent_count; i++) {
+                    int idx = env->expert_static_agent_indices[i];
+                    int t_end = env->episode_length;
+                    if (t_end > env->agents[idx].trajectory_length)
+                        t_end = env->agents[idx].trajectory_length;
+                    for (int t = env->init_steps; t < t_end; t++) {
+                        DrawPoint3D((Vector3){env->agents[idx].log_trajectory_x[t],
+                                              env->agents[idx].log_trajectory_y[t],
+                                              env->agents[idx].log_trajectory_z[t]},
+                                    EXPERT_REPLAY);
+                    }
+                }
+            }
+            draw_scene(env, client, 1, 0, 0, 0);
 
-            DrawText(TextFormat("Longitudinal Jerk: %.2f m/s^3", jerk_long_value), 10, 110, 20, action_color);
-            DrawText(TextFormat("Lateral Jerk: %.2f m/s^3", jerk_lat_value), 10, 130, 20, action_color);
+        } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
+            int agent_idx = env->active_agent_indices[env->human_agent_idx];
+            Agent *agent = &env->agents[agent_idx];
+
+            Camera3D camera = {0};
+            camera.position = (Vector3){agent->sim_x, agent->sim_y, 400.0f};
+            camera.target = (Vector3){agent->sim_x, agent->sim_y, 0.0f};
+            camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+            camera.projection = CAMERA_ORTHOGRAPHIC;
+            camera.fovy = env->grid_map->vision_range * GRID_CELL_SIZE * 2.0f;
+
+            BeginDrawing();
+            ClearBackground(ROAD_COLOR);
+            BeginMode3D(camera);
+            draw_scene(env, client, 1, 1, 0, 0);
+
+        } else {
+            int agent_idx = env->active_agent_indices[env->human_agent_idx];
+            Agent *agent = &env->agents[agent_idx];
+
+            Camera3D camera = {0};
+            camera.position = (Vector3){agent->sim_x - (25.0f * cosf(agent->sim_heading)),
+                                        agent->sim_y - (25.0f * sinf(agent->sim_heading)), 15.0f};
+            camera.target = (Vector3){agent->sim_x + 40.0f * cosf(agent->sim_heading),
+                                      agent->sim_y + 40.0f * sinf(agent->sim_heading), 1.0f};
+            camera.up = (Vector3){0.0f, 0.0f, 1.0f};
+            camera.fovy = 60.0f;
+            camera.projection = CAMERA_PERSPECTIVE;
+
+            BeginDrawing();
+            ClearBackground(ROAD_COLOR);
+            BeginMode3D(camera);
+            draw_scene(env, client, 0, 0, 0, 1);
         }
-    } else { // continuous
-        float (*action_array_f)[2] = (float (*)[2])env->actions;
-        DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20, action_color);
-        DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, action_color);
-    }
 
-    // Show key press status
-    int status_y = 150;
-    if (IsKeyDown(KEY_LEFT_SHIFT)) {
-        DrawText("[shift pressed]", 10, status_y, 20, YELLOW);
-        status_y += 20;
-    }
-    if (IsKeyDown(KEY_SPACE)) {
-        DrawText("[space pressed]", 10, status_y, 20, YELLOW);
-        status_y += 20;
-    }
-    if (IsKeyDown(KEY_LEFT_CONTROL)) {
-        DrawText("[ctrl pressed]", 10, status_y, 20, YELLOW);
-        status_y += 20;
-    }
+        // NOTE: draw_scene() already calls EndMode3D() internally (see the
+        // EndMode3D at the end of the road-drawing block), so we don't repeat
+        // it here — a second call would pop past the projection matrix stack.
 
-    // Controls help
-    DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10,
-             client->height - 30, 20, PUFF_WHITE);
+#ifdef DRIVE_HAS_EGL
+        if (client->egl_mode) {
+            // EGL headless: just flush the rlgl batch. Skip EndDrawing's
+            // glfwSwapBuffers + glfwPollEvents which are unnecessary (no window).
+            rlDrawRenderBatchActive();
+        } else
+#endif
+        {
+            EndDrawing();
+        }
 
-    DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, status_y, 20, PUFF_WHITE);
-    DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, status_y + 20, 20, PUFF_WHITE);
-    EndDrawing();
+        if (profile_enabled)
+            t_draw_end = GetTime();
+
+        int w = (int)client->width, h = (int)client->height;
+        int frame_bytes = w * h * 4;
+
+#ifdef DRIVE_HAS_EGL
+        if (client->egl_mode) {
+            // PBO double-buffer: async GPU→CPU readback overlapped with next frame's draw.
+            // Frame flow:
+            //   Frame 0: kick off async read into PBO 0 (nothing to write yet)
+            //   Frame N: map PBO[prev] (blocks until its DMA finishes), write to pipe,
+            //            kick off async read into PBO[curr]
+            // Net effect: readback DMA is hidden behind the next frame's draw time.
+
+            // Create PBOs on first use
+            if (client->pbo[0] == 0) {
+                glGenBuffers(2, client->pbo);
+                for (int i = 0; i < 2; i++) {
+                    glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[i]);
+                    glBufferData(GL_PIXEL_PACK_BUFFER, frame_bytes, NULL, GL_STREAM_READ);
+                }
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            }
+
+            int curr = client->pbo_index;
+            int prev = 1 - curr;
+
+            // Kick off async read into current PBO
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[curr]);
+            glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+            if (profile_enabled)
+                t_read_end = GetTime();
+
+            // Map previous PBO and write to pipe (skip frame 0 — no previous data).
+            // glReadPixels returns rows bottom-up (GL convention: origin at
+            // bottom-left), but ffmpeg expects top-down. We write the rows in
+            // reverse order via writev so each frame takes one syscall and no
+            // 19 MB memcpy — iovecs can point directly into the mapped PBO.
+            if (client->pbo_frame_count > 0) {
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
+                unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+                if (ptr) {
+                    int row_bytes = w * 4;
+                    // IOV_MAX on Linux is 1024, so frames taller than 1024 rows
+                    // need multiple writev calls. Split the flip into chunks
+                    // of at most IOV_MAX rows, each chunk in top-down order.
+                    // Within each chunk we also loop to handle short writes
+                    // (pipe can return < chunk_bytes when interrupted by a
+                    // signal or when the kernel pipe buffer is partially full)
+                    // by shrinking the head iovec and retrying.
+                    int iov_max = 1024;
+                    int rows_remaining = h;
+                    int row_top = 0; // next top-down row we're about to emit
+                    ssize_t total_written = 0;
+                    int io_error = 0;
+                    while (rows_remaining > 0 && !io_error) {
+                        int chunk = rows_remaining < iov_max ? rows_remaining : iov_max;
+                        struct iovec iov[1024];
+                        size_t chunk_bytes = 0;
+                        for (int i = 0; i < chunk; i++) {
+                            // Top-down row (row_top + i) corresponds to
+                            // bottom-up source row (h - 1 - (row_top + i)).
+                            int src_row = h - 1 - (row_top + i);
+                            iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
+                            iov[i].iov_len = row_bytes;
+                            chunk_bytes += row_bytes;
+                        }
+                        struct iovec *cur = iov;
+                        int cur_cnt = chunk;
+                        size_t cur_remaining = chunk_bytes;
+                        while (cur_remaining > 0) {
+                            ssize_t written = writev(client->recorder_pipefd[1], cur, cur_cnt);
+                            if (written < 0) {
+                                if (errno == EINTR)
+                                    continue; // signal, retry
+                                fprintf(stderr, "[drive-pbo] frame=%d writev chunk=%d failed errno=%d(%s)\n",
+                                        client->pbo_frame_count, cur_cnt, errno, strerror(errno));
+                                io_error = 1;
+                                break;
+                            }
+                            total_written += written;
+                            cur_remaining -= (size_t)written;
+                            // Advance past fully-consumed iovecs and shrink
+                            // the head iovec by any partial bytes.
+                            size_t consumed = (size_t)written;
+                            while (cur_cnt > 0 && consumed >= cur[0].iov_len) {
+                                consumed -= cur[0].iov_len;
+                                cur++;
+                                cur_cnt--;
+                            }
+                            if (cur_cnt > 0 && consumed > 0) {
+                                cur[0].iov_base = (unsigned char *)cur[0].iov_base + consumed;
+                                cur[0].iov_len -= consumed;
+                            }
+                        }
+                        row_top += chunk;
+                        rows_remaining -= chunk;
+                    }
+                    if (client->pbo_frame_count <= 3 || total_written != frame_bytes) {
+                        fprintf(stderr, "[drive-pbo] frame=%d writev=%zd/%d fd=%d ptr=%p\n", client->pbo_frame_count,
+                                total_written, frame_bytes, client->recorder_pipefd[1], (void *)ptr);
+                    }
+                    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+                } else {
+                    fprintf(stderr, "[drive-pbo] frame=%d glMapBuffer returned NULL! GL error=0x%x\n",
+                            client->pbo_frame_count, glGetError());
+                }
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            }
+
+            client->pbo_index = prev;
+            client->pbo_frame_count++;
+        } else
+#endif
+        {
+            // Synchronous fallback (Xvfb/Mesa path)
+            unsigned char *screen_data = rlReadScreenPixels(w, h);
+            if (profile_enabled)
+                t_read_end = GetTime();
+            if (screen_data) {
+                // Loop to handle short writes and EINTR on the blocking pipe.
+                size_t remaining = (size_t)frame_bytes;
+                unsigned char *p = screen_data;
+                while (remaining > 0) {
+                    ssize_t written = write(client->recorder_pipefd[1], p, remaining);
+                    if (written < 0) {
+                        if (errno == EINTR)
+                            continue;
+                        break;
+                    }
+                    p += written;
+                    remaining -= (size_t)written;
+                }
+                RL_FREE(screen_data);
+            }
+        }
+
+        if (profile_enabled) {
+            t_pipe_end = GetTime();
+            acc_draw += (t_draw_end - t_draw_start);
+            acc_read += (t_read_end - t_draw_end);
+            acc_pipe += (t_pipe_end - t_read_end);
+            profile_frame++;
+            if (profile_frame % profile_every == 0) {
+                double n = (double)profile_every;
+                double ms_draw = 1000.0 * acc_draw / n;
+                double ms_read = 1000.0 * acc_read / n;
+                double ms_pipe = 1000.0 * acc_pipe / n;
+                double ms_tot = ms_draw + ms_read + ms_pipe;
+                fprintf(stderr,
+                        "[drive-render-profile] %dx%d frame=%d avg over %d: "
+                        "draw=%.2fms read=%.2fms pipe=%.2fms total=%.2fms (%.1f FPS)\n",
+                        (int)client->width, (int)client->height, profile_frame, profile_every, ms_draw, ms_read,
+                        ms_pipe, ms_tot, ms_tot > 0 ? 1000.0 / ms_tot : 0.0);
+                acc_draw = acc_read = acc_pipe = 0.0;
+            }
+        }
+    } else { // Pop-up window
+        BeginDrawing();
+        ClearBackground(ROAD_COLOR);
+        BeginMode3D(client->camera);
+        handle_camera_controls(env->client);
+        draw_scene(env, client, 0, 0, 0, 0);
+
+        if (IsKeyPressed(KEY_TAB) && env->active_agent_count > 0) {
+            env->human_agent_idx = (env->human_agent_idx + 1) % env->active_agent_count;
+        }
+
+        DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
+        DrawText(TextFormat("Controlling agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
+        int human_idx = env->active_agent_indices[env->human_agent_idx];
+
+        Color action_color = IsKeyDown(KEY_LEFT_SHIFT) ? YELLOW : PUFF_WHITE;
+
+        if (env->action_type == 0) { // discrete
+            int *action_array = (int *)env->actions;
+            int action_val = action_array[env->human_agent_idx];
+
+            if (env->dynamics_model == CLASSIC) {
+                int num_steer = 13;
+                int accel_idx = action_val / num_steer;
+                int steer_idx = action_val % num_steer;
+                float accel_value = ACCELERATION_VALUES[accel_idx];
+                float steer_value = STEERING_VALUES[steer_idx];
+
+                DrawText(TextFormat("Acceleration: %.2f m/s^2", accel_value), 10, 110, 20, action_color);
+                DrawText(TextFormat("Steering: %.3f", steer_value), 10, 130, 20, action_color);
+            } else if (env->dynamics_model == JERK) {
+                int num_lat = 3;
+                int jerk_long_idx = action_val / num_lat;
+                int jerk_lat_idx = action_val % num_lat;
+                float jerk_long_value = JERK_LONG[jerk_long_idx];
+                float jerk_lat_value = JERK_LAT[jerk_lat_idx];
+
+                DrawText(TextFormat("Longitudinal Jerk: %.2f m/s^3", jerk_long_value), 10, 110, 20, action_color);
+                DrawText(TextFormat("Lateral Jerk: %.2f m/s^3", jerk_lat_value), 10, 130, 20, action_color);
+            }
+        } else { // continuous
+            float (*action_array_f)[2] = (float (*)[2])env->actions;
+            DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20,
+                     action_color);
+            DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, action_color);
+        }
+
+        int status_y = 150;
+        if (IsKeyDown(KEY_LEFT_SHIFT)) {
+            DrawText("[shift pressed]", 10, status_y, 20, YELLOW);
+            status_y += 20;
+        }
+        if (IsKeyDown(KEY_SPACE)) {
+            DrawText("[space pressed]", 10, status_y, 20, YELLOW);
+            status_y += 20;
+        }
+        if (IsKeyDown(KEY_LEFT_CONTROL)) {
+            DrawText("[ctrl pressed]", 10, status_y, 20, YELLOW);
+            status_y += 20;
+        }
+
+        DrawText("Controls: SHIFT + W/S - Accelerate/Brake, SHIFT + A/D - Steer, TAB - Switch Agent", 10,
+                 client->height - 30, 20, PUFF_WHITE);
+        DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, status_y, 20, PUFF_WHITE);
+        DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, status_y + 20, 20, PUFF_WHITE);
+        EndDrawing();
+    }
 }
 
 void close_client(Client *client) {
-    for (int i = 0; i < 6; i++) {
-        UnloadModel(client->cars[i]);
+#ifdef DRIVE_HAS_EGL
+    // Flush the last PBO frame before closing the pipe. Same row-reversed
+    // writev as the per-frame path so the trailing frame matches the rest.
+    if (client->egl_mode && client->pbo_frame_count > 0 && client->pbo[0] != 0) {
+        int prev = 1 - client->pbo_index;
+        int w = (int)client->width, h = (int)client->height;
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
+        unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        if (ptr) {
+            int row_bytes = w * 4;
+            int iov_max = 1024;
+            int rows_remaining = h;
+            int row_top = 0;
+            int io_error = 0;
+            while (rows_remaining > 0 && !io_error) {
+                int chunk = rows_remaining < iov_max ? rows_remaining : iov_max;
+                struct iovec iov[1024];
+                size_t chunk_bytes = 0;
+                for (int i = 0; i < chunk; i++) {
+                    int src_row = h - 1 - (row_top + i);
+                    iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
+                    iov[i].iov_len = row_bytes;
+                    chunk_bytes += row_bytes;
+                }
+                struct iovec *cur = iov;
+                int cur_cnt = chunk;
+                size_t cur_remaining = chunk_bytes;
+                while (cur_remaining > 0) {
+                    ssize_t written = writev(client->recorder_pipefd[1], cur, cur_cnt);
+                    if (written < 0) {
+                        if (errno == EINTR)
+                            continue;
+                        io_error = 1;
+                        break;
+                    }
+                    cur_remaining -= (size_t)written;
+                    size_t consumed = (size_t)written;
+                    while (cur_cnt > 0 && consumed >= cur[0].iov_len) {
+                        consumed -= cur[0].iov_len;
+                        cur++;
+                        cur_cnt--;
+                    }
+                    if (cur_cnt > 0 && consumed > 0) {
+                        cur[0].iov_base = (unsigned char *)cur[0].iov_base + consumed;
+                        cur[0].iov_len -= consumed;
+                    }
+                }
+                row_top += chunk;
+                rows_remaining -= chunk;
+            }
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glDeleteBuffers(2, client->pbo);
     }
-    UnloadTexture(client->puffers);
-    CloseWindow();
+#endif
+    // Free road cache
+    if (client->road_cache_valid) {
+        UnloadMesh(client->road_tri_mesh);
+    }
+    free(client->road_line_verts);
+    free(client->road_line_colors);
+
+    if (client->recorder_pid > 0) {
+        close(client->recorder_pipefd[1]);
+        waitpid(client->recorder_pid, NULL, 0);
+    }
+
+    // Always unload models — they hold GPU-side VBOs/VAOs/textures tracked by
+    // rlgl. Leaking them corrupts rlgl's internal bookkeeping and causes segfaults
+    // when the next make_client loads fresh models on the same GL context.
+    for (int i = 0; i < 6; i++)
+        UnloadModel(client->cars[i]);
+    UnloadModel(client->cyclist);
+    UnloadModel(client->pedestrian);
+
+    if (!client->egl_mode) {
+        // Non-EGL: also tear down window/Xvfb
+        CloseWindow();
+        if (client->xvfb_pid > 0) {
+            kill(client->xvfb_pid, SIGTERM);
+            waitpid(client->xvfb_pid, NULL, 0);
+            char lock_file[32], socket_file[32];
+            snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", client->xvfb_display_num);
+            snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", client->xvfb_display_num);
+            unlink(lock_file);
+            unlink(socket_file);
+            unsetenv("DISPLAY");
+        }
+    }
+    // EGL mode: don't touch GLFW/Xvfb/EGL — they persist across render envs.
+
     free(client);
 }
 
@@ -4442,6 +5269,10 @@ void sample_new_goal(Drive *env, int agent_idx) {
             // Calculate distance to point
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
 
+            // Goal must be outside the current goal radius so the agent has to drive to it
+            if (distance <= agent->reward_coefs[REWARD_COEF_GOAL_RADIUS])
+                continue;
+
             // compute distance
             float distance_error =
                 fmax(env->min_goal_distance - distance, fmax(0.0, distance - env->max_goal_distance));
@@ -4450,7 +5281,6 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 agent->goal_position_x = point_x;
                 agent->goal_position_y = point_y;
                 agent->goal_position_z = point_z;
-                sample_new_goal_radius(env, agent);
                 agent->goals_sampled_this_episode += 1.0f;
                 return;
                 // if not check whether is closer than the previous best alternative point
@@ -4474,6 +5304,5 @@ void sample_new_goal(Drive *env, int agent_idx) {
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goal_position_z = best_z;
-    sample_new_goal_radius(env, agent);
     agent->goals_sampled_this_episode += 1.0f;
 }

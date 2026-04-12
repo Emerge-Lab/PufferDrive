@@ -83,6 +83,13 @@ def parse_args():
         "--args", type=str, nargs="+", default=None, help="Args to override/sweep (e.g., learning_rate=1e-4:3e-4)"
     )
 
+    # GPU heartbeat: keeps utilization above threshold to prevent job reclamation on NYU cluster
+    parser.add_argument(
+        "--heartbeat",
+        action="store_true",
+        help="Run scripts/gpu_heartbeat.py in background alongside training",
+    )
+
     # Container settings
     parser.add_argument("--container", action="store_true", help="Run inside Singularity container")
     parser.add_argument(
@@ -94,7 +101,7 @@ def parse_args():
     parser.add_argument(
         "--container_overlay",
         type=str,
-        default="/scratch/ev2237/containers/pufferdrive/overlay.ext3",
+        default=f"/scratch/{os.environ.get('USER', '')}/images/PufferDrive/overlay-15GB-500K.ext3",
         help="Singularity overlay path",
     )
 
@@ -272,8 +279,8 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         import sys
         import submitit
 
-        # Code isolation: shallow symlink of top-level entries, then copy .so files
-        # so rebuilding for another branch won't break running jobs.
+        # Code isolation: symlink top-level entries, hard copy pufferlib/ source
+        # (symlink resources/ to avoid copying 3.7GB of maps/models).
         isolated_root = os.path.join(save_dir, "code")
         if os.path.exists(isolated_root):
             version = 1
@@ -291,18 +298,28 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 else:
                     os.remove(dst)
             os.symlink(src, dst)
-        # Copy pufferlib/ as a real dir tree so we can replace .so files
+        # Hard copy pufferlib/ so branch switches don't break running jobs.
+        # Previously used `cp -rs` (symlinks) which meant switching branches
+        # after submission would silently change the code running jobs use.
+        # We symlink resources/ (3.7GB of maps/models) to avoid slow copies,
+        # but hard copy everything else (source code, .so files).
         pufferlib_dst = os.path.join(isolated_root, "pufferlib")
         if os.path.islink(pufferlib_dst):
             os.remove(pufferlib_dst)
+        elif os.path.isdir(pufferlib_dst):
+            shutil.rmtree(pufferlib_dst)
         pufferlib_src = os.path.join(project_root, "pufferlib")
-        subprocess.run(["cp", "-rs", pufferlib_src, pufferlib_dst], check=True)
-        # Copy .so files over their symlinks so they survive rebuilds
-        for so_link in glob.glob(os.path.join(pufferlib_dst, "**", "*.so"), recursive=True):
-            if os.path.islink(so_link):
-                real_path = os.path.realpath(so_link)
-                os.remove(so_link)
-                shutil.copy2(real_path, so_link)
+        shutil.copytree(
+            pufferlib_src,
+            pufferlib_dst,
+            symlinks=False,
+            ignore=shutil.ignore_patterns("resources"),
+        )
+        # Symlink resources/ (large static data, safe to share)
+        resources_src = os.path.join(pufferlib_src, "resources")
+        resources_dst = os.path.join(pufferlib_dst, "resources")
+        if os.path.isdir(resources_src):
+            os.symlink(resources_src, resources_dst)
         project_root = isolated_root
 
         # Change to project directory and set up environment
@@ -345,6 +362,17 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         # Add save_dir to command
         full_cmd = base_cmd + cmd + ["--train.data-dir", save_dir]
 
+        # If heartbeat is enabled, wrap the training command in a brace group that:
+        #   1. backgrounds python scripts/gpu_heartbeat.py
+        #   2. runs training in the foreground
+        #   3. kills the heartbeat on training exit, preserving training's exit code
+        # Brace groups `{ ... ; }` run in the current shell (unlike parens) so the
+        # preceding `cd` and env exports still apply to the training command. The `&`
+        # backgrounds only the python call, not the whole compound statement.
+        def wrap_with_heartbeat(train_cmd_str):
+            hb = "python scripts/gpu_heartbeat.py > /tmp/gpu_heartbeat.log 2>&1 & HEARTBEAT_PID=$!"
+            return f"{{ {hb}; {train_cmd_str}; TRAIN_EXIT=$?; kill $HEARTBEAT_PID 2>/dev/null; exit $TRAIN_EXIT; }}"
+
         # Wrap with singularity if container mode is enabled
         if container_config is not None:
             env_setup = "source /ext3/env.sh"
@@ -358,7 +386,10 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 f"export WANDB_DIR={scratch_dir}/wandb_data && "
                 f"mkdir -p {scratch_dir}/cache"
             )
-            inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && " + " ".join(full_cmd)
+            train_str = " ".join(full_cmd)
+            if args.heartbeat:
+                train_str = wrap_with_heartbeat(train_str)
+            inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && {train_str}"
             full_cmd = [
                 "singularity",
                 "exec",
@@ -378,6 +409,10 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                     inner_cmd,
                 ]
             )
+        elif args.heartbeat:
+            # No container: still need to wrap in bash -c so the brace group parses.
+            train_str = " ".join(full_cmd)
+            full_cmd = ["bash", "-c", wrap_with_heartbeat(train_str)]
 
         print(f">>> Job: {job_name}")
         print(f">>> Working directory: {project_root}")

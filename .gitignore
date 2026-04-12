@@ -163,6 +163,8 @@ pufferlib/ocean/impulse_wars/benchmark/
 
 # Ignore data files
 data/
+!data/CarlaXODRs/
+!data/CarlaXODRs/**
 pufferlib/resources/drive/binaries/
 pufferlib/resources/drive/binaries/training/
 pufferlib/resources/drive/binaries/validation/
