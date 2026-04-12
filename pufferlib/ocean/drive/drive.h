@@ -4815,24 +4815,26 @@ void close_client(Client *client) {
     if (client->egl_mode) {
         rlglClose();
         egl_headless_cleanup();
-    } else
+    }
 #endif
-    {
+    // Always clean up GLFW/Xvfb — even in EGL mode, InitWindow was called
+    // and must be matched by CloseWindow to avoid stale state on next eval.
+    if (!client->egl_mode) {
         for (int i = 0; i < 6; i++)
             UnloadModel(client->cars[i]);
         UnloadModel(client->cyclist);
         UnloadModel(client->pedestrian);
-        CloseWindow();
-        if (client->xvfb_pid > 0) {
-            kill(client->xvfb_pid, SIGTERM);
-            waitpid(client->xvfb_pid, NULL, 0);
-            char lock_file[32], socket_file[32];
-            snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", client->xvfb_display_num);
-            snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", client->xvfb_display_num);
-            unlink(lock_file);
-            unlink(socket_file);
-            unsetenv("DISPLAY");
-        }
+    }
+    CloseWindow();
+    if (client->xvfb_pid > 0) {
+        kill(client->xvfb_pid, SIGTERM);
+        waitpid(client->xvfb_pid, NULL, 0);
+        char lock_file[32], socket_file[32];
+        snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", client->xvfb_display_num);
+        snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", client->xvfb_display_num);
+        unlink(lock_file);
+        unlink(socket_file);
+        unsetenv("DISPLAY");
     }
 
     free(client);
