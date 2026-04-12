@@ -3538,6 +3538,14 @@ struct Client {
     pid_t xvfb_pid;
     int xvfb_display_num;
     int egl_mode; // 1 = EGL headless GPU rendering (no Xvfb/InitWindow)
+    // Cached static road geometry (rebuilt once per episode, drawn every frame)
+    float *road_tri_verts;         // 3 floats (x,y,z) per vertex
+    unsigned char *road_tri_colors; // 4 bytes (RGBA) per vertex
+    int road_tri_count;            // number of triangles (verts = count * 3)
+    float *road_line_verts;
+    unsigned char *road_line_colors;
+    int road_line_count;           // number of lines (verts = count * 2)
+    int road_cache_valid;
     // PBO double-buffer for async glReadPixels (GPU→CPU DMA)
     unsigned int pbo[2];
     int pbo_index;       // which PBO to read INTO this frame (0 or 1)
@@ -4017,6 +4025,139 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
 }
 
+// Build cached road geometry from env->road_elements. Call once per episode.
+void build_road_cache(Drive *env, Client *client) {
+    // First pass: count triangles and lines
+    int tri_count = 0, line_count = 0;
+    for (int i = 0; i < env->num_roads; i++) {
+        RoadMapElement *road = &env->road_elements[i];
+        int segs = road->segment_length - 1;
+        if (segs <= 0) continue;
+        if (road->type == ROAD_EDGE)
+            tri_count += segs * 14; // 14 triangles per curb segment
+        else if (road->type == ROAD_LANE || road->type == ROAD_LINE)
+            line_count += segs;
+    }
+
+    // Allocate
+    free(client->road_tri_verts);
+    free(client->road_tri_colors);
+    free(client->road_line_verts);
+    free(client->road_line_colors);
+    client->road_tri_verts = (float *)malloc(tri_count * 3 * 3 * sizeof(float));
+    client->road_tri_colors = (unsigned char *)malloc(tri_count * 3 * 4);
+    client->road_line_verts = (float *)malloc(line_count * 2 * 3 * sizeof(float));
+    client->road_line_colors = (unsigned char *)malloc(line_count * 2 * 4);
+    client->road_tri_count = 0;
+    client->road_line_count = 0;
+
+    // Helper to push a triangle
+    #define PUSH_TRI(vx1,vy1,vz1, vx2,vy2,vz2, vx3,vy3,vz3, cr,cg,cb,ca) do { \
+        int _ti = client->road_tri_count * 9; \
+        int _ci = client->road_tri_count * 12; \
+        client->road_tri_verts[_ti+0]=vx1; client->road_tri_verts[_ti+1]=vy1; client->road_tri_verts[_ti+2]=vz1; \
+        client->road_tri_verts[_ti+3]=vx2; client->road_tri_verts[_ti+4]=vy2; client->road_tri_verts[_ti+5]=vz2; \
+        client->road_tri_verts[_ti+6]=vx3; client->road_tri_verts[_ti+7]=vy3; client->road_tri_verts[_ti+8]=vz3; \
+        for (int _v=0;_v<3;_v++) { \
+            client->road_tri_colors[_ci+_v*4+0]=cr; client->road_tri_colors[_ci+_v*4+1]=cg; \
+            client->road_tri_colors[_ci+_v*4+2]=cb; client->road_tri_colors[_ci+_v*4+3]=ca; \
+        } \
+        client->road_tri_count++; \
+    } while(0)
+
+    #define PUSH_LINE(vx1,vy1,vz1, vx2,vy2,vz2, cr,cg,cb,ca) do { \
+        int _li = client->road_line_count * 6; \
+        int _ci = client->road_line_count * 8; \
+        client->road_line_verts[_li+0]=vx1; client->road_line_verts[_li+1]=vy1; client->road_line_verts[_li+2]=vz1; \
+        client->road_line_verts[_li+3]=vx2; client->road_line_verts[_li+4]=vy2; client->road_line_verts[_li+5]=vz2; \
+        for (int _v=0;_v<2;_v++) { \
+            client->road_line_colors[_ci+_v*4+0]=cr; client->road_line_colors[_ci+_v*4+1]=cg; \
+            client->road_line_colors[_ci+_v*4+2]=cb; client->road_line_colors[_ci+_v*4+3]=ca; \
+        } \
+        client->road_line_count++; \
+    } while(0)
+
+    // Second pass: build geometry
+    for (int i = 0; i < env->num_roads; i++) {
+        RoadMapElement *road = &env->road_elements[i];
+        for (int j = 0; j < road->segment_length - 1; j++) {
+            float sx = road->x[j], sy = road->y[j], sz = road->z[j];
+            float ex = road->x[j+1], ey = road->y[j+1], ez = road->z[j+1];
+
+            if (road->type == ROAD_EDGE) {
+                // Same curb geometry as draw_road_edge
+                float curb_height = 0.5f, curb_width = 0.3f;
+                float dx = ex - sx, dy = ey - sy;
+                float len = sqrtf(dx*dx + dy*dy);
+                if (len < 1e-6f) continue;
+                float nx = -dy/len, ny = dx/len; // perpendicular
+                float hw = curb_width / 2;
+
+                float b1x=sx-nx*hw, b1y=sy-ny*hw, b2x=sx+nx*hw, b2y=sy+ny*hw;
+                float b3x=ex+nx*hw, b3y=ey+ny*hw, b4x=ex-nx*hw, b4y=ey-ny*hw;
+                float t1x=b1x, t1y=b1y, t1z=sz+curb_height;
+                float t2x=b2x, t2y=b2y, t2z=sz+curb_height;
+                float t3x=b3x, t3y=b3y, t3z=ez+curb_height;
+                float t4x=b4x, t4y=b4y, t4z=ez+curb_height;
+
+                // Bottom (160,160,160)
+                PUSH_TRI(b1x,b1y,sz, b2x,b2y,sz, b3x,b3y,ez, 160,160,160,255);
+                PUSH_TRI(b1x,b1y,sz, b3x,b3y,ez, b4x,b4y,ez, 160,160,160,255);
+                // Top (220,220,220)
+                PUSH_TRI(t1x,t1y,t1z, t3x,t3y,t3z, t2x,t2y,t2z, 220,220,220,255);
+                PUSH_TRI(t1x,t1y,t1z, t4x,t4y,t4z, t3x,t3y,t3z, 220,220,220,255);
+                // Sides (180,180,180) — 8 triangles for 4 quads
+                PUSH_TRI(b1x,b1y,sz, t1x,t1y,t1z, b2x,b2y,sz, 180,180,180,255);
+                PUSH_TRI(t1x,t1y,t1z, t2x,t2y,t2z, b2x,b2y,sz, 180,180,180,255);
+                PUSH_TRI(b2x,b2y,sz, t2x,t2y,t2z, b3x,b3y,ez, 180,180,180,255);
+                PUSH_TRI(t2x,t2y,t2z, t3x,t3y,t3z, b3x,b3y,ez, 180,180,180,255);
+                PUSH_TRI(b3x,b3y,ez, t3x,t3y,t3z, b4x,b4y,ez, 180,180,180,255);
+                PUSH_TRI(t3x,t3y,t3z, t4x,t4y,t4z, b4x,b4y,ez, 180,180,180,255);
+                PUSH_TRI(b4x,b4y,ez, t4x,t4y,t4z, b1x,b1y,sz, 180,180,180,255);
+                PUSH_TRI(t4x,t4y,t4z, t1x,t1y,t1z, b1x,b1y,sz, 180,180,180,255);
+            } else if (road->type == ROAD_LANE) {
+                Color c = Fade(SOFT_YELLOW, 0.25f);
+                PUSH_LINE(sx,sy,sz, ex,ey,ez, c.r,c.g,c.b,c.a);
+            } else if (road->type == ROAD_LINE) {
+                PUSH_LINE(sx,sy,sz, ex,ey,ez, 255,255,255,255);
+            }
+        }
+    }
+    #undef PUSH_TRI
+    #undef PUSH_LINE
+
+    client->road_cache_valid = 1;
+    fprintf(stderr, "[drive] Road cache built: %d triangles, %d lines\n",
+            client->road_tri_count, client->road_line_count);
+}
+
+// Draw cached road geometry via rlgl batch
+void draw_road_cached(Client *client) {
+    // Triangles (curbs)
+    if (client->road_tri_count > 0) {
+        rlBegin(RL_TRIANGLES);
+        int nv = client->road_tri_count * 3;
+        for (int i = 0; i < nv; i++) {
+            rlColor4ub(client->road_tri_colors[i*4], client->road_tri_colors[i*4+1],
+                       client->road_tri_colors[i*4+2], client->road_tri_colors[i*4+3]);
+            rlVertex3f(client->road_tri_verts[i*3], client->road_tri_verts[i*3+1], client->road_tri_verts[i*3+2]);
+        }
+        rlEnd();
+    }
+    // Lines (lanes, road lines)
+    if (client->road_line_count > 0) {
+        rlSetLineWidth(2.0f);
+        rlBegin(RL_LINES);
+        int nv = client->road_line_count * 2;
+        for (int i = 0; i < nv; i++) {
+            rlColor4ub(client->road_line_colors[i*4], client->road_line_colors[i*4+1],
+                       client->road_line_colors[i*4+2], client->road_line_colors[i*4+3]);
+            rlVertex3f(client->road_line_verts[i*3], client->road_line_verts[i*3+1], client->road_line_verts[i*3+2]);
+        }
+        rlEnd();
+    }
+}
+
 void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float end_y, float start_z, float end_z) {
     Color CURB_TOP = (Color){220, 220, 220, 255};  // Top surface - lightest
     Color CURB_SIDE = (Color){180, 180, 180, 255}; // Side faces - medium
@@ -4309,28 +4450,24 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
     }
 
-    // Draw road elements
-    for (int i = 0; i < env->num_roads; i++) {
-        RoadMapElement *road = &env->road_elements[i];
-        for (int j = 0; j < road->segment_length - 1; j++) {
-            Vector3 start = {road->x[j], road->y[j], road->z[j]};
-            Vector3 end = {road->x[j + 1], road->y[j + 1], road->z[j + 1]};
-            Color lineColor = GRAY;
-            if (road->type == ROAD_LANE)
-                lineColor = Fade(SOFT_YELLOW, 0.25f);
-            else if (road->type == ROAD_LINE)
-                lineColor = WHITE;
-            else if (road->type == ROAD_EDGE)
-                lineColor = Fade(WHITE, 0.7f);
-            else if (road->type == DRIVEWAY)
-                lineColor = RED;
-
-            if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-                if (road->type == ROAD_EDGE) {
-                    draw_road_edge(env, start.x, start.y, end.x, end.y, start.z, end.z);
-                } else if (road->type == ROAD_LANE || road->type == ROAD_LINE) {
-                    rlSetLineWidth(2.0f);
-                    DrawLine3D(start, end, lineColor);
+    // Draw road elements (cached or immediate)
+    if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
+        if (client->road_cache_valid) {
+            draw_road_cached(client);
+        } else {
+            // Fallback: immediate mode (first frame before cache is built, or interactive)
+            for (int i = 0; i < env->num_roads; i++) {
+                RoadMapElement *road = &env->road_elements[i];
+                for (int j = 0; j < road->segment_length - 1; j++) {
+                    Vector3 start = {road->x[j], road->y[j], road->z[j]};
+                    Vector3 end = {road->x[j + 1], road->y[j + 1], road->z[j + 1]};
+                    if (road->type == ROAD_EDGE) {
+                        draw_road_edge(env, start.x, start.y, end.x, end.y, start.z, end.z);
+                    } else if (road->type == ROAD_LANE || road->type == ROAD_LINE) {
+                        Color lineColor = (road->type == ROAD_LANE) ? Fade(SOFT_YELLOW, 0.25f) : WHITE;
+                        rlSetLineWidth(2.0f);
+                        DrawLine3D(start, end, lineColor);
+                    }
                 }
             }
         }
@@ -4375,6 +4512,11 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         env->client = make_client(env);
     }
     Client *client = env->client;
+
+    // Build road cache on first render (static geometry, reused every frame)
+    if (!client->road_cache_valid) {
+        build_road_cache(env, client);
+    }
 
     // Per-stage timing. Enabled with DRIVE_RENDER_PROFILE=1 in the environment.
     // Prints rolling averages every DRIVE_RENDER_PROFILE_EVERY frames (default 60).
@@ -4636,6 +4778,12 @@ void close_client(Client *client) {
         glDeleteBuffers(2, client->pbo);
     }
 #endif
+    // Free road cache
+    free(client->road_tri_verts);
+    free(client->road_tri_colors);
+    free(client->road_line_verts);
+    free(client->road_line_colors);
+
     if (client->recorder_pid > 0) {
         close(client->recorder_pipefd[1]);
         waitpid(client->recorder_pid, NULL, 0);
