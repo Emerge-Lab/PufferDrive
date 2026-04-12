@@ -3714,13 +3714,12 @@ Client *make_client(Drive *env) {
                 // GPU/PBO path: same ffmpeg command as non-EGL (video may be vertically
                 // flipped but this confirms PBO data reaches ffmpeg).
                 execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
-                       "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "-loglevel",
-                       "error", filename, NULL);
+                       "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", filename,
+                       NULL);
             }
 #endif
             execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
-                   "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "-loglevel",
-                   "error", filename, NULL);
+                   "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", filename, NULL);
             fprintf(stderr, "execlp ffmpeg failed\n");
             _exit(1);
         }
