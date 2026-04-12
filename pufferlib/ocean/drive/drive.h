@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
@@ -3724,6 +3725,8 @@ Client *make_client(Drive *env) {
             _exit(1);
         }
         close(client->recorder_pipefd[0]);
+        fprintf(stderr, "[drive] ffmpeg forked: pid=%d pipe_write_fd=%d size=%s file=%s egl=%d\n", client->recorder_pid,
+                client->recorder_pipefd[1], size_str, filename, client->egl_mode);
 
         // Increase pipe buffer to reduce write() blocking on large frames
 #ifdef __linux__
