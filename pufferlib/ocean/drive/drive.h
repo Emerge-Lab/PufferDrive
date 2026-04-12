@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -4730,16 +4731,46 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             if (profile_enabled)
                 t_read_end = GetTime();
 
-            // Map previous PBO and write to pipe (skip frame 0 — no previous data)
+            // Map previous PBO and write to pipe (skip frame 0 — no previous data).
+            // glReadPixels returns rows bottom-up (GL convention: origin at
+            // bottom-left), but ffmpeg expects top-down. We write the rows in
+            // reverse order via writev so each frame takes one syscall and no
+            // 19 MB memcpy — iovecs can point directly into the mapped PBO.
             if (client->pbo_frame_count > 0) {
                 glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
                 unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
                 if (ptr) {
-                    ssize_t written = write(client->recorder_pipefd[1], ptr, frame_bytes);
-                    if (client->pbo_frame_count <= 3 || written != frame_bytes) {
-                        fprintf(stderr, "[drive-pbo] frame=%d write=%zd/%d fd=%d ptr=%p errno=%d(%s)\n",
-                                client->pbo_frame_count, written, frame_bytes, client->recorder_pipefd[1], (void *)ptr,
-                                errno, strerror(errno));
+                    int row_bytes = w * 4;
+                    // IOV_MAX on Linux is 1024, so frames taller than 1024 rows
+                    // need multiple writev calls. Split the flip into chunks
+                    // of at most IOV_MAX rows, each chunk in top-down order.
+                    int iov_max = 1024;
+                    int rows_remaining = h;
+                    int row_top = 0; // next top-down row we're about to emit
+                    ssize_t total_written = 0;
+                    while (rows_remaining > 0) {
+                        int chunk = rows_remaining < iov_max ? rows_remaining : iov_max;
+                        struct iovec iov[1024];
+                        for (int i = 0; i < chunk; i++) {
+                            // Top-down row (row_top + i) corresponds to
+                            // bottom-up source row (h - 1 - (row_top + i)).
+                            int src_row = h - 1 - (row_top + i);
+                            iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
+                            iov[i].iov_len = row_bytes;
+                        }
+                        ssize_t written = writev(client->recorder_pipefd[1], iov, chunk);
+                        if (written < 0) {
+                            fprintf(stderr, "[drive-pbo] frame=%d writev chunk=%d failed errno=%d(%s)\n",
+                                    client->pbo_frame_count, chunk, errno, strerror(errno));
+                            break;
+                        }
+                        total_written += written;
+                        row_top += chunk;
+                        rows_remaining -= chunk;
+                    }
+                    if (client->pbo_frame_count <= 3 || total_written != frame_bytes) {
+                        fprintf(stderr, "[drive-pbo] frame=%d writev=%zd/%d fd=%d ptr=%p\n", client->pbo_frame_count,
+                                total_written, frame_bytes, client->recorder_pipefd[1], (void *)ptr);
                     }
                     glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
                 } else {
@@ -4855,14 +4886,31 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
 void close_client(Client *client) {
 #ifdef DRIVE_HAS_EGL
-    // Flush the last PBO frame before closing the pipe
+    // Flush the last PBO frame before closing the pipe. Same row-reversed
+    // writev as the per-frame path so the trailing frame matches the rest.
     if (client->egl_mode && client->pbo_frame_count > 0 && client->pbo[0] != 0) {
         int prev = 1 - client->pbo_index;
-        int frame_bytes = (int)client->width * (int)client->height * 4;
+        int w = (int)client->width, h = (int)client->height;
         glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
         unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
         if (ptr) {
-            write(client->recorder_pipefd[1], ptr, frame_bytes);
+            int row_bytes = w * 4;
+            int iov_max = 1024;
+            int rows_remaining = h;
+            int row_top = 0;
+            while (rows_remaining > 0) {
+                int chunk = rows_remaining < iov_max ? rows_remaining : iov_max;
+                struct iovec iov[1024];
+                for (int i = 0; i < chunk; i++) {
+                    int src_row = h - 1 - (row_top + i);
+                    iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
+                    iov[i].iov_len = row_bytes;
+                }
+                if (writev(client->recorder_pipefd[1], iov, chunk) < 0)
+                    break;
+                row_top += chunk;
+                rows_remaining -= chunk;
+            }
             glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
