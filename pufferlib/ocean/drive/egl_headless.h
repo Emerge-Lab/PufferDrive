@@ -185,25 +185,31 @@ static int egl_headless_resize(int width, int height) {
 // Call this AFTER InitWindow + rlglInit have loaded glad and initial state.
 // We must first release the GLX context that GLFW/InitWindow created.
 static int egl_switch_to_gpu(void) {
-    // Release the GLX context by using glXMakeCurrent via dlsym
-    // (we don't have glx.h here, so go through the dynamic linker)
+    // Release the GLX context that GLFW/InitWindow created on this thread.
+    // Use the *actual* current GLX display and context — opening a fresh
+    // X connection via XOpenDisplay(NULL) doesn't match the current context
+    // and can produce BadMatch on strict drivers. We don't have glx.h here,
+    // so look everything up via dlsym.
     typedef int (*glXMakeCurrentFunc)(void *, unsigned long, void *);
+    typedef void *(*glXGetCurrentDisplayFunc)(void);
+    typedef void *(*glXGetCurrentContextFunc)(void);
     void *libgl = dlopen("libGL.so.1", RTLD_LAZY);
     if (libgl) {
         glXMakeCurrentFunc glXMC = (glXMakeCurrentFunc)dlsym(libgl, "glXMakeCurrent");
-        // Get the current X display from the DISPLAY env var via XOpenDisplay
-        typedef void *(*XOpenDisplayFunc)(const char *);
-        void *libx11 = dlopen("libX11.so.6", RTLD_LAZY);
-        if (libx11 && glXMC) {
-            XOpenDisplayFunc XOD = (XOpenDisplayFunc)dlsym(libx11, "XOpenDisplay");
-            if (XOD) {
-                void *dpy = XOD(NULL);
-                if (dpy) {
-                    glXMC(dpy, 0, NULL); // Release GLX context on this thread
+        glXGetCurrentDisplayFunc glXGCD = (glXGetCurrentDisplayFunc)dlsym(libgl, "glXGetCurrentDisplay");
+        glXGetCurrentContextFunc glXGCC = (glXGetCurrentContextFunc)dlsym(libgl, "glXGetCurrentContext");
+        if (glXMC && glXGCD && glXGCC) {
+            void *current_dpy = glXGCD();
+            void *current_ctx = glXGCC();
+            if (current_ctx && current_dpy) {
+                if (glXMC(current_dpy, 0, NULL)) {
                     fprintf(stderr, "[egl_headless] Released GLX context\n");
+                } else {
+                    fprintf(stderr, "[egl_headless] Failed to release current GLX context\n");
                 }
             }
         }
+        dlclose(libgl);
     }
 
     if (!eglMakeCurrent(g_egl_ctx.display, g_egl_ctx.surface, g_egl_ctx.surface, g_egl_ctx.context)) {
