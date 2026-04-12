@@ -142,7 +142,7 @@ int unnormalize_traffic_light_state(int norm_state) {
 /**
  * @brief Categorizes the type of collision an agent is involved in.
  *
- * - STATIONARY_PARTNER_COLLISION: ego hit a stationary partner agent
+ * - STATIONARY_AGENT_COLLISION:   ego hit a stationary partner agent
  *
  * - STATIONARY_EGO_COLLISION:     ego was stationary when hit by another agent
  *
