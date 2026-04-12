@@ -2,15 +2,15 @@
 set -e
 
 # Usage:
-#   ./build.sh breakout              # Build _C.so with breakout statically linked
-#   ./build.sh breakout --float      # float32 precision (required for --slowly)
-#   ./build.sh breakout --cpu        # CPU fallback, torch only
-#   ./build.sh breakout --debug      # Debug build
-#   ./build.sh breakout --local      # Standalone executable (debug, sanitizers)
-#   ./build.sh breakout --fast       # Standalone executable (optimized)
-#   ./build.sh breakout --web        # Emscripten web build
-#   ./build.sh breakout --profile    # Kernel profiling binary
-#   ./build.sh all                   # Build all envs with default and --float
+#   ./build.sh drive                 # Build _C.so with drive statically linked
+#   ./build.sh drive --float         # float32 precision (required for --slowly)
+#   ./build.sh drive --cpu           # CPU fallback, torch only
+#   ./build.sh drive --debug         # Debug build
+#   ./build.sh drive --local         # Standalone executable (debug, sanitizers)
+#   ./build.sh drive --fast          # Standalone executable (optimized)
+#   ./build.sh drive --web           # Emscripten web build
+#   ./build.sh drive --profile       # Kernel profiling binary
+#   ./build.sh all                   # Build drive with default and --float
 
 if [ -z "$1" ]; then
     echo "Usage: ./build.sh ENV_NAME [--float] [--debug] [--local|--fast|--web|--profile|--cpu|--all]"
@@ -106,16 +106,6 @@ if [ "$ENV" = "constellation" ]; then
 elif [ "$ENV" = "trailer" ]; then
     SRC_DIR="trailer"
     OUTPUT_NAME="trailer/trailer"
-elif [ "$ENV" = "impulse_wars" ]; then
-    SRC_DIR="ocean/$ENV"
-    if [ "$MODE" = "web" ]; then BOX2D_NAME='box2d-web'
-    elif [ "$PLATFORM" = "Linux" ]; then BOX2D_NAME='box2d-linux-amd64'
-    else BOX2D_NAME='box2d-macos-arm64'
-    fi
-    BOX2D_URL="https://github.com/capnspacehook/box2d/releases/latest/download"
-    download "$BOX2D_NAME" "$BOX2D_URL/$BOX2D_NAME.tar.gz"
-    INCLUDES+=(-I./$BOX2D_NAME/include -I./$BOX2D_NAME/src)
-    LINK_ARCHIVES+=("./$BOX2D_NAME/libbox2d.a")
 elif [ -d "ocean/$ENV" ]; then
     SRC_DIR="ocean/$ENV"
 else

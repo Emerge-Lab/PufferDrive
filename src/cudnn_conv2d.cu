@@ -1,5 +1,5 @@
 // cuDNN Conv2d: forward/backward with fused bias+activation.
-// Included by ocean.cu (training) and tests/test_nmmo3_cuda.cu (test).
+// Shared cuDNN conv helpers for the training backend.
 
 #ifndef CUDNN_CONV2D_CU
 #define CUDNN_CONV2D_CU

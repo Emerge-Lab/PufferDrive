@@ -1,6 +1,6 @@
 ## puffer [train | eval | sweep] [env_name] [optional args] -- See https://puffer.ai for full detail0
 # This is the same as python -m pufferlib.pufferl [train | eval | sweep] [env_name] [optional args]
-# Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_nmmo3
+# Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train drive
 
 import os
 import glob
@@ -508,4 +508,3 @@ def load_policy(args, vec):
         policy.load_state_dict(state_dict)
 
     return policy
-

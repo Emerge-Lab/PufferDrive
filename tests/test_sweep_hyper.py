@@ -309,7 +309,7 @@ if __name__ == "__main__":
         help="Skip experiments and only visualize results from the output file.",
     )
 
-    env_name = "puffer_breakout"
+    env_name = "drive"
     args = pufferl.load_config(env_name, parser)
 
     output_file = args["output_file"]

@@ -20,7 +20,7 @@ const int A_ = 4;
 const int INPUT_SIZE = 96;
 
 #ifndef ENV_NAME
-#error "ENV_NAME must be defined at compile time (e.g. -DENV_NAME=breakout)"
+#error "ENV_NAME must be defined at compile time (e.g. -DENV_NAME=drive)"
 #endif
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -36,7 +36,7 @@ void print_usage(const char* prog) {
     printf("  fusedscan      - Fused scan (checkpointed) kernel only\n");
     printf("  samplelogits   - Sample logits kernel only\n");
     printf("  ppoloss        - PPO loss fused fwd+bwd kernel\n");
-    printf("  im2col         - im2col + col2im (nmmo3 conv sizes, B=1024)\n");
+    printf("  im2col         - im2col + col2im microbenchmark (B=1024)\n");
     printf("  envspeed       - Environment step throughput\n");
     printf("    --buffers N  - Number of buffers (default: %d)\n", BUF);
     printf("    --threads N  - Number of threads (default: 16)\n");
