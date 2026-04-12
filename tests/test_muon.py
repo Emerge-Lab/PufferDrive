@@ -1,4 +1,3 @@
-
 import torch
 import torch.utils.cpp_extension
 import torch.nn as nn
@@ -6,7 +5,7 @@ import warnings
 from typing import List
 
 # Suppress heavyball warnings
-warnings.filterwarnings(action='ignore', category=UserWarning, module=r'heavyball.*')
+warnings.filterwarnings(action="ignore", category=UserWarning, module=r"heavyball.*")
 
 # Try importing torch.optim.Muon (from muon-optim package)
 from pufferlib.muon import Muon as TorchMuon
@@ -24,11 +23,12 @@ torch.set_num_threads(1)
 
 # Config
 config = {
-    'learning_rate': 1e-3,
-    'adam_beta1': 0.9,
-    'adam_beta2': 0.999,
-    'adam_eps': 1e-8,
+    "learning_rate": 1e-3,
+    "adam_beta1": 0.9,
+    "adam_beta2": 0.999,
+    "adam_eps": 1e-8,
 }
+
 
 # Model: Linear -> ReLU -> Linear (no biases)
 class Net(nn.Module):
@@ -40,6 +40,7 @@ class Net(nn.Module):
 
     def forward(self, x):
         return self.l2(self.act(self.l1(x)))
+
 
 # Initialize model and data
 model1 = Net()
@@ -56,18 +57,18 @@ y = torch.randn(16, 1)
 # Optimizers
 heavy_optimizer = ForeachMuon(
     model1.parameters(),
-    lr=config['learning_rate'],
-    betas=(config['adam_beta1'], config['adam_beta2']),
-    eps=config['adam_eps'],
+    lr=config["learning_rate"],
+    betas=(config["adam_beta1"], config["adam_beta2"]),
+    eps=config["adam_eps"],
     heavyball_momentum=True,
-    compile_step=False
+    compile_step=False,
 )
 
 torch_optimizer = TorchMuon(
     model2.parameters(),
-    lr=config['learning_rate'],
-    momentum=config['adam_beta1'],
-    eps=config['adam_eps'],
+    lr=config["learning_rate"],
+    momentum=config["adam_beta1"],
+    eps=config["adam_eps"],
     weight_decay=0.0,
 )
 
@@ -105,7 +106,7 @@ for epoch in range(n_epochs):
         if not torch.allclose(p1.data, p2.data, atol=1e-6, rtol=1e-5):
             all_close = False
 
-    print(f"{epoch+1:<6} {str(all_close):<10} {max_diff:<15.3e}")
+    print(f"{epoch + 1:<6} {str(all_close):<10} {max_diff:<15.3e}")
 
     # Optional: break early if divergence
     if not all_close and max_diff > 1e-4:

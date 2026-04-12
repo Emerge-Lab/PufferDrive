@@ -25,6 +25,7 @@ dependencies = [
     "scikit-learn",
     "wandb",
     "pybind11",
+    "ruff",
 ]
 
 [project.scripts]
@@ -40,3 +41,30 @@ include = ["pufferlib*"]
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "F",    # Pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "C90",  # mccabe
+    "I",    # isort
+    "N",    # pep8-naming
+]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

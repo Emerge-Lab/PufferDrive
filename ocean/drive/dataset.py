@@ -26,10 +26,7 @@ TRAJECTORY_LENGTH = 91
 
 def calculate_area(p1, p2, p3):
     """Calculate the area of the triangle using the determinant method."""
-    return 0.5 * abs(
-        (p1["x"] - p3["x"]) * (p2["y"] - p1["y"])
-        - (p1["x"] - p2["x"]) * (p3["y"] - p1["y"])
-    )
+    return 0.5 * abs((p1["x"] - p3["x"]) * (p2["y"] - p1["y"]) - (p1["x"] - p2["x"]) * (p3["y"] - p1["y"]))
 
 
 def dist(a, b):
@@ -67,10 +64,7 @@ def simplify_polyline(geometry, polyline_reduction_threshold, max_segment_length
             point2 = geometry[k_1]
             point3 = geometry[k_2]
             area = calculate_area(point1, point2, point3)
-            if (
-                area < polyline_reduction_threshold
-                and dist(point1, point3) <= max_segment_length
-            ):
+            if area < polyline_reduction_threshold and dist(point1, point3) <= max_segment_length:
                 skip[k_1] = True
                 skip_changed = True
                 k = k_2
@@ -103,31 +97,20 @@ def save_map_binary(map_data, output_file, unique_map_id):
             positions = obj.get("position", [])
             for coord in ["x", "y", "z"]:
                 for i in range(TRAJECTORY_LENGTH):
-                    pos = (
-                        positions[i]
-                        if i < len(positions)
-                        else {"x": 0.0, "y": 0.0, "z": 0.0}
-                    )
+                    pos = positions[i] if i < len(positions) else {"x": 0.0, "y": 0.0, "z": 0.0}
                     f.write(struct.pack("f", float(pos.get(coord, 0.0))))
 
             velocities = obj.get("velocity", [])
             for coord in ["x", "y", "z"]:
                 for i in range(TRAJECTORY_LENGTH):
-                    vel = (
-                        velocities[i]
-                        if i < len(velocities)
-                        else {"x": 0.0, "y": 0.0, "z": 0.0}
-                    )
+                    vel = velocities[i] if i < len(velocities) else {"x": 0.0, "y": 0.0, "z": 0.0}
                     f.write(struct.pack("f", float(vel.get(coord, 0.0))))
 
             headings = obj.get("heading", [])
             f.write(
                 struct.pack(
                     f"{TRAJECTORY_LENGTH}f",
-                    *[
-                        float(headings[i]) if i < len(headings) else 0.0
-                        for i in range(TRAJECTORY_LENGTH)
-                    ],
+                    *[float(headings[i]) if i < len(headings) else 0.0 for i in range(TRAJECTORY_LENGTH)],
                 )
             )
 
@@ -135,10 +118,7 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(
                 struct.pack(
                     f"{TRAJECTORY_LENGTH}i",
-                    *[
-                        int(valids[i]) if i < len(valids) else 0
-                        for i in range(TRAJECTORY_LENGTH)
-                    ],
+                    *[int(valids[i]) if i < len(valids) else 0 for i in range(TRAJECTORY_LENGTH)],
                 )
             )
 

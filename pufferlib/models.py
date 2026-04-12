@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class Policy(nn.Module):
     def __init__(self, encoder, decoder, network):
         super().__init__()
@@ -22,10 +23,11 @@ class Policy(nn.Module):
 
     def forward(self, x):
         B, TT = x.shape[:2]
-        h = self.encoder(x.reshape(B*TT, *x.shape[2:]))
+        h = self.encoder(x.reshape(B * TT, *x.shape[2:]))
         h = self.network.forward_train(h.reshape(B, TT, -1))
-        logits, values = self.decoder(h.reshape(B*TT, -1))
+        logits, values = self.decoder(h.reshape(B * TT, -1))
         return logits, values.reshape(B, TT)
+
 
 class DefaultEncoder(nn.Module):
     def __init__(self, obs_size, hidden_size=128):
@@ -34,6 +36,7 @@ class DefaultEncoder(nn.Module):
 
     def forward(self, observations):
         return self.encoder(observations.view(observations.shape[0], -1).float())
+
 
 class DefaultDecoder(nn.Module):
     def __init__(self, nvec, hidden_size=128):
@@ -63,6 +66,7 @@ class DefaultDecoder(nn.Module):
         values = self.value_function(hidden)
         return logits, values
 
+
 class MLP(nn.Module):
     def __init__(self, hidden_size, num_layers=1, **kwargs):
         super().__init__()
@@ -80,15 +84,14 @@ class MLP(nn.Module):
     def forward_train(self, h):
         return self.net(h)
 
+
 class MinGRU(nn.Module):
     # https://arxiv.org/abs/2410.01201v1
     def __init__(self, hidden_size, num_layers=1, **kwargs):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.layers = nn.ModuleList([
-            nn.Linear(hidden_size, 3 * hidden_size, bias=False) for _ in range(num_layers)
-        ])
+        self.layers = nn.ModuleList([nn.Linear(hidden_size, 3 * hidden_size, bias=False) for _ in range(num_layers)])
 
     def _g(self, x):
         return torch.where(x >= 0, x + 0.5, x.sigmoid())
@@ -114,7 +117,7 @@ class MinGRU(nn.Module):
         state_out = []
         for i in range(self.num_layers):
             hidden, gate, proj = self.layers[i](h).chunk(3, dim=-1)
-            out = torch.lerp(state[i:i+1].transpose(0, 1), self._g(hidden), gate.sigmoid())
+            out = torch.lerp(state[i : i + 1].transpose(0, 1), self._g(hidden), gate.sigmoid())
             h = self._highway(h, out, proj)
             state_out.append(out[:, -1:])
         return h.squeeze(1), (torch.stack(state_out, 0).squeeze(2),)
@@ -129,6 +132,7 @@ class MinGRU(nn.Module):
             h = self._highway(h, out, proj)
         return h
 
+
 class LSTM(nn.Module):
     def __init__(self, hidden_size, num_layers=1, **kwargs):
         super().__init__()
@@ -140,10 +144,10 @@ class LSTM(nn.Module):
 
         for i in range(num_layers):
             cell = self.cell[i]
-            w_ih = getattr(self.lstm, f'weight_ih_l{i}')
-            w_hh = getattr(self.lstm, f'weight_hh_l{i}')
-            b_ih = getattr(self.lstm, f'bias_ih_l{i}')
-            b_hh = getattr(self.lstm, f'bias_hh_l{i}')
+            w_ih = getattr(self.lstm, f"weight_ih_l{i}")
+            w_hh = getattr(self.lstm, f"weight_hh_l{i}")
+            b_ih = getattr(self.lstm, f"bias_ih_l{i}")
+            b_hh = getattr(self.lstm, f"bias_hh_l{i}")
             nn.init.orthogonal_(w_ih, 1.0)
             nn.init.orthogonal_(w_hh, 1.0)
             b_ih.data.zero_()
@@ -173,6 +177,7 @@ class LSTM(nn.Module):
         h, _ = self.lstm(h)
         return h.transpose(0, 1)
 
+
 class GRU(nn.Module):
     def __init__(self, hidden_size, num_layers=1, **kwargs):
         super().__init__()
@@ -185,10 +190,10 @@ class GRU(nn.Module):
 
         for i in range(num_layers):
             cell = self.cell[i]
-            w_ih = getattr(self.gru, f'weight_ih_l{i}')
-            w_hh = getattr(self.gru, f'weight_hh_l{i}')
-            b_ih = getattr(self.gru, f'bias_ih_l{i}')
-            b_hh = getattr(self.gru, f'bias_hh_l{i}')
+            w_ih = getattr(self.gru, f"weight_ih_l{i}")
+            w_hh = getattr(self.gru, f"weight_hh_l{i}")
+            b_ih = getattr(self.gru, f"bias_ih_l{i}")
+            b_hh = getattr(self.gru, f"bias_hh_l{i}")
             nn.init.orthogonal_(w_ih, 1.0)
             nn.init.orthogonal_(w_hh, 1.0)
             b_ih.data.zero_()
@@ -222,10 +227,13 @@ class GRU(nn.Module):
         h = self.norm(h)
         return h.transpose(0, 1)
 
+
 class NatureEncoder(nn.Module):
-    '''NatureCNN encoder (Mnih et al. 2015). Returns [batch, hidden_size].'''
-    def __init__(self, env, hidden_size=512, framestack=1, flat_size=64*7*7,
-            channels_last=False, downsample=1, **kwargs):
+    """NatureCNN encoder (Mnih et al. 2015). Returns [batch, hidden_size]."""
+
+    def __init__(
+        self, env, hidden_size=512, framestack=1, flat_size=64 * 7 * 7, channels_last=False, downsample=1, **kwargs
+    ):
         super().__init__()
         self.channels_last = channels_last
         self.downsample = downsample
@@ -245,8 +253,9 @@ class NatureEncoder(nn.Module):
         if self.channels_last:
             observations = observations.permute(0, 3, 1, 2)
         if self.downsample > 1:
-            observations = observations[:, :, ::self.downsample, ::self.downsample]
+            observations = observations[:, :, :: self.downsample, :: self.downsample]
         return self.network(observations.float() / 255.0)
+
 
 class ResidualBlock(nn.Module):
     def __init__(self, channels):
@@ -261,6 +270,7 @@ class ResidualBlock(nn.Module):
         x = F.relu(x)
         x = self.conv1(x)
         return x + inputs
+
 
 class ConvSequence(nn.Module):
     def __init__(self, input_shape, out_channels):
@@ -282,14 +292,16 @@ class ConvSequence(nn.Module):
         _c, h, w = self._input_shape
         return (self._out_channels, (h + 1) // 2, (w + 1) // 2)
 
+
 class ImpalaEncoder(nn.Module):
-    '''IMPALA ResNet encoder (Espeholt et al. 2018). Returns [batch, hidden_size].'''
+    """IMPALA ResNet encoder (Espeholt et al. 2018). Returns [batch, hidden_size]."""
+
     def __init__(self, env, hidden_size=256, cnn_width=16, **kwargs):
         super().__init__()
         h, w, c = env.single_observation_space.shape
         shape = (c, h, w)
         conv_seqs = []
-        for out_channels in [cnn_width, 2*cnn_width, 2*cnn_width]:
+        for out_channels in [cnn_width, 2 * cnn_width, 2 * cnn_width]:
             conv_seq = ConvSequence(shape, out_channels)
             shape = conv_seq.get_output_shape()
             conv_seqs.append(conv_seq)

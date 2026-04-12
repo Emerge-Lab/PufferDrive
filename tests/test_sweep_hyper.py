@@ -5,9 +5,11 @@ import numpy as np
 import torch
 
 import pandas as pd
+
 try:
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MaxNLocator
+
     _MATPLOTLIB_AVAILABLE = True
 except ImportError:
     _MATPLOTLIB_AVAILABLE = False
@@ -50,9 +52,7 @@ def evaluate_gp(gp_model, likelihood, test_x, test_y):
 
     # 3. Negative Log-Likelihood (NLL)
     # This is the negative of the log probability of the test data under the model's predictions
-    nll = (
-        -torch.distributions.Normal(pred_mean, pred_std).log_prob(test_y).mean().item()
-    )
+    nll = -torch.distributions.Normal(pred_mean, pred_std).log_prob(test_y).mean().item()
 
     return {
         "mae": mae,
@@ -61,14 +61,10 @@ def evaluate_gp(gp_model, likelihood, test_x, test_y):
     }
 
 
-def _validate_gp_model(
-    gp_model, likelihood, val_obs, train_obs, target_key, use_log=False
-):
+def _validate_gp_model(gp_model, likelihood, val_obs, train_obs, target_key, use_log=False):
     """Helper to prepare validation data, evaluate a GP model, and print metrics."""
     val_x = torch.from_numpy(np.stack([e["input"] for e in val_obs])).to(torch.float64)
-    val_y = torch.from_numpy(np.array([e[target_key] for e in val_obs])).to(
-        torch.float64
-    )
+    val_y = torch.from_numpy(np.array([e[target_key] for e in val_obs])).to(torch.float64)
     train_y = np.array([e[target_key] for e in train_obs])
 
     if use_log:
@@ -81,9 +77,7 @@ def _validate_gp_model(
     metrics = evaluate_gp(gp_model, likelihood, val_x, val_y_norm)
 
     target_name = f"log-{target_key}" if use_log else target_key
-    print(
-        f"{target_key.capitalize()} GP Validation Metrics (on normalized {target_name}):"
-    )
+    print(f"{target_key.capitalize()} GP Validation Metrics (on normalized {target_name}):")
     for k, v in metrics.items():
         print(f"  {k}: {v:.4f}")
 
@@ -129,9 +123,7 @@ def run_experiment(args, train_obs, val_obs, gp_iter, gp_lr, use_gpu=False):
         score_loss_history.append(score_loss)
         cost_loss_history.append(cost_loss)
 
-    print(
-        f"  Finished training on {len(train_obs)} observations over {num_batches} iterations."
-    )
+    print(f"  Finished training on {len(train_obs)} observations over {num_batches} iterations.")
 
     # --- Evaluate Score GP ---
     score_metrics = _validate_gp_model(
@@ -199,7 +191,7 @@ def visualize_results(results_file):
     iters_list = sorted(df["gp_iter"].unique())
     colors = plt.cm.viridis(np.linspace(0, 1, len(iters_list)))
     iter_color_map = dict(zip(iters_list, colors))
- 
+
     lrs_list = sorted(df["gp_lr"].unique())
     # Use a different colormap for the learning rates in the loss plot
     lr_colors = plt.cm.plasma(np.linspace(0, 1, len(lrs_list)))
@@ -233,9 +225,7 @@ def visualize_results(results_file):
         fig.show()
 
     # --- Plot 2: Loss Curves ---
-    fig, axes = plt.subplots(
-        2, len(iters_list), figsize=(6 * len(iters_list), 10), sharey="row"
-    )
+    fig, axes = plt.subplots(2, len(iters_list), figsize=(6 * len(iters_list), 10), sharey="row")
     fig.suptitle("GP Training Loss Curves", fontsize=16)
     for i, iters in enumerate(iters_list):
         # Score Loss
@@ -246,7 +236,7 @@ def visualize_results(results_file):
                 row["score_loss_history"],
                 alpha=0.7,
                 color=lr_color_map[row["gp_lr"]],
-                label=f'lr={row["gp_lr"]:.1e}',
+                label=f"lr={row['gp_lr']:.1e}",
             )
         ax_score.set_title(f"Score Loss (iters={iters})")
         ax_score.set_xlabel("Training Batch")
@@ -263,7 +253,7 @@ def visualize_results(results_file):
                 row["cost_loss_history"],
                 alpha=0.7,
                 color=lr_color_map[row["gp_lr"]],
-                label=f'lr={row["gp_lr"]:.1e}',
+                label=f"lr={row['gp_lr']:.1e}",
             )
         ax_cost.set_title(f"Cost Loss (iters={iters})")
         ax_cost.set_xlabel("Training Batch")
@@ -344,13 +334,9 @@ if __name__ == "__main__":
     validation_observations = success_observations[split_idx:]
 
     if not train_observations or not validation_observations:
-        raise ValueError(
-            "Data split resulted in empty training or validation set. Check data and split ratio."
-        )
+        raise ValueError("Data split resulted in empty training or validation set. Check data and split ratio.")
 
-    print(
-        f"Using {len(train_observations)} for training and {len(validation_observations)} for validation."
-    )
+    print(f"Using {len(train_observations)} for training and {len(validation_observations)} for validation.")
 
     # --- Define Hyperparameter Grid ---
     gp_iters_to_test = [50, 100, 200]
@@ -363,15 +349,13 @@ if __name__ == "__main__":
                 continue
 
             try:
-                score_metrics, cost_metrics, score_loss_hist, cost_loss_hist = (
-                    run_experiment(
-                        args,
-                        train_observations,
-                        validation_observations,
-                        gp_iter=iters,
-                        gp_lr=lr,
-                        use_gpu=True,
-                    )
+                score_metrics, cost_metrics, score_loss_hist, cost_loss_hist = run_experiment(
+                    args,
+                    train_observations,
+                    validation_observations,
+                    gp_iter=iters,
+                    gp_lr=lr,
+                    use_gpu=True,
                 )
                 all_results.append(
                     {
@@ -390,9 +374,7 @@ if __name__ == "__main__":
             # Save results after each experiment to avoid data loss on interruption
             with open(args["output_file"], "wb") as f:
                 pickle.dump(all_results, f)
-            print(
-                f"Saved {len(all_results)} experiment results to {args['output_file']}"
-            )
+            print(f"Saved {len(all_results)} experiment results to {args['output_file']}")
 
     print(f"\nFinished. All evaluation results saved to {args['output_file']}")
     visualize_results(output_file)
