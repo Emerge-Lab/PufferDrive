@@ -3685,12 +3685,7 @@ Client *make_client(Drive *env) {
                 close(fd);
 #ifdef __linux__
             if (client->egl_mode) {
-                // GPU path: PBO readback skips row flip, so ffmpeg must vflip.
-                // Try NVENC first; fall through to libx264 if unavailable.
-                execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
-                       "-", "-vf", "vflip", "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23", "-pix_fmt", "yuv420p",
-                       "-loglevel", "error", filename, NULL);
-                // NVENC failed — try libx264 with vflip
+                // GPU/PBO path: readback skips the row flip, so ffmpeg must vflip.
                 execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
                        "-", "-vf", "vflip", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf",
                        "23", "-loglevel", "error", filename, NULL);
