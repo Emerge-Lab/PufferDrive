@@ -28,6 +28,7 @@ typedef struct {
     EGLDisplay display;
     EGLContext context;
     EGLSurface surface;
+    EGLConfig config; // retained so we can recreate pbuffers when the render resolution grows
     int width;
     int height;
     int active;
@@ -132,9 +133,51 @@ static int egl_headless_init(int width, int height) {
     g_egl_ctx.display = display;
     g_egl_ctx.context = context;
     g_egl_ctx.surface = surface;
+    g_egl_ctx.config = config;
     g_egl_ctx.width = width;
     g_egl_ctx.height = height;
     fprintf(stderr, "[egl_headless] GPU context created (%dx%d), ready to activate\n", width, height);
+    return 1;
+}
+
+// Recreate the pbuffer surface at (width, height) if the current one is too
+// small for the requested dimensions. The EGL pbuffer is allocated at a fixed
+// size at creation; subsequent rlViewport calls can only shrink the usable
+// region, not grow it. If a later render env has a larger map, glReadPixels
+// will read uninitialized pixels in the out-of-bounds region. We unbind the
+// current surface, destroy it, create a new one sized to fit, and rebind.
+static int egl_headless_resize(int width, int height) {
+    if (!g_egl_ctx.active || g_egl_ctx.surface == EGL_NO_SURFACE) {
+        return 0;
+    }
+    if (width <= g_egl_ctx.width && height <= g_egl_ctx.height) {
+        return 1; // current surface already fits
+    }
+    int new_w = width > g_egl_ctx.width ? width : g_egl_ctx.width;
+    int new_h = height > g_egl_ctx.height ? height : g_egl_ctx.height;
+
+    // Unbind the old surface before destroying it
+    if (!eglMakeCurrent(g_egl_ctx.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)) {
+        fprintf(stderr, "[egl_headless] resize unbind failed: 0x%x\n", eglGetError());
+        return 0;
+    }
+    eglDestroySurface(g_egl_ctx.display, g_egl_ctx.surface);
+
+    EGLint pbufferAttribs[] = {EGL_WIDTH, new_w, EGL_HEIGHT, new_h, EGL_NONE};
+    EGLSurface new_surface = eglCreatePbufferSurface(g_egl_ctx.display, g_egl_ctx.config, pbufferAttribs);
+    if (new_surface == EGL_NO_SURFACE) {
+        fprintf(stderr, "[egl_headless] resize create pbuffer failed: 0x%x\n", eglGetError());
+        return 0;
+    }
+    if (!eglMakeCurrent(g_egl_ctx.display, new_surface, new_surface, g_egl_ctx.context)) {
+        fprintf(stderr, "[egl_headless] resize rebind failed: 0x%x\n", eglGetError());
+        eglDestroySurface(g_egl_ctx.display, new_surface);
+        return 0;
+    }
+    g_egl_ctx.surface = new_surface;
+    g_egl_ctx.width = new_w;
+    g_egl_ctx.height = new_h;
+    fprintf(stderr, "[egl_headless] pbuffer resized to %dx%d\n", new_w, new_h);
     return 1;
 }
 
