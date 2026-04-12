@@ -107,7 +107,7 @@ def print_dashboard(
     table.add_column(justify="right", width=12)
 
     table.add_row(
-        f"{b1}PufferLib {b2}4.0 {idx[0] * ' '}:blowfish:",
+        f"{b1}PufferDrive {b2} {idx[0] * ' '}:car:",
         f"{c1}GPU: {b2}{g('util/gpu_percent'):.0f}{c2}%",
         f"{c1}VRAM: {b2}{g('util/vram_used_gb'):.1f}{c2}/{b2}{g('util/vram_total_gb'):.0f}{c2}G",
         f"{c1}RAM: {b2}{g('util/cpu_mem_gb'):.1f}{c2}G",
