@@ -3667,13 +3667,10 @@ Client *make_client(Drive *env) {
                     fprintf(stderr, "[drive] EGL GPU unavailable, using Xvfb/Mesa (software rendering)\n");
                 }
             } else {
-                // Subsequent render envs: EGL context is still alive (persists across
-                // render envs to keep model/texture uploads valid). Just re-init rlgl
-                // for fresh batch state and update viewport for this env's resolution.
-                rlglClose();
-                rlglInit((int)client->width, (int)client->height);
+                // Subsequent render envs: EGL context persists (keeps model/texture
+                // uploads valid). Just update viewport for this env's resolution.
+                // rlgl batch state carries over — BeginDrawing flushes+resets each frame.
                 rlViewport(0, 0, (int)client->width, (int)client->height);
-                rlEnableDepthTest();
             }
             if (g_egl_available == 1) {
                 client->egl_mode = 1;
