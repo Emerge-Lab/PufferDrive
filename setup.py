@@ -260,7 +260,11 @@ if not NO_OCEAN:
                 ]
             )
             if system == "Linux":
-                c_ext.extra_link_args.extend(["-lEGL", "-lGL", "-ldl"])
+                # Link EGL/GL only if headers are available (libegl1-mesa-dev).
+                # Without them, the EGL headless GPU path is compiled out via
+                # __has_include in drive.h and the Xvfb/Mesa fallback is used.
+                if os.path.exists("/usr/include/EGL/egl.h"):
+                    c_ext.extra_link_args.extend(["-lEGL", "-lGL", "-ldl"])
 
         if "impulse_wars" in c_ext.name:
             print(f"Adding {c_ext.name} to extra objects")

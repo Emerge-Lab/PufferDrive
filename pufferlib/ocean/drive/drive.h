@@ -18,7 +18,16 @@
 #include "error.h"
 #include "datatypes.h"
 
-#ifdef __linux__
+// EGL is optional: only compile in the EGL headless path if the headers
+// are available. CI environments without libegl1-mesa-dev skip this entirely
+// and fall back to Xvfb/Mesa software rendering.
+#if defined(__linux__) && defined(__has_include)
+#if __has_include(<EGL/egl.h>)
+#define DRIVE_HAS_EGL 1
+#endif
+#endif
+
+#ifdef DRIVE_HAS_EGL
 #include "egl_headless.h"
 #endif
 
@@ -3646,7 +3655,7 @@ Client *make_client(Drive *env) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
 
-#ifdef __linux__
+#ifdef DRIVE_HAS_EGL
     // EGL GPU context: create per render env (different maps = different resolutions).
     // The EGL display is persistent (never terminated — eglTerminate breaks CUDA).
     // We destroy the old surface+context and create fresh ones for the new resolution,
@@ -3710,7 +3719,7 @@ Client *make_client(Drive *env) {
             close(client->recorder_pipefd[0]);
             for (int fd = 3; fd < 256; fd++)
                 close(fd);
-#ifdef __linux__
+#ifdef DRIVE_HAS_EGL
             if (client->egl_mode) {
                 // GPU/PBO path: same ffmpeg command as non-EGL (video may be vertically
                 // flipped but this confirms PBO data reaches ffmpeg).
@@ -3729,7 +3738,7 @@ Client *make_client(Drive *env) {
                 client->recorder_pipefd[1], size_str, filename, client->egl_mode);
 
         // Increase pipe buffer to reduce write() blocking on large frames
-#ifdef __linux__
+#ifdef DRIVE_HAS_EGL
         {
             int pipe_sz = fcntl(client->recorder_pipefd[1], F_SETPIPE_SZ, 4 * 1024 * 1024);
             if (pipe_sz > 0) {
@@ -4663,7 +4672,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         }
 
         EndMode3D();
-#ifdef __linux__
+#ifdef DRIVE_HAS_EGL
         if (client->egl_mode) {
             // EGL headless: just flush the rlgl batch. Skip EndDrawing's
             // glfwSwapBuffers + glfwPollEvents which are unnecessary (no window).
@@ -4680,7 +4689,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         int w = (int)client->width, h = (int)client->height;
         int frame_bytes = w * h * 4;
 
-#ifdef __linux__
+#ifdef DRIVE_HAS_EGL
         if (client->egl_mode && 0) { // DISABLED: use sync readback to debug pipe
             // PBO double-buffer: async GPU→CPU readback overlapped with next frame's draw.
             // Frame flow:
@@ -4834,7 +4843,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 }
 
 void close_client(Client *client) {
-#ifdef __linux__
+#ifdef DRIVE_HAS_EGL
     // Flush the last PBO frame before closing the pipe
     if (client->egl_mode && client->pbo_frame_count > 0 && client->pbo[0] != 0) {
         int prev = 1 - client->pbo_index;
