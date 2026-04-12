@@ -223,6 +223,7 @@ struct timespec ts;
 typedef struct AgentSpawnSettings AgentSpawnSettings;
 typedef struct Drive Drive;
 typedef struct Client Client;
+void close_client(Client *client); // forward declaration
 typedef struct Log Log;
 typedef struct Agent Agent;
 typedef struct RoadMapElement RoadMapElement;
@@ -2517,6 +2518,12 @@ SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, 
 }
 
 void c_close(Drive *env) {
+    // Close the ffmpeg recorder pipe and wait for it to finish writing the mp4
+    if (env->client != NULL) {
+        close_client(env->client);
+        env->client = NULL;
+    }
+
     // Always free per-env agent data
     free_agents(env->agents, env->num_objects);
     free(env->active_agent_indices);

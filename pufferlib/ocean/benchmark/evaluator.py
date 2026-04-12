@@ -945,6 +945,7 @@ class Evaluator:
         If rendering is enabled, each view mode gets its own temporary env with
         render_mode=1, so each view has its own ffmpeg pipe and uniquely named mp4.
         """
+        import os
         from pufferlib.pufferl import load_env
 
         if mode == "human_replay":
@@ -956,6 +957,25 @@ class Evaluator:
             eval_config = self.sp_eval_config
             render_eval = self.render_sp_rollout
         driver = env.driver_env
+
+        # ── DEBUG: snapshot the primary env's cache-key params ──────────────
+        _primary_driver = driver
+        _primary_map_dir = getattr(_primary_driver, "map_dir", "?")
+        _primary_num_maps = getattr(_primary_driver, "num_maps", "?")
+        _primary_obs_win = getattr(_primary_driver, "observation_window_size", "?")
+        _primary_poly_red = getattr(_primary_driver, "polyline_reduction_threshold", "?")
+        _primary_poly_seg = getattr(_primary_driver, "polyline_max_segment_length", "?")
+        _primary_render_mode = getattr(_primary_driver, "render_mode", "?")
+        _primary_num_envs = getattr(_primary_driver, "num_envs", "?")
+        _primary_pid = os.getpid()
+        print(
+            f"[CACHE_DEBUG] [{mode}] PRIMARY env created — PID={_primary_pid} "
+            f"map_dir={_primary_map_dir!r} num_maps={_primary_num_maps} "
+            f"render_mode={_primary_render_mode} num_envs={_primary_num_envs} "
+            f"obs_win={_primary_obs_win} poly_red={_primary_poly_red} poly_seg={_primary_poly_seg}",
+            flush=True,
+        )
+        # ────────────────────────────────────────────────────────────────────
 
         needs_stats_first = render_eval and self.render_select_mode not in (self.RENDER_FIRST, self.RENDER_RANDOM)
 
@@ -978,7 +998,48 @@ class Evaluator:
                 suffix = f"_{self.render_view_suffix[view_mode]}" if multi_view else ""
                 render_cfg = copy.deepcopy(eval_config)
                 render_cfg["env"]["render_mode"] = 1
+
+                # ── DEBUG: log render cfg cache-key params before load_env ──
+                _rcfg_env = render_cfg.get("env", {})
+                print(
+                    f"[CACHE_DEBUG] [{mode}] About to create RENDER env — PID={os.getpid()} "
+                    f"view_mode={view_mode!r} suffix={suffix!r} render_env_idx={render_env_idx} "
+                    f"map_dir={_rcfg_env.get('map_dir', '?')!r} "
+                    f"num_maps={_rcfg_env.get('num_maps', '?')} "
+                    f"render_mode={_rcfg_env.get('render_mode', '?')} "
+                    f"obs_win={_rcfg_env.get('observation_window_size', '?')} "
+                    f"poly_red={_rcfg_env.get('polyline_reduction_threshold', '?')} "
+                    f"poly_seg={_rcfg_env.get('polyline_max_segment_length', '?')}",
+                    flush=True,
+                )
+                _cache_key_match = (
+                    _rcfg_env.get("map_dir") == _primary_map_dir
+                    and _rcfg_env.get("num_maps") == _primary_num_maps
+                    and _rcfg_env.get("observation_window_size") == _primary_obs_win
+                    and _rcfg_env.get("polyline_reduction_threshold") == _primary_poly_red
+                    and _rcfg_env.get("polyline_max_segment_length") == _primary_poly_seg
+                )
+                print(
+                    f"[CACHE_DEBUG] [{mode}] Cache key match vs primary env: {_cache_key_match} "
+                    f"(mismatch would trigger release_map_cache while ref_count>0)",
+                    flush=True,
+                )
+                # ────────────────────────────────────────────────────────────
+
                 render_env = load_env("puffer_drive", render_cfg)
+
+                # ── DEBUG: confirm render env params after construction ──────
+                _rdriver = render_env.driver_env
+                print(
+                    f"[CACHE_DEBUG] [{mode}] RENDER env created OK — "
+                    f"map_dir={getattr(_rdriver, 'map_dir', '?')!r} "
+                    f"num_maps={getattr(_rdriver, 'num_maps', '?')} "
+                    f"num_envs={getattr(_rdriver, 'num_envs', '?')} "
+                    f"render_mode={getattr(_rdriver, 'render_mode', '?')}",
+                    flush=True,
+                )
+                # ────────────────────────────────────────────────────────────
+
                 try:
                     self._run_rollout(
                         policy,
@@ -988,7 +1049,15 @@ class Evaluator:
                         view_suffix=suffix,
                     )
                 finally:
+                    print(
+                        f"[CACHE_DEBUG] [{mode}] Closing RENDER env (view={view_mode!r})",
+                        flush=True,
+                    )
                     render_env.close()
+                    print(
+                        f"[CACHE_DEBUG] [{mode}] RENDER env closed OK",
+                        flush=True,
+                    )
 
         if mode == "self_play":
             self.self_play_stats = final_info
