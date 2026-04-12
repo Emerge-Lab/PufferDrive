@@ -3711,10 +3711,11 @@ Client *make_client(Drive *env) {
                 close(fd);
 #ifdef __linux__
             if (client->egl_mode) {
-                // GPU/PBO path: readback skips the row flip, so ffmpeg must vflip.
+                // GPU/PBO path: same ffmpeg command as non-EGL (video may be vertically
+                // flipped but this confirms PBO data reaches ffmpeg).
                 execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
-                       "-", "-vf", "vflip", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf",
-                       "23", "-loglevel", "error", filename, NULL);
+                       "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "-loglevel",
+                       "error", filename, NULL);
             }
 #endif
             execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
