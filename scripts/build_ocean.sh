@@ -104,6 +104,10 @@ FLAGS=(
     -ldl
     $ERROR_LIMIT_FLAG
     -DPLATFORM_DESKTOP
+    # _GNU_SOURCE must be set on the command line (not inside a header) so
+    # glibc exposes GNU extensions like F_SETPIPE_SZ regardless of include
+    # order. drive.c compiles drivenet.h first which pulls in <time.h>.
+    -D_GNU_SOURCE
 )
 
 

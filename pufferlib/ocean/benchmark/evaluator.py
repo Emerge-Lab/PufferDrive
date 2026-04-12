@@ -868,6 +868,7 @@ class Evaluator:
 
         self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
         self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
+        self.save_render_videos = bool(self.configs["eval"].get("save_render_videos", False))
 
         view_mode_str = str(self.configs["eval"].get("render_view_mode", "sim_state")).lower().strip('"').strip("'")
         self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
@@ -1030,9 +1031,10 @@ class Evaluator:
         import glob
 
         if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
-            # Still clean up even if not logging
-            for p in glob.glob("*.mp4"):
-                os.remove(p)
+            # Still clean up even if not logging — unless the user wants to keep them.
+            if not self.save_render_videos:
+                for p in glob.glob("*.mp4"):
+                    os.remove(p)
             return
 
         import wandb
@@ -1061,9 +1063,10 @@ class Evaluator:
             wandb_key = f"render/{eval_mode}/{view_tag}" if view_tag else f"render/{eval_mode}"
             self.logger.wandb.log({wandb_key: wandb.Video(p, format="mp4", caption=caption)})
 
-        # Clean up
-        for p in video_files:
-            os.remove(p)
+        # Clean up (skip if user wants to keep videos on disk)
+        if not self.save_render_videos:
+            for p in video_files:
+                os.remove(p)
 
     def log_stats(self):
         if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
@@ -1136,6 +1139,9 @@ class SafeEvaluator:
                 str(full_config.get("eval", {}).get("render_view_mode", "sim_state")).lower().strip('"').strip("'")
             )
         self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
+        self.save_render_videos = (
+            bool(full_config.get("eval", {}).get("save_render_videos", False)) if full_config is not None else False
+        )
 
         # Authoritative RNN flag comes from `full_config`, which PuffeRL passes
         # in flattened form for this evaluator. In this code path the flag
@@ -1297,8 +1303,9 @@ class SafeEvaluator:
         import glob
 
         if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
-            for p in glob.glob("*.mp4"):
-                os.remove(p)
+            if not self.save_render_videos:
+                for p in glob.glob("*.mp4"):
+                    os.remove(p)
             return
 
         import wandb
@@ -1323,8 +1330,9 @@ class SafeEvaluator:
             wandb_key = f"render/safe_eval/{view_tag}" if view_tag else "render/safe_eval"
             self.logger.wandb.log({wandb_key: wandb.Video(p, format="mp4", caption=caption)})
 
-        for p in video_files:
-            os.remove(p)
+        if not self.save_render_videos:
+            for p in video_files:
+                os.remove(p)
 
     def log_stats(self, global_step=None):
         """Log collected metrics to wandb."""
