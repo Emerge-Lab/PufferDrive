@@ -4590,25 +4590,38 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             BeginMode3D(camera);
 
             if (draw_traces) {
+                // Points are ~500x cheaper than spheres (2 verts vs ~500 tris) — lets us
+                // draw full trajectory breadcrumbs for every agent every frame.
                 for (int i = 0; i < env->active_agent_count; i++) {
                     int idx = env->active_agent_indices[i];
-                    for (int t = env->init_steps; t < env->episode_length; t++) {
+                    // Bound by the agent's actual trajectory length. Spawned agents
+                    // (init_variable_agent_number) have trajectory_length == 1, so
+                    // iterating up to episode_length would be an OOB read.
+                    int t_end = env->episode_length;
+                    if (t_end > env->agents[idx].trajectory_length)
+                        t_end = env->agents[idx].trajectory_length;
+                    for (int t = env->init_steps; t < t_end; t++) {
                         Color agent_color = LIGHTBLUE;
                         if (env->agents[idx].type == PEDESTRIAN)
                             agent_color = LIGHT_ORANGE;
                         else if (env->agents[idx].type == CYCLIST)
                             agent_color = LIGHT_PURPLE;
-                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t], env->agents[idx].log_trajectory_y[t],
-                                             env->agents[idx].log_trajectory_z[t]},
-                                   0.15f, agent_color);
+                        DrawPoint3D((Vector3){env->agents[idx].log_trajectory_x[t],
+                                              env->agents[idx].log_trajectory_y[t],
+                                              env->agents[idx].log_trajectory_z[t]},
+                                    agent_color);
                     }
                 }
                 for (int i = 0; i < env->expert_static_agent_count; i++) {
                     int idx = env->expert_static_agent_indices[i];
-                    for (int t = env->init_steps; t < env->episode_length; t++) {
-                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t], env->agents[idx].log_trajectory_y[t],
-                                             env->agents[idx].log_trajectory_z[t]},
-                                   0.15f, EXPERT_REPLAY);
+                    int t_end = env->episode_length;
+                    if (t_end > env->agents[idx].trajectory_length)
+                        t_end = env->agents[idx].trajectory_length;
+                    for (int t = env->init_steps; t < t_end; t++) {
+                        DrawPoint3D((Vector3){env->agents[idx].log_trajectory_x[t],
+                                              env->agents[idx].log_trajectory_y[t],
+                                              env->agents[idx].log_trajectory_z[t]},
+                                    EXPERT_REPLAY);
                     }
                 }
             }
@@ -4848,12 +4861,16 @@ void close_client(Client *client) {
         waitpid(client->recorder_pid, NULL, 0);
     }
 
+    // Always unload models — they hold GPU-side VBOs/VAOs/textures tracked by
+    // rlgl. Leaking them corrupts rlgl's internal bookkeeping and causes segfaults
+    // when the next make_client loads fresh models on the same GL context.
+    for (int i = 0; i < 6; i++)
+        UnloadModel(client->cars[i]);
+    UnloadModel(client->cyclist);
+    UnloadModel(client->pedestrian);
+
     if (!client->egl_mode) {
-        // Non-EGL: full cleanup (window mode or Xvfb fallback)
-        for (int i = 0; i < 6; i++)
-            UnloadModel(client->cars[i]);
-        UnloadModel(client->cyclist);
-        UnloadModel(client->pedestrian);
+        // Non-EGL: also tear down window/Xvfb
         CloseWindow();
         if (client->xvfb_pid > 0) {
             kill(client->xvfb_pid, SIGTERM);
@@ -4867,8 +4884,6 @@ void close_client(Client *client) {
         }
     }
     // EGL mode: don't touch GLFW/Xvfb/EGL — they persist across render envs.
-    // EGL surface+context cleanup happens at the START of the next make_client
-    // (or never, if this is the last render env — process exit handles it).
 
     free(client);
 }
