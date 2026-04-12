@@ -4666,7 +4666,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         int frame_bytes = w * h * 4;
 
 #ifdef __linux__
-        if (client->egl_mode) {
+        if (client->egl_mode && 0) { // DISABLED: use sync readback to debug pipe
             // PBO double-buffer: async GPU→CPU readback overlapped with next frame's draw.
             // Frame flow:
             //   Frame 0: kick off async read into PBO 0 (nothing to write yet)
