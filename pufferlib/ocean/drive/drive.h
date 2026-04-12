@@ -338,6 +338,10 @@ struct SharedMapData {
     int num_tracks_to_predict;
     int *tracks_to_predict_indices;
 
+    // Scenario ID string (filename stem, e.g. "map_000" from "map_000.bin")
+    // Copied here so init_from_shared can populate env->scenario_id for mp4 naming.
+    char scenario_id[SCENARIO_ID_STR_LENGTH];
+
     // Reference counting
     int ref_count;
 };
@@ -2349,6 +2353,9 @@ void init_from_shared(Drive *env, SharedMapData *shared) {
     env->shared_map = shared;
     shared->ref_count++;
 
+    // Copy scenario_id so make_client can name the mp4 correctly.
+    memcpy(env->scenario_id, shared->scenario_id, SCENARIO_ID_STR_LENGTH);
+
     // Point to shared road/grid data (read-only, not duplicated)
     env->road_elements = shared->road_elements;
     env->road_scenario_ids = shared->road_scenario_ids;
@@ -2486,6 +2493,7 @@ SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, 
     shared->drivable_lane_lengths = temp.drivable_lane_lengths;
     shared->num_drivable = temp.num_drivable;
     shared->total_drivable_lane_length = temp.total_drivable_lane_length;
+    memcpy(shared->scenario_id, temp.scenario_id, SCENARIO_ID_STR_LENGTH);
 
     // Compute world means
     set_means(&temp);
