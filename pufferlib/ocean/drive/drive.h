@@ -4651,6 +4651,10 @@ void sample_new_goal(Drive *env, int agent_idx) {
             // Calculate distance to point
             float distance = sqrtf(to_point_x * to_point_x + to_point_y * to_point_y);
 
+            // Goal must be outside the current goal radius so the agent has to drive to it
+            if (distance <= agent->reward_coefs[REWARD_COEF_GOAL_RADIUS])
+                continue;
+
             // compute distance
             float distance_error =
                 fmax(env->min_goal_distance - distance, fmax(0.0, distance - env->max_goal_distance));
