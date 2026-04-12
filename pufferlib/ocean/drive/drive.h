@@ -642,18 +642,6 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
     }
 }
 
-static void sample_new_goal_radius(Drive *env, Agent *agent) {
-
-    if (env->reward_randomization) {
-        // Standard Uniform Randomization
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = random_uniform(
-            env->reward_bounds[REWARD_COEF_GOAL_RADIUS].min_val, env->reward_bounds[REWARD_COEF_GOAL_RADIUS].max_val);
-    } else {
-        // Fixed coefficients
-        agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
-    }
-}
-
 static float normalize_reward_coef(float value, int coef_idx, Drive *env) {
     // NOTE: This prevents having coefficients outside of hardcoded bounds
     // What if we want to allow that?
@@ -4671,7 +4659,6 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 agent->goal_position_x = point_x;
                 agent->goal_position_y = point_y;
                 agent->goal_position_z = point_z;
-                sample_new_goal_radius(env, agent);
                 agent->goals_sampled_this_episode += 1.0f;
                 return;
                 // if not check whether is closer than the previous best alternative point
@@ -4695,6 +4682,5 @@ void sample_new_goal(Drive *env, int agent_idx) {
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
     agent->goal_position_z = best_z;
-    sample_new_goal_radius(env, agent);
     agent->goals_sampled_this_episode += 1.0f;
 }
