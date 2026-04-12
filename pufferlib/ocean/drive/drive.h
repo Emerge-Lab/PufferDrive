@@ -3539,11 +3539,11 @@ struct Client {
     int xvfb_display_num;
     int egl_mode; // 1 = EGL headless GPU rendering (no Xvfb/InitWindow)
     // Cached static road geometry (rebuilt once per episode, drawn every frame)
-    Mesh road_tri_mesh;            // curb triangles — uploaded to GPU VBO, drawn with one DrawMesh call
-    Material road_material;        // default material for road mesh
-    float *road_line_verts;        // lane/road lines — small, drawn via rlgl
+    Mesh road_tri_mesh;     // curb triangles — uploaded to GPU VBO, drawn with one DrawMesh call
+    Material road_material; // default material for road mesh
+    float *road_line_verts; // lane/road lines — small, drawn via rlgl
     unsigned char *road_line_colors;
-    int road_line_count;           // number of lines (verts = count * 2)
+    int road_line_count; // number of lines (verts = count * 2)
     int road_cache_valid;
     // PBO double-buffer for async glReadPixels (GPU→CPU DMA)
     unsigned int pbo[2];
@@ -3687,23 +3687,18 @@ Client *make_client(Drive *env) {
             if (client->egl_mode) {
                 // GPU path: PBO readback skips row flip, so ffmpeg must vflip.
                 // Try NVENC first; fall through to libx264 if unavailable.
-                execlp("ffmpeg", "ffmpeg", "-y",
-                       "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
-                       "-vf", "vflip",
-                       "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23",
-                       "-pix_fmt", "yuv420p", "-loglevel", "error", filename, NULL);
-                // NVENC failed — try libx264 with vflip
-                execlp("ffmpeg", "ffmpeg", "-y",
-                       "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
-                       "-vf", "vflip",
-                       "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23",
+                execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
+                       "-", "-vf", "vflip", "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23", "-pix_fmt", "yuv420p",
                        "-loglevel", "error", filename, NULL);
+                // NVENC failed — try libx264 with vflip
+                execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
+                       "-", "-vf", "vflip", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf",
+                       "23", "-loglevel", "error", filename, NULL);
             }
 #endif
-            execlp("ffmpeg", "ffmpeg", "-y",
-                   "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
-                   "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23",
-                   "-loglevel", "error", filename, NULL);
+            execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
+                   "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "-loglevel",
+                   "error", filename, NULL);
             fprintf(stderr, "execlp ffmpeg failed\n");
             _exit(1);
         }
@@ -4033,7 +4028,8 @@ void build_road_cache(Drive *env, Client *client) {
     for (int i = 0; i < env->num_roads; i++) {
         RoadMapElement *road = &env->road_elements[i];
         int segs = road->segment_length - 1;
-        if (segs <= 0) continue;
+        if (segs <= 0)
+            continue;
         if (road->type == ROAD_EDGE)
             tri_count += segs * 14;
         else if (road->type == ROAD_LANE || road->type == ROAD_LINE)
@@ -4050,75 +4046,92 @@ void build_road_cache(Drive *env, Client *client) {
     int actual_tri_count = 0;
     client->road_line_count = 0;
 
-    #define PUSH_TRI(vx1,vy1,vz1, vx2,vy2,vz2, vx3,vy3,vz3, cr,cg,cb,ca) do { \
-        int _ti = actual_tri_count * 9; \
-        int _ci = actual_tri_count * 12; \
-        tri_verts[_ti+0]=vx1; tri_verts[_ti+1]=vy1; tri_verts[_ti+2]=vz1; \
-        tri_verts[_ti+3]=vx2; tri_verts[_ti+4]=vy2; tri_verts[_ti+5]=vz2; \
-        tri_verts[_ti+6]=vx3; tri_verts[_ti+7]=vy3; tri_verts[_ti+8]=vz3; \
-        for (int _v=0;_v<3;_v++) { \
-            tri_colors[_ci+_v*4+0]=cr; tri_colors[_ci+_v*4+1]=cg; \
-            tri_colors[_ci+_v*4+2]=cb; tri_colors[_ci+_v*4+3]=ca; \
-        } \
-        actual_tri_count++; \
-    } while(0)
+#define PUSH_TRI(vx1, vy1, vz1, vx2, vy2, vz2, vx3, vy3, vz3, cr, cg, cb, ca)                                          \
+    do {                                                                                                               \
+        int _ti = actual_tri_count * 9;                                                                                \
+        int _ci = actual_tri_count * 12;                                                                               \
+        tri_verts[_ti + 0] = vx1;                                                                                      \
+        tri_verts[_ti + 1] = vy1;                                                                                      \
+        tri_verts[_ti + 2] = vz1;                                                                                      \
+        tri_verts[_ti + 3] = vx2;                                                                                      \
+        tri_verts[_ti + 4] = vy2;                                                                                      \
+        tri_verts[_ti + 5] = vz2;                                                                                      \
+        tri_verts[_ti + 6] = vx3;                                                                                      \
+        tri_verts[_ti + 7] = vy3;                                                                                      \
+        tri_verts[_ti + 8] = vz3;                                                                                      \
+        for (int _v = 0; _v < 3; _v++) {                                                                               \
+            tri_colors[_ci + _v * 4 + 0] = cr;                                                                         \
+            tri_colors[_ci + _v * 4 + 1] = cg;                                                                         \
+            tri_colors[_ci + _v * 4 + 2] = cb;                                                                         \
+            tri_colors[_ci + _v * 4 + 3] = ca;                                                                         \
+        }                                                                                                              \
+        actual_tri_count++;                                                                                            \
+    } while (0)
 
-    #define PUSH_LINE(vx1,vy1,vz1, vx2,vy2,vz2, cr,cg,cb,ca) do { \
-        int _li = client->road_line_count * 6; \
-        int _ci = client->road_line_count * 8; \
-        client->road_line_verts[_li+0]=vx1; client->road_line_verts[_li+1]=vy1; client->road_line_verts[_li+2]=vz1; \
-        client->road_line_verts[_li+3]=vx2; client->road_line_verts[_li+4]=vy2; client->road_line_verts[_li+5]=vz2; \
-        for (int _v=0;_v<2;_v++) { \
-            client->road_line_colors[_ci+_v*4+0]=cr; client->road_line_colors[_ci+_v*4+1]=cg; \
-            client->road_line_colors[_ci+_v*4+2]=cb; client->road_line_colors[_ci+_v*4+3]=ca; \
-        } \
-        client->road_line_count++; \
-    } while(0)
+#define PUSH_LINE(vx1, vy1, vz1, vx2, vy2, vz2, cr, cg, cb, ca)                                                        \
+    do {                                                                                                               \
+        int _li = client->road_line_count * 6;                                                                         \
+        int _ci = client->road_line_count * 8;                                                                         \
+        client->road_line_verts[_li + 0] = vx1;                                                                        \
+        client->road_line_verts[_li + 1] = vy1;                                                                        \
+        client->road_line_verts[_li + 2] = vz1;                                                                        \
+        client->road_line_verts[_li + 3] = vx2;                                                                        \
+        client->road_line_verts[_li + 4] = vy2;                                                                        \
+        client->road_line_verts[_li + 5] = vz2;                                                                        \
+        for (int _v = 0; _v < 2; _v++) {                                                                               \
+            client->road_line_colors[_ci + _v * 4 + 0] = cr;                                                           \
+            client->road_line_colors[_ci + _v * 4 + 1] = cg;                                                           \
+            client->road_line_colors[_ci + _v * 4 + 2] = cb;                                                           \
+            client->road_line_colors[_ci + _v * 4 + 3] = ca;                                                           \
+        }                                                                                                              \
+        client->road_line_count++;                                                                                     \
+    } while (0)
 
     // Second pass: build geometry
     for (int i = 0; i < env->num_roads; i++) {
         RoadMapElement *road = &env->road_elements[i];
         for (int j = 0; j < road->segment_length - 1; j++) {
             float sx = road->x[j], sy = road->y[j], sz = road->z[j];
-            float ex = road->x[j+1], ey = road->y[j+1], ez = road->z[j+1];
+            float ex = road->x[j + 1], ey = road->y[j + 1], ez = road->z[j + 1];
 
             if (road->type == ROAD_EDGE) {
                 float curb_height = 0.5f, curb_width = 0.3f;
                 float dx = ex - sx, dy = ey - sy;
-                float len = sqrtf(dx*dx + dy*dy);
-                if (len < 1e-6f) continue;
-                float nx = -dy/len, ny = dx/len;
+                float len = sqrtf(dx * dx + dy * dy);
+                if (len < 1e-6f)
+                    continue;
+                float nx = -dy / len, ny = dx / len;
                 float hw = curb_width / 2;
 
-                float b1x=sx-nx*hw, b1y=sy-ny*hw, b2x=sx+nx*hw, b2y=sy+ny*hw;
-                float b3x=ex+nx*hw, b3y=ey+ny*hw, b4x=ex-nx*hw, b4y=ey-ny*hw;
-                float t1x=b1x, t1y=b1y, t1z=sz+curb_height;
-                float t2x=b2x, t2y=b2y, t2z=sz+curb_height;
-                float t3x=b3x, t3y=b3y, t3z=ez+curb_height;
-                float t4x=b4x, t4y=b4y, t4z=ez+curb_height;
+                float b1x = sx - nx * hw, b1y = sy - ny * hw, b2x = sx + nx * hw, b2y = sy + ny * hw;
+                float b3x = ex + nx * hw, b3y = ey + ny * hw, b4x = ex - nx * hw, b4y = ey - ny * hw;
+                float t1x = b1x, t1y = b1y, t1z = sz + curb_height;
+                float t2x = b2x, t2y = b2y, t2z = sz + curb_height;
+                float t3x = b3x, t3y = b3y, t3z = ez + curb_height;
+                float t4x = b4x, t4y = b4y, t4z = ez + curb_height;
 
-                PUSH_TRI(b1x,b1y,sz, b2x,b2y,sz, b3x,b3y,ez, 160,160,160,255);
-                PUSH_TRI(b1x,b1y,sz, b3x,b3y,ez, b4x,b4y,ez, 160,160,160,255);
-                PUSH_TRI(t1x,t1y,t1z, t3x,t3y,t3z, t2x,t2y,t2z, 220,220,220,255);
-                PUSH_TRI(t1x,t1y,t1z, t4x,t4y,t4z, t3x,t3y,t3z, 220,220,220,255);
-                PUSH_TRI(b1x,b1y,sz, t1x,t1y,t1z, b2x,b2y,sz, 180,180,180,255);
-                PUSH_TRI(t1x,t1y,t1z, t2x,t2y,t2z, b2x,b2y,sz, 180,180,180,255);
-                PUSH_TRI(b2x,b2y,sz, t2x,t2y,t2z, b3x,b3y,ez, 180,180,180,255);
-                PUSH_TRI(t2x,t2y,t2z, t3x,t3y,t3z, b3x,b3y,ez, 180,180,180,255);
-                PUSH_TRI(b3x,b3y,ez, t3x,t3y,t3z, b4x,b4y,ez, 180,180,180,255);
-                PUSH_TRI(t3x,t3y,t3z, t4x,t4y,t4z, b4x,b4y,ez, 180,180,180,255);
-                PUSH_TRI(b4x,b4y,ez, t4x,t4y,t4z, b1x,b1y,sz, 180,180,180,255);
-                PUSH_TRI(t4x,t4y,t4z, t1x,t1y,t1z, b1x,b1y,sz, 180,180,180,255);
+                PUSH_TRI(b1x, b1y, sz, b2x, b2y, sz, b3x, b3y, ez, 160, 160, 160, 255);
+                PUSH_TRI(b1x, b1y, sz, b3x, b3y, ez, b4x, b4y, ez, 160, 160, 160, 255);
+                PUSH_TRI(t1x, t1y, t1z, t3x, t3y, t3z, t2x, t2y, t2z, 220, 220, 220, 255);
+                PUSH_TRI(t1x, t1y, t1z, t4x, t4y, t4z, t3x, t3y, t3z, 220, 220, 220, 255);
+                PUSH_TRI(b1x, b1y, sz, t1x, t1y, t1z, b2x, b2y, sz, 180, 180, 180, 255);
+                PUSH_TRI(t1x, t1y, t1z, t2x, t2y, t2z, b2x, b2y, sz, 180, 180, 180, 255);
+                PUSH_TRI(b2x, b2y, sz, t2x, t2y, t2z, b3x, b3y, ez, 180, 180, 180, 255);
+                PUSH_TRI(t2x, t2y, t2z, t3x, t3y, t3z, b3x, b3y, ez, 180, 180, 180, 255);
+                PUSH_TRI(b3x, b3y, ez, t3x, t3y, t3z, b4x, b4y, ez, 180, 180, 180, 255);
+                PUSH_TRI(t3x, t3y, t3z, t4x, t4y, t4z, b4x, b4y, ez, 180, 180, 180, 255);
+                PUSH_TRI(b4x, b4y, ez, t4x, t4y, t4z, b1x, b1y, sz, 180, 180, 180, 255);
+                PUSH_TRI(t4x, t4y, t4z, t1x, t1y, t1z, b1x, b1y, sz, 180, 180, 180, 255);
             } else if (road->type == ROAD_LANE) {
                 Color c = Fade(SOFT_YELLOW, 0.25f);
-                PUSH_LINE(sx,sy,sz, ex,ey,ez, c.r,c.g,c.b,c.a);
+                PUSH_LINE(sx, sy, sz, ex, ey, ez, c.r, c.g, c.b, c.a);
             } else if (road->type == ROAD_LINE) {
-                PUSH_LINE(sx,sy,sz, ex,ey,ez, 255,255,255,255);
+                PUSH_LINE(sx, sy, sz, ex, ey, ez, 255, 255, 255, 255);
             }
         }
     }
-    #undef PUSH_TRI
-    #undef PUSH_LINE
+#undef PUSH_TRI
+#undef PUSH_LINE
 
     // Upload curb triangles to GPU as a Mesh (single VBO draw call per frame)
     Mesh mesh = {0};
@@ -4131,8 +4144,8 @@ void build_road_cache(Drive *env, Client *client) {
     client->road_material = LoadMaterialDefault();
 
     client->road_cache_valid = 1;
-    fprintf(stderr, "[drive] Road cache: %d triangles (VBO), %d lines (rlgl)\n",
-            actual_tri_count, client->road_line_count);
+    fprintf(stderr, "[drive] Road cache: %d triangles (VBO), %d lines (rlgl)\n", actual_tri_count,
+            client->road_line_count);
 }
 
 // Draw cached road geometry: VBO for curbs, rlgl for lines
@@ -4147,9 +4160,10 @@ void draw_road_cached(Client *client) {
         rlBegin(RL_LINES);
         int nv = client->road_line_count * 2;
         for (int i = 0; i < nv; i++) {
-            rlColor4ub(client->road_line_colors[i*4], client->road_line_colors[i*4+1],
-                       client->road_line_colors[i*4+2], client->road_line_colors[i*4+3]);
-            rlVertex3f(client->road_line_verts[i*3], client->road_line_verts[i*3+1], client->road_line_verts[i*3+2]);
+            rlColor4ub(client->road_line_colors[i * 4], client->road_line_colors[i * 4 + 1],
+                       client->road_line_colors[i * 4 + 2], client->road_line_colors[i * 4 + 3]);
+            rlVertex3f(client->road_line_verts[i * 3], client->road_line_verts[i * 3 + 1],
+                       client->road_line_verts[i * 3 + 2]);
         }
         rlEnd();
     }
@@ -4531,7 +4545,8 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         profile_every = (n && atoi(n) > 0) ? atoi(n) : 60;
     }
     double t_draw_start = 0.0, t_draw_end = 0.0, t_read_end = 0.0, t_pipe_end = 0.0;
-    if (profile_enabled) t_draw_start = GetTime();
+    if (profile_enabled)
+        t_draw_start = GetTime();
 
     if (env->render_mode == RENDER_HEADLESS) { // Headless rendering via ffmpeg
         float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
@@ -4555,19 +4570,21 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                     int idx = env->active_agent_indices[i];
                     for (int t = env->init_steps; t < env->episode_length; t++) {
                         Color agent_color = LIGHTBLUE;
-                        if (env->agents[idx].type == PEDESTRIAN) agent_color = LIGHT_ORANGE;
-                        else if (env->agents[idx].type == CYCLIST) agent_color = LIGHT_PURPLE;
-                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t],
-                                             env->agents[idx].log_trajectory_y[t],
-                                             env->agents[idx].log_trajectory_z[t]}, 0.15f, agent_color);
+                        if (env->agents[idx].type == PEDESTRIAN)
+                            agent_color = LIGHT_ORANGE;
+                        else if (env->agents[idx].type == CYCLIST)
+                            agent_color = LIGHT_PURPLE;
+                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t], env->agents[idx].log_trajectory_y[t],
+                                             env->agents[idx].log_trajectory_z[t]},
+                                   0.15f, agent_color);
                     }
                 }
                 for (int i = 0; i < env->expert_static_agent_count; i++) {
                     int idx = env->expert_static_agent_indices[i];
                     for (int t = env->init_steps; t < env->episode_length; t++) {
-                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t],
-                                             env->agents[idx].log_trajectory_y[t],
-                                             env->agents[idx].log_trajectory_z[t]}, 0.15f, EXPERT_REPLAY);
+                        DrawSphere((Vector3){env->agents[idx].log_trajectory_x[t], env->agents[idx].log_trajectory_y[t],
+                                             env->agents[idx].log_trajectory_z[t]},
+                                   0.15f, EXPERT_REPLAY);
                     }
                 }
             }
@@ -4620,7 +4637,8 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             EndDrawing();
         }
 
-        if (profile_enabled) t_draw_end = GetTime();
+        if (profile_enabled)
+            t_draw_end = GetTime();
 
         int w = (int)client->width, h = (int)client->height;
         int frame_bytes = w * h * 4;
@@ -4652,7 +4670,8 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, 0);
             glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
-            if (profile_enabled) t_read_end = GetTime();
+            if (profile_enabled)
+                t_read_end = GetTime();
 
             // Map previous PBO and write to pipe (skip frame 0 — no previous data)
             if (client->pbo_frame_count > 0) {
@@ -4672,7 +4691,8 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         {
             // Synchronous fallback (Xvfb/Mesa path)
             unsigned char *screen_data = rlReadScreenPixels(w, h);
-            if (profile_enabled) t_read_end = GetTime();
+            if (profile_enabled)
+                t_read_end = GetTime();
             if (screen_data) {
                 write(client->recorder_pipefd[1], screen_data, frame_bytes);
                 RL_FREE(screen_data);
@@ -4694,8 +4714,8 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                 fprintf(stderr,
                         "[drive-render-profile] %dx%d frame=%d avg over %d: "
                         "draw=%.2fms read=%.2fms pipe=%.2fms total=%.2fms (%.1f FPS)\n",
-                        (int)client->width, (int)client->height, profile_frame, profile_every,
-                        ms_draw, ms_read, ms_pipe, ms_tot, ms_tot > 0 ? 1000.0 / ms_tot : 0.0);
+                        (int)client->width, (int)client->height, profile_frame, profile_every, ms_draw, ms_read,
+                        ms_pipe, ms_tot, ms_tot > 0 ? 1000.0 / ms_tot : 0.0);
                 acc_draw = acc_read = acc_pipe = 0.0;
             }
         }
