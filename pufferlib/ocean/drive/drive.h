@@ -3652,20 +3652,31 @@ Client *make_client(Drive *env) {
     // then re-init rlgl so render batches live on the current GPU context.
     if (env->render_mode == RENDER_HEADLESS) {
         if (g_egl_available != 0) {
-            // Destroy previous EGL surface+context if they exist
-            egl_headless_cleanup();
-            if (egl_headless_init((int)client->width, (int)client->height)) {
-                if (egl_switch_to_gpu()) {
-                    rlglInit((int)client->width, (int)client->height);
-                    rlViewport(0, 0, (int)client->width, (int)client->height);
-                    rlEnableDepthTest();
-                    client->egl_mode = 1;
-                    g_egl_available = 1;
+            if (!g_egl_ctx.active) {
+                // First time: create EGL context and switch to GPU
+                if (egl_headless_init((int)client->width, (int)client->height)) {
+                    if (egl_switch_to_gpu()) {
+                        rlglInit((int)client->width, (int)client->height);
+                        rlViewport(0, 0, (int)client->width, (int)client->height);
+                        rlEnableDepthTest();
+                        g_egl_available = 1;
+                    }
                 }
+                if (g_egl_available < 0) {
+                    g_egl_available = 0;
+                    fprintf(stderr, "[drive] EGL GPU unavailable, using Xvfb/Mesa (software rendering)\n");
+                }
+            } else {
+                // Subsequent render envs: EGL context is still alive (persists across
+                // render envs to keep model/texture uploads valid). Just re-init rlgl
+                // for fresh batch state and update viewport for this env's resolution.
+                rlglClose();
+                rlglInit((int)client->width, (int)client->height);
+                rlViewport(0, 0, (int)client->width, (int)client->height);
+                rlEnableDepthTest();
             }
-            if (!client->egl_mode && g_egl_available < 0) {
-                g_egl_available = 0; // Don't retry on future render envs
-                fprintf(stderr, "[drive] EGL GPU unavailable, using Xvfb/Mesa (software rendering)\n");
+            if (g_egl_available == 1) {
+                client->egl_mode = 1;
             }
         }
     }
