@@ -306,6 +306,42 @@ struct AgentSpawnSettings {
     float h;
 };
 
+// Shared map data that can be reused across multiple environments using the same map.
+// Holds road infrastructure (road_elements, grid_map, neighbor_cache) and agent templates.
+// Reference-counted: freed when no env references it and the cache is released.
+typedef struct SharedMapData SharedMapData;
+struct SharedMapData {
+    // Road infrastructure (shared read-only across envs)
+    RoadMapElement *road_elements;
+    int *road_scenario_ids;
+    int num_roads;
+
+    // Spatial index
+    GridMap *grid_map;
+    int *neighbor_offsets;
+
+    // World coordinate means
+    float world_mean_x;
+    float world_mean_y;
+    float world_mean_z;
+
+    // Drivable lane index (computed from road_elements, used for agent spawning)
+    int *drivable_lane_indices;
+    float *drivable_lane_lengths;
+    int num_drivable;
+    float total_drivable_lane_length;
+
+    // Agent templates from binary (for cloning into per-env agents)
+    Agent *template_agents;
+    int num_objects;
+    int sdc_track_index;
+    int num_tracks_to_predict;
+    int *tracks_to_predict_indices;
+
+    // Reference counting
+    int ref_count;
+};
+
 struct Drive {
     Client *client;
     float *observations;
@@ -390,6 +426,9 @@ struct Drive {
     float partner_obs_radius;
     float partner_obs_norm;
     float road_obs_norm;
+
+    // Shared map data (NULL if map data is owned by this env)
+    SharedMapData *shared_map;
 };
 
 // ========================================
@@ -2275,19 +2314,10 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
-void init(Drive *env) {
-    env->human_agent_idx = 0;
-    env->timestep = 0;
-    load_map_binary(env->map_name, env);
-    filter_road_elements(env);
-    compute_drivable_lane_points(env);
-    create_sparse_lane_points(env, env->polyline_reduction_threshold, env->polyline_max_segment_length);
-    set_means(env);
-    init_grid_map(env);
-    generate_offsets(collision_offsets, COLLISION_RANGE);
-    generate_offsets(z_offsets, Z_RANGE);
-    init_neighbor_offsets(env);
-    cache_neighbor_offsets(env);
+// Common post-load initialization shared by both init() and init_from_shared().
+// Called after map data and drivable lanes are ready. Spawns/configures agents,
+// sets start positions, and allocates per-env logs.
+void finalize_env(Drive *env) {
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
@@ -2297,43 +2327,228 @@ void init(Drive *env) {
     env->logs = (Log *)calloc(env->active_agent_count, sizeof(Log));
 }
 
-void close_client(Client *client);
+void init(Drive *env) {
+    env->human_agent_idx = 0;
+    env->timestep = 0;
+    env->shared_map = NULL;
+    load_map_binary(env->map_name, env);
+    filter_road_elements(env);
+    compute_drivable_lane_points(env);
+    generate_offsets(z_offsets, Z_RANGE);
+    init_neighbor_offsets(env);
+    cache_neighbor_offsets(env);
+    finalize_env(env);
+}
+
+// Initialize an environment using shared map data instead of loading from disk.
+// Road elements, grid_map, and neighbor cache are shared (pointer copy, not duplicated).
+// Agents are cloned per-env since they have mutable sim state.
+void init_from_shared(Drive *env, SharedMapData *shared) {
+    env->human_agent_idx = 0;
+    env->timestep = 0;
+    env->shared_map = shared;
+    shared->ref_count++;
+
+    // Point to shared road/grid data (read-only, not duplicated)
+    env->road_elements = shared->road_elements;
+    env->road_scenario_ids = shared->road_scenario_ids;
+    env->num_roads = shared->num_roads;
+    env->grid_map = shared->grid_map;
+    env->neighbor_offsets = shared->neighbor_offsets;
+    env->world_mean_x = shared->world_mean_x;
+    env->world_mean_y = shared->world_mean_y;
+    env->world_mean_z = shared->world_mean_z;
+    env->sdc_track_index = shared->sdc_track_index;
+    env->num_tracks_to_predict = shared->num_tracks_to_predict;
+
+    // Copy tracks_to_predict_indices (small, per-env)
+    if (shared->num_tracks_to_predict > 0) {
+        env->tracks_to_predict_indices = (int *)malloc(shared->num_tracks_to_predict * sizeof(int));
+        memcpy(env->tracks_to_predict_indices, shared->tracks_to_predict_indices,
+               shared->num_tracks_to_predict * sizeof(int));
+    } else {
+        env->tracks_to_predict_indices = NULL;
+    }
+
+    // Generate collision/z offsets (static globals, idempotent)
+    generate_offsets(collision_offsets, COLLISION_RANGE);
+    generate_offsets(z_offsets, Z_RANGE);
+
+    // Point to shared drivable lane data (read-only, used by spawn_agent)
+    env->drivable_lane_indices = shared->drivable_lane_indices;
+    env->drivable_lane_lengths = shared->drivable_lane_lengths;
+    env->num_drivable = shared->num_drivable;
+    env->total_drivable_lane_length = shared->total_drivable_lane_length;
+
+    if (env->init_mode == INIT_VARIABLE_AGENT_NUMBER) {
+        // Variable agent mode: agents are spawned fresh, not cloned from template.
+        // Set num_objects=0 so spawn_active_agents' free_agents() call is a no-op.
+        env->agents = NULL;
+        env->num_objects = 0;
+    } else {
+        // Clone agents from template (each env needs its own mutable copy)
+        env->num_objects = shared->num_objects;
+        env->agents = (Agent *)calloc(shared->num_objects, sizeof(Agent));
+        for (int i = 0; i < shared->num_objects; i++) {
+            Agent *src = &shared->template_agents[i];
+            Agent *dst = &env->agents[i];
+            // Copy all scalar fields
+            *dst = *src;
+            // Deep copy trajectory arrays
+            allocate_agent_trajectories(dst);
+            memcpy(dst->log_trajectory_x, src->log_trajectory_x, src->trajectory_length * sizeof(float));
+            memcpy(dst->log_trajectory_y, src->log_trajectory_y, src->trajectory_length * sizeof(float));
+            memcpy(dst->log_trajectory_z, src->log_trajectory_z, src->trajectory_length * sizeof(float));
+            memcpy(dst->log_velocity_x, src->log_velocity_x, src->trajectory_length * sizeof(float));
+            memcpy(dst->log_velocity_y, src->log_velocity_y, src->trajectory_length * sizeof(float));
+            memcpy(dst->log_heading, src->log_heading, src->trajectory_length * sizeof(float));
+            memcpy(dst->log_valid, src->log_valid, src->trajectory_length * sizeof(int));
+            // Route and path are per-env, start NULL
+            dst->route = NULL;
+            dst->path = NULL;
+        }
+    }
+
+    finalize_env(env);
+}
+
+// Free a SharedMapData and all data it owns.
+void free_shared_map_data(SharedMapData *shared) {
+    if (shared == NULL)
+        return;
+
+    // Free road elements
+    for (int i = 0; i < shared->num_roads; i++) {
+        free_road_element(&shared->road_elements[i]);
+    }
+    free(shared->road_elements);
+    free(shared->road_scenario_ids);
+
+    // Free grid map
+    int grid_cell_count = shared->grid_map->grid_cols * shared->grid_map->grid_rows;
+    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+        free(shared->grid_map->cells[grid_index]);
+    }
+    free(shared->grid_map->cells);
+    free(shared->grid_map->cell_entities_count);
+    free(shared->neighbor_offsets);
+    for (int i = 0; i < grid_cell_count; i++) {
+        free(shared->grid_map->neighbor_cache_entities[i]);
+    }
+    free(shared->grid_map->neighbor_cache_entities);
+    free(shared->grid_map->neighbor_cache_count);
+    free(shared->grid_map);
+
+    // Free drivable lane data
+    free(shared->drivable_lane_indices);
+    free(shared->drivable_lane_lengths);
+
+    // Free template agents
+    free_agents(shared->template_agents, shared->num_objects);
+
+    // Free tracks_to_predict
+    free(shared->tracks_to_predict_indices);
+
+    free(shared);
+}
+
+// Create a SharedMapData by loading a map binary and building all spatial structures.
+SharedMapData *create_shared_map_data(const char *map_file_path, int init_mode, int control_mode, int init_steps,
+                                      float observation_window_size, float polyline_reduction_threshold,
+                                      float polyline_max_segment_length) {
+    SharedMapData *shared = (SharedMapData *)calloc(1, sizeof(SharedMapData));
+
+    // Create a temporary Drive to use existing loading/processing functions.
+    Drive temp = {0};
+    temp.init_mode = init_mode;
+    temp.control_mode = control_mode;
+    temp.init_steps = init_steps;
+    temp.observation_window_size = observation_window_size;
+    temp.polyline_reduction_threshold = polyline_reduction_threshold;
+    temp.polyline_max_segment_length = polyline_max_segment_length;
+
+    // Load and process map data (same pipeline as init())
+    load_map_binary(map_file_path, &temp);
+    filter_road_elements(&temp);
+    create_sparse_lane_points(&temp, polyline_reduction_threshold, polyline_max_segment_length);
+    compute_drivable_lane_points(&temp);
+
+    // Transfer ownership to shared struct
+    shared->template_agents = temp.agents;
+    shared->num_objects = temp.num_objects;
+    shared->num_roads = temp.num_roads;
+    shared->road_elements = temp.road_elements;
+    shared->road_scenario_ids = temp.road_scenario_ids;
+    shared->sdc_track_index = temp.sdc_track_index;
+    shared->num_tracks_to_predict = temp.num_tracks_to_predict;
+    shared->tracks_to_predict_indices = temp.tracks_to_predict_indices;
+    shared->drivable_lane_indices = temp.drivable_lane_indices;
+    shared->drivable_lane_lengths = temp.drivable_lane_lengths;
+    shared->num_drivable = temp.num_drivable;
+    shared->total_drivable_lane_length = temp.total_drivable_lane_length;
+
+    // Compute world means
+    set_means(&temp);
+    shared->world_mean_x = temp.world_mean_x;
+    shared->world_mean_y = temp.world_mean_y;
+    shared->world_mean_z = temp.world_mean_z;
+
+    // Build grid map and neighbor cache
+    init_grid_map(&temp);
+    generate_offsets(collision_offsets, COLLISION_RANGE);
+    generate_offsets(z_offsets, Z_RANGE);
+    init_neighbor_offsets(&temp);
+    cache_neighbor_offsets(&temp);
+
+    // Transfer grid data ownership to shared struct
+    shared->grid_map = temp.grid_map;
+    shared->neighbor_offsets = temp.neighbor_offsets;
+
+    shared->ref_count = 0;
+    return shared;
+}
 
 void c_close(Drive *env) {
-    if (env->client != NULL) {
-        close_client(env->client);
-        env->client = NULL;
-    }
+    // Always free per-env agent data
     free_agents(env->agents, env->num_objects);
-    for (int i = 0; i < env->num_roads; i++) {
-        free_road_element(&env->road_elements[i]);
-    }
-    free(env->road_elements);
-    free(env->road_scenario_ids);
     free(env->active_agent_indices);
-    free(env->drivable_lane_indices);
-    free(env->drivable_lane_lengths);
+    // Only free drivable lanes if not shared (shared envs point to SharedMapData's copy)
+    if (env->shared_map == NULL) {
+        free(env->drivable_lane_indices);
+        free(env->drivable_lane_lengths);
+    }
     free(env->logs);
-    // GridMap cleanup
-    int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
-    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-        free(env->grid_map->cells[grid_index]);
-    }
-    free(env->grid_map->cells);
-    free(env->grid_map->cell_entities_count);
-    free(env->neighbor_offsets);
-
-    for (int i = 0; i < grid_cell_count; i++) {
-        free(env->grid_map->neighbor_cache_entities[i]);
-    }
-    free(env->grid_map->neighbor_cache_entities);
-    free(env->grid_map->neighbor_cache_count);
-    free(env->grid_map);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
     free(env->tracks_to_predict_indices);
-    env->tracks_to_predict_indices = NULL;
     free(env->ini_file);
+
+    if (env->shared_map != NULL) {
+        // Map data is shared — just decrement ref count, don't free
+        env->shared_map->ref_count--;
+        env->shared_map = NULL;
+    } else {
+        // Map data is owned by this env — free it
+        for (int i = 0; i < env->num_roads; i++) {
+            free_road_element(&env->road_elements[i]);
+        }
+        free(env->road_elements);
+        free(env->road_scenario_ids);
+
+        int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
+        for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+            free(env->grid_map->cells[grid_index]);
+        }
+        free(env->grid_map->cells);
+        free(env->grid_map->cell_entities_count);
+        free(env->neighbor_offsets);
+        for (int i = 0; i < grid_cell_count; i++) {
+            free(env->grid_map->neighbor_cache_entities[i]);
+        }
+        free(env->grid_map->neighbor_cache_entities);
+        free(env->grid_map->neighbor_cache_count);
+        free(env->grid_map);
+    }
 }
 
 void allocate(Drive *env) {
