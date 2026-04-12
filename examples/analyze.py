@@ -410,8 +410,21 @@ def evaluate_scaling_checkpoints(base_config):
             lambda_value=0.15 if is_reg else 0.0,
         )
 
+        # ── Human-replay on randomly sampled validation scenes ───────────
+        hr_val_rows = run_mode(
+            evaluator,
+            policy,
+            cpt_config,
+            VAL_MAP_DIR,
+            "control_sdc_only",
+            cpt_path,
+            "scaling_hr_val",
+            num_maps=10_000,
+            lambda_value=0.15 if is_reg else 0.0,
+        )
+
         # ── Human-replay on interactive scenes ───────────────────────────
-        hr_rows = run_mode(
+        hr_interactive_rows = run_mode(
             evaluator,
             policy,
             cpt_config,
@@ -424,7 +437,7 @@ def evaluate_scaling_checkpoints(base_config):
         )
 
         # Attach scaling metadata to every row
-        for row in sp_train_rows + sp_val_rows + hr_rows:
+        for row in sp_train_rows + sp_val_rows + hr_val_rows + hr_interactive_rows:
             row["sp_maps"] = sp_maps
             row["is_regularized"] = is_reg
             row["dynamics"] = dynamics
@@ -432,7 +445,8 @@ def evaluate_scaling_checkpoints(base_config):
 
         all_rows.extend(sp_train_rows)
         all_rows.extend(sp_val_rows)
-        all_rows.extend(hr_rows)
+        all_rows.extend(hr_val_rows)
+        all_rows.extend(hr_interactive_rows)
 
     return all_rows
 

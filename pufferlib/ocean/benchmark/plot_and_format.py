@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 import seaborn as sns
+import pandas as pd
 
 DPI = 600
 
@@ -76,6 +77,31 @@ def _maps_to_human_hours(maps: int) -> float:
         hours = (maps × 9s × 5) / 3600
     """
     return (maps * 9 * 5) / 3600
+
+
+# ---------------------------------------------------------------------------
+# Shared colour convention
+# ---------------------------------------------------------------------------
+
+UNREG_COLOR = "k"
+REG_COLORS = ["#ff7f0e", "#d62728", "#e377c2", "#9467bd", "#bcbd22", "#a8174a"]
+
+
+def _reg_unreg_colors(anchor_vals):
+    """Return a color dict mapping anchor_val -> color.
+
+    anchor_val == 0  ->  black (unregularized)
+    anchor_val  > 0  ->  successive entries from REG_COLORS
+    """
+    color_map = {}
+    reg_idx = 0
+    for v in sorted(anchor_vals):
+        if v == 0:
+            color_map[v] = UNREG_COLOR
+        else:
+            color_map[v] = REG_COLORS[reg_idx % len(REG_COLORS)]
+            reg_idx += 1
+    return color_map
 
 
 def plot_scores(df, save_path="results/figures/eval_scores.pdf"):
@@ -189,10 +215,9 @@ def _scaling_scatter_common(
 
 def _build_anchor_style_maps(anchor_vals):
     """Build consistent color and marker maps for anchor values."""
-    palette = sns.color_palette("colorblind", n_colors=len(anchor_vals))
-    color_map = {v: palette[i] for i, v in enumerate(anchor_vals)}
+    color_map = _reg_unreg_colors(anchor_vals)
     markers = ["X", "o", "s", "D", "^", "v", "P", "*"]
-    marker_map = {v: markers[i % len(markers)] for i, v in enumerate(anchor_vals)}
+    marker_map = {v: markers[i % len(markers)] for i, v in enumerate(sorted(anchor_vals))}
     return color_map, marker_map
 
 
@@ -255,18 +280,14 @@ def plot_scaling_scatter(df, save_path="results/figures/eval_scaling_scatter.pdf
 
     series_keys = sorted(agg["series_key"].unique())
 
-    # Assign colors: orange shades for regularized, blue/green for unregularized
-    unreg_colors = ["k", "#2ca02c", "#17becf"]
-    reg_colors = ["#ff7f0e", "#d62728", "#e377c2", "#9467bd", "#bcbd22"]
-
-    unreg_keys = [k for k in series_keys if "_anchor0" in k]
-    reg_keys = [k for k in series_keys if "_anchor0" not in k]
-
+    # Build color map: series_key -> color, using shared reg/unreg convention
+    # Extract anchor_maps from each series_key to look up color
+    anchor_vals = sorted(agg["anchor_maps"].unique())
+    base_color_map = _reg_unreg_colors(anchor_vals)
     color_map = {}
-    for i, k in enumerate(unreg_keys):
-        color_map[k] = unreg_colors[i % len(unreg_colors)]
-    for i, k in enumerate(reg_keys):
-        color_map[k] = reg_colors[i % len(reg_colors)]
+    for sk in series_keys:
+        anchor_val = int(sk.split("anchor")[1])
+        color_map[sk] = base_color_map[anchor_val]
 
     markers = ["X", "o", "s", "D", "^", "v", "P", "*"]
     marker_map = {k: markers[i % len(markers)] for i, k in enumerate(series_keys)}
@@ -362,14 +383,19 @@ def plot_scaling_barplot(df, save_path="results/figures/eval_scaling_barplot.pdf
 
     scaling_df["policy"] = scaling_df.apply(
         lambda r: (
-            f"regularized, anchor with {_maps_to_human_time(r['anchor_maps'])} of human data"
-            if r["anchor_maps"] > 0
-            else "unregularized"
+            f"regularized ({_maps_to_human_time(r['anchor_maps'])})" if r["anchor_maps"] > 0 else "unregularized"
         ),
         axis=1,
     )
 
-    palette = _set_style(scaling_df["policy"].nunique())
+    # Build per-row palette using shared reg/unreg color convention
+    anchor_vals = sorted(scaling_df["anchor_maps"].unique())
+    base_color_map = _reg_unreg_colors(anchor_vals)
+    # One color per unique policy label, preserving order
+    policy_order = scaling_df.drop_duplicates("anchor_maps").sort_values("anchor_maps")
+    palette = [base_color_map[a] for a in policy_order["anchor_maps"]]
+
+    _set_style(len(anchor_vals))
 
     subplot_specs = [
         ("score", "Score", "Self-play score — training, 50k maps"),
@@ -380,7 +406,16 @@ def plot_scaling_barplot(df, save_path="results/figures/eval_scaling_barplot.pdf
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
     for ax, (y_col, ylabel, title) in zip(axes, subplot_specs):
-        sns.barplot(data=scaling_df, x="policy", y=y_col, errorbar="se", palette=palette, ax=ax, alpha=0.8)
+        sns.barplot(
+            data=scaling_df,
+            x="policy",
+            y=y_col,
+            errorbar="se",
+            palette=palette,
+            order=policy_order["policy"].tolist(),
+            ax=ax,
+            alpha=0.8,
+        )
         ax.set_title(title)
         ax.set_xlabel("")
         ax.set_ylabel(ylabel)
@@ -1122,11 +1157,8 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     agg["delta_atfault"] = agg["sp_atfault"] - agg["hr_atfault"]
 
     anchor_vals = sorted(agg["anchor_maps"].unique())
+    color_map = _reg_unreg_colors(anchor_vals)
 
-    _cb = sns.color_palette("colorblind")
-    REG_COLORS = ["#f4a6c0", "#f454c4", "#d63b73", "#a8174a", "#6b0f2e"]
-    color_map = {0: "black"}
-    color_map.update({a: REG_COLORS[i] for i, a in enumerate(a for a in anchor_vals if a != 0)})
     markers = ["^", "s", "o", "D", "P", "X", "v", "*"]
     marker_map = {a: markers[i % len(markers)] for i, a in enumerate(anchor_vals)}
 
@@ -1134,7 +1166,6 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
         return "no anchor (unreg)" if a == 0 else f"{_maps_to_human_time(a)} anchor"
 
     _set_style(len(anchor_vals))
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     subplot_specs = [
         ("sp_collision_rate", "Self-play collision rate [%]"),
@@ -1180,7 +1211,6 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
                 color="#2e7cf8",
                 ha="left",
                 va="bottom",
-                # fontweight="bold",
             )
         else:
             ax.set_ylim(bottom=0)
@@ -1232,7 +1262,7 @@ def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatib
     # unreg first (black), reg second (pink)
     agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
     agg = agg.sort_values("is_reg").reset_index(drop=True)
-    colors = ["black" if not r else "#d63b73" for r in agg["is_reg"]]
+    colors = ["black" if not r else "#d62728" for r in agg["is_reg"]]
 
     subplot_specs = [
         ("collision_rate", "HR collision rate [%]", True),
@@ -1293,6 +1323,294 @@ def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatib
 
 
 # ---------------------------------------------------------------------------
+# Human-replay val vs interactive comparison table
+# ---------------------------------------------------------------------------
+
+
+def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_comparison_table.tex"):
+    """LaTeX table comparing human-replay performance on the full validation set
+    vs. the interactive validation subset, for all scaling checkpoints.
+
+    Rows: one per (sp_maps, anchor_maps) combination, unreg rows first.
+    Column groups:
+      - HR validation (scaling_hr_val):       score, collision, at-fault, rear, route progress, lateral L2
+      - HR interactive (scaling_hr_interactive): same metrics
+
+    Formatting identical to generate_scaling_latex_table: green cellcolor for
+    higher-is-better metrics, red for lower-is-better, intensity normalised
+    per column, best value in each column bold.
+
+    Required LaTeX packages:
+      \\usepackage{booktabs}
+      \\usepackage[table]{xcolor}
+      \\usepackage{graphicx}
+      \\usepackage{makecell}
+      \\usepackage{bm}
+    """
+    hr_modes = ["scaling_hr_val", "scaling_hr_interactive"]
+    scaling_df = df[df["mode"].isin(hr_modes)].copy()
+    if scaling_df.empty:
+        print("  No scaling HR data found — skipping generate_hr_comparison_latex_table.")
+        return None
+
+    scaling_df["anchor_maps"] = scaling_df["anchor_maps"].fillna(0).astype(int)
+
+    hr_metrics = [
+        "score",
+        "collision_rate",
+        "at_fault_collision_rate",
+        "rear_collision_rate",
+        "route_progress",
+        "lateral_error_avg",
+    ]
+    available_metrics = [m for m in hr_metrics if m in scaling_df.columns]
+
+    agg = scaling_df.groupby(["sp_maps", "anchor_maps", "mode"])[available_metrics].agg(["mean", "sem"]).reset_index()
+    flat_cols = ["sp_maps", "anchor_maps", "mode"]
+    for m in available_metrics:
+        flat_cols.extend([f"{m}_mean", f"{m}_sem"])
+    agg.columns = flat_cols
+
+    val_df = agg[agg["mode"] == "scaling_hr_val"].drop(columns=["mode"]).copy()
+    int_df = agg[agg["mode"] == "scaling_hr_interactive"].drop(columns=["mode"]).copy()
+
+    val_df = val_df.rename(columns={c: f"val_{c}" for c in val_df.columns if c not in ("sp_maps", "anchor_maps")})
+    int_df = int_df.rename(columns={c: f"int_{c}" for c in int_df.columns if c not in ("sp_maps", "anchor_maps")})
+
+    merged = val_df.merge(int_df, on=["sp_maps", "anchor_maps"], how="outer")
+
+    # unreg rows first, then reg, each sorted by sp_maps
+    unreg = merged[merged["anchor_maps"] == 0].sort_values("sp_maps")
+    reg = merged[merged["anchor_maps"] != 0].sort_values(["sp_maps", "anchor_maps"])
+    merged = pd.concat([unreg, reg]).reset_index(drop=True)
+
+    # ── Colour helpers (identical logic to generate_scaling_latex_table) ────
+    has_at_fault = "at_fault_collision_rate" in available_metrics
+    has_rear = "rear_collision_rate" in available_metrics
+    has_route_prog = "route_progress" in available_metrics
+    has_lateral = "lateral_error_avg" in available_metrics
+
+    # higher-is-better -> green; lower-is-better -> red
+    green_cols = []
+    red_cols = []
+    for prefix in ("val", "int"):
+        green_cols.append(f"{prefix}_score_mean")
+        if has_route_prog:
+            green_cols.append(f"{prefix}_route_progress_mean")
+        red_cols.append(f"{prefix}_collision_rate_mean")
+        if has_at_fault:
+            red_cols.append(f"{prefix}_at_fault_collision_rate_mean")
+        if has_rear:
+            red_cols.append(f"{prefix}_rear_collision_rate_mean")
+        if has_lateral:
+            red_cols.append(f"{prefix}_lateral_error_avg_mean")
+
+    existing_green = [c for c in green_cols if c in merged.columns]
+    existing_red = [c for c in red_cols if c in merged.columns]
+
+    col_min, col_max = {}, {}
+    for c in existing_green + existing_red:
+        vals = merged[c].dropna()
+        col_min[c] = vals.min() if not vals.empty else 0
+        col_max[c] = vals.max() if not vals.empty else 1
+
+    def _intensity(val, col):
+        if np.isnan(val):
+            return 0
+        vmin, vmax = col_min.get(col, 0), col_max.get(col, 1)
+        if vmax == vmin:
+            return 25
+        return int(5 + (val - vmin) / (vmax - vmin) * 45)
+
+    def _fmt_green(mean, sem, col, is_best=False):
+        if np.isnan(mean):
+            return "---"
+        intensity = _intensity(mean, col)
+        if not (np.isnan(sem) or sem == 0):
+            text = f"$\\bm{{{mean:.3f} \\pm {sem:.3f}}}$" if is_best else f"${mean:.3f} \\pm {sem:.3f}$"
+        else:
+            text = f"\\textbf{{{mean:.3f}}}" if is_best else f"{mean:.3f}"
+        return f"\\cellcolor{{green!{intensity}}} {text}"
+
+    def _fmt_red(mean, sem, col, is_best=False, as_pct=True, decimals=1):
+        if np.isnan(mean):
+            return "---"
+        intensity = _intensity(mean, col)
+        m_val = mean * 100 if as_pct else mean
+        s_val = sem * 100 if as_pct else sem
+        fmt = f".{decimals}f"
+        if not (np.isnan(s_val) or s_val == 0):
+            text = f"$\\bm{{{m_val:{fmt}} \\pm {s_val:{fmt}}}}$" if is_best else f"${m_val:{fmt}} \\pm {s_val:{fmt}}$"
+        else:
+            text = f"\\textbf{{{m_val:{fmt}}}}" if is_best else f"{m_val:{fmt}}"
+        return f"\\cellcolor{{red!{intensity}}} {text}"
+
+    # best: max for green cols, min for red cols
+    best = {}
+    for c in existing_green:
+        best[c] = merged[c].max()
+    for c in existing_red:
+        best[c] = merged[c].min()
+
+    def _is_best(col, val):
+        return col in best and not np.isnan(val) and np.isclose(val, best[col])
+
+    def _anchor_label(anchor_maps):
+        return "0 (unreg.)" if anchor_maps == 0 else _maps_to_human_time(anchor_maps)
+
+    # ── Column spec ─────────────────────────────────────────────────────────
+    n_hr_cols = (
+        2  # score, collision
+        + int(has_at_fault)
+        + int(has_rear)
+        + int(has_route_prog)
+        + int(has_lateral)
+    )
+    col_spec = "rr" + "|" + "r" * n_hr_cols + "|" + "r" * n_hr_cols
+
+    # ── Build LaTeX ─────────────────────────────────────────────────────────
+    lines = []
+    lines.append(
+        r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, "
+        r"\usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
+    )
+    lines.append(r"\begin{table}[ht]")
+    lines.append(r"\centering")
+    lines.append(
+        r"\caption{Human-replay performance on the randomly sampled validation set "
+        r"vs.\ the interactive validation subset for all scaling checkpoints. "
+        r"Metrics are averaged over all scenes in each split.}"
+    )
+    lines.append(r"\label{tab:hr_comparison_results}")
+    lines.append(r"\resizebox{\textwidth}{!}{%")
+    lines.append(r"\begin{tabular}{" + col_spec + "}")
+    lines.append(r"\toprule")
+
+    val_header = r"\multicolumn{" + str(n_hr_cols) + r"}{c|}{HR — validation (random)}"
+    int_header = r"\multicolumn{" + str(n_hr_cols) + r"}{c}{HR — interactive}"
+    lines.append(r" & & " + val_header + " & " + int_header + r" \\")
+
+    def _metric_headers():
+        hdrs = ["Score $\\uparrow$", "Coll. (\\%) $\\downarrow$"]
+        if has_at_fault:
+            hdrs.append("At-fault (\\%) $\\downarrow$")
+        if has_rear:
+            hdrs.append("Rear coll. (\\%) $\\downarrow$")
+        if has_route_prog:
+            hdrs.append("Route prog. $\\uparrow$")
+        if has_lateral:
+            hdrs.append("Lateral L2 $\\downarrow$")
+        return hdrs
+
+    metric_headers = _metric_headers()
+    header2 = (
+        "\\makecell{Self-play maps \\\\ (metadata)} & "
+        "\\makecell{Anchor data \\\\ (human demonstrations)} & "
+        + " & ".join(metric_headers)
+        + " & "
+        + " & ".join(metric_headers)
+        + r" \\"
+    )
+    lines.append(header2)
+    lines.append(r"\midrule")
+
+    prev_was_unreg = None
+    for _, row in merged.iterrows():
+        is_unreg = int(row["anchor_maps"]) == 0
+        if prev_was_unreg is True and not is_unreg:
+            lines.append(r"\midrule")
+        prev_was_unreg = is_unreg
+
+        anchor_cell = (
+            f"\\cellcolor{{blue!10}} {_anchor_label(int(row['anchor_maps']))}"
+            if is_unreg
+            else f"\\cellcolor[HTML]{{FDCFF1}} {_anchor_label(int(row['anchor_maps']))}"
+        )
+        cells = [_fmt_maps(int(row["sp_maps"])), anchor_cell]
+
+        for prefix in ("val", "int"):
+            # score (green)
+            s_col = f"{prefix}_score_mean"
+            cells.append(
+                _fmt_green(
+                    row.get(s_col, np.nan),
+                    row.get(f"{prefix}_score_sem", np.nan),
+                    col=s_col,
+                    is_best=_is_best(s_col, row.get(s_col, np.nan)),
+                )
+            )
+            # collision rate (red, %)
+            c_col = f"{prefix}_collision_rate_mean"
+            cells.append(
+                _fmt_red(
+                    row.get(c_col, np.nan),
+                    row.get(f"{prefix}_collision_rate_sem", np.nan),
+                    col=c_col,
+                    is_best=_is_best(c_col, row.get(c_col, np.nan)),
+                )
+            )
+            # at-fault (red, %)
+            if has_at_fault:
+                af_col = f"{prefix}_at_fault_collision_rate_mean"
+                cells.append(
+                    _fmt_red(
+                        row.get(af_col, np.nan),
+                        row.get(f"{prefix}_at_fault_collision_rate_sem", np.nan),
+                        col=af_col,
+                        is_best=_is_best(af_col, row.get(af_col, np.nan)),
+                    )
+                )
+            # rear collision (red, %)
+            if has_rear:
+                r_col = f"{prefix}_rear_collision_rate_mean"
+                cells.append(
+                    _fmt_red(
+                        row.get(r_col, np.nan),
+                        row.get(f"{prefix}_rear_collision_rate_sem", np.nan),
+                        col=r_col,
+                        is_best=_is_best(r_col, row.get(r_col, np.nan)),
+                    )
+                )
+            # route progress (green)
+            if has_route_prog:
+                rp_col = f"{prefix}_route_progress_mean"
+                cells.append(
+                    _fmt_green(
+                        row.get(rp_col, np.nan),
+                        row.get(f"{prefix}_route_progress_sem", np.nan),
+                        col=rp_col,
+                        is_best=_is_best(rp_col, row.get(rp_col, np.nan)),
+                    )
+                )
+            # lateral L2 (red, raw value, 2 decimals)
+            if has_lateral:
+                l_col = f"{prefix}_lateral_error_avg_mean"
+                cells.append(
+                    _fmt_red(
+                        row.get(l_col, np.nan),
+                        row.get(f"{prefix}_lateral_error_avg_sem", np.nan),
+                        col=l_col,
+                        is_best=_is_best(l_col, row.get(l_col, np.nan)),
+                        as_pct=False,
+                        decimals=2,
+                    )
+                )
+
+        lines.append(" & ".join(cells) + r" \\")
+
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}}")
+    lines.append(r"\end{table}")
+
+    latex_str = "\n".join(lines)
+    _ensure_dir(save_path)
+    with open(save_path, "w") as f:
+        f.write(latex_str)
+    print(f"  LaTeX table written to {save_path}")
+    return latex_str
+
+
+# ---------------------------------------------------------------------------
 # Master entry point
 # ---------------------------------------------------------------------------
 
@@ -1301,15 +1619,16 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
     """Generate all evaluation figures."""
     print("\nGenerating figures...")
     if df is not None and not df.empty:
-        plot_scores(df)
-        print("  Saved eval_scores.pdf")
-        plot_scaling_barplot(df)
-        print("  Saved eval_scaling_barplot.pdf")
-        plot_scaling_scatter(df)
-        print("  Saved eval_scaling_scatter.pdf")
+        # plot_scores(df)
+        # print("  Saved eval_scores.pdf")
+        # plot_scaling_barplot(df)
+        # print("  Saved eval_scaling_barplot.pdf")
+        # plot_scaling_scatter(df)
+        # print("  Saved eval_scaling_scatter.pdf")
         plot_data_requirements(df)
         print("  Saved eval_data_requirements.pdf")
         generate_scaling_latex_table(df)
+        generate_hr_comparison_latex_table(df)
         plot_compatibility_tradeoff_bar(df)
         print("  Saved eval_compatibility_tradeoff_bar.pdf")
     plot_scaling_wosac(wosac_df)
@@ -1323,7 +1642,6 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
 
 if __name__ == "__main__":
     import os
-    import pandas as pd
 
     EVAL_CSV = "results/checkpoint_eval_results.csv"
     WOSAC_CSV = "results/checkpoint_wosac_results.csv"
