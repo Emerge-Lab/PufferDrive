@@ -2,22 +2,22 @@
 # This is the same as python -m pufferlib.pufferl [train | eval | sweep] [env_name] [optional args]
 # Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train drive
 
-import os
-import glob
-import time
 import ctypes
+import glob
+import os
+import time
 from collections import defaultdict
 
 import numpy as np
-
 import torch
 import torch.distributed
 from torch.distributions.utils import logits_to_probs
 
 import pufferlib
 import pufferlib.pufferl
-from pufferlib.muon import Muon
 from pufferlib import _C
+from pufferlib.muon import Muon
+
 
 if _C.precision_bytes != 4:
     raise RuntimeError(

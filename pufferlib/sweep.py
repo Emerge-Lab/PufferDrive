@@ -1,25 +1,24 @@
-import random
 import math
+import random
 import warnings
 from collections import deque
-from copy import deepcopy
 from contextlib import contextmanager
+from copy import deepcopy
 
-import numpy as np
-import pufferlib
-
-import torch
 import gpytorch
-from gpytorch.models import ExactGP
+import numpy as np
+import torch
+from gpytorch.kernels import AdditiveKernel, MaternKernel, PolynomialKernel, ScaleKernel
 from gpytorch.likelihoods import GaussianLikelihood
-from gpytorch.kernels import MaternKernel, PolynomialKernel, ScaleKernel, AdditiveKernel
 from gpytorch.means import ConstantMean
 from gpytorch.mlls import ExactMarginalLogLikelihood
+from gpytorch.models import ExactGP
 from gpytorch.priors import LogNormalPrior
 from scipy.optimize import minimize
-from scipy.stats.qmc import Sobol
 from scipy.spatial import KDTree
+from scipy.stats.qmc import Sobol
 from sklearn.linear_model import LogisticRegression
+
 
 EPSILON = 1e-6
 

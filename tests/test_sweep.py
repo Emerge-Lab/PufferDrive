@@ -1,20 +1,21 @@
-import time
 import random
+import time
 
 import numpy as np
 import torch
-
 from rich.traceback import install
+
 
 install(show_locals=False)  # Rich tracebacks
 
 import pufferlib
 import pufferlib.sweep
 
+
 try:
     from bokeh.models import ColumnDataSource, LinearColorMapper
-    from bokeh.plotting import figure, show
     from bokeh.palettes import Turbo256
+    from bokeh.plotting import figure, show
 except:
     pass
 

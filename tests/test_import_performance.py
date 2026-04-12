@@ -3,7 +3,6 @@ import time
 
 def test_import_speed():
     start = time.time()
-    import pufferlib
 
     end = time.time()
     print(end - start, " seconds to import pufferlib")

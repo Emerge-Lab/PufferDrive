@@ -1,8 +1,7 @@
-import torch
 import numpy as np
-
-
 import pyximport
+import torch
+
 
 pyximport.install(
     setup_args={
@@ -14,6 +13,7 @@ pyximport.install(
 )
 
 from pufferlib.extensions import puffernet
+
 
 # TODO: Should probably add a safe mode that type checks input arrays
 # It's user error, but it is a big foot gun

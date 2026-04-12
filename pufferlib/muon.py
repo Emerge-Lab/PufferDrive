@@ -2,12 +2,12 @@
 
 import torch
 from torch import Tensor
-
 from torch.optim.optimizer import (
-    _to_scalar,
     Optimizer,
     ParamsT,
+    _to_scalar,
 )
+
 
 __all__ = ["Muon"]
 

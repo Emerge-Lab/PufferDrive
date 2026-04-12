@@ -16,10 +16,11 @@ Step 2: Process to map binaries
 
 import json
 import struct
-import os
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
+
 from tqdm import tqdm
+
 
 TRAJECTORY_LENGTH = 91
 

@@ -1,9 +1,10 @@
 # Merges log files + filters to pareto-optimal points wrt steps, wall-clock, and score. Comment that if you want the full dataset. Also does TSNE, which is why I haven't bothered porting to C.
+import glob
+import json
+import os
+
 import numpy as np
 
-import json
-import glob
-import os
 
 HYPERS = [
     "train/learning_rate",

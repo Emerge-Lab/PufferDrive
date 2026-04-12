@@ -1,10 +1,9 @@
 import time
-import rich
 
+import rich
 import torch
 import torch.utils.cpp_extension
 
-import pufferlib
 
 try:
     from pufferlib import _C

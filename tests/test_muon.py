@@ -1,18 +1,20 @@
-import torch
-import torch.utils.cpp_extension
-import torch.nn as nn
 import warnings
-from typing import List
+
+import torch
+import torch.nn as nn
+import torch.utils.cpp_extension
+
 
 # Suppress heavyball warnings
 warnings.filterwarnings(action="ignore", category=UserWarning, module=r"heavyball.*")
 
 # Try importing torch.optim.Muon (from muon-optim package)
-from pufferlib.muon import Muon as TorchMuon
-
 # Import heavyball's ForeachMuon
 import heavyball
 from heavyball import ForeachMuon
+
+from pufferlib.muon import Muon as TorchMuon
+
 
 # Set compile mode to default
 heavyball.utils.compile_mode = "default"

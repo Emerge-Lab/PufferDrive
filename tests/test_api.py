@@ -1,10 +1,10 @@
-from pdb import set_trace as T
 
-import pufferlib
 import pufferlib.emulation
 import pufferlib.vector
-from pufferlib.exceptions import APIUsageError, InvalidAgentError
 from pufferlib.environments import test
+from pufferlib.exceptions import APIUsageError, InvalidAgentError
+
+import pufferlib
 
 
 def print_if(e, print_errors):

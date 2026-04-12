@@ -3,24 +3,25 @@
 
 import warnings
 
+
 warnings.filterwarnings("error", category=RuntimeWarning)
 
-import os
-import sys
+import argparse
+import ast
+import configparser
 import glob
 import json
-import ast
-import time
-import argparse
-import configparser
-from collections import defaultdict
 import multiprocessing as mp
+import os
+import sys
+import time
+from collections import defaultdict
 from copy import deepcopy
 
 import numpy as np
 
-import torch
 import pufferlib
+
 
 try:
     from pufferlib import _C
@@ -34,9 +35,11 @@ import rich.traceback
 from rich.table import Table
 from rich_argparse import RichHelpFormatter
 
+
 rich.traceback.install(show_locals=False)
 
 import signal  # Aggressively exit on ctrl+c
+
 
 signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 
