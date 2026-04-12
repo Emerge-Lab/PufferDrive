@@ -1,0 +1,1 @@
+Characters and assets subject to the license of the original artists. In particular, we use Mana Seed assets by Seliel the Shaper under a valid license purchased from itch.io. You may not repurpose these assets for other projects without purchasing your own license. To mitigate abuse, we release only collated spritesheets as exported by our postprocessor.
