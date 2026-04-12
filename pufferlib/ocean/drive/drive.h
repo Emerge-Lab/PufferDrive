@@ -4699,8 +4699,15 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                 glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
                 unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
                 if (ptr) {
-                    write(client->recorder_pipefd[1], ptr, frame_bytes);
+                    ssize_t written = write(client->recorder_pipefd[1], ptr, frame_bytes);
+                    if (client->pbo_frame_count <= 3 || written != frame_bytes) {
+                        fprintf(stderr, "[drive-pbo] frame=%d write=%zd/%d fd=%d ptr=%p\n", client->pbo_frame_count,
+                                written, frame_bytes, client->recorder_pipefd[1], (void *)ptr);
+                    }
                     glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+                } else {
+                    fprintf(stderr, "[drive-pbo] frame=%d glMapBuffer returned NULL! GL error=0x%x\n",
+                            client->pbo_frame_count, glGetError());
                 }
                 glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
             }
