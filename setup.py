@@ -260,6 +260,14 @@ if not NO_OCEAN:
                 ]
             )
             if system == "Linux":
+                # _GNU_SOURCE must be defined before any system header is
+                # included so glibc exposes GNU extensions like F_SETPIPE_SZ.
+                # Defining it inside drive.h is too late: drive.c compiles
+                # drivenet.h first, which pulls in <time.h> before drive.h.
+                # Setting it as a compiler flag guarantees it's in effect for
+                # every translation unit that compiles drive.h's transitive
+                # includes.
+                c_ext.extra_compile_args.append("-D_GNU_SOURCE")
                 # Link EGL/GL only if headers are available (libegl1-mesa-dev).
                 # Without them, the EGL headless GPU path is compiled out via
                 # __has_include in drive.h and the Xvfb/Mesa fallback is used.

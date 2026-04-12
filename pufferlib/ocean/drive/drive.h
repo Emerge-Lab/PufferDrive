@@ -1,4 +1,8 @@
-#define _GNU_SOURCE
+// _GNU_SOURCE is set via -D_GNU_SOURCE in setup.py's drive extension build
+// flags so GNU extensions (F_SETPIPE_SZ, writev, etc.) are visible regardless
+// of which header is included first. Don't define it here — drive.c pulls in
+// drivenet.h -> <time.h> before drive.h, so defining it mid-stream would be
+// too late.
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
