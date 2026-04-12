@@ -28,6 +28,15 @@
 #endif
 
 #ifdef DRIVE_HAS_EGL
+// GL_GLEXT_PROTOTYPES must come before any GL/gl.h include so glext declares
+// the modern buffer-object entry points (glGenBuffers, glBindBuffer,
+// glBufferData, glMapBuffer, glUnmapBuffer, glDeleteBuffers). Without a
+// declaration, gcc defaults their return type to implicit int, and
+// glMapBuffer's void* pointer gets truncated to 32 bits and sign-extended,
+// producing EFAULT writes like 0xffffffff9cbf1000.
+#define GL_GLEXT_PROTOTYPES 1
+#include <GL/gl.h>
+#include <GL/glext.h>
 #include "egl_headless.h"
 #endif
 
@@ -3678,8 +3687,10 @@ Client *make_client(Drive *env) {
                 }
             } else {
                 // Subsequent render envs: EGL context persists (keeps model/texture
-                // uploads valid). Just update viewport for this env's resolution.
-                // rlgl batch state carries over — BeginDrawing flushes+resets each frame.
+                // uploads valid). The pbuffer was sized for the first client — grow
+                // it if this client needs more pixels so glReadPixels doesn't read
+                // uninitialized memory outside the framebuffer bounds.
+                egl_headless_resize((int)client->width, (int)client->height);
                 rlViewport(0, 0, (int)client->width, (int)client->height);
             }
             if (g_egl_available == 1) {
@@ -4690,7 +4701,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         int frame_bytes = w * h * 4;
 
 #ifdef DRIVE_HAS_EGL
-        if (client->egl_mode && 0) { // DISABLED: use sync readback to debug pipe
+        if (client->egl_mode) {
             // PBO double-buffer: async GPU→CPU readback overlapped with next frame's draw.
             // Frame flow:
             //   Frame 0: kick off async read into PBO 0 (nothing to write yet)
