@@ -663,7 +663,8 @@ class PuffeRL:
                 render_cfg["env"]["map_dir"] = map_dir
                 render_cfg["env"]["control_mode"] = "control_sdc_only"
                 render_cfg["env"]["init_mode"] = "create_all_valid"
-                render_cfg["env"]["episode_length"] = 91
+                episode_length = int(class_cfg.get("episode_length", 91))
+                render_cfg["env"]["episode_length"] = episode_length
                 render_cfg["env"]["resample_frequency"] = 0
                 render_cfg["env"]["render_mode"] = 1
                 render_cfg["vec"] = {"backend": "Serial", "num_envs": 1}
@@ -675,7 +676,7 @@ class PuffeRL:
                         env=render_env,
                         device=self.config["device"],
                         use_rnn=self.config.get("use_rnn", False),
-                        max_steps=91,
+                        max_steps=episode_length,
                         render_ctx=RenderContext(
                             view_mode=RenderView.FULL_SIM_STATE,
                             env_id=0,
