@@ -2687,7 +2687,6 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
 
     int ego_idx = env->active_agent_indices[agent_idx];
     Agent *ego_entity = &env->agents[ego_idx];
-    int ego_id = ego_entity->id;
 
     // Ego stats
     float cos_heading = cosf(ego_entity->sim_heading);
@@ -2697,9 +2696,13 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
     int partners_in_radius = 0;
     AgentDistance candidates[MAX_AGENTS];
     for (int i = 0; i < env->num_created_agents; i++) {
-        Agent *partner = &env->agents[i];
-        if (ego_id == partner->id)
+        // Skip the ego itself. Compare by slot index rather than Agent->id:
+        // id is assigned from the file for map-loaded agents and from the slot
+        // index for variably-spawned agents, so mixing modes could produce an
+        // id collision that silently drops a legitimate partner.
+        if (i == ego_idx)
             continue;
+        Agent *partner = &env->agents[i];
         float dx = partner->sim_x - ego_entity->sim_x;
         float dy = partner->sim_y - ego_entity->sim_y;
         float dz = partner->sim_z - ego_entity->sim_z;
@@ -2743,11 +2746,18 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
         float other_sin = sinf(partner->sim_heading);
         obs[obs_idx + 5] = other_cos * cos_heading + other_sin * sin_heading;
         obs[obs_idx + 6] = other_sin * cos_heading - other_cos * sin_heading;
-        float rel_vx = partner->sim_vx - ego_entity->sim_vx;
-        float rel_vy = partner->sim_vy - ego_entity->sim_vy;
-        float rel_speed_magnitude = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
-        float rel_v_dot_heading = rel_vx * other_cos + rel_vy * other_sin;
-        obs[obs_idx + 7] = copysignf(rel_speed_magnitude, rel_v_dot_heading) / MAX_SPEED;
+        // Partner scalar speed magnitude. The previous encoding was
+        //   copysignf(|partner_v - ego_v|, (partner_v - ego_v) . partner_heading)
+        // which has no coherent physical interpretation: the sign depended on
+        // the partner's world-frame heading, so a stopped partner reported a
+        // non-zero value whose sign flipped if you rotated the (frozen) car.
+        // Use the partner's own speed magnitude instead — stopped partners
+        // now cleanly report 0, and the partner's direction of motion is
+        // already implicit in the heading obs at obs[+5] / obs[+6] for rigid-
+        // body vehicles (v = sim_speed * heading_unit).
+        float partner_speed =
+            sqrtf(partner->sim_vx * partner->sim_vx + partner->sim_vy * partner->sim_vy);
+        obs[obs_idx + 7] = partner_speed / MAX_SPEED;
         obs_idx += 8;
     }
 
