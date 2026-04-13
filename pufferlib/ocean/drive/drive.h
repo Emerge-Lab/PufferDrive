@@ -154,8 +154,7 @@
 #define ROAD_FEATURES 8
 #define ROAD_FEATURES_ONEHOT 14
 // Partner obs layout: [rel_x, rel_y, dz, width, length, rel_heading_x,
-// rel_heading_y, rel_vx_ego, rel_vy_ego]. The last two are the partner's
-// velocity relative to ego, rotated into the ego's local frame.
+// rel_heading_y, rel_vx_ego, rel_vy_ego].
 #define PARTNER_FEATURES 9
 
 #define MAX_CHECKED_LANES 32
