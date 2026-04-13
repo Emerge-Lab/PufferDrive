@@ -2687,6 +2687,7 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
 
     int ego_idx = env->active_agent_indices[agent_idx];
     Agent *ego_entity = &env->agents[ego_idx];
+    int ego_id = ego_entity->id;
 
     // Ego stats
     float cos_heading = cosf(ego_entity->sim_heading);
@@ -2696,13 +2697,9 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
     int partners_in_radius = 0;
     AgentDistance candidates[MAX_AGENTS];
     for (int i = 0; i < env->num_created_agents; i++) {
-        // Skip the ego itself. Compare by slot index rather than Agent->id:
-        // id is assigned from the file for map-loaded agents and from the slot
-        // index for variably-spawned agents, so mixing modes could produce an
-        // id collision that silently drops a legitimate partner.
-        if (i == ego_idx)
-            continue;
         Agent *partner = &env->agents[i];
+        if (ego_id == partner->id)
+            continue;
         float dx = partner->sim_x - ego_entity->sim_x;
         float dy = partner->sim_y - ego_entity->sim_y;
         float dz = partner->sim_z - ego_entity->sim_z;
