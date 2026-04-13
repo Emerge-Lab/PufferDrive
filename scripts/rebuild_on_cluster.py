@@ -51,7 +51,13 @@ def build_rebuild_script(project_root: str, overlay: str, image: str) -> str:
     no fakeroot, sources /ext3/env.sh which activates the venv/conda env with torch
     and other deps installed.
     """
+    # TORCH_CUDA_ARCH_LIST must cover every GPU type the cluster might schedule jobs on:
+    #   8.0 = A100, 8.9 = L40S, 9.0 = H100/H200
+    # Without this, the torch CUDA extension is built only for the build node's GPU
+    # arch and jobs that land on other GPU types crash with
+    # "no kernel image is available for execution on the device".
     inner = (
+        'export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0" && '
         "source /ext3/env.sh && "
         f"cd {project_root} && "
         "which python3 && "
