@@ -153,7 +153,10 @@
 
 #define ROAD_FEATURES 8
 #define ROAD_FEATURES_ONEHOT 14
-#define PARTNER_FEATURES 8
+// Partner obs layout: [rel_x, rel_y, dz, width, length, rel_heading_x,
+// rel_heading_y, rel_vx_ego, rel_vy_ego]. The last two are the partner's
+// velocity relative to ego, rotated into the ego's local frame.
+#define PARTNER_FEATURES 9
 
 #define MAX_CHECKED_LANES 32
 
@@ -2743,14 +2746,23 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
         float other_sin = sinf(partner->sim_heading);
         obs[obs_idx + 5] = other_cos * cos_heading + other_sin * sin_heading;
         obs[obs_idx + 6] = other_sin * cos_heading - other_cos * sin_heading;
-        float partner_speed =
-            sqrtf(partner->sim_vx * partner->sim_vx + partner->sim_vy * partner->sim_vy);
-        obs[obs_idx + 7] = partner_speed / MAX_SPEED;
-        obs_idx += 8;
+        // Partner velocity relative to ego, rotated into ego's local frame.
+        // Same R(-theta_ego) rotation that maps world (dx, dy) to (rel_x, rel_y)
+        // above. Stopped partners report rel_v = -ego_v, which when rotated
+        // gives the ego's own motion with flipped sign — i.e. "from ego's
+        // reference frame, the stopped partner appears to be moving backward
+        // at ego's speed", which is the correct physical signal.
+        float rel_vx_world = partner->sim_vx - ego_entity->sim_vx;
+        float rel_vy_world = partner->sim_vy - ego_entity->sim_vy;
+        float rel_vx_ego = rel_vx_world * cos_heading + rel_vy_world * sin_heading;
+        float rel_vy_ego = -rel_vx_world * sin_heading + rel_vy_world * cos_heading;
+        obs[obs_idx + 7] = rel_vx_ego / MAX_SPEED;
+        obs[obs_idx + 8] = rel_vy_ego / MAX_SPEED;
+        obs_idx += PARTNER_FEATURES;
     }
 
     // Pad remaining partner obs with zero
-    int remaining_partner_obs = (MAX_PARTNER_OBSERVATIONS - cars_seen) * 8;
+    int remaining_partner_obs = (MAX_PARTNER_OBSERVATIONS - cars_seen) * PARTNER_FEATURES;
     memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
 
     // Return coverage: fraction of partners within radius that fit in obs slots
@@ -3886,7 +3898,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     int obs_idx = ego_dim; // Start after ego obs
     for (int j = 0; j < MAX_PARTNER_OBSERVATIONS; j++) {
         if (agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
-            obs_idx += 8; // Move to next agent observation
+            obs_idx += PARTNER_FEATURES; // Move to next agent observation
             continue;
         }
         // Draw position of other agents
