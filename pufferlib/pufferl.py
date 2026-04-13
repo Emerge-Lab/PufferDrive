@@ -15,6 +15,7 @@ import time
 import random
 import shutil
 import subprocess
+import tempfile
 import argparse
 import importlib
 import configparser
@@ -36,6 +37,9 @@ import pufferlib.sweep
 import pufferlib.vector
 import pufferlib.pytorch
 import pufferlib.utils
+
+from pufferlib.ocean.benchmark.evaluator import Evaluator
+
 
 try:
     from pufferlib import _C
@@ -68,7 +72,8 @@ ADVANTAGE_CUDA = shutil.which("nvcc") is not None
 
 
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None):
+    def __init__(self, config, vecenv, policy, logger=None, full_args=None):
+        self.full_args = full_args
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
@@ -128,17 +133,8 @@ class PuffeRL:
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
-        self.render = config["render"]
-        self.render_async = config["render_async"]
-        self.render_interval = config["render_interval"]
-
-        safe_eval_renders = config.get("safe_eval", {}).get("enabled", False)
-        if self.render or safe_eval_renders:
-            ensure_drive_binary()
-
-        if self.render_async:
-            self.render_queue = multiprocessing.Queue()
-            self.render_processes = []
+        # Use a safe default when eval settings are absent
+        self.eval_interval = config.get("eval", {}).get("eval_interval", 0)
 
         # LSTM
         if config["use_rnn"]:
@@ -207,9 +203,6 @@ class PuffeRL:
         self.logger = logger
         if logger is None:
             self.logger = NoLogger(config)
-        if self.render_async and hasattr(self.logger, "wandb") and self.logger.wandb:
-            self.logger.wandb.define_metric("render_step", hidden=True)
-            self.logger.wandb.define_metric("render/*", step_metric="render_step")
 
         # Learning rate scheduler
         epochs = config["total_timesteps"] // config["batch_size"]
@@ -520,60 +513,34 @@ class PuffeRL:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
-            if self.render and self.epoch % self.render_interval == 0:
-                model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-                model_files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+            if self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training:
+                human_replay_eval = self.config["eval"]["human_replay_eval"]
+                self_play_eval = self.config["eval"]["self_play_eval"]
 
-                if model_files:
-                    # Take the latest checkpoint
-                    latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
+                self.evaluator = Evaluator(self.full_args, self.logger)
+                if human_replay_eval:
+                    self.evaluator.hr_env = load_env(self.config["env"], self.evaluator.hr_eval_config)
+                    self.evaluator.rollout(self.uncompiled_policy, mode="human_replay")
+                    self.evaluator.hr_env.close()
+                    self.evaluator.log_videos(eval_mode="human_replay", epoch=self.epoch)
+                if self_play_eval:
+                    self.evaluator.sp_env = load_env(self.config["env"], self.evaluator.sp_eval_config)
+                    self.evaluator.rollout(self.uncompiled_policy, mode="self_play")
+                    self.evaluator.sp_env.close()
+                    self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
+                if human_replay_eval or self_play_eval:
+                    self.evaluator.log_stats()
 
-                    # Export to .bin for rendering with raylib
-                    try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
+                del self.evaluator
 
-                        export(
-                            args=export_args,
-                            env_name=self.config["env"],
-                            vecenv=self.vecenv,
-                            policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
-                        )
-
-                        bin_path_epoch = f"{model_dir}_epoch_{self.epoch:06d}.bin"
-                        shutil.copy2(bin_path, bin_path_epoch)
-
-                        driver_env = getattr(self.vecenv, "driver_env", None)
-                        render_ini = pufferlib.utils.generate_env_ini(
-                            self.config.get("env_config", {}), prefix="render_"
-                        )
-                        self._render_videos(
-                            bin_path=bin_path_epoch,
-                            num_maps=getattr(driver_env, "num_maps", None),
-                            map_dir=getattr(driver_env, "map_dir", None),
-                            wandb_prefix="render",
-                            config_path=render_ini,
-                            cleanup_files=[bin_path_epoch, bin_path, render_ini],
-                        )
-
-                    except Exception as e:
-                        print(f"Failed to export model weights: {e}")
-
-        if self.config["eval"]["wosac_realism_eval"] and (
-            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
-        ):
-            pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
-
-        if self.config["eval"]["human_replay_eval"] and (
-            (self.epoch - 1) % self.config["eval"]["eval_interval"] == 0 or done_training
-        ):
-            pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
+            if self.config["eval"]["wosac_realism_eval"] and (
+                (self.epoch) % self.config["eval"]["eval_interval"] == 0 or done_training
+            ):
+                pufferlib.utils.run_wosac_eval_in_subprocess(self.config, self.logger, self.global_step)
 
         safe_eval_config = self.config.get("safe_eval", {})
         safe_eval_enabled = safe_eval_config.get("enabled", False)
-        safe_eval_interval = int(safe_eval_config.get("interval", self.render_interval))
+        safe_eval_interval = int(safe_eval_config.get("interval", self.eval_interval))
         is_main = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
         if (
             is_main
@@ -654,16 +621,15 @@ class PuffeRL:
         """Run safe eval in-process using SafeEvaluator, then render videos."""
 
         vecenv = None
-        bin_path = None
-        safe_ini_path = None
-        render_handed_off = False
         try:
             from pufferlib.ocean.benchmark.evaluator import SafeEvaluator
 
             self.msg = "Running safe eval..."
             env_name = self.config["env"]
             safe_eval_config = self.config.get("safe_eval", {})
-            evaluator = SafeEvaluator(env_name, safe_eval_config, device=self.config["device"], logger=self.logger)
+            evaluator = SafeEvaluator(
+                env_name, safe_eval_config, device=self.config["device"], logger=self.logger, full_config=self.config
+            )
             eval_config = evaluator._build_eval_env_config()
 
             vecenv = load_env(env_name, eval_config)
@@ -678,34 +644,12 @@ class PuffeRL:
             metrics = evaluator.evaluate(vecenv, policy)
             evaluator.log_stats(global_step=self.global_step)
 
+            if evaluator.render_safe_eval:
+                self.msg = "Rendering safe eval..."
+                evaluator.render(eval_config, policy)
+                evaluator.log_videos(epoch=self.epoch)
+
             self.msg = f"Safe eval: {len(metrics)} metrics logged"
-
-            self.msg = "Spawning safe eval render..."
-            model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-            bin_path = f"{model_dir}_safe_eval_epoch_{self.epoch:06d}.bin"
-
-            export(
-                args={"env_name": env_name, "load_model_path": "unused", **self.config},
-                env_name=env_name,
-                vecenv=self.vecenv,
-                policy=self.uncompiled_policy,
-                path=bin_path,
-                silent=True,
-            )
-
-            safe_ini_path = pufferlib.utils.generate_safe_eval_ini(safe_eval_config)
-
-            self._render_videos(
-                bin_path=bin_path,
-                num_maps=safe_eval_config.get("num_maps"),
-                map_dir=safe_eval_config.get("map_dir"),
-                wandb_prefix="eval",
-                config_path=safe_ini_path,
-                cleanup_files=[bin_path, safe_ini_path],
-            )
-            render_handed_off = True
-            self.msg = f"Safe eval complete: {len(metrics)} metrics logged"
-
         except Exception as e:
             self.msg = f"Safe eval failed: {e}"
             traceback.print_exc(file=sys.stderr)
@@ -715,13 +659,6 @@ class PuffeRL:
                     vecenv.close()
                 except Exception:
                     pass
-            if not render_handed_off:
-                for f in [bin_path, safe_ini_path]:
-                    if f and os.path.exists(f):
-                        try:
-                            os.remove(f)
-                        except OSError:
-                            pass
 
     def _run_driving_behaviours_eval(self):
         """Run serial driving behaviours evals across all 5 classes, then render videos."""
@@ -858,9 +795,6 @@ class PuffeRL:
             print(f"Error reading render queue: {e}")
 
     def mean_and_log(self):
-        # Check render queue for finished async jobs
-        self.check_render_queue()
-
         config = self.config
         for k in list(self.stats.keys()):
             v = self.stats[k]
@@ -896,22 +830,6 @@ class PuffeRL:
     def close(self):
         self.vecenv.close()
         self.utilization.stop()
-
-        if self.render_async:
-            # Drain any remaining async render results before closing
-            self.check_render_queue()
-            for p in self.render_processes:
-                try:
-                    if p.is_alive():
-                        p.terminate()
-                        p.join(timeout=5)
-                        if p.is_alive():
-                            p.kill()
-                except Exception:
-                    print(f"Failed to terminate render process {p.pid}")
-            self.render_processes = []
-            self.render_queue.close()
-            self.render_queue.join_thread()
 
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
@@ -1379,7 +1297,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     )
     if "vec" in args and "num_workers" in args["vec"]:
         train_config["num_workers"] = args["vec"]["num_workers"]
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    pufferl = PuffeRL(train_config, vecenv, policy, logger, full_args=args)
 
     all_logs = []
     while pufferl.global_step < train_config["total_timesteps"]:
@@ -1524,23 +1442,12 @@ def eval(env_name, args=None, vecenv=None, policy=None):
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
-        frames = []
-        while True:
-            render = driver.render()
-            if len(frames) < args["save_frames"]:
-                frames.append(render)
+        if driver.render_mode == 1:
+            max_frames = 91
+            frame_count = 0
 
-            # Screenshot Ocean envs with F12, gifs with control + F12
-            if driver.render_mode == "ansi":
-                print("\033[0;0H" + render + "\n")
-                time.sleep(1 / args["fps"])
-            elif driver.render_mode == "rgb_array":
-                pass
-                # import cv2
-                # render = cv2.cvtColor(render, cv2.COLOR_RGB2BGR)
-                # cv2.imshow('frame', render)
-                # cv2.waitKey(1)
-                # time.sleep(1/args['fps'])
+        while True:
+            driver.render()
 
             with torch.no_grad():
                 ob = torch.as_tensor(ob).to(device)
@@ -1551,13 +1458,14 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             if isinstance(logits, torch.distributions.Normal):
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
-            ob = vecenv.step(action)[0]
+            ob, reward, done, truncated, info = vecenv.step(action)
 
-            if len(frames) > 0 and len(frames) == args["save_frames"]:
-                import imageio
+            if driver.render_mode == 1:
+                frame_count += 1
+                if frame_count >= max_frames or done.all() or truncated.all():
+                    break
 
-                imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
-                frames.append("Done")
+        vecenv.close()
 
 
 def sweep(args=None, env_name=None):
@@ -1747,27 +1655,6 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
         print(f"Saved {len(weights)} weights to {path}")
 
 
-def ensure_drive_binary():
-    """Delete existing visualize binary and rebuild it. This ensures the
-    binary is always up-to-date with the latest code changes.
-    """
-    if os.path.exists("./visualize"):
-        os.remove("./visualize")
-
-    try:
-        result = subprocess.run(
-            ["bash", "scripts/build_ocean.sh", "visualize", "fast"], capture_output=True, text=True, timeout=300
-        )
-
-        if result.returncode != 0:
-            print(f"Build failed: {result.stderr}")
-            raise RuntimeError("Failed to build visualize binary for rendering")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Build timed out")
-    except Exception as e:
-        raise RuntimeError(f"Build error: {e}")
-
-
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
@@ -1837,6 +1724,7 @@ def load_config(env_name, config_dir=None):
         add_help=False,
     )
     parser.add_argument("--load-model-path", type=str, default=None, help="Path to a pretrained checkpoint")
+    parser.add_argument("--export-path", type=str, default=None, help="Output path for puffer export (.bin file)")
     parser.add_argument(
         "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
     )
@@ -1928,21 +1816,50 @@ def load_config(env_name, config_dir=None):
 
 
 def render(env_name, args=None):
+    """Render rollouts for a batch of maps using the in-process c_render pipeline.
+
+    Each map is loaded as a separate environment with render_mode=1 (headless
+    ffmpeg). A policy rollout is run for max_frames steps, producing one
+    {scenario_id}.mp4 per env in the current working directory. The files are
+    then moved into output_dir.
+    """
+    from pufferlib.ocean.drive.drive import RenderView
+
     args = args or load_config(env_name)
     render_configs = args.get("render", {})
 
-    # Renders first num_maps from map_dir using visualize binary
     try:
         map_dir = render_configs["map_dir"]
         num_maps = render_configs.get("num_maps", "auto")
-        view_mode = render_configs["view_mode"]
-        render_policy_path = render_configs["policy_path"]
-        overwork = render_configs.get("overwork", False)
-        num_workers = args["vec"]["num_workers"]
+        view_mode_str = str(render_configs.get("view_mode", "sim_state")).lower().strip('"').strip("'")
+        draw_traces = render_configs.get("draw_traces", True)
+        max_frames = render_configs.get("max_frames", 91)
         output_dir = render_configs["output_dir"]
+        # Allow [render] to override [env] init/control modes — important for logged-trajectory
+        # maps (e.g. carla_2D) which need create_all_valid + control_vehicles, not the training
+        # init_variable_agent_number mode that spawns agents on road lanes.
+        render_init_mode = (
+            str(render_configs["init_mode"]).strip('"').strip("'") if "init_mode" in render_configs else None
+        )
+        render_control_mode = (
+            str(render_configs["control_mode"]).strip('"').strip("'") if "control_mode" in render_configs else None
+        )
     except KeyError as e:
         raise pufferlib.APIUsageError(f"Missing render config: {e}")
 
+    # Map config string → list of RenderView enums to render
+    # "both" = sim_state + persp, "all" = sim_state + persp + bev
+    _VIEW_MODE_MAP = {
+        "sim_state": [RenderView.FULL_SIM_STATE],
+        "topdown": [RenderView.FULL_SIM_STATE],  # backward compat
+        "bev": [RenderView.BEV_AGENT_OBS],
+        "agent": [RenderView.BEV_AGENT_OBS],  # backward compat
+        "persp": [RenderView.AGENT_PERSP],
+        "both": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP],
+        "all": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP, RenderView.BEV_AGENT_OBS],
+    }
+    view_modes = _VIEW_MODE_MAP.get(view_mode_str)
+    if view_modes is None:
     human_replay_render = render_configs.get("human_replay_render", False)
     human_replay_control_mode = render_configs.get("human_replay_control_mode", "control_sdc_only")
 
@@ -1964,6 +1881,14 @@ def render(env_name, args=None):
         num_maps = available_maps
 
     render_maps = [os.path.join(map_dir, f) for f in sorted(os.listdir(map_dir)) if f.endswith(".bin")][:num_maps]
+            f"Unknown view_mode '{view_mode_str}'. Choose from: sim_state, bev, persp, both, all"
+        )
+
+    bin_files = sorted(f for f in os.listdir(map_dir) if f.endswith(".bin"))
+    if num_maps > len(bin_files):
+        num_maps = len(bin_files)
+    render_maps = [os.path.join(map_dir, f) for f in bin_files[:num_maps]]
+
     os.makedirs(output_dir, exist_ok=True)
 
     # Rebuild visualize binary
@@ -2027,16 +1952,103 @@ def render(env_name, args=None):
                 print(f"Error rendering {map_name}: exit code {result.returncode}")
         except subprocess.TimeoutExpired:
             print(f"Timeout rendering {map_name}: exceeded 600 seconds")
+    # Fall back to CPU if the configured device is unavailable (e.g. no CUDA on this machine)
+    configured_device = args["train"]["device"]
+    if configured_device == "cuda" and not torch.cuda.is_available():
+        print("Warning: CUDA not available, falling back to CPU for render.")
+        configured_device = "cpu"
+    args["train"]["device"] = configured_device
+    device = configured_device
 
-    try:
-        if render_maps:
-            print(f"Rendering {len(render_maps)} maps from {map_dir} with {num_workers} workers...")
-            with ThreadPool(num_workers) as pool:
-                pool.map(render_task, render_maps)
-            print(f"Finished rendering videos to {output_dir}")
-    finally:
-        if human_replay_ini and os.path.exists(human_replay_ini):
-            os.remove(human_replay_ini)
+    def render_one_map(map_path):
+        """Render a single map file in one or more view modes, moving resulting mp4(s) to output_dir.
+
+        Each view mode runs a separate rollout via the shared
+        :func:`pufferlib.ocean.drive.rollout.rollout_loop` helper, so that each
+        gets its own ffmpeg pipe and output file. Output files are named
+        ``{scenario_id}_{view}.mp4`` for multi-view runs or ``{scenario_id}.mp4``
+        for single-view runs — the C binding writes the correct name directly
+        via ``set_video_suffix``, no post-hoc renaming required.
+        """
+        from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
+
+        map_name = os.path.splitext(os.path.basename(map_path))[0]
+
+        _VIEW_SUFFIX = {
+            RenderView.FULL_SIM_STATE: "sim_state",
+            RenderView.AGENT_PERSP: "persp",
+            RenderView.BEV_AGENT_OBS: "bev",
+        }
+        multi = len(view_modes) > 1
+
+        for view_mode in view_modes:
+            with tempfile.TemporaryDirectory() as tmp_map_dir:
+                tmp_bin = os.path.join(tmp_map_dir, os.path.basename(map_path))
+                shutil.copy2(map_path, tmp_bin)
+
+                env_overrides = {
+                    **args["env"],
+                    "num_maps": 1,
+                    "map_dir": tmp_map_dir,
+                    "render_mode": 1,  # headless ffmpeg → writes {scenario_id}[suffix].mp4 in cwd
+                }
+                if render_init_mode is not None:
+                    env_overrides["init_mode"] = render_init_mode
+                if render_control_mode is not None:
+                    env_overrides["control_mode"] = render_control_mode
+
+                map_args = {
+                    **args,
+                    "env": env_overrides,
+                    "vec": {"backend": "Serial", "num_envs": 1},
+                }
+
+                env = load_env(env_name, map_args)
+                policy = load_policy(map_args, env, env_name)
+                policy.eval()
+
+                # Clean up any stale mp4 from a previous run and snapshot cwd so
+                # we can find the new file(s) created during this rollout.
+                suffix = f"_{_VIEW_SUFFIX[view_mode]}" if multi else ""
+                stale = os.path.join(os.getcwd(), f"{map_name}{suffix}.mp4")
+                if os.path.exists(stale):
+                    os.remove(stale)
+                before = set(glob.glob(os.path.join(os.getcwd(), "*.mp4")))
+
+                rollout_loop(
+                    policy=policy,
+                    env=env,
+                    device=device,
+                    use_rnn=map_args["train"]["use_rnn"],
+                    max_steps=max_frames,
+                    render_ctx=RenderContext(
+                        view_mode=view_mode,
+                        env_id=0,
+                        draw_traces=draw_traces,
+                        video_suffix=suffix,
+                    ),
+                )
+
+                env.close()
+
+                # Move the newly produced mp4(s) to output_dir. With
+                # set_video_suffix, filenames are correct by construction — no
+                # post-hoc renaming needed.
+                after = set(glob.glob(os.path.join(os.getcwd(), "*.mp4")))
+                new_mp4s = after - before
+                if new_mp4s:
+                    for src in sorted(new_mp4s):
+                        dst = os.path.join(output_dir, os.path.basename(src))
+                        shutil.move(src, dst)
+                        print(f"  Saved {dst}")
+                else:
+                    print(f"  Warning: no mp4 produced for map {map_name} view {_VIEW_SUFFIX[view_mode]}")
+
+    if render_maps:
+        print(f"Rendering {len(render_maps)} map(s) from {map_dir} → {output_dir} ...")
+        for map_path in render_maps:
+            render_one_map(map_path)
+        print(f"Done. Videos written to {output_dir}")
 
 
 def main():
@@ -2059,7 +2071,8 @@ def main():
     elif mode == "profile":
         profile(env_name=env_name)
     elif mode == "export":
-        export(env_name=env_name)
+        args = load_config(env_name)
+        export(env_name=env_name, args=args, path=args.get("export_path"))
     elif mode == "sanity":
         sanity(env_name=env_name)
     elif mode == "render":

@@ -264,6 +264,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 free(env->active_agent_indices);
                 free(env->static_agent_indices);
                 free(env->expert_static_agent_indices);
+                free(env->tracks_to_predict_indices);
                 free(env);
                 Py_DECREF(agent_offsets);
                 Py_DECREF(map_ids);
@@ -285,6 +286,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env->active_agent_indices);
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
+            free(env->tracks_to_predict_indices);
             free(env);
             continue;
         }
@@ -369,6 +371,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->min_goal_distance = (float)unpack(kwargs, "min_goal_distance");
     env->max_goal_distance = (float)unpack(kwargs, "max_goal_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
+    env->render_mode = (int)unpack(kwargs, "render_mode");
     env->min_goal_speed = (float)unpack(kwargs, "min_goal_speed");
     env->max_goal_speed = (float)unpack(kwargs, "max_goal_speed");
     env->min_avg_speed_to_consider_goal_attempt = (float)unpack(kwargs, "min_avg_speed_to_consider_goal_attempt");

@@ -1,5 +1,6 @@
 """WOSAC evaluation class for PufferDrive."""
 
+import copy
 import torch
 import numpy as np
 import pandas as pd
@@ -818,6 +819,280 @@ class HumanReplayEvaluator:
                 return results
 
 
+class Evaluator:
+    """Evaluates policies in self_play, human_replay, with optional rendering.
+
+    Initializes the eval envs needed based on eval config flags:
+    - human_replay_eval: creates hr_env (control_sdc_only)
+    - self_play_eval: creates sp_env (control_agents)
+    """
+
+    RENDER_FIRST = "first"
+    RENDER_RANDOM = "random"
+    RENDER_WORST_SCORE = "worst_score"
+    RENDER_WORST_COLLISION = "worst_collision"
+
+    def __init__(self, configs, logger=None):
+        self.configs = configs
+        self.logger = logger
+        self.self_play_stats = None
+        self.human_replay_stats = None
+        self.sp_env = None
+        self.hr_env = None
+
+        self._unpack_eval_configs(configs)
+
+    def _unpack_eval_configs(self, configs):
+        from pufferlib.ocean.drive.drive import RenderView
+
+        _VIEW_MODE_MAP = {
+            "sim_state": [RenderView.FULL_SIM_STATE],
+            "topdown": [RenderView.FULL_SIM_STATE],
+            "bev": [RenderView.BEV_AGENT_OBS],
+            "agent": [RenderView.BEV_AGENT_OBS],
+            "persp": [RenderView.AGENT_PERSP],
+            "both": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP],
+            "all": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP, RenderView.BEV_AGENT_OBS],
+        }
+        _VIEW_SUFFIX = {
+            RenderView.FULL_SIM_STATE: "sim_state",
+            RenderView.AGENT_PERSP: "persp",
+            RenderView.BEV_AGENT_OBS: "bev",
+        }
+
+        eval_config = copy.deepcopy(configs)
+        # Create separate evaluation environments based on specified configs
+        eval_config["env"]["termination_mode"] = 0
+        backend = eval_config["eval"].get("backend", "PufferEnv")
+        eval_config["vec"] = dict(backend=backend, num_envs=1)
+
+        self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
+        self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
+        self.save_render_videos = bool(self.configs["eval"].get("save_render_videos", False))
+
+        view_mode_str = str(self.configs["eval"].get("render_view_mode", "sim_state")).lower().strip('"').strip("'")
+        self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
+        self.render_view_suffix = _VIEW_SUFFIX
+
+        # --- Human replay config ---
+        hr_control_mode = (
+            str(self.configs["eval"].get("human_replay_control_mode", "control_sdc_only")).strip('"').strip("'")
+        )
+        hr_num_agents = int(self.configs["eval"].get("human_replay_num_agents", 16))
+        hr_map_dir = (
+            str(self.configs["eval"].get("hr_map_dir", "resources/drive/binaries/training")).strip('"').strip("'")
+        )
+
+        self.hr_eval_config = copy.deepcopy(eval_config)
+        self.hr_eval_config["env"]["map_dir"] = hr_map_dir
+        self.hr_eval_config["env"]["num_agents"] = hr_num_agents
+        self.hr_eval_config["env"]["control_mode"] = hr_control_mode
+        self.hr_eval_config["env"]["init_mode"] = "create_all_valid"
+        self.hr_eval_config["env"]["render_mode"] = (
+            0  # primary env: stats only; render envs created per-view in rollout()
+        )
+        if self.configs["eval"]["human_replay_eval"]:
+            self.hr_eval_config["env"]["episode_length"] = 91  # WOMD scenario length
+
+        # --- Self-play config ---
+        sp_map_dir = (
+            str(self.configs["eval"].get("sp_map_dir", "resources/drive/binaries/carla_2D")).strip('"').strip("'")
+        )
+        sp_num_agents = int(self.configs["eval"].get("num_eval_agents", 64))
+
+        self.sp_eval_config = copy.deepcopy(eval_config)
+        self.sp_eval_config["env"]["map_dir"] = sp_map_dir
+        self.sp_eval_config["env"]["num_agents"] = sp_num_agents
+        self.sp_eval_config["env"]["control_mode"] = "control_agents"
+        self.sp_eval_config["env"]["render_mode"] = (
+            0  # primary env: stats only; render envs created per-view in rollout()
+        )
+
+        self.render_select_mode = self.configs["eval"]["render_select_mode"]
+
+    def select_render_env(self, env_logs):
+        """Select which environment to render based on per-env rollout statistics.
+        Args:
+            env_logs: List of dicts, one per environment. Each dict contains
+                aggregated agent statistics (score, collision_rate, offroad_rate, etc.)
+                with 'n' being the number of controlled agents in that env.
+                Empty dicts indicate no data was collected for that env.
+
+        Returns:
+            int: Index of the environment to render.
+        """
+        mode = self.render_select_mode
+        if mode == self.RENDER_FIRST:
+            return 0
+        if mode == self.RENDER_RANDOM:
+            return np.random.randint(len(env_logs))
+
+        populated = [(i, log) for i, log in enumerate(env_logs) if log]
+
+        if not populated:
+            return 0
+
+        if mode == self.RENDER_WORST_SCORE:
+            return min(populated, key=lambda x: x[1].get("score", 1.0))[0]
+        elif mode == self.RENDER_WORST_COLLISION:
+            return max(populated, key=lambda x: x[1].get("collision_rate", 0.0))[0]
+        # Add other modes based on desiderata here
+        return 0
+
+    def rollout(self, policy, mode="self_play"):
+        """Roll out the given policy in the specified eval env and collect statistics.
+
+        Stats are collected using the primary env (already loaded by pufferl.py).
+        If rendering is enabled, each view mode gets its own temporary env with
+        render_mode=1, so each view has its own ffmpeg pipe and uniquely named mp4.
+        """
+        from pufferlib.pufferl import load_env
+
+        if mode == "human_replay":
+            env = self.hr_env
+            eval_config = self.hr_eval_config
+            render_eval = self.render_hr_rollout
+        else:  # self_play
+            env = self.sp_env
+            eval_config = self.sp_eval_config
+            render_eval = self.render_sp_rollout
+        driver = env.driver_env
+
+        needs_stats_first = render_eval and self.render_select_mode not in (self.RENDER_FIRST, self.RENDER_RANDOM)
+
+        if needs_stats_first:
+            env_logs = self._run_rollout(policy, env, per_env_logs=True)
+            render_env_idx = self.select_render_env(env_logs)
+        else:
+            render_env_idx = self.select_render_env([{}] * driver.num_envs)
+
+        # Collect stats from the primary env (no rendering)
+        info_list = self._run_rollout(policy, env)
+        final_info = info_list[0] if info_list else {}
+
+        # Render each view in its own temporary env so each gets its own ffmpeg pipe
+        # and uniquely named mp4 (e.g. {scenario_id}_bev.mp4).
+        if render_eval:
+            view_modes = self.render_view_modes
+            multi_view = len(view_modes) > 1
+            for view_mode in view_modes:
+                suffix = f"_{self.render_view_suffix[view_mode]}" if multi_view else ""
+                render_cfg = copy.deepcopy(eval_config)
+                render_cfg["env"]["render_mode"] = 1
+                render_env = load_env("puffer_drive", render_cfg)
+                try:
+                    self._run_rollout(
+                        policy,
+                        render_env,
+                        render_env_idx=render_env_idx,
+                        view_mode=view_mode,
+                        view_suffix=suffix,
+                    )
+                finally:
+                    render_env.close()
+
+        if mode == "self_play":
+            self.self_play_stats = final_info
+            self.self_play_stats["render_env_idx"] = render_env_idx
+        elif mode == "human_replay":
+            self.human_replay_stats = final_info
+            self.human_replay_stats["render_env_idx"] = render_env_idx
+
+    def _run_rollout(self, policy, env, render_env_idx=None, per_env_logs=False, view_mode=None, view_suffix=""):
+        """Run a single rollout. If render_env_idx is not None, render that env.
+
+        Thin wrapper around :func:`pufferlib.ocean.drive.rollout.rollout_loop`.
+        The shared helper owns the actual forward-sample-step-break loop; this
+        method just builds the RenderContext when rendering is requested.
+        """
+        from pufferlib.ocean.drive.drive import RenderView
+        from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
+
+        render_ctx = None
+        if render_env_idx is not None:
+            render_ctx = RenderContext(
+                view_mode=view_mode if view_mode is not None else RenderView.FULL_SIM_STATE,
+                env_id=render_env_idx,
+                video_suffix=view_suffix,
+            )
+
+        return rollout_loop(
+            policy=policy,
+            env=env,
+            device=self.configs["train"]["device"],
+            use_rnn=self.configs["train"]["use_rnn"],
+            render_ctx=render_ctx,
+            per_env_logs=per_env_logs,
+        )
+
+    def log_videos(self, eval_mode, epoch):
+        """Log all mp4s in local path to wandb after env close has flushed ffmpeg pipes."""
+        import os
+        import glob
+
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            # Still clean up even if not logging — unless the user wants to keep them.
+            if not self.save_render_videos:
+                for p in glob.glob("*.mp4"):
+                    os.remove(p)
+            return
+
+        import wandb
+
+        video_files = glob.glob("*.mp4")
+        if not video_files:
+            print("Warning: no render videos found in local path")
+            return
+
+        render_mode = self.render_select_mode
+        multi_view = len(self.render_view_modes) > 1
+        _known_suffixes = {"_sim_state", "_persp", "_bev"}
+
+        for p in video_files:
+            stem = os.path.splitext(os.path.basename(p))[0]
+            # Extract view suffix from filename if present (e.g. "abc123_bev" → view="bev")
+            view_tag = ""
+            if multi_view:
+                for s in _known_suffixes:
+                    if stem.endswith(s):
+                        view_tag = s[1:]  # strip leading "_"
+                        stem = stem[: -len(s)]
+                        break
+            scenario_id = stem
+            caption = f"scene_{scenario_id}_epoch_{epoch}_select_{render_mode}"
+            wandb_key = f"render/{eval_mode}/{view_tag}" if view_tag else f"render/{eval_mode}"
+            self.logger.wandb.log({wandb_key: wandb.Video(p, format="mp4", caption=caption)})
+
+        # Clean up (skip if user wants to keep videos on disk)
+        if not self.save_render_videos:
+            for p in video_files:
+                os.remove(p)
+
+    def log_stats(self):
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            return
+
+        eval_stats = {}
+
+        if self.human_replay_stats is not None:
+            if "collision_rate" in self.human_replay_stats:
+                eval_stats["eval/hr_collision_rate"] = self.human_replay_stats["collision_rate"]
+            if "score" in self.human_replay_stats:
+                eval_stats["eval/hr_score"] = self.human_replay_stats["score"]
+        if self.self_play_stats is not None:
+            if "collision_rate" in self.self_play_stats:
+                eval_stats["eval/sp_collision_rate"] = self.self_play_stats["collision_rate"]
+            if "score" in self.self_play_stats:
+                eval_stats["eval/sp_score"] = self.self_play_stats["score"]
+            if "n" in self.self_play_stats:
+                eval_stats["eval/num_agents"] = self.self_play_stats["n"]
+
+        if not eval_stats:
+            return
+
+        self.logger.wandb.log(eval_stats)
+
+
 class SafeEvaluator:
     """Evaluates policies with fixed safe/law-abiding reward conditioning.
 
@@ -829,7 +1104,7 @@ class SafeEvaluator:
     args dict — only the env_name, safe_eval config, and device.
     """
 
-    def __init__(self, env_name: str, safe_eval_config: Dict, device="cuda", logger=None):
+    def __init__(self, env_name: str, safe_eval_config: Dict, device="cuda", logger=None, full_config=None):
         self.env_name = env_name
         self.logger = logger
         self.safe_eval_config = safe_eval_config
@@ -840,6 +1115,41 @@ class SafeEvaluator:
             device = f"cuda:{device}"
         self.device = device
         self.stats = None
+        self.render_safe_eval = safe_eval_config.get("render_safe_eval", False)
+        # Resolve view modes from [eval].render_view_mode
+        from pufferlib.ocean.drive.drive import RenderView
+
+        _VIEW_MODE_MAP = {
+            "sim_state": [RenderView.FULL_SIM_STATE],
+            "topdown": [RenderView.FULL_SIM_STATE],
+            "bev": [RenderView.BEV_AGENT_OBS],
+            "agent": [RenderView.BEV_AGENT_OBS],
+            "persp": [RenderView.AGENT_PERSP],
+            "both": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP],
+            "all": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP, RenderView.BEV_AGENT_OBS],
+        }
+        self._view_suffix = {
+            RenderView.FULL_SIM_STATE: "sim_state",
+            RenderView.AGENT_PERSP: "persp",
+            RenderView.BEV_AGENT_OBS: "bev",
+        }
+        view_mode_str = "sim_state"
+        if full_config is not None:
+            view_mode_str = (
+                str(full_config.get("eval", {}).get("render_view_mode", "sim_state")).lower().strip('"').strip("'")
+            )
+        self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
+        self.save_render_videos = (
+            bool(full_config.get("eval", {}).get("save_render_videos", False)) if full_config is not None else False
+        )
+
+        # Authoritative RNN flag comes from `full_config`, which PuffeRL passes
+        # in flattened form for this evaluator. In this code path the flag
+        # lives at `full_config["use_rnn"]` (no `train` nesting) — it is set
+        # during config loading from `rnn_name`. We previously used
+        # hasattr(policy, "hidden_size") as a proxy, which is fragile because
+        # non-RNN policies can also expose hidden_size.
+        self.use_rnn = bool(full_config.get("use_rnn", False)) if full_config is not None else False
 
     def _build_eval_env_config(self):
         """Build env config with safe reward conditioning values applied.
@@ -903,7 +1213,7 @@ class SafeEvaluator:
 
         policy.eval()
         num_agents = vecenv.observation_space.shape[0]
-        use_rnn = hasattr(policy, "hidden_size")
+        use_rnn = self.use_rnn
 
         ob, _ = vecenv.reset()
         state = {}
@@ -951,6 +1261,78 @@ class SafeEvaluator:
 
         self.stats = {k: float(np.mean(v)) for k, v in all_stats.items() if len(v) > 0}
         return self.stats
+
+    def render(self, eval_config, policy):
+        """Run a single rollout with rendering enabled, one env per view mode.
+
+        Always renders env index 0 (first env). Uses [eval].render_view_mode.
+        Produces .mp4 files on disk (flushed when each render_env is closed).
+
+        Thin wrapper around :func:`pufferlib.ocean.drive.rollout.rollout_loop`.
+        """
+        import copy
+
+        from pufferlib.pufferl import load_env
+        from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
+
+        multi_view = len(self.render_view_modes) > 1
+        for view_mode in self.render_view_modes:
+            suffix = f"_{self._view_suffix[view_mode]}" if multi_view else ""
+            render_cfg = copy.deepcopy(eval_config)
+            render_cfg["env"]["render_mode"] = 1
+            render_env = load_env(self.env_name, render_cfg)
+            try:
+                rollout_loop(
+                    policy=policy,
+                    env=render_env,
+                    device=self.device,
+                    use_rnn=self.use_rnn,
+                    max_steps=self.episode_length,
+                    render_ctx=RenderContext(
+                        view_mode=view_mode,
+                        env_id=0,
+                        video_suffix=suffix,
+                    ),
+                )
+            finally:
+                render_env.close()
+
+    def log_videos(self, epoch):
+        """Glob .mp4 files produced by render() and log them to wandb under render/safe_eval."""
+        import os
+        import glob
+
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            if not self.save_render_videos:
+                for p in glob.glob("*.mp4"):
+                    os.remove(p)
+            return
+
+        import wandb
+
+        video_files = glob.glob("*.mp4")
+        if not video_files:
+            print("Warning: safe_eval render produced no mp4 files")
+            return
+
+        multi_view = len(self.render_view_modes) > 1
+        _known_suffixes = {"_sim_state", "_persp", "_bev"}
+        for p in video_files:
+            stem = os.path.splitext(os.path.basename(p))[0]
+            view_tag = ""
+            if multi_view:
+                for s in _known_suffixes:
+                    if stem.endswith(s):
+                        view_tag = s[1:]
+                        stem = stem[: -len(s)]
+                        break
+            caption = f"scene_{stem}_epoch_{epoch}_safe_eval"
+            wandb_key = f"render/safe_eval/{view_tag}" if view_tag else "render/safe_eval"
+            self.logger.wandb.log({wandb_key: wandb.Video(p, format="mp4", caption=caption)})
+
+        if not self.save_render_videos:
+            for p in video_files:
+                os.remove(p)
 
     def log_stats(self, global_step=None):
         """Log collected metrics to wandb."""
