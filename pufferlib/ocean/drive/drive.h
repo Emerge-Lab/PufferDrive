@@ -2747,11 +2747,6 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
         obs[obs_idx + 5] = other_cos * cos_heading + other_sin * sin_heading;
         obs[obs_idx + 6] = other_sin * cos_heading - other_cos * sin_heading;
         // Partner velocity relative to ego, rotated into ego's local frame.
-        // Same R(-theta_ego) rotation that maps world (dx, dy) to (rel_x, rel_y)
-        // above. Stopped partners report rel_v = -ego_v, which when rotated
-        // gives the ego's own motion with flipped sign — i.e. "from ego's
-        // reference frame, the stopped partner appears to be moving backward
-        // at ego's speed", which is the correct physical signal.
         float rel_vx_world = partner->sim_vx - ego_entity->sim_vx;
         float rel_vy_world = partner->sim_vy - ego_entity->sim_vy;
         float rel_vx_ego = rel_vx_world * cos_heading + rel_vy_world * sin_heading;
