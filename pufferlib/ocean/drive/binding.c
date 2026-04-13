@@ -472,6 +472,12 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "max_observation_distance", log->max_observation_distance);
     assign_to_dict(dict, "observation_coverage", log->observation_coverage);
     assign_to_dict(dict, "partner_obs_coverage", log->partner_obs_coverage);
+    // Per-agent average of how many steps each agent was active (not stopped).
+    // Equals episode_length for fleets with no stops; drops toward 0 as the
+    // stopping rate rises. Useful for sanity-checking the new Option C
+    // normalization — sharp drops here should correlate with drops in
+    // collision_rate / offroad_rate.
+    assign_to_dict(dict, "active_step_count", log->active_step_count);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }

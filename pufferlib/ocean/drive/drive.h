@@ -261,6 +261,16 @@ typedef struct TrafficControlElement TrafficControlElement;
 struct Log {
     float episode_return;
     float episode_length;
+    // active_step_count: number of steps on which this agent's reward-loop
+    // metric updates actually ran. Equals episode_length for agents that were
+    // never stopped. For agents that were stopped at step T_stop, it equals
+    // T_stop (the last step before stopped=1 took effect). Used as the
+    // per-agent divisor for reward-loop rate fields (velocity_progress_sum,
+    // avg_speed_per_agent, comfort_violation_count, lane_center_rate) so
+    // stopping doesn't dilute those averages. Not used for observation-loop
+    // rate fields (max_observation_distance, observation_coverage,
+    // partner_obs_coverage), which continue to be updated for stopped agents.
+    float active_step_count;
     float score;
     float goals_reached_this_episode;
     float goals_sampled_this_episode;
@@ -1688,6 +1698,24 @@ void add_log(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
 
+        // Per-agent divisor for REWARD-LOOP rate fields. These fields
+        // (avg_speed_per_agent, comfort_violation_count, velocity_progress_sum,
+        // lane_center_rate) are only updated while the agent is active — once
+        // agent->stopped is set, c_step's reward loop `continue`s and the
+        // fields freeze. Dividing their frozen sums by the FULL env->timestep
+        // would bias them downward by the ratio of active-to-total steps and,
+        // because that ratio varies episode-to-episode (especially with
+        // stopped_reset_threshold bimodal termination), produce large
+        // spurious swings in the reported averages. Instead, use the agent's
+        // own active_step_count so each agent reports its true per-active-step
+        // rate. The fallback to 1 prevents division-by-zero for agents that
+        // never had a non-stopped step (unlikely, but possible on step 0
+        // resets).
+        int active_ts = (int)env->logs[i].active_step_count;
+        if (active_ts < 1) {
+            active_ts = 1;
+        }
+
         env->log.goals_reached_this_episode += agent->goals_reached_this_episode;
         env->log.goals_sampled_this_episode += agent->goals_sampled_this_episode;
         env->log.goals_attempted_this_episode += agent->goals_attempted_this_episode;
@@ -1700,8 +1728,9 @@ void add_log(Drive *env) {
         env->log.offroad_per_agent += offroad_per_agent;
         float collisions_per_agent = env->logs[i].collisions_per_agent;
         env->log.collisions_per_agent += collisions_per_agent;
+        // CATEGORY A (reward-loop rate field): divide by per-agent active_ts.
         float avg_speed_per_agent = env->logs[i].avg_speed_per_agent;
-        env->log.avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
+        env->log.avg_speed_per_agent += avg_speed_per_agent / active_ts;
         float frac_goal_reached = agent->goals_reached_this_episode / agent->goals_attempted_this_episode;
 
         // Score related computation
@@ -1729,16 +1758,25 @@ void add_log(Drive *env) {
         env->log.total_distance_travelled += agent->distance_since_spawn;
         env->log.total_infractions += infraction_count;
         env->log.distance_without_collision += env->logs[i].distance_without_collision;
-        env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
-        env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
+        // CATEGORY A (reward-loop rate fields): divide by per-agent active_ts.
+        env->log.comfort_violation_count += env->logs[i].comfort_violation_count / active_ts;
+        env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / active_ts;
         // Log composition counts per agent so vec_log averaging recovers the per-env value
         env->log.active_agent_count += env->active_agent_count;
         env->log.expert_static_agent_count += env->expert_static_agent_count;
         env->log.static_agent_count += env->static_agent_count;
-        env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
+        // CATEGORY A (reward-loop rate field): divide by per-agent active_ts.
+        env->log.lane_center_rate += env->logs[i].lane_center_rate / active_ts;
+        // CATEGORY B (observation-loop rate fields): these continue to be
+        // updated for stopped agents inside compute_observations (no stopped
+        // check there), so their per-step denominator is still the full env
+        // timestep count, not active_ts.
         env->log.max_observation_distance += env->logs[i].max_observation_distance / safe_timestep;
         env->log.observation_coverage += env->logs[i].observation_coverage / safe_timestep;
         env->log.partner_obs_coverage += env->logs[i].partner_obs_coverage / safe_timestep;
+        // Per-agent active step count itself, reported as a diagnostic
+        // (per-agent average active step count after vec_log divides by n).
+        env->log.active_step_count += env->logs[i].active_step_count;
         env->log.n += 1;
     }
 }
@@ -3302,6 +3340,14 @@ void c_step(Drive *env) {
             env->rewards[i] = 0.0f;
             continue;
         }
+        // This agent's reward-loop metrics are about to run. Count this step
+        // in active_step_count so add_log can divide reward-loop rate fields
+        // by the correct per-agent denominator (see Log struct comment).
+        // Note: on the step where the agent FIRST crashes, agent->stopped is
+        // still 0 at this point — compute_agent_metrics below may set it to 1
+        // after detecting the collision. That's correct: this step's metric
+        // updates do execute, so it counts toward active_step_count.
+        env->logs[i].active_step_count += 1.0f;
         compute_agent_metrics(env, agent_idx);
         int collision_state = agent->collision_state;
         if (collision_state == NO_COLLISION) {
