@@ -545,6 +545,18 @@ class PuffeRL:
         ):
             self._run_safe_eval()
 
+        single_agent_eval_config = self.config.get("single_agent_eval", {})
+        single_agent_eval_enabled = single_agent_eval_config.get("enabled", False)
+        single_agent_eval_interval = int(single_agent_eval_config.get("interval", self.eval_interval))
+        is_main = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+        if (
+            is_main
+            and single_agent_eval_enabled
+            and single_agent_eval_interval > 0
+            and (self.epoch % single_agent_eval_interval == 0 or done_training)
+        ):
+            self._run_single_agent_eval()
+
     def _run_safe_eval(self):
         """Run safe eval in-process using SafeEvaluator."""
         import copy
@@ -582,6 +594,55 @@ class PuffeRL:
             self.msg = f"Safe eval: {len(metrics)} metrics logged"
         except Exception as e:
             self.msg = f"Safe eval failed: {e}"
+            traceback.print_exc(file=sys.stderr)
+        finally:
+            if vecenv is not None:
+                try:
+                    vecenv.close()
+                except Exception:
+                    pass
+
+    def _run_single_agent_eval(self):
+        """Run single agent eval in-process using SingleAgentEvaluator."""
+        import copy
+        import traceback
+
+        vecenv = None
+        try:
+            from pufferlib.ocean.benchmark.evaluator import SingleAgentEvaluator
+
+            self.msg = "Running single agent eval..."
+            env_name = self.config["env"]
+            single_agent_eval_config = self.config.get("single_agent_eval", {})
+            evaluator = SingleAgentEvaluator(
+                env_name,
+                single_agent_eval_config,
+                device=self.config["device"],
+                logger=self.logger,
+                full_config=self.config,
+            )
+            eval_config = evaluator._build_eval_env_config()
+
+            vecenv = load_env(env_name, eval_config)
+            policy = load_policy(eval_config, vecenv, env_name)
+
+            # Copy weights from in-memory policy (no checkpoint dependency)
+            state_dict = copy.deepcopy(self.uncompiled_policy.state_dict())
+            # Strip DDP "module." prefix if present
+            state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+            policy.load_state_dict(state_dict)
+
+            metrics = evaluator.evaluate(vecenv, policy)
+            evaluator.log_stats(global_step=self.global_step)
+
+            if evaluator.render_single_agent_eval:
+                self.msg = "Rendering single agent eval..."
+                evaluator.render(eval_config, policy)
+                evaluator.log_videos(epoch=self.epoch)
+
+            self.msg = f"Single agent eval: {len(metrics)} metrics logged"
+        except Exception as e:
+            self.msg = f"Single agent eval failed: {e}"
             traceback.print_exc(file=sys.stderr)
         finally:
             if vecenv is not None:
@@ -1087,6 +1148,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         env_config=args.get("env", {}),
         eval=args.get("eval", {}),
         safe_eval=args.get("safe_eval", {}),
+        single_agent_eval=args.get("single_agent_eval", {}),
     )
     if "vec" in args and "num_workers" in args["vec"]:
         train_config["num_workers"] = args["vec"]["num_workers"]

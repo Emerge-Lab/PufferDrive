@@ -1346,3 +1346,242 @@ class SafeEvaluator:
         if global_step is not None:
             payload["train_step"] = global_step
         self.logger.wandb.log(payload)
+
+
+class SingleAgentEvaluator:
+    """Evaluates policies with in a Single Agent setting.
+
+    Re-parses the INI config internally so it doesn't need the full training
+    args dict — only the env_name, single_agent config, and device.
+    """
+
+    def __init__(self, env_name: str, single_agent_eval_config: Dict, device="cuda", logger=None, full_config=None):
+        self.env_name = env_name
+        self.logger = logger
+        self.single_agent_eval_config = single_agent_eval_config
+        self.num_episodes = single_agent_eval_config.get("num_episodes", 100)
+        self.num_agents = single_agent_eval_config.get("num_agents", 64)
+        self.episode_length = single_agent_eval_config.get("episode_length", 1000)
+        if isinstance(device, int):
+            device = f"cuda:{device}"
+        self.device = device
+        self.stats = None
+        self.render_single_agent_eval = single_agent_eval_config.get("render_single_agent_eval", False)
+        # Resolve view modes from [eval].render_view_mode
+        from pufferlib.ocean.drive.drive import RenderView
+
+        _VIEW_MODE_MAP = {
+            "sim_state": [RenderView.FULL_SIM_STATE],
+            "topdown": [RenderView.FULL_SIM_STATE],
+            "bev": [RenderView.BEV_AGENT_OBS],
+            "agent": [RenderView.BEV_AGENT_OBS],
+            "persp": [RenderView.AGENT_PERSP],
+            "both": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP],
+            "all": [RenderView.FULL_SIM_STATE, RenderView.AGENT_PERSP, RenderView.BEV_AGENT_OBS],
+        }
+        self._view_suffix = {
+            RenderView.FULL_SIM_STATE: "sim_state",
+            RenderView.AGENT_PERSP: "persp",
+            RenderView.BEV_AGENT_OBS: "bev",
+        }
+        view_mode_str = "sim_state"
+        if full_config is not None:
+            view_mode_str = (
+                str(full_config.get("eval", {}).get("render_view_mode", "sim_state")).lower().strip('"').strip("'")
+            )
+        self.render_view_modes = _VIEW_MODE_MAP.get(view_mode_str, [RenderView.FULL_SIM_STATE])
+        self.save_render_videos = (
+            bool(full_config.get("eval", {}).get("save_render_videos", False)) if full_config is not None else False
+        )
+
+        # Authoritative RNN flag comes from `full_config`, which PuffeRL passes
+        # in flattened form for this evaluator. In this code path the flag
+        # lives at `full_config["use_rnn"]` (no `train` nesting) — it is set
+        # during config loading from `rnn_name`. We previously used
+        # hasattr(policy, "hidden_size") as a proxy, which is fragile because
+        # non-RNN policies can also expose hidden_size.
+        self.use_rnn = bool(full_config.get("use_rnn", False)) if full_config is not None else False
+
+    def _build_eval_env_config(self):
+        """Build env config with single agent values applied.
+
+        Re-parses the INI file to get a fresh full config, then applies
+        singel agent overrides for env, and vec.
+        """
+        import re
+        from pufferlib.pufferl import load_config
+
+        # Re-parse INI to get full config (env, vec, policy, rnn, etc.)
+        import sys
+
+        original_argv = sys.argv
+        sys.argv = ["pufferl"]
+        try:
+            eval_config = load_config(self.env_name)
+        finally:
+            sys.argv = original_argv
+
+        eval_config["vec"] = dict(backend="PufferEnv", num_envs=1)
+        eval_config["train"]["device"] = self.device
+        eval_config["env"]["num_agents"] = self.num_agents
+        eval_config["env"]["episode_length"] = self.episode_length
+        eval_config["env"]["resample_frequency"] = 0
+        eval_config["env"]["reward_randomization"] = 1
+        eval_config["env"]["reward_conditioning"] = 1
+        eval_config["env"]["min_agents_per_env"] = 1
+        eval_config["env"]["max_agents_per_env"] = 1
+
+        # Apply single_agent_eval overrides for map_dir, goal distances, etc.
+        for override_key in ("map_dir", "num_maps", "min_goal_distance", "max_goal_distance"):
+            if override_key in self.single_agent_eval_config:
+                eval_config["env"][override_key] = self.single_agent_eval_config[override_key]
+
+        return eval_config
+
+    def evaluate(self, vecenv, policy):
+        """Run evaluation with single agent setting and collect metrics.
+
+        Args:
+            vecenv: Vectorized environment (created with single agent config)
+            policy: Trained policy to evaluate
+
+        Returns:
+            dict: Averaged metrics over collected episodes
+        """
+        from collections import defaultdict
+
+        policy.eval()
+        num_agents = vecenv.observation_space.shape[0]
+        use_rnn = self.use_rnn
+
+        ob, _ = vecenv.reset()
+        state = {}
+        dones = torch.zeros(num_agents, device=self.device)
+        prev_rewards = torch.zeros(num_agents, device=self.device)
+        if use_rnn:
+            state = dict(
+                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=self.device),
+                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=self.device),
+            )
+
+        all_stats = defaultdict(list)
+        episodes_collected = 0
+        max_steps = (self.num_episodes // max(num_agents, 1) + 2) * self.episode_length
+
+        for step in range(max_steps):
+            if episodes_collected >= self.num_episodes:
+                break
+
+            with torch.no_grad():
+                ob_t = torch.as_tensor(ob).to(self.device)
+                if use_rnn:
+                    state["reward"] = prev_rewards
+                    state["done"] = dones
+                logits, value = policy.forward_eval(ob_t, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+            if isinstance(logits, torch.distributions.Normal):
+                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+            ob, rewards, terminals, truncations, infos = vecenv.step(action)
+            prev_rewards = torch.as_tensor(rewards).float().to(self.device)
+            dones = torch.as_tensor(np.maximum(terminals, truncations)).float().to(self.device)
+
+            for entry in infos:
+                if isinstance(entry, dict):
+                    episodes_collected += int(entry.get("n", 1))
+                    for k, v in entry.items():
+                        try:
+                            float(v)
+                            all_stats[k].append(v)
+                        except (TypeError, ValueError):
+                            pass
+
+        self.stats = {k: float(np.mean(v)) for k, v in all_stats.items() if len(v) > 0}
+        return self.stats
+
+    def render(self, eval_config, policy):
+        """Run a single rollout with rendering enabled, one env per view mode.
+
+        Always renders env index 0 (first env). Uses [eval].render_view_mode.
+        Produces .mp4 files on disk (flushed when each render_env is closed).
+
+        Thin wrapper around :func:`pufferlib.ocean.drive.rollout.rollout_loop`.
+        """
+        import copy
+
+        from pufferlib.pufferl import load_env
+        from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
+
+        multi_view = len(self.render_view_modes) > 1
+        for view_mode in self.render_view_modes:
+            suffix = f"_{self._view_suffix[view_mode]}" if multi_view else ""
+            render_cfg = copy.deepcopy(eval_config)
+            render_cfg["env"]["render_mode"] = 1
+            render_env = load_env(self.env_name, render_cfg)
+            try:
+                rollout_loop(
+                    policy=policy,
+                    env=render_env,
+                    device=self.device,
+                    use_rnn=self.use_rnn,
+                    max_steps=self.episode_length,
+                    render_ctx=RenderContext(
+                        view_mode=view_mode,
+                        env_id=0,
+                        video_suffix=suffix,
+                    ),
+                )
+            finally:
+                render_env.close()
+
+    def log_videos(self, epoch):
+        """Glob .mp4 files produced by render() and log them to wandb under render/single_agent_eval."""
+        import os
+        import glob
+
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            if not self.save_render_videos:
+                for p in glob.glob("*.mp4"):
+                    os.remove(p)
+            return
+
+        import wandb
+
+        video_files = glob.glob("*.mp4")
+        if not video_files:
+            print("Warning: single_agent_eval render produced no mp4 files")
+            return
+
+        multi_view = len(self.render_view_modes) > 1
+        _known_suffixes = {"_sim_state", "_persp", "_bev"}
+        for p in video_files:
+            stem = os.path.splitext(os.path.basename(p))[0]
+            view_tag = ""
+            if multi_view:
+                for s in _known_suffixes:
+                    if stem.endswith(s):
+                        view_tag = s[1:]
+                        stem = stem[: -len(s)]
+                        break
+            caption = f"scene_{stem}_epoch_{epoch}_single_agent_eval"
+            wandb_key = f"render/single_agent_eval/{view_tag}" if view_tag else "render/single_agent_eval"
+            self.logger.wandb.log({wandb_key: wandb.Video(p, format="mp4", caption=caption)})
+
+        if not self.save_render_videos:
+            for p in video_files:
+                os.remove(p)
+
+    def log_stats(self, global_step=None):
+        """Log collected metrics to wandb."""
+        if self.stats is None:
+            return
+
+        if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
+            return
+
+        payload = {f"eval/single_agent_{k}": v for k, v in self.stats.items()}
+        if global_step is not None:
+            payload["train_step"] = global_step
+        self.logger.wandb.log(payload)
