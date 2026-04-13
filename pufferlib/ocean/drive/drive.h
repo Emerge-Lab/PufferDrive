@@ -2746,15 +2746,6 @@ float compute_partner_observations(Drive *env, float *obs, int agent_idx, int ob
         float other_sin = sinf(partner->sim_heading);
         obs[obs_idx + 5] = other_cos * cos_heading + other_sin * sin_heading;
         obs[obs_idx + 6] = other_sin * cos_heading - other_cos * sin_heading;
-        // Partner scalar speed magnitude. The previous encoding was
-        //   copysignf(|partner_v - ego_v|, (partner_v - ego_v) . partner_heading)
-        // which has no coherent physical interpretation: the sign depended on
-        // the partner's world-frame heading, so a stopped partner reported a
-        // non-zero value whose sign flipped if you rotated the (frozen) car.
-        // Use the partner's own speed magnitude instead — stopped partners
-        // now cleanly report 0, and the partner's direction of motion is
-        // already implicit in the heading obs at obs[+5] / obs[+6] for rigid-
-        // body vehicles (v = sim_speed * heading_unit).
         float partner_speed =
             sqrtf(partner->sim_vx * partner->sim_vx + partner->sim_vy * partner->sim_vy);
         obs[obs_idx + 7] = partner_speed / MAX_SPEED;
