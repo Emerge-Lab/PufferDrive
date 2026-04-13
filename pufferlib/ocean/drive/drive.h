@@ -3731,13 +3731,22 @@ Client *make_client(Drive *env) {
             if (client->egl_mode) {
                 // GPU/PBO path: same ffmpeg command as non-EGL (video may be vertically
                 // flipped but this confirms PBO data reaches ffmpeg).
+                // -threads 4: cap libx264's internal thread pool. x264's default
+                // autodetects from the physical node (~96+ cores on H100/H200), spawning
+                // ~24 encode threads + 4 lookahead threads. Under a 16-core SLURM cgroup
+                // that's ~2x oversubscription that burst-preempts the render producer
+                // and causes safe_eval renders to hang / SIGABRT. 4 threads is already
+                // far more than needed for 1232^2 ultrafast (~500 fps encode vs <200 fps
+                // producer), and leaves 12+ cores untouched for the main thread / env
+                // / render producer.
                 execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
-                       "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", filename,
-                       NULL);
+                       "-", "-c:v", "libx264", "-threads", "4", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf",
+                       "23", filename, NULL);
             }
 #endif
             execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
-                   "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", filename, NULL);
+                   "-", "-c:v", "libx264", "-threads", "4", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23",
+                   filename, NULL);
             fprintf(stderr, "execlp ffmpeg failed\n");
             _exit(1);
         }
