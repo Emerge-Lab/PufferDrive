@@ -101,7 +101,7 @@ def run_driving_behaviour_class_eval_in_subprocess(config, class_name, class_cfg
             "True",
             "--eval.human-replay-control-mode",
             "control_sdc_only",
-            "--eval.map-dir",
+            "--eval.hr-map-dir",
             map_dir,
             # Load exactly the maps available in the eval set.
             "--env.num-maps",

@@ -628,7 +628,7 @@ class PuffeRL:
         all_results = {}
         num_ran = 0
 
-        # Evaluate on all driving behaviour classes via subprocess (no load_env in training process)
+        # Evaluate on all driving behaviour classes via subprocess (load_env in training process causes OOM, need to investigate further)
         for class_name, class_cfg in evaluator.classes:
             if not class_cfg.get("human_replay_eval", False):
                 continue
@@ -1303,13 +1303,14 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         return results_dict
 
     elif human_replay_enabled:
-        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        args["env"]["map_dir"] = args["eval"].get(
+            "hr_map_dir", args["eval"].get("map_dir", "resources/drive/binaries/training")
+        )
         dataset_name = args["env"]["map_dir"].split("/")[-1]
         print(f"Running human replay evaluation with {dataset_name} dataset.\n")
         from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
         backend = args["eval"].get("backend", "PufferEnv")
-        args["env"]["map_dir"] = args["eval"]["map_dir"]
         args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
 
         args["vec"] = dict(backend=backend, num_envs=1)
