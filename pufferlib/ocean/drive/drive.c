@@ -130,7 +130,7 @@ void demo(const char *map_name_arg, const char *policy_name_arg, int view_mode, 
                 {conf.reward_bound_steer_min, conf.reward_bound_steer_max},
                 {conf.reward_bound_acc_min, conf.reward_bound_acc_max},
             },
-        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .map_name = "resources/drive/binaries/Town01/map_000.bin",
         .render_mode = RENDER_WINDOW,
         .partner_obs_radius = conf.partner_obs_radius,
     };
@@ -148,7 +148,13 @@ void demo(const char *map_name_arg, const char *policy_name_arg, int view_mode, 
     }
     c_reset(&env);
     c_render(&env, view_mode, draw_traces);
-    Weights *weights = load_weights(policy_name_arg ? policy_name_arg : "resources/drive/puffer_drive_weights.bin");
+    const char *weights_path = policy_name_arg ? policy_name_arg : "resources/drive/new_render_single_agent.bin";
+    Weights *weights = load_weights(weights_path);
+    if (!weights) {
+        fprintf(stderr, "Error: Failed to load weights from '%s'\n", weights_path);
+        free_allocated(&env);
+        return;
+    }
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model, env.reward_conditioning);
 
     int accel_delta = 1;

@@ -539,6 +539,7 @@ class PuffeRL:
                     self.evaluator.log_videos(eval_mode="human_replay", epoch=self.epoch)
                 if self_play_eval:
                     import os as _os
+
                     _sp_cfg_env = self.evaluator.sp_eval_config.get("env", {})
                     print(
                         f"[CACHE_DEBUG] [pufferl] Creating sp_env — PID={_os.getpid()} "
@@ -1441,6 +1442,10 @@ def profile(args=None, env_name=None, vecenv=None, policy=None):
 
 def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent=False):
     args = args or load_config(env_name)
+    if args["train"]["device"] == "cuda" and not torch.cuda.is_available():
+        if not silent:
+            print("Warning: CUDA not available, falling back to CPU for export.")
+        args["train"]["device"] = "cpu"
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv)
 

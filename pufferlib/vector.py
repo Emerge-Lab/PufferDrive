@@ -76,10 +76,18 @@ class Serial:
         else:
             self.is_invalid_step = np.zeros(self.agents_per_batch, dtype=np.uint8)
 
+        # Save the temporary driver env and close it once the real envs are
+        # created.  The initial driver_env is only used above for num_agents and
+        # space introspection; keeping it alive would leak a C-level map-cache
+        # ref_count, causing "Cannot change map cache config while Drive
+        # environments are still open" on the next binding.shared() call.
+        _tmp_driver = self.driver_env
+        self.driver_env = None
+
         self.envs = []
         ptr = 0
         for i in range(num_envs):
-            end = ptr + self.driver_env.num_agents
+            end = ptr + _tmp_driver.num_agents
             buf_i = dict(
                 observations=self.observations[ptr:end],
                 rewards=self.rewards[ptr:end],
@@ -93,6 +101,8 @@ class Serial:
             seed_i = seed + i if seed is not None else None
             env = env_creators[i](*env_args[i], buf=buf_i, seed=seed_i, **env_kwargs[i])
             self.envs.append(env)
+
+        _tmp_driver.close()
 
         self.driver_env = driver = self.envs[0]
         self.emulated = self.driver_env.emulated
