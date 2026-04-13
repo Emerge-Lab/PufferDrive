@@ -59,7 +59,6 @@ rich.traceback.install(show_locals=False)
 import signal  # Aggressively exit on ctrl+c
 
 import multiprocessing
-import queue
 
 import copy
 import traceback
@@ -552,7 +551,7 @@ class PuffeRL:
 
         behaviours_eval_enabled = self.config.get("eval", {}).get("driving_behaviours_eval", False)
         behaviours_eval_interval = int(
-            self.config.get("eval", {}).get("driving_behaviours_eval_interval", self.render_interval)
+            self.config.get("eval", {}).get("driving_behaviours_eval_interval", self.eval_interval)
         )
         if (
             is_main
@@ -561,61 +560,6 @@ class PuffeRL:
             and (self.epoch % behaviours_eval_interval == 0 or done_training)
         ):
             self._run_driving_behaviours_eval()
-
-    def _render_videos(
-        self,
-        bin_path,
-        num_maps=None,
-        map_dir=None,
-        wandb_prefix="render",
-        config_path=None,
-        cleanup_files=None,
-    ):
-        """Render videos, either async (background process) or sync (blocking)."""
-        wandb_log = hasattr(self.logger, "wandb") and self.logger.wandb is not None
-        render_kwargs = dict(
-            config=self.config,
-            run_id=self.logger.run_id,
-            num_maps=num_maps,
-            map_dir=map_dir,
-            wandb_log=wandb_log,
-            epoch=self.epoch,
-            global_step=self.global_step,
-            bin_path=bin_path,
-            config_path=config_path,
-            wandb_prefix=wandb_prefix,
-        )
-
-        if self.render_async:
-            self._reap_render_processes()
-            max_processes = 3
-            if len(self.render_processes) >= max_processes:
-                print(f"Waiting for render processes to finish ({len(self.render_processes)}/{max_processes})...")
-            while len(self.render_processes) >= max_processes:
-                time.sleep(1)
-                self._reap_render_processes()
-
-            render_proc = multiprocessing.Process(
-                target=pufferlib.utils.render_videos_and_cleanup,
-                kwargs={
-                    **render_kwargs,
-                    "cleanup_files": cleanup_files or [],
-                    "render_async": True,
-                    "render_queue": self.render_queue,
-                },
-                daemon=True,
-            )
-            render_proc.start()
-            self.render_processes.append(render_proc)
-        else:
-            pufferlib.utils.render_videos(
-                **render_kwargs,
-                render_async=False,
-                wandb_run=self.logger.wandb if wandb_log else None,
-            )
-            for f in cleanup_files or []:
-                if os.path.exists(f):
-                    os.remove(f)
 
     def _run_safe_eval(self):
         """Run safe eval in-process using SafeEvaluator, then render videos."""
@@ -702,97 +646,67 @@ class PuffeRL:
                 all_results[class_name] = results
                 num_ran += 1
 
-        # Render a video for each driving behaviour class
+        # Render a video for each driving behaviour class using the new rollout_loop pipeline
         for class_name, class_cfg in evaluator.classes:
-            print(f'Class render_cfg for "{class_name}": {class_cfg}')
             if not class_cfg.get("render_eval", False):
-                print(f"DrivingBehavioursEval: render disabled for {class_name}")
                 continue
-            print(f"DrivingBehavioursEval: rendering videos for {num_ran}/{len(evaluator.classes)} classes")
             short = class_name[len(DrivingBehavioursEvaluator.EVAL_SECTIONS_PREFIX) :]
             map_dir = class_cfg.get("map_dir", "")
             if isinstance(map_dir, str):
                 map_dir = map_dir.strip('"')
             try:
-                model_dir = os.path.join(self.config["data_dir"], f"{env_name}_{self.logger.run_id}")
-                bin_path = f"{model_dir}_driving_behaviours_{class_name}_epoch_{self.epoch:06d}.bin"
+                from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
+                from pufferlib.ocean.drive.drive import RenderView
+                import copy as _copy
 
-                export(
-                    args={"env_name": env_name, "load_model_path": "unused", **self.config},
-                    env_name=env_name,
-                    vecenv=self.vecenv,
-                    policy=self.uncompiled_policy,
-                    path=bin_path,
-                    silent=True,
-                )
+                render_cfg = _copy.deepcopy(self.full_args)
+                render_cfg["env"]["map_dir"] = map_dir
+                render_cfg["env"]["control_mode"] = "control_sdc_only"
+                render_cfg["env"]["init_mode"] = "create_all_valid"
+                render_cfg["env"]["episode_length"] = 91
+                render_cfg["env"]["resample_frequency"] = 0
+                render_cfg["env"]["render_mode"] = 1
+                render_cfg["vec"] = {"backend": "Serial", "num_envs": 1}
 
-                render_ini = pufferlib.utils.generate_env_ini(
-                    {
-                        "control_mode": '"control_sdc_only"',
-                        "init_mode": '"create_all_valid"',
-                        "map_dir": f'"{map_dir}"',
-                    },
-                    prefix=f"driving_behaviours_{class_name}_render_",
-                )
+                render_env = load_env(env_name, render_cfg)
+                try:
+                    rollout_loop(
+                        policy=self.uncompiled_policy,
+                        env=render_env,
+                        device=self.config["device"],
+                        use_rnn=self.config.get("use_rnn", False),
+                        max_steps=91,
+                        render_ctx=RenderContext(
+                            view_mode=RenderView.FULL_SIM_STATE,
+                            env_id=0,
+                        ),
+                    )
+                finally:
+                    render_env.close()
 
-                self._render_videos(
-                    bin_path=bin_path,
-                    map_dir=map_dir,
-                    wandb_prefix=f"driving_behaviours/{short}",
-                    config_path=render_ini,
-                    cleanup_files=[bin_path, render_ini],
-                )
+                # Log any produced mp4s to wandb
+                import glob as _glob
+
+                video_files = _glob.glob("*.mp4")
+                if hasattr(self.logger, "wandb") and self.logger.wandb and video_files:
+                    import wandb
+
+                    for p in video_files:
+                        stem = os.path.splitext(os.path.basename(p))[0]
+                        self.logger.wandb.log(
+                            {
+                                f"driving_behaviours/{short}/render": wandb.Video(
+                                    p, format="mp4", caption=f"scene_{stem}_epoch_{self.epoch}"
+                                )
+                            }
+                        )
+                for p in video_files:
+                    os.remove(p)
             except Exception as e:
                 print(f"DrivingBehavioursEval: render failed for {short}: {e}")
                 traceback.print_exc()
 
         self.msg = f"Driving behaviours eval complete: {num_ran}/{len(evaluator.classes)} classes evaluated"
-
-    def _reap_render_processes(self):
-        """Remove finished render processes from the tracking list."""
-        if not self.render_async:
-            return
-        alive = []
-        for p in self.render_processes:
-            if p.is_alive():
-                alive.append(p)
-            else:
-                p.join(timeout=1)
-        self.render_processes = alive
-
-    def check_render_queue(self):
-        """Check if any async render jobs finished and log them."""
-        if not self.render_async:
-            return
-        self._reap_render_processes()
-
-        try:
-            while True:
-                try:
-                    result = self.render_queue.get_nowait()
-                except queue.Empty:
-                    break
-
-                step = result["step"]
-                videos = result["videos"]
-                prefix = result.get("prefix", "render")
-
-                if hasattr(self.logger, "wandb") and self.logger.wandb:
-                    import wandb
-
-                    payload = {}
-                    if videos["output_topdown"]:
-                        payload[f"{prefix}/world_state"] = [
-                            wandb.Video(p, format="mp4") for p in videos["output_topdown"]
-                        ]
-                    if videos["output_agent"]:
-                        payload[f"{prefix}/agent_view"] = [wandb.Video(p, format="mp4") for p in videos["output_agent"]]
-
-                    if payload:
-                        payload["train_step"] = step
-                        self.logger.wandb.log(payload)
-        except Exception as e:
-            print(f"Error reading render queue: {e}")
 
     def mean_and_log(self):
         config = self.config
@@ -1419,6 +1333,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         print(json.dumps(results))
         print("HUMAN_REPLAY_METRICS_END")
 
+        vecenv.close()
         return results
 
     else:  # Standard evaluation: Render
@@ -1830,7 +1745,7 @@ def render(env_name, args=None):
 
     try:
         map_dir = render_configs["map_dir"]
-        num_maps = render_configs.get("num_maps", "auto")
+        num_maps = render_configs.get("num_maps", 1)
         view_mode_str = str(render_configs.get("view_mode", "sim_state")).lower().strip('"').strip("'")
         draw_traces = render_configs.get("draw_traces", True)
         max_frames = render_configs.get("max_frames", 91)
@@ -1860,27 +1775,7 @@ def render(env_name, args=None):
     }
     view_modes = _VIEW_MODE_MAP.get(view_mode_str)
     if view_modes is None:
-    human_replay_render = render_configs.get("human_replay_render", False)
-    human_replay_control_mode = render_configs.get("human_replay_control_mode", "control_sdc_only")
-
-    cpu_cores = psutil.cpu_count(logical=False)
-    if num_workers > cpu_cores and not overwork:
         raise pufferlib.APIUsageError(
-            " ".join(
-                [
-                    f"num_workers ({num_workers}) > hardware cores ({cpu_cores}) is disallowed by default.",
-                    "PufferLib multiprocessing is heavily optimized for 1 process per hardware core.",
-                    "If you really want to do this, set overwork=True (--vec-overwork in our demo.py).",
-                ]
-            )
-        )
-
-    available_maps = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
-    if num_maps == "auto" or num_maps > available_maps:
-        print(f"Generating videos for all {available_maps} maps in {map_dir}")
-        num_maps = available_maps
-
-    render_maps = [os.path.join(map_dir, f) for f in sorted(os.listdir(map_dir)) if f.endswith(".bin")][:num_maps]
             f"Unknown view_mode '{view_mode_str}'. Choose from: sim_state, bev, persp, both, all"
         )
 
@@ -1891,67 +1786,6 @@ def render(env_name, args=None):
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Rebuild visualize binary
-    ensure_drive_binary()
-
-    # Generate a human-replay INI override if requested (control_mode = control_sdc_only)
-    human_replay_ini = None
-    if human_replay_render:
-        human_replay_ini = pufferlib.utils.generate_env_ini(
-            {
-                "control_mode": f'"{human_replay_control_mode}"',
-                "init_mode": "create_all_valid",
-            },
-            prefix="human_replay_render_",
-        )
-        print(
-            f"Human-replay render: control_mode={human_replay_control_mode}, all non-SDC agents use expert trajectories."
-        )
-
-    def render_task(map_path):
-        base_cmd = (
-            ["./visualize"]
-            if sys.platform == "darwin"
-            else ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", "./visualize"]
-        )
-        cmd = base_cmd.copy()
-        cmd.extend(["--map-name", map_path])
-        if human_replay_ini:
-            cmd.extend(["--config", human_replay_ini])
-        if render_configs.get("show_grid", False):
-            cmd.append("--show-grid")
-        if render_configs.get("obs_only", False):
-            cmd.append("--obs-only")
-        if render_configs.get("show_lasers", False):
-            cmd.append("--lasers")
-        if render_configs.get("show_human_logs", False):
-            cmd.append("--log-trajectories")
-        if render_configs.get("zoom_in", False):
-            cmd.append("--zoom-in")
-        cmd.extend(["--view", view_mode])
-        if render_policy_path is not None:
-            cmd.extend(["--policy-name", render_policy_path])
-
-        map_name = os.path.basename(map_path).replace(".bin", "")
-
-        if view_mode == "topdown" or view_mode == "both":
-            cmd.extend(["--output-topdown", os.path.join(output_dir, f"topdown_{map_name}.mp4")])
-        if view_mode == "agent" or view_mode == "both":
-            cmd.extend(["--output-agent", os.path.join(output_dir, f"agent_{map_name}.mp4")])
-
-        env_vars = os.environ.copy()
-        env_vars["ASAN_OPTIONS"] = "exitcode=0"
-        print(f"Running: {' '.join(cmd)}")
-        try:
-            result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=600, env=env_vars)
-            if result.stdout:
-                print(f"[{map_name}] stdout: {result.stdout[-1000:]}")
-            if result.stderr:
-                print(f"[{map_name}] stderr: {result.stderr[-1000:]}")
-            if result.returncode != 0:
-                print(f"Error rendering {map_name}: exit code {result.returncode}")
-        except subprocess.TimeoutExpired:
-            print(f"Timeout rendering {map_name}: exceeded 600 seconds")
     # Fall back to CPU if the configured device is unavailable (e.g. no CUDA on this machine)
     configured_device = args["train"]["device"]
     if configured_device == "cuda" and not torch.cuda.is_available():
