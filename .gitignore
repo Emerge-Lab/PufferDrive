@@ -161,12 +161,7 @@ wandb/
 raylib*/
 box2d*/
 
-# Temp Impulse Wars files
-pufferlib/ocean/impulse_wars/*-debug/
-pufferlib/ocean/impulse_wars/*-release/
-pufferlib/ocean/impulse_wars/debug-*/
-pufferlib/ocean/impulse_wars/release-*/
-pufferlib/ocean/impulse_wars/benchmark/
+drive
 
 # Data
 resources/drive/data/*
