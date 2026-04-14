@@ -2009,7 +2009,7 @@ def _load_target_policy_for_eval(args, vecenv, env_name, target_policy=None):
         target_policy.eval()
         return target_policy
 
-    target_policy_path = args["train"].get("target_policy")
+    target_policy_path = args.get("target_policy_path") or args["train"].get("target_policy")
     if target_policy_path is None or str(target_policy_path).lower() == "none":
         raise pufferlib.APIUsageError("Adversarial eval requires train.target_policy")
 
@@ -2104,6 +2104,10 @@ def _get_random_eval_filename_suffix(args):
 
     if args.get("seed") is not None:
         parts.append(f"seed{args['seed']}")
+
+    if args.get("target_policy_path") is not None:
+        target_name = os.path.splitext(os.path.basename(args["target_policy_path"]))[0]
+        parts.append(f"target_{target_name}")
 
     return f"_{'_'.join(parts)}" if parts else ""
 
@@ -2852,6 +2856,12 @@ def load_config(env_name, config_dir=None):
     )
     parser.add_argument("--load-model-path", type=str, default=None, help="Path to a pretrained checkpoint")
     parser.add_argument(
+        "--target-policy-path",
+        type=str,
+        default=None,
+        help="Optional explicit target policy checkpoint for adversarial evaluation/rendering",
+    )
+    parser.add_argument(
         "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
     )
     parser.add_argument(
@@ -2859,27 +2869,27 @@ def load_config(env_name, config_dir=None):
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
     parser.add_argument("--seed", type=int, default=None, help="Optional explicit seed for evaluation/render runs")
-    parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
+    parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument(
-        "--eval_agents_per_scene",
+        "--eval-agents-per-scene",
         type=int,
         default=None,
         help="Fixed number of agents per scenario for evaluation overrides",
     )
     parser.add_argument(
-        "--eval_scenario_length",
+        "--eval-scenario-length",
         type=int,
         default=None,
         help="Scenario length for evaluation overrides",
     )
     parser.add_argument(
-        "--num_carla_maps", type=int, default=8, help="Number of CARLA maps to use in gigaflow mode (max 8)"
+        "--num-carla-maps", type=int, default=8, help="Number of CARLA maps to use in gigaflow mode (max 8)"
     )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument(
-        "--render_obs", type=int, default=0, help="Rendering the observation of first agent in evaluation"
+        "--render-obs", type=int, default=0, help="Rendering the observation of first agent in evaluation"
     )
-    parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
+    parser.add_argument("--agent-index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
     parser.add_argument("--save-frames", type=int, default=0)
     parser.add_argument("--gif-path", type=str, default="eval.gif")
     parser.add_argument("--fps", type=float, default=15)
@@ -2894,7 +2904,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
     parser.add_argument(
-        "--eval_simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
+        "--eval-simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
     )
     args = parser.parse_known_args()[0]
 
