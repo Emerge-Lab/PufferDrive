@@ -229,6 +229,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
+        .spawn_initial_speed = conf.spawn_initial_speed,
+        .goal_speed = conf.goal_speed,
         .map_name = (char *)map_name,
         .init_steps = init_steps,
         .max_controlled_agents = max_controlled_agents,

@@ -174,11 +174,12 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float heading_self_y = sinf(heading_self);
     float px = env->agents[active_idx].sim_x;
     float py = env->agents[active_idx].sim_y;
+    float pz = env->agents[active_idx].sim_z;
     // draw goal (first target waypoint, in ego frame)
     if (env->num_target_waypoints > 0) {
         int goal_obs_idx = ego_dim + num_reward_coefs;
-        float goal_x = agent_obs[goal_obs_idx] * MAX_GOAL_POSITION;
-        float goal_y = agent_obs[goal_obs_idx + 1] * MAX_GOAL_POSITION;
+        float goal_x = agent_obs[goal_obs_idx] * env->max_goal_position;
+        float goal_y = agent_obs[goal_obs_idx + 1] * env->max_goal_position;
         if (mode == 0) {
             DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
             DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
@@ -196,39 +197,48 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     // First draw other agent observations
     int obs_idx = ego_dim + num_reward_coefs + target_features; // Start after ego, conditioning, and target obs
     for (int j = 0; j < env->max_partner_observations; j++) {
-        if (agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
+        bool is_empty = true;
+        for (int k = 0; k < PARTNER_FEATURES; k++) {
+            if (agent_obs[obs_idx + k] != 0.0f) {
+                is_empty = false;
+                break;
+            }
+        }
+        if (is_empty) {
             obs_idx += PARTNER_FEATURES;
             continue;
         }
         // Draw position of other agents
-        float x = agent_obs[obs_idx] * 50;
-        float y = agent_obs[obs_idx + 1] * 50;
+        float x = agent_obs[obs_idx] * env->max_position;
+        float y = agent_obs[obs_idx + 1] * env->max_position;
+        float z = agent_obs[obs_idx + 2] * env->max_position;
         if (lasers && mode == 0) {
-            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x, y, 1}, ORANGE);
+            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x, y, z + 1}, ORANGE);
         }
 
         float partner_x = px + (x * heading_self_x - y * heading_self_y);
         float partner_y = py + (x * heading_self_y + y * heading_self_x);
+        float partner_z = pz + z;
         if (lasers && mode == 1) {
-            DrawLine3D((Vector3){px, py, 1}, (Vector3){partner_x, partner_y, 1}, ORANGE);
+            DrawLine3D((Vector3){px, py, pz + 1}, (Vector3){partner_x, partner_y, partner_z + 1}, ORANGE);
         }
 
-        float half_width = 0.5 * agent_obs[obs_idx + 2] * MAX_VEH_WIDTH;
-        float half_len = 0.5 * agent_obs[obs_idx + 3] * MAX_VEH_LEN;
-        float theta_x = agent_obs[obs_idx + 4];
-        float theta_y = agent_obs[obs_idx + 5];
+        float half_len = 0.5f * agent_obs[obs_idx + 3] * env->max_veh_len;
+        float half_width = 0.5f * agent_obs[obs_idx + 4] * env->max_veh_width;
+        float theta_x = agent_obs[obs_idx + 5];
+        float theta_y = agent_obs[obs_idx + 6];
         float partner_angle = atan2f(theta_y, theta_x);
         float cos_heading = cosf(partner_angle);
         float sin_heading = sinf(partner_angle);
         Vector3 corners[4] = {
             (Vector3){x + (half_len * cos_heading - half_width * sin_heading),
-                      y + (half_len * sin_heading + half_width * cos_heading), 1},
+                      y + (half_len * sin_heading + half_width * cos_heading), z + 1},
             (Vector3){x + (half_len * cos_heading + half_width * sin_heading),
-                      y + (half_len * sin_heading - half_width * cos_heading), 1},
+                      y + (half_len * sin_heading - half_width * cos_heading), z + 1},
             (Vector3){x + (-half_len * cos_heading + half_width * sin_heading),
-                      y + (-half_len * sin_heading - half_width * cos_heading), 1},
+                      y + (-half_len * sin_heading - half_width * cos_heading), z + 1},
             (Vector3){x + (-half_len * cos_heading - half_width * sin_heading),
-                      y + (-half_len * sin_heading + half_width * cos_heading), 1},
+                      y + (-half_len * sin_heading + half_width * cos_heading), z + 1},
         };
 
         if (mode == 0) {
@@ -245,7 +255,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
                 world_corners[j].x = px + (lx * heading_self_x - ly * heading_self_y);
                 world_corners[j].y = py + (lx * heading_self_y + ly * heading_self_x);
-                world_corners[j].z = 1;
+                world_corners[j].z = pz + z + 1;
             }
             for (int j = 0; j < 4; j++) {
                 DrawLine3D(world_corners[j], world_corners[(j + 1) % 4], ORANGE);
@@ -259,12 +269,13 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float arrow_x_world;
         float arrow_y_world;
         if (mode == 0) {
-            DrawLine3D((Vector3){x, y, 1}, (Vector3){arrow_x, arrow_y, 1}, PUFF_WHITE);
+            DrawLine3D((Vector3){x, y, z + 1}, (Vector3){arrow_x, arrow_y, z + 1}, PUFF_WHITE);
         }
         if (mode == 1) {
             arrow_x_world = px + (arrow_x * heading_self_x - arrow_y * heading_self_y);
             arrow_y_world = py + (arrow_x * heading_self_y + arrow_y * heading_self_x);
-            DrawLine3D((Vector3){partner_x, partner_y, 1}, (Vector3){arrow_x_world, arrow_y_world, 1}, PUFF_WHITE);
+            DrawLine3D((Vector3){partner_x, partner_y, partner_z + 1},
+                       (Vector3){arrow_x_world, arrow_y_world, partner_z + 1}, PUFF_WHITE);
         }
         // Calculate perpendicular offsets for arrow head
         float arrow_size = 0.3f; // Size of the arrow head
@@ -287,8 +298,10 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
             // Draw the two lines forming the arrow head
             if (mode == 0) {
-                DrawLine3D((Vector3){arrow_x, arrow_y, 1}, (Vector3){arrow_x_end1, arrow_y_end1, 1}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x, arrow_y, 1}, (Vector3){arrow_x_end2, arrow_y_end2, 1}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, z + 1}, (Vector3){arrow_x_end1, arrow_y_end1, z + 1},
+                           PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x, arrow_y, z + 1}, (Vector3){arrow_x_end2, arrow_y_end2, z + 1},
+                           PUFF_WHITE);
             }
 
             if (mode == 1) {
@@ -296,10 +309,10 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
                 float arrow_y_end1_world = py + (arrow_x_end1 * heading_self_y + arrow_y_end1 * heading_self_x);
                 float arrow_x_end2_world = px + (arrow_x_end2 * heading_self_x - arrow_y_end2 * heading_self_y);
                 float arrow_y_end2_world = py + (arrow_x_end2 * heading_self_y + arrow_y_end2 * heading_self_x);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 1},
-                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, 1}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, 1},
-                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, 1}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, partner_z + 1},
+                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, partner_z + 1}, PUFF_WHITE);
+                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, partner_z + 1},
+                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, partner_z + 1}, PUFF_WHITE);
             }
         }
 
@@ -307,19 +320,27 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
     // Then draw lane segment observations (obs_idx is now at lane obs start after partner loop)
     int lane_obs_start = obs_idx;
-    for (int k = 0; k < env->max_lane_segment_observations; k++) {
+    for (int k = 0; k < env->obs_lane_segment_count; k++) {
         int entity_idx = lane_obs_start + k * ROAD_FEATURES;
-        if (agent_obs[entity_idx] == 0 && agent_obs[entity_idx + 1] == 0) {
+        bool is_empty = true;
+        for (int j = 0; j < ROAD_FEATURES; j++) {
+            if (agent_obs[entity_idx + j] != 0.0f) {
+                is_empty = false;
+                break;
+            }
+        }
+        if (is_empty) {
             continue;
         }
         Color lineColor = PUFF_CYAN;
         // For road segments, draw line between start and end points
-        float x_middle = agent_obs[entity_idx] * 50;
-        float y_middle = agent_obs[entity_idx + 1] * 50;
-        float rel_angle_x = (agent_obs[entity_idx + 4]);
-        float rel_angle_y = (agent_obs[entity_idx + 5]);
+        float x_middle = agent_obs[entity_idx] * env->max_position;
+        float y_middle = agent_obs[entity_idx + 1] * env->max_position;
+        float z_middle = agent_obs[entity_idx + 2] * env->max_position;
+        float rel_angle_x = (agent_obs[entity_idx + 5]);
+        float rel_angle_y = (agent_obs[entity_idx + 6]);
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
-        float segment_length = agent_obs[entity_idx + 2] * MAX_ROAD_SEGMENT_LENGTH;
+        float segment_length = agent_obs[entity_idx + 3] * env->max_road_segment_length;
         // Calculate endpoint using the relative angle directly
         // Calculate endpoint directly
         float x_start = x_middle - segment_length * cosf(rel_angle);
@@ -328,7 +349,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float y_end = y_middle + segment_length * sinf(rel_angle);
 
         if (lasers && mode == 0) {
-            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x_middle, y_middle, 1}, lineColor);
+            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x_middle, y_middle, z_middle + 1}, lineColor);
         }
 
         if (mode == 1) {
@@ -338,14 +359,16 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             float y_start_world = py + (x_start * heading_self_y + y_start * heading_self_x);
             float x_end_world = px + (x_end * heading_self_x - y_end * heading_self_y);
             float y_end_world = py + (x_end * heading_self_y + y_end * heading_self_x);
-            DrawCube((Vector3){x_middle_world, y_middle_world, 1}, 0.5f, 0.5f, 0.5f, lineColor);
-            DrawLine3D((Vector3){x_start_world, y_start_world, 1}, (Vector3){x_end_world, y_end_world, 1}, BLUE);
+            float z_world = pz + z_middle + 1;
+            DrawCube((Vector3){x_middle_world, y_middle_world, z_world}, 0.5f, 0.5f, 0.5f, lineColor);
+            DrawLine3D((Vector3){x_start_world, y_start_world, z_world}, (Vector3){x_end_world, y_end_world, z_world},
+                       BLUE);
             if (lasers)
-                DrawLine3D((Vector3){px, py, 1}, (Vector3){x_middle_world, y_middle_world, 1}, lineColor);
+                DrawLine3D((Vector3){px, py, pz + 1}, (Vector3){x_middle_world, y_middle_world, z_world}, lineColor);
         }
         if (mode == 0) {
-            DrawCube((Vector3){x_middle, y_middle, 1}, 0.5f, 0.5f, 0.5f, lineColor);
-            DrawLine3D((Vector3){x_start, y_start, 1}, (Vector3){x_end, y_end, 1}, BLUE);
+            DrawCube((Vector3){x_middle, y_middle, z_middle + 1}, 0.5f, 0.5f, 0.5f, lineColor);
+            DrawLine3D((Vector3){x_start, y_start, z_middle + 1}, (Vector3){x_end, y_end, z_middle + 1}, BLUE);
         }
     }
 }

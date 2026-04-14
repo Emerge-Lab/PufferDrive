@@ -47,14 +47,14 @@ DriveNet *init_drivenet(Weights *weights, int num_agents, int dynamics_model) {
     int hidden_size = 256;
     int input_size = 64;
 
-    int ego_dim = (dynamics_model == JERK) ? 10 : 7;
+    int ego_dim = (dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
 
     // Determine action space size based on dynamics model
     int action_size, logit_sizes[2];
     int action_dim;
     if (dynamics_model == CLASSIC) {
-        action_size = 7 * 13; // Joint action space
-        logit_sizes[0] = 7 * 13;
+        action_size = 7 * 9; // Joint action space (7 accel × 9 steering = 63)
+        logit_sizes[0] = 7 * 9;
         action_dim = 1;
     } else {                 // JERK
         action_size = 4 * 3; // Joint action space (4 longitudinal × 3 lateral = 12)

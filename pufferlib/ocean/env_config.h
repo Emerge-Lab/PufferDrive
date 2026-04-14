@@ -25,6 +25,8 @@ typedef struct {
     float reward_timestep;
     float reward_reverse;
     float goal_radius;
+    float spawn_initial_speed;
+    float goal_speed;
     int collision_behavior;
     int offroad_behavior;
     int traffic_light_behavior;
@@ -44,12 +46,17 @@ typedef struct {
     int reward_randomization;
     int compute_eval_metrics;
     int max_agents_per_env;
-    int use_rear_axle;
     int max_lane_segment_observations;
     int max_boundary_segment_observations;
+    float lane_segment_dropout;
+    float boundary_segment_dropout;
     int max_partner_observations;
     int max_traffic_control_observations;
     int traffic_control_scope;
+    float partner_blindness_prob;
+    float phantom_braking_prob;
+    float phantom_braking_trigger_prob;
+    int phantom_braking_duration;
 } env_init_config;
 
 // INI file parser handler - parses all environment configuration from drive.ini
@@ -120,6 +127,10 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_reverse = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
+    } else if (MATCH("env", "spawn_initial_speed")) {
+        env_config->spawn_initial_speed = atof(value);
+    } else if (MATCH("env", "goal_speed")) {
+        env_config->goal_speed = atof(value);
     } else if (MATCH("env", "dt")) {
         env_config->dt = atof(value);
     } else if (MATCH("env", "scenario_length")) {
@@ -165,22 +176,28 @@ static int handler(void *config, const char *section, const char *name, const ch
         } else {
             env_config->compute_eval_metrics = 0;
         }
-    } else if (MATCH("env", "use_rear_axle")) {
-        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
-            env_config->use_rear_axle = 1;
-        } else {
-            env_config->use_rear_axle = 0;
-        }
     } else if (MATCH("env", "max_boundary_segment_observations")) {
         env_config->max_boundary_segment_observations = atoi(value);
     } else if (MATCH("env", "max_lane_segment_observations")) {
         env_config->max_lane_segment_observations = atoi(value);
+    } else if (MATCH("env", "lane_segment_dropout")) {
+        env_config->lane_segment_dropout = atof(value);
+    } else if (MATCH("env", "boundary_segment_dropout")) {
+        env_config->boundary_segment_dropout = atof(value);
     } else if (MATCH("env", "max_partner_observations")) {
         env_config->max_partner_observations = atoi(value);
     } else if (MATCH("env", "max_traffic_control_observations")) {
         env_config->max_traffic_control_observations = atoi(value);
     } else if (MATCH("env", "traffic_control_scope")) {
         env_config->traffic_control_scope = atoi(value);
+    } else if (MATCH("env", "partner_blindness_prob")) {
+        env_config->partner_blindness_prob = atof(value);
+    } else if (MATCH("env", "phantom_braking_prob")) {
+        env_config->phantom_braking_prob = atof(value);
+    } else if (MATCH("env", "phantom_braking_trigger_prob")) {
+        env_config->phantom_braking_trigger_prob = atof(value);
+    } else if (MATCH("env", "phantom_braking_duration")) {
+        env_config->phantom_braking_duration = atoi(value);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }
