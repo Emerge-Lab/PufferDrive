@@ -10,11 +10,13 @@ set -e
 #   ./build.sh --fast           # Standalone executable (optimized)
 #   ./build.sh --web            # Emscripten web build
 #   ./build.sh --profile        # Kernel profiling binary
+#   ./build.sh clean            # Remove compiled artifacts and Python bytecode
 
 ENV=drive
 
 for arg in "$@"; do
     case $arg in
+        clean) CLEAN=1 ;;
         --float) PRECISION="-DPRECISION_FLOAT" ;;
         --debug) DEBUG=1 ;;
         --local) MODE=local ;;
@@ -25,6 +27,14 @@ for arg in "$@"; do
         *) echo "Error: unknown argument '$arg'" && exit 1 ;;
     esac
 done
+
+if [ -n "$CLEAN" ]; then
+    rm -rf build drive profile
+    rm -f pufferlib/_C*.so pufferlib/_C*.pyd pufferlib/_C*.dylib
+    find . -type d -name '__pycache__' -exec rm -rf {} +
+    find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+    exit 0
+fi
 
 # Linux/mac
 PLATFORM="$(uname -s)"
