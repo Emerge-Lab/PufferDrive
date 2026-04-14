@@ -41,14 +41,14 @@ def send_precheck(vecenv, actions):
 
 def reset(vecenv, seed=42):
     vecenv.async_reset(seed)
-    obs, rewards, terminals, truncations, infos, env_ids, masks = vecenv.recv()
+    obs, rewards, terminals, truncations, infos, env_ids, masks, is_invalid_step = vecenv.recv()
     return obs, infos
 
 
 def step(vecenv, actions):
     actions = np.asarray(actions)
     vecenv.send(actions)
-    obs, rewards, terminals, truncations, infos, env_ids, masks = vecenv.recv()
+    obs, rewards, terminals, truncations, infos, env_ids, masks, is_invalid_step = vecenv.recv()
     return obs, rewards, terminals, truncations, infos  # include env_ids or no?
 
 

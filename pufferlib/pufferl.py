@@ -686,7 +686,7 @@ class PuffeRL:
                 render_cfg["env"]["episode_length"] = episode_length
                 render_cfg["env"]["resample_frequency"] = 0
                 render_cfg["env"]["render_mode"] = 1
-                render_cfg["vec"] = {"backend": "Serial", "num_envs": 1}
+                render_cfg["vec"] = {"backend": "PufferEnv", "num_envs": 1}
 
                 render_env = load_env(env_name, render_cfg)
                 try:

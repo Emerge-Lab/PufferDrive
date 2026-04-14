@@ -130,7 +130,7 @@ void demo(const char *map_name_arg, const char *policy_name_arg, int view_mode, 
                 {conf.reward_bound_steer_min, conf.reward_bound_steer_max},
                 {conf.reward_bound_acc_min, conf.reward_bound_acc_max},
             },
-        .map_name = "resources/drive/binaries/carla/carla_3D/map_001.bin",
+        .map_name = "resources/drive/binaries/carla_2D/map_001.bin",
         .render_mode = RENDER_WINDOW,
         .partner_obs_radius = conf.partner_obs_radius,
     };
