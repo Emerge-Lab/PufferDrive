@@ -226,6 +226,7 @@ class PuffeRL:
         self.stats = defaultdict(list)
         self.last_stats = defaultdict(list)
         self.losses = {}
+        self.ema_max = 0.0
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -363,152 +364,26 @@ class PuffeRL:
         profile = self.profile
         epoch = self.epoch
         profile("train", epoch)
+        profile("train_misc", epoch, nest=True)
         losses = defaultdict(float)
         config = self.config
-        device = config["device"]
 
-        b0 = config["prio_beta0"]
-        a = config["prio_alpha"]
-        clip_coef = config["clip_coef"]
-        vf_clip = config["vf_clip_coef"]
-        anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
-        self.ratio[:] = 1
+        ppo_granularity = config["ppo_granularity"]
+        if ppo_granularity == "auto":
+            ppo_granularity = "trajectory" if config["use_rnn"] else "transition"
+        if config["use_rnn"] and ppo_granularity == "transition":
+            raise ValueError("RNN requires trajectory-level training")
 
-        for mb in range(self.total_minibatches):
-            profile("train_misc", epoch, nest=True)
-            self.amp_context.__enter__()
+        if ppo_granularity == "trajectory":
+            explained_var = self._train_ppo_trajectory(losses, profile, epoch)
+        else:
+            explained_var = self._train_ppo_transition(losses, profile, epoch)
 
-            shape = self.values.shape
-            advantages = torch.zeros(shape, device=device)
-            advantages = compute_puff_advantage(
-                self.values,
-                self.rewards,
-                self.terminals,
-                self.ratio,
-                advantages,
-                config["gamma"],
-                config["gae_lambda"],
-                config["vtrace_rho_clip"],
-                config["vtrace_c_clip"],
-            )
-
-            profile("train_copy", epoch)
-            adv = advantages.abs().sum(axis=1)
-            prio_weights = torch.nan_to_num(adv**a, 0, 0, 0)
-            prio_probs = (prio_weights + 1e-6) / (prio_weights.sum() + 1e-6)
-            idx = torch.multinomial(prio_probs, self.minibatch_segments)
-            mb_prio = (self.segments * prio_probs[idx, None]) ** -anneal_beta
-            mb_obs = self.observations[idx]
-            mb_actions = self.actions[idx]
-            mb_logprobs = self.logprobs[idx]
-            mb_rewards = self.rewards[idx]
-            mb_terminals = self.terminals[idx]
-            mb_is_invalid_step = self.is_invalid_step[idx].bool()
-            mb_truncations = self.truncations[idx]
-            mb_ratio = self.ratio[idx]
-            mb_values = self.values[idx]
-            mb_returns = advantages[idx] + mb_values
-            mb_advantages = advantages[idx]
-
-            profile("train_forward", epoch)
-            if not config["use_rnn"]:
-                mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
-
-            state = dict(
-                action=mb_actions,
-                lstm_h=None,
-                lstm_c=None,
-            )
-
-            logits, newvalue = self.policy(mb_obs, state)
-            actions, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
-
-            profile("train_misc", epoch)
-            newlogprob = newlogprob.reshape(mb_logprobs.shape)
-            logratio = newlogprob - mb_logprobs
-            ratio = logratio.exp()
-            self.ratio[idx] = ratio.detach()
-
-            with torch.no_grad():
-                old_approx_kl = (-logratio).mean()
-                approx_kl = ((ratio - 1) - logratio).mean()
-                clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
-
-            adv = advantages[idx]
-            adv = compute_puff_advantage(
-                mb_values,
-                mb_rewards,
-                mb_terminals,
-                ratio,
-                adv,
-                config["gamma"],
-                config["gae_lambda"],
-                config["vtrace_rho_clip"],
-                config["vtrace_c_clip"],
-            )
-            adv = mb_advantages
-            adv = mb_prio * (adv - adv.mean()) / (adv.std() + 1e-8)
-
-            # --- Masked advantage normalization ---
-            # Only compute mean/std over valid timesteps
-            valid_adv = adv[~mb_is_invalid_step]
-            if valid_adv.numel() > 0:
-                adv_mean = valid_adv.mean()
-                adv_std = valid_adv.std() + 1e-8
-            else:
-                adv_mean = adv.mean()
-                adv_std = adv.std() + 1e-8
-            adv = (adv - adv_mean) / adv_std
-
-            # Losses
-            pg_loss1 = -adv[~mb_is_invalid_step] * ratio[~mb_is_invalid_step]
-            pg_loss2 = -adv[~mb_is_invalid_step] * torch.clamp(ratio[~mb_is_invalid_step], 1 - clip_coef, 1 + clip_coef)
-            pg_loss = torch.max(pg_loss1, pg_loss2)
-            pg_loss = pg_loss.mean()
-
-            newvalue = newvalue.view(mb_returns.shape)
-            v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
-            v_loss_unclipped = (newvalue - mb_returns) ** 2
-            v_loss_clipped = (v_clipped - mb_returns) ** 2
-            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
-            v_loss = v_loss[~mb_is_invalid_step].mean()
-
-            entropy_loss = entropy[~mb_is_invalid_step.reshape(-1)].mean()
-
-            loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
-            self.amp_context.__enter__()  # TODO: AMP needs some debugging
-
-            # This breaks vloss clipping?
-            self.values[idx] = newvalue.detach().float()
-
-            # Logging
-            profile("train_misc", epoch)
-            losses["policy_loss"] += pg_loss.item() / self.total_minibatches
-            losses["value_loss"] += v_loss.item() / self.total_minibatches
-            losses["entropy"] += entropy_loss.item() / self.total_minibatches
-            losses["old_approx_kl"] += old_approx_kl.item() / self.total_minibatches
-            losses["approx_kl"] += approx_kl.item() / self.total_minibatches
-            losses["clipfrac"] += clipfrac.item() / self.total_minibatches
-            losses["importance"] += ratio.mean().item() / self.total_minibatches
-
-            # Learn on accumulated minibatches
-            profile("learn", epoch)
-            loss.backward()
-            if (mb + 1) % self.accumulate_minibatches == 0:
-                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-
-        # Reprioritize experience
         profile("train_misc", epoch)
         if config["anneal_lr"]:
             self.scheduler.step()
 
-        y_pred = self.values.flatten()
-        y_true = advantages.flatten() + self.values.flatten()
-        var_y = y_true.var()
-        explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
-        losses["explained_variance"] = explained_var.item()
+        losses["explained_variance"] = explained_var
 
         profile.end()
         logs = None
@@ -563,6 +438,270 @@ class PuffeRL:
             and (self.epoch % safe_eval_interval == 0 or done_training)
         ):
             self._run_safe_eval()
+
+    def _ppo_loss(
+        self,
+        mb_obs,
+        mb_actions,
+        mb_logprobs,
+        mb_values,
+        mb_returns,
+        mb_adv,
+        clip_coef,
+        vf_clip,
+        adv_weights=None,
+        unbiased_std=False,
+    ):
+        state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
+        logits, newvalue = self.policy(mb_obs, state)
+        _, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+
+        newlogprob = newlogprob.view_as(mb_logprobs)
+        newvalue = newvalue.view_as(mb_returns)
+        logratio = newlogprob - mb_logprobs
+        ratio = logratio.exp()
+
+        with torch.no_grad():
+            old_approx_kl = (-logratio).mean()
+            approx_kl = ((ratio - 1) - logratio).mean()
+            clipfrac = ((ratio - 1.0).abs() > clip_coef).float().mean()
+
+        mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std(unbiased=unbiased_std) + 1e-8)
+        if adv_weights is not None:
+            mb_adv = adv_weights * mb_adv
+
+        pg_loss1 = -mb_adv * ratio
+        pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
+        pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+        if vf_clip is not None:
+            v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
+            v_loss_unclipped = (newvalue - mb_returns) ** 2
+            v_loss_clipped = (v_clipped - mb_returns) ** 2
+            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+        else:
+            v_loss = 0.5 * (newvalue - mb_returns) ** 2
+            v_loss = v_loss.mean()
+        entropy_loss = entropy.mean()
+        loss = pg_loss + self.config["vf_coef"] * v_loss - self.config["ent_coef"] * entropy_loss
+
+        return (
+            loss,
+            newvalue,
+            ratio,
+            {
+                "policy_loss": pg_loss.item(),
+                "value_loss": v_loss.item(),
+                "entropy": entropy_loss.item(),
+                "old_approx_kl": old_approx_kl.item(),
+                "approx_kl": approx_kl.item(),
+                "clipfrac": clipfrac.item(),
+            },
+        )
+
+    def _train_ppo_trajectory(self, losses, profile, epoch):
+        config = self.config
+        device = config["device"]
+
+        b0 = config["prio_beta0"]
+        a = config["prio_alpha"]
+        clip_coef = config["clip_coef"]
+        vf_clip = config["vf_clip_coef"]
+        anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
+        self.ratio[:] = 1
+
+        # 3.0 stores ~valid mask as is_invalid_step (float, nonzero=invalid).
+        # Turbostream stores self.masks (bool, True=valid). Bridge here.
+        for mb in range(self.total_minibatches):
+            profile("train_misc", epoch)
+            self.amp_context.__enter__()
+
+            masks = ~self.is_invalid_step.bool()
+            terminals = torch.maximum(self.terminals, (~masks).float())
+            advantages = torch.zeros_like(self.values, device=device)
+            advantages = compute_puff_advantage(
+                self.values,
+                self.rewards,
+                terminals,
+                self.ratio,
+                advantages,
+                config["gamma"],
+                config["gae_lambda"],
+                config["vtrace_rho_clip"],
+                config["vtrace_c_clip"],
+            )
+            advantages.masked_fill_(~masks, 0.0)
+
+            adv = advantages.abs().sum(axis=1)
+            prio_weights = torch.nan_to_num(adv**a, 0, 0, 0)
+            prio_probs = (prio_weights + 1e-6) / (prio_weights.sum() + 1e-6)
+            idx = torch.multinomial(prio_probs, self.minibatch_segments)
+            mb_prio = (self.segments * prio_probs[idx, None]) ** -anneal_beta
+
+            profile("train_copy", epoch)
+            mb_obs = self.observations[idx]
+            mb_actions = self.actions[idx]
+            mb_logprobs = self.logprobs[idx]
+            mb_values = self.values[idx]
+            mb_returns = advantages[idx] + mb_values
+            mb_adv = advantages[idx]
+
+            if not config["use_rnn"]:
+                mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
+
+            profile("train_forward", epoch)
+            loss, newvalue, ratio, stats = self._ppo_loss(
+                mb_obs,
+                mb_actions,
+                mb_logprobs,
+                mb_values,
+                mb_returns,
+                mb_adv,
+                clip_coef,
+                vf_clip,
+                adv_weights=mb_prio,
+                unbiased_std=True,
+            )
+            self.ratio[idx] = ratio.detach()
+            self.amp_context.__enter__()  # TODO: AMP needs some debugging
+
+            self.values[idx] = newvalue.detach().float()
+
+            profile("train_misc", epoch)
+            for key, value in stats.items():
+                losses[key] += value / self.total_minibatches
+            losses["importance"] += ratio.mean().item() / self.total_minibatches
+
+            profile("learn", epoch)
+            loss.backward()
+            if (mb + 1) % self.accumulate_minibatches == 0:
+                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+                self.optimizer.step()
+                self.optimizer.zero_grad()
+
+        y_pred = self.values.flatten()
+        y_true = advantages.flatten() + self.values.flatten()
+        var_y = y_true.var()
+        return float("nan") if var_y == 0 else (1 - (y_true - y_pred).var() / var_y).item()
+
+    def _train_ppo_transition(self, losses, profile, epoch):
+        config = self.config
+        device = config["device"]
+
+        clip_coef = config["clip_coef"]
+        vf_clip = config["vf_clip_coef"]
+
+        masks = ~self.is_invalid_step.bool()
+        terminals = torch.maximum(self.terminals, (~masks).float())
+        advantages = compute_puff_advantage(
+            self.values,
+            self.rewards,
+            terminals,
+            torch.ones_like(self.values, device=device),
+            torch.zeros_like(self.values, device=device),
+            config["gamma"],
+            config["gae_lambda"],
+            1.0,
+            1.0,
+        )
+        advantages = advantages.masked_fill(~masks, 0.0)
+        returns = advantages + self.values
+
+        flat_advantages_f = advantages.reshape(-1)
+        flat_masks_f = masks.reshape(-1).bool()
+        total_transitions = flat_masks_f.numel()
+        valid_idx = torch.nonzero(flat_masks_f, as_tuple=False).flatten()
+
+        filter_metrics = {
+            "masked_fraction": 1.0 - (valid_idx.numel() / max(total_transitions, 1)),
+            "kept_fraction": 0.0,
+            "filtered_fraction": 1.0,
+        }
+
+        ewma_beta = config["adv_filter_ewma_beta"]
+        threshold_scale = config["adv_filter_threshold_scale"]
+        valid_abs_adv = flat_advantages_f[valid_idx].abs()
+        current_max = valid_abs_adv.max().item() if valid_abs_adv.numel() > 0 else 0.0
+        self.ema_max = current_max if epoch == 0 else ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
+        threshold = threshold_scale * self.ema_max
+
+        keep_mask = valid_abs_adv >= threshold
+        keep_idx = valid_idx[keep_mask]
+        num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
+
+        filter_metrics["kept_fraction"] = num_kept / max(num_valid, 1)
+        filter_metrics["filtered_fraction"] = 1.0 - filter_metrics["kept_fraction"]
+
+        losses["filter_threshold"] = threshold
+        losses["ema_max"] = self.ema_max
+        losses.update(filter_metrics)
+
+        obs_shape = self.vecenv.single_observation_space.shape
+        flat_obs = self.observations.reshape(-1, *obs_shape)
+        flat_actions = self.actions.reshape(-1, *self.actions.shape[2:])
+        flat_logprobs = self.logprobs.reshape(-1)
+        flat_values = self.values.reshape(-1)
+        flat_returns = returns.reshape(-1)
+        flat_advantages = advantages.reshape(-1)
+
+        self.optimizer.zero_grad()
+        total_minibatches = 0
+        pending_minibatches = 0
+
+        for _ in range(config["update_epochs"]):
+            permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
+            for start in range(0, permutation.numel(), self.minibatch_size):
+                profile("train_copy", epoch)
+                mb_idx = permutation[start : start + self.minibatch_size]
+                mb_obs = flat_obs[mb_idx]
+                mb_actions = flat_actions[mb_idx]
+                mb_logprobs = flat_logprobs[mb_idx]
+                mb_values = flat_values[mb_idx]
+                mb_returns = flat_returns[mb_idx]
+                mb_adv = flat_advantages[mb_idx]
+
+                profile("train_forward", epoch)
+                loss, _, _, stats = self._ppo_loss(
+                    mb_obs,
+                    mb_actions,
+                    mb_logprobs,
+                    mb_values,
+                    mb_returns,
+                    mb_adv,
+                    clip_coef,
+                    vf_clip,
+                    unbiased_std=False,
+                )
+                self.amp_context.__enter__()  # TODO: AMP needs some debugging
+
+                profile("train_misc", epoch)
+                for key, value in stats.items():
+                    losses[key] += value
+
+                profile("learn", epoch)
+                loss.backward()
+                total_minibatches += 1
+                pending_minibatches += 1
+
+                if pending_minibatches >= self.accumulate_minibatches:
+                    torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+                    pending_minibatches = 0
+
+        if pending_minibatches > 0:
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+
+        if total_minibatches > 0:
+            for key in ("policy_loss", "value_loss", "entropy", "old_approx_kl", "approx_kl", "clipfrac"):
+                losses[key] /= total_minibatches
+
+        y_pred = flat_values[valid_idx]
+        y_true = flat_returns[valid_idx]
+        var_y = y_true.var(unbiased=False)
+        return float("nan") if var_y == 0 else (1 - (y_true - y_pred).var() / var_y).item()
 
     def _run_safe_eval(self):
         """Run safe eval in-process using SafeEvaluator."""
