@@ -1,15 +1,8 @@
 #include <stdlib.h>
 #include <stdio.h>
-#include <stdint.h>
-#include <stddef.h>
-#include <unistd.h>
+#include <stdbool.h>
 #include <math.h>
-#include <assert.h>
 #include <string.h>
-#include "raylib.h"
-#include "raymath.h"
-#include "rlgl.h"
-#include <time.h>
 
 // Entity Types
 #define NONE 0

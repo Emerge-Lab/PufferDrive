@@ -1,6 +1,12 @@
 #ifndef SIM_RENDER_H
 #define SIM_RENDER_H
 
+#include <stdlib.h>
+#include <math.h>
+#include "raylib.h"
+#include "raymath.h"
+#include "rlgl.h"
+
 const Color STONE_GRAY       = (Color){80, 80, 80, 255};
 const Color PUFF_RED         = (Color){187, 0, 0, 255};
 const Color PUFF_CYAN        = (Color){0, 187, 187, 255};
