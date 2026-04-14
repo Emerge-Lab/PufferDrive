@@ -1,0 +1,19 @@
+# Base training configuration for PufferDrive cluster jobs (puffer-4).
+# These args are passed to `puffer train drive` as --key=value flags.
+#
+# Only keys listed here override the defaults in config/drive.ini and
+# config/default.ini. Anything else falls through to the ini defaults.
+
+# Vectorization
+vec.total_agents: 8192
+vec.num_buffers: 2
+vec.num_threads: 2
+
+# Training
+train.total_timesteps: 2_000_000_000
+checkpoint_interval: 1000
+
+# W&B logging (all three are [base]-level flags on puffer-4, not [wandb].*)
+wandb: True
+wandb_project: puffer4_drive
+wandb_group: cluster
