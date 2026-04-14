@@ -548,6 +548,8 @@ class PuffeRL:
                 num_scenarios=self.config["eval"]["multi_scenario_num_scenarios"],
                 map_dir=map_dir,
                 num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
+                agents_per_scene=self.config["eval"].get("agents_per_scene", 30),
+                scenario_length=self.config["eval"].get("scenario_length"),
             )
 
             # Build eval args by applying overrides to training config
@@ -1774,7 +1776,15 @@ def load_eval_multi_scenarios_config(env_name, model_path=None, eval_overrides=N
     return args
 
 
-def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=None, num_carla_maps=8):
+def build_eval_overrides(
+    simulation_mode,
+    num_agents,
+    num_scenarios,
+    map_dir=None,
+    num_carla_maps=8,
+    agents_per_scene=30,
+    scenario_length=None,
+):
     """Build evaluation overrides for a given simulation mode.
 
     Args:
@@ -1783,13 +1793,16 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
         map_dir: replay dataset directory, required for replay mode
     """
     # Common reward coefficients (same for both modes)
+    if scenario_length is None:
+        scenario_length = 500 if simulation_mode == "gigaflow" else 91
+
     common_env = {
         "eval_mode": 1,
-        "collision_behavior": 0,
-        "offroad_behavior": 0,
+        "collision_behavior": 1,
+        "offroad_behavior": 1,
         "reward_randomization": False,
-        "min_agents_per_env": 30,
-        "max_agents_per_env": 30,
+        "min_agents_per_env": agents_per_scene,
+        "max_agents_per_env": agents_per_scene,
         "reward_vehicle_collision": 3.0,
         "reward_offroad_collision": 3.0,
         "reward_ade": 0.0,
@@ -1807,8 +1820,8 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
             "env": {
                 **common_env,
                 "simulation_mode": "gigaflow",
-                "resample_frequency": 500,
-                "scenario_length": 500,
+                "resample_frequency": scenario_length,
+                "scenario_length": scenario_length,
                 "map_dir": "pufferlib/resources/drive/binaries/carla",
                 "num_maps": num_carla_maps,
                 "num_agents": num_agents,
@@ -1820,8 +1833,8 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
             "env": {
                 **common_env,
                 "simulation_mode": "replay",
-                "resample_frequency": 91,
-                "scenario_length": 91,
+                "resample_frequency": scenario_length,
+                "scenario_length": scenario_length,
                 "map_dir": "pufferlib/resources/drive/binaries/eval",
                 "num_maps": num_scenarios,
                 "num_agents": num_agents,
@@ -1893,7 +1906,15 @@ def verify_scenario_coverage_gigaflow(csv_path: str, num_scenarios: int) -> dict
 
 
 # Helper functions for eval_multi_scenarios and eval_multi_scenarios_render
-def _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False, simulation_mode="replay"):
+def _export_metrics(
+    global_infos,
+    eval_folder,
+    num_scenarios,
+    quiet,
+    verify_coverage=False,
+    simulation_mode="replay",
+    filename_suffix="",
+):
     """Export episode and summary CSVs, return avg_infos dict."""
     # Episode Metrics
     try:
@@ -1906,7 +1927,7 @@ def _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_cove
         if verify_coverage:
             df_episodes = df_episodes.sort_values(by=["map_name", "episode_id"])
 
-        episode_csv_path = os.path.join(eval_folder, "episode_metrics.csv")
+        episode_csv_path = os.path.join(eval_folder, f"episode_metrics{filename_suffix}.csv")
         df_episodes.to_csv(episode_csv_path, index=False)
         if not quiet:
             print(f"\n✅ Per-episode metrics exported to {episode_csv_path}")
@@ -1949,7 +1970,7 @@ def _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_cove
         elif v and isinstance(v[0], numbers.Number):
             avg_infos[k] = np.mean(v)
     df_summary = pd.DataFrame(list(avg_infos.items()), columns=["Metric", "Average"])
-    summary_csv_path = os.path.join(eval_folder, "evaluation_summary.csv")
+    summary_csv_path = os.path.join(eval_folder, f"evaluation_summary{filename_suffix}.csv")
     df_summary.to_csv(summary_csv_path, index=False)
     if not quiet:
         print(f"\n✅ Average results exported to {summary_csv_path}")
@@ -2052,6 +2073,41 @@ def _extract_episode_summaries(infos):
     return []
 
 
+def _get_eval_folder(args, adversarial=False):
+    if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
+        return args["eval_results_dir"]
+
+    model_path = args.get("load_model_path")
+    if model_path is None:
+        experiment_name = "manual"
+        model_name = "random_init"
+    else:
+        model_filename_with_ext = os.path.basename(model_path)
+        model_name = os.path.splitext(model_filename_with_ext)[0]
+        models_dir = os.path.dirname(model_path)
+        experiment_dir = os.path.dirname(models_dir)
+        experiment_name = os.path.basename(experiment_dir)
+
+    suffix = f"{args['eval_simulation']}_adversarial" if adversarial else args["eval_simulation"]
+    return os.path.join("benchmark", experiment_name, model_name, suffix)
+
+
+def _get_random_eval_filename_suffix(args):
+    parts = []
+
+    agents_per_scene = args.get("eval_agents_per_scene") or args["eval"].get("agents_per_scene")
+    if agents_per_scene is None:
+        agents_per_scene = args["env"].get("min_agents_per_env")
+
+    if args.get("load_model_path") is None and agents_per_scene is not None:
+        parts.append(f"agents{agents_per_scene}")
+
+    if args.get("seed") is not None:
+        parts.append(f"seed{args['seed']}")
+
+    return f"_{'_'.join(parts)}" if parts else ""
+
+
 def eval_multi_scenarios(
     env_name, args=None, vecenv=None, policy=None, logger=None, metric_prefix="validation", quiet=False
 ):
@@ -2069,6 +2125,8 @@ def eval_multi_scenarios(
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
+            agents_per_scene=tmp_args.get("eval_agents_per_scene") or tmp_args["eval"].get("agents_per_scene", 30),
+            scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
 
@@ -2124,22 +2182,10 @@ def eval_multi_scenarios(
             lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
         )
 
-    # Folder for evaluation results
-    # For inline evaluation during training, use eval_results_dir in experiments folder
-    # For standalone evaluation, use benchmark folder
-    if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
-        eval_folder = args["eval_results_dir"]
-    else:
-        # Standalone evaluation path (in benchmark folder)
-        model_path = args["load_model_path"]
-        model_filename_with_ext = os.path.basename(model_path)
-        model_name = os.path.splitext(model_filename_with_ext)[0]
-        models_dir = os.path.dirname(model_path)
-        experiment_dir = os.path.dirname(models_dir)
-        experiment_name = os.path.basename(experiment_dir)
-        eval_folder = os.path.join("benchmark", experiment_name, model_name, args["eval_simulation"])
+    eval_folder = _get_eval_folder(args, adversarial=False)
     os.makedirs(eval_folder, exist_ok=True)
 
+    filename_suffix = _get_random_eval_filename_suffix(args)
     global_infos = {}
     scenarios_processed = 0
     vecenv.async_reset(42)
@@ -2188,6 +2234,7 @@ def eval_multi_scenarios(
         quiet,
         verify_coverage=True,
         simulation_mode=args["env"]["simulation_mode"],
+        filename_suffix=filename_suffix,
     )
     print(f"\nTotal evaluation time: {time.time() - t0:.2f} seconds for {num_scenarios} scenarios.")
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
@@ -2214,6 +2261,8 @@ def eval_multi_scenarios_render(
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
+            agents_per_scene=tmp_args.get("eval_agents_per_scene") or tmp_args["eval"].get("agents_per_scene", 30),
+            scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
 
@@ -2237,26 +2286,14 @@ def eval_multi_scenarios_render(
             lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
         )
 
-    # Folder for evaluation results
-    # For inline evaluation during training, use eval_results_dir in experiments folder
-    # For standalone evaluation, use benchmark folder
-    if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
-        eval_folder = args["eval_results_dir"]
-    else:
-        # Standalone evaluation path (in benchmark folder)
-        model_path = args["load_model_path"]
-        model_filename_with_ext = os.path.basename(model_path)
-        model_name = os.path.splitext(model_filename_with_ext)[0]
-        models_dir = os.path.dirname(model_path)
-        experiment_dir = os.path.dirname(models_dir)
-        experiment_name = os.path.basename(experiment_dir)
-        eval_folder = os.path.join("benchmark", experiment_name, model_name, args["eval_simulation"])
+    eval_folder = _get_eval_folder(args, adversarial=False)
     os.makedirs(eval_folder, exist_ok=True)
 
     if args["render"]:
         gif_folder = eval_folder + "/gif"
         os.makedirs(gif_folder, exist_ok=True)
 
+    filename_suffix = _get_random_eval_filename_suffix(args)
     global_infos = {}
     num_scenarios = args["num_scenarios"]
 
@@ -2370,7 +2407,7 @@ def eval_multi_scenarios_render(
                         traffic_histories[env_idx],
                         trajectory_histories[env_idx],
                         all_agents_obs_histories[env_idx],
-                        f"{gif_folder}/{env_map_name}_{global_episode_id:03d}.html",
+                        f"{gif_folder}/{env_map_name}{filename_suffix}_{global_episode_id:03d}.html",
                         head_north=True,
                         use_rear_axle=args["env"]["use_rear_axle"],
                     )
@@ -2381,7 +2418,14 @@ def eval_multi_scenarios_render(
     if args["render"]:
         pufferlib.viz.build_gallery_index(gif_folder)
 
-    avg_infos = _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
+    avg_infos = _export_metrics(
+        global_infos,
+        eval_folder,
+        num_scenarios,
+        quiet,
+        verify_coverage=False,
+        filename_suffix=filename_suffix,
+    )
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
 
     # Close vectorized environment to avoid file descriptor leaks
@@ -2398,9 +2442,6 @@ def render_adversarial(
     metric_prefix="validation",
     quiet=False,
 ):
-    np.random.seed(42)
-    torch.manual_seed(42)
-
     if args is None:
         tmp_args = load_config(env_name)
         model_path = tmp_args.get("load_model_path")
@@ -2412,8 +2453,14 @@ def render_adversarial(
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
+            agents_per_scene=tmp_args.get("eval_agents_per_scene") or tmp_args["eval"].get("agents_per_scene", 30),
+            scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
+
+    if args.get("seed") is not None:
+        np.random.seed(args["seed"])
+        torch.manual_seed(args["seed"])
 
     backend = args["vec"]["backend"]
     if backend != "PufferEnv":
@@ -2441,22 +2488,14 @@ def render_adversarial(
             lstm_c=torch.zeros(num_agents, target_policy.hidden_size, device=device),
         )
 
-    if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
-        eval_folder = args["eval_results_dir"]
-    else:
-        model_path = args["load_model_path"]
-        model_filename_with_ext = os.path.basename(model_path)
-        model_name = os.path.splitext(model_filename_with_ext)[0]
-        models_dir = os.path.dirname(model_path)
-        experiment_dir = os.path.dirname(models_dir)
-        experiment_name = os.path.basename(experiment_dir)
-        eval_folder = os.path.join("benchmark", experiment_name, model_name, f"{args['eval_simulation']}_adversarial")
+    eval_folder = _get_eval_folder(args, adversarial=True)
     os.makedirs(eval_folder, exist_ok=True)
 
     if args["render"]:
         gif_folder = eval_folder + "/gif"
         os.makedirs(gif_folder, exist_ok=True)
 
+    filename_suffix = _get_random_eval_filename_suffix(args)
     global_infos = {}
     num_scenarios = args["num_scenarios"]
 
@@ -2570,7 +2609,7 @@ def render_adversarial(
                         traffic_histories[env_idx],
                         trajectory_histories[env_idx],
                         all_agents_obs_histories[env_idx],
-                        f"{gif_folder}/{env_map_name}_{global_episode_id:03d}.html",
+                        f"{gif_folder}/{env_map_name}{filename_suffix}_{global_episode_id:03d}.html",
                         head_north=True,
                         use_rear_axle=args["env"]["use_rear_axle"],
                     )
@@ -2581,7 +2620,14 @@ def render_adversarial(
     if args["render"]:
         pufferlib.viz.build_gallery_index(gif_folder)
 
-    avg_infos = _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
+    avg_infos = _export_metrics(
+        global_infos,
+        eval_folder,
+        num_scenarios,
+        quiet,
+        verify_coverage=False,
+        filename_suffix=filename_suffix,
+    )
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
     vecenv.close()
 
@@ -2812,7 +2858,20 @@ def load_config(env_name, config_dir=None):
         "--render-mode", type=str, default="auto", choices=["auto", "human", "ansi", "rgb_array", "raylib", "None"]
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
+    parser.add_argument("--seed", type=int, default=None, help="Optional explicit seed for evaluation/render runs")
     parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
+    parser.add_argument(
+        "--eval_agents_per_scene",
+        type=int,
+        default=None,
+        help="Fixed number of agents per scenario for evaluation overrides",
+    )
+    parser.add_argument(
+        "--eval_scenario_length",
+        type=int,
+        default=None,
+        help="Scenario length for evaluation overrides",
+    )
     parser.add_argument(
         "--num_carla_maps", type=int, default=8, help="Number of CARLA maps to use in gigaflow mode (max 8)"
     )
