@@ -1816,6 +1816,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->scenario_length = (int)unpack(kwargs, "scenario_length");
     env->termination_mode = (int)unpack(kwargs, "termination_mode");
     env->inactive_agent_threshold = (float)unpack(kwargs, "inactive_agent_threshold");
+    env->adversarial_termination_mode = (int)unpack(kwargs, "adversarial_termination_mode");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
     int max_agents = (int)unpack(kwargs, "max_agents");

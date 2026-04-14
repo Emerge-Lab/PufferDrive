@@ -52,6 +52,7 @@ class Drive(pufferlib.PufferEnv):
         simulation_mode="gigaflow",
         termination_mode=0,
         inactive_agent_threshold=0.4,
+        adversarial_termination_mode=0,
         buf=None,
         seed=1,
         init_steps=0,
@@ -127,6 +128,7 @@ class Drive(pufferlib.PufferEnv):
         self.num_eval_scenarios = num_eval_scenarios
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
+        self.adversarial_termination_mode = adversarial_termination_mode
         self.rng = np.random.default_rng(seed)
         self.min_agents_per_env = min_agents_per_env
         self.max_agents_per_env = max_agents_per_env
@@ -315,6 +317,7 @@ class Drive(pufferlib.PufferEnv):
                 scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
                 termination_mode=int(self.termination_mode),
                 inactive_agent_threshold=float(self.inactive_agent_threshold),
+                adversarial_termination_mode=int(self.adversarial_termination_mode),
                 map_file=self.map_files[map_ids[i]],
                 max_agents=nxt - cur,
                 max_agents_per_env=self.max_agents_per_env,
@@ -437,6 +440,7 @@ class Drive(pufferlib.PufferEnv):
                         scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
                         termination_mode=int(self.termination_mode),
                         inactive_agent_threshold=float(self.inactive_agent_threshold),
+                        adversarial_termination_mode=int(self.adversarial_termination_mode),
                         map_file=self.map_files[map_ids[i]],
                         max_agents=nxt - cur,
                         max_agents_per_env=self.max_agents_per_env,

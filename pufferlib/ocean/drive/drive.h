@@ -89,7 +89,7 @@
 #define TRAFFIC_CONTROL_SCOPE_ALL 2
 
 // Agent observations
-#define AGENT_OBS_MAX_DIST 100.0f // Max distance for observing other agents
+#define AGENT_OBS_MAX_DIST 10000.0f // Max distance for observing other agents
 
 // TARGET_TYPE modes (controls what target info is in observations)
 #define TARGET_STATIC 0
@@ -315,6 +315,7 @@ struct Drive {
     int simulation_mode;
     int termination_mode;
     float inactive_agent_threshold;
+    int adversarial_termination_mode;
     int reward_conditioning;
     int reward_randomization;
     int compute_eval_metrics;
@@ -4665,15 +4666,15 @@ void c_step(Drive *env) {
         for (int i = 1; i < env->active_agent_count; i++) {
 
             // Weight given to the "base" = drive reward. 0 is full adversarial mode.
-            float base_weight = 1.0f;
+            float base_weight = 0.2f;
 
             // Downscale the base reward.
             env->logs[i].episode_return *= base_weight;
             env->rewards[i] *= base_weight;
 
             // Assign adversarial reward.
-            // env->rewards[i] -= target_reward;
-            // env->logs[i].episode_return -= target_reward;
+            env->rewards[i] -= target_reward;
+            env->logs[i].episode_return -= target_reward;
         }
     }
 
@@ -4701,7 +4702,37 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->timestep == env->scenario_length || early_reset) {
+    int adversarial_early_reset = 0;
+    if (env->active_agent_count > 0 && env->adversarial_termination_mode > 0) {
+        int target_agent_idx = env->active_agent_indices[0];
+        int target_inactive = env->agents[target_agent_idx].removed || env->agents[target_agent_idx].stopped;
+
+        int alive_adversaries = 0;
+        for (int i = 1; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            if (!(env->agents[agent_idx].removed || env->agents[agent_idx].stopped)) {
+                alive_adversaries++;
+            }
+        }
+
+        int no_adversaries_alive = (alive_adversaries == 0);
+        switch (env->adversarial_termination_mode) {
+        case 1:
+            adversarial_early_reset = no_adversaries_alive;
+            break;
+        case 2:
+            adversarial_early_reset = target_inactive;
+            break;
+        case 3:
+            adversarial_early_reset = no_adversaries_alive || target_inactive;
+            break;
+        default:
+            adversarial_early_reset = 0;
+            break;
+        }
+    }
+
+    if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
             env->truncations[i] = 1;
         }
