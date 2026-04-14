@@ -2361,10 +2361,11 @@ void init(Drive *env) {
     load_map_binary(env->map_name, env);
     filter_road_elements(env);
     compute_drivable_lane_points(env);
+    create_sparse_lane_points(env, env->polyline_reduction_threshold, env->polyline_max_segment_length);
     set_means(env);
+    init_grid_map(env);
     generate_offsets(collision_offsets, COLLISION_RANGE);
     generate_offsets(z_offsets, Z_RANGE);
-    init_grid_map(env);
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     finalize_env(env);
@@ -3965,7 +3966,7 @@ Client *make_client(Drive *env) {
         }
 
         char size_str[64];
-        snprintf(size_str, sizeof(size_str), "%dx%d", GetRenderWidth(), GetRenderHeight());
+        snprintf(size_str, sizeof(size_str), "%dx%d", (int)client->width, (int)client->height);
 
         char filename[320];
         if (env->video_suffix[0] != '\0')

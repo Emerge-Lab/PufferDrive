@@ -538,36 +538,9 @@ class PuffeRL:
                     self.evaluator.hr_env.close()
                     self.evaluator.log_videos(eval_mode="human_replay", epoch=self.epoch)
                 if self_play_eval:
-                    import os as _os
-
-                    _sp_cfg_env = self.evaluator.sp_eval_config.get("env", {})
-                    print(
-                        f"[CACHE_DEBUG] [pufferl] Creating sp_env — PID={_os.getpid()} "
-                        f"map_dir={_sp_cfg_env.get('map_dir', '?')!r} "
-                        f"num_maps={_sp_cfg_env.get('num_maps', '?')} "
-                        f"render_mode={_sp_cfg_env.get('render_mode', '?')} "
-                        f"obs_win={_sp_cfg_env.get('observation_window_size', '?')} "
-                        f"poly_red={_sp_cfg_env.get('polyline_reduction_threshold', '?')} "
-                        f"poly_seg={_sp_cfg_env.get('polyline_max_segment_length', '?')}",
-                        flush=True,
-                    )
                     self.evaluator.sp_env = load_env(self.config["env"], self.evaluator.sp_eval_config)
-                    print(
-                        f"[CACHE_DEBUG] [pufferl] sp_env created OK — "
-                        f"num_envs={getattr(self.evaluator.sp_env.driver_env, 'num_envs', '?')} "
-                        f"num_agents={getattr(self.evaluator.sp_env.driver_env, 'num_agents', '?')}",
-                        flush=True,
-                    )
                     self.evaluator.rollout(self.uncompiled_policy, mode="self_play")
-                    print(
-                        f"[CACHE_DEBUG] [pufferl] Closing sp_env — PID={_os.getpid()}",
-                        flush=True,
-                    )
                     self.evaluator.sp_env.close()
-                    print(
-                        f"[CACHE_DEBUG] [pufferl] sp_env closed OK",
-                        flush=True,
-                    )
                     self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
                 if human_replay_eval or self_play_eval:
                     self.evaluator.log_stats()
