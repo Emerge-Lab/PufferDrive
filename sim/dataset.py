@@ -11,7 +11,7 @@ Step 1: Unzip to get folder with .json files
     tar xzf drive_data/pufferdrive_womd_train_1000.tar.gz --strip-components=1 -C drive_data/training/
 
 Step 2: Process to map binaries
-  python ocean/drive/dataset.py --data_folder drive_data/training --output_dir drive_data/binaries
+  python sim/dataset.py --data_folder drive_data/training --output_dir drive_data/binaries
 """
 
 import json

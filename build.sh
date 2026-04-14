@@ -2,22 +2,16 @@
 set -e
 
 # Usage:
-#   ./build.sh drive                 # Build _C.so with drive statically linked
-#   ./build.sh drive --float         # float32 precision (required for --slowly)
-#   ./build.sh drive --cpu           # CPU fallback, torch only
-#   ./build.sh drive --debug         # Debug build
-#   ./build.sh drive --local         # Standalone executable (debug, sanitizers)
-#   ./build.sh drive --fast          # Standalone executable (optimized)
-#   ./build.sh drive --web           # Emscripten web build
-#   ./build.sh drive --profile       # Kernel profiling binary
-#   ./build.sh all                   # Build drive with default and --float
+#   ./build.sh                  # Build _C.so with drive statically linked
+#   ./build.sh --float          # float32 precision (required for --slowly)
+#   ./build.sh --cpu            # CPU fallback, torch only
+#   ./build.sh --debug          # Debug build
+#   ./build.sh --local          # Standalone executable (debug, sanitizers)
+#   ./build.sh --fast           # Standalone executable (optimized)
+#   ./build.sh --web            # Emscripten web build
+#   ./build.sh --profile        # Kernel profiling binary
 
-if [ -z "$1" ]; then
-    echo "Usage: ./build.sh ENV_NAME [--float] [--debug] [--local|--fast|--web|--profile|--cpu|--all]"
-    exit 1
-fi
-ENV=$1
-shift
+ENV=drive
 
 for arg in "$@"; do
     case $arg in
@@ -31,24 +25,6 @@ for arg in "$@"; do
         *) echo "Error: unknown argument '$arg'" && exit 1 ;;
     esac
 done
-
-if [ "$ENV" = "all" ]; then
-    FAILED=""
-    for env_dir in ocean/*/; do
-        env=$(basename "$env_dir")
-        if bash "$0" "$env" && bash "$0" "$env" --float; then
-            echo "OK: $env"
-        else
-            echo "FAIL: $env"
-            FAILED="$FAILED\n  $env"
-        fi
-    done
-
-    if [ -n "$FAILED" ]; then
-        echo -e "\nFailed builds:$FAILED"
-    fi
-    exit 0
-fi
 
 # Linux/mac
 PLATFORM="$(uname -s)"
@@ -99,20 +75,9 @@ INCLUDES=(-I./$RAYLIB_NAME/include -I./src -I./vendor)
 LINK_ARCHIVES=("$RAYLIB_A")
 EXTRA_SRC=""
 
-if [ "$ENV" = "constellation" ]; then
-    SRC_DIR="constellation"
-    EXTRA_SRC="vendor/cJSON.c"
-    OUTPUT_NAME="seethestars"
-elif [ "$ENV" = "trailer" ]; then
-    SRC_DIR="trailer"
-    OUTPUT_NAME="trailer/trailer"
-elif [ -d "ocean/$ENV" ]; then
-    SRC_DIR="ocean/$ENV"
-else
-    echo "Error: environment '$ENV' not found" && exit 1
-fi
-
-OUTPUT_NAME=${OUTPUT_NAME:-$ENV}
+[ -d "sim" ] || { echo "Error: sim/ not found"; exit 1; }
+SRC_DIR="sim"
+OUTPUT_NAME="$ENV"
 
 # Standalone environment build
 if [ -n "$DEBUG" ] || [ "$MODE" = "local" ]; then

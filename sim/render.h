@@ -1,5 +1,5 @@
-#ifndef OCEAN_DRIVE_RENDER_H
-#define OCEAN_DRIVE_RENDER_H
+#ifndef SIM_RENDER_H
+#define SIM_RENDER_H
 
 const Color STONE_GRAY       = (Color){80, 80, 80, 255};
 const Color PUFF_RED         = (Color){187, 0, 0, 255};
