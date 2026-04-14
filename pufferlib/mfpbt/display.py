@@ -19,11 +19,14 @@ class MFPBTProgressDisplay:
         self.round_train_env_steps = round_train_env_steps
         self.frequencies = frequencies
         self.agent_states: dict[int, AgentDisplayState] = {}
+        self.best_ever_score: float | None = None
 
     def initialize_agents(self, agents: list[AgentState]) -> None:
         for agent in agents:
             score = agent.selection_score if math.isfinite(agent.selection_score) else None
             self.agent_states[agent.metadata.global_id] = AgentDisplayState(status="waiting", selection_score=score)
+            if score is not None:
+                self._update_best_ever(score)
 
     def begin_round(self, agents: list[AgentState]) -> None:
         for agent in agents:
@@ -39,6 +42,11 @@ class MFPBTProgressDisplay:
             state.status = "complete"
             if event.agent is not None and math.isfinite(event.agent.selection_score):
                 state.selection_score = event.agent.selection_score
+                self._update_best_ever(event.agent.selection_score)
+
+    def _update_best_ever(self, score: float) -> None:
+        if self.best_ever_score is None or score > self.best_ever_score:
+            self.best_ever_score = score
 
     def render(
         self,
@@ -49,22 +57,13 @@ class MFPBTProgressDisplay:
     ) -> None:
         current_round = round_index + 1
         total_steps = current_round * self.round_train_env_steps
-        best_score = max(
-            (
-                state.selection_score
-                for state in self.agent_states.values()
-                if state.selection_score is not None and math.isfinite(state.selection_score)
-            ),
-            default=float("-inf"),
-        )
-
         avg_round_str = _format_duration(avg_round_duration)
         eta_str = _format_duration(eta_seconds)
 
         lines = [
             f"Current round: {current_round}/{self.num_rounds}",
             f"Steps: {total_steps}",
-            f"Best score: {best_score if math.isfinite(best_score) else 'n/a'}",
+            f"Best score: {self.best_ever_score if self.best_ever_score is not None else 'n/a'}",
             f"Avg round time: {avg_round_str}",
             f"ETA: {eta_str}",
             "",

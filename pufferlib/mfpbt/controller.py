@@ -8,7 +8,12 @@ from collections import defaultdict
 
 import numpy as np
 
-from .checkpoint import load_experiment_checkpoint, save_archive_checkpoint, save_experiment_checkpoint
+from .checkpoint import (
+    load_experiment_checkpoint,
+    save_archive_checkpoint,
+    save_experiment_checkpoint,
+    save_round_best_model,
+)
 from .config import MFPBTConfig
 from .display import MFPBTProgressDisplay
 from .genetics import apply_mf_pbt_genetics, mf_pbt_genetics, perturbation
@@ -32,10 +37,12 @@ class MFPBTController:
         self.display = MFPBTProgressDisplay(config.num_rounds, config.round_train_env_steps, config.frequencies)
         self.round_durations = []
         self.archive_root = None
+        self.round_best_root = None
         self.latest_archive_dir = None
         if self.checkpoint_path:
             checkpoint_dir = os.path.dirname(self.checkpoint_path) or "."
             self.archive_root = os.path.join(checkpoint_dir, "archive")
+            self.round_best_root = os.path.join(checkpoint_dir, "best_round_models")
 
     def agent_seed(self, global_id: int) -> int:
         return int(self.config.seed + global_id)
@@ -142,6 +149,7 @@ class MFPBTController:
                 event, experiment_state.round_index, experiment_state.agents
             ),
         )
+        self._save_round_best_model(updated_agents, experiment_state.round_index)
 
         global_ranking = self._global_ranking(updated_agents)
         local_rankings = self._local_rankings(updated_agents)
@@ -203,6 +211,13 @@ class MFPBTController:
         if self.latest_archive_dir is not None and self.latest_archive_dir != archive_dir:
             shutil.rmtree(self.latest_archive_dir, ignore_errors=True)
         self.latest_archive_dir = archive_dir
+
+    def _save_round_best_model(self, agents: list[AgentState], round_index: int) -> None:
+        if self.round_best_root is None:
+            return
+
+        best_agent = max(agents, key=lambda agent: agent.selection_score)
+        save_round_best_model(best_agent, round_index, self.round_best_root)
 
     def _handle_display_event(self, event, round_index, agents):
         self.display.handle_event(event)

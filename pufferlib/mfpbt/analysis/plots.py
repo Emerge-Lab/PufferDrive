@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import json
 
 cache_dir = os.path.join(tempfile.gettempdir(), "mfpbt-matplotlib-cache")
 os.makedirs(cache_dir, exist_ok=True)
@@ -41,6 +42,17 @@ def _read_logs(run_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         raise FileNotFoundError(f"Missing round summary csv: {round_summary_path}")
 
     return pd.read_csv(agent_history_path), pd.read_csv(round_summary_path)
+
+
+def _to_builtin(value):
+    if pd.isna(value):
+        return None
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
 
 
 def _resolve_step_series(round_summary: pd.DataFrame) -> pd.Series:
@@ -121,6 +133,45 @@ def _save_hyperparameter_distribution_plot(
     return output_path
 
 
+def _save_best_model_summary(agent_history: pd.DataFrame, output_dir: str) -> list[str]:
+    scored = agent_history.copy()
+    scored["selection_score"] = pd.to_numeric(scored["selection_score"], errors="coerce")
+    scored = scored.dropna(subset=["selection_score"])
+    if scored.empty:
+        raise ValueError("agent_history.csv does not contain any valid selection_score values")
+
+    best_row = scored.loc[scored["selection_score"].idxmax()]
+    best_summary = {column: _to_builtin(best_row[column]) for column in scored.columns}
+
+    text_path = os.path.join(output_dir, "best_model_summary.txt")
+    json_path = os.path.join(output_dir, "best_model_summary.json")
+
+    with open(text_path, "w") as handle:
+        handle.write(f"best_selection_score: {best_summary.get('selection_score')}\n")
+        handle.write(f"global_id: {best_summary.get('global_id')}\n")
+        handle.write(f"round_index: {best_summary.get('round_index')}\n")
+        handle.write(f"env_steps: {best_summary.get('env_steps')}\n")
+        handle.write(f"population_id: {best_summary.get('population_id')}\n")
+        handle.write(f"local_id: {best_summary.get('local_id')}\n")
+        for key, value in best_summary.items():
+            if key in {
+                "selection_score",
+                "global_id",
+                "round_index",
+                "env_steps",
+                "population_id",
+                "local_id",
+            }:
+                continue
+            handle.write(f"{key}: {value}\n")
+
+    with open(json_path, "w") as handle:
+        json.dump(best_summary, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+    return [text_path, json_path]
+
+
 def generate_analysis_plots(run_dir: str, hyperparameter_name: str = "learning_rate") -> list[str]:
     agent_history, round_summary = _read_logs(run_dir)
     output_dir = os.path.join(run_dir, "analysis")
@@ -130,4 +181,5 @@ def generate_analysis_plots(run_dir: str, hyperparameter_name: str = "learning_r
         _save_best_score_plot(round_summary, output_dir),
         _save_hyperparameter_distribution_plot(agent_history, output_dir, hyperparameter_name),
     ]
+    outputs.extend(_save_best_model_summary(agent_history, output_dir))
     return outputs

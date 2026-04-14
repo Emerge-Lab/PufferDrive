@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import os
 import tempfile
-import time
 
 import torch
 
@@ -47,11 +46,11 @@ class PufferLTrainerBackend(TrainerBackend):
             return torch.load(agent.trainer_state.checkpoint_path, weights_only=False)
         return agent.trainer_state
 
-    def _save_agent_trainer_state(self, global_id: int, trainer_state):
+    def _save_agent_trainer_state(self, agent_id: int, trainer_state):
         if self.trainer_state_dir is None:
             return trainer_state
 
-        path = os.path.join(self.trainer_state_dir, f"agent_{global_id}.pt")
+        path = os.path.join(self.trainer_state_dir, f"agent_id_{agent_id}.pt")
         tmp_path = f"{path}.tmp"
         torch.save(trainer_state, tmp_path)
         os.replace(tmp_path, path)

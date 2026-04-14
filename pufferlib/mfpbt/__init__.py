@@ -25,6 +25,7 @@ __all__ = [
     "run_mfpbt",
     "save_archive_checkpoint",
     "save_experiment_checkpoint",
+    "save_round_best_model",
 ]
 
 _EXPORTS = {
@@ -33,6 +34,7 @@ _EXPORTS = {
     "load_experiment_checkpoint": (".checkpoint", "load_experiment_checkpoint"),
     "save_archive_checkpoint": (".checkpoint", "save_archive_checkpoint"),
     "save_experiment_checkpoint": (".checkpoint", "save_experiment_checkpoint"),
+    "save_round_best_model": (".checkpoint", "save_round_best_model"),
     "MFPBTConfig": (".config", "MFPBTConfig"),
     "load_mfpbt_config": (".config", "load_mfpbt_config"),
     "MFPBTController": (".controller", "MFPBTController"),
