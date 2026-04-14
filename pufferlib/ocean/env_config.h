@@ -83,6 +83,7 @@ typedef struct {
     float spawn_height;
     char map_dir[256];
     float min_avg_speed_to_consider_goal_attempt;
+    float stopped_reset_threshold;
     float partner_obs_radius;
     float partner_obs_norm;
     float road_obs_norm;
@@ -264,6 +265,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->num_maps = atoi(value);
     } else if (MATCH("env", "min_avg_speed_to_consider_goal_attempt")) {
         env_config->min_avg_speed_to_consider_goal_attempt = atof(value);
+    } else if (MATCH("env", "stopped_reset_threshold")) {
+        env_config->stopped_reset_threshold = atof(value);
     } else if (MATCH("env", "partner_obs_radius")) {
         env_config->partner_obs_radius = atof(value);
     } else if (MATCH("env", "partner_obs_norm")) {

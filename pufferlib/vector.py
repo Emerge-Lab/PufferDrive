@@ -71,6 +71,10 @@ class Serial:
         self.observation_space = pufferlib.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
 
         set_buffers(self, buf)
+        if buf is not None and "is_invalid_step" in buf:
+            self.is_invalid_step = buf["is_invalid_step"]
+        else:
+            self.is_invalid_step = np.zeros(self.agents_per_batch, dtype=np.uint8)
 
         self.envs = []
         ptr = 0
@@ -83,6 +87,7 @@ class Serial:
                 truncations=self.truncations[ptr:end],
                 masks=self.masks[ptr:end],
                 actions=self.actions[ptr:end],
+                is_invalid_step=self.is_invalid_step[ptr:end],
             )
             ptr = end
             seed_i = seed + i if seed is not None else None
@@ -172,6 +177,7 @@ class Serial:
             self.infos,
             self.agent_ids,
             self.masks,
+            self.is_invalid_step,
         )
 
     def close(self):
@@ -206,6 +212,7 @@ def _worker_process(
         terminals=np.ndarray(shape, dtype=bool, buffer=shm["terminals"])[worker_idx],
         truncations=np.ndarray(shape, dtype=bool, buffer=shm["truncateds"])[worker_idx],
         masks=np.ndarray(shape, dtype=bool, buffer=shm["masks"])[worker_idx],
+        is_invalid_step=np.ndarray(shape, dtype=np.uint8, buffer=shm["is_invalid_step"])[worker_idx],
         actions=atn_arr,
     )
     buf["masks"][:] = True
@@ -344,6 +351,7 @@ class Multiprocessing:
             rewards=RawArray("f", num_agents),
             terminals=RawArray("b", num_agents),
             truncateds=RawArray("b", num_agents),
+            is_invalid_step=RawArray("B", num_agents),
             masks=RawArray("b", num_agents),
             semaphores=RawArray("c", num_workers),
             notify=RawArray("b", num_workers),
@@ -357,11 +365,13 @@ class Multiprocessing:
             rewards=np.ndarray(shape, dtype=np.float32, buffer=self.shm["rewards"]),
             terminals=np.ndarray(shape, dtype=bool, buffer=self.shm["terminals"]),
             truncations=np.ndarray(shape, dtype=bool, buffer=self.shm["truncateds"]),
+            is_invalid_step=np.ndarray(shape, dtype=np.uint8, buffer=self.shm["is_invalid_step"]),
             masks=np.ndarray(shape, dtype=bool, buffer=self.shm["masks"]),
             semaphores=np.ndarray(num_workers, dtype=np.uint8, buffer=self.shm["semaphores"]),
             notify=np.ndarray(num_workers, dtype=bool, buffer=self.shm["notify"]),
         )
         self.buf["semaphores"][:] = MAIN
+        self.is_invalid_step = self.buf["is_invalid_step"].ravel()
 
         from multiprocessing import Pipe, Process
 
@@ -492,8 +502,10 @@ class Multiprocessing:
         agent_ids = self.agent_ids[w_slice].ravel()
         m = buf["masks"][w_slice].ravel()
         self.batch_mask = m
+        self.is_invalid_step = buf["is_invalid_step"][w_slice].ravel()
+        inv = self.is_invalid_step
 
-        return o, r, d, t, infos, agent_ids, m
+        return o, r, d, t, infos, agent_ids, m, inv
 
     def send(self, actions):
         actions = send_precheck(self, actions).reshape(self.atn_batch_shape)
@@ -622,7 +634,7 @@ class Ray:
             env_id = [self.async_handles.index(e) for e in ready]
             recvs = self.ray.get(ready)
 
-        o, r, d, t, infos, ids, m = zip(*recvs)
+        o, r, d, t, infos, ids, m, inv = zip(*recvs)
         self.prev_env_id = env_id
 
         infos = [i for ii in infos for i in ii]
@@ -632,8 +644,9 @@ class Ray:
         d = np.stack(d, axis=0).ravel()
         t = np.stack(t, axis=0).ravel()
         m = np.stack(m, axis=0).ravel()
+        inv = np.stack(inv, axis=0).ravel()
         agent_ids = self.agent_ids[env_id].ravel()
-        return o, r, d, t, infos, agent_ids, m
+        return o, r, d, t, infos, agent_ids, m, inv
 
     def send(self, actions):
         actions = send_precheck(self, actions).reshape(self.atn_batch_shape)
