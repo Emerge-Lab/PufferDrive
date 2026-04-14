@@ -54,11 +54,29 @@ CLANG_WARN=(
 
 download() {
     local name=$1 url=$2
-    [ -d "$name" ] && return
+    local target="vendor/$name"
+    local archive=""
+    [ -d "$target" ] && return
+    if [ -d "$name" ]; then
+        mkdir -p vendor
+        mv "$name" "$target"
+        return
+    fi
     echo "Downloading $name..."
+    mkdir -p vendor
     case "$url" in
-        *.zip) curl -sL "$url" -o "$name.zip" && unzip -q "$name.zip" && rm "$name.zip" ;;
-        *)     curl -sL "$url" -o "$name.tar.gz" && tar xf "$name.tar.gz" && rm "$name.tar.gz" ;;
+        *.zip)
+            archive="$target.zip"
+            curl -sL "$url" -o "$archive"
+            unzip -q "$archive" -d vendor
+            rm "$archive"
+            ;;
+        *)
+            archive="$target.tar.gz"
+            curl -sL "$url" -o "$archive"
+            tar xf "$archive" -C vendor
+            rm "$archive"
+            ;;
     esac
 }
 
@@ -70,8 +88,9 @@ else
     download "$RAYLIB_NAME" "$RAYLIB_URL/$RAYLIB_NAME.tar.gz"
 fi
 
-RAYLIB_A="$RAYLIB_NAME/lib/libraylib.a"
-INCLUDES=(-I./$RAYLIB_NAME/include -I./src -I./vendor)
+RAYLIB_DIR="vendor/$RAYLIB_NAME"
+RAYLIB_A="$RAYLIB_DIR/lib/libraylib.a"
+INCLUDES=(-I./$RAYLIB_DIR/include -I./src -I./vendor)
 LINK_ARCHIVES=("$RAYLIB_A")
 EXTRA_SRC=""
 
@@ -111,7 +130,7 @@ elif [ "$MODE" = "web" ]; then
         -O3 -Wall \
         "${LINK_ARCHIVES[@]}" \
         "${INCLUDES[@]}" \
-        -L. -L./$RAYLIB_NAME/lib \
+        -L. -L./$RAYLIB_DIR/lib \
         -sASSERTIONS=2 -gsource-map \
         -sUSE_GLFW=3 -sUSE_WEBGL2=1 -sASYNCIFY -sFILESYSTEM -sFORCE_FILESYSTEM=1 \
         --shell-file vendor/minshell.html \
@@ -172,7 +191,7 @@ fi
 echo "Compiling static library for $ENV..."
 ${CC:-clang} -c "${CLANG_OPT[@]}" \
     -I. -Isrc -I$SRC_DIR -Ivendor \
-    -I./$RAYLIB_NAME/include -I$CUDA_HOME/include \
+    -I./$RAYLIB_DIR/include -I$CUDA_HOME/include \
     -DPLATFORM_DESKTOP \
     -fno-semantic-interposition -fvisibility=hidden \
     -fPIC -fopenmp \
@@ -195,7 +214,7 @@ if [ -z "$MODE" ]; then
         -std=c++17 \
         -I. -Isrc \
         -I$PYTHON_INCLUDE -I$PYBIND_INCLUDE -I$NUMPY_INCLUDE \
-        -I$CUDA_HOME/include $CUDNN_IFLAG -I$RAYLIB_NAME/include \
+        -I$CUDA_HOME/include $CUDNN_IFLAG -I$RAYLIB_DIR/include \
         -Xcompiler=-fopenmp \
         -DOBS_TENSOR_T=$OBS_TENSOR_T \
         -DENV_NAME=$ENV \
@@ -240,7 +259,7 @@ elif [ "$MODE" = "profile" ]; then
     echo "Compiling profile binary ($ARCH)..."
     $NVCC $NVCC_OPT -arch=$ARCH -std=c++17 \
         -I. -Isrc -I$SRC_DIR -Ivendor \
-        -I$CUDA_HOME/include $CUDNN_IFLAG -I$RAYLIB_NAME/include \
+        -I$CUDA_HOME/include $CUDNN_IFLAG -I$RAYLIB_DIR/include \
         -DOBS_TENSOR_T=$OBS_TENSOR_T \
         -DENV_NAME=$ENV \
         -Xcompiler=-DPLATFORM_DESKTOP \
