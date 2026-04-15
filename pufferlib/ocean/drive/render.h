@@ -940,7 +940,12 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
         Vector3 position;
         float heading;
-        position = (Vector3){agent->sim_x, agent->sim_y, 1};
+        // Use sim_z so cars on elevated map sections (hills, overpasses)
+        // are drawn at their actual world z, matching 3.0's draw_scene.
+        // With a hardcoded z=1 the car's world pos diverges from the road
+        // surface (which comes from road->x/y/z in build_road_cache), so
+        // on maps with elevation the car appears off the road surface.
+        position = (Vector3){agent->sim_x, agent->sim_y, agent->sim_z};
         heading = agent->sim_heading;
         // Create size vector
         Vector3 size = {agent->sim_length, agent->sim_width, agent->sim_height};
@@ -1266,8 +1271,12 @@ void c_render(Drive *env, int view_mode) {
         int agent_idx = env->active_agent_indices[env->human_agent_idx];
         Agent *agent = &env->agents[agent_idx];
         render_camera = (Camera3D){0};
-        render_camera.position = (Vector3){agent->sim_x, agent->sim_y, 400.0f};
-        render_camera.target = (Vector3){agent->sim_x, agent->sim_y, 0.0f};
+        // Park the ortho camera 400m above the agent's actual ground
+        // height so hilly maps render consistently. target z is
+        // agent->sim_z (not hardcoded 0) so the view axis is always
+        // straight down relative to the agent regardless of elevation.
+        render_camera.position = (Vector3){agent->sim_x, agent->sim_y, agent->sim_z + 400.0f};
+        render_camera.target = (Vector3){agent->sim_x, agent->sim_y, agent->sim_z};
         render_camera.up = (Vector3){0.0f, -1.0f, 0.0f};
         render_camera.projection = CAMERA_ORTHOGRAPHIC;
         // Match 3.0's BEV fovy exactly. 3.0 computes vision_range as
