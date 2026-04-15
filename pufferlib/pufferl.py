@@ -585,17 +585,33 @@ class PuffeRL:
             # it, and let training keep going. The upstream eval_multi_scenarios
             # metric call is separate and already ran, so metric eval continues
             # to work even if video rendering is broken.
-            try:
-                eval_multi_scenarios_render(
-                    env_name=self.config["env"],
-                    args=render_args,
-                    vecenv=None,
-                    policy=self.uncompiled_policy,
-                    logger=self.logger,
-                    metric_prefix="render",
-                    quiet=True,
-                    render_backend=backend_name,
-                )
+            # Multi-view EGL render: run the full render fn once per view
+            # (sim_state then bev). Each call creates a fresh vecenv that
+            # starts at scenario 0, runs all scenarios with one camera, and
+            # tears down. Doing both views in ONE rollout would not work
+            # because Drive.step's resample fires at the last step and
+            # advances starting_map_counter — a re-reset would replay the
+            # NEXT batch instead of the original one.
+            _bev_views = (
+                [(0, "", "sim_state"), (1, "_bev", "bev")]
+                if backend_name == "egl"
+                else [(0, "", "sim_state")]
+            )
+            for _vmode, _vsuffix, _vlabel in _bev_views:
+                try:
+                    eval_multi_scenarios_render(
+                        env_name=self.config["env"],
+                        args=dict(render_args),
+                        vecenv=None,
+                        policy=self.uncompiled_policy,
+                        logger=self.logger,
+                        metric_prefix=f"render_{_vlabel}",
+                        quiet=True,
+                        render_backend=backend_name,
+                        view_mode=_vmode,
+                        video_suffix=_vsuffix,
+                        log_view_label=_vlabel,
+                    )
             except Exception as e:
                 import traceback
 
@@ -2124,8 +2140,10 @@ def eval_multi_scenarios(
     print(f"\nTotal evaluation time: {time.time() - t0:.2f} seconds for {num_scenarios} scenarios.")
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
 
+    _sys_instr.stderr.write("[render-instr] about to call vecenv.close()\n"); _sys_instr.stderr.flush()
     # Close vectorized environment to avoid file descriptor leaks
     vecenv.close()
+    _sys_instr.stderr.write("[render-instr] vecenv.close() returned\n"); _sys_instr.stderr.flush()
 
 
 def eval_multi_scenarios_render(
@@ -2137,6 +2155,9 @@ def eval_multi_scenarios_render(
     metric_prefix="validation",
     quiet=False,
     render_backend="html",
+    view_mode=0,
+    video_suffix="",
+    log_view_label="render",
 ):
     # Set fixed seed for reproducible evaluation
     np.random.seed(42)
@@ -2226,6 +2247,19 @@ def eval_multi_scenarios_render(
 
     global_infos = {}
     num_scenarios = args["num_scenarios"]
+
+    # Apply per-env video suffix once before any render. make_client reads
+    # env->video_suffix on the first render to build the ffmpeg filename, so
+    # this must fire before any step. We don't yet know how many internal
+    # envs are in the vecenv (vecenv.get_state() only works after reset),
+    # so set on a generous prefix and let extras be no-ops.
+    if egl_mode and video_suffix:
+        _target_env_pre = vecenv if not hasattr(vecenv, "envs") else vecenv.envs[0]
+        for _e in range(256):
+            try:
+                _target_env_pre.set_video_suffix(video_suffix, env_idx=_e)
+            except Exception:
+                break
 
     scenarios_processed = 0
     # PufferEnv native backend: vecenv IS the Drive env (no .envs list).
@@ -2321,7 +2355,7 @@ def eval_multi_scenarios_render(
                     # GPU context) and close_client at scenario end flushes the
                     # trailing PBO frame.
                     for e in range(num_envs_in_batch):
-                        target_env.render(env_idx=e)
+                        target_env.render(env_idx=e, view_mode=view_mode)
 
                 # Serial backend returns infos as single list (infos[0] is the env's info list)
                 if infos and infos[0]:
@@ -2360,20 +2394,30 @@ def eval_multi_scenarios_render(
                 # the trailing PBO frame is flushed, and libx264 writes the mp4
                 # trailer. Without this, the mp4 files are either empty or one
                 # frame short.
+                import sys as _sys_cc
+                _sys_cc.stderr.write(f"[render-instr] starting close_client loop num_envs_in_batch={num_envs_in_batch}\n"); _sys_cc.stderr.flush()
                 for e in range(num_envs_in_batch):
+                    _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) calling\n"); _sys_cc.stderr.flush()
                     target_env.close_client(env_idx=e)
+                    _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) returned\n"); _sys_cc.stderr.flush()
 
             scenarios_processed += num_envs_in_batch
             pbar.update(num_envs_in_batch)
+
+    import sys as _sys_instr
+    _sys_instr.stderr.write("[render-instr] rollout loop done\n"); _sys_instr.stderr.flush()
 
     if html_mode:
         pufferlib.viz.build_gallery_index(gif_folder)
 
     if saved_cwd is not None:
         os.chdir(saved_cwd)
+    _sys_instr.stderr.write("[render-instr] chdir restored\n"); _sys_instr.stderr.flush()
 
     avg_infos = _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
+    _sys_instr.stderr.write("[render-instr] _export_metrics done\n"); _sys_instr.stderr.flush()
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
+    _sys_instr.stderr.write("[render-instr] _log_eval_metrics done\n"); _sys_instr.stderr.flush()
 
     # Upload each produced mp4 to wandb as a Video log. We only do this when
     # the EGL backend was used (so mp4_folder is populated) and a logger is
@@ -2388,7 +2432,7 @@ def eval_multi_scenarios_render(
             )
             if mp4_paths:
                 video_log = {
-                    f"render/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, fps=30, format="mp4")
+                    f"render_{log_view_label}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, fps=30, format="mp4")
                     for p in mp4_paths
                 }
                 step = args.get("global_step")

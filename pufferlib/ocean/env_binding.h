@@ -530,8 +530,8 @@ static PyObject *vec_step(PyObject *self, PyObject *arg) {
 
 static PyObject *vec_render(PyObject *self, PyObject *args) {
     int num_args = PyTuple_Size(args);
-    if (num_args != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_render requires 2 arguments");
+    if (num_args != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_render requires 3 arguments (vec_env, view_mode, env_id)");
         return NULL;
     }
 
@@ -541,14 +541,55 @@ static PyObject *vec_render(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    PyObject *env_id_arg = PyTuple_GetItem(args, 1);
+    PyObject *view_mode_arg = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(view_mode_arg, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "view_mode must be an integer");
+        return NULL;
+    }
+    int view_mode = PyLong_AsLong(view_mode_arg);
+
+    PyObject *env_id_arg = PyTuple_GetItem(args, 2);
     if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
         return NULL;
     }
     int env_id = PyLong_AsLong(env_id_arg);
 
-    c_render(vec->envs[env_id]);
+    c_render(vec->envs[env_id], view_mode);
+    Py_RETURN_NONE;
+}
+
+// Set the per-env video suffix BEFORE the first vec_render of a rollout.
+// make_client reads env->video_suffix when constructing the ffmpeg output
+// filename, so multi-view rollouts (sim_state + bev) can produce distinct
+// {scenario_id}.mp4 vs {scenario_id}_bev.mp4 without overwrite.
+static PyObject *vec_set_video_suffix(PyObject *self, PyObject *args) {
+    int num_args = PyTuple_Size(args);
+    if (num_args != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_video_suffix requires 3 arguments (vec_env, suffix, env_id)");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+    PyObject *suffix_arg = PyTuple_GetItem(args, 1);
+    if (!PyUnicode_Check(suffix_arg)) {
+        PyErr_SetString(PyExc_TypeError, "suffix must be a string");
+        return NULL;
+    }
+    const char *suffix = PyUnicode_AsUTF8(suffix_arg);
+    if (!suffix) return NULL;
+    PyObject *env_id_arg = PyTuple_GetItem(args, 2);
+    if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
+        return NULL;
+    }
+    int env_id = PyLong_AsLong(env_id_arg);
+    Drive *drive = (Drive *)vec->envs[env_id];
+    strncpy(drive->video_suffix, suffix, sizeof(drive->video_suffix) - 1);
+    drive->video_suffix[sizeof(drive->video_suffix) - 1] = '\0';
     Py_RETURN_NONE;
 }
 
@@ -1081,6 +1122,7 @@ static PyMethodDef methods[] = {
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
+    {"vec_set_video_suffix", vec_set_video_suffix, METH_VARARGS, "Set the mp4 filename suffix for an env"},
     {"vec_close_client", vec_close_client, METH_VARARGS,
      "Release a single env's render client without destroying the env"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},

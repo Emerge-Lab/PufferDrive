@@ -1,6 +1,18 @@
 #ifndef RENDER_H
 #define RENDER_H
 
+// View modes for c_render in headless EGL recording. Mirrors 3.0 drive.h
+// VIEW_MODE_* enum so callers can pick which camera is used per render.
+//   DEFAULT (0)        — preserves the legacy fixed bird's-eye-ish
+//                        perspective camera stored on client->camera.
+//                        This is what every render before the BEV port did.
+//   BEV_AGENT_OBS (1)  — top-down orthographic camera centered on the
+//                        ego (env->human_agent_idx) at vision-range zoom.
+//                        Matches 3.0's VIEW_MODE_BEV_AGENT_OBS branch.
+#define VIEW_MODE_DEFAULT 0
+#define VIEW_MODE_BEV_AGENT_OBS 1
+
+
 #include <raylib.h>
 #include "rlgl.h"
 
@@ -354,7 +366,10 @@ Client *make_client(Drive *env) {
 
         char filename[320];
         const char *stem = env->scenario_id[0] ? env->scenario_id : "pufferdrive";
-        snprintf(filename, sizeof(filename), "%s.mp4", stem);
+        if (env->video_suffix[0])
+            snprintf(filename, sizeof(filename), "%s%s.mp4", stem, env->video_suffix);
+        else
+            snprintf(filename, sizeof(filename), "%s.mp4", stem);
 
         client->recorder_pid = fork();
         if (client->recorder_pid == -1) {
@@ -1213,7 +1228,7 @@ void saveAgentViewImage(Drive *env, Client *client, const char *filename, Render
     UnloadImage(img);
 }
 
-void c_render(Drive *env) {
+void c_render(Drive *env, int view_mode) {
     if (env->client == NULL) {
         env->client = make_client(env);
     }
@@ -1226,10 +1241,29 @@ void c_render(Drive *env) {
         build_road_cache(env, client);
     }
 
+    // Pick the camera based on view_mode. Default is the legacy fixed
+    // perspective camera stored on the client; BEV_AGENT_OBS rebuilds an
+    // ortho camera every frame so it stays centered on the ego agent as
+    // the agent moves through the map. Mirrors 3.0 drive.h's c_render.
+    Camera3D render_camera;
+    if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS &&
+        env->active_agent_count > 0) {
+        int agent_idx = env->active_agent_indices[env->human_agent_idx];
+        Agent *agent = &env->agents[agent_idx];
+        render_camera = (Camera3D){0};
+        render_camera.position = (Vector3){agent->sim_x, agent->sim_y, 400.0f};
+        render_camera.target = (Vector3){agent->sim_x, agent->sim_y, 0.0f};
+        render_camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+        render_camera.projection = CAMERA_ORTHOGRAPHIC;
+        render_camera.fovy = (float)env->grid_map->vision_range * GRID_CELL_SIZE * 2.0f;
+    } else {
+        render_camera = client->camera;
+    }
+
     BeginDrawing();
     Color road = (Color){35, 35, 37, 255};
     ClearBackground(road);
-    BeginMode3D(client->camera);
+    BeginMode3D(render_camera);
     if (env->render_mode != RENDER_HEADLESS)
         handle_camera_controls(env->client);
     if (client->road_cache_valid) {

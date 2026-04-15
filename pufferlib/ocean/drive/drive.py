@@ -575,8 +575,16 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self, env_idx=0):
-        binding.vec_render(self.c_envs, env_idx)
+    def render(self, env_idx=0, view_mode=0):
+        # view_mode: 0=default fixed perspective, 1=BEV ego-centered ortho.
+        # See VIEW_MODE_* defines in pufferlib/ocean/drive/render.h.
+        binding.vec_render(self.c_envs, view_mode, env_idx)
+
+    def set_video_suffix(self, suffix, env_idx=0):
+        # Append `suffix` to the next mp4 filename for the given env.
+        # Must be called BEFORE the first render of a rollout because
+        # make_client reads env->video_suffix when forking ffmpeg.
+        binding.vec_set_video_suffix(self.c_envs, suffix, env_idx)
 
     def close_client(self, env_idx=0):
         # Tear down the render Client for one env without destroying the env.

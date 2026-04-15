@@ -321,6 +321,11 @@ struct Drive {
     // Metadata fields
     char scenario_id[128];
     char dataset_name[32];
+    // Optional suffix appended to the headless mp4 filename so multi-view
+    // rendering can produce e.g. Town01.mp4 and Town01_bev.mp4 without the
+    // second overwriting the first. Set via vec_set_video_suffix BEFORE
+    // the first c_render of a rollout (make_client reads it when forking ffmpeg).
+    char video_suffix[64];
     int log_length;
     float log_dt;
     int num_objects_of_interest;
