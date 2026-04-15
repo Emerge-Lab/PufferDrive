@@ -215,7 +215,7 @@ static PyObject *env_render(PyObject *self, PyObject *args) {
     if (!env) {
         return NULL;
     }
-    c_render(env);
+    c_render((Drive *)env, 0);  // single-env binding: VIEW_MODE_DEFAULT
     Py_RETURN_NONE;
 }
 
