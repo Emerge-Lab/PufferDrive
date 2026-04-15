@@ -1793,6 +1793,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_timestep = (float)unpack(kwargs, "reward_timestep");
     env->reward_overspeed = (float)unpack(kwargs, "reward_overspeed");
     env->reward_ade = (float)unpack(kwargs, "reward_ade");
+    env->adv_reward_weight_collision = (float)unpack(kwargs, "adv_reward_weight_collision");
+    env->adv_reward_weight_offroad = (float)unpack(kwargs, "adv_reward_weight_offroad");
+    env->adv_reward_weight_drive = (float)unpack(kwargs, "adv_reward_weight_drive");
+    env->adv_reward_weight_adversarial = (float)unpack(kwargs, "adv_reward_weight_adversarial");
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int)unpack(kwargs, "traffic_light_behavior");
@@ -1849,7 +1853,15 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "episode_length", log->episode_length);
     assign_to_dict(dict, "collision_rate", log->collision_rate);
     assign_to_dict(dict, "episode_return", log->episode_return);
+    assign_to_dict(dict, "episode_return_collision", log->episode_return_collision);
+    assign_to_dict(dict, "episode_return_offroad", log->episode_return_offroad);
+    assign_to_dict(dict, "episode_return_drive", log->episode_return_drive);
+    assign_to_dict(dict, "episode_return_adversarial", log->episode_return_adversarial);
     assign_to_dict(dict, "target_episode_return", log->target_episode_return);
+    assign_to_dict(dict, "target_episode_return_collision", log->target_episode_return_collision);
+    assign_to_dict(dict, "target_episode_return_offroad", log->target_episode_return_offroad);
+    assign_to_dict(dict, "target_episode_return_drive", log->target_episode_return_drive);
+    assign_to_dict(dict, "target_episode_return_adversarial", log->target_episode_return_adversarial);
     assign_to_dict(dict, "did_target_collide", log->did_target_collide);
     assign_to_dict(dict, "did_target_offroad", log->did_target_offroad);
     assign_to_dict(dict, "did_target_fail", log->did_target_fail);

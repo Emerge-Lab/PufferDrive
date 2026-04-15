@@ -169,7 +169,15 @@ struct Log {
     float n;
     float target_n;
     float episode_return;
+    float episode_return_collision;
+    float episode_return_offroad;
+    float episode_return_drive;
+    float episode_return_adversarial;
     float target_episode_return;
+    float target_episode_return_collision;
+    float target_episode_return_offroad;
+    float target_episode_return_drive;
+    float target_episode_return_adversarial;
     float episode_length;
     float expert_static_car_count;
     float static_car_count;
@@ -236,6 +244,13 @@ struct GridMap {
     int num_drivable_grid_cell;
 };
 
+typedef struct {
+    float collision;
+    float offroad;
+    float drive;
+    float adversarial;
+} RewardTerms;
+
 struct Drive {
     Client *client;
     float *observations;
@@ -285,6 +300,10 @@ struct Drive {
     float reward_timestep;
     float reward_overspeed;
     float reward_ade;
+    float adv_reward_weight_collision;
+    float adv_reward_weight_offroad;
+    float adv_reward_weight_drive;
+    float adv_reward_weight_adversarial;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -339,6 +358,20 @@ typedef struct {
     float dy;
     float dz;
 } AgentDistance;
+
+static inline float total_reward_terms(const RewardTerms *terms) {
+    return terms->collision + terms->offroad + terms->drive + terms->adversarial;
+}
+
+static inline void apply_reward_terms(Drive *env, int i, const RewardTerms *terms) {
+    float total_reward = total_reward_terms(terms);
+    env->rewards[i] += total_reward;
+    env->logs[i].episode_return += total_reward;
+    env->logs[i].episode_return_collision += terms->collision;
+    env->logs[i].episode_return_offroad += terms->offroad;
+    env->logs[i].episode_return_drive += terms->drive;
+    env->logs[i].episode_return_adversarial += terms->adversarial;
+}
 
 static float compute_euclidean_distance(float x1, float y1, float x2, float y2) {
     float dx = x2 - x1;
@@ -2589,6 +2622,10 @@ static void add_log(Drive *env) {
         env->log.avg_displacement_error += displacement_error;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        env->log.episode_return_collision += env->logs[i].episode_return_collision;
+        env->log.episode_return_offroad += env->logs[i].episode_return_offroad;
+        env->log.episode_return_drive += env->logs[i].episode_return_drive;
+        env->log.episode_return_adversarial += env->logs[i].episode_return_adversarial;
         // Comfort and velocity metrics (normalized per timestep)
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -2627,6 +2664,10 @@ static void add_log(Drive *env) {
     if (env->active_agent_count > 0) {
         env->log.target_n += 1.0f;
         env->log.target_episode_return += env->logs[0].episode_return;
+        env->log.target_episode_return_collision += env->logs[0].episode_return_collision;
+        env->log.target_episode_return_offroad += env->logs[0].episode_return_offroad;
+        env->log.target_episode_return_drive += env->logs[0].episode_return_drive;
+        env->log.target_episode_return_adversarial += env->logs[0].episode_return_adversarial;
 
         if (env->logs[0].collision_rate > 0.0f) {
             env->log.did_target_collide += 1.0f;
@@ -3723,9 +3764,10 @@ static void compute_metrics(Drive *env, int agent_idx) {
     return;
 }
 
-static void compute_rewards(Drive *env, int i) {
+static RewardTerms compute_rewards(Drive *env, int i) {
     int agent_idx = env->active_agent_indices[i];
     Agent *agent = &env->agents[agent_idx];
+    RewardTerms terms = {0};
 
     // NOTE: compute_metrics enforces offroad > collision priority via early returns.
     // All penalty terms below are applied independently (no early returns here).
@@ -3736,8 +3778,7 @@ static void compute_rewards(Drive *env, int i) {
         // At max speed (~20 m/s): extra -2.0 on top of base coefficient.
         float reward_collision = -(agent->reward_coefs[REWARD_COEF_COLLISION] + 0.1f * agent->sim_speed);
 
-        env->rewards[i] += reward_collision;
-        env->logs[i].episode_return += reward_collision;
+        terms.collision += reward_collision;
         env->logs[i].collision_rate = 1.0f;
     }
 
@@ -3745,18 +3786,16 @@ static void compute_rewards(Drive *env, int i) {
     if (agent->metrics_array[OFFROAD_IDX] > 0.0f) {
         float reward_offroad = -agent->reward_coefs[REWARD_COEF_OFFROAD];
 
-        env->rewards[i] += reward_offroad;
+        terms.offroad += reward_offroad;
         env->logs[i].offroad_rate = 1.0f;
-        env->logs[i].episode_return += reward_offroad;
     }
 
     // Red light violation reward (GIGAFLOW)
     if (agent->metrics_array[RED_LIGHT_IDX] > 0.0f) {
         float reward_red_light = -agent->reward_coefs[REWARD_COEF_STOP_LINE];
 
-        env->rewards[i] += reward_red_light;
+        terms.drive += reward_red_light;
         env->logs[i].red_light_violation_rate = 1.0f;
-        env->logs[i].episode_return += reward_red_light;
     }
 
     // Goal reward
@@ -3771,8 +3810,7 @@ static void compute_rewards(Drive *env, int i) {
         //         weight = 0.0f;
         // }
 
-        env->rewards[i] += env->reward_goal * weight;
-        env->logs[i].episode_return += env->reward_goal * weight;
+        terms.drive += env->reward_goal * weight;
         env->logs[i].num_waypoints_reached += 1;
     }
 
@@ -3789,8 +3827,7 @@ static void compute_rewards(Drive *env, int i) {
     float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt *
                               (against_lane_penalty + vel_aligned_penalty + alignment_bonus);
 
-    env->rewards[i] += lane_align_reward;
-    env->logs[i].episode_return += lane_align_reward;
+    terms.drive += lane_align_reward;
 
     // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05 / exp(|x_f - bias| - 0.5))
     float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
@@ -3800,24 +3837,21 @@ static void compute_rewards(Drive *env, int i) {
     float lane_center_reward =
         -agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
 
-    env->rewards[i] += lane_center_reward;
     env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
-    env->logs[i].episode_return += lane_center_reward;
+    terms.drive += lane_center_reward;
 
     // Comfort reward (GIGAFLOW)
     float comfort_violations = agent->metrics_array[COMFORT_VIOLATION_IDX];
     float comfort_penalty = -agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
 
-    env->rewards[i] += comfort_penalty;
     env->logs[i].comfort_violation_count += comfort_violations;
-    env->logs[i].episode_return += comfort_penalty;
+    terms.drive += comfort_penalty;
 
     // Velocity reward (GIGAFLOW)
     float velocity_progress = agent->metrics_array[VELOCITY_PROGRESS_IDX];
     float velocity_reward = agent->reward_coefs[REWARD_COEF_VELOCITY] * env->dt * velocity_progress;
 
-    env->rewards[i] += velocity_reward;
-    env->logs[i].episode_return += velocity_reward;
+    terms.drive += velocity_reward;
     env->logs[i].velocity_progress_sum += velocity_progress;
 
     // Timestep reward (GIGAFLOW)
@@ -3826,33 +3860,29 @@ static void compute_rewards(Drive *env, int i) {
     if (agent->sim_speed > 0.01f || accel > 0.01f) {
         float timestep_penalty = -agent->reward_coefs[REWARD_COEF_TIMESTEP] * env->dt;
 
-        env->rewards[i] += timestep_penalty;
-        env->logs[i].episode_return += timestep_penalty;
+        terms.drive += timestep_penalty;
     }
 
     // Reverse reward (GIGAFLOW)
     if (agent->sim_speed_signed < -0.01f) {
         float reverse_penalty = -agent->reward_coefs[REWARD_COEF_REVERSE] * env->dt;
 
-        env->rewards[i] += reverse_penalty;
-        env->logs[i].episode_return += reverse_penalty;
+        terms.drive += reverse_penalty;
     }
 
     // Over speed reward (GIGAFLOW++)
     float speed_reward = -agent->reward_coefs[REWARD_COEF_OVERSPEED] * agent->metrics_array[SPEED_LIMIT_IDX];
 
-    env->rewards[i] += speed_reward;
     env->logs[i].avg_speed_per_agent += agent->sim_speed;
     agent->distance_since_spawn += agent->sim_speed * env->dt;
-    env->logs[i].episode_return += speed_reward;
+    terms.drive += speed_reward;
 
     // ADE reward (CUSTOM)
     float current_ade = agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
     if (current_ade > 0.0f && env->reward_ade != 0.0f) {
         float ade_reward = env->reward_ade * current_ade;
 
-        env->rewards[i] += ade_reward;
-        env->logs[i].episode_return += ade_reward;
+        terms.drive += ade_reward;
     }
     env->logs[i].avg_displacement_error = current_ade;
 
@@ -3905,6 +3935,8 @@ static void compute_rewards(Drive *env, int i) {
         agent->metrics_array[MULTI_LANE_SCORE_IDX] = 0.0f;
         agent->metrics_array[AT_FAULT_COLLISION_IDX] = 0.0f;
     }
+
+    return terms;
 }
 
 static void compute_observations(Drive *env) {
@@ -4615,6 +4647,8 @@ void c_reset(Drive *env) {
 
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
+    RewardTerms reward_terms[(env->active_agent_count > 0) ? env->active_agent_count : 1];
+    memset(reward_terms, 0, env->active_agent_count * sizeof(RewardTerms));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
 
@@ -4656,26 +4690,30 @@ void c_step(Drive *env) {
         compute_metrics(env, agent_idx);
 
         // Compute rewards
-        compute_rewards(env, i);
+        reward_terms[i] = compute_rewards(env, i);
     }
 
     // Adversarial reward: agent 0 is the target in both replay and gigaflow modes.
     if (env->active_agent_count > 0) {
-        float target_reward = env->rewards[0];
+        float target_reward = total_reward_terms(&reward_terms[0]);
 
         for (int i = 1; i < env->active_agent_count; i++) {
+            reward_terms[i].collision *= env->adv_reward_weight_collision;
+            reward_terms[i].offroad *= env->adv_reward_weight_offroad;
 
             // Weight given to the "base" = drive reward. 0 is full adversarial mode.
-            float base_weight = 0.5f;
-
-            // Downscale the base reward.
-            env->logs[i].episode_return *= base_weight;
-            env->rewards[i] *= base_weight;
+            reward_terms[i].drive *= env->adv_reward_weight_drive;
 
             // Assign adversarial reward.
-            env->rewards[i] -= target_reward;
-            env->logs[i].episode_return -= target_reward;
+            reward_terms[i].adversarial = -target_reward * env->adv_reward_weight_adversarial;
+            // reward_terms[i].adversarial = 0.0f;
+            // reward_terms[i].collision = 0.0f;
+            // reward_terms[i].offroad = 0.0f;
         }
+    }
+
+    for (int i = 0; i < env->active_agent_count; i++) {
+        apply_reward_terms(env, i, &reward_terms[i]);
     }
 
     // Mark terminals for stopped or removed agents

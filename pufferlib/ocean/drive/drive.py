@@ -31,6 +31,10 @@ class Drive(pufferlib.PufferEnv):
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
+        adv_reward_weight_collision=0.5,
+        adv_reward_weight_offroad=0.5,
+        adv_reward_weight_drive=0.5,
+        adv_reward_weight_adversarial=1.0,
         min_waypoint_spacing=20.0,
         max_waypoint_spacing=60.0,
         num_target_waypoints=3,
@@ -98,6 +102,10 @@ class Drive(pufferlib.PufferEnv):
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
+        self.adv_reward_weight_collision = adv_reward_weight_collision
+        self.adv_reward_weight_offroad = adv_reward_weight_offroad
+        self.adv_reward_weight_drive = adv_reward_weight_drive
+        self.adv_reward_weight_adversarial = adv_reward_weight_adversarial
         self.goal_radius = goal_radius
         self.min_waypoint_spacing = min_waypoint_spacing
         self.max_waypoint_spacing = max_waypoint_spacing
@@ -297,6 +305,10 @@ class Drive(pufferlib.PufferEnv):
                 reward_timestep=self.reward_timestep,
                 reward_overspeed=self.reward_overspeed,
                 reward_ade=self.reward_ade,
+                adv_reward_weight_collision=self.adv_reward_weight_collision,
+                adv_reward_weight_offroad=self.adv_reward_weight_offroad,
+                adv_reward_weight_drive=self.adv_reward_weight_drive,
+                adv_reward_weight_adversarial=self.adv_reward_weight_adversarial,
                 collision_behavior=self.collision_behavior,
                 offroad_behavior=self.offroad_behavior,
                 traffic_light_behavior=self.traffic_light_behavior,
@@ -421,6 +433,10 @@ class Drive(pufferlib.PufferEnv):
                         reward_timestep=self.reward_timestep,
                         reward_overspeed=self.reward_overspeed,
                         reward_ade=self.reward_ade,
+                        adv_reward_weight_collision=self.adv_reward_weight_collision,
+                        adv_reward_weight_offroad=self.adv_reward_weight_offroad,
+                        adv_reward_weight_drive=self.adv_reward_weight_drive,
+                        adv_reward_weight_adversarial=self.adv_reward_weight_adversarial,
                         collision_behavior=self.collision_behavior,
                         offroad_behavior=self.offroad_behavior,
                         traffic_light_behavior=self.traffic_light_behavior,
