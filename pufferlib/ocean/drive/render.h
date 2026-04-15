@@ -227,22 +227,15 @@ static int g_glfw_ready = 0;
 
 Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
+    // Fixed 1920x1080 pbuffer for headless (roughly 3x the pixel area of
+    // the old 1280x704). MUST be identical across all envs because the
+    // EGL pbuffer is a single global resource shared across every env's
+    // client. 3.0's dynamic per-map sizing works there because each map
+    // is its own process/env; for our multi-env-per-Drive setup a shared
+    // pbuffer with per-env dims would corrupt the frame stream.
     if (env->render_mode == RENDER_HEADLESS) {
-        // Match 3.0's dynamic sizing: pbuffer = map_size_m * 6 (pixels/m),
-        // rounded to even (libx264 requires). Gives ~1200x1200 for a 200m
-        // CARLA town, roughly 2x the pixel density of our old fixed 1280x704.
-        // Cap at 2048x2048 to stay within GPU limits on any reasonable map.
-        float map_w = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
-        float map_h = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        float scale = 6.0f;
-        int img_w = (int)roundf(map_w * scale / 2.0f) * 2;
-        int img_h = (int)roundf(map_h * scale / 2.0f) * 2;
-        if (img_w < 256) img_w = 256;
-        if (img_h < 256) img_h = 256;
-        if (img_w > 2048) img_w = 2048;
-        if (img_h > 2048) img_h = 2048;
-        client->width = img_w;
-        client->height = img_h;
+        client->width = 1920;
+        client->height = 1080;
     } else {
         client->width = 1280;
         client->height = 704;
@@ -423,7 +416,10 @@ Client *make_client(Drive *env) {
 
         // Grow the pipe buffer so one frame fits without blocking the writer.
 #ifdef F_SETPIPE_SZ
-        int pipe_sz = fcntl(client->recorder_pipefd[1], F_SETPIPE_SZ, 4 * 1024 * 1024);
+        // 1920x1080x4 bytes = 8.3 MB per frame; need a pipe buffer big enough
+        // for at least one frame so the writev from client_record_frame doesn't
+        // block the producer on every frame. 16 MB leaves headroom.
+        int pipe_sz = fcntl(client->recorder_pipefd[1], F_SETPIPE_SZ, 16 * 1024 * 1024);
         if (pipe_sz > 0)
             fprintf(stderr, "[drive] Pipe buffer set to %d bytes\n", pipe_sz);
 #endif
