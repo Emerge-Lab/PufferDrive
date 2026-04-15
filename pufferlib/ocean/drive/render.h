@@ -227,8 +227,26 @@ static int g_glfw_ready = 0;
 
 Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
-    client->width = 1280;
-    client->height = 704;
+    if (env->render_mode == RENDER_HEADLESS) {
+        // Match 3.0's dynamic sizing: pbuffer = map_size_m * 6 (pixels/m),
+        // rounded to even (libx264 requires). Gives ~1200x1200 for a 200m
+        // CARLA town, roughly 2x the pixel density of our old fixed 1280x704.
+        // Cap at 2048x2048 to stay within GPU limits on any reasonable map.
+        float map_w = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
+        float map_h = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
+        float scale = 6.0f;
+        int img_w = (int)roundf(map_w * scale / 2.0f) * 2;
+        int img_h = (int)roundf(map_h * scale / 2.0f) * 2;
+        if (img_w < 256) img_w = 256;
+        if (img_h < 256) img_h = 256;
+        if (img_w > 2048) img_w = 2048;
+        if (img_h > 2048) img_h = 2048;
+        client->width = img_w;
+        client->height = img_h;
+    } else {
+        client->width = 1280;
+        client->height = 704;
+    }
     if (env->render_mode == RENDER_HEADLESS && !g_glfw_ready) {
         // Headless one-time init: hide window, fork Xvfb if needed, and let
         // InitWindow load glad. Subsequent make_client calls reuse this
