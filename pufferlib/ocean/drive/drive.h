@@ -1,3 +1,11 @@
+// _GNU_SOURCE is set via -D_GNU_SOURCE in setup.py's drive extension build
+// flags so GNU extensions (F_SETPIPE_SZ, writev, etc.) are visible regardless
+// of which header is included first.
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/uio.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -12,6 +20,32 @@
 #include <time.h>
 #include "error.h"
 #include "datatypes.h"
+
+// EGL is optional: only compile in the EGL headless path if the headers
+// are available. CI environments without libegl1-mesa-dev skip this entirely
+// and fall back to Xvfb/Mesa software rendering.
+#if defined(__linux__) && defined(__has_include)
+#if __has_include(<EGL/egl.h>)
+#define DRIVE_HAS_EGL 1
+#endif
+#endif
+
+#ifdef DRIVE_HAS_EGL
+// GL_GLEXT_PROTOTYPES must come before any GL/gl.h include so glext declares
+// the modern buffer-object entry points (glGenBuffers, glBindBuffer,
+// glBufferData, glMapBuffer, glUnmapBuffer, glDeleteBuffers). Without a
+// declaration, gcc defaults their return type to implicit int, and
+// glMapBuffer's void* pointer gets truncated to 32 bits and sign-extended,
+// producing EFAULT writes like 0xffffffff9cbf1000.
+#define GL_GLEXT_PROTOTYPES 1
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include "egl_headless.h"
+#endif
+
+// Render modes (selected by drive.py's render_mode kwarg, plumbed via binding.c)
+#define RENDER_WINDOW 0
+#define RENDER_HEADLESS 1
 
 #define INVALID_POSITION -10000.0f
 

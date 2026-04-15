@@ -123,10 +123,19 @@ if system == "Linux":
         "-Wno-alloc-size-larger-than",
         "-Wno-implicit-function-declaration",
         "-fmax-errors=3",
+        # _GNU_SOURCE must be defined before any system header is included so
+        # glibc exposes GNU extensions like F_SETPIPE_SZ, writev, etc. that
+        # the headless render pipeline in drive.h depends on.
+        "-D_GNU_SOURCE",
     ]
     extra_link_args += [
         "-Bsymbolic-functions",
     ]
+    # Link EGL/GL only if headers are available (libegl1-mesa-dev). Without
+    # them, the EGL headless GPU path in drive.h is compiled out via
+    # __has_include and the Xvfb/Mesa fallback is used.
+    if os.path.exists("/usr/include/EGL/egl.h"):
+        extra_link_args.extend(["-lEGL", "-lGL", "-ldl"])
     if not NO_OCEAN:
         download_raylib(RAYLIB_NAME, ".tar.gz")
 elif system == "Darwin":
