@@ -208,16 +208,19 @@ static inline void draw_road_cached(Client *client) {
 // thread. Keeping them as statics mirrors 3.0's pattern in drive.h.
 static pid_t g_xvfb_pid = 0;
 static int g_xvfb_display_num = 0;
+// GLFW/Xvfb init is a per-process one-shot. Subsequent make_client
+// invocations reuse the existing window + GL context; the EGL pbuffer
+// is resized instead. Matches 3.0 drive.h g_glfw_ready pattern.
+static int g_glfw_ready = 0;
 
 Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
     client->width = 1280;
     client->height = 704;
-    if (env->render_mode == RENDER_HEADLESS) {
-        // Headless: hide the GLFW window so raylib doesn't try to pop an
-        // on-screen surface (crashes on nodes without a display) and let
-        // Xvfb/Mesa load glad. We'll switch the active GL context to EGL/GPU
-        // below.
+    if (env->render_mode == RENDER_HEADLESS && !g_glfw_ready) {
+        // Headless one-time init: hide window, fork Xvfb if needed, and let
+        // InitWindow load glad. Subsequent make_client calls reuse this
+        // window + GL context (EGL pbuffer is resized in place).
         SetConfigFlags(FLAG_WINDOW_HIDDEN);
         SetTargetFPS(6000);
         SetTraceLogLevel(LOG_WARNING);
@@ -258,11 +261,13 @@ Client *make_client(Drive *env) {
                 usleep(100000);
             usleep(200000);
         }
-    } else {
+        InitWindow(client->width, client->height, "PufferLib Ray GPU Drive");
+        g_glfw_ready = 1;
+    } else if (env->render_mode != RENDER_HEADLESS) {
         SetConfigFlags(FLAG_MSAA_4X_HINT);
         SetTargetFPS(30);
+        InitWindow(client->width, client->height, "PufferLib Ray GPU Drive");
     }
-    InitWindow(client->width, client->height, "PufferLib Ray GPU Drive");
 #ifdef DRIVE_HAS_EGL
     // EGL GPU context switch: after InitWindow loads glad/rlgl on the
     // Xvfb/Mesa context, create an NVIDIA GPU context via EGL and switch
@@ -273,7 +278,11 @@ Client *make_client(Drive *env) {
     if (env->render_mode == RENDER_HEADLESS && !egl_ready) {
         if (egl_headless_init((int)client->width, (int)client->height)) {
             if (egl_switch_to_gpu()) {
-                rlglClose();
+                // Do NOT call rlglClose here. rlglClose triggers glDelete*
+                // on IDs from the previous (GLX/Mesa) context, which forces
+                // an XSync on the GLX connection and surfaces queued X errors
+                // from the glXMakeCurrent(dpy, 0, NULL) release. 3.0 avoids
+                // this by just calling rlglInit on the fresh EGL context.
                 rlglInit((int)client->width, (int)client->height);
                 rlViewport(0, 0, (int)client->width, (int)client->height);
                 rlEnableDepthTest();
