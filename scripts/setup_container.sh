@@ -10,11 +10,13 @@
 
 set -e
 
-# Configuration - adjust these paths for your setup
-CONTAINER_DIR="${CONTAINER_DIR:-/scratch/$USER/containers/pufferdrive}"
-OVERLAY_PATH="$CONTAINER_DIR/overlay.ext3"
+# Configuration - adjust these paths for your setup (all env-var overridable).
+# Defaults match submit_cluster.py --container_overlay / --container_image so
+# both scripts agree on which overlay they're reading/writing.
+OVERLAY_PATH="${OVERLAY_PATH:-/scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3}"
 IMAGE_PATH="${IMAGE_PATH:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}"
 OVERLAY_TEMPLATE="${OVERLAY_TEMPLATE:-/share/apps/overlay-fs-ext3/overlay-15GB-500K.ext3.gz}"
+CONTAINER_DIR="${CONTAINER_DIR:-$(dirname "$OVERLAY_PATH")}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 create_overlay() {
