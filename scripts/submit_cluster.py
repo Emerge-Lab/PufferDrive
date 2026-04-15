@@ -210,7 +210,7 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
         # Wandb overrides: explicit flags take priority, then prefix for name
         wandb_name = args.wandb_name or args.prefix
         if wandb_name is not None:
-            cmd.extend(["--wandb-name", wandb_name])
+            cmd.extend(["--tag", wandb_name])
         if args.wandb_group is not None:
             cmd.extend(["--wandb-group", args.wandb_group])
         if args.wandb_project is not None:
