@@ -1255,7 +1255,16 @@ void c_render(Drive *env, int view_mode) {
         render_camera.target = (Vector3){agent->sim_x, agent->sim_y, 0.0f};
         render_camera.up = (Vector3){0.0f, -1.0f, 0.0f};
         render_camera.projection = CAMERA_ORTHOGRAPHIC;
-        render_camera.fovy = (float)env->grid_map->vision_range * GRID_CELL_SIZE * 2.0f;
+        // Match 3.0's BEV fovy exactly. 3.0 computes vision_range as
+        // ceil(observation_window_size / GRID_CELL_SIZE) + 1, giving
+        // fovy = 210m for a 100m observation window. Our init_grid_map
+        // uses 2*half_range+1 which is ~2x larger, so using env->grid_map->
+        // vision_range here would produce a 410m viewport that makes the
+        // ego agent look tiny. Compute fovy directly from obs distances.
+        float _bev_obs_window = fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist),
+                                      env->road_obs_side_dist);
+        int _bev_vrange = (int)ceilf(_bev_obs_window / GRID_CELL_SIZE) + 1;
+        render_camera.fovy = (float)_bev_vrange * GRID_CELL_SIZE * 2.0f;
     } else {
         render_camera = client->camera;
     }
