@@ -612,15 +612,14 @@ class PuffeRL:
                         video_suffix=_vsuffix,
                         log_view_label=_vlabel,
                     )
-            except Exception as e:
-                import traceback
-
-                print(
-                    f"\n⚠️  multi_scenario_render failed at step {self.global_step}: "
-                    f"{type(e).__name__}: {e}"
-                )
-                traceback.print_exc()
-                print("Training continues.")
+                except Exception as e:
+                    import traceback
+                    print(
+                        f"\n⚠️  multi_scenario_render failed (view={_vlabel}) at step {self.global_step}: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    traceback.print_exc()
+                    print("Training continues.")
 
         return logs
 
