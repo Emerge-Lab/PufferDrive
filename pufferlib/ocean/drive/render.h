@@ -915,6 +915,52 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0},
                (Vector3){env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0}, PUFF_CYAN);
 
+    // ==== Traffic lights ====================================================
+    // For each TRAFFIC_LIGHT element, query states[env->timestep] and draw the
+    // stop-line segment + a marker cube at its midpoint colored by current
+    // state. Drawn BEFORE the agent loop so cars can occlude overlapping markers.
+    // Non-TRAFFIC_LIGHT types (stop signs, yield signs) don't have a per-step
+    // dynamic state, so we leave them out for now (they're a follow-up).
+    for (int tl_i = 0; tl_i < env->num_traffic_elements; tl_i++) {
+        TrafficControlElement *traffic = &env->traffic_elements[tl_i];
+        if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT)
+            continue;
+        if (traffic->states == NULL || traffic->state_length <= 0)
+            continue;
+
+        int state_idx = env->timestep;
+        if (state_idx < 0) state_idx = 0;
+        if (state_idx >= traffic->state_length) state_idx = traffic->state_length - 1;
+        int tl_state = traffic->states[state_idx];
+
+        Color tl_color;
+        switch (tl_state) {
+            case TRAFFIC_CONTROL_STATE_RED:    tl_color = RED;    break;
+            case TRAFFIC_CONTROL_STATE_YELLOW: tl_color = YELLOW; break;
+            case TRAFFIC_CONTROL_STATE_GREEN:  tl_color = GREEN;  break;
+            default:                           tl_color = GRAY;   break; // OFF / UNKNOWN
+        }
+
+        // Lift the stop-line endpoints a little above the road surface so the
+        // line and marker render on top of the road tri mesh instead of
+        // z-fighting with it.
+        Vector3 sl_p1 = (Vector3){traffic->stop_line[0], traffic->stop_line[1],
+                                  traffic->stop_line[2] + 0.3f};
+        Vector3 sl_p2 = (Vector3){traffic->stop_line[3], traffic->stop_line[4],
+                                  traffic->stop_line[5] + 0.3f};
+        Vector3 sl_mid = (Vector3){
+            (traffic->stop_line[0] + traffic->stop_line[3]) * 0.5f,
+            (traffic->stop_line[1] + traffic->stop_line[4]) * 0.5f,
+            (traffic->stop_line[2] + traffic->stop_line[5]) * 0.5f + 0.5f,
+        };
+
+        DrawLine3D(sl_p1, sl_p2, tl_color);
+        // Marker cube at the midpoint. 2 x 2 x 1 m is large enough to read in a
+        // ~210 m BEV viewport (~1% of view height) and small enough to not
+        // dominate the perspective sim_state camera.
+        DrawCube(sl_mid, 2.0f, 2.0f, 1.0f, tl_color);
+    }
+
     for (int i = 0; i < env->num_total_agents; i++) {
         Agent *agent = &env->agents[i];
         // Draw objects
