@@ -28,6 +28,19 @@ typedef struct Client {
     int car_assignments[MAX_AGENTS]; // To keep car model assignments consistent per vehicle
     Vector3 default_camera_position;
     Vector3 default_camera_target;
+    // Headless batch recording state (populated when env->render_mode == RENDER_HEADLESS).
+    // recorder_pipefd[1] is the write end of the pipe to the forked ffmpeg child.
+    int recorder_pipefd[2];
+    pid_t recorder_pid;
+    int recorder_active; // 1 once ffmpeg fork + pipe are set up
+    // PBO double-buffer for async glReadPixels → CPU DMA. Hides readback
+    // latency behind the next frame's draw.
+    unsigned int pbo[2];
+    int pbo_index;       // which PBO to read INTO this frame (0 or 1)
+    int pbo_frame_count; // total frames rendered so far (0 = first frame, nothing to flush)
+    // 1 once the EGL GPU context switch has succeeded for this process. Set
+    // in make_client; subsequent clients reuse the persistent EGL display.
+    int egl_mode;
 } Client;
 
 Client *make_client(Drive *env) {
@@ -75,6 +88,8 @@ Client *make_client(Drive *env) {
         egl_headless_resize((int)client->width, (int)client->height);
         rlViewport(0, 0, (int)client->width, (int)client->height);
     }
+    if (egl_ready)
+        client->egl_mode = 1;
 #endif
     client->puffers = LoadTexture("resources/puffers_128.png");
     client->cars[0] = LoadModel("resources/drive/RedCar.glb");
@@ -110,7 +125,191 @@ Client *make_client(Drive *env) {
     client->camera.fovy = 45.0f;
     client->camera.projection = CAMERA_PERSPECTIVE;
     client->camera_zoom = 1.0f;
+
+    // Headless batch recording: fork an ffmpeg child and open a pipe to
+    // stream raw RGBA frames into libx264. The pipe write end lives in the
+    // parent; the read end is dup'd to stdin in the child. One child per
+    // Client; the child runs for the lifetime of the Client and exits when
+    // close_client closes the pipe.
+    if (env->render_mode == RENDER_HEADLESS) {
+        if (pipe(client->recorder_pipefd) == -1) {
+            fprintf(stderr, "[drive] pipe() failed: %s\n", strerror(errno));
+            return client;
+        }
+
+        char size_str[64];
+        snprintf(size_str, sizeof(size_str), "%dx%d", (int)client->width, (int)client->height);
+
+        char filename[320];
+        const char *stem = env->scenario_id[0] ? env->scenario_id : "pufferdrive";
+        snprintf(filename, sizeof(filename), "%s.mp4", stem);
+
+        client->recorder_pid = fork();
+        if (client->recorder_pid == -1) {
+            fprintf(stderr, "[drive] fork() failed: %s\n", strerror(errno));
+            close(client->recorder_pipefd[0]);
+            close(client->recorder_pipefd[1]);
+            return client;
+        }
+
+        if (client->recorder_pid == 0) { // ffmpeg child
+            close(client->recorder_pipefd[1]);
+            dup2(client->recorder_pipefd[0], STDIN_FILENO);
+            close(client->recorder_pipefd[0]);
+            for (int fd = 3; fd < 256; fd++)
+                close(fd);
+            // -threads 4: cap libx264's internal thread pool. x264 autodetects
+            // from the physical node (~96+ cores on H100/H200) and spawns ~24
+            // encode threads + 4 lookahead threads. Under a 16-core SLURM
+            // cgroup that's ~2x oversubscription that burst-preempts the render
+            // producer and causes eval renders to hang / SIGABRT. 4 threads is
+            // already far more than needed for ultrafast encoding (~500 fps
+            // encode vs <200 fps producer), and leaves cores untouched for the
+            // main thread / env / render producer.
+            execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
+                   "-", "-c:v", "libx264", "-threads", "4", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23",
+                   filename, NULL);
+            fprintf(stderr, "[drive] execlp ffmpeg failed: %s\n", strerror(errno));
+            _exit(1);
+        }
+        close(client->recorder_pipefd[0]);
+        fprintf(stderr, "[drive] ffmpeg forked: pid=%d pipe_write_fd=%d size=%s file=%s egl=%d\n",
+                client->recorder_pid, client->recorder_pipefd[1], size_str, filename, client->egl_mode);
+
+        // Grow the pipe buffer so one frame fits without blocking the writer.
+#ifdef F_SETPIPE_SZ
+        int pipe_sz = fcntl(client->recorder_pipefd[1], F_SETPIPE_SZ, 4 * 1024 * 1024);
+        if (pipe_sz > 0)
+            fprintf(stderr, "[drive] Pipe buffer set to %d bytes\n", pipe_sz);
+#endif
+        client->recorder_active = 1;
+    }
+
     return client;
+}
+
+// Async PBO readback + writev pipe write. Called once per frame AFTER the
+// draw batch has been flushed (after EndDrawing / rlDrawRenderBatchActive).
+// Double-buffers two PBOs so glReadPixels returns immediately and the
+// previous frame's mapped PBO is written to ffmpeg while the current draw
+// runs. glReadPixels returns rows bottom-up but ffmpeg expects top-down —
+// we row-reverse via a writev iovec instead of memcpy.
+static inline void client_record_frame(Client *client) {
+    if (!client->recorder_active)
+        return;
+#ifdef DRIVE_HAS_EGL
+    if (!client->egl_mode) {
+        // Xvfb/Mesa fallback: synchronous rlReadScreenPixels + write.
+        int w = (int)client->width, h = (int)client->height;
+        int frame_bytes = w * h * 4;
+        unsigned char *screen_data = rlReadScreenPixels(w, h);
+        if (!screen_data)
+            return;
+        size_t remaining = (size_t)frame_bytes;
+        unsigned char *p = screen_data;
+        while (remaining > 0) {
+            ssize_t written = write(client->recorder_pipefd[1], p, remaining);
+            if (written < 0) {
+                if (errno == EINTR)
+                    continue;
+                break;
+            }
+            p += written;
+            remaining -= (size_t)written;
+        }
+        RL_FREE(screen_data);
+        client->pbo_frame_count++;
+        return;
+    }
+
+    int w = (int)client->width, h = (int)client->height;
+    int frame_bytes = w * h * 4;
+
+    // Lazily allocate the PBO pair on first frame.
+    if (client->pbo[0] == 0) {
+        glGenBuffers(2, client->pbo);
+        for (int i = 0; i < 2; i++) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[i]);
+            glBufferData(GL_PIXEL_PACK_BUFFER, frame_bytes, NULL, GL_STREAM_READ);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+
+    int curr = client->pbo_index;
+    int prev = 1 - curr;
+
+    // Kick off async DMA for the current frame's pixels.
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[curr]);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+    // Write the previous frame (map + writev). Skip the very first frame
+    // because there's no prior data yet.
+    if (client->pbo_frame_count > 0) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
+        unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        if (ptr) {
+            int row_bytes = w * 4;
+            // IOV_MAX on Linux is 1024, so frames taller than 1024 rows need
+            // multiple writev calls. Split the top-down flip into chunks of
+            // at most IOV_MAX rows. Within each chunk, loop to handle short
+            // writes (EINTR / partial pipe buffer) by shrinking the head
+            // iovec and retrying.
+            int iov_max = 1024;
+            int rows_remaining = h;
+            int row_top = 0;
+            int io_error = 0;
+            while (rows_remaining > 0 && !io_error) {
+                int chunk = rows_remaining < iov_max ? rows_remaining : iov_max;
+                struct iovec iov[1024];
+                size_t chunk_bytes = 0;
+                for (int i = 0; i < chunk; i++) {
+                    int src_row = h - 1 - (row_top + i);
+                    iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
+                    iov[i].iov_len = row_bytes;
+                    chunk_bytes += row_bytes;
+                }
+                struct iovec *cur = iov;
+                int cur_cnt = chunk;
+                size_t cur_remaining = chunk_bytes;
+                while (cur_remaining > 0) {
+                    ssize_t written = writev(client->recorder_pipefd[1], cur, cur_cnt);
+                    if (written < 0) {
+                        if (errno == EINTR)
+                            continue;
+                        fprintf(stderr, "[drive-pbo] frame=%d writev chunk=%d failed errno=%d(%s)\n",
+                                client->pbo_frame_count, cur_cnt, errno, strerror(errno));
+                        io_error = 1;
+                        break;
+                    }
+                    cur_remaining -= (size_t)written;
+                    size_t consumed = (size_t)written;
+                    while (cur_cnt > 0 && consumed >= cur[0].iov_len) {
+                        consumed -= cur[0].iov_len;
+                        cur++;
+                        cur_cnt--;
+                    }
+                    if (cur_cnt > 0 && consumed > 0) {
+                        cur[0].iov_base = (unsigned char *)cur[0].iov_base + consumed;
+                        cur[0].iov_len -= consumed;
+                    }
+                }
+                row_top += chunk;
+                rows_remaining -= chunk;
+            }
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        } else {
+            fprintf(stderr, "[drive-pbo] frame=%d glMapBuffer returned NULL! GL error=0x%x\n",
+                    client->pbo_frame_count, glGetError());
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+
+    client->pbo_index = prev;
+    client->pbo_frame_count++;
+#else
+    (void)client;
+#endif
 }
 
 // Camera control functions
@@ -807,39 +1006,122 @@ void c_render(Drive *env) {
     Color road = (Color){35, 35, 37, 255};
     ClearBackground(road);
     BeginMode3D(client->camera);
-    handle_camera_controls(env->client);
+    if (env->render_mode != RENDER_HEADLESS)
+        handle_camera_controls(env->client);
     draw_scene(env, client, 0, 0, 0, 0);
-    // Draw debug info
-    DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,
-                        client->camera.position.z),
-             10, 10, 20, PUFF_WHITE);
-    DrawText(TextFormat("Camera Target: (%.2f, %.2f, %.2f)", client->camera.target.x, client->camera.target.y,
-                        client->camera.target.z),
-             10, 30, 20, PUFF_WHITE);
-    DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
-    // acceleration & steering
-    int human_idx = env->active_agent_indices[env->human_agent_idx];
-    DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
-    DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
-    // Controls help
-    DrawText("Controls: W/S - Accelerate/Brake, A/D - Steer, 1-4 - Switch Agent", 10, client->height - 30, 20,
-             PUFF_WHITE);
-    // acceleration & steering
-    if (env->action_type == 1) { // continuous (float)
-        float (*action_array_f)[2] = (float (*)[2])env->actions;
-        DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20, PUFF_WHITE);
-        DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
-    } else { // discrete (int)
-        int (*action_array)[2] = (int (*)[2])env->actions;
-        DrawText(TextFormat("Acceleration: %d", action_array[env->human_agent_idx][0]), 10, 110, 20, PUFF_WHITE);
-        DrawText(TextFormat("Steering: %d", action_array[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
+    if (env->render_mode != RENDER_HEADLESS) {
+        // Debug overlay — only meaningful in the interactive viewer.
+        DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x,
+                            client->camera.position.y, client->camera.position.z),
+                 10, 10, 20, PUFF_WHITE);
+        DrawText(TextFormat("Camera Target: (%.2f, %.2f, %.2f)", client->camera.target.x, client->camera.target.y,
+                            client->camera.target.z),
+                 10, 30, 20, PUFF_WHITE);
+        DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
+        int human_idx = env->active_agent_indices[env->human_agent_idx];
+        DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
+        DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
+        DrawText("Controls: W/S - Accelerate/Brake, A/D - Steer, 1-4 - Switch Agent", 10, client->height - 30, 20,
+                 PUFF_WHITE);
+        if (env->action_type == 1) { // continuous (float)
+            float (*action_array_f)[2] = (float (*)[2])env->actions;
+            DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20,
+                     PUFF_WHITE);
+            DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
+        } else { // discrete (int)
+            int (*action_array)[2] = (int (*)[2])env->actions;
+            DrawText(TextFormat("Acceleration: %d", action_array[env->human_agent_idx][0]), 10, 110, 20, PUFF_WHITE);
+            DrawText(TextFormat("Steering: %d", action_array[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
+        }
+        DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, 150, 20, PUFF_WHITE);
+        DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, 170, 20, PUFF_WHITE);
     }
-    DrawText(TextFormat("Grid Rows: %d", env->grid_map->grid_rows), 10, 150, 20, PUFF_WHITE);
-    DrawText(TextFormat("Grid Cols: %d", env->grid_map->grid_cols), 10, 170, 20, PUFF_WHITE);
-    EndDrawing();
+#ifdef DRIVE_HAS_EGL
+    if (client->egl_mode) {
+        // EGL headless: flush the rlgl batch directly. Skip EndDrawing's
+        // glfwSwapBuffers + glfwPollEvents — there's no window to swap.
+        rlDrawRenderBatchActive();
+    } else
+#endif
+    {
+        EndDrawing();
+    }
+
+    if (env->render_mode == RENDER_HEADLESS) {
+        client_record_frame(client);
+    }
 }
 
 void close_client(Client *client) {
+    // Flush the trailing PBO frame to the ffmpeg pipe before tearing down.
+    // The recorder loop only writes frame N when frame N+1 is kicked off, so
+    // the last produced frame is still sitting in a mapped PBO when we get
+    // here. Without this flush, the output mp4 ends one frame short.
+    if (client->recorder_active) {
+#ifdef DRIVE_HAS_EGL
+        if (client->egl_mode && client->pbo_frame_count > 0) {
+            int prev = 1 - client->pbo_index;
+            int w = (int)client->width, h = (int)client->height;
+            int row_bytes = w * 4;
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
+            unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+            if (ptr) {
+                int iov_max = 1024;
+                int rows_remaining = h;
+                int row_top = 0;
+                int io_error = 0;
+                while (rows_remaining > 0 && !io_error) {
+                    int chunk = rows_remaining < iov_max ? rows_remaining : iov_max;
+                    struct iovec iov[1024];
+                    size_t chunk_bytes = 0;
+                    for (int i = 0; i < chunk; i++) {
+                        int src_row = h - 1 - (row_top + i);
+                        iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
+                        iov[i].iov_len = row_bytes;
+                        chunk_bytes += row_bytes;
+                    }
+                    struct iovec *cur = iov;
+                    int cur_cnt = chunk;
+                    size_t cur_remaining = chunk_bytes;
+                    while (cur_remaining > 0) {
+                        ssize_t written = writev(client->recorder_pipefd[1], cur, cur_cnt);
+                        if (written < 0) {
+                            if (errno == EINTR)
+                                continue;
+                            io_error = 1;
+                            break;
+                        }
+                        cur_remaining -= (size_t)written;
+                        size_t consumed = (size_t)written;
+                        while (cur_cnt > 0 && consumed >= cur[0].iov_len) {
+                            consumed -= cur[0].iov_len;
+                            cur++;
+                            cur_cnt--;
+                        }
+                        if (cur_cnt > 0 && consumed > 0) {
+                            cur[0].iov_base = (unsigned char *)cur[0].iov_base + consumed;
+                            cur[0].iov_len -= consumed;
+                        }
+                    }
+                    row_top += chunk;
+                    rows_remaining -= chunk;
+                }
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            }
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            glDeleteBuffers(2, client->pbo);
+            client->pbo[0] = 0;
+            client->pbo[1] = 0;
+        }
+#endif
+        close(client->recorder_pipefd[1]);
+        if (client->recorder_pid > 0) {
+            int status = 0;
+            waitpid(client->recorder_pid, &status, 0);
+            fprintf(stderr, "[drive] ffmpeg child %d exited (status=0x%x)\n", client->recorder_pid, status);
+        }
+        client->recorder_active = 0;
+    }
     for (int i = 0; i < 6; i++) {
         UnloadModel(client->cars[i]);
     }
