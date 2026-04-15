@@ -1358,16 +1358,40 @@ void close_client(Client *client) {
     free(client->road_line_colors);
     client->road_line_colors = NULL;
     client->road_line_count = 0;
+    // Always unload models — they hold GPU-side VBOs/VAOs/textures tracked
+    // by rlgl. Leaking them corrupts rlgl's internal bookkeeping and causes
+    // segfaults when the next make_client loads fresh models on the same GL
+    // context. Cyclist + pedestrian were being leaked until this fix (3.0's
+    // close_client unloads all of them).
     for (int i = 0; i < 6; i++) {
         UnloadModel(client->cars[i]);
     }
+    UnloadModel(client->cyclist);
+    UnloadModel(client->pedestrian);
     UnloadTexture(client->puffers);
-    CloseWindow();
+
+    // CRITICAL: skip CloseWindow + egl_headless_cleanup in egl_mode.
+    //
+    // CloseWindow tears down GLFW, which on Linux calls glXMakeCurrent(dpy,
+    // None, NULL) + glXDestroyContext on the GLFW-owned GLX context. That
+    // glXMakeCurrent flushes the GLX connection, which surfaces the queued
+    // async BadAccess from egl_switch_to_gpu's earlier release call and
+    // crashes the process. It also kills the global GLFW window that the
+    // next make_client is supposed to reuse (via the g_glfw_ready guard).
+    //
+    // egl_headless_cleanup destroys g_egl_ctx.surface/context. The next
+    // make_client hits the `egl_ready` static flag (still set) and goes
+    // to egl_headless_resize, which operates on a destroyed context =>
+    // crash on the second batch of scenarios.
+    //
+    // 3.0 keeps GLFW + EGL persistent across render envs — see drive.h
+    // close_client (the "EGL mode: don't touch GLFW/Xvfb/EGL" comment).
+    if (!client->egl_mode) {
+        CloseWindow();
 #ifdef DRIVE_HAS_EGL
-    // Release the EGL GPU context but do NOT eglTerminate (that corrupts
-    // CUDA on NVIDIA drivers — see egl_headless.h comment).
-    egl_headless_cleanup();
+        egl_headless_cleanup();
 #endif
+    }
     free(client);
 }
 
