@@ -611,7 +611,10 @@ class PuffeRL:
                         view_mode=_vmode,
                         video_suffix=_vsuffix,
                         log_view_label=_vlabel,
-                        render_max_steps=50,  # cap rollout to dodge the ~500-c_render-call abort
+                        # Configurable cap: eval.render_max_steps. Default 50 until
+                        # the mystery ~500-c_render-call abort is properly diagnosed.
+                        # Set to 0/negative to disable the cap entirely.
+                        render_max_steps=(self.config["eval"].get("render_max_steps", 50) or None),
                     )
                 except Exception as e:
                     import traceback
