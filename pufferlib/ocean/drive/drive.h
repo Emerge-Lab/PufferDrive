@@ -4666,7 +4666,7 @@ void c_step(Drive *env) {
         for (int i = 1; i < env->active_agent_count; i++) {
 
             // Weight given to the "base" = drive reward. 0 is full adversarial mode.
-            float base_weight = 0.2f;
+            float base_weight = 0.5f;
 
             // Downscale the base reward.
             env->logs[i].episode_return *= base_weight;

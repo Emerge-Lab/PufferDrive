@@ -1813,6 +1813,7 @@ def build_eval_overrides(
         "reward_lane_align": 0.025,
         "reward_lane_center": 0.0038,
         "reward_timestep": 0.000025,
+        "adversarial_termination_mode": 2,
     }
 
     if simulation_mode == "gigaflow":
@@ -2028,16 +2029,23 @@ def _build_eval_target_mask(infos, vecenv, device):
 
     if infos is None:
         return target_mask
-    if isinstance(infos, dict):
-        infos = [infos]
-    elif infos and isinstance(infos[0], list):
-        flattened_infos = []
-        for sub_infos in infos:
-            flattened_infos.extend(sub_infos)
-        infos = flattened_infos
+
+    def _iter_info_dicts(payload):
+        if payload is None:
+            return
+        if isinstance(payload, dict):
+            yield payload
+            return
+        if isinstance(payload, (list, tuple)):
+            for item in payload:
+                yield from _iter_info_dicts(item)
+
+    infos = list(_iter_info_dicts(infos))
 
     env_counter = 0
     for information in infos:
+        if not isinstance(information, dict):
+            continue
         agent_offsets = information.get("agent_offsets")
         if agent_offsets is None:
             continue
@@ -2099,7 +2107,7 @@ def _get_random_eval_filename_suffix(args):
     if agents_per_scene is None:
         agents_per_scene = args["env"].get("min_agents_per_env")
 
-    if args.get("load_model_path") is None and agents_per_scene is not None:
+    if agents_per_scene is not None:
         parts.append(f"agents{agents_per_scene}")
 
     if args.get("seed") is not None:
@@ -2274,7 +2282,7 @@ def eval_multi_scenarios_render(
     if backend != "PufferEnv":
         backend = "Serial"
 
-    args["vec"] = dict(backend=backend, num_envs=1)
+    args["vec"] = {**args["vec"], "backend": backend, "num_envs": 1}
     args["env"]["num_eval_scenarios"] = args["num_scenarios"]  # first batch: fill as many scenarios as fit
 
     vecenv = vecenv or load_env(env_name, args)
@@ -2465,12 +2473,15 @@ def render_adversarial(
     if args.get("seed") is not None:
         np.random.seed(args["seed"])
         torch.manual_seed(args["seed"])
+        args["vec"]["seed"] = args["seed"]
+    else:
+        args["vec"]["seed"] = None
 
     backend = args["vec"]["backend"]
     if backend != "PufferEnv":
         backend = "Serial"
 
-    args["vec"] = dict(backend=backend, num_envs=1)
+    args["vec"] = {**args["vec"], "backend": backend, "num_envs": 1}
     args["env"]["num_eval_scenarios"] = args["num_scenarios"]
 
     vecenv = vecenv or load_env(env_name, args)
@@ -2506,7 +2517,8 @@ def render_adversarial(
     scenarios_processed = 0
     with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
         while scenarios_processed < num_scenarios:
-            ob, infos = vecenv.reset()
+            reset_seed = None if args.get("seed") is None else args["seed"] + scenarios_processed
+            ob, infos = vecenv.reset(seed=reset_seed)
 
             scenarios = vecenv.get_state()
             num_envs_in_batch = len(scenarios)

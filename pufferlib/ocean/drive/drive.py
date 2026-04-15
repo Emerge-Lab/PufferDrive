@@ -340,8 +340,9 @@ class Drive(pufferlib.PufferEnv):
     def random_seed(self):
         return int(self.rng.integers(0, 2**24))
 
-    def reset(self, seed=0):
-        binding.vec_reset(self.c_envs, seed)
+    def reset(self, seed=None):
+        reset_seed = self.random_seed if seed is None else seed
+        binding.vec_reset(self.c_envs, reset_seed)
         self.tick = 0
         self.truncations[:] = 0
         return self.observations, [{"agent_offsets": self.agent_offsets}]
