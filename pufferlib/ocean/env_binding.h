@@ -598,6 +598,8 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             Env *env = vec->envs[i];
             float n = env->log.n;
             float target_n = env->log.target_n;
+            float episode_length = env->log.episode_length;
+            float target_episode_length = env->log.target_episode_length;
             float episode_return = env->log.episode_return;
             float episode_return_collision = env->log.episode_return_collision;
             float episode_return_offroad = env->log.episode_return_offroad;
@@ -616,6 +618,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 ((float *)&env->log)[i] /= n;
             }
             if (target_n > 0.0f) {
+                env->log.target_episode_length = target_episode_length / target_n;
                 env->log.target_episode_return = target_episode_return / target_n;
                 env->log.target_episode_return_collision = target_episode_return_collision / target_n;
                 env->log.target_episode_return_offroad = target_episode_return_offroad / target_n;
@@ -626,6 +629,8 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 env->log.did_target_fail = did_target_fail / target_n;
             }
             float adversary_n = n - target_n;
+            env->log.episode_length =
+                adversary_n > 0.0f ? (episode_length - target_episode_length) / adversary_n : 0.0f;
             env->log.episode_return =
                 adversary_n > 0.0f ? (episode_return - target_episode_return) / adversary_n : 0.0f;
             env->log.episode_return_collision =
@@ -691,6 +696,8 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
 
         float n = aggregate.n;
         float target_n = aggregate.target_n;
+        float episode_length = aggregate.episode_length;
+        float target_episode_length = aggregate.target_episode_length;
         float episode_return = aggregate.episode_return;
         float episode_return_collision = aggregate.episode_return_collision;
         float episode_return_offroad = aggregate.episode_return_offroad;
@@ -712,6 +719,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
 
         // Target metrics are per-scenario signals, not per-agent averages.
         if (target_n > 0.0f) {
+            aggregate.target_episode_length = target_episode_length / target_n;
             aggregate.target_episode_return = target_episode_return / target_n;
             aggregate.target_episode_return_collision = target_episode_return_collision / target_n;
             aggregate.target_episode_return_offroad = target_episode_return_offroad / target_n;
@@ -722,6 +730,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             aggregate.did_target_fail = did_target_fail / target_n;
         }
         float adversary_n = n - target_n;
+        aggregate.episode_length = adversary_n > 0.0f ? (episode_length - target_episode_length) / adversary_n : 0.0f;
         aggregate.episode_return = adversary_n > 0.0f ? (episode_return - target_episode_return) / adversary_n : 0.0f;
         aggregate.episode_return_collision =
             adversary_n > 0.0f ? (episode_return_collision - target_episode_return_collision) / adversary_n : 0.0f;

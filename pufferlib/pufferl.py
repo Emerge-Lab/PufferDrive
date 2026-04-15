@@ -80,6 +80,54 @@ HIDDEN_DASHBOARD_METRICS = {
 }
 
 
+def metric_log_key(metric_name):
+    if "/" in metric_name:
+        return metric_name
+
+    policy_metrics = {
+        "episode_return",
+        "episode_return_collision",
+        "episode_return_offroad",
+        "episode_return_drive",
+        "episode_return_adversarial",
+        "mean_reward",
+        "mean_reward_collision",
+        "mean_reward_offroad",
+        "mean_reward_drive",
+        "mean_reward_adversarial",
+    }
+    target_metrics = {
+        "target_episode_return": "episode_return",
+        "target_episode_return_collision": "episode_return_collision",
+        "target_episode_return_offroad": "episode_return_offroad",
+        "target_episode_return_drive": "episode_return_drive",
+        "target_episode_return_adversarial": "episode_return_adversarial",
+        "target_mean_reward": "mean_reward",
+        "target_mean_reward_collision": "mean_reward_collision",
+        "target_mean_reward_offroad": "mean_reward_offroad",
+        "target_mean_reward_drive": "mean_reward_drive",
+        "target_mean_reward_adversarial": "mean_reward_adversarial",
+    }
+    overview_metrics = {
+        "episode_length",
+        "target_episode_length",
+        "did_target_fail",
+        "did_target_collide",
+        "did_target_offroad",
+        "collision_rate",
+        "offroad_rate",
+        "red_light_violation_rate",
+    }
+
+    if metric_name in policy_metrics:
+        return f"policy/{metric_name}"
+    if metric_name in target_metrics:
+        return f"target/{target_metrics[metric_name]}"
+    if metric_name in overview_metrics:
+        return f"overview/{metric_name}"
+    return f"environment/{metric_name}"
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, target_policy=None, logger=None):
         # Backend perf optimization
@@ -906,10 +954,10 @@ class PuffeRL:
             "uptime": time.time() - self.start_time,
             "epoch": int(dist_sum(self.epoch, device)),  # VB Why it is a sum ?
             "learning_rate": self.optimizer.param_groups[0]["lr"],
-            **{f"environment/{k}": v for k, v in self.stats.items()},
+            **{metric_log_key(k): v for k, v in self.stats.items()},
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
-            # **{f'environment/{k}': dist_mean(v, device) for k, v in self.stats.items()},
+            # **{metric_log_key(k): dist_mean(v, device) for k, v in self.stats.items()},
             # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
             # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
@@ -2661,7 +2709,7 @@ def sweep(args=None, env_name=None):
 
     sweep = sweep_cls(args["sweep"])
     points_per_run = args["sweep"]["downsample"]
-    target_key = f"environment/{args['sweep']['metric']}"
+    target_key = metric_log_key(args["sweep"]["metric"])
 
     for i in range(args["max_runs"]):
         seed = time.time_ns() & 0xFFFFFFFF

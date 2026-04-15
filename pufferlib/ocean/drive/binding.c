@@ -1847,21 +1847,36 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     float total_distance_travelled = log->total_distance_travelled * n;
     float total_infractions = log->total_infractions * n;
     float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
+    float safe_episode_length = fmaxf(log->episode_length, 1.0f);
+    float safe_target_episode_length = fmaxf(log->target_episode_length, 1.0f);
 
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
     assign_to_dict(dict, "episode_length", log->episode_length);
+    assign_to_dict(dict, "target_episode_length", log->target_episode_length);
     assign_to_dict(dict, "collision_rate", log->collision_rate);
     assign_to_dict(dict, "episode_return", log->episode_return);
     assign_to_dict(dict, "episode_return_collision", log->episode_return_collision);
     assign_to_dict(dict, "episode_return_offroad", log->episode_return_offroad);
     assign_to_dict(dict, "episode_return_drive", log->episode_return_drive);
     assign_to_dict(dict, "episode_return_adversarial", log->episode_return_adversarial);
+    assign_to_dict(dict, "mean_reward", log->episode_return / safe_episode_length);
+    assign_to_dict(dict, "mean_reward_collision", log->episode_return_collision / safe_episode_length);
+    assign_to_dict(dict, "mean_reward_offroad", log->episode_return_offroad / safe_episode_length);
+    assign_to_dict(dict, "mean_reward_drive", log->episode_return_drive / safe_episode_length);
+    assign_to_dict(dict, "mean_reward_adversarial", log->episode_return_adversarial / safe_episode_length);
     assign_to_dict(dict, "target_episode_return", log->target_episode_return);
     assign_to_dict(dict, "target_episode_return_collision", log->target_episode_return_collision);
     assign_to_dict(dict, "target_episode_return_offroad", log->target_episode_return_offroad);
     assign_to_dict(dict, "target_episode_return_drive", log->target_episode_return_drive);
     assign_to_dict(dict, "target_episode_return_adversarial", log->target_episode_return_adversarial);
+    assign_to_dict(dict, "target_mean_reward", log->target_episode_return / safe_target_episode_length);
+    assign_to_dict(dict, "target_mean_reward_collision",
+                   log->target_episode_return_collision / safe_target_episode_length);
+    assign_to_dict(dict, "target_mean_reward_offroad", log->target_episode_return_offroad / safe_target_episode_length);
+    assign_to_dict(dict, "target_mean_reward_drive", log->target_episode_return_drive / safe_target_episode_length);
+    assign_to_dict(dict, "target_mean_reward_adversarial",
+                   log->target_episode_return_adversarial / safe_target_episode_length);
     assign_to_dict(dict, "did_target_collide", log->did_target_collide);
     assign_to_dict(dict, "did_target_offroad", log->did_target_offroad);
     assign_to_dict(dict, "did_target_fail", log->did_target_fail);

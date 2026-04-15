@@ -179,6 +179,7 @@ struct Log {
     float target_episode_return_drive;
     float target_episode_return_adversarial;
     float episode_length;
+    float target_episode_length;
     float expert_static_car_count;
     float static_car_count;
     float score;
@@ -2663,6 +2664,7 @@ static void add_log(Drive *env) {
 
     if (env->active_agent_count > 0) {
         env->log.target_n += 1.0f;
+        env->log.target_episode_length += env->logs[0].episode_length;
         env->log.target_episode_return += env->logs[0].episode_return;
         env->log.target_episode_return_collision += env->logs[0].episode_return_collision;
         env->log.target_episode_return_offroad += env->logs[0].episode_return_offroad;
