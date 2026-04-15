@@ -1786,8 +1786,11 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
         "reward_timestep": 0.000025,
         "lane_segment_dropout": 0.0,
         "boundary_segment_dropout": 0.0,
-        "max_lane_segment_observations": 80,
-        "max_boundary_segment_observations": 80,
+        # NOTE: do not override max_{lane,boundary}_segment_observations here.
+        # Those change the observation vector shape, and the render path reuses
+        # the live training policy which was built for the training obs sizes.
+        # Hardcoding 80/80 here caused the policy forward to hit a scatter/gather
+        # idx out-of-bounds (CUDA device-side assert) when training used 70/40.
     }
 
     if simulation_mode == "gigaflow":
