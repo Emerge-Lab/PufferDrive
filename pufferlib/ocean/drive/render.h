@@ -202,6 +202,13 @@ static inline void draw_road_cached(Client *client) {
     }
 }
 
+// Persistent Xvfb state. Xvfb + GLFW are initialized once per process and
+// reused across successive headless Clients. Starting a fresh Xvfb per client
+// leaks display sockets; calling glfwTerminate prevents re-init on the same
+// thread. Keeping them as statics mirrors 3.0's pattern in drive.h.
+static pid_t g_xvfb_pid = 0;
+static int g_xvfb_display_num = 0;
+
 Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
     client->width = 1280;
@@ -214,6 +221,43 @@ Client *make_client(Drive *env) {
         SetConfigFlags(FLAG_WINDOW_HIDDEN);
         SetTargetFPS(6000);
         SetTraceLogLevel(LOG_WARNING);
+
+        // Auto-spawn Xvfb when running on a compute node with no X server.
+        // Ported from 3.0's drive.h:3633–3672. We only do this when DISPLAY
+        // is unset and we haven't already forked an Xvfb for this process.
+        if (getenv("DISPLAY") == NULL && g_xvfb_pid == 0) {
+            g_xvfb_display_num = 100 + (getpid() % 900);
+            char lock_file[32], socket_file[32], display_str[16];
+            snprintf(display_str, sizeof(display_str), ":%d", g_xvfb_display_num);
+            snprintf(lock_file, sizeof(lock_file), "/tmp/.X%d-lock", g_xvfb_display_num);
+            snprintf(socket_file, sizeof(socket_file), "/tmp/.X11-unix/X%d", g_xvfb_display_num);
+
+            // Clean up a stale lockfile from a dead Xvfb on this display number.
+            FILE *f = fopen(lock_file, "r");
+            if (f) {
+                pid_t pid = -1;
+                fscanf(f, "%d", &pid);
+                fclose(f);
+                if (pid > 0 && kill(pid, 0) != 0) {
+                    unlink(lock_file);
+                    unlink(socket_file);
+                }
+            }
+
+            g_xvfb_pid = fork();
+            if (g_xvfb_pid == 0) {
+                close(STDOUT_FILENO);
+                close(STDERR_FILENO);
+                execlp("Xvfb", "Xvfb", display_str, "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac",
+                       "-noreset", NULL);
+                _exit(1);
+            }
+            setenv("DISPLAY", display_str, 1);
+            // Wait up to 2 seconds for the lockfile (Xvfb ready signal).
+            for (int i = 0; i < 20 && access(lock_file, F_OK) != 0; i++)
+                usleep(100000);
+            usleep(200000);
+        }
     } else {
         SetConfigFlags(FLAG_MSAA_4X_HINT);
         SetTargetFPS(30);
