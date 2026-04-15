@@ -88,10 +88,25 @@ rebuild_extension() {
 
 run_in_container() {
     local cmd="$1"
+    # Source /ext3/env.sh so the overlay's miniforge python, torch, and
+    # pufferlib site-packages land on sys.path. Without this the rebuild
+    # command fails with ModuleNotFoundError: torch.
+    # --fakeroot dropped — the rebuild only needs read access to the
+    # overlay. Keeping it only when we're installing (which needs to write
+    # to /ext3). See the `install` dispatch below.
+    singularity exec --nv \
+        --overlay "$OVERLAY_PATH:ro" \
+        "$IMAGE_PATH" \
+        bash -c "source /ext3/env.sh && cd $PROJECT_ROOT && $cmd"
+}
+
+run_in_container_writable() {
+    local cmd="$1"
+    # Writable overlay path for `install` — needs to pip-install into /ext3.
     singularity exec --nv --fakeroot \
         --overlay "$OVERLAY_PATH" \
         "$IMAGE_PATH" \
-        bash -c "cd $PROJECT_ROOT && $cmd"
+        bash -c "source /ext3/env.sh && cd $PROJECT_ROOT && $cmd"
 }
 
 case "${1:-}" in
@@ -103,7 +118,7 @@ case "${1:-}" in
         if [ -f /.singularity.d/Singularity ]; then
             install_deps
         else
-            run_in_container "$0 install"
+            run_in_container_writable "$0 install"
         fi
         ;;
     rebuild)
