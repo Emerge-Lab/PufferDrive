@@ -579,16 +579,32 @@ class PuffeRL:
             print(
                 f"\n🎬 Running multi-scenario {backend_name} render at step {self.global_step}..."
             )
-            eval_multi_scenarios_render(
-                env_name=self.config["env"],
-                args=render_args,
-                vecenv=None,
-                policy=self.uncompiled_policy,
-                logger=self.logger,
-                metric_prefix="render",
-                quiet=True,
-                render_backend=backend_name,
-            )
+            # Render failures (missing map dir, corrupted .bin files, ffmpeg
+            # absent, EGL unavailable, etc.) should NEVER crash training — the
+            # render is a logging side-channel. Catch any exception here, log
+            # it, and let training keep going. The upstream eval_multi_scenarios
+            # metric call is separate and already ran, so metric eval continues
+            # to work even if video rendering is broken.
+            try:
+                eval_multi_scenarios_render(
+                    env_name=self.config["env"],
+                    args=render_args,
+                    vecenv=None,
+                    policy=self.uncompiled_policy,
+                    logger=self.logger,
+                    metric_prefix="render",
+                    quiet=True,
+                    render_backend=backend_name,
+                )
+            except Exception as e:
+                import traceback
+
+                print(
+                    f"\n⚠️  multi_scenario_render failed at step {self.global_step}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                traceback.print_exc()
+                print("Training continues.")
 
         return logs
 
@@ -1783,7 +1799,10 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
                 "max_agents_per_env": 50,
                 "resample_frequency": 3000,
                 "scenario_length": 3000,
-                "map_dir": "pufferlib/resources/drive/binaries/carla",
+                # Point at the py123d-converted CARLA towns added to this branch.
+                # The older binaries/carla dir predates the 123Drive pipeline and
+                # is not populated on emerge/temp_training.
+                "map_dir": map_dir or "pufferlib/resources/drive/binaries/carla_py123d",
                 "num_maps": num_carla_maps,
                 "num_agents": num_agents,
                 "termination_mode": 0.0,
