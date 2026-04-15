@@ -47,6 +47,12 @@ install_deps() {
     # Use --break-system-packages since we're in a container with overlay
     export PIP_BREAK_SYSTEM_PACKAGES=1
 
+    # Multi-arch CUDA build so the _C.so runs on A100 (8.0), L40S (8.9),
+    # H100/H200 (9.0) without "no kernel image is available for execution
+    # on the device" crashes when a training job lands on a different GPU
+    # type than the one we built on.
+    export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
+
     # Install PyTorch with CUDA
     echo "=== Installing PyTorch ==="
     pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
@@ -71,6 +77,9 @@ install_deps() {
 
 rebuild_extension() {
     echo "=== Rebuilding C extension ==="
+    # See install_deps comment — must target every GPU type we might land
+    # on after the rebuild or jobs crash with missing kernel images.
+    export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
     cd "$PROJECT_ROOT"
     python3 setup.py build_ext --inplace --force
     echo "=== Rebuild complete ==="
