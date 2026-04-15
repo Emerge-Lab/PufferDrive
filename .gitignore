@@ -166,6 +166,8 @@ data/
 pufferlib/resources/drive/binaries/*/
 !pufferlib/resources/drive/binaries/carla/
 !pufferlib/resources/drive/binaries/carla/**
+# Re-ignore .DS_Store inside carla binaries
+pufferlib/resources/drive/binaries/carla/.DS_Store
 
 # Compiled drive binary in root
 /drive
@@ -184,3 +186,15 @@ artifacts/
 pufferlib/resources/drive/output*.gif
 *.mp4
 .vscode/
+
+# macOS debug symbols
+*.dSYM/
+
+# External local clones
+external/
+
+# Generated docs
+docs/
+
+# Claude config
+.claude/
