@@ -249,6 +249,11 @@ struct GridMap {
 
 struct Drive {
     Client *client;
+    // Render mode: RENDER_WINDOW (0) for interactive viewer, RENDER_HEADLESS (1)
+    // for the EGL/PBO/ffmpeg batch pipeline. Set via the render_mode kwarg in
+    // drive.py → binding.c. Default 0 (live viewer) so normal training is
+    // unaffected; only eval-video code paths need to set this.
+    int render_mode;
     float *observations;
     float *actions;
     float *rewards;

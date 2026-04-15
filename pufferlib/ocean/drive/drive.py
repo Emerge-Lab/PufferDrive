@@ -333,7 +333,16 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_reset(self.c_envs, self.random_seed)
 
     def _env_init_kwargs(self, map_file, max_agents):
+        # render_mode_flag: 0 = live viewer (RENDER_WINDOW), 1 = headless batch
+        # recorder (RENDER_HEADLESS). The C side only distinguishes these two;
+        # Python's render_mode = "rgb_array" / "human" / None map to the viewer
+        # path, and only "headless" / "record" flip to RENDER_HEADLESS.
+        if self.render_mode in ("headless", "record", "rgb_array_headless"):
+            render_mode_flag = 1
+        else:
+            render_mode_flag = 0
         return {
+            "render_mode": render_mode_flag,
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
             "human_agent_idx": self.human_agent_idx,

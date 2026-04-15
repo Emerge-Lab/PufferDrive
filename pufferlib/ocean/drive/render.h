@@ -34,9 +34,48 @@ Client *make_client(Drive *env) {
     Client *client = (Client *)calloc(1, sizeof(Client));
     client->width = 1280;
     client->height = 704;
-    SetConfigFlags(FLAG_MSAA_4X_HINT);
+    if (env->render_mode == RENDER_HEADLESS) {
+        // Headless: hide the GLFW window so raylib doesn't try to pop an
+        // on-screen surface (crashes on nodes without a display) and let
+        // Xvfb/Mesa load glad. We'll switch the active GL context to EGL/GPU
+        // below.
+        SetConfigFlags(FLAG_WINDOW_HIDDEN);
+        SetTargetFPS(6000);
+        SetTraceLogLevel(LOG_WARNING);
+    } else {
+        SetConfigFlags(FLAG_MSAA_4X_HINT);
+        SetTargetFPS(30);
+    }
     InitWindow(client->width, client->height, "PufferLib Ray GPU Drive");
-    SetTargetFPS(30);
+#ifdef DRIVE_HAS_EGL
+    // EGL GPU context switch: after InitWindow loads glad/rlgl on the
+    // Xvfb/Mesa context, create an NVIDIA GPU context via EGL and switch
+    // the thread's active GL context to it. rlgl state (render batches,
+    // default textures) has to be re-created on the new context via
+    // rlglClose + rlglInit, otherwise subsequent draw calls crash.
+    static int egl_ready = 0;
+    if (env->render_mode == RENDER_HEADLESS && !egl_ready) {
+        if (egl_headless_init((int)client->width, (int)client->height)) {
+            if (egl_switch_to_gpu()) {
+                rlglClose();
+                rlglInit((int)client->width, (int)client->height);
+                rlViewport(0, 0, (int)client->width, (int)client->height);
+                rlEnableDepthTest();
+                egl_ready = 1;
+            }
+        }
+        if (!egl_ready) {
+            fprintf(stderr,
+                    "[drive] EGL GPU unavailable, falling back to Xvfb/Mesa software rendering\n");
+        }
+    } else if (env->render_mode == RENDER_HEADLESS && egl_ready) {
+        // Subsequent headless clients reuse the persistent EGL context. The
+        // pbuffer may need to grow if this env's map is larger than the one
+        // the first client sized for.
+        egl_headless_resize((int)client->width, (int)client->height);
+        rlViewport(0, 0, (int)client->width, (int)client->height);
+    }
+#endif
     client->puffers = LoadTexture("resources/puffers_128.png");
     client->cars[0] = LoadModel("resources/drive/RedCar.glb");
     client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
@@ -806,6 +845,11 @@ void close_client(Client *client) {
     }
     UnloadTexture(client->puffers);
     CloseWindow();
+#ifdef DRIVE_HAS_EGL
+    // Release the EGL GPU context but do NOT eglTerminate (that corrupts
+    // CUDA on NVIDIA drivers — see egl_headless.h comment).
+    egl_headless_cleanup();
+#endif
     free(client);
 }
 

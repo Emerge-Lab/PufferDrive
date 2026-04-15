@@ -1737,6 +1737,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 }
 
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
+    env->render_mode = (int)unpack(kwargs, "render_mode");
     env->action_type = (int)unpack(kwargs, "action_type");
     env->dynamics_model = (int)unpack(kwargs, "dynamics_model");
     env->reward_goal = (float)unpack(kwargs, "reward_goal");
