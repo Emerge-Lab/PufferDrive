@@ -611,6 +611,7 @@ class PuffeRL:
                         view_mode=_vmode,
                         video_suffix=_vsuffix,
                         log_view_label=_vlabel,
+                        render_max_steps=50,  # cap rollout to dodge the ~500-c_render-call abort
                     )
                 except Exception as e:
                     import traceback
@@ -2157,6 +2158,7 @@ def eval_multi_scenarios_render(
     view_mode=0,
     video_suffix="",
     log_view_label="render",
+    render_max_steps=None,
 ):
     # Set fixed seed for reproducible evaluation
     np.random.seed(42)
@@ -2299,7 +2301,10 @@ def eval_multi_scenarios_render(
                 trajectory_histories = [[] for _ in range(num_envs_in_batch)]
                 all_agents_obs_histories = [[] for _ in range(num_envs_in_batch)]
 
-            for t in range(args["env"]["scenario_length"]):
+            _render_steps = args["env"]["scenario_length"]
+            if render_max_steps is not None:
+                _render_steps = min(_render_steps, render_max_steps)
+            for t in range(_render_steps):
                 if html_mode:
                     current_scenarios = vecenv.get_state()
                     start_obs_index = 0
