@@ -531,6 +531,65 @@ class PuffeRL:
                 quiet=True,  # Suppress verbose output during inline eval
             )
 
+        # Multi-scenario render — independent interval so the heavier render
+        # path doesn't have to fire every eval_interval. Mirrors the block
+        # above but calls eval_multi_scenarios_render with render=True and
+        # the configured backend ("egl" by default on this branch, writes
+        # one mp4 per scenario via the C render.h pipeline).
+        if self.config["eval"]["multi_scenario_render"] and (
+            self.epoch % self.config["eval"]["multi_scenario_render_interval"] == 0 or done_training
+        ):
+            render_simulation_mode = self.config["eval"]["multi_scenario_simulation_mode"]
+            num_agents_render = self.config["eval"]["num_agents"]
+            render_map_dir = self.config["eval"]["map_dir"]
+
+            render_overrides = build_eval_overrides(
+                simulation_mode=render_simulation_mode,
+                num_agents=num_agents_render,
+                num_scenarios=self.config["eval"]["multi_scenario_num_scenarios"],
+                map_dir=render_map_dir,
+                num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
+            )
+
+            render_args = load_eval_multi_scenarios_config(
+                env_name=self.config["env"],
+                model_path=None,
+                eval_overrides=render_overrides,
+            )
+            render_args["global_step"] = self.global_step
+            render_args["num_scenarios"] = self.config["eval"]["multi_scenario_num_scenarios"]
+            render_args["eval_simulation"] = render_simulation_mode
+            render_args["render"] = True  # master on/off for the render branch
+            render_args["render_obs"] = False  # HTML-only; EGL path ignores
+
+            render_args["inline_eval"] = True
+            experiment_name = f"{self.config['env']}_{self.logger.run_id}"
+            render_args["load_model_path"] = os.path.join(
+                self.config["data_dir"], experiment_name, "models", f"inline_epoch_{self.epoch}.pt"
+            )
+            render_args["eval_results_dir"] = os.path.join(
+                self.config["data_dir"],
+                experiment_name,
+                "renders",
+                f"epoch_{self.epoch:08d}",
+                self.config["eval"]["multi_scenario_simulation_mode"],
+            )
+
+            backend_name = self.config["eval"]["multi_scenario_render_backend"]
+            print(
+                f"\n🎬 Running multi-scenario {backend_name} render at step {self.global_step}..."
+            )
+            eval_multi_scenarios_render(
+                env_name=self.config["env"],
+                args=render_args,
+                vecenv=None,
+                policy=self.uncompiled_policy,
+                logger=self.logger,
+                metric_prefix="render",
+                quiet=True,
+                render_backend=backend_name,
+            )
+
         return logs
 
     def _ppo_loss(
@@ -2289,6 +2348,31 @@ def eval_multi_scenarios_render(
 
     avg_infos = _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
+
+    # Upload each produced mp4 to wandb as a Video log. We only do this when
+    # the EGL backend was used (so mp4_folder is populated) and a logger is
+    # available. Each video is logged under render/<scenario_stem> keyed by
+    # the current global_step, which wandb then displays as a media grid.
+    if egl_mode and mp4_folder and logger is not None:
+        try:
+            import wandb
+
+            mp4_paths = sorted(
+                os.path.join(mp4_folder, f) for f in os.listdir(mp4_folder) if f.endswith(".mp4")
+            )
+            if mp4_paths:
+                video_log = {
+                    f"render/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, fps=30, format="mp4")
+                    for p in mp4_paths
+                }
+                step = args.get("global_step")
+                if hasattr(logger, "log"):
+                    logger.log(video_log, step) if step is not None else logger.log(video_log)
+                if not quiet:
+                    print(f"✅ Uploaded {len(mp4_paths)} render mp4(s) to wandb")
+        except Exception as e:
+            if not quiet:
+                print(f"⚠️ Failed to upload render mp4s to wandb: {e}")
 
     # Close vectorized environment to avoid file descriptor leaks
     vecenv.close()
