@@ -575,8 +575,13 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self):
-        binding.vec_render(self.c_envs, 0)
+    def render(self, env_idx=0):
+        binding.vec_render(self.c_envs, env_idx)
+
+    def close_client(self, env_idx=0):
+        # Tear down the render Client for one env without destroying the env.
+        # Flushes ffmpeg + PBOs on the headless path so the mp4 is fully written.
+        binding.vec_close_client(self.c_envs, env_idx)
 
     def close(self):
         binding.vec_close(self.c_envs)

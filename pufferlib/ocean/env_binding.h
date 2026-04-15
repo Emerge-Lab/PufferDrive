@@ -552,6 +552,38 @@ static PyObject *vec_render(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+// Explicit per-env client teardown. Distinct from c_close (which tears the
+// whole Env down) — this just releases the render Client so ffmpeg/ PBOs
+// are flushed without destroying the env. Used by eval renderers that want
+// to close out one scenario's mp4 and then reset the env for the next one.
+static PyObject *vec_close_client(PyObject *self, PyObject *args) {
+    int num_args = PyTuple_Size(args);
+    if (num_args != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_close_client requires 2 arguments");
+        return NULL;
+    }
+
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+
+    PyObject *env_id_arg = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "env_id must be an integer");
+        return NULL;
+    }
+    int env_id = PyLong_AsLong(env_id_arg);
+
+    Env *env = vec->envs[env_id];
+    if (env && env->client) {
+        close_client(env->client);
+        env->client = NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static int assign_to_dict(PyObject *dict, char *key, float value) {
     PyObject *v = PyFloat_FromDouble(value);
     if (v == NULL) {
@@ -1049,6 +1081,8 @@ static PyMethodDef methods[] = {
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
+    {"vec_close_client", vec_close_client, METH_VARARGS,
+     "Release a single env's render client without destroying the env"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"vec_get", vec_get, METH_VARARGS, "Get attributes from each env in a VecEnv"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
