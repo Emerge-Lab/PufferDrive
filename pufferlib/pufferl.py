@@ -2256,7 +2256,12 @@ def eval_multi_scenarios_render(
     # so set on a generous prefix and let extras be no-ops.
     if egl_mode and video_suffix:
         _target_env_pre = vecenv if not hasattr(vecenv, "envs") else vecenv.envs[0]
-        for _e in range(256):
+        # Drive exposes its internal C-level vec env count via num_envs.
+        # Use it as the loop bound so we never call set_video_suffix on an
+        # out-of-range env_id (which would corrupt memory before the C
+        # bounds check landed).
+        _internal_num_envs = getattr(_target_env_pre, "num_envs", 1)
+        for _e in range(_internal_num_envs):
             try:
                 _target_env_pre.set_video_suffix(video_suffix, env_idx=_e)
             except Exception:

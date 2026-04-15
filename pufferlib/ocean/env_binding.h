@@ -587,6 +587,10 @@ static PyObject *vec_set_video_suffix(PyObject *self, PyObject *args) {
         return NULL;
     }
     int env_id = PyLong_AsLong(env_id_arg);
+    if (env_id < 0 || env_id >= vec->num_envs) {
+        PyErr_SetString(PyExc_IndexError, "vec_set_video_suffix env_id out of range");
+        return NULL;
+    }
     Drive *drive = (Drive *)vec->envs[env_id];
     strncpy(drive->video_suffix, suffix, sizeof(drive->video_suffix) - 1);
     drive->video_suffix[sizeof(drive->video_suffix) - 1] = '\0';
