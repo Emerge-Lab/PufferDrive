@@ -1034,19 +1034,20 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
             DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, WHITE);
             {
-                float cos_heading = cosf(heading);
-                float sin_heading = sinf(heading);
+                // Corners in LOCAL space: the enclosing rlPushMatrix +
+                // rlTranslatef(position) + rlRotatef(heading) block already
+                // rotates and translates everything drawn after it, so we
+                // must NOT pre-rotate the corners here. The previous code
+                // applied cos_heading/sin_heading to the corners AND let the
+                // matrix rotate them again -- double rotation, boxes appeared
+                // visibly offset from the car models. Matches 3.0 drive.h.
                 float half_len = agent->sim_length * 0.5f;
                 float half_width = agent->sim_width * 0.5f;
                 Vector3 corners[4] = {
-                    (Vector3){0 + (half_len * cos_heading - half_width * sin_heading),
-                              0 + (half_len * sin_heading + half_width * cos_heading), 0},
-                    (Vector3){0 + (half_len * cos_heading + half_width * sin_heading),
-                              0 + (half_len * sin_heading - half_width * cos_heading), 0},
-                    (Vector3){0 + (-half_len * cos_heading + half_width * sin_heading),
-                              0 + (-half_len * sin_heading - half_width * cos_heading), 0},
-                    (Vector3){0 + (-half_len * cos_heading - half_width * sin_heading),
-                              0 + (-half_len * sin_heading + half_width * cos_heading), 0},
+                    (Vector3){half_len, -half_width, 0},  // front-left
+                    (Vector3){half_len, half_width, 0},   // front-right
+                    (Vector3){-half_len, half_width, 0},  // rear-right
+                    (Vector3){-half_len, -half_width, 0}, // rear-left
                 };
                 Color wire_color = GRAY; // static
                 if (!is_active_agent && agent->mark_as_expert == 1)
