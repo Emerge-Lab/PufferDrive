@@ -2048,7 +2048,14 @@ def eval_multi_scenarios(
 
 
 def eval_multi_scenarios_render(
-    env_name, args=None, vecenv=None, policy=None, logger=None, metric_prefix="validation", quiet=False
+    env_name,
+    args=None,
+    vecenv=None,
+    policy=None,
+    logger=None,
+    metric_prefix="validation",
+    quiet=False,
+    render_backend="html",
 ):
     # Set fixed seed for reproducible evaluation
     np.random.seed(42)
@@ -2074,6 +2081,19 @@ def eval_multi_scenarios_render(
 
     args["vec"] = dict(backend=backend, num_envs=1)
     args["env"]["num_eval_scenarios"] = args["num_scenarios"]  # first batch: fill as many scenarios as fit
+
+    # Backend selection.
+    #   "html" — the existing viz.generate_interactive_replay path (CPU-only,
+    #            self-contained HTML per scenario).
+    #   "egl"  — the C-side render.h → make_client → client_record_frame
+    #            pipeline (EGL GPU context, PBO double-buffer readback,
+    #            writev → ffmpeg libx264, one mp4 per scenario).
+    egl_mode = bool(args.get("render")) and render_backend == "egl"
+    html_mode = bool(args.get("render")) and not egl_mode
+    if egl_mode:
+        # Force the C env to RENDER_HEADLESS so make_client spawns ffmpeg and
+        # (under DRIVE_HAS_EGL) switches the active GL context to the GPU.
+        args["env"]["render_mode"] = "headless"
 
     vecenv = vecenv or load_env(env_name, args)
 
@@ -2108,9 +2128,20 @@ def eval_multi_scenarios_render(
             eval_folder = os.path.join("benchmark", experiment_name, model_name, args["eval_simulation"])
     os.makedirs(eval_folder, exist_ok=True)
 
-    if args["render"]:
+    saved_cwd = None
+    mp4_folder = None
+    gif_folder = None
+    if html_mode:
         gif_folder = eval_folder + "/gif"
         os.makedirs(gif_folder, exist_ok=True)
+    if egl_mode:
+        mp4_folder = os.path.join(eval_folder, "mp4")
+        os.makedirs(mp4_folder, exist_ok=True)
+        # C-side make_client writes <scenario_id>.mp4 into the process cwd. We
+        # chdir into mp4_folder so every scenario's file lands in the right
+        # place, then restore cwd after the rollout loop.
+        saved_cwd = os.getcwd()
+        os.chdir(mp4_folder)
 
     global_infos = {}
     num_scenarios = args["num_scenarios"]
@@ -2141,15 +2172,17 @@ def eval_multi_scenarios_render(
                     lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
                 )
 
-            # Initialize histories as lists of lists (one list per environment)
-            if args["render"]:
+            # Initialize histories as lists of lists (one list per environment).
+            # Only needed for the HTML replay path — EGL writes mp4 frames
+            # directly to ffmpeg via c_render each step.
+            if html_mode:
                 agent_histories = [[] for _ in range(num_envs_in_batch)]
                 traffic_histories = [[] for _ in range(num_envs_in_batch)]
                 trajectory_histories = [[] for _ in range(num_envs_in_batch)]
                 all_agents_obs_histories = [[] for _ in range(num_envs_in_batch)]
 
             for t in range(args["env"]["scenario_length"]):
-                if args["render"]:
+                if html_mode:
                     current_scenarios = vecenv.get_state()
                     start_obs_index = 0
 
@@ -2196,6 +2229,15 @@ def eval_multi_scenarios_render(
 
                 ob, _, _, _, infos = vecenv.step(action)
 
+                if egl_mode:
+                    # Flush one frame per env through c_render → client_record_frame
+                    # → PBO async readback → writev → ffmpeg pipe. make_client is
+                    # called lazily on the first render per env (sets up ffmpeg +
+                    # GPU context) and close_client at scenario end flushes the
+                    # trailing PBO frame.
+                    for e in range(num_envs_in_batch):
+                        vecenv.envs[0].render(env_idx=e)
+
                 # Serial backend returns infos as single list (infos[0] is the env's info list)
                 if infos and infos[0]:
                     for env_idx, summary in enumerate(infos[0]):
@@ -2209,7 +2251,7 @@ def eval_multi_scenarios_render(
                                 global_infos[k] = []
                             global_infos[k].append(v)
 
-            if args["render"]:
+            if html_mode:
                 # Loop through every environment to generate its specific HTML replay
                 for env_idx in range(num_envs_in_batch):
                     global_episode_id = batch_start + env_idx
@@ -2228,11 +2270,22 @@ def eval_multi_scenarios_render(
                         head_north=True,
                     )
 
+            if egl_mode:
+                # Close every env's Client so ffmpeg gets EOF on its input pipe,
+                # the trailing PBO frame is flushed, and libx264 writes the mp4
+                # trailer. Without this, the mp4 files are either empty or one
+                # frame short.
+                for e in range(num_envs_in_batch):
+                    vecenv.envs[0].close_client(env_idx=e)
+
             scenarios_processed += num_envs_in_batch
             pbar.update(num_envs_in_batch)
 
-    if args["render"]:
+    if html_mode:
         pufferlib.viz.build_gallery_index(gif_folder)
+
+    if saved_cwd is not None:
+        os.chdir(saved_cwd)
 
     avg_infos = _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
