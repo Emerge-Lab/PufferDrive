@@ -1269,7 +1269,15 @@ void c_render(Drive *env, int view_mode) {
     if (client->road_cache_valid) {
         draw_road_cached(client);
     }
-    draw_scene(env, client, 0, 0, 0, 0);
+    // Per 3.0's c_render: BEV uses draw_scene(mode=1, obs_only=1) — the
+    // flat wireframe-box agent path that fits the ortho top-down camera.
+    // Default view keeps mode=0 (3D car model path) since that matches
+    // the legacy fixed perspective camera.
+    if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
+        draw_scene(env, client, 1, 1, 0, 0);
+    } else {
+        draw_scene(env, client, 0, 0, 0, 0);
+    }
     if (env->render_mode != RENDER_HEADLESS) {
         // Debug overlay — only meaningful in the interactive viewer.
         DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x,
