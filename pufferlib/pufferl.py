@@ -2225,6 +2225,10 @@ def eval_multi_scenarios_render(
     num_scenarios = args["num_scenarios"]
 
     scenarios_processed = 0
+    # PufferEnv native backend: vecenv IS the Drive env (no .envs list).
+    # Serial/Multiprocessing: need vecenv.envs[0] to reach the underlying env.
+    target_env = vecenv if not hasattr(vecenv, "envs") else vecenv.envs[0]
+
     with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
         while scenarios_processed < num_scenarios:
             ob, _ = vecenv.reset()
@@ -2237,7 +2241,7 @@ def eval_multi_scenarios_render(
             # Prepare batch_size_eval for the resample that fires at end of the step loop.
             # That resample will load the NEXT batch, so cap it at remaining_after_this.
             remaining_after_this = num_scenarios - scenarios_processed - num_envs_in_batch
-            vecenv.envs[0].batch_size_eval = max(1, remaining_after_this)
+            target_env.batch_size_eval = max(1, remaining_after_this)
 
             map_names = []
             for env_idx in range(num_envs_in_batch):
@@ -2314,7 +2318,7 @@ def eval_multi_scenarios_render(
                     # GPU context) and close_client at scenario end flushes the
                     # trailing PBO frame.
                     for e in range(num_envs_in_batch):
-                        vecenv.envs[0].render(env_idx=e)
+                        target_env.render(env_idx=e)
 
                 # Serial backend returns infos as single list (infos[0] is the env's info list)
                 if infos and infos[0]:
@@ -2354,7 +2358,7 @@ def eval_multi_scenarios_render(
                 # trailer. Without this, the mp4 files are either empty or one
                 # frame short.
                 for e in range(num_envs_in_batch):
-                    vecenv.envs[0].close_client(env_idx=e)
+                    target_env.close_client(env_idx=e)
 
             scenarios_processed += num_envs_in_batch
             pbar.update(num_envs_in_batch)
