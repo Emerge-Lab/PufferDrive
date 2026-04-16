@@ -1654,10 +1654,11 @@ def eval(env_name, args=None, vecenv=None, policy=None):
         backend = args["eval"].get("backend", "PufferEnv")
         args["env"]["map_dir"] = args["eval"]["map_dir"]
         args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
+        args["env"]["num_maps"] = len([f for f in os.listdir(args["env"]["map_dir"]) if f.endswith(".bin")])
 
         args["vec"] = dict(backend=backend, num_envs=1)
         args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
-        args["env"]["episode_length"] = 91  # WOMD scenario length
+        args["env"]["scenario_length"] = 91  # WOMD scenario length
 
         vecenv = vecenv or load_env(env_name, args)
         policy = policy or load_policy(args, vecenv, env_name)
@@ -2731,11 +2732,11 @@ def load_config(env_name, config_dir=None):
     puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
     puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
     if env_name == "default":
-        p = configparser.ConfigParser()
+        p = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
         p.read(puffer_default_config)
     else:
         for path in glob.glob(puffer_config_dir, recursive=True):
-            p = configparser.ConfigParser()
+            p = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
             p.read([puffer_default_config, path])
             if env_name in p["base"]["env_name"].split():
                 break
