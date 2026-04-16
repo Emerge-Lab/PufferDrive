@@ -576,9 +576,7 @@ class PuffeRL:
             )
 
             backend_name = self.config["eval"]["multi_scenario_render_backend"]
-            print(
-                f"\n🎬 Running multi-scenario {backend_name} render at step {self.global_step}..."
-            )
+            print(f"\n🎬 Running multi-scenario {backend_name} render at step {self.global_step}...")
             # Render failures (missing map dir, corrupted .bin files, ffmpeg
             # absent, EGL unavailable, etc.) should NEVER crash training — the
             # render is a logging side-channel. Catch any exception here, log
@@ -592,11 +590,7 @@ class PuffeRL:
             # because Drive.step's resample fires at the last step and
             # advances starting_map_counter — a re-reset would replay the
             # NEXT batch instead of the original one.
-            _bev_views = (
-                [(0, "", "sim_state"), (1, "_bev", "bev")]
-                if backend_name == "egl"
-                else [(0, "", "sim_state")]
-            )
+            _bev_views = [(0, "", "sim_state"), (1, "_bev", "bev")] if backend_name == "egl" else [(0, "", "sim_state")]
             for _vmode, _vsuffix, _vlabel in _bev_views:
                 try:
                     eval_multi_scenarios_render(
@@ -618,6 +612,7 @@ class PuffeRL:
                     )
                 except Exception as e:
                     import traceback
+
                     print(
                         f"\n⚠️  multi_scenario_render failed (view={_vlabel}) at step {self.global_step}: "
                         f"{type(e).__name__}: {e}"
@@ -2143,10 +2138,12 @@ def eval_multi_scenarios(
     print(f"\nTotal evaluation time: {time.time() - t0:.2f} seconds for {num_scenarios} scenarios.")
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
 
-    _sys_instr.stderr.write("[render-instr] about to call vecenv.close()\n"); _sys_instr.stderr.flush()
+    _sys_instr.stderr.write("[render-instr] about to call vecenv.close()\n")
+    _sys_instr.stderr.flush()
     # Close vectorized environment to avoid file descriptor leaks
     vecenv.close()
-    _sys_instr.stderr.write("[render-instr] vecenv.close() returned\n"); _sys_instr.stderr.flush()
+    _sys_instr.stderr.write("[render-instr] vecenv.close() returned\n")
+    _sys_instr.stderr.flush()
 
 
 def eval_multi_scenarios_render(
@@ -2407,29 +2404,40 @@ def eval_multi_scenarios_render(
                 # trailer. Without this, the mp4 files are either empty or one
                 # frame short.
                 import sys as _sys_cc
-                _sys_cc.stderr.write(f"[render-instr] starting close_client loop num_envs_in_batch={num_envs_in_batch}\n"); _sys_cc.stderr.flush()
+
+                _sys_cc.stderr.write(
+                    f"[render-instr] starting close_client loop num_envs_in_batch={num_envs_in_batch}\n"
+                )
+                _sys_cc.stderr.flush()
                 for e in range(num_envs_in_batch):
-                    _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) calling\n"); _sys_cc.stderr.flush()
+                    _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) calling\n")
+                    _sys_cc.stderr.flush()
                     target_env.close_client(env_idx=e)
-                    _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) returned\n"); _sys_cc.stderr.flush()
+                    _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) returned\n")
+                    _sys_cc.stderr.flush()
 
             scenarios_processed += num_envs_in_batch
             pbar.update(num_envs_in_batch)
 
     import sys as _sys_instr
-    _sys_instr.stderr.write("[render-instr] rollout loop done\n"); _sys_instr.stderr.flush()
+
+    _sys_instr.stderr.write("[render-instr] rollout loop done\n")
+    _sys_instr.stderr.flush()
 
     if html_mode:
         pufferlib.viz.build_gallery_index(gif_folder)
 
     if saved_cwd is not None:
         os.chdir(saved_cwd)
-    _sys_instr.stderr.write("[render-instr] chdir restored\n"); _sys_instr.stderr.flush()
+    _sys_instr.stderr.write("[render-instr] chdir restored\n")
+    _sys_instr.stderr.flush()
 
     avg_infos = _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
-    _sys_instr.stderr.write("[render-instr] _export_metrics done\n"); _sys_instr.stderr.flush()
+    _sys_instr.stderr.write("[render-instr] _export_metrics done\n")
+    _sys_instr.stderr.flush()
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
-    _sys_instr.stderr.write("[render-instr] _log_eval_metrics done\n"); _sys_instr.stderr.flush()
+    _sys_instr.stderr.write("[render-instr] _log_eval_metrics done\n")
+    _sys_instr.stderr.flush()
 
     # Upload each produced mp4 to wandb as a Video log. We only do this when
     # the EGL backend was used (so mp4_folder is populated) and a logger is
@@ -2439,12 +2447,12 @@ def eval_multi_scenarios_render(
         try:
             import wandb
 
-            mp4_paths = sorted(
-                os.path.join(mp4_folder, f) for f in os.listdir(mp4_folder) if f.endswith(".mp4")
-            )
+            mp4_paths = sorted(os.path.join(mp4_folder, f) for f in os.listdir(mp4_folder) if f.endswith(".mp4"))
             if mp4_paths:
                 video_log = {
-                    f"render_{log_view_label}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, fps=30, format="mp4")
+                    f"render_{log_view_label}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(
+                        p, fps=30, format="mp4"
+                    )
                     for p in mp4_paths
                 }
                 step = args.get("global_step")

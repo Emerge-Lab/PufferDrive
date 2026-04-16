@@ -215,7 +215,7 @@ static PyObject *env_render(PyObject *self, PyObject *args) {
     if (!env) {
         return NULL;
     }
-    c_render((Drive *)env, 0);  // single-env binding: VIEW_MODE_DEFAULT
+    c_render((Drive *)env, 0); // single-env binding: VIEW_MODE_DEFAULT
     Py_RETURN_NONE;
 }
 
@@ -580,7 +580,8 @@ static PyObject *vec_set_video_suffix(PyObject *self, PyObject *args) {
         return NULL;
     }
     const char *suffix = PyUnicode_AsUTF8(suffix_arg);
-    if (!suffix) return NULL;
+    if (!suffix)
+        return NULL;
     PyObject *env_id_arg = PyTuple_GetItem(args, 2);
     if (!PyObject_TypeCheck(env_id_arg, &PyLong_Type)) {
         PyErr_SetString(PyExc_TypeError, "env_id must be an integer");

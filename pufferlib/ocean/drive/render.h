@@ -12,7 +12,6 @@
 #define VIEW_MODE_DEFAULT 0
 #define VIEW_MODE_BEV_AGENT_OBS 1
 
-
 #include <raylib.h>
 #include "rlgl.h"
 
@@ -94,44 +93,44 @@ void build_road_cache(Drive *env, Client *client) {
     client->road_line_count = 0;
 
 #define PUSH_TRI(vx1, vy1, vz1, vx2, vy2, vz2, vx3, vy3, vz3, cr, cg, cb, ca)                                          \
-    do {                                                                                                              \
-        int _ti = actual_tri_count * 9;                                                                               \
-        int _ci = actual_tri_count * 12;                                                                              \
-        tri_verts[_ti + 0] = vx1;                                                                                     \
-        tri_verts[_ti + 1] = vy1;                                                                                     \
-        tri_verts[_ti + 2] = vz1;                                                                                     \
-        tri_verts[_ti + 3] = vx2;                                                                                     \
-        tri_verts[_ti + 4] = vy2;                                                                                     \
-        tri_verts[_ti + 5] = vz2;                                                                                     \
-        tri_verts[_ti + 6] = vx3;                                                                                     \
-        tri_verts[_ti + 7] = vy3;                                                                                     \
-        tri_verts[_ti + 8] = vz3;                                                                                     \
-        for (int _v = 0; _v < 3; _v++) {                                                                              \
-            tri_colors[_ci + _v * 4 + 0] = cr;                                                                        \
-            tri_colors[_ci + _v * 4 + 1] = cg;                                                                        \
-            tri_colors[_ci + _v * 4 + 2] = cb;                                                                        \
-            tri_colors[_ci + _v * 4 + 3] = ca;                                                                        \
-        }                                                                                                             \
-        actual_tri_count++;                                                                                           \
+    do {                                                                                                               \
+        int _ti = actual_tri_count * 9;                                                                                \
+        int _ci = actual_tri_count * 12;                                                                               \
+        tri_verts[_ti + 0] = vx1;                                                                                      \
+        tri_verts[_ti + 1] = vy1;                                                                                      \
+        tri_verts[_ti + 2] = vz1;                                                                                      \
+        tri_verts[_ti + 3] = vx2;                                                                                      \
+        tri_verts[_ti + 4] = vy2;                                                                                      \
+        tri_verts[_ti + 5] = vz2;                                                                                      \
+        tri_verts[_ti + 6] = vx3;                                                                                      \
+        tri_verts[_ti + 7] = vy3;                                                                                      \
+        tri_verts[_ti + 8] = vz3;                                                                                      \
+        for (int _v = 0; _v < 3; _v++) {                                                                               \
+            tri_colors[_ci + _v * 4 + 0] = cr;                                                                         \
+            tri_colors[_ci + _v * 4 + 1] = cg;                                                                         \
+            tri_colors[_ci + _v * 4 + 2] = cb;                                                                         \
+            tri_colors[_ci + _v * 4 + 3] = ca;                                                                         \
+        }                                                                                                              \
+        actual_tri_count++;                                                                                            \
     } while (0)
 
-#define PUSH_LINE(vx1, vy1, vz1, vx2, vy2, vz2, cr, cg, cb, ca)                                                       \
-    do {                                                                                                              \
-        int _li = client->road_line_count * 6;                                                                        \
-        int _ci = client->road_line_count * 8;                                                                        \
-        client->road_line_verts[_li + 0] = vx1;                                                                       \
-        client->road_line_verts[_li + 1] = vy1;                                                                       \
-        client->road_line_verts[_li + 2] = vz1;                                                                       \
-        client->road_line_verts[_li + 3] = vx2;                                                                       \
-        client->road_line_verts[_li + 4] = vy2;                                                                       \
-        client->road_line_verts[_li + 5] = vz2;                                                                       \
-        for (int _v = 0; _v < 2; _v++) {                                                                              \
-            client->road_line_colors[_ci + _v * 4 + 0] = cr;                                                          \
-            client->road_line_colors[_ci + _v * 4 + 1] = cg;                                                          \
-            client->road_line_colors[_ci + _v * 4 + 2] = cb;                                                          \
-            client->road_line_colors[_ci + _v * 4 + 3] = ca;                                                          \
-        }                                                                                                             \
-        client->road_line_count++;                                                                                    \
+#define PUSH_LINE(vx1, vy1, vz1, vx2, vy2, vz2, cr, cg, cb, ca)                                                        \
+    do {                                                                                                               \
+        int _li = client->road_line_count * 6;                                                                         \
+        int _ci = client->road_line_count * 8;                                                                         \
+        client->road_line_verts[_li + 0] = vx1;                                                                        \
+        client->road_line_verts[_li + 1] = vy1;                                                                        \
+        client->road_line_verts[_li + 2] = vz1;                                                                        \
+        client->road_line_verts[_li + 3] = vx2;                                                                        \
+        client->road_line_verts[_li + 4] = vy2;                                                                        \
+        client->road_line_verts[_li + 5] = vz2;                                                                        \
+        for (int _v = 0; _v < 2; _v++) {                                                                               \
+            client->road_line_colors[_ci + _v * 4 + 0] = cr;                                                           \
+            client->road_line_colors[_ci + _v * 4 + 1] = cg;                                                           \
+            client->road_line_colors[_ci + _v * 4 + 2] = cb;                                                           \
+            client->road_line_colors[_ci + _v * 4 + 3] = ca;                                                           \
+        }                                                                                                              \
+        client->road_line_count++;                                                                                     \
     } while (0)
 
     for (int i = 0; i < env->num_road_elements; i++) {
@@ -313,8 +312,7 @@ Client *make_client(Drive *env) {
             }
         }
         if (!egl_ready) {
-            fprintf(stderr,
-                    "[drive] EGL GPU unavailable, falling back to Xvfb/Mesa software rendering\n");
+            fprintf(stderr, "[drive] EGL GPU unavailable, falling back to Xvfb/Mesa software rendering\n");
         }
     } else if (env->render_mode == RENDER_HEADLESS && egl_ready) {
         // Subsequent headless clients reuse the persistent EGL context. The
@@ -411,8 +409,8 @@ Client *make_client(Drive *env) {
             _exit(1);
         }
         close(client->recorder_pipefd[0]);
-        fprintf(stderr, "[drive] ffmpeg forked: pid=%d pipe_write_fd=%d size=%s file=%s egl=%d\n",
-                client->recorder_pid, client->recorder_pipefd[1], size_str, filename, client->egl_mode);
+        fprintf(stderr, "[drive] ffmpeg forked: pid=%d pipe_write_fd=%d size=%s file=%s egl=%d\n", client->recorder_pid,
+                client->recorder_pipefd[1], size_str, filename, client->egl_mode);
 
         // Grow the pipe buffer so one frame fits without blocking the writer.
 #ifdef F_SETPIPE_SZ
@@ -540,8 +538,8 @@ static inline void client_record_frame(Client *client) {
             }
             glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
         } else {
-            fprintf(stderr, "[drive-pbo] frame=%d glMapBuffer returned NULL! GL error=0x%x\n",
-                    client->pbo_frame_count, glGetError());
+            fprintf(stderr, "[drive-pbo] frame=%d glMapBuffer returned NULL! GL error=0x%x\n", client->pbo_frame_count,
+                    glGetError());
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
@@ -929,25 +927,33 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             continue;
 
         int state_idx = env->timestep;
-        if (state_idx < 0) state_idx = 0;
-        if (state_idx >= traffic->state_length) state_idx = traffic->state_length - 1;
+        if (state_idx < 0)
+            state_idx = 0;
+        if (state_idx >= traffic->state_length)
+            state_idx = traffic->state_length - 1;
         int tl_state = traffic->states[state_idx];
 
         Color tl_color;
         switch (tl_state) {
-            case TRAFFIC_CONTROL_STATE_RED:    tl_color = RED;    break;
-            case TRAFFIC_CONTROL_STATE_YELLOW: tl_color = YELLOW; break;
-            case TRAFFIC_CONTROL_STATE_GREEN:  tl_color = GREEN;  break;
-            default:                           tl_color = GRAY;   break; // OFF / UNKNOWN
+        case TRAFFIC_CONTROL_STATE_RED:
+            tl_color = RED;
+            break;
+        case TRAFFIC_CONTROL_STATE_YELLOW:
+            tl_color = YELLOW;
+            break;
+        case TRAFFIC_CONTROL_STATE_GREEN:
+            tl_color = GREEN;
+            break;
+        default:
+            tl_color = GRAY;
+            break; // OFF / UNKNOWN
         }
 
         // Lift the stop-line endpoints a little above the road surface so the
         // line and marker render on top of the road tri mesh instead of
         // z-fighting with it.
-        Vector3 sl_p1 = (Vector3){traffic->stop_line[0], traffic->stop_line[1],
-                                  traffic->stop_line[2] + 0.3f};
-        Vector3 sl_p2 = (Vector3){traffic->stop_line[3], traffic->stop_line[4],
-                                  traffic->stop_line[5] + 0.3f};
+        Vector3 sl_p1 = (Vector3){traffic->stop_line[0], traffic->stop_line[1], traffic->stop_line[2] + 0.3f};
+        Vector3 sl_p2 = (Vector3){traffic->stop_line[3], traffic->stop_line[4], traffic->stop_line[5] + 0.3f};
         Vector3 sl_mid = (Vector3){
             (traffic->stop_line[0] + traffic->stop_line[3]) * 0.5f,
             (traffic->stop_line[1] + traffic->stop_line[4]) * 0.5f,
@@ -1312,8 +1318,7 @@ void c_render(Drive *env, int view_mode) {
     // ortho camera every frame so it stays centered on the ego agent as
     // the agent moves through the map. Mirrors 3.0 drive.h's c_render.
     Camera3D render_camera;
-    if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS &&
-        env->active_agent_count > 0) {
+    if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS && env->active_agent_count > 0) {
         int agent_idx = env->active_agent_indices[env->human_agent_idx];
         Agent *agent = &env->agents[agent_idx];
         render_camera = (Camera3D){0};
@@ -1331,8 +1336,8 @@ void c_render(Drive *env, int view_mode) {
         // uses 2*half_range+1 which is ~2x larger, so using env->grid_map->
         // vision_range here would produce a 410m viewport that makes the
         // ego agent look tiny. Compute fovy directly from obs distances.
-        float _bev_obs_window = fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist),
-                                      env->road_obs_side_dist);
+        float _bev_obs_window =
+            fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist), env->road_obs_side_dist);
         int _bev_vrange = (int)ceilf(_bev_obs_window / GRID_CELL_SIZE) + 1;
         render_camera.fovy = (float)_bev_vrange * GRID_CELL_SIZE * 2.0f;
     } else {
@@ -1359,8 +1364,8 @@ void c_render(Drive *env, int view_mode) {
     }
     if (env->render_mode != RENDER_HEADLESS) {
         // Debug overlay — only meaningful in the interactive viewer.
-        DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x,
-                            client->camera.position.y, client->camera.position.z),
+        DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,
+                            client->camera.position.z),
                  10, 10, 20, PUFF_WHITE);
         DrawText(TextFormat("Camera Target: (%.2f, %.2f, %.2f)", client->camera.target.x, client->camera.target.y,
                             client->camera.target.z),
