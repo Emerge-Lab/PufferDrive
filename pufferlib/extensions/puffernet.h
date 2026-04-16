@@ -43,9 +43,8 @@ void _load_weights(const char* filename, float* weights, size_t num_weights) {
         exit(1);
     }
 
-    // Get file size
+    // Seek to end only to verify we can read; rewind before actual read
     fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
     rewind(file);
 
     size_t read_size = fread(weights, sizeof(float), num_weights, file);

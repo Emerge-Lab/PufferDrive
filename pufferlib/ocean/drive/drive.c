@@ -49,28 +49,71 @@ void demo() {
         exit(1);
     }
 
+    // Build map path: <map_dir>/Town01.bin
+    char map_path[512];
+    snprintf(map_path, sizeof(map_path), "%s/Town01.bin", conf.map_dir);
+
     Drive env = {
         .human_agent_idx = 0,
+        .map_name = map_path,
+        .num_controllable_agents = conf.max_agents_per_env,
+        .num_max_agents = conf.max_agents_per_env,
+        .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
         .reward_vehicle_collision = conf.reward_vehicle_collision,
         .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_stop_line = conf.reward_stop_line,
+        .reward_goal = conf.reward_goal,
         .reward_ade = conf.reward_ade,
+        .reward_overspeed = conf.reward_overspeed,
+        .reward_comfort = conf.reward_comfort,
+        .reward_velocity = conf.reward_velocity,
+        .reward_lane_align = conf.reward_lane_align,
+        .reward_vel_align = conf.reward_vel_align,
+        .reward_lane_center = conf.reward_lane_center,
+        .reward_center_bias = conf.reward_center_bias,
+        .reward_reverse = conf.reward_reverse,
+        .reward_timestep = conf.reward_timestep,
         .goal_radius = conf.goal_radius,
+        .collision_behavior = conf.collision_behavior,
+        .offroad_behavior = conf.offroad_behavior,
+        .traffic_light_behavior = conf.traffic_light_behavior,
         .dt = conf.dt,
         .spawn_initial_speed = conf.spawn_initial_speed,
         .goal_speed = conf.goal_speed,
-        .map_name = "resources/drive/binaries/map_000.bin",
+        .target_type = conf.target_type,
+        .scenario_length = conf.scenario_length,
+        .termination_mode = conf.termination_mode,
         .init_steps = conf.init_steps,
-        .collision_behavior = conf.collision_behavior,
-        .offroad_behavior = conf.offroad_behavior,
+        .init_mode = conf.init_mode,
+        .control_mode = conf.control_mode,
+        .simulation_mode = conf.simulation_mode,
+        .min_waypoint_spacing = conf.min_waypoint_spacing,
+        .max_waypoint_spacing = conf.max_waypoint_spacing,
+        .num_target_waypoints = conf.num_target_waypoints,
+        .reward_conditioning = conf.reward_conditioning,
+        .reward_randomization = conf.reward_randomization,
         .compute_eval_metrics = conf.compute_eval_metrics,
+        .max_lane_segment_observations = conf.max_lane_segment_observations,
+        .max_boundary_segment_observations = conf.max_boundary_segment_observations,
+        .max_partner_observations = conf.max_partner_observations,
+        .max_traffic_control_observations = conf.max_traffic_control_observations,
+        .traffic_control_scope = conf.traffic_control_scope,
+        .partner_blindness_prob = conf.partner_blindness_prob,
+        .phantom_braking_prob = conf.phantom_braking_prob,
+        .phantom_braking_trigger_prob = conf.phantom_braking_trigger_prob,
+        .phantom_braking_duration = conf.phantom_braking_duration,
     };
+    env.obs_lane_segment_count =
+        compute_effective_road_obs_count(env.max_lane_segment_observations, conf.lane_segment_dropout);
+    env.obs_boundary_segment_count =
+        compute_effective_road_obs_count(env.max_boundary_segment_observations, conf.boundary_segment_dropout);
+
     allocate(&env);
     c_reset(&env);
-    c_render(&env);
+    c_render(&env, 0);
     Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
-    // Client* client = make_client(&env);
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {
@@ -113,7 +156,7 @@ void demo() {
             }
         }
         c_step(&env);
-        c_render(&env);
+        c_render(&env, 0);
     }
 
     close_client(env.client);
@@ -134,7 +177,7 @@ void performance_test() {
     long test_time = 10;
     Drive env = {
         .human_agent_idx = 0,
-        .map_name = strdup("pufferlib/resources/drive/binaries/carla/map_000.bin"),
+        .map_name = strdup(conf.map_dir),
         .ini_file = strdup(ini_file),
         .num_controllable_agents = conf.max_agents_per_env,
         // From conf
@@ -237,8 +280,8 @@ void performance_test() {
 }
 
 int main() {
-    performance_test();
-    // demo();
+    demo();
+    // performance_test();
     // test_drivenet();
     return 0;
 }
