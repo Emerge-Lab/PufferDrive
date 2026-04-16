@@ -1841,6 +1841,7 @@ def build_eval_overrides(
     num_agents,
     num_scenarios,
     map_dir=None,
+    maps=None,
     num_carla_maps=8,
     agents_per_scene=30,
     scenario_length=None,
@@ -1888,18 +1889,20 @@ def build_eval_overrides(
     }
 
     if simulation_mode == "gigaflow":
-        eval_overrides = {
-            "env": {
-                **common_env,
-                "simulation_mode": "gigaflow",
-                "resample_frequency": scenario_length,
-                "scenario_length": scenario_length,
-                "map_dir": map_dir or "pufferlib/resources/drive/binaries/carla",
-                "num_maps": num_carla_maps,
-                "num_agents": num_agents,
-                "termination_mode": 0.0,
-            }
+        env_overrides = {
+            **common_env,
+            "simulation_mode": "gigaflow",
+            "resample_frequency": scenario_length,
+            "scenario_length": scenario_length,
+            "map_dir": map_dir or "pufferlib/resources/drive/binaries/carla",
+            "num_maps": num_carla_maps,
+            "num_agents": num_agents,
+            "termination_mode": 0.0,
         }
+        if maps is not None:
+            env_overrides["maps"] = maps
+
+        eval_overrides = {"env": env_overrides}
     elif simulation_mode == "replay":
         eval_overrides = {
             "env": {
@@ -1908,6 +1911,7 @@ def build_eval_overrides(
                 "resample_frequency": scenario_length,
                 "scenario_length": scenario_length,
                 "map_dir": map_dir or "pufferlib/resources/drive/binaries/womd",
+                "maps": None,
                 "num_maps": num_scenarios,
                 "num_agents": num_agents,
                 "termination_mode": 0.0,
@@ -2207,6 +2211,7 @@ def eval_multi_scenarios(
             num_agents=num_agents_eval,
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
+            maps=tmp_args.get("eval_maps"),
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
             agents_per_scene=tmp_args.get("eval_agents_per_scene") or tmp_args["eval"].get("agents_per_scene", 30),
             scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
@@ -2344,6 +2349,7 @@ def eval_multi_scenarios_render(
             num_agents=num_agents_eval,
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
+            maps=tmp_args.get("eval_maps"),
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
             agents_per_scene=tmp_args.get("eval_agents_per_scene") or tmp_args["eval"].get("agents_per_scene", 30),
             scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
@@ -2536,6 +2542,7 @@ def render_adversarial(
             num_agents=num_agents_eval,
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
+            maps=tmp_args.get("eval_maps"),
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
             agents_per_scene=tmp_args.get("eval_agents_per_scene") or tmp_args["eval"].get("agents_per_scene", 30),
             scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
@@ -2967,6 +2974,12 @@ def load_config(env_name, config_dir=None):
     )
     parser.add_argument(
         "--num-carla-maps", type=int, default=8, help="Number of CARLA maps to use in gigaflow mode (max 8)"
+    )
+    parser.add_argument(
+        "--eval-maps",
+        type=str,
+        default=None,
+        help="Gigaflow-only explicit CARLA map selection for evaluation, e.g. 2,5,10",
     )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument(

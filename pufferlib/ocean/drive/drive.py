@@ -16,6 +16,101 @@ def compute_effective_road_obs_count(max_count, dropout):
     return int(max_count * (1.0 - clipped_dropout))
 
 
+def _normalize_map_selectors(maps):
+    if maps is None:
+        return None
+
+    if isinstance(maps, str):
+        stripped = maps.strip()
+        if not stripped or stripped.lower() == "none":
+            return None
+        selectors = [part.strip() for part in stripped.split(",")]
+    elif isinstance(maps, (list, tuple, set)):
+        selectors = list(maps)
+    else:
+        selectors = [maps]
+
+    normalized = []
+    for selector in selectors:
+        if isinstance(selector, np.integer):
+            normalized.append(int(selector))
+            continue
+
+        if isinstance(selector, int):
+            normalized.append(selector)
+            continue
+
+        if isinstance(selector, str):
+            selector = selector.strip()
+            if not selector:
+                continue
+            if selector.lower().startswith("town") and selector[4:].isdigit():
+                normalized.append(int(selector[4:]))
+                continue
+            if selector.isdigit():
+                normalized.append(int(selector))
+                continue
+            normalized.append(selector)
+            continue
+
+        raise TypeError(f"Unsupported map selector type: {type(selector).__name__}")
+
+    return normalized or None
+
+
+def _select_map_files(map_dir, simulation_mode, maps, num_maps):
+    all_map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
+    if not all_map_files:
+        raise FileNotFoundError(
+            f"No .bin files found in {map_dir}. Please ensure the Drive maps are downloaded and installed correctly per docs."
+        )
+
+    map_selectors = _normalize_map_selectors(maps)
+    if map_selectors is None:
+        if num_maps > len(all_map_files):
+            raise ValueError(f"num_maps ({num_maps}) exceeds available maps in {map_dir} ({len(all_map_files)}).")
+        return all_map_files[:num_maps]
+
+    if simulation_mode != "gigaflow":
+        raise ValueError("The maps selector is only supported in gigaflow mode.")
+
+    selected_files = []
+    seen = set()
+    available_map_names = [os.path.basename(path) for path in all_map_files]
+    for selector in map_selectors:
+        matched_file = None
+        if isinstance(selector, int):
+            target_name = f"opendrive__Town{selector:02d}.bin"
+            for path in all_map_files:
+                if os.path.basename(path) == target_name:
+                    matched_file = path
+                    break
+        else:
+            selector_name = os.path.basename(str(selector))
+            if selector_name.lower().startswith("town") and selector_name[4:].split(".")[0].isdigit():
+                town_id = int(selector_name[4:].split(".")[0])
+                selector_name = f"opendrive__Town{town_id:02d}.bin"
+            for path in all_map_files:
+                if os.path.basename(path) == selector_name:
+                    matched_file = path
+                    break
+
+        if matched_file is None:
+            raise ValueError(
+                f"Unknown gigaflow map selector {selector!r}. Available CARLA maps: {', '.join(available_map_names)}"
+            )
+        if matched_file in seen:
+            continue
+
+        selected_files.append(matched_file)
+        seen.add(matched_file)
+
+    if not selected_files:
+        raise ValueError("The maps selector did not match any gigaflow maps.")
+
+    return selected_files
+
+
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
@@ -72,6 +167,7 @@ class Drive(pufferlib.PufferEnv):
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir=None,
+        maps=None,
         target_type="static",
         reward_conditioning=False,
         reward_randomization=False,
@@ -230,7 +326,9 @@ class Drive(pufferlib.PufferEnv):
         self.control_mode_str = control_mode
         self.simulation_mode_str = simulation_mode
         self.map_dir = map_dir
-        self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
+        self.maps = maps
+        self.map_files = _select_map_files(self.map_dir, self.simulation_mode_str, self.maps, num_maps)
+        self.num_maps = len(self.map_files)
 
         if self.simulation_mode_str == "gigaflow":
             self.simulation_mode = 0
@@ -278,16 +376,6 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")
 
-        # Check if resources directory exists
-        if not self.map_files:
-            raise FileNotFoundError(
-                f"No .bin files found in {map_dir}. Please ensure the Drive maps are downloaded and installed correctly per docs."
-            )
-
-        # Check maps availability
-        available_maps = len(self.map_files)
-        if num_maps > available_maps:
-            raise ValueError(f"num_maps ({num_maps}) exceeds available maps in {map_dir} ({available_maps}).")
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
 
@@ -303,7 +391,7 @@ class Drive(pufferlib.PufferEnv):
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
             num_agents=num_agents,
-            num_maps=num_maps,
+            num_maps=self.num_maps,
             starting_map_counter=self.starting_map_counter,
             eval_mode=self.eval_mode,
             init_mode=self.init_mode,
