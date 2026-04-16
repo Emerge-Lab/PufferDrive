@@ -9,6 +9,13 @@ import pufferlib
 from pufferlib.ocean.drive import binding
 
 
+def compute_effective_road_obs_count(max_count, dropout):
+    if max_count <= 0:
+        return 0
+    clipped_dropout = min(max(float(dropout), 0.0), 1.0)
+    return int(max_count * (1.0 - clipped_dropout))
+
+
 class Drive(pufferlib.PufferEnv):
     def __init__(
         self,
@@ -44,7 +51,7 @@ class Drive(pufferlib.PufferEnv):
         traffic_light_behavior=0,
         dt=0.1,
         spawn_initial_speed=0.0,
-        goal_speed_threshold=3.0,
+        goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
         num_maps=100,
@@ -70,17 +77,33 @@ class Drive(pufferlib.PufferEnv):
         reward_randomization=False,
         compute_eval_metrics=True,
         split_network=False,
-        use_rear_axle=False,
         max_lane_segment_observations=32,
         max_boundary_segment_observations=32,
         max_partner_observations=16,
         max_traffic_control_observations=4,
         traffic_control_scope=0,
         starting_map=0,
+        max_goal_position=100.0,
+        max_position=100.0,
+        max_veh_len=15.0,
+        max_veh_width=10.0,
+        max_road_segment_length=5.0,
+        max_road_segment_width=5.0,
+        max_traffic_control_distance=100.0,
+        agent_obs_max_dist=100.0,
+        road_obs_front_dist=120.0,
+        road_obs_behind_dist=20.0,
+        road_obs_side_dist=30.0,
+        lane_segment_dropout=0.0,
+        boundary_segment_dropout=0.0,
+        partner_blindness_prob=0.0,
+        phantom_braking_prob=0.0,
+        phantom_braking_trigger_prob=0.0,
+        phantom_braking_duration=10,
     ):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
-        self.goal_speed_threshold = float(goal_speed_threshold)
+        self.goal_speed = float(goal_speed)
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
         self.compute_eval_metrics = compute_eval_metrics
@@ -147,13 +170,37 @@ class Drive(pufferlib.PufferEnv):
             "jerk": binding.EGO_FEATURES_JERK,
         }.get(dynamics_model)
 
-        self.use_rear_axle = use_rear_axle
         # Extract observation shapes from constants
         self.max_lane_segment_observations = max_lane_segment_observations
         self.max_boundary_segment_observations = max_boundary_segment_observations
         self.max_partner_observations = max_partner_observations
         self.traffic_control_scope = traffic_control_scope
         self.max_traffic_control_observations = max_traffic_control_observations
+        self.max_goal_position = float(max_goal_position)
+        self.max_position = float(max_position)
+        self.max_veh_len = float(max_veh_len)
+        self.max_veh_width = float(max_veh_width)
+        self.max_road_segment_length = float(max_road_segment_length)
+        self.max_road_segment_width = float(max_road_segment_width)
+        self.max_traffic_control_distance = float(max_traffic_control_distance)
+        self.agent_obs_max_dist = float(agent_obs_max_dist)
+        self.road_obs_front_dist = float(road_obs_front_dist)
+        self.road_obs_behind_dist = float(road_obs_behind_dist)
+        self.road_obs_side_dist = float(road_obs_side_dist)
+        self.lane_segment_dropout = float(lane_segment_dropout)
+        self.boundary_segment_dropout = float(boundary_segment_dropout)
+        self.obs_lane_segment_count = compute_effective_road_obs_count(
+            self.max_lane_segment_observations,
+            self.lane_segment_dropout,
+        )
+        self.obs_boundary_segment_count = compute_effective_road_obs_count(
+            self.max_boundary_segment_observations,
+            self.boundary_segment_dropout,
+        )
+        self.partner_blindness_prob = float(partner_blindness_prob)
+        self.phantom_braking_prob = float(phantom_braking_prob)
+        self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
+        self.phantom_braking_duration = int(phantom_braking_duration)
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
@@ -171,8 +218,8 @@ class Drive(pufferlib.PufferEnv):
             + self.num_reward_coefs
             + self.target_dim
             + self.max_partner_observations * self.partner_features
-            + self.max_lane_segment_observations * self.road_features
-            + self.max_boundary_segment_observations * self.road_features
+            + self.obs_lane_segment_count * self.road_features
+            + self.obs_boundary_segment_count * self.road_features
             + self.max_traffic_control_observations * self.traffic_control_features
         )
 
@@ -217,9 +264,9 @@ class Drive(pufferlib.PufferEnv):
             self._action_type_flag = 0
             if dynamics_model == "classic":
                 # Joint action space (assume dependence)
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 13])
+                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 9])
                 # Multi discrete (assume independence)
-                # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
+                # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 9])
             elif dynamics_model == "jerk":
                 # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
                 self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
@@ -288,65 +335,85 @@ class Drive(pufferlib.PufferEnv):
                 self.truncations[cur:nxt],
                 self.masks[cur:nxt],
                 self.random_seed,
-                action_type=self._action_type_flag,
-                dynamics_model=self.dynamics_model_flag,
-                human_agent_idx=self.human_agent_idx,
-                reward_goal=self.reward_goal,
-                reward_vehicle_collision=self.reward_vehicle_collision,
-                reward_offroad_collision=self.reward_offroad_collision,
-                reward_comfort=self.reward_comfort,
-                reward_lane_align=self.reward_lane_align,
-                reward_vel_align=self.reward_vel_align,
-                reward_lane_center=self.reward_lane_center,
-                reward_center_bias=self.reward_center_bias,
-                reward_velocity=self.reward_velocity,
-                reward_reverse=self.reward_reverse,
-                reward_stop_line=self.reward_stop_line,
-                reward_timestep=self.reward_timestep,
-                reward_overspeed=self.reward_overspeed,
-                reward_ade=self.reward_ade,
-                adv_reward_weight_collision=self.adv_reward_weight_collision,
-                adv_reward_weight_offroad=self.adv_reward_weight_offroad,
-                adv_reward_weight_drive=self.adv_reward_weight_drive,
-                adv_reward_weight_adversarial=self.adv_reward_weight_adversarial,
-                collision_behavior=self.collision_behavior,
-                offroad_behavior=self.offroad_behavior,
-                traffic_light_behavior=self.traffic_light_behavior,
-                goal_radius=self.goal_radius,
-                min_waypoint_spacing=self.min_waypoint_spacing,
-                max_waypoint_spacing=self.max_waypoint_spacing,
-                num_target_waypoints=self.num_target_waypoints,
-                target_type=self.target_type,
-                use_rear_axle=self.use_rear_axle,
-                max_lane_segment_observations=self.max_lane_segment_observations,
-                max_boundary_segment_observations=self.max_boundary_segment_observations,
-                max_partner_observations=self.max_partner_observations,
-                max_traffic_control_observations=self.max_traffic_control_observations,
-                traffic_control_scope=self.traffic_control_scope,
-                dt=self.dt,
-                spawn_initial_speed=self.spawn_initial_speed,
-                goal_speed_threshold=self.goal_speed_threshold,
-                scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
-                termination_mode=int(self.termination_mode),
-                inactive_agent_threshold=float(self.inactive_agent_threshold),
-                adversarial_termination_mode=int(self.adversarial_termination_mode),
-                map_file=self.map_files[map_ids[i]],
-                max_agents=nxt - cur,
-                max_agents_per_env=self.max_agents_per_env,
-                ini_file="pufferlib/config/ocean/drive.ini",
-                init_steps=self.init_steps,
-                init_mode=self.init_mode,
-                control_mode=self.control_mode,
-                simulation_mode=self.simulation_mode,
-                reward_conditioning=self.reward_conditioning,
-                reward_randomization=self.reward_randomization,
-                compute_eval_metrics=self.compute_eval_metrics,
-                eval_mode=self.eval_mode,
+                **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
             )
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
         binding.vec_reset(self.c_envs, self.random_seed)
+
+    def _env_init_kwargs(self, map_file, max_agents):
+        return {
+            "action_type": self._action_type_flag,
+            "dynamics_model": self.dynamics_model_flag,
+            "human_agent_idx": self.human_agent_idx,
+            "reward_goal": self.reward_goal,
+            "reward_vehicle_collision": self.reward_vehicle_collision,
+            "reward_offroad_collision": self.reward_offroad_collision,
+            "reward_comfort": self.reward_comfort,
+            "reward_lane_align": self.reward_lane_align,
+            "reward_vel_align": self.reward_vel_align,
+            "reward_lane_center": self.reward_lane_center,
+            "reward_center_bias": self.reward_center_bias,
+            "reward_velocity": self.reward_velocity,
+            "reward_reverse": self.reward_reverse,
+            "reward_stop_line": self.reward_stop_line,
+            "reward_timestep": self.reward_timestep,
+            "reward_overspeed": self.reward_overspeed,
+            "reward_ade": self.reward_ade,
+            "adv_reward_weight_collision": self.adv_reward_weight_collision,
+            "adv_reward_weight_offroad": self.adv_reward_weight_offroad,
+            "adv_reward_weight_drive": self.adv_reward_weight_drive,
+            "adv_reward_weight_adversarial": self.adv_reward_weight_adversarial,
+            "collision_behavior": self.collision_behavior,
+            "offroad_behavior": self.offroad_behavior,
+            "traffic_light_behavior": self.traffic_light_behavior,
+            "goal_radius": self.goal_radius,
+            "min_waypoint_spacing": self.min_waypoint_spacing,
+            "max_waypoint_spacing": self.max_waypoint_spacing,
+            "num_target_waypoints": self.num_target_waypoints,
+            "target_type": self.target_type,
+            "max_lane_segment_observations": self.max_lane_segment_observations,
+            "max_boundary_segment_observations": self.max_boundary_segment_observations,
+            "max_partner_observations": self.max_partner_observations,
+            "max_traffic_control_observations": self.max_traffic_control_observations,
+            "traffic_control_scope": self.traffic_control_scope,
+            "dt": self.dt,
+            "spawn_initial_speed": self.spawn_initial_speed,
+            "goal_speed": self.goal_speed,
+            "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
+            "termination_mode": int(self.termination_mode),
+            "inactive_agent_threshold": float(self.inactive_agent_threshold),
+            "adversarial_termination_mode": int(self.adversarial_termination_mode),
+            "map_file": map_file,
+            "max_agents": max_agents,
+            "max_agents_per_env": self.max_agents_per_env,
+            "init_steps": self.init_steps,
+            "init_mode": self.init_mode,
+            "control_mode": self.control_mode,
+            "simulation_mode": self.simulation_mode,
+            "reward_conditioning": self.reward_conditioning,
+            "reward_randomization": self.reward_randomization,
+            "compute_eval_metrics": self.compute_eval_metrics,
+            "eval_mode": self.eval_mode,
+            "max_goal_position": self.max_goal_position,
+            "max_position": self.max_position,
+            "max_veh_len": self.max_veh_len,
+            "max_veh_width": self.max_veh_width,
+            "max_road_segment_length": self.max_road_segment_length,
+            "max_road_segment_width": self.max_road_segment_width,
+            "max_traffic_control_distance": self.max_traffic_control_distance,
+            "agent_obs_max_dist": self.agent_obs_max_dist,
+            "road_obs_front_dist": self.road_obs_front_dist,
+            "road_obs_behind_dist": self.road_obs_behind_dist,
+            "road_obs_side_dist": self.road_obs_side_dist,
+            "obs_lane_segment_count": self.obs_lane_segment_count,
+            "obs_boundary_segment_count": self.obs_boundary_segment_count,
+            "partner_blindness_prob": self.partner_blindness_prob,
+            "phantom_braking_prob": self.phantom_braking_prob,
+            "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
+            "phantom_braking_duration": self.phantom_braking_duration,
+        }
 
     @property
     def random_seed(self):
@@ -416,60 +483,7 @@ class Drive(pufferlib.PufferEnv):
                         self.truncations[cur:nxt],
                         self.masks[cur:nxt],
                         self.random_seed,
-                        action_type=self._action_type_flag,
-                        dynamics_model=self.dynamics_model_flag,
-                        human_agent_idx=self.human_agent_idx,
-                        reward_goal=self.reward_goal,
-                        reward_vehicle_collision=self.reward_vehicle_collision,
-                        reward_offroad_collision=self.reward_offroad_collision,
-                        reward_comfort=self.reward_comfort,
-                        reward_lane_align=self.reward_lane_align,
-                        reward_vel_align=self.reward_vel_align,
-                        reward_lane_center=self.reward_lane_center,
-                        reward_center_bias=self.reward_center_bias,
-                        reward_velocity=self.reward_velocity,
-                        reward_reverse=self.reward_reverse,
-                        reward_stop_line=self.reward_stop_line,
-                        reward_timestep=self.reward_timestep,
-                        reward_overspeed=self.reward_overspeed,
-                        reward_ade=self.reward_ade,
-                        adv_reward_weight_collision=self.adv_reward_weight_collision,
-                        adv_reward_weight_offroad=self.adv_reward_weight_offroad,
-                        adv_reward_weight_drive=self.adv_reward_weight_drive,
-                        adv_reward_weight_adversarial=self.adv_reward_weight_adversarial,
-                        collision_behavior=self.collision_behavior,
-                        offroad_behavior=self.offroad_behavior,
-                        traffic_light_behavior=self.traffic_light_behavior,
-                        goal_radius=self.goal_radius,
-                        min_waypoint_spacing=self.min_waypoint_spacing,
-                        max_waypoint_spacing=self.max_waypoint_spacing,
-                        num_target_waypoints=self.num_target_waypoints,
-                        target_type=self.target_type,
-                        use_rear_axle=self.use_rear_axle,
-                        max_lane_segment_observations=self.max_lane_segment_observations,
-                        max_boundary_segment_observations=self.max_boundary_segment_observations,
-                        max_partner_observations=self.max_partner_observations,
-                        max_traffic_control_observations=self.max_traffic_control_observations,
-                        traffic_control_scope=self.traffic_control_scope,
-                        dt=self.dt,
-                        spawn_initial_speed=self.spawn_initial_speed,
-                        goal_speed_threshold=self.goal_speed_threshold,
-                        scenario_length=(int(self.scenario_length) if self.scenario_length is not None else None),
-                        termination_mode=int(self.termination_mode),
-                        inactive_agent_threshold=float(self.inactive_agent_threshold),
-                        adversarial_termination_mode=int(self.adversarial_termination_mode),
-                        map_file=self.map_files[map_ids[i]],
-                        max_agents=nxt - cur,
-                        max_agents_per_env=self.max_agents_per_env,
-                        ini_file="pufferlib/config/ocean/drive.ini",
-                        init_steps=self.init_steps,
-                        init_mode=self.init_mode,
-                        control_mode=self.control_mode,
-                        simulation_mode=self.simulation_mode,
-                        reward_conditioning=self.reward_conditioning,
-                        reward_randomization=self.reward_randomization,
-                        compute_eval_metrics=self.compute_eval_metrics,
-                        eval_mode=self.eval_mode,
+                        **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)

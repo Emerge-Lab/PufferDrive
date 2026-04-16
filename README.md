@@ -98,7 +98,7 @@ puffer eval_multi_scenarios_render puffer_drive \
 | `vf_coef` | `2` | Value loss weight |
 | `ent_coef` | `0.001` | Entropy bonus |
 | `vtrace_rho_clip` / `vtrace_c_clip` | `1` | V-trace IS ratio clipping |
-| `prio_alpha` / `prio_beta0` | `0.85` | Priority sampling exponents |
+| `adv_sampling_prio_alpha` / `adv_sampling_prio_beta0` | `0.85` | Priority sampling exponents |
 
 ### `[policy]` — Network
 

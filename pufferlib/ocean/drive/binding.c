@@ -1543,7 +1543,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
     int num_eval_scenarios = unpack(kwargs, "num_eval_scenarios");
-
     if (min_agents_per_env <= 0 || max_agents_per_env <= 0) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env and max_agents_per_env must be > 0");
         return NULL;
@@ -1565,7 +1564,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             // Eval mode: fixed agent count, sequential map cycling
             int agents_per_env = max_agents_per_env;
             int env_count = (num_agents + agents_per_env - 1) / agents_per_env;
-            env_count--;
 
             env_count = env_count > num_eval_scenarios ? num_eval_scenarios : env_count;
 
@@ -1576,7 +1574,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             for (int i = 0; i < env_count; i++) {
                 PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
                 PyList_SetItem(map_ids_list, i, PyLong_FromLong((s_map_counter + i) % num_maps));
-                offset += agents_per_env;
+                int remaining = num_agents - offset;
+                offset += (remaining < agents_per_env) ? remaining : agents_per_env;
             }
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
 
@@ -1684,27 +1683,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
             maps_checked++;
-            // Fix the safeguard, the maps_checked is increased even when the same map is picked.
-            // Safeguard: if we've checked all available maps and found no active agents, raise an error
-            // if(maps_checked >= num_maps) {
-            //     for(int j=0;j<env->num_total_agents;j++) free_agent(&env->agents[j]);
-            //     for (int j=0;j<env->num_road_elements;j++) free_road_element(&env->road_elements[j]);
-            //     for (int j=0;j<env->num_traffic_elements;j++) free_traffic_element(&env->traffic_elements[j]);
-            //     free(env->agents);
-            //     free(env->road_elements);
-            //     free(env->traffic_elements);
-            //     free(env->active_agent_indices);
-            //     free(env->static_agent_indices);
-            //     free(env->expert_static_agent_indices);
-            //     free(env);
-            //     Py_DECREF(agent_offsets);
-            //     Py_DECREF(map_ids);
-            //     char error_msg[256];
-            //     sprintf(error_msg, "No controllable agents found in any of the %d available maps", num_maps);
-            //     PyErr_SetString(PyExc_ValueError, error_msg);
-            //     return NULL;
-            // }
-
             for (int j = 0; j < env->num_total_agents; j++)
                 free_agent(&env->agents[j]);
             for (int j = 0; j < env->num_road_elements; j++)
@@ -1722,11 +1700,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         }
 
         // Store map_id
-        PyObject *map_id_obj = PyLong_FromLong(map_id);
-        PyList_SetItem(map_ids, env_count, map_id_obj);
+        PyList_SetItem(map_ids, env_count, PyLong_FromLong(map_id));
         // Store agent offset
-        PyObject *offset = PyLong_FromLong(total_agent_count);
-        PyList_SetItem(agent_offsets, env_count, offset);
+        PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(total_agent_count));
         total_agent_count += env->active_agent_count;
         env_count++;
         for (int j = 0; j < env->num_total_agents; j++)
@@ -1743,8 +1719,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env->expert_static_agent_indices);
         free(env);
     }
-    // printf("Generated %d environments to cover %d agents (requested %d agents)\n", env_count, total_agent_count,
-    // num_agents);
+
     if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
@@ -1762,21 +1737,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 }
 
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
-    env->ini_file = unpack_str(kwargs, "ini_file");
-    // env_init_config conf = {0};
-    // if (ini_parse(env->ini_file, handler, &conf) < 0) {
-    //     printf("Error while loading %s", env->ini_file);
-    // }
-    // if (kwargs && PyDict_GetItemString(kwargs, "scenario_length")) {
-    //     conf.scenario_length = (int)unpack(kwargs, "scenario_length");
-    // }
-    // if (kwargs && PyDict_GetItemString(kwargs, "termination_mode")) {
-    //     conf.termination_mode = (int)unpack(kwargs, "termination_mode");
-    // }
-    // if (conf.scenario_length <= 0) {
-    //     PyErr_SetString(PyExc_ValueError, "scenario_length must be > 0 (set in INI or kwargs)");
-    //     return -1;
-    // }
     env->action_type = (int)unpack(kwargs, "action_type");
     env->dynamics_model = (int)unpack(kwargs, "dynamics_model");
     env->reward_goal = (float)unpack(kwargs, "reward_goal");
@@ -1808,7 +1768,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         env->num_target_waypoints = MAX_TARGET_WAYPOINTS;
     }
     env->target_type = (int)unpack(kwargs, "target_type");
-    env->use_rear_axle = (int)unpack(kwargs, "use_rear_axle");
     env->max_boundary_segment_observations = (int)unpack(kwargs, "max_boundary_segment_observations");
     env->max_lane_segment_observations = (int)unpack(kwargs, "max_lane_segment_observations");
     env->max_partner_observations = (int)unpack(kwargs, "max_partner_observations");
@@ -1816,18 +1775,15 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->traffic_control_scope = (int)unpack(kwargs, "traffic_control_scope");
     env->dt = (float)unpack(kwargs, "dt");
     env->spawn_initial_speed = (float)unpack(kwargs, "spawn_initial_speed");
-    env->goal_speed_threshold = (float)unpack(kwargs, "goal_speed_threshold");
+    env->goal_speed = (float)unpack(kwargs, "goal_speed");
     env->scenario_length = (int)unpack(kwargs, "scenario_length");
     env->termination_mode = (int)unpack(kwargs, "termination_mode");
     env->inactive_agent_threshold = (float)unpack(kwargs, "inactive_agent_threshold");
     env->adversarial_termination_mode = (int)unpack(kwargs, "adversarial_termination_mode");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
-    int max_agents = (int)unpack(kwargs, "max_agents");
-    env->num_controllable_agents = max_agents;
-    int max_agents_per_env = (int)unpack(kwargs, "max_agents_per_env");
-    env->num_max_agents = max_agents_per_env;
-
+    env->num_controllable_agents = (int)unpack(kwargs, "max_agents");
+    env->num_max_agents = (int)unpack(kwargs, "max_agents_per_env");
     int init_steps = (int)unpack(kwargs, "init_steps");
     env->init_steps = init_steps;
     env->timestep = init_steps;
@@ -1838,6 +1794,23 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_randomization = (bool)unpack(kwargs, "reward_randomization");
     env->compute_eval_metrics = (bool)unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int)unpack(kwargs, "eval_mode");
+    env->max_goal_position = (float)unpack(kwargs, "max_goal_position");
+    env->max_position = (float)unpack(kwargs, "max_position");
+    env->max_veh_len = (float)unpack(kwargs, "max_veh_len");
+    env->max_veh_width = (float)unpack(kwargs, "max_veh_width");
+    env->max_road_segment_length = (float)unpack(kwargs, "max_road_segment_length");
+    env->max_road_segment_width = (float)unpack(kwargs, "max_road_segment_width");
+    env->max_traffic_control_distance = (float)unpack(kwargs, "max_traffic_control_distance");
+    env->agent_obs_max_dist = (float)unpack(kwargs, "agent_obs_max_dist");
+    env->road_obs_front_dist = (float)unpack(kwargs, "road_obs_front_dist");
+    env->road_obs_behind_dist = (float)unpack(kwargs, "road_obs_behind_dist");
+    env->road_obs_side_dist = (float)unpack(kwargs, "road_obs_side_dist");
+    env->obs_lane_segment_count = (int)unpack(kwargs, "obs_lane_segment_count");
+    env->obs_boundary_segment_count = (int)unpack(kwargs, "obs_boundary_segment_count");
+    env->partner_blindness_prob = (float)unpack(kwargs, "partner_blindness_prob");
+    env->phantom_braking_prob = (float)unpack(kwargs, "phantom_braking_prob");
+    env->phantom_braking_trigger_prob = (float)unpack(kwargs, "phantom_braking_trigger_prob");
+    env->phantom_braking_duration = (int)unpack(kwargs, "phantom_braking_duration");
 
     init(env);
     return 0;

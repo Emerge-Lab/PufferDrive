@@ -1,22 +1,23 @@
 // -- REWARD CONDITIONING COEFFICIENTS
 #define REWARD_COEF_GOAL_RADIUS 0
-#define REWARD_COEF_COLLISION 1
-#define REWARD_COEF_OFFROAD 2
-#define REWARD_COEF_COMFORT 3
-#define REWARD_COEF_LANE_ALIGN 4
-#define REWARD_COEF_VEL_ALIGN 5
-#define REWARD_COEF_LANE_CENTER 6
-#define REWARD_COEF_CENTER_BIAS 7
-#define REWARD_COEF_VELOCITY 8
-#define REWARD_COEF_REVERSE 9
-#define REWARD_COEF_STOP_LINE 10
-#define REWARD_COEF_TIMESTEP 11
-#define REWARD_COEF_OVERSPEED 12
+#define REWARD_COEF_GOAL_SPEED 1
+#define REWARD_COEF_COLLISION 2
+#define REWARD_COEF_OFFROAD 3
+#define REWARD_COEF_COMFORT 4
+#define REWARD_COEF_LANE_ALIGN 5
+#define REWARD_COEF_VEL_ALIGN 6
+#define REWARD_COEF_LANE_CENTER 7
+#define REWARD_COEF_CENTER_BIAS 8
+#define REWARD_COEF_VELOCITY 9
+#define REWARD_COEF_REVERSE 10
+#define REWARD_COEF_STOP_LINE 11
+#define REWARD_COEF_TIMESTEP 12
+#define REWARD_COEF_OVERSPEED 13
 // Dynamic conditioning coefficients
-#define REWARD_COEF_THROTTLE 13
-#define REWARD_COEF_STEER 14
-#define REWARD_COEF_ACC 15
-#define NUM_REWARD_COEFS 16
+#define REWARD_COEF_THROTTLE 14
+#define REWARD_COEF_STEER 15
+#define REWARD_COEF_ACC 16
+#define NUM_REWARD_COEFS 17
 
 // -- AGENT TYPE
 #define UNKNOWN 0
@@ -235,13 +236,16 @@ struct Agent {
     float reward_coefs[NUM_REWARD_COEFS];
 
     // Puffer score tracking (per-episode accumulators)
-    struct ttc_result cached_ttc; // Filled once per step before reward computation
-    float wrong_way_distance;     // Accumulated wrong-way distance
-    float speed_violation_sum;    // For nuPlan speed compliance formula
-    int ttc_violations;           // Count of TTC < 0.95s violations
-    int ttc_samples;              // Total TTC samples for rate
-    int at_fault_collision;       // 1 if at-fault collision occurred this episode
-    float multi_lane_time;        // Accumulated time (s) on multiple lanes
+    struct ttc_result cached_ttc;    // Filled once per step before reward computation
+    float wrong_way_distance;        // Accumulated wrong-way distance
+    float speed_violation_sum;       // For nuPlan speed compliance formula
+    int ttc_violations;              // Count of TTC < 0.95s violations
+    int ttc_samples;                 // Total TTC samples for rate
+    int at_fault_collision;          // 1 if at-fault collision occurred this episode
+    float multi_lane_time;           // Accumulated time (s) on multiple lanes
+    int phantom_braking_counter;     // >0 means currently phantom braking
+    unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
+    unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
 };
 
 struct RoadMapElement {

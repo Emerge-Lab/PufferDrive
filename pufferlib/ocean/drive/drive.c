@@ -33,6 +33,13 @@ void test_drivenet() {
     free(weights);
 }
 
+static inline int compute_effective_road_obs_count(int max_count, float dropout) {
+    if (max_count <= 0)
+        return 0;
+    float clipped_dropout = clip(dropout, 0.0f, 1.0f);
+    return (int)(max_count * (1.0f - clipped_dropout));
+}
+
 void demo() {
     // Read configuration from INI file
     env_init_config conf = {0};
@@ -50,6 +57,8 @@ void demo() {
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
+        .spawn_initial_speed = conf.spawn_initial_speed,
+        .goal_speed = conf.goal_speed,
         .map_name = "resources/drive/binaries/map_000.bin",
         .init_steps = conf.init_steps,
         .collision_behavior = conf.collision_behavior,
@@ -150,6 +159,8 @@ void performance_test() {
         .offroad_behavior = conf.offroad_behavior,
         .traffic_light_behavior = conf.traffic_light_behavior,
         .dt = conf.dt,
+        .spawn_initial_speed = conf.spawn_initial_speed,
+        .goal_speed = conf.goal_speed,
         .target_type = conf.target_type,
         .scenario_length = conf.scenario_length,
         .termination_mode = conf.termination_mode,
@@ -164,13 +175,22 @@ void performance_test() {
         .reward_randomization = conf.reward_randomization,
         .compute_eval_metrics = conf.compute_eval_metrics,
         .num_max_agents = conf.max_agents_per_env,
-        .use_rear_axle = conf.use_rear_axle,
         .max_lane_segment_observations = conf.max_lane_segment_observations,
         .max_boundary_segment_observations = conf.max_boundary_segment_observations,
         .max_partner_observations = conf.max_partner_observations,
         .max_traffic_control_observations = conf.max_traffic_control_observations,
         .traffic_control_scope = conf.traffic_control_scope,
+        .partner_blindness_prob = conf.partner_blindness_prob,
+        .phantom_braking_prob = conf.phantom_braking_prob,
+        .phantom_braking_trigger_prob = conf.phantom_braking_trigger_prob,
+        .phantom_braking_duration = conf.phantom_braking_duration,
+
     };
+    env.obs_lane_segment_count =
+        compute_effective_road_obs_count(env.max_lane_segment_observations, conf.lane_segment_dropout);
+    env.obs_boundary_segment_count =
+        compute_effective_road_obs_count(env.max_boundary_segment_observations, conf.boundary_segment_dropout);
+
     struct timespec ts_total_start, ts_total_end;
     struct timespec ts_init_start, ts_init_end;
     struct timespec ts_step_start, ts_step_end;

@@ -56,8 +56,8 @@ class DriveBackbone(nn.Module):
             self.partner_features_count - 1 if strip_last_partner_feature else self.partner_features_count
         )
         # Road features size (lanes + boundaries)
-        self.max_lane_segment_observations = env.max_lane_segment_observations
-        self.max_boundary_segment_observations = env.max_boundary_segment_observations
+        self.obs_lane_segment_count = env.obs_lane_segment_count
+        self.obs_boundary_segment_count = env.obs_boundary_segment_count
         self.road_features_count = env.road_features
         # Traffic control size
         self.max_traffic_control_observations = env.max_traffic_control_observations
@@ -76,7 +76,7 @@ class DriveBackbone(nn.Module):
         # 1. observations Encoders
         # Each encoder projects raw features into a common input_size embedding space
         self.ego_encoder = self._create_encoder(ego_dim, input_size, encoder_gigaflow)
-        if self.max_lane_segment_observations > 0:
+        if self.obs_lane_segment_count > 0:
             self.lane_encoder = self._create_encoder(
                 self.road_features_count,
                 input_size,
@@ -84,7 +84,7 @@ class DriveBackbone(nn.Module):
                 dropout=dropout,
             )
             num_feature_sets += 1
-        if self.max_boundary_segment_observations > 0:
+        if self.obs_boundary_segment_count > 0:
             self.boundary_encoder = self._create_encoder(
                 self.road_features_count,
                 input_size,
@@ -125,8 +125,8 @@ class DriveBackbone(nn.Module):
     def forward(self, observations, ego_dim):
         # Extract and slice observations from the flat buffer
         partner_dim = self.max_partner_observations * self.partner_features_count
-        lane_dim = self.max_lane_segment_observations * self.road_features_count
-        boundary_dim = self.max_boundary_segment_observations * self.road_features_count
+        lane_dim = self.obs_lane_segment_count * self.road_features_count
+        boundary_dim = self.obs_boundary_segment_count * self.road_features_count
         traffic_control_dim = self.max_traffic_control_observations * self.traffic_control_features_count
 
         slide_idx = ego_dim
@@ -152,14 +152,12 @@ class DriveBackbone(nn.Module):
         feature_list = [ego_features]
 
         # Encode Lanes and Boundaries separately
-        if self.max_lane_segment_observations > 0:
-            lane_objects = lane_observations.view(-1, self.max_lane_segment_observations, self.road_features_count)
+        if self.obs_lane_segment_count > 0:
+            lane_objects = lane_observations.view(-1, self.obs_lane_segment_count, self.road_features_count)
             lane_features, _ = self.lane_encoder(lane_objects).max(dim=1)
             feature_list.append(lane_features)
-        if self.max_boundary_segment_observations > 0:
-            boundary_objects = boundary_observations.view(
-                -1, self.max_boundary_segment_observations, self.road_features_count
-            )
+        if self.obs_boundary_segment_count > 0:
+            boundary_objects = boundary_observations.view(-1, self.obs_boundary_segment_count, self.road_features_count)
 
             boundary_features, _ = self.boundary_encoder(boundary_objects).max(dim=1)
             feature_list.append(boundary_features)

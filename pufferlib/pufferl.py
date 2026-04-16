@@ -374,8 +374,7 @@ class PuffeRL:
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
 
-            self.global_step += env_id.stop - env_id.start
-            # self.global_step += int(mask.sum())
+            self.global_step += int(mask.sum())
 
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
@@ -726,8 +725,8 @@ class PuffeRL:
         config = self.config
         device = config["device"]
 
-        b0 = config["prio_beta0"]
-        a = config["prio_alpha"]
+        b0 = config["adv_sampling_prio_beta0"]
+        a = config["adv_sampling_prio_alpha"]
         clip_coef = config["clip_coef"]
         vf_clip = config["vf_clip_coef"]
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
@@ -857,6 +856,18 @@ class PuffeRL:
         keep_mask = valid_abs_adv >= threshold
         keep_idx = valid_idx[keep_mask]
         num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
+
+        if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+            # Synchronize the number of kept transitions in multi-GPU setting to keep synchronization
+            kept_tensor = torch.tensor([num_kept], device=device)
+            torch.distributed.all_reduce(kept_tensor, op=torch.distributed.ReduceOp.MIN)
+            _min_num_kept = kept_tensor.item()
+            if num_kept > _min_num_kept:
+                if _min_num_kept == 0:
+                    keep_idx = keep_idx[:0]
+                else:
+                    top_idx = torch.topk(valid_abs_adv[keep_mask], _min_num_kept, largest=True, sorted=False).indices
+                    keep_idx = keep_idx[top_idx]
 
         filter_metrics["kept_fraction"] = num_kept / max(num_valid, 1)
         filter_metrics["filtered_fraction"] = 1.0 - filter_metrics["kept_fraction"]
@@ -1495,6 +1506,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "trajectory_scaling_factors",
             "max_boundary_segment_observations",
             "max_lane_segment_observations",
+            "boundary_segment_dropout",
+            "lane_segment_dropout",
             "max_partner_observations",
             "max_traffic_control_observations",
             "traffic_control_scope",
@@ -1518,7 +1531,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     if "LOCAL_RANK" in os.environ:
         world_size = int(os.environ.get("WORLD_SIZE", 1))
-        print("World size", world_size)
         master_addr = os.environ.get("MASTER_ADDR", "localhost")
         master_port = os.environ.get("MASTER_PORT", "29500")
         local_rank = int(os.environ["LOCAL_RANK"])
@@ -1848,11 +1860,13 @@ def build_eval_overrides(
         "eval_mode": 1,
         "collision_behavior": 1,
         "offroad_behavior": 1,
+        "traffic_light_behavior": 0,
         "reward_randomization": False,
         "min_agents_per_env": agents_per_scene,
         "max_agents_per_env": agents_per_scene,
         "reward_vehicle_collision": 3.0,
         "reward_offroad_collision": 3.0,
+        "reward_stop_line": 1.0,
         "reward_ade": 0.0,
         "reward_goal": 1.0,
         "reward_overspeed": 0.05,
@@ -1862,6 +1876,15 @@ def build_eval_overrides(
         "reward_lane_center": 0.0038,
         "reward_timestep": 0.000025,
         "adversarial_termination_mode": 2,
+        "reward_reverse": 0.005,
+        "goal_speed": 20.0,
+        "num_target_waypoints": 3,
+        "min_waypoint_spacing": 30.0,
+        "max_waypoint_spacing": 30.0,
+        "lane_segment_dropout": 0.0,
+        "boundary_segment_dropout": 0.0,
+        "max_lane_segment_observations": 80,
+        "max_boundary_segment_observations": 80,
     }
 
     if simulation_mode == "gigaflow":
@@ -1871,7 +1894,7 @@ def build_eval_overrides(
                 "simulation_mode": "gigaflow",
                 "resample_frequency": scenario_length,
                 "scenario_length": scenario_length,
-                "map_dir": "pufferlib/resources/drive/binaries/carla",
+                "map_dir": map_dir or "pufferlib/resources/drive/binaries/carla",
                 "num_maps": num_carla_maps,
                 "num_agents": num_agents,
                 "termination_mode": 0.0,
@@ -1884,12 +1907,12 @@ def build_eval_overrides(
                 "simulation_mode": "replay",
                 "resample_frequency": scenario_length,
                 "scenario_length": scenario_length,
-                "map_dir": "pufferlib/resources/drive/binaries/eval",
+                "map_dir": map_dir or "pufferlib/resources/drive/binaries/womd",
                 "num_maps": num_scenarios,
                 "num_agents": num_agents,
-                "reward_traffic_light_violation": 1.0,
                 "termination_mode": 0.0,
-            }
+                # "control_mode": "control_sdc_only",
+            },
         }
     else:
         raise ValueError(f"Invalid simulation_mode: {simulation_mode}. Must be 'gigaflow' or 'replay'.")
@@ -2232,6 +2255,7 @@ def eval_multi_scenarios(
         vecenv = pufferlib.vector.make(env_creators, env_args=env_args, env_kwargs=env_kwargs_list, **args["vec"])
 
     policy = policy or load_policy(args, vecenv, env_name)
+    policy.eval()
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
@@ -2336,6 +2360,7 @@ def eval_multi_scenarios_render(
     vecenv = vecenv or load_env(env_name, args)
 
     policy = policy or load_policy(args, vecenv, env_name)
+    policy.eval()
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
@@ -2469,7 +2494,6 @@ def eval_multi_scenarios_render(
                         all_agents_obs_histories[env_idx],
                         f"{gif_folder}/{env_map_name}{filename_suffix}_{global_episode_id:03d}.html",
                         head_north=True,
-                        use_rear_axle=args["env"]["use_rear_axle"],
                     )
 
             scenarios_processed += num_envs_in_batch
@@ -2675,7 +2699,6 @@ def render_adversarial(
                         all_agents_obs_histories[env_idx],
                         f"{gif_folder}/{env_map_name}{filename_suffix}_{global_episode_id:03d}.html",
                         head_north=True,
-                        use_rear_axle=args["env"]["use_rear_axle"],
                     )
 
             scenarios_processed += num_envs_in_batch

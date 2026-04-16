@@ -5,18 +5,20 @@ import weakref
 from typing import Optional, Tuple
 
 import math
+import re
 import matplotlib.figure
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection, PatchCollection, PolyCollection
-from matplotlib.patches import Circle, Polygon
+from matplotlib.patches import Circle
 import os
 import json
 import zlib
 import base64
 
 from pufferlib.ocean.drive import binding
+from pufferlib.ocean.drive.drive import compute_effective_road_obs_count
 
 
 COLORS = {
@@ -146,6 +148,37 @@ def _traffic_control_kind(control_type):
 
 def _traffic_light_color(state):
     return TRAFFIC_LIGHT_COLORS.get(int(state), COLORS["inactive_agent"])
+
+
+def _scale_ratio(numerator, denominator, default=1.0):
+    return default if denominator == 0 else float(numerator) / float(denominator)
+
+
+def _obs_scales(
+    env_cfg=None,
+    max_goal_position=100.0,
+    max_position=100.0,
+    max_veh_width=10.0,
+    max_veh_len=15.0,
+    max_road_segment_length=5.0,
+    max_road_segment_width=5.0,
+):
+    env_cfg = env_cfg or {}
+    max_goal_position = float(env_cfg.get("max_goal_position", max_goal_position))
+    max_position = float(env_cfg.get("max_position", max_position))
+    max_veh_width = float(env_cfg.get("max_veh_width", max_veh_width))
+    max_veh_len = float(env_cfg.get("max_veh_len", max_veh_len))
+    max_road_segment_length = float(env_cfg.get("max_road_segment_length", max_road_segment_length))
+    max_road_segment_width = float(env_cfg.get("max_road_segment_width", max_road_segment_width))
+    return {
+        "max_goal_position": max_goal_position,
+        "max_position": max_position,
+        "veh_width_to_position": _scale_ratio(max_veh_width, max_position),
+        "veh_len_to_position": _scale_ratio(max_veh_len, max_position),
+        "goal_to_position": _scale_ratio(max_goal_position, max_position),
+        "road_length_to_position": _scale_ratio(max_road_segment_length, max_position),
+        "road_width_to_position": _scale_ratio(max_road_segment_width, max_position),
+    }
 
 
 def _init_fig_ax(config: VizConfig, reuse_key: str = None, with_metrics: bool = False):
@@ -329,7 +362,7 @@ def _render_routes(ax, agents, lane_dict, active_indices):
             ax.add_collection(LineCollection(segs, colors=color, linewidths=2.0, alpha=0.6, linestyles="--", zorder=5))
 
 
-def _render_agents(ax, agents, active_indices, static_indices, config, px_per_meter, use_rear_axle=False):
+def _render_agents(ax, agents, active_indices, static_indices, config, px_per_meter):
     if not agents:
         return
     active_set, static_set = set(active_indices or []), set(static_indices or [])
@@ -726,7 +759,6 @@ def plot_simulator_state(
     show_trajectories: bool = False,
     simulation_mode: str = None,
     reuse_key: str = None,
-    use_rear_axle: bool = False,
 ) -> np.ndarray:
     """Render simulator state to RGB image array."""
     vis_radius = None if simulation_mode == "gigaflow" or simulation_mode is None else 75.0
@@ -777,7 +809,6 @@ def plot_simulator_state(
         scenario.get("static_agent_indices", []),
         vis_config,
         px_per_meter,
-        use_rear_axle,
     )
 
     ax.set_xlim(x_min, x_max)
@@ -826,6 +857,8 @@ def unpack_obs(
     max_lane_segments: int = 16,
     max_boundary_segments: int = 16,
     max_traffic_control_observations: int = 16,
+    lane_segment_dropout: float = 0.0,
+    boundary_segment_dropout: float = 0.0,
     agent_idx: int = 0,
 ):
     """
@@ -848,6 +881,8 @@ def unpack_obs(
     road_feature_size = binding.ROAD_FEATURES
     # Traffic control obs
     traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES
+    lane_segment_count = compute_effective_road_obs_count(max_lane_segments, lane_segment_dropout)
+    boundary_segment_count = compute_effective_road_obs_count(max_boundary_segments, boundary_segment_dropout)
 
     # Target obs
     target_features = binding.STATIC_TARGET_FEATURES if target_type == "static" else binding.DYNAMIC_TARGET_FEATURES
@@ -872,15 +907,15 @@ def unpack_obs(
 
     # Extract lane elements
     lane_start = partners_end
-    lane_end = lane_start + max_lane_segments * road_feature_size
+    lane_end = lane_start + lane_segment_count * road_feature_size
     lane_obs = obs_flat[:, lane_start:lane_end]
-    lane_obs = lane_obs.reshape(-1, max_lane_segments, road_feature_size)
+    lane_obs = lane_obs.reshape(-1, lane_segment_count, road_feature_size)
 
     # Extract boundary elements
     boundary_start = lane_end
-    boundary_end = boundary_start + max_boundary_segments * road_feature_size
+    boundary_end = boundary_start + boundary_segment_count * road_feature_size
     boundary_obs = obs_flat[:, boundary_start:boundary_end]
-    boundary_obs = boundary_obs.reshape(-1, max_boundary_segments, road_feature_size)
+    boundary_obs = boundary_obs.reshape(-1, boundary_segment_count, road_feature_size)
 
     # Extract traffic controls
     traffic_start = boundary_end
@@ -913,8 +948,15 @@ def plot_observation(
     max_lane_segments=32,
     max_boundary_segments=32,
     max_traffic_control_observations=4,
+    lane_segment_dropout=0.0,
+    boundary_segment_dropout=0.0,
     agent_idx=0,
-    use_rear_axle=False,
+    max_goal_position=100.0,
+    max_position=100.0,
+    max_veh_width=10.0,
+    max_veh_len=15.0,
+    max_road_segment_length=5.0,
+    max_road_segment_width=5.0,
 ) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
@@ -935,13 +977,27 @@ def plot_observation(
         max_lane_segments,
         max_boundary_segments,
         max_traffic_control_observations,
+        lane_segment_dropout,
+        boundary_segment_dropout,
         agent_idx,
     )
+    scales = _obs_scales(
+        max_goal_position=max_goal_position,
+        max_position=max_position,
+        max_veh_width=max_veh_width,
+        max_veh_len=max_veh_len,
+        max_road_segment_length=max_road_segment_length,
+        max_road_segment_width=max_road_segment_width,
+    )
+    target_position_scale = scales["goal_to_position"] if target_type == "static" else 1.0
 
     if dynamics_model == "jerk":
         ego_speed, ego_width, ego_length, steering_angle, a_long, a_lat, lcenter, lalign, speed_limit = ego_state
     else:
         ego_speed, ego_width, ego_length, lcenter, lalign, speed_limit = ego_state
+
+    ego_width *= scales["veh_width_to_position"]
+    ego_length *= scales["veh_len_to_position"]
 
     # Ego vehicle at origin
     ax.add_patch(
@@ -961,7 +1017,8 @@ def plot_observation(
     for i in range(target_obs.shape[0]):
         if np.all(target_obs[i] == 0):
             continue
-        wp_x, wp_y = target_obs[i][0], target_obs[i][1]
+        wp_x = target_obs[i][0] * target_position_scale
+        wp_y = target_obs[i][1] * target_position_scale
         if target_type == "static":
             color = "red" if i == 0 else "orange"
             marker = "*" if i == 0 else "o"
@@ -992,7 +1049,10 @@ def plot_observation(
     for i in range(partners_obs.shape[0]):
         if np.all(partners_obs[i] == 0):
             continue
-        rel_x, rel_y, width, length, heading_cos, heading_sin, _, _ = partners_obs[i]
+        rel_x, rel_y = partners_obs[i][0], partners_obs[i][1]
+        length = partners_obs[i][3] * scales["veh_len_to_position"]
+        width = partners_obs[i][4] * scales["veh_width_to_position"]
+        heading_cos, heading_sin = partners_obs[i][5], partners_obs[i][6]
         heading = np.arctan2(heading_sin, heading_cos)
 
         rect = mpatches.Rectangle(
@@ -1009,12 +1069,16 @@ def plot_observation(
         ax.add_patch(rect)
 
     # Road elements
+    rl2p = scales["road_length_to_position"]
+    rw2p = scales["road_width_to_position"]
     count_lane = 0
     for i in range(lane_obs.shape[0]):
         if np.all(lane_obs[i] == 0):
             continue
         count_lane += 1
-        rel_x, rel_y, length, width, dir_cos, dir_sin, _ = lane_obs[i]
+        rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
+        length, width = lane_obs[i][3] * rl2p, lane_obs[i][4] * rw2p
+        dir_cos, dir_sin = lane_obs[i][5], lane_obs[i][6]
         color = "lightgrey"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
         ax.plot(
@@ -1030,7 +1094,9 @@ def plot_observation(
         if np.all(boundary_obs[i] == 0):
             continue
         count_boundary += 1
-        rel_x, rel_y, length, width, dir_cos, dir_sin, _ = boundary_obs[i]
+        rel_x, rel_y = boundary_obs[i][0], boundary_obs[i][1]
+        length, width = boundary_obs[i][3] * rl2p, boundary_obs[i][4] * rw2p
+        dir_cos, dir_sin = boundary_obs[i][5], boundary_obs[i][6]
         color = "black"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
         ax.plot(
@@ -1207,8 +1273,12 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         max_lane_segments=args["env"]["max_lane_segment_observations"],
         max_boundary_segments=args["env"]["max_boundary_segment_observations"],
         max_traffic_control_observations=args["env"]["max_traffic_control_observations"],
+        lane_segment_dropout=args["env"].get("lane_segment_dropout", 0.0),
+        boundary_segment_dropout=args["env"].get("boundary_segment_dropout", 0.0),
         agent_idx=obs_index,
     )
+    scales = _obs_scales(args.get("env"))
+    target_position_scale = scales["goal_to_position"] if args["env"]["target_type"] == "static" else 1.0
 
     # --- Rotation Helper ---
     def _rot(x, y):
@@ -1222,6 +1292,9 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         ego_speed, ego_width, ego_length = ego_state[:3]
         steering_angle, a_long, a_lat = 0.0, 0.0, 0.0
 
+    ego_width *= scales["veh_width_to_position"]
+    ego_length *= scales["veh_len_to_position"]
+
     ego_data = {
         "s": round(float(ego_speed), 3),
         "w": round(float(ego_width), 3),
@@ -1232,14 +1305,17 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
     }
 
     # --- Parse Road Segments ---
+    rl2p = scales["road_length_to_position"]
+    rw2p = scales["road_width_to_position"]
+
     def parse_roads(roads):
         res = []
         for r in roads:
             if np.all(r == 0):
                 continue
             x, y = r[0], r[1]
-            length, width = r[2], r[3]
-            cos_a, sin_a = r[4], r[5]
+            length, width = r[3] * rl2p, r[4] * rw2p
+            cos_a, sin_a = r[5], r[6]
             if head_north:
                 x_rot, y_rot = _rot(x, y)
                 cos_rot, sin_rot = _rot(cos_a, sin_a)
@@ -1265,20 +1341,22 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
             continue
 
         px, py = _rot(p[0], p[1])
-        h = math.atan2(p[5], p[4])
+        h = math.atan2(p[6], p[5])
 
         if head_north:
             h += math.pi / 2
             h = (h + math.pi) % (2 * math.pi) - math.pi
 
+        pl = float(p[3]) * scales["veh_len_to_position"]
+        pw = float(p[4]) * scales["veh_width_to_position"]
         parsed_partners.append(
             {
                 "x": round(float(px), 3),
                 "y": round(float(py), 3),
-                "w": round(float(p[2]), 3),
-                "l": round(float(p[3]), 3),
+                "w": round(pw, 3),
+                "l": round(pl, 3),
                 "h": round(float(h), 3),
-                "s": round(float(p[6]), 3),
+                "s": round(float(p[7]), 3),
             }
         )
 
@@ -1315,7 +1393,7 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
     for g in target_obs:
         if np.all(g == 0):
             continue
-        gx, gy = _rot(g[0], g[1])
+        gx, gy = _rot(g[0] * target_position_scale, g[1] * target_position_scale)
         gps_data.append([round(float(gx), 3), round(float(gy), 3)])
 
     return {
@@ -1337,7 +1415,6 @@ def generate_interactive_replay(
     all_agents_obs_history,
     filename="replay.html",
     head_north=False,
-    use_rear_axle=False,
 ):
     # --- 0. COMPRESSION HELPER ---
     def pack_and_compress_data(data, decimals=3):
@@ -1545,7 +1622,7 @@ def generate_interactive_replay(
         const B64_PAYLOAD = "__COMPRESSED_PAYLOAD__";
 
         // Globals (populated after decompression)
-        let MAP, AGENTS, TRAFFIC, TRAJ, META, ALL_OBS, HEAD_NORTH, USE_REAR_AXLE;
+        let MAP, AGENTS, TRAFFIC, TRAJ, META, ALL_OBS, HEAD_NORTH;
 
         const c=document.getElementById('c'), ctx=c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
@@ -1582,7 +1659,6 @@ def generate_interactive_replay(
                 META = data.meta;
                 ALL_OBS = data.obs;
                 HEAD_NORTH = data.head_north;
-                USE_REAR_AXLE = data.use_rear_axle;
 
                 document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
                 document.getElementById('meta-id').innerText = META.scenario_id;
@@ -1622,7 +1698,6 @@ def generate_interactive_replay(
                 META = data.meta;
                 ALL_OBS = data.obs;
                 HEAD_NORTH = data.head_north;
-                USE_REAR_AXLE = data.use_rear_axle;
 
                 document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
                 document.getElementById('meta-id').innerText = META.scenario_id;
@@ -2065,7 +2140,6 @@ def generate_interactive_replay(
         "meta": metadata,
         "obs": all_agents_obs_history,
         "head_north": head_north,
-        "use_rear_axle": use_rear_axle,
     }
 
     print("Compressing replay data, this might take a second...")
@@ -2081,25 +2155,16 @@ def generate_interactive_replay(
 
 
 def build_gallery_index(folder_path="."):
-    # Assuming files still start with "map_" based on your example
-    files = [f for f in os.listdir(folder_path) if f.startswith("map_") and f.endswith(".html")]
+    files = [f for f in os.listdir(folder_path) if f != "index.html" and re.fullmatch(r"(.+)_([0-9]+)\.html", f)]
 
     if not files:
         print("No matching .html files found in this directory.")
         return
 
     def sort_key(filename):
-        # 1. Strip the '.html' extension
-        name_no_ext = filename[:-5]
-
-        # 2. Split from the right exactly once
-        # e.g., "map_000_000" -> ["map_000", "000"]
-        parts = name_no_ext.rsplit("_", 1)
-
-        env_map_name = parts[0]
-        global_episode_id = int(parts[1])
-
-        # 3. Sort first by episode ID, then by map name
+        match = re.fullmatch(r"(.+)_([0-9]+)\.html", filename)
+        env_map_name = match.group(1)
+        global_episode_id = int(match.group(2))
         return (global_episode_id, env_map_name)
 
     files.sort(key=sort_key)
