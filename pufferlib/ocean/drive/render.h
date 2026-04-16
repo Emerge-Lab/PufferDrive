@@ -338,23 +338,38 @@ Client *make_client(Drive *env) {
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
-    // Get initial target position from first active agent
-    Vector3 target_pos = {
-        0,
-        0, // Y is up
-        1  // Z is depth
-    };
+    // Get initial target position from first valid agent (active or expert_static).
+    // Agents may have large raw world coordinates (e.g. WOMD), so center on them.
+    float scene_cx = 0.0f, scene_cy = 0.0f, scene_cz = 0.0f;
+    for (int i = 0; i < env->num_total_agents; i++) {
+        Agent *a = &env->agents[i];
+        if (a->sim_valid && a->sim_x != INVALID_POSITION && a->sim_y != INVALID_POSITION) {
+            scene_cx = a->sim_x;
+            scene_cy = a->sim_y;
+            scene_cz = a->sim_z;
+            break;
+        }
+    }
+    // Fallback: use first road element midpoint if no valid agent found
+    if (scene_cx == 0.0f && scene_cy == 0.0f && env->num_road_elements > 0) {
+        RoadMapElement *r0 = &env->road_elements[0];
+        if (r0->segment_length > 0) {
+            scene_cx = r0->x[0];
+            scene_cy = r0->y[0];
+            scene_cz = r0->z[0];
+        }
+    }
 
-    // Set up camera to look at target from above and behind
-    client->default_camera_position = (Vector3){
-        0,      // Same X as target
-        120.0f, // 20 units above target
-        175.0f  // 20 units behind target
-    };
+    Vector3 target_pos = {scene_cx, scene_cy, scene_cz};
+
+    // Top-down bird's-eye view: camera directly above target in Z.
+    // World convention: X=east, Y=north, Z=altitude.
+    // This puts roads and agents in the same X-Y plane as seen from above.
+    client->default_camera_position = (Vector3){scene_cx, scene_cy, scene_cz + 200.0f};
     client->default_camera_target = target_pos;
     client->camera.position = client->default_camera_position;
     client->camera.target = client->default_camera_target;
-    client->camera.up = (Vector3){0.0f, -1.0f, 0.0f}; // Y is up
+    client->camera.up = (Vector3){0.0f, 1.0f, 0.0f}; // +Y (north) is screen-up
     client->camera.fovy = 45.0f;
     client->camera.projection = CAMERA_PERSPECTIVE;
     client->camera_zoom = 1.0f;
@@ -1153,24 +1168,28 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     // Per-frame road geometry — skipped entirely when the static road cache is
     // valid (headless batch path draws it from a VBO via draw_road_cached).
     if (!client->road_cache_valid) {
-        for (int i = 0; i < env->num_road_elements; i++) {
-            RoadMapElement *element = &env->road_elements[i];
-
-            for (int j = 0; j < element->segment_length - 1; j++) {
-                Vector3 start = {element->x[j], element->y[j], 1};
-                Vector3 end = {element->x[j + 1], element->y[j + 1], 1};
-                Color lineColor = GRAY;
-
-                if (is_road_lane(element->type))
-                    lineColor = GRAY;
-                else if (is_road_line(element->type))
-                    lineColor = BLUE;
-                else if (is_road_edge(element->type))
-                    lineColor = WHITE;
-                else if (is_misc_road(element->type))
-                    lineColor = RED;
-                if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-                    draw_road_edge(env, start.x, start.y, end.x, end.y, lineColor);
+        if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
+            rlSetLineWidth(1.5f);
+            for (int i = 0; i < env->num_road_elements; i++) {
+                RoadMapElement *element = &env->road_elements[i];
+                for (int j = 0; j < element->segment_length - 1; j++) {
+                    float sx = element->x[j], sy = element->y[j], sz = element->z[j];
+                    float ex = element->x[j + 1], ey = element->y[j + 1], ez = element->z[j + 1];
+                    if (is_road_lane(element->type)) {
+                        // Lane centerline: semi-transparent yellow line (matches headless cache)
+                        DrawLine3D((Vector3){sx, sy, sz + 0.05f}, (Vector3){ex, ey, ez + 0.05f},
+                                   (Color){230, 200, 90, 100});
+                    } else if (is_road_line(element->type)) {
+                        // Road marking: solid white line
+                        DrawLine3D((Vector3){sx, sy, sz + 0.05f}, (Vector3){ex, ey, ez + 0.05f}, WHITE);
+                    } else if (is_road_edge(element->type)) {
+                        // Road edge / curb: flat white line at same level as road markings
+                        DrawLine3D((Vector3){sx, sy, sz + 0.05f}, (Vector3){ex, ey, ez + 0.05f},
+                                   (Color){255, 255, 255, 200});
+                    } else if (is_misc_road(element->type)) {
+                        DrawLine3D((Vector3){sx, sy, sz + 0.05f}, (Vector3){ex, ey, ez + 0.05f},
+                                   (Color){255, 100, 100, 180});
+                    }
                 }
             }
         }

@@ -1756,6 +1756,8 @@ static void build_path(Drive *env, int agent_idx) {
     // Interpolate waypoints along route lanes
     for (int route_idx = 0; route_idx < agent->route_length && wp_count < MAX_NUM_WP_PATH; route_idx++) {
         int lane_idx = agent->route[route_idx];
+        if (lane_idx < 0 || lane_idx >= env->num_road_elements)
+            continue; // skip dummy/invalid route entries
         RoadMapElement *lane = &env->road_elements[lane_idx];
 
         for (int i = 0; i < lane->segment_length && wp_count < MAX_NUM_WP_PATH; i++) {
@@ -3060,6 +3062,13 @@ void set_active_agents(Drive *env) {
 
     // In GIGAFLOW mode, spawn agents dynamically on the map
     if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+        if (env->grid_map->num_drivable_grid_cell == 0) {
+            env->agents = (Agent *)calloc(1, sizeof(Agent));
+            env->active_agent_indices = (int *)malloc(sizeof(int));
+            env->active_agent_count = 0;
+            env->num_agents = 0;
+            return;
+        }
         int num_agents_to_create = env->num_controllable_agents;
 
         // Initialize agents for GIGAFLOW mode

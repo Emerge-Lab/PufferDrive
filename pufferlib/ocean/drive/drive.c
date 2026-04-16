@@ -1,6 +1,7 @@
 #include "drive.h"
 #include "drivenet.h"
 #include <string.h>
+#include <dirent.h>
 #include "../env_config.h"
 
 // Use this test if the network changes to ensure that the forward pass
@@ -49,9 +50,32 @@ void demo() {
         exit(1);
     }
 
-    // Build map path: <map_dir>/Town01.bin
+    // Optional: point to a specific map file instead of scanning map_dir
+    const char *map_file = NULL; // e.g. "pufferlib/resources/drive/binaries/dense/tfrecord-00105-of-00150_75.bin"
+
     char map_path[512];
-    snprintf(map_path, sizeof(map_path), "%s/Town01.bin", conf.map_dir);
+    if (map_file) {
+        snprintf(map_path, sizeof(map_path), "%s", map_file);
+    } else {
+        // Find first .bin file in map_dir (works for both CARLA and WOMD dirs)
+        DIR *dir = opendir(conf.map_dir);
+        struct dirent *entry;
+        map_path[0] = '\0';
+        if (dir) {
+            while ((entry = readdir(dir)) != NULL) {
+                size_t len = strlen(entry->d_name);
+                if (len > 4 && strcmp(entry->d_name + len - 4, ".bin") == 0) {
+                    snprintf(map_path, sizeof(map_path), "%s/%s", conf.map_dir, entry->d_name);
+                    break;
+                }
+            }
+            closedir(dir);
+        }
+        if (map_path[0] == '\0') {
+            fprintf(stderr, "Error: no .bin files found in %s\n", conf.map_dir);
+            exit(1);
+        }
+    }
 
     Drive env = {
         .human_agent_idx = 0,
