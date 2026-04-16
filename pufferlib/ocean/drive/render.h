@@ -1349,7 +1349,8 @@ void c_render(Drive *env, int view_mode) {
         float map_w = fabsf(env->grid_map->bottom_right_x - env->grid_map->top_left_x);
         float map_h = fabsf(env->grid_map->bottom_right_y - env->grid_map->top_left_y);
         render_camera.fovy = fmaxf(map_w, map_h) * 1.05f;
-    } else if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS && env->active_agent_count > 0) {
+    } else if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS &&
+               env->active_agent_count > 0) {
         int agent_idx = env->active_agent_indices[env->human_agent_idx];
         Agent *agent = &env->agents[agent_idx];
         render_camera = (Camera3D){0};

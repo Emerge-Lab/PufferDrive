@@ -18,6 +18,7 @@ Views:
     bev          - ego-following ortho camera with wireframe boxes (view_mode=1)
     topdown_sim  - fixed ortho camera over full map with 3D car models (view_mode=2)
 """
+
 import argparse
 import os
 import sys
@@ -63,7 +64,10 @@ def main():
         map_bin = os.path.join(project_root, "pufferlib/resources/drive/binaries/carla_py123d", f"{cli.map}.bin")
         if not os.path.exists(map_bin):
             print(f"Error: map binary not found at {map_bin}")
-            print("Available maps:", os.listdir(os.path.join(project_root, "pufferlib/resources/drive/binaries/carla_py123d")))
+            print(
+                "Available maps:",
+                os.listdir(os.path.join(project_root, "pufferlib/resources/drive/binaries/carla_py123d")),
+            )
             sys.exit(1)
         dst = os.path.join(map_dir, f"{cli.map}.bin")
         if not os.path.exists(dst):
