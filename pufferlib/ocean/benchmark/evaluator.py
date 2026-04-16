@@ -869,9 +869,11 @@ class SafeEvaluator:
         eval_config["env"]["reward_conditioning"] = 1
 
         # Apply safe_eval overrides for map_dir, goal distances, etc.
-        for override_key in ("map_dir", "num_maps", "min_goal_distance", "max_goal_distance"):
+        for override_key in ("map_dir", "num_maps", "min_goal_distance", "max_goal_distance", "dynamic_noise_scale"):
             if override_key in self.safe_eval_config:
                 eval_config["env"][override_key] = self.safe_eval_config[override_key]
+        
+        print(f"[SafeEval] dynamic_noise_scale = {eval_config['env'].get('dynamic_noise_scale', 'NOT SET')}")
 
         # Discover valid reward bound names from env config
         valid_bounds = set()
