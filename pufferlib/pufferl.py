@@ -490,6 +490,8 @@ class PuffeRL:
             pufferlib.utils.run_driving_behaviours_eval_in_subprocess(
                 self.config, self.logger, self.global_step, behaviours_config
             )
+            if self.config["eval"].get("render_driving_behaviours"):
+                self._render_driving_behaviours(behaviours_config)
 
         if self.config["eval"]["multi_scenario_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
@@ -943,6 +945,75 @@ class PuffeRL:
 
         self.logger.log(logs, agent_steps)
         return logs
+
+    def _render_driving_behaviours(self, behaviours_config):
+        """Render one scenario per driving behaviour class using eval_multi_scenarios_render."""
+        EVAL_SECTIONS_PREFIX = "eval_"
+        backend_name = self.config["eval"].get("multi_scenario_render_backend", "egl")
+        bev_views = [(0, "", "sim_state"), (1, "_bev", "bev")] if backend_name == "egl" else [(0, "", "sim_state")]
+
+        for class_name, class_cfg in behaviours_config.items():
+            if not class_name.startswith(EVAL_SECTIONS_PREFIX):
+                continue
+            map_dir = class_cfg.get("map_dir", "")
+            if isinstance(map_dir, str):
+                map_dir = map_dir.strip('"').strip("'")
+            if not os.path.isdir(map_dir) or not any(f.endswith(".bin") for f in os.listdir(map_dir)):
+                continue
+
+            short = class_name[len(EVAL_SECTIONS_PREFIX) :]
+            num_maps = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+            render_overrides = build_eval_overrides(
+                simulation_mode="replay",
+                num_agents=1,
+                num_scenarios=1,
+                map_dir=map_dir,
+            )
+            render_overrides["env"]["control_mode"] = "control_sdc_only"
+            render_overrides["env"]["num_maps"] = num_maps
+            render_overrides["env"]["scenario_length"] = class_cfg.get("scenario_length", 91)
+
+            render_args = load_eval_multi_scenarios_config(
+                env_name=self.config["env"],
+                model_path=None,
+                eval_overrides=render_overrides,
+            )
+            experiment_name = f"{self.config['env']}_{self.logger.run_id}"
+            render_args["global_step"] = self.global_step
+            render_args["num_scenarios"] = 1
+            render_args["eval_simulation"] = "replay"
+            render_args["render"] = True
+            render_args["inline_eval"] = True
+            render_args["eval_results_dir"] = os.path.join(
+                self.config["data_dir"],
+                experiment_name,
+                "renders",
+                f"epoch_{self.epoch:08d}",
+                "driving_behaviours",
+                short,
+            )
+
+            for vmode, vsuffix, vlabel in bev_views:
+                try:
+                    eval_multi_scenarios_render(
+                        env_name=self.config["env"],
+                        args=dict(render_args),
+                        vecenv=None,
+                        policy=self.uncompiled_policy,
+                        logger=self.logger,
+                        metric_prefix=f"driving_behaviours/{short}",
+                        quiet=True,
+                        render_backend=backend_name,
+                        view_mode=vmode,
+                        video_suffix=vsuffix,
+                        log_view_label=vlabel,
+                        render_max_steps=(self.config["eval"].get("render_max_steps", 50) or None),
+                    )
+                except Exception as e:
+                    import traceback
+
+                    print(f"DrivingBehavioursRender [{short}] view={vlabel}: {type(e).__name__}: {e}")
+                    traceback.print_exc()
 
     def close(self):
         self.vecenv.close()
@@ -1854,9 +1925,10 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
                 "resample_frequency": 91,
                 "scenario_length": 91,
                 "max_agents_per_env": 64,
-                "map_dir": "pufferlib/resources/drive/binaries/womd",
+                "map_dir": map_dir or "pufferlib/resources/drive/binaries/womd",
                 "num_maps": num_scenarios,
                 "num_agents": num_agents,
+                "min_agents_per_env": 1,
                 "termination_mode": 0.0,
                 # "control_mode": "control_sdc_only",
             },

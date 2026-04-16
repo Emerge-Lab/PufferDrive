@@ -1005,12 +1005,25 @@ def plot_observation(
             (-ego_length / 2, -ego_width / 2),
             ego_length,
             ego_width,
-            facecolor="blue",
-            edgecolor="black",
-            linewidth=2,
-            alpha=0.7,
+            facecolor="#0055FF",
+            edgecolor="#FFD700",
+            linewidth=4,
+            alpha=0.9,
             zorder=10,
         )
+    )
+    # SDC label above the vehicle
+    ax.text(
+        0,
+        ego_width / 2 + 0.03,
+        "SDC",
+        ha="center",
+        va="bottom",
+        fontsize=11,
+        fontweight="bold",
+        color="#FFD700",
+        bbox=dict(boxstyle="round,pad=0.2", facecolor="#0055FF", edgecolor="#FFD700", linewidth=1.5),
+        zorder=11,
     )
 
     # Draw target waypoints
