@@ -2045,12 +2045,12 @@ static void compute_goals(Drive *env, int agent_idx) {
         // If we reached the end of the current path, compute a new route and retry.
         // Bounded by iter <= 4 to prevent infinite loops on degenerate maps.
         if (needed_s >= path_end_s) {
-            if (iter > 3) {
-                printf("[GIGAFLOW WARNING] -> Max iterations in compute_goals for agent %d\n", agent_idx);
-                agent->removed = 1;
-                return;
-            }
             if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+                if (iter > 3) {
+                    printf("[GIGAFLOW WARNING] -> Max iterations in compute_goals for agent %d\n", agent_idx);
+                    agent->removed = 1;
+                    return;
+                }
                 int route_ok = compute_new_route(env, agent_idx, path->waypoints[base_idx].lane_idx);
                 if (route_ok == 0) {
                     agent->removed = 1;
@@ -3049,6 +3049,14 @@ static bool should_control_agent(Drive *env, int agent_idx) {
     if (!type_is_controllable || agent->mark_as_expert)
         return false;
 
+    // In REPLAY mode without route data, control agents spawning far enough from their goal
+    if (env->simulation_mode == SIMULATION_REPLAY && agent->route_length == 0) {
+        float dx = agent->goal_position_x - agent->log_trajectory_x[env->init_steps];
+        float dy = agent->goal_position_y - agent->log_trajectory_y[env->init_steps];
+        float dz = agent->goal_position_z - agent->log_trajectory_z[env->init_steps];
+        return sqrtf(dx * dx + dy * dy + dz * dz) > env->goal_radius;
+    }
+
     // Control if the agent has a route to follow
     return agent->route_length != 0;
 }
@@ -3327,8 +3335,26 @@ void init(Drive *env) {
     if (env->simulation_mode == SIMULATION_REPLAY) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
-            build_path(env, agent_idx);
-            compute_goals(env, agent_idx);
+            Agent *agent = &env->agents[agent_idx];
+            if (agent->route_length == 0) {
+                // No route data: set a single goal at the final trajectory position
+                int last = agent->trajectory_length - 1;
+                float gx = agent->log_trajectory_x[last];
+                float gy = agent->log_trajectory_y[last];
+                float gz = agent->log_trajectory_z[last];
+                for (int g = 0; g < env->num_target_waypoints && g < MAX_TARGET_WAYPOINTS; g++) {
+                    agent->goal_positions_x[g] = gx;
+                    agent->goal_positions_y[g] = gy;
+                    agent->goal_positions_z[g] = gz;
+                }
+                agent->current_goal_idx = 0;
+                agent->goal_position_x = gx;
+                agent->goal_position_y = gy;
+                agent->goal_position_z = gz;
+            } else {
+                build_path(env, agent_idx);
+                compute_goals(env, agent_idx);
+            }
         }
     }
 }
@@ -4704,7 +4730,23 @@ void c_reset(Drive *env) {
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
 
-        compute_goals(env, agent_idx);
+        if (env->simulation_mode == SIMULATION_REPLAY && agent->route_length == 0) {
+            int last = agent->trajectory_length - 1;
+            float gx = agent->log_trajectory_x[last];
+            float gy = agent->log_trajectory_y[last];
+            float gz = agent->log_trajectory_z[last];
+            for (int g = 0; g < env->num_target_waypoints && g < MAX_TARGET_WAYPOINTS; g++) {
+                agent->goal_positions_x[g] = gx;
+                agent->goal_positions_y[g] = gy;
+                agent->goal_positions_z[g] = gz;
+            }
+            agent->current_goal_idx = 0;
+            agent->goal_position_x = gx;
+            agent->goal_position_y = gy;
+            agent->goal_position_z = gz;
+        } else {
+            compute_goals(env, agent_idx);
+        }
         initialize_agent_progression(env, agent_idx);
         compute_metrics(env, agent_idx);
     }
@@ -4803,7 +4845,12 @@ void c_step(Drive *env) {
             if (agent->current_goal_idx == env->num_target_waypoints) {
                 // Last goal reached - generate new set of goals
                 env->logs[i].num_goals_reached += 1;
-                compute_goals(env, agent_idx);
+                if (env->simulation_mode == SIMULATION_REPLAY && agent->route_length == 0) {
+                    // Goal is fixed (final trajectory position); leave current_goal_idx saturated
+                    // so the reached-goal condition won't fire again this episode
+                } else {
+                    compute_goals(env, agent_idx);
+                }
             } else {
                 // Advance alias to next goal
                 agent->goal_position_x = agent->goal_positions_x[agent->current_goal_idx];

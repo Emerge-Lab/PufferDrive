@@ -1542,6 +1542,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int seed = unpack(kwargs, "seed");
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
+    float goal_radius = (float)unpack(kwargs, "goal_radius");
     int num_eval_scenarios = unpack(kwargs, "num_eval_scenarios");
     if (min_agents_per_env <= 0 || max_agents_per_env <= 0) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env and max_agents_per_env must be > 0");
@@ -1676,6 +1677,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->simulation_mode = simulation_mode;
         env->init_steps = init_steps;
         env->num_max_agents = max_agents_per_env;
+        env->goal_radius = goal_radius;
         load_map_binary(map_file, env);
 
         set_active_agents(env);
