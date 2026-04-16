@@ -11,6 +11,7 @@
 //                        Matches 3.0's VIEW_MODE_BEV_AGENT_OBS branch.
 #define VIEW_MODE_DEFAULT 0
 #define VIEW_MODE_BEV_AGENT_OBS 1
+#define VIEW_MODE_TOPDOWN_SIM 2
 
 #include <raylib.h>
 #include "rlgl.h"
@@ -1337,24 +1338,25 @@ void c_render(Drive *env, int view_mode) {
     // ortho camera every frame so it stays centered on the ego agent as
     // the agent moves through the map. Mirrors 3.0 drive.h's c_render.
     Camera3D render_camera;
-    if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS && env->active_agent_count > 0) {
+    if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_TOPDOWN_SIM) {
+        render_camera = (Camera3D){0};
+        float cx = (env->grid_map->top_left_x + env->grid_map->bottom_right_x) * 0.5f;
+        float cy = (env->grid_map->top_left_y + env->grid_map->bottom_right_y) * 0.5f;
+        render_camera.position = (Vector3){cx, cy, 400.0f};
+        render_camera.target = (Vector3){cx, cy, 0.0f};
+        render_camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+        render_camera.projection = CAMERA_ORTHOGRAPHIC;
+        float map_w = fabsf(env->grid_map->bottom_right_x - env->grid_map->top_left_x);
+        float map_h = fabsf(env->grid_map->bottom_right_y - env->grid_map->top_left_y);
+        render_camera.fovy = fmaxf(map_w, map_h) * 1.05f;
+    } else if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS && env->active_agent_count > 0) {
         int agent_idx = env->active_agent_indices[env->human_agent_idx];
         Agent *agent = &env->agents[agent_idx];
         render_camera = (Camera3D){0};
-        // Park the ortho camera 400m above the agent's actual ground
-        // height so hilly maps render consistently. target z is
-        // agent->sim_z (not hardcoded 0) so the view axis is always
-        // straight down relative to the agent regardless of elevation.
         render_camera.position = (Vector3){agent->sim_x, agent->sim_y, agent->sim_z + 400.0f};
         render_camera.target = (Vector3){agent->sim_x, agent->sim_y, agent->sim_z};
         render_camera.up = (Vector3){0.0f, -1.0f, 0.0f};
         render_camera.projection = CAMERA_ORTHOGRAPHIC;
-        // Match 3.0's BEV fovy exactly. 3.0 computes vision_range as
-        // ceil(observation_window_size / GRID_CELL_SIZE) + 1, giving
-        // fovy = 210m for a 100m observation window. Our init_grid_map
-        // uses 2*half_range+1 which is ~2x larger, so using env->grid_map->
-        // vision_range here would produce a 410m viewport that makes the
-        // ego agent look tiny. Compute fovy directly from obs distances.
         float _bev_obs_window =
             fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist), env->road_obs_side_dist);
         int _bev_vrange = (int)ceilf(_bev_obs_window / GRID_CELL_SIZE) + 1;
