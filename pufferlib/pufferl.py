@@ -1002,6 +1002,7 @@ class PuffeRL:
                         policy=self.uncompiled_policy,
                         logger=self.logger,
                         metric_prefix=f"driving_behaviours/{short}",
+                        render_key_prefix=f"driving_behaviours/{short}/render/{vlabel}",
                         quiet=True,
                         render_backend=backend_name,
                         view_mode=vmode,
@@ -2252,6 +2253,7 @@ def eval_multi_scenarios_render(
     video_suffix="",
     log_view_label="render",
     render_max_steps=None,
+    render_key_prefix=None,
 ):
     # Set fixed seed for reproducible evaluation
     np.random.seed(42)
@@ -2517,8 +2519,31 @@ def eval_multi_scenarios_render(
     _sys_instr.stderr.write("[render-instr] rollout loop done\n")
     _sys_instr.stderr.flush()
 
+    # render_key_prefix overrides metric_prefix for wandb media uploads only.
+    # This lets callers keep metric_prefix for scalar metrics while using a
+    # different namespace for renders (e.g. driving_behaviours/<class>/render/<view>).
+    _upload_prefix = render_key_prefix if render_key_prefix is not None else metric_prefix
+
     if html_mode:
         pufferlib.viz.build_gallery_index(gif_folder)
+        if logger is not None:
+            try:
+                import wandb
+
+                html_paths = sorted(os.path.join(gif_folder, f) for f in os.listdir(gif_folder) if f.endswith(".html"))
+                if html_paths:
+                    step = args.get("global_step")
+                    html_log = {
+                        f"{_upload_prefix}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Html(p)
+                        for p in html_paths
+                    }
+                    if hasattr(logger, "log"):
+                        logger.log(html_log, step) if step is not None else logger.log(html_log)
+                    if not quiet:
+                        print(f"Uploaded {len(html_paths)} render HTML(s) to wandb")
+            except Exception as e:
+                if not quiet:
+                    print(f"Failed to upload render HTMLs to wandb: {e}")
 
     if saved_cwd is not None:
         os.chdir(saved_cwd)
@@ -2532,10 +2557,6 @@ def eval_multi_scenarios_render(
     _sys_instr.stderr.write("[render-instr] _log_eval_metrics done\n")
     _sys_instr.stderr.flush()
 
-    # Upload each produced mp4 to wandb as a Video log. We only do this when
-    # the EGL backend was used (so mp4_folder is populated) and a logger is
-    # available. Each video is logged under render/<scenario_stem> keyed by
-    # the current global_step, which wandb then displays as a media grid.
     if egl_mode and mp4_folder and logger is not None:
         try:
             import wandb
@@ -2543,19 +2564,17 @@ def eval_multi_scenarios_render(
             mp4_paths = sorted(os.path.join(mp4_folder, f) for f in os.listdir(mp4_folder) if f.endswith(".mp4"))
             if mp4_paths:
                 video_log = {
-                    f"render_{log_view_label}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(
-                        p, fps=30, format="mp4"
-                    )
+                    f"{_upload_prefix}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, fps=30, format="mp4")
                     for p in mp4_paths
                 }
                 step = args.get("global_step")
                 if hasattr(logger, "log"):
                     logger.log(video_log, step) if step is not None else logger.log(video_log)
                 if not quiet:
-                    print(f"✅ Uploaded {len(mp4_paths)} render mp4(s) to wandb")
+                    print(f"Uploaded {len(mp4_paths)} render mp4(s) to wandb")
         except Exception as e:
             if not quiet:
-                print(f"⚠️ Failed to upload render mp4s to wandb: {e}")
+                print(f"Failed to upload render mp4s to wandb: {e}")
 
     # Close vectorized environment to avoid file descriptor leaks
     vecenv.close()
