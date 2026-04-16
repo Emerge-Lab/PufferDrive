@@ -165,6 +165,114 @@ def run_wosac_eval_in_subprocess(config, logger, global_step):
         print(f"Failed to run WOSAC evaluation: {type(e).__name__}: {e}")
 
 
+def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behaviours_config):
+    """
+    Run driving behaviours evaluation for each of the specified scenario classes in a subprocess.
+
+    For each class defined in behaviours_config, calls `puffer eval puffer_drive` with:
+      - simulation_mode=replay, control_mode=control_sdc_only, init_mode=create_all_valid
+      - map_dir and num_agents from the class config
+    Parses HUMAN_REPLAY_METRICS_START/END JSON from stdout and logs to wandb under
+    driving_behaviours/<class_name>/<metric>.
+    """
+    try:
+        run_id = logger.run_id
+        model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
+        model_files = glob.glob(os.path.join(model_dir, "models", "model_*.pt"))
+
+        if not model_files:
+            print("DrivingBehavioursEval: no model files found, skipping.")
+            return
+
+        latest_cpt = max(model_files, key=os.path.getctime)
+        EVAL_SECTIONS_PREFIX = "eval_"
+        classes = [(name, cfg) for name, cfg in behaviours_config.items() if name.startswith(EVAL_SECTIONS_PREFIX)]
+
+        all_results = {}
+        for class_name, class_cfg in classes:
+            map_dir = class_cfg.get("map_dir", "")
+            if isinstance(map_dir, str):
+                map_dir = map_dir.strip('"').strip("'")
+            if not os.path.isdir(map_dir):
+                print(
+                    f"DrivingBehavioursEval [{class_name[len(EVAL_SECTIONS_PREFIX) :]}]: map_dir not found, skipping ({map_dir})"
+                )
+                continue
+            num_agents = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+            if num_agents == 0:
+                print(
+                    f"DrivingBehavioursEval [{class_name[len(EVAL_SECTIONS_PREFIX) :]}]: no .bin files in {map_dir}, skipping"
+                )
+                continue
+            scenario_length = class_cfg.get("scenario_length", 91)
+            short = class_name[len(EVAL_SECTIONS_PREFIX) :]
+
+            cmd = [
+                sys.executable,
+                "-m",
+                "pufferlib.pufferl",
+                "eval",
+                config["env"],
+                "--load-model-path",
+                latest_cpt,
+                "--eval.wosac-realism-eval",
+                "False",
+                "--eval.human-replay-eval",
+                "True",
+                "--eval.map-dir",
+                map_dir,
+                "--eval.human-replay-num-agents",
+                str(num_agents),
+                "--eval.human-replay-control-mode",
+                str(config["eval"].get("human_replay_control_mode", "control_sdc_only")),
+                "--env.simulation-mode",
+                "replay",
+                "--env.init-mode",
+                "create_all_valid",
+                "--env.scenario-length",
+                str(scenario_length),
+            ]
+
+            print(f"DrivingBehavioursEval: running class '{short}' with map_dir={map_dir}")
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.getcwd())
+                if result.returncode == 0:
+                    stdout = result.stdout
+                    if "HUMAN_REPLAY_METRICS_START" in stdout and "HUMAN_REPLAY_METRICS_END" in stdout:
+                        start = stdout.find("HUMAN_REPLAY_METRICS_START") + len("HUMAN_REPLAY_METRICS_START")
+                        end = stdout.find("HUMAN_REPLAY_METRICS_END")
+                        metrics = json.loads(stdout[start:end].strip())
+                        all_results[class_name] = metrics
+                        print(f"DrivingBehavioursEval [{short}]: {metrics}")
+                    else:
+                        print(f"DrivingBehavioursEval [{short}]: no metrics found in output")
+                else:
+                    print(
+                        f"DrivingBehavioursEval [{short}]: subprocess failed (exit {result.returncode}): {result.stderr[-500:]}"
+                    )
+            except subprocess.TimeoutExpired:
+                print(f"DrivingBehavioursEval [{short}]: timed out")
+            except Exception as e:
+                print(f"DrivingBehavioursEval [{short}]: error: {e}")
+
+        # Log all class results to wandb
+        if hasattr(logger, "wandb") and logger.wandb and all_results:
+            payload = {}
+            for class_name, metrics in all_results.items():
+                short = class_name[len(EVAL_SECTIONS_PREFIX) :]
+                for k, v in metrics.items():
+                    try:
+                        payload[f"driving_behaviours/{short}/{k}"] = float(v)
+                    except (TypeError, ValueError):
+                        pass
+            if payload:
+                payload["train_step"] = global_step
+                logger.wandb.log(payload, step=global_step)
+
+    except Exception as e:
+        print(f"DrivingBehavioursEval: unexpected error: {e}")
+
+
 def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
     """
     Generate and log training videos using C-based rendering.

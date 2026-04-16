@@ -1552,7 +1552,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env must be <= max_agents_per_env");
         return NULL;
     }
-    if (num_agents < min_agents_per_env) {
+    if (simulation_mode == SIMULATION_GIGAFLOW && num_agents < min_agents_per_env) {
         PyErr_SetString(PyExc_ValueError, "num_agents must be >= min_agents_per_env");
         return NULL;
     }

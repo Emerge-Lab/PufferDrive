@@ -38,6 +38,7 @@ from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
 import pufferlib.sweep
+import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
 import pufferlib.viz
@@ -475,6 +476,20 @@ class PuffeRL:
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
         ):
             pufferlib.utils.run_human_replay_eval_in_subprocess(self.config, self.logger, self.global_step)
+
+        behaviours_eval_enabled = self.config["eval"].get("driving_behaviours_eval", False)
+        behaviours_eval_interval = int(self.config["eval"].get("driving_behaviours_eval_interval", 25))
+        behaviours_config = self.config.get("driving_behaviours_eval")
+        if (
+            behaviours_eval_enabled
+            and behaviours_config
+            and behaviours_eval_interval > 0
+            and (self.epoch % behaviours_eval_interval == 0 or done_training)
+        ):
+            self.save_checkpoint()
+            pufferlib.utils.run_driving_behaviours_eval_in_subprocess(
+                self.config, self.logger, self.global_step, behaviours_config
+            )
 
         if self.config["eval"]["multi_scenario_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
@@ -1519,7 +1534,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             experiment_dir=experiment_dir,
         )
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    train_config = dict(
+        **args["train"],
+        env=env_name,
+        eval=args.get("eval", {}),
+        driving_behaviours_eval=args.get("driving_behaviours_eval"),
+    )
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
@@ -2771,6 +2791,22 @@ def load_config(env_name, config_dir=None):
         prev[subkey] = value
 
     args["train"]["use_rnn"] = args["rnn_name"] is not None
+
+    # Load driving behaviours eval config if specified
+    behaviours_config_path = args.get("eval", {}).get("driving_behaviours_eval_config")
+    if behaviours_config_path:
+        if isinstance(behaviours_config_path, str):
+            behaviours_config_path = behaviours_config_path.strip('"').strip("'")
+        if os.path.exists(behaviours_config_path):
+            print(f"Loading driving behaviours eval config from {behaviours_config_path}")
+            bp = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
+            bp.read(behaviours_config_path)
+            behaviours = {}
+            for section in bp.sections():
+                behaviours[section] = {k: puffer_type(v) for k, v in bp[section].items()}
+            args["driving_behaviours_eval"] = behaviours
+        else:
+            print(f"Warning: driving_behaviours_eval_config not found: {behaviours_config_path}")
 
     # Use World size to divide Num_Agents / minibatch size in DDP
     if "LOCAL_RANK" in os.environ:
