@@ -2400,6 +2400,15 @@ static int collision_check(Drive *env, int agent_idx) {
     return car_collided_with_index;
 }
 
+static bool is_adversarial_agent(Drive *env, int agent_idx) {
+    for (int i = 1; i < env->active_agent_count; i++) {
+        if (env->active_agent_indices[i] == agent_idx) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Classify whether a collision is at-fault for the ego agent.
 static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
     Agent *agent = &env->agents[agent_idx];
@@ -2716,6 +2725,7 @@ static void reset_agent_state(Agent *agent) {
     agent->ttc_violations = 0;
     agent->ttc_samples = 0;
     agent->at_fault_collision = 0;
+    agent->collided_with_agent_idx = -1;
     agent->multi_lane_time = 0.0f;
     agent->phantom_braking_counter = 0;
     agent->is_blind_partner = 0;
@@ -3793,10 +3803,12 @@ static void compute_metrics(Drive *env, int agent_idx) {
     }
 
     // Priority 2: Handle vehicle collision
+    agent->collided_with_agent_idx = -1;
     int car_collided_with_index = collision_check(env, agent_idx);
 
     if (car_collided_with_index != -1) {
         agent->metrics_array[COLLISION_IDX] = 1.0f;
+        agent->collided_with_agent_idx = car_collided_with_index;
         // Track at-fault collisions for evaluation metrics.
         if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
             agent->at_fault_collision = 1;
@@ -3846,9 +3858,14 @@ static RewardTerms compute_rewards(Drive *env, int i) {
 
     // Collision reward (GIGAFLOW)
     if (agent->metrics_array[COLLISION_IDX] > 0.0f) {
+        int target_agent_idx = (env->active_agent_count > 0) ? env->active_agent_indices[0] : -1;
+        int collided_with_idx = agent->collided_with_agent_idx;
+        bool apply_collision_penalty = (agent_idx == target_agent_idx) || is_adversarial_agent(env, collided_with_idx);
+
         // Velocity-dependent penalty: incentivizes braking before unavoidable collision.
         // At max speed (~20 m/s): extra -2.0 on top of base coefficient.
-        float reward_collision = -(agent->reward_coefs[REWARD_COEF_COLLISION] + 0.1f * agent->sim_speed);
+        float reward_collision =
+            apply_collision_penalty ? -(agent->reward_coefs[REWARD_COEF_COLLISION] + 0.1f * agent->sim_speed) : 0.0f;
 
         terms.collision += reward_collision;
         env->logs[i].collision_rate = 1.0f;

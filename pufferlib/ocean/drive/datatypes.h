@@ -242,6 +242,7 @@ struct Agent {
     int ttc_violations;              // Count of TTC < 0.95s violations
     int ttc_samples;                 // Total TTC samples for rate
     int at_fault_collision;          // 1 if at-fault collision occurred this episode
+    int collided_with_agent_idx;     // Last collision partner index for reward shaping / analysis
     float multi_lane_time;           // Accumulated time (s) on multiple lanes
     int phantom_braking_counter;     // >0 means currently phantom braking
     unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
