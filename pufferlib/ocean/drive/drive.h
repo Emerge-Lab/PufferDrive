@@ -3336,24 +3336,29 @@ void init(Drive *env) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             Agent *agent = &env->agents[agent_idx];
-            if (agent->route_length == 0) {
-                // No route data: set a single goal at the final trajectory position
-                int last = agent->trajectory_length - 1;
-                float gx = agent->log_trajectory_x[last];
-                float gy = agent->log_trajectory_y[last];
-                float gz = agent->log_trajectory_z[last];
-                for (int g = 0; g < env->num_target_waypoints && g < MAX_TARGET_WAYPOINTS; g++) {
-                    agent->goal_positions_x[g] = gx;
-                    agent->goal_positions_y[g] = gy;
-                    agent->goal_positions_z[g] = gz;
+            // For replay mode, always place waypoints along the logged
+            // trajectory. Route-based compute_goals can produce goals that
+            // diverge from the actual path the SDC should follow.
+            {
+                int start = env->init_steps > 0 ? env->init_steps : 0;
+                int remaining = agent->trajectory_length - 1 - start;
+                if (remaining < 1)
+                    remaining = 1;
+                int num_wp = env->num_target_waypoints;
+                if (num_wp > MAX_TARGET_WAYPOINTS)
+                    num_wp = MAX_TARGET_WAYPOINTS;
+                for (int g = 0; g < num_wp; g++) {
+                    int t = start + (g + 1) * remaining / num_wp;
+                    if (t >= agent->trajectory_length)
+                        t = agent->trajectory_length - 1;
+                    agent->goal_positions_x[g] = agent->log_trajectory_x[t];
+                    agent->goal_positions_y[g] = agent->log_trajectory_y[t];
+                    agent->goal_positions_z[g] = agent->log_trajectory_z[t];
                 }
                 agent->current_goal_idx = 0;
-                agent->goal_position_x = gx;
-                agent->goal_position_y = gy;
-                agent->goal_position_z = gz;
-            } else {
-                build_path(env, agent_idx);
-                compute_goals(env, agent_idx);
+                agent->goal_position_x = agent->goal_positions_x[0];
+                agent->goal_position_y = agent->goal_positions_y[0];
+                agent->goal_position_z = agent->goal_positions_z[0];
             }
         }
     }
@@ -4843,11 +4848,12 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[agent_idx];
         if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
             if (agent->current_goal_idx == env->num_target_waypoints) {
-                // Last goal reached - generate new set of goals
+                // Last goal reached
                 env->logs[i].num_goals_reached += 1;
-                if (env->simulation_mode == SIMULATION_REPLAY && agent->route_length == 0) {
-                    // Goal is fixed (final trajectory position); leave current_goal_idx saturated
-                    // so the reached-goal condition won't fire again this episode
+                if (env->simulation_mode == SIMULATION_REPLAY) {
+                    // Replay mode: leave current_goal_idx saturated so the
+                    // reached-goal condition won't fire again. Re-generating
+                    // route-based goals on WOMD maps fails (removed=1).
                 } else {
                     compute_goals(env, agent_idx);
                 }

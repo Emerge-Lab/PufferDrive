@@ -1160,10 +1160,24 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             continue;
         }
         if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-            DrawSphere((Vector3){agent->goal_position_x, agent->goal_position_y, 1}, 0.5f, DARKGREEN);
-
-            DrawCircle3D((Vector3){agent->goal_position_x, agent->goal_position_y, 0.1f}, env->goal_radius,
-                         (Vector3){0, 0, 1}, 90.0f, Fade(LIGHTGREEN, 0.3f));
+            // Draw all target waypoints: brightest (first) to darkest (last)
+            int num_wp = env->num_target_waypoints;
+            if (num_wp > MAX_TARGET_WAYPOINTS)
+                num_wp = MAX_TARGET_WAYPOINTS;
+            for (int wp = 0; wp < num_wp; wp++) {
+                if (wp < agent->current_goal_idx)
+                    continue; // already reached
+                float wx = agent->goal_positions_x[wp];
+                float wy = agent->goal_positions_y[wp];
+                float wz = agent->goal_positions_z[wp];
+                // Brightness: first=1.0, last=0.3
+                float alpha = 1.0f - 0.7f * (float)wp / (float)(num_wp > 1 ? num_wp - 1 : 1);
+                float radius = 1.5f - 0.5f * (float)wp / (float)(num_wp > 1 ? num_wp - 1 : 1);
+                Color wp_color = Fade(LIME, alpha);
+                DrawSphere((Vector3){wx, wy, wz + 1.0f}, radius, wp_color);
+                DrawCircle3D((Vector3){wx, wy, wz + 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
+                             Fade(LIME, alpha * 0.3f));
+            }
         }
     }
     // Per-frame road geometry — skipped entirely when the static road cache is
