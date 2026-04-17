@@ -45,14 +45,14 @@ CHECKPOINTS = [
 ]
 
 SCALING_CHECKPOINTS_PATH = (
-    "models/scaling_cpts"  # Directory containing scaling checkpoints following the naming convention described above
+    "models/scaling_cpts_v2"  # Directory containing scaling checkpoints following the naming convention described above
 )
 DETERMINISTIC = True
 
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_TOTAL_EVAL_AGENTS = 1024 * 5
+NUM_TOTAL_EVAL_AGENTS = 1024 * 1
 NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
