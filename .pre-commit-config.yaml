@@ -1,0 +1,27 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+    -   id: trailing-whitespace
+        files: ^(pufferlib|sim)/
+    -   id: end-of-file-fixer
+        files: ^(pufferlib|sim)/
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.15.11
+  hooks:
+    - id: ruff
+      args: [ --fix ]
+    - id: ruff-format
+- repo: https://github.com/srstevenson/nb-clean
+  rev: 4.0.1
+  hooks:
+    - id: nb-clean
+      args:
+        - --remove-empty-cells
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: 'v21.1.5'
+  hooks:
+  -   id: clang-format
+      files: ^sim/

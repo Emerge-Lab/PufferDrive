@@ -1,4 +1,3 @@
-
 import pufferlib.emulation
 import pufferlib.vector
 from pufferlib.environments import test
