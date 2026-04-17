@@ -771,7 +771,7 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
 
     # TODO: First step action space check
 
-    return backend(env_creators, env_args, env_kwargs, num_envs, **kwargs)
+    return backend(env_creators, env_args, env_kwargs, num_envs, seed=seed, **kwargs)
 
 
 def make_seeds(seed, num_envs):

@@ -4655,7 +4655,9 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
 }
 
 void c_reset(Drive *env) {
-    if (env->timestep == 0) {
+    // Replay envs should expose the constructor-time initial state on the first reset.
+    // Gigaflow envs need to fully respawn so explicit reset seeds affect the first scenario.
+    if (env->timestep == 0 && env->simulation_mode != SIMULATION_GIGAFLOW) {
         for (int x = 0; x < env->active_agent_count; x++) {
             env->logs[x] = (Log){0};
             int agent_idx = env->active_agent_indices[x];
