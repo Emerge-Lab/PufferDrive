@@ -1273,7 +1273,7 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
             agent->at_fault_collision_state = 1;
         }
 
-        // NEW: rear collision — other agent hit us from behind
+        // Rear collision — other agent hit us from behind
         // i.e. the other agent is behind us and moving toward us
         float dx_rev = agent->x - other->x;
         float dy_rev = agent->y - other->y;
