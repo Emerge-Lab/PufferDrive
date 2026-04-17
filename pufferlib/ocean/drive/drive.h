@@ -292,6 +292,9 @@ struct Drive {
     float world_mean_y;
     float dt;
     float spawn_initial_speed;
+    int targeted_spawn_mode;
+    float targeted_spawn_radius;
+    int targeted_spawn_attempts;
     float goal_radius;
     float goal_speed;
     float min_waypoint_spacing;
@@ -2838,6 +2841,76 @@ static bool check_spawn_red_light_violation(Drive *env, float spawn_x, float spa
     return check_stop_line_crossing(env, &temp_agent, lane_idx, corners);
 }
 
+static bool sample_drivable_lane_candidate_global(Drive *env, int *start_lane_idx, int *geometry_idx) {
+    if (env->grid_map->num_drivable_grid_cell <= 0)
+        return false;
+
+    int list_idx = rand() % env->grid_map->num_drivable_grid_cell;
+    int grid_idx = env->grid_map->grid_index_drivable[list_idx];
+
+    GridMapEntity cell_candidates[MAX_ENTITIES_PER_CELL];
+    int candidate_count = 0;
+
+    for (int i = 0; i < env->grid_map->cell_entities_count[grid_idx]; i++) {
+        GridMapEntity entity = env->grid_map->cells[grid_idx][i];
+        if (entity.entity_type != ENTITY_TYPE_ROAD_ELEMENT)
+            continue;
+        if (!is_drivable_road_lane(env->road_elements[entity.entity_idx].type))
+            continue;
+        cell_candidates[candidate_count++] = entity;
+    }
+
+    if (candidate_count == 0)
+        return false;
+
+    GridMapEntity chosen_entity = cell_candidates[rand() % candidate_count];
+    *start_lane_idx = chosen_entity.entity_idx;
+    *geometry_idx = chosen_entity.geometry_idx;
+    return true;
+}
+
+static bool sample_drivable_lane_candidate_near_target(Drive *env, float target_x, float target_y, float radius,
+                                                       int *start_lane_idx, int *geometry_idx) {
+    if (env->grid_map->num_drivable_grid_cell <= 0 || radius <= 0.0f)
+        return false;
+
+    float radius_sq = radius * radius;
+    int candidate_count = 0;
+    int chosen_lane_idx = -1;
+    int chosen_geometry_idx = -1;
+
+    for (int i = 0; i < env->grid_map->num_drivable_grid_cell; i++) {
+        int grid_idx = env->grid_map->grid_index_drivable[i];
+
+        for (int j = 0; j < env->grid_map->cell_entities_count[grid_idx]; j++) {
+            GridMapEntity entity = env->grid_map->cells[grid_idx][j];
+            if (entity.entity_type != ENTITY_TYPE_ROAD_ELEMENT)
+                continue;
+            if (!is_drivable_road_lane(env->road_elements[entity.entity_idx].type))
+                continue;
+
+            RoadMapElement *lane = &env->road_elements[entity.entity_idx];
+            float dx = lane->x[entity.geometry_idx] - target_x;
+            float dy = lane->y[entity.geometry_idx] - target_y;
+            if (dx * dx + dy * dy > radius_sq)
+                continue;
+
+            candidate_count++;
+            if (rand() % candidate_count == 0) {
+                chosen_lane_idx = entity.entity_idx;
+                chosen_geometry_idx = entity.geometry_idx;
+            }
+        }
+    }
+
+    if (candidate_count == 0)
+        return false;
+
+    *start_lane_idx = chosen_lane_idx;
+    *geometry_idx = chosen_geometry_idx;
+    return true;
+}
+
 // NOTE: type of function -> void, int, bool ?
 static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
     Agent *agent = &env->agents[agent_idx];
@@ -2880,38 +2953,36 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
     // Sampling rejection loop
     // TARGET: Only one attempt should be sufficient in most cases
     const int MAX_SPAWN_ATTEMPTS = 30;
+    int local_attempts = env->targeted_spawn_attempts;
+    if (local_attempts < 0)
+        local_attempts = 0;
+    if (local_attempts > MAX_SPAWN_ATTEMPTS)
+        local_attempts = MAX_SPAWN_ATTEMPTS;
+
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
-        int chosen_lane_idx = -1;
+        int candidate_geometry_idx = -1;
+        bool sampled = false;
+        bool try_targeted_spawn = env->targeted_spawn_mode == 1 && agent_idx > 0 && attempt < local_attempts &&
+                                  env->agents[0].sim_valid == 1 && env->agents[0].sim_x != INVALID_POSITION;
 
-        int list_idx = rand() % env->grid_map->num_drivable_grid_cell;
-        int grid_idx = env->grid_map->grid_index_drivable[list_idx];
-
-        GridMapEntity cell_candidates[MAX_ENTITIES_PER_CELL];
-        int candidate_count = 0;
-
-        for (int i = 0; i < env->grid_map->cell_entities_count[grid_idx]; i++) {
-            GridMapEntity entity = env->grid_map->cells[grid_idx][i];
-
-            if (entity.entity_type == ENTITY_TYPE_ROAD_ELEMENT) {
-                if (is_drivable_road_lane(env->road_elements[entity.entity_idx].type)) {
-                    cell_candidates[candidate_count++] = entity;
-                }
-            }
+        if (try_targeted_spawn) {
+            sampled = sample_drivable_lane_candidate_near_target(env, env->agents[0].sim_x, env->agents[0].sim_y,
+                                                                 env->targeted_spawn_radius, &start_lane_idx,
+                                                                 &candidate_geometry_idx);
         }
 
-        if (candidate_count == 0)
+        if (!sampled) {
+            sampled = sample_drivable_lane_candidate_global(env, &start_lane_idx, &candidate_geometry_idx);
+        }
+
+        if (!sampled)
             continue;
 
-        GridMapEntity chosen_entity = cell_candidates[rand() % candidate_count];
-        chosen_lane_idx = chosen_entity.entity_idx;
-
-        start_lane_idx = chosen_lane_idx;
         start_lane = &env->road_elements[start_lane_idx];
-
-        spawn_x = start_lane->x[chosen_entity.geometry_idx];
-        spawn_y = start_lane->y[chosen_entity.geometry_idx];
-        spawn_z = start_lane->z[chosen_entity.geometry_idx];
-        spawn_heading = start_lane->headings[chosen_entity.geometry_idx];
+        spawn_x = start_lane->x[candidate_geometry_idx];
+        spawn_y = start_lane->y[candidate_geometry_idx];
+        spawn_z = start_lane->z[candidate_geometry_idx];
+        spawn_heading = start_lane->headings[candidate_geometry_idx];
 
         // Check for collision with existing/already-reset agents
         if (check_spawn_collision(env, num_agents, spawn_x, spawn_y, spawn_z, spawn_heading, spawn_length, spawn_width,

@@ -1784,6 +1784,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->map_name = map_file;
     env->num_controllable_agents = (int)unpack(kwargs, "max_agents");
     env->num_max_agents = (int)unpack(kwargs, "max_agents_per_env");
+    env->targeted_spawn_mode = (int)unpack(kwargs, "targeted_spawn_mode");
+    env->targeted_spawn_radius = (float)unpack(kwargs, "targeted_spawn_radius");
+    env->targeted_spawn_attempts = (int)unpack(kwargs, "targeted_spawn_attempts");
     int init_steps = (int)unpack(kwargs, "init_steps");
     env->init_steps = init_steps;
     env->timestep = init_steps;
