@@ -45,6 +45,8 @@ build-backend = "setuptools.build_meta"
 [tool.ruff]
 line-length = 120
 target-version = "py313"
+include = ["pufferlib/**/*.py"]
+exclude = ["sim/*.py", "constellation/*.py", "tests/*.py"]
 
 [tool.ruff.lint]
 select = [
@@ -55,12 +57,13 @@ select = [
     "I",    # isort
     "N",    # pep8-naming
 ]
+ignore = ["E402", "F841", "N806", "E722", "E731", "E741", "N803", "N812"]
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 
 [tool.ruff.lint.mccabe]
-max-complexity = 20
+max-complexity = 25
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

@@ -27,7 +27,8 @@ try:
     from pufferlib import _C
 except ImportError:
     raise ImportError(
-        "Failed to import PufferLib C++ backend. If you have non-default PyTorch, try installing with --no-build-isolation"
+        "Failed to import PufferLib C++ backend."
+        " If you have non-default PyTorch, try installing with --no-build-isolation"
     )
 
 import rich
