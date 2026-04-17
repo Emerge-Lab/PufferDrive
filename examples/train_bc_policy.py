@@ -41,7 +41,7 @@ SWEEP_CONFIG = {
         "hidden_size": {"values": [512]},
         "batch_size": {"values": [2048]},
         "resample_every_n_epochs": {"values": [1]},
-        "num_maps": {"values": [10, 100, 1000, 10000]},
+        "num_maps": {"values": [67, 200, 1200, 12_000]},  # 10 min, 30 min, 3 hr, 30 hr
     },
 }
 
@@ -51,10 +51,10 @@ TRAIN_DEFAULTS = {
     "hidden_size": 512,
     "batch_size": 2048,
     "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
-    "epochs": 1000,
-    "num_maps": 10,
+    "epochs": 4000,
+    "num_maps": 12_000,
     "eval_frequency": 10,  # Validation dataset
-    "val_patience": 10,  # Stop if val loss doesn't improve for this many eval checks
+    "val_patience": 40,  # Stop if val loss doesn't improve for this many eval checks
 }
 
 
@@ -278,6 +278,8 @@ def build_env_args(dynamics_model, num_maps):
     args["env"]["fix_lambdas"] = True
     args["env"]["fix_rewards"] = True
     args["env"]["lambda_value"] = 0.0
+    args["env"]["control_mode"] = "control_sdc_only"  # "control_agents" #"control_sdc_only"
+    args["env"]["num_agents"] = 128
     return args
 
 
@@ -305,6 +307,7 @@ def load_data(driver_env):
     )
     obs = driver_env.expert_observations_full.float()
     actions = driver_env.expert_actions_discrete.long()
+
     return TensorDataset(obs, actions)
 
 
@@ -410,12 +413,8 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
     else:
         return
 
-    plt.tight_layout()
-    path = f"bc_action_distribution_{dynamics_model}_{num_maps}_{run_id}.png"
-    plt.savefig(path, dpi=150)
+    wandb.log({"action_distribution": wandb.Image(fig)})
     plt.close(fig)
-    print(f"Saved action distribution plot to {path}")
-    wandb.log({"action_distribution": wandb.Image(path)})
 
 
 def evaluate(policy, dataloader, device):
