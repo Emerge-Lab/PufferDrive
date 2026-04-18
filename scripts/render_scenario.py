@@ -139,11 +139,19 @@ def main():
     eval_overrides["env"]["partner_blindness_prob"] = 0.0
     eval_overrides["env"]["phantom_braking_prob"] = 0.0
     eval_overrides["env"]["phantom_braking_trigger_prob"] = 0.0
+    # Use all road segments at eval (no dropout). The obs vector is always
+    # max-sized now, so dropout=0 just fills more slots without changing shape.
+    eval_overrides["env"]["lane_segment_dropout"] = 0.0
+    eval_overrides["env"]["boundary_segment_dropout"] = 0.0
     if cli.simulation_mode == "replay":
         # Don't stop/remove the SDC for offroad — let it drive freely so
         # the video shows the full trajectory even with a mismatched policy.
         eval_overrides["env"]["offroad_behavior"] = 0
         eval_overrides["env"]["collision_behavior"] = 0
+        # Match scenario_length to requested steps so the render loop
+        # doesn't cap at the default 91 from build_eval_overrides.
+        eval_overrides["env"]["scenario_length"] = steps
+        eval_overrides["env"]["resample_frequency"] = steps
 
     args = load_eval_multi_scenarios_config(env_name, cli.checkpoint, eval_overrides)
     args["load_model_path"] = cli.checkpoint
