@@ -2587,7 +2587,11 @@ def eval_multi_scenarios_render(
         try:
             import wandb
 
-            mp4_paths = sorted(os.path.join(mp4_folder, f) for f in os.listdir(mp4_folder) if f.endswith(".mp4"))
+            mp4_paths = sorted(
+                os.path.join(mp4_folder, f)
+                for f in os.listdir(mp4_folder)
+                if f.endswith(".mp4") and os.path.splitext(f)[0].endswith(video_suffix)
+            )
             if mp4_paths:
                 video_log = {
                     f"{_upload_prefix}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, fps=30, format="mp4")
