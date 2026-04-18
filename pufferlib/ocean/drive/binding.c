@@ -1,9 +1,70 @@
+#include <Python.h>
 #include "drive.h"
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
 #define MY_GET
 #include "../env_binding.h"
+
+// Process-local map cache: indexed by map_id, populated by my_shared(), used by my_init().
+static SharedMapData **g_map_cache = NULL;
+static int g_map_cache_size = 0;
+static pid_t g_map_cache_pid = 0;
+// Cache key: params that affect SharedMapData content (obs dists determine vision_range)
+static float g_cache_road_obs_front_dist = 0;
+static float g_cache_road_obs_behind_dist = 0;
+static float g_cache_road_obs_side_dist = 0;
+static char **g_cache_map_paths = NULL;
+
+static void reset_cache_globals(void) {
+    g_map_cache = NULL;
+    g_map_cache_size = 0;
+    g_map_cache_pid = 0;
+    g_cache_road_obs_front_dist = 0;
+    g_cache_road_obs_behind_dist = 0;
+    g_cache_road_obs_side_dist = 0;
+    g_cache_map_paths = NULL;
+}
+
+static void release_map_cache_internal(void) {
+    if (g_map_cache == NULL)
+        return;
+    // After fork, child inherits g_map_cache pointers via copy-on-write.
+    // We must NOT free them — they belong to the parent's address space.
+    // Discard them and let the child rebuild its own cache on the next call.
+    if (g_map_cache_pid != 0 && g_map_cache_pid != getpid()) {
+        reset_cache_globals();
+        return;
+    }
+    // Refuse to release if any envs still hold a reference
+    for (int i = 0; i < g_map_cache_size; i++) {
+        if (g_map_cache[i] != NULL && g_map_cache[i]->ref_count > 0) {
+            fprintf(stderr,
+                    "ERROR: cannot release map cache — entry %d still has %d live env(s). "
+                    "Close all Drive instances before changing map config.\n",
+                    i, g_map_cache[i]->ref_count);
+            return;
+        }
+    }
+    for (int i = 0; i < g_map_cache_size; i++) {
+        if (g_map_cache[i] != NULL)
+            free_shared_map_data(g_map_cache[i]);
+    }
+    free(g_map_cache);
+    if (g_cache_map_paths != NULL) {
+        for (int i = 0; i < g_map_cache_size; i++)
+            free(g_cache_map_paths[i]);
+        free(g_cache_map_paths);
+    }
+    reset_cache_globals();
+}
+
+static PyObject *release_map_cache_py(PyObject *self, PyObject *args) {
+    release_map_cache_internal();
+    Py_RETURN_NONE;
+}
+
+#define MY_METHODS {"release_map_cache", release_map_cache_py, METH_VARARGS, "Release the shared map data cache"}
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *obs = PyDict_GetItemString(kwargs, "observations");
@@ -1544,6 +1605,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
     float goal_radius = (float)unpack(kwargs, "goal_radius");
     int num_eval_scenarios = unpack(kwargs, "num_eval_scenarios");
+    float road_obs_front_dist = (float)unpack(kwargs, "road_obs_front_dist");
+    float road_obs_behind_dist = (float)unpack(kwargs, "road_obs_behind_dist");
+    float road_obs_side_dist = (float)unpack(kwargs, "road_obs_side_dist");
     if (min_agents_per_env <= 0 || max_agents_per_env <= 0) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env and max_agents_per_env must be > 0");
         return NULL;
@@ -1559,7 +1623,44 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     srand(seed);
 
-    // GIGAFLOW mode: use random sampling for agent counts per env
+    // Reuse the existing cache if this process created it with matching config.
+    // Cache key: PID, num_maps, map file paths, obs dist params (determine vision_range).
+    int reuse_cache =
+        (g_map_cache != NULL && g_map_cache_pid == getpid() && g_map_cache_size == num_maps &&
+         g_cache_road_obs_front_dist == road_obs_front_dist && g_cache_road_obs_behind_dist == road_obs_behind_dist &&
+         g_cache_road_obs_side_dist == road_obs_side_dist);
+    if (reuse_cache && g_cache_map_paths != NULL) {
+        for (int i = 0; i < num_maps; i++) {
+            const char *path = PyUnicode_AsUTF8(PyList_GetItem(map_files, i));
+            if (g_cache_map_paths[i] == NULL || strcmp(g_cache_map_paths[i], path) != 0) {
+                reuse_cache = 0;
+                break;
+            }
+        }
+    }
+    if (!reuse_cache) {
+        release_map_cache_internal();
+        if (g_map_cache != NULL) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            "Cannot change map cache config while Drive environments are still open. "
+                            "Call close() on all Drive instances first.");
+            return NULL;
+        }
+        g_map_cache_size = num_maps;
+        g_map_cache = (SharedMapData **)calloc(num_maps, sizeof(SharedMapData *));
+        g_map_cache_pid = getpid();
+        g_cache_road_obs_front_dist = road_obs_front_dist;
+        g_cache_road_obs_behind_dist = road_obs_behind_dist;
+        g_cache_road_obs_side_dist = road_obs_side_dist;
+        g_cache_map_paths = (char **)calloc(num_maps, sizeof(char *));
+        for (int i = 0; i < num_maps; i++) {
+            const char *path = PyUnicode_AsUTF8(PyList_GetItem(map_files, i));
+            g_cache_map_paths[i] = strdup(path);
+        }
+    }
+
+    // GIGAFLOW mode: agent counts are numeric, no binary loading needed for counting.
+    // We do lazily populate the cache so my_init can call init_from_shared.
     if (simulation_mode == SIMULATION_GIGAFLOW) {
         if (eval_mode) {
             // Eval mode: fixed agent count, sequential map cycling
@@ -1573,10 +1674,17 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
             int offset = 0;
             for (int i = 0; i < env_count; i++) {
+                int map_id_g = (s_map_counter + i) % num_maps;
                 PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-                PyList_SetItem(map_ids_list, i, PyLong_FromLong((s_map_counter + i) % num_maps));
+                PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id_g));
                 int remaining = num_agents - offset;
                 offset += (remaining < agents_per_env) ? remaining : agents_per_env;
+                // Lazily populate cache for assigned map
+                if (g_map_cache[map_id_g] == NULL) {
+                    const char *map_file_path = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id_g));
+                    g_map_cache[map_id_g] = create_shared_map_data(map_file_path, road_obs_front_dist,
+                                                                   road_obs_behind_dist, road_obs_side_dist);
+                }
             }
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
 
@@ -1597,23 +1705,13 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             if (remaining <= max_agents_per_env) {
                 count = remaining;
             } else {
-                // 1. We must leave at least min_agents_per_env for the future.
                 int absolute_max_allowed = remaining - min_agents_per_env;
-
-                // 2. We cannot take more than max_agents_per_env right now.
                 int current_upper_bound =
                     (absolute_max_allowed < max_agents_per_env) ? absolute_max_allowed : max_agents_per_env;
-
-                // 3. We must take at least min_agents_per_env right now.
                 int current_lower_bound = min_agents_per_env;
-
-                // Safety check: if constraints are tight, lower might equal upper.
-                // If absolute_max_allowed < min_lower_bound for example leading to
-                // current_upper_bound < current_lower_bound
                 if (current_upper_bound <= current_lower_bound) {
                     count = current_lower_bound;
                 } else {
-                    // Now the range is guaranteed to be positive.
                     int range = current_upper_bound - current_lower_bound + 1;
                     count = current_lower_bound + (rand() % range);
                 }
@@ -1628,9 +1726,16 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         int offset = 0;
         for (int i = 0; i < env_count; i++) {
+            int map_id_g = rand() % num_maps;
             PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rand() % num_maps));
+            PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id_g));
             offset += agent_counts[i];
+            // Lazily populate cache for assigned map
+            if (g_map_cache[map_id_g] == NULL) {
+                const char *map_file_path = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id_g));
+                g_map_cache[map_id_g] = create_shared_map_data(map_file_path, road_obs_front_dist, road_obs_behind_dist,
+                                                               road_obs_side_dist);
+            }
         }
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(num_agents));
 
@@ -1643,7 +1748,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         return tuple;
     }
 
-    // REPLAY mode - existing logic with max_agents_per_env cap
+    // REPLAY mode: use SharedMapData cache for agent counting (avoids per-env binary load)
     int total_agent_count = 0;
     int map_id = 0;
     int env_count = 0;
@@ -1664,62 +1769,56 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         if (eval_mode) {
             map_id = s_map_counter % num_maps;
-            s_map_counter += 1; // This increments towards end_map_index
+            s_map_counter += 1;
         } else {
             map_id = rand() % num_maps;
         }
 
-        const char *map_file = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id));
+        // Lazily populate the shared map cache for this map_id
+        if (g_map_cache[map_id] == NULL) {
+            const char *map_file_path = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id));
+            g_map_cache[map_id] =
+                create_shared_map_data(map_file_path, road_obs_front_dist, road_obs_behind_dist, road_obs_side_dist);
+        }
+        SharedMapData *shared = g_map_cache[map_id];
 
-        Drive *env = calloc(1, sizeof(Drive));
-        env->init_mode = init_mode;
-        env->control_mode = control_mode;
-        env->simulation_mode = simulation_mode;
-        env->init_steps = init_steps;
-        env->num_max_agents = max_agents_per_env;
-        env->goal_radius = goal_radius;
-        load_map_binary(map_file, env);
+        // Count active agents using a lightweight temp env (no binary reload)
+        Drive temp_env = {0};
+        temp_env.init_mode = init_mode;
+        temp_env.control_mode = control_mode;
+        temp_env.simulation_mode = simulation_mode;
+        temp_env.init_steps = init_steps;
+        temp_env.num_max_agents = max_agents_per_env;
+        temp_env.goal_radius = goal_radius;
+        temp_env.agents = shared->template_agents;
+        temp_env.num_total_agents = shared->num_total_agents;
+        temp_env.grid_map = shared->grid_map;
+        set_active_agents(&temp_env);
+        int active_count = temp_env.active_agent_count;
+        free(temp_env.active_agent_indices);
+        free(temp_env.static_agent_indices);
+        free(temp_env.expert_static_agent_indices);
 
-        set_active_agents(env);
-
-        // Skip map if it doesn't contain any controllable agents
-        if (env->active_agent_count == 0) {
+        // Skip map if it has no controllable agents
+        if (active_count == 0) {
             maps_checked++;
-            for (int j = 0; j < env->num_total_agents; j++)
-                free_agent(&env->agents[j]);
-            for (int j = 0; j < env->num_road_elements; j++)
-                free_road_element(&env->road_elements[j]);
-            for (int j = 0; j < env->num_traffic_elements; j++)
-                free_traffic_element(&env->traffic_elements[j]);
-            free(env->agents);
-            free(env->road_elements);
-            free(env->traffic_elements);
-            free(env->active_agent_indices);
-            free(env->static_agent_indices);
-            free(env->expert_static_agent_indices);
-            free(env);
+            if (maps_checked >= num_maps) {
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids);
+                char error_msg[256];
+                snprintf(error_msg, sizeof(error_msg),
+                         "No maps with controllable agents found after checking all %d maps.", num_maps);
+                PyErr_SetString(PyExc_ValueError, error_msg);
+                return NULL;
+            }
             continue;
         }
 
-        // Store map_id
+        // Store map_id and agent offset
         PyList_SetItem(map_ids, env_count, PyLong_FromLong(map_id));
-        // Store agent offset
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(total_agent_count));
-        total_agent_count += env->active_agent_count;
+        total_agent_count += active_count;
         env_count++;
-        for (int j = 0; j < env->num_total_agents; j++)
-            free_agent(&env->agents[j]);
-        for (int j = 0; j < env->num_road_elements; j++)
-            free_road_element(&env->road_elements[j]);
-        for (int j = 0; j < env->num_traffic_elements; j++)
-            free_traffic_element(&env->traffic_elements[j]);
-        free(env->agents);
-        free(env->road_elements);
-        free(env->traffic_elements);
-        free(env->active_agent_indices);
-        free(env->static_agent_indices);
-        free(env->expert_static_agent_indices);
-        free(env);
     }
 
     if (total_agent_count >= num_agents) {
@@ -1810,6 +1909,19 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_trigger_prob = (float)unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int)unpack(kwargs, "phantom_braking_duration");
 
+    // Use shared map cache if map_id is provided and cache entry exists
+    PyObject *map_id_obj = kwargs ? PyDict_GetItemString(kwargs, "map_id") : NULL;
+    if (map_id_obj != NULL && g_map_cache != NULL) {
+        int map_id = (int)PyLong_AsLong(map_id_obj);
+        if (map_id >= 0 && map_id < g_map_cache_size && g_map_cache[map_id] != NULL) {
+            init_from_shared(env, g_map_cache[map_id]);
+            return 0;
+        }
+        // Cache miss: warn and fall through to disk loading
+        fprintf(stderr, "WARNING: map_id=%d provided but shared map cache miss — loading from disk\n", map_id);
+    }
+
+    // Fallback: load map from disk (standalone use, tests, or cache miss)
     init(env);
     return 0;
 }

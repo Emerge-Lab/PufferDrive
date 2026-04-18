@@ -305,6 +305,9 @@ class Drive(pufferlib.PufferEnv):
             max_agents_per_env=self.max_agents_per_env,
             num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
             goal_radius=self.goal_radius,
+            road_obs_front_dist=self.road_obs_front_dist,
+            road_obs_behind_dist=self.road_obs_behind_dist,
+            road_obs_side_dist=self.road_obs_side_dist,
         )
         # In eval mode, don't wrap counter - allows termination condition to work correctly
         self.starting_map_counter = self.starting_map_counter + num_envs
@@ -327,6 +330,7 @@ class Drive(pufferlib.PufferEnv):
                 self.masks[cur:nxt],
                 self.random_seed,
                 **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
+                map_id=map_ids[i],
             )
             env_ids.append(env_id)
 
@@ -458,6 +462,9 @@ class Drive(pufferlib.PufferEnv):
                     min_agents_per_env=self.min_agents_per_env,
                     max_agents_per_env=self.max_agents_per_env,
                     num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
+                    road_obs_front_dist=self.road_obs_front_dist,
+                    road_obs_behind_dist=self.road_obs_behind_dist,
+                    road_obs_side_dist=self.road_obs_side_dist,
                 )
 
                 # In eval mode, don't wrap counter - allows termination condition to work correctly
@@ -474,6 +481,7 @@ class Drive(pufferlib.PufferEnv):
                         self.truncations[cur:nxt],
                         self.masks[cur:nxt],
                         self.random_seed,
+                        map_id=map_ids[i],
                         **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
                     )
                     env_ids.append(env_id)
