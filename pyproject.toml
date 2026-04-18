@@ -228,6 +228,7 @@ cleanrl = [
 
 [project.scripts]
 puffer = "pufferlib.pufferl:main"
+puffer_il = "pufferlib.puffer_il:main"
 
 [project.urls]
 Homepage = "https://puffer.ai"
