@@ -6,7 +6,14 @@ import json
 import struct
 import os
 import pufferlib
+from enum import IntEnum
 from pufferlib.ocean.drive import binding
+
+
+class RenderView(IntEnum):
+    FULL_SIM_STATE = 0  # Fixed bird's-eye-ish perspective (legacy default)
+    BEV_AGENT_OBS = 1  # Top-down ortho centered on ego agent at vision-range zoom
+    TOPDOWN_SIM = 2  # Full-map orthographic top-down
 
 
 def compute_effective_road_obs_count(max_count, dropout):
@@ -584,16 +591,16 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self, env_idx=0, view_mode=0):
-        # view_mode: 0=default fixed perspective, 1=BEV ego-centered ortho.
+    def render(self, view_mode=RenderView.FULL_SIM_STATE, env_id=0):
+        # view_mode: 0=default fixed perspective, 1=BEV ego-centered ortho, 2=full-map topdown.
         # See VIEW_MODE_* defines in pufferlib/ocean/drive/render.h.
-        binding.vec_render(self.c_envs, view_mode, env_idx)
+        binding.vec_render(self.c_envs, int(view_mode), env_id)
 
-    def set_video_suffix(self, suffix, env_idx=0):
+    def set_video_suffix(self, suffix, env_id=0):
         # Append `suffix` to the next mp4 filename for the given env.
         # Must be called BEFORE the first render of a rollout because
         # make_client reads env->video_suffix when forking ffmpeg.
-        binding.vec_set_video_suffix(self.c_envs, suffix, env_idx)
+        binding.vec_set_video_suffix(self.c_envs, suffix, env_id)
 
     def close_client(self, env_idx=0):
         # Tear down the render Client for one env without destroying the env.

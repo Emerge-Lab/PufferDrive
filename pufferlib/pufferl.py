@@ -144,9 +144,6 @@ class PuffeRL:
         self.render = config["render"]
         self.render_interval = config["render_interval"]
 
-        if self.render:
-            ensure_drive_binary()
-
         # LSTM
         if config["use_rnn"]:
             n = vecenv.agents_per_batch
@@ -430,32 +427,63 @@ class PuffeRL:
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
             if self.render and self.epoch % self.render_interval == 0:
-                model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
-                model_files = glob.glob(os.path.join(model_dir, "models", "model_*.pt"))
-
-                if model_files:
-                    # Take the latest checkpoint
-                    latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
-
-                    # Export to .bin for rendering with raylib
+                render_simulation_mode = self.config["eval"].get("multi_scenario_simulation_mode", "gigaflow")
+                num_agents_render = self.config["eval"]["num_agents"]
+                render_map_dir = self.config["eval"]["map_dir"]
+                render_overrides = build_eval_overrides(
+                    simulation_mode=render_simulation_mode,
+                    num_agents=num_agents_render,
+                    num_scenarios=self.config["eval"].get("multi_scenario_num_scenarios", 4),
+                    map_dir=render_map_dir,
+                    num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
+                )
+                render_args = load_eval_multi_scenarios_config(
+                    env_name=self.config["env"],
+                    model_path=None,
+                    eval_overrides=render_overrides,
+                )
+                experiment_name = f"{self.config['env']}_{self.logger.run_id}"
+                render_args["global_step"] = self.global_step
+                render_args["num_scenarios"] = self.config["eval"].get("multi_scenario_num_scenarios", 4)
+                render_args["eval_simulation"] = render_simulation_mode
+                render_args["render"] = True
+                render_args["render_obs"] = False
+                render_args["inline_eval"] = True
+                render_args["load_model_path"] = os.path.join(
+                    self.config["data_dir"], experiment_name, "models", f"inline_epoch_{self.epoch}.pt"
+                )
+                render_args["eval_results_dir"] = os.path.join(
+                    self.config["data_dir"],
+                    experiment_name,
+                    "renders",
+                    f"epoch_{self.epoch:08d}",
+                )
+                backend_name = self.config["eval"].get("multi_scenario_render_backend", "egl")
+                _bev_views = (
+                    [(0, "", "sim_state"), (1, "_bev", "bev")] if backend_name == "egl" else [(0, "", "sim_state")]
+                )
+                for _vmode, _vsuffix, _vlabel in _bev_views:
                     try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
-
-                        export(
-                            args=export_args,
+                        eval_multi_scenarios_render(
                             env_name=self.config["env"],
-                            vecenv=self.vecenv,
+                            args=dict(render_args),
+                            vecenv=None,
                             policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
+                            logger=self.logger,
+                            metric_prefix=f"render_{_vlabel}",
+                            quiet=True,
+                            render_backend=backend_name,
+                            view_mode=_vmode,
+                            video_suffix=_vsuffix,
+                            log_view_label=_vlabel,
+                            render_max_steps=(self.config["eval"].get("render_max_steps", 50) or None),
                         )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
-
                     except Exception as e:
-                        print(f"Failed to export model weights: {e}")
+                        import traceback
+
+                        print(f"\n⚠️  render failed (view={_vlabel}) at epoch {self.epoch}: {type(e).__name__}: {e}")
+                        traceback.print_exc()
+                        print("Training continues.")
 
         if self.config["eval"]["wosac_realism_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
@@ -2701,29 +2729,136 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
         print(f"Saved {len(weights)} weights to {path}")
 
 
-def ensure_drive_binary():
-    """Delete existing visualize binary and rebuild it. This ensures the
-    binary is always up-to-date with the latest code changes.
-    """
-    if os.path.exists("./visualize"):
-        print("Removing existing visualize binary...")
-        os.remove("./visualize")
+def render(env_name, args=None):
+    """Render rollouts for a batch of maps using the in-process c_render pipeline.
 
-    print("Building visualize binary...")
+    Each map is loaded as a separate environment with render_mode="headless"
+    (EGL/ffmpeg). A policy rollout is run for max_frames steps, producing one
+    mp4 per map in output_dir.
+
+    Requires a [render] section in the config with:
+        map_dir, output_dir, num_maps, view_mode, max_frames
+    """
+    import glob as _glob
+    import shutil
+    import tempfile
+    from pufferlib.ocean.drive.drive import RenderView
+    from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
+
+    args = args or load_config(env_name)
+    render_configs = args.get("render", {})
+
     try:
-        result = subprocess.run(
-            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
+        map_dir = render_configs["map_dir"]
+        num_maps = render_configs.get("num_maps", 1)
+        view_mode_str = str(render_configs.get("view_mode", "sim_state")).lower().strip('"').strip("'")
+        max_frames = render_configs.get("max_frames", 91)
+        output_dir = render_configs["output_dir"]
+        render_init_mode = (
+            str(render_configs["init_mode"]).strip('"').strip("'") if "init_mode" in render_configs else None
+        )
+        render_control_mode = (
+            str(render_configs["control_mode"]).strip('"').strip("'") if "control_mode" in render_configs else None
+        )
+    except KeyError as e:
+        raise pufferlib.APIUsageError(f"Missing render config: {e}")
+
+    _VIEW_MODE_MAP = {
+        "sim_state": [RenderView.FULL_SIM_STATE],
+        "topdown": [RenderView.TOPDOWN_SIM],
+        "bev": [RenderView.BEV_AGENT_OBS],
+        "both": [RenderView.FULL_SIM_STATE, RenderView.BEV_AGENT_OBS],
+        "all": [RenderView.FULL_SIM_STATE, RenderView.BEV_AGENT_OBS, RenderView.TOPDOWN_SIM],
+    }
+    view_modes = _VIEW_MODE_MAP.get(view_mode_str)
+    if view_modes is None:
+        raise pufferlib.APIUsageError(
+            f"Unknown view_mode '{view_mode_str}'. Choose from: sim_state, topdown, bev, both, all"
         )
 
-        if result.returncode == 0:
-            print("Successfully built visualize binary")
-        else:
-            print(f"Build failed: {result.stderr}")
-            raise RuntimeError("Failed to build visualize binary for rendering")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Build timed out")
-    except Exception as e:
-        raise RuntimeError(f"Build error: {e}")
+    bin_files = sorted(f for f in os.listdir(map_dir) if f.endswith(".bin"))
+    if num_maps > len(bin_files):
+        num_maps = len(bin_files)
+    render_maps = [os.path.join(map_dir, f) for f in bin_files[:num_maps]]
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    configured_device = args["train"]["device"]
+    if configured_device == "cuda" and not torch.cuda.is_available():
+        print("Warning: CUDA not available, falling back to CPU for render.")
+        configured_device = "cpu"
+    args["train"]["device"] = configured_device
+    device = configured_device
+
+    _VIEW_SUFFIX = {
+        RenderView.FULL_SIM_STATE: "sim_state",
+        RenderView.BEV_AGENT_OBS: "bev",
+        RenderView.TOPDOWN_SIM: "topdown",
+    }
+
+    def render_one_map(map_path):
+        map_name = os.path.splitext(os.path.basename(map_path))[0]
+        multi = len(view_modes) > 1
+
+        for view_mode in view_modes:
+            with tempfile.TemporaryDirectory() as tmp_map_dir:
+                tmp_bin = os.path.join(tmp_map_dir, os.path.basename(map_path))
+                shutil.copy2(map_path, tmp_bin)
+
+                env_overrides = {
+                    **args["env"],
+                    "num_maps": 1,
+                    "map_dir": tmp_map_dir,
+                    "render_mode": "headless",
+                }
+                if render_init_mode is not None:
+                    env_overrides["init_mode"] = render_init_mode
+                if render_control_mode is not None:
+                    env_overrides["control_mode"] = render_control_mode
+
+                map_args = {
+                    **args,
+                    "env": env_overrides,
+                    "vec": {"backend": "Serial", "num_envs": 1},
+                }
+
+                env = load_env(env_name, map_args)
+                policy = load_policy(map_args, env, env_name)
+                policy.eval()
+
+                suffix = f"_{_VIEW_SUFFIX[view_mode]}" if multi else ""
+                before = set(_glob.glob(os.path.join(os.getcwd(), "*.mp4")))
+
+                rollout_loop(
+                    policy=policy,
+                    env=env,
+                    device=device,
+                    use_rnn=map_args["train"]["use_rnn"],
+                    max_steps=max_frames,
+                    render_ctx=RenderContext(
+                        view_mode=view_mode,
+                        env_id=0,
+                        video_suffix=suffix,
+                    ),
+                )
+
+                env.close()
+
+                after = set(_glob.glob(os.path.join(os.getcwd(), "*.mp4")))
+                new_mp4s = after - before
+                if new_mp4s:
+                    for src in sorted(new_mp4s):
+                        dst = os.path.join(output_dir, os.path.basename(src))
+                        shutil.move(src, dst)
+                        print(f"  Saved {dst}")
+                else:
+                    print(f"  Warning: no mp4 produced for {map_name} view={_VIEW_SUFFIX[view_mode]}")
+
+    if render_maps:
+        print(f"Rendering {len(render_maps)} map(s) from {map_dir} → {output_dir} ...")
+        for map_path in render_maps:
+            render_one_map(map_path)
+        print(f"Done. Videos written to {output_dir}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
@@ -2909,7 +3044,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, render, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -2919,6 +3054,8 @@ def main():
         train(env_name=env_name)
     elif mode == "eval":
         eval(env_name=env_name)
+    elif mode == "render":
+        render(env_name=env_name)
     elif mode == "eval_multi_scenarios":
         eval_multi_scenarios(env_name=env_name)
     elif mode == "eval_multi_scenarios_render":
