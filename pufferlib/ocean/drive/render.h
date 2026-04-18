@@ -813,7 +813,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
     // Then draw lane segment observations (obs_idx is now at lane obs start after partner loop)
     int lane_obs_start = obs_idx;
-    for (int k = 0; k < env->obs_lane_segment_count; k++) {
+    for (int k = 0; k < env->max_lane_segment_observations; k++) {
         int entity_idx = lane_obs_start + k * ROAD_FEATURES;
         bool is_empty = true;
         for (int j = 0; j < ROAD_FEATURES; j++) {
@@ -862,6 +862,45 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         if (mode == 0) {
             DrawCube((Vector3){x_middle, y_middle, z_middle + 1}, 0.5f, 0.5f, 0.5f, lineColor);
             DrawLine3D((Vector3){x_start, y_start, z_middle + 1}, (Vector3){x_end, y_end, z_middle + 1}, BLUE);
+        }
+    }
+    // Draw boundary/edge segment observations in red (immediately after lane obs)
+    int boundary_obs_start = lane_obs_start + env->max_lane_segment_observations * ROAD_FEATURES;
+    for (int k = 0; k < env->max_boundary_segment_observations; k++) {
+        int entity_idx = boundary_obs_start + k * ROAD_FEATURES;
+        bool is_empty = true;
+        for (int j = 0; j < ROAD_FEATURES; j++) {
+            if (agent_obs[entity_idx + j] != 0.0f) {
+                is_empty = false;
+                break;
+            }
+        }
+        if (is_empty)
+            continue;
+        float x_middle = agent_obs[entity_idx] * env->max_position;
+        float y_middle = agent_obs[entity_idx + 1] * env->max_position;
+        float z_middle = agent_obs[entity_idx + 2] * env->max_position;
+        float rel_angle_x = agent_obs[entity_idx + 5];
+        float rel_angle_y = agent_obs[entity_idx + 6];
+        float rel_angle = atan2f(rel_angle_y, rel_angle_x);
+        float segment_length = agent_obs[entity_idx + 3] * env->max_road_segment_length;
+        float x_start = x_middle - segment_length * cosf(rel_angle);
+        float y_start = y_middle - segment_length * sinf(rel_angle);
+        float x_end = x_middle + segment_length * cosf(rel_angle);
+        float y_end = y_middle + segment_length * sinf(rel_angle);
+
+        if (mode == 1) {
+            float x_start_world = px + (x_start * heading_self_x - y_start * heading_self_y);
+            float y_start_world = py + (x_start * heading_self_y + y_start * heading_self_x);
+            float x_end_world = px + (x_end * heading_self_x - y_end * heading_self_y);
+            float y_end_world = py + (x_end * heading_self_y + y_end * heading_self_x);
+            float z_world = pz + z_middle + 1;
+            DrawLine3D((Vector3){x_start_world, y_start_world, z_world},
+                       (Vector3){x_end_world, y_end_world, z_world}, RED);
+        }
+        if (mode == 0) {
+            DrawLine3D((Vector3){x_start, y_start, z_middle + 1},
+                       (Vector3){x_end, y_end, z_middle + 1}, RED);
         }
     }
 }
@@ -1043,7 +1082,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
             };
 
-            if (agent_index == env->human_agent_idx && !agent->metrics_array[REACHED_GOAL_IDX]) {
+            if (agent_index == env->human_agent_idx) {
                 draw_agent_obs(env, agent_index, mode, obs_only, lasers);
             }
             if ((obs_only || IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx) {
@@ -1055,10 +1094,15 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             if (is_expert)
                 car_color = GOLD; // expert replay
             if (is_active_agent)
-                car_color = BLUE; // policy-controlled
+                car_color = GREEN; // policy-controlled SDC
             if (is_active_agent && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0 ||
                                     agent->metrics_array[RED_LIGHT_IDX] > 0))
                 car_color = RED;
+            if (is_active_agent && car_color.r == GREEN.r && car_color.g == GREEN.g) {
+                // Filled quad for the SDC
+                DrawTriangle3D(corners[0], corners[1], corners[2], Fade(GREEN, 0.7f));
+                DrawTriangle3D(corners[0], corners[2], corners[3], Fade(GREEN, 0.7f));
+            }
             rlSetLineWidth(3.0f);
             for (int j = 0; j < 4; j++) {
                 DrawLine3D(corners[j], corners[(j + 1) % 4], car_color);
@@ -1086,7 +1130,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 car_model = client->cars[0]; // Collided agent
             }
             // Draw obs for human selected agent
-            if (agent_index == env->human_agent_idx && !agent->metrics_array[REACHED_GOAL_IDX]) {
+            if (agent_index == env->human_agent_idx) {
                 draw_agent_obs(env, agent_index, mode, obs_only, lasers);
             }
             // Draw cube for cars static and active
@@ -1122,11 +1166,23 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 if (!is_active_agent && agent->mark_as_expert == 1)
                     wire_color = GOLD; // expert replay
                 if (is_active_agent)
-                    wire_color = BLUE; // policy
+                    wire_color = GREEN; // policy-controlled SDC
                 if (is_active_agent &&
                     (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0 ||
                      agent->metrics_array[RED_LIGHT_IDX] > 0))
                     wire_color = RED;
+                if (is_active_agent && wire_color.r == GREEN.r && wire_color.g == GREEN.g) {
+                    // Filled quad for the SDC
+                    rlBegin(RL_TRIANGLES);
+                    rlColor4ub(0, 228, 48, 180);
+                    rlVertex3f(corners[0].x, corners[0].y, corners[0].z);
+                    rlVertex3f(corners[1].x, corners[1].y, corners[1].z);
+                    rlVertex3f(corners[2].x, corners[2].y, corners[2].z);
+                    rlVertex3f(corners[0].x, corners[0].y, corners[0].z);
+                    rlVertex3f(corners[2].x, corners[2].y, corners[2].z);
+                    rlVertex3f(corners[3].x, corners[3].y, corners[3].z);
+                    rlEnd();
+                }
                 rlSetLineWidth(2.0f);
                 for (int j = 0; j < 4; j++) {
                     DrawLine3D(corners[j], corners[(j + 1) % 4], wire_color);
