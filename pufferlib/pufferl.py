@@ -1543,8 +1543,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "trajectory_scaling_factors",
             "max_boundary_segment_observations",
             "max_lane_segment_observations",
-            "boundary_segment_dropout",
-            "lane_segment_dropout",
             "max_partner_observations",
             "max_traffic_control_observations",
             "traffic_control_scope",
@@ -1891,13 +1889,13 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
         "reward_lane_align": 0.025,
         "reward_lane_center": 0.0038,
         "reward_timestep": 0.000025,
-        "lane_segment_dropout": 0.0,
-        "boundary_segment_dropout": 0.0,
-        # NOTE: do not override max_{lane,boundary}_segment_observations here.
-        # Those change the observation vector shape, and the render path reuses
-        # the live training policy which was built for the training obs sizes.
-        # Hardcoding 80/80 here caused the policy forward to hit a scatter/gather
-        # idx out-of-bounds (CUDA device-side assert) when training used 70/40.
+        # NOTE: do not override lane_segment_dropout, boundary_segment_dropout,
+        # or max_{lane,boundary}_segment_observations here. All of these change
+        # the observation vector shape, and the render path reuses the live
+        # training policy which was built for the training obs sizes. Setting
+        # dropout to 0.0 here when training uses >0 causes the eval env to
+        # produce larger observations than the policy expects, triggering a
+        # CUDA device-side assert (scatter/gather index out of bounds).
     }
 
     if simulation_mode == "gigaflow":
