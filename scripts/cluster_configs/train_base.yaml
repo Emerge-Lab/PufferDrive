@@ -6,7 +6,7 @@
 # and env.num_agents are all intentionally omitted so runs inherit the ini.
 
 # Training
-train.total_timesteps: 2_000_000_000
+train.total_timesteps: 10_000_000_000
 train.checkpoint_interval: 1000
 
 # W&B logging

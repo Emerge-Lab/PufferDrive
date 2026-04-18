@@ -56,9 +56,7 @@ def main():
         choices=["gigaflow", "replay"],
         help="Simulation mode: gigaflow (random spawn) or replay (log trajectories, policy controls SDC)",
     )
-    parser.add_argument(
-        "--init-steps", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)"
-    )
+    parser.add_argument("--init-steps", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)")
     parser.add_argument(
         "--control-mode",
         default=None,
@@ -136,6 +134,11 @@ def main():
     # Override control_mode and init_steps after build_eval_overrides
     eval_overrides["env"]["control_mode"] = control_mode
     eval_overrides["env"]["init_steps"] = init_steps
+    # Disable robustness perturbations for eval renders — we want to see
+    # the policy's clean behavior, not randomly blinded or phantom-braking.
+    eval_overrides["env"]["partner_blindness_prob"] = 0.0
+    eval_overrides["env"]["phantom_braking_prob"] = 0.0
+    eval_overrides["env"]["phantom_braking_trigger_prob"] = 0.0
     if cli.simulation_mode == "replay":
         # Don't stop/remove the SDC for offroad — let it drive freely so
         # the video shows the full trajectory even with a mismatched policy.

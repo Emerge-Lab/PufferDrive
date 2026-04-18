@@ -3,8 +3,8 @@ account: torch_pr_355_general  # Set your account/allocation
 nodes: 1
 gpus: 1
 cpus: 16
-mem: 32gb
-time: 360  # minutes
+mem: 96gb
+time: 2880  # minutes
 gpu_type: null  # rtx8000, a100, v100 (optional, uses partition default)
 exclude: null
 nodelist: null
