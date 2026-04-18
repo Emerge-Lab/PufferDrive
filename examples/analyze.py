@@ -52,7 +52,7 @@ DETERMINISTIC = True
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_TOTAL_EVAL_AGENTS = 1024 * 1
+NUM_TOTAL_EVAL_AGENTS = 1024 * 5
 NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
@@ -420,7 +420,7 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_hr_val",
             num_maps=10_000,
-            lambda_value=0.15 if is_reg else 0.0,
+            lambda_value=0.15 if is_reg else 0.0,  # TODO: Fix this
         )
 
         # ── Human-replay on interactive scenes ───────────────────────────

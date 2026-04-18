@@ -48,17 +48,17 @@ df = pd.DataFrame(
             "Method": "Self-play \n RL",
             "Total experience learned from": 5_000_000_000,
             "Human demonstrations used": 0,
-            "Self-play\ncollision rate": 0.5,
+            "Self-play\ncollision rate": 0.2,
             "Human-replay\ncollision rate": 5.0,
-            "Cumulative training time": 7,
+            "Cumulative training time": 9.15,
         },
         {
             "Method": "Reg self-play \n RL (ours)",
             "Total experience learned from": 5_000_000_000 + 45_000,
-            "Human demonstrations used": 45_000,
+            "Human demonstrations used": 108000,
             "Self-play\ncollision rate": 0.1,
-            "Human-replay\ncollision rate": 0.4,
-            "Cumulative training time": 7.3,
+            "Human-replay\ncollision rate": 0.5,
+            "Cumulative training time": 9.45,
         },
         {
             "Method": "SMART \n (IL-based)",
@@ -66,7 +66,7 @@ df = pd.DataFrame(
             "Human demonstrations used": 225_000_000,
             "Self-play\ncollision rate": 0.5,
             "Human-replay\ncollision rate": 4.0,
-            "Cumulative training time": 168,
+            "Cumulative training time": 281,  # 32 * 8 (IL) + 25 (finetune)
         },
     ]
 )
@@ -146,7 +146,7 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
     _bar(ax_demo, "Human demonstrations used", "Transitions", log=False, lower_is_better=True)
     ax_demo.set_ylabel("")
     ax_demo.tick_params(labelleft=False)
-    _bar(ax_time, "Cumulative training time", "Hours", log=False, lower_is_better=True)
+    _bar(ax_time, "Cumulative training time", "GPU hours", log=False, lower_is_better=True)
     _bar(ax_sp, "Self-play\ncollision rate", "Collision rate (%)", log=False, lower_is_better=True)
     _bar(ax_hr, "Human-replay\ncollision rate", "Collision rate (%)", log=False, lower_is_better=True)
 
@@ -177,12 +177,6 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
     GREEN = "#5cca61"
     # (label, value_str, detail_str, color)
     rows = [
-        (
-            "Training speed",
-            f"{speed_ratio:.0f}×  faster",
-            f"({_abbreviate(int(ours_speed))} vs. {_abbreviate(int(smart_speed))} transitions/hr)",
-            GREEN,
-        ),
         (
             "Human data required",
             f"{demo_ratio:,.0f}× less",

@@ -1157,6 +1157,414 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     return fig
 
 
+def plot_human_data_requirements(df, save_path="results/figures/eval_human_data_requirements.pdf"):
+    """Human-data sweep at fixed 10k metadata maps.
+
+    Companion to plot_data_requirements: instead of sweeping self-play training
+    maps, this sweeps the amount of human demonstration data (anchor data) while
+    holding self-play training maps fixed at 10k.
+
+    x-axis: human demonstration data in minutes (log scale).
+    4 line-plot subplots:
+        0) HR at-fault collision rate [%] (validation)
+        1) HR collision rate [%]          (validation)
+        2) SP collision rate [%]          (validation)
+        3) HR route progress [%]          (validation)
+
+    Series:
+        - Regularized (ours):   line through anchor-data points (pale purple)
+        - Best unregularized:   horizontal dashed blue line (10k-map unreg checkpoint)
+        - SMART baseline:       line across SMART checkpoints (pink, same style as reg)
+                                — plotted only where SMART data is available
+    """
+    # ── Colours (kept local to avoid touching module-level constants) ───────
+    COLOR_OURS = "#CCCCFF"  # reg self-play RL (ours)
+    COLOR_OURS_EDGE = "#6B3FA0"  # darker purple edge for marker readability
+    COLOR_SELFPLAY = "#4A7FD4"  # unregularized self-play baseline
+    COLOR_SMART = "#E8609A"  # SMART baseline
+    COLOR_SMART_EDGE = "#B4437A"  # darker pink edge, matches the ours/edge pattern
+
+    # ── SMART baseline data ─────────────────────────────────────────────────
+    # TODO: replace with `pd.read_csv("results/smart_baseline.csv")` once ready.
+    # Values stored in percent to match the y-axes; np.nan = not yet measured.
+    # NOTE: num_maps has a duplicate 12000 entry — one is a placeholder row
+    # that gets dropped by dropna before plotting. Confirm whether this is
+    # intentional or should be 1200 (which had 4.06% in earlier notes).
+    SMART_DATA = pd.DataFrame(
+        {
+            "num_maps": [67, 200, 1200, 12000, 500000],
+            "hr_atfault_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
+            "hr_coll_pct": [17.25, 9.14, 5.0, 4.5, 3.91],
+            "sp_coll_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
+            "hr_progress_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
+        }
+    )
+    # 9 seconds per scenario → minutes (same conversion as reg)
+    SMART_DATA["minutes"] = SMART_DATA["num_maps"] * 9 / 60
+
+    # ── Filter to scaling modes and 50k metadata maps only ───────────────────
+    scaling_modes = ["scaling_sp_val", "scaling_hr_val"]
+    df = df[df["mode"].isin(scaling_modes)].copy()
+    df = df[df["sp_maps"] == 50000]
+    if df.empty:
+        print("  No 10k sp_maps data — skipping plot_human_data_requirements.")
+        return None
+
+    df["anchor_maps"] = df["anchor_maps"].fillna(0).astype(int)
+
+    # ── Aggregate per anchor_maps ────────────────────────────────────────────
+    hr = df[df["mode"] == "scaling_hr_val"]
+    hr_agg = (
+        hr.groupby("anchor_maps")[["at_fault_collision_rate", "collision_rate", "route_progress"]]
+        .agg(["mean", "sem"])
+        .reset_index()
+    )
+    hr_agg.columns = [
+        "anchor_maps",
+        "hr_atfault_mean",
+        "hr_atfault_sem",
+        "hr_coll_mean",
+        "hr_coll_sem",
+        "hr_progress_mean",
+        "hr_progress_sem",
+    ]
+
+    sp = df[df["mode"] == "scaling_sp_val"]
+    sp_agg = sp.groupby("anchor_maps")[["collision_rate"]].agg(["mean", "sem"]).reset_index()
+    sp_agg.columns = ["anchor_maps", "sp_coll_mean", "sp_coll_sem"]
+
+    agg = hr_agg.merge(sp_agg, on="anchor_maps", how="outer")
+    agg["anchor_minutes"] = agg["anchor_maps"] * 9 / 60
+
+    # Convert fractional rates to percentages
+    for col in ("hr_atfault", "hr_coll", "hr_progress", "sp_coll"):
+        agg[f"{col}_mean_pct"] = agg[f"{col}_mean"] * 100
+        agg[f"{col}_sem_pct"] = agg[f"{col}_sem"] * 100
+
+    unreg = agg[agg["anchor_maps"] == 0]
+    reg = agg[agg["anchor_maps"] > 0].sort_values("anchor_minutes")
+
+    # ── Plot ─────────────────────────────────────────────────────────────────
+    _set_style(3)
+    fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
+
+    # (y_mean_col, y_sem_col, ylabel, smart_col_in_SMART_DATA)
+    subplot_specs = [
+        ("hr_atfault_mean_pct", "hr_atfault_sem_pct", "Human-replay at-fault collision rate [%]", "hr_atfault_pct"),
+        ("hr_coll_mean_pct", "hr_coll_sem_pct", "Human-replay collision rate [%]", "hr_coll_pct"),
+        ("sp_coll_mean_pct", "sp_coll_sem_pct", "Self-play collision rate [%]", "sp_coll_pct"),
+        ("hr_progress_mean_pct", "hr_progress_sem_pct", "Human-replay route progress [%]", "hr_progress_pct"),
+    ]
+
+    for ax, (y_mean, y_sem, ylabel, smart_col) in zip(axes, subplot_specs):
+        # Regularized (ours) — connected line through anchor points
+        if not reg.empty:
+            ax.errorbar(
+                reg["anchor_minutes"],
+                reg[y_mean],
+                yerr=reg[y_sem],
+                color=COLOR_OURS,
+                marker="o",
+                markersize=9,
+                linewidth=2.0,
+                capsize=3,
+                markeredgecolor=COLOR_OURS_EDGE,
+                markerfacecolor=COLOR_OURS,
+                label="regularized self-play (ours)",
+                zorder=4,
+            )
+
+        # Best unregularized — horizontal dashed line at the 10k checkpoint's value
+        if not unreg.empty:
+            ax.axhline(
+                unreg[y_mean].iloc[0],
+                color=COLOR_SELFPLAY,
+                linestyle="--",
+                linewidth=2.0,
+                alpha=0.9,
+                label="best unregularized self-play",
+                zorder=2,
+            )
+
+        # SMART — same line style as reg, pink colour family
+        smart_valid = SMART_DATA.dropna(subset=[smart_col])
+        if not smart_valid.empty:
+            ax.plot(
+                smart_valid["minutes"],
+                smart_valid[smart_col],
+                color=COLOR_SMART,
+                marker="o",
+                markersize=9,
+                linewidth=2.0,
+                linestyle="-",
+                markeredgecolor=COLOR_SMART_EDGE,
+                markerfacecolor=COLOR_SMART,
+                label="SMART-tiny-CLSFT",
+                zorder=3,
+            )
+
+        tick_positions = [10, 30, 180, 1800, 75000]
+        tick_labels = ["10 min", "30 min", "3 hours", "30 hours", "52 days"]
+        ax.set_xscale("symlog", linthresh=60, linscale=1.2)
+        ax.set_xticks(tick_positions, labels=tick_labels, rotation=35, ha="right")
+        ax.minorticks_off()
+        ax.set_ylim(bottom=0)
+        ax.set_xlabel("Human demonstration data")
+        ax.set_ylabel(ylabel)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.legend(fontsize=8, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
+def generate_human_data_latex_table(df, save_path="results/figures/eval_human_data_table.tex"):
+    """Companion table to plot_human_data_requirements.
+
+    Rows: one per (method, human-data-amount) pair.
+          Ordering: all SMART rows first, then all regularized self-play rows,
+          each sorted by increasing human data.
+    Columns:
+        - Human demonstrations (same units as plot: "10 min", "30 min", …)
+        - Method
+        - Self-play collision rate [%]                (test)
+        - Self-play route progress [%]                (test)
+        - Human-replay collision rate [%]             (test)
+        - Human-replay at-fault collision rate [%]    (test)
+        - Human-replay route progress [%]             (test)
+
+    Best value per metric column is bolded across both methods.
+    SMART uses pink row highlighting, regularized uses pale purple.
+    Missing values render as "---".
+
+    Required LaTeX packages:
+      \\usepackage{booktabs}
+      \\usepackage[table]{xcolor}
+      \\usepackage{graphicx}
+      \\usepackage{makecell}
+      \\usepackage{bm}
+    """
+
+    # ── SMART baseline data (keep in sync with plot_human_data_requirements) ─
+    # TODO: replace with pd.read_csv("results/smart_baseline.csv") once ready.
+    SMART_DATA = pd.DataFrame(
+        {
+            "num_maps": [67, 200, 12000, 12000, 500000],
+            "hr_atfault_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
+            "hr_coll_pct": [17.25, 9.14, 4.06, np.nan, 3.91],
+            "sp_coll_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
+            "hr_progress_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
+            "sp_progress_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
+        }
+    )
+    SMART_DATA["minutes"] = SMART_DATA["num_maps"] * 9 / 60
+
+    # ── Filter to scaling modes and 50k metadata maps ───────────────────────
+    scaling_modes = ["scaling_sp_val", "scaling_hr_val"]
+    df = df[df["mode"].isin(scaling_modes)].copy()
+    df = df[df["sp_maps"] == 50000]
+    if df.empty:
+        print("  No 50k sp_maps data — skipping generate_human_data_latex_table.")
+        return None
+
+    df["anchor_maps"] = df["anchor_maps"].fillna(0).astype(int)
+
+    # ── Aggregate regularized results ───────────────────────────────────────
+    hr = df[df["mode"] == "scaling_hr_val"]
+    hr_agg = (
+        hr.groupby("anchor_maps")[["at_fault_collision_rate", "collision_rate", "route_progress"]]
+        .agg(["mean", "sem"])
+        .reset_index()
+    )
+    hr_agg.columns = [
+        "anchor_maps",
+        "hr_atfault_mean",
+        "hr_atfault_sem",
+        "hr_coll_mean",
+        "hr_coll_sem",
+        "hr_progress_mean",
+        "hr_progress_sem",
+    ]
+
+    sp = df[df["mode"] == "scaling_sp_val"]
+    sp_agg = sp.groupby("anchor_maps")[["collision_rate", "route_progress"]].agg(["mean", "sem"]).reset_index()
+    sp_agg.columns = [
+        "anchor_maps",
+        "sp_coll_mean",
+        "sp_coll_sem",
+        "sp_progress_mean",
+        "sp_progress_sem",
+    ]
+
+    reg_agg = hr_agg.merge(sp_agg, on="anchor_maps", how="outer")
+    reg_agg = reg_agg[reg_agg["anchor_maps"] > 0].copy()  # drop unreg row
+    reg_agg["minutes"] = reg_agg["anchor_maps"] * 9 / 60
+
+    # Convert fractional rates → percentages
+    for col in ("hr_atfault", "hr_coll", "hr_progress", "sp_coll", "sp_progress"):
+        reg_agg[f"{col}_mean_pct"] = reg_agg[f"{col}_mean"] * 100
+        reg_agg[f"{col}_sem_pct"] = reg_agg[f"{col}_sem"] * 100
+
+    # ── Build unified per-row structure: (method, minutes, metric dict) ─────
+    rows = []
+    # SMART rows, sorted by minutes
+    smart_sorted = SMART_DATA.sort_values("minutes").reset_index(drop=True)
+    for _, r in smart_sorted.iterrows():
+        rows.append(
+            {
+                "method": "SMART",
+                "minutes": r["minutes"],
+                "sp_coll_mean": r["sp_coll_pct"],
+                "sp_coll_sem": np.nan,
+                "sp_progress_mean": r["sp_progress_pct"],
+                "sp_progress_sem": np.nan,
+                "hr_coll_mean": r["hr_coll_pct"],
+                "hr_coll_sem": np.nan,
+                "hr_atfault_mean": r["hr_atfault_pct"],
+                "hr_atfault_sem": np.nan,
+                "hr_progress_mean": r["hr_progress_pct"],
+                "hr_progress_sem": np.nan,
+            }
+        )
+    # Regularized rows, sorted by minutes
+    reg_sorted = reg_agg.sort_values("minutes").reset_index(drop=True)
+    for _, r in reg_sorted.iterrows():
+        rows.append(
+            {
+                "method": "regularized self-play",
+                "minutes": r["minutes"],
+                "sp_coll_mean": r["sp_coll_mean_pct"],
+                "sp_coll_sem": r["sp_coll_sem_pct"],
+                "sp_progress_mean": r["sp_progress_mean_pct"],
+                "sp_progress_sem": r["sp_progress_sem_pct"],
+                "hr_coll_mean": r["hr_coll_mean_pct"],
+                "hr_coll_sem": r["hr_coll_sem_pct"],
+                "hr_atfault_mean": r["hr_atfault_mean_pct"],
+                "hr_atfault_sem": r["hr_atfault_sem_pct"],
+                "hr_progress_mean": r["hr_progress_mean_pct"],
+                "hr_progress_sem": r["hr_progress_sem_pct"],
+            }
+        )
+
+    table = pd.DataFrame(rows)
+
+    # ── Human-readable minute labels (match the plot's x-tick scheme) ───────
+    def _fmt_minutes(minutes):
+        if minutes < 60:
+            return f"{int(round(minutes))} min"
+        hours = minutes / 60
+        if hours < 24:
+            if hours == int(hours):
+                return f"{int(hours)} hours"
+            return f"{hours:.1f} hours"
+        days = hours / 24
+        if days == int(days):
+            return f"{int(days)} days"
+        return f"{days:.1f} days"
+
+    table["human_data_label"] = table["minutes"].apply(_fmt_minutes)
+
+    # ── Metric metadata ──────────────────────────────────────────────────────
+    # (mean_col, sem_col, header, higher_is_better)
+    metrics = [
+        ("sp_coll_mean", "sp_coll_sem", "Coll. (\\%) $\\downarrow$", False),
+        ("sp_progress_mean", "sp_progress_sem", "Route prog. (\\%) $\\uparrow$", True),
+        ("hr_coll_mean", "hr_coll_sem", "Coll. (\\%) $\\downarrow$", False),
+        ("hr_atfault_mean", "hr_atfault_sem", "At-fault (\\%) $\\downarrow$", False),
+        ("hr_progress_mean", "hr_progress_sem", "Route prog. (\\%) $\\uparrow$", True),
+    ]
+
+    # Best value per column, over all rows (both methods)
+    best = {}
+    for mean_col, _, _, higher_is_better in metrics:
+        vals = table[mean_col].dropna()
+        if vals.empty:
+            best[mean_col] = None
+        else:
+            best[mean_col] = vals.max() if higher_is_better else vals.min()
+
+    def _fmt_cell(mean, sem, mean_col):
+        if pd.isna(mean):
+            return "---"
+        is_best = best[mean_col] is not None and np.isclose(mean, best[mean_col])
+        if pd.notna(sem) and sem != 0:
+            body = f"{mean:.1f} \\pm {sem:.1f}"
+            return f"$\\bm{{{body}}}$" if is_best else f"${body}$"
+        body = f"{mean:.1f}"
+        return f"\\textbf{{{body}}}" if is_best else body
+
+    # ── Build LaTeX ──────────────────────────────────────────────────────────
+    n_sp_cols = 2
+    n_hr_cols = 3
+    col_spec = "ll" + "|" + "r" * n_sp_cols + "|" + "r" * n_hr_cols
+
+    lines = []
+    lines.append(
+        r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, "
+        r"\usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
+    )
+    lines.append(r"\begin{table}[ht]")
+    lines.append(r"\centering")
+    lines.append(
+        r"\caption{Performance vs.\ amount of human demonstration data at fixed 50k "
+        r"self-play training maps. Best value per column in bold. "
+        r"SMART self-play metrics are not reported because SMART is a behaviour "
+        r"model rather than an RL agent.}"
+    )
+    lines.append(r"\label{tab:human_data_results}")
+    lines.append(r"\resizebox{\textwidth}{!}{%")
+    lines.append(r"\begin{tabular}{" + col_spec + "}")
+    lines.append(r"\toprule")
+
+    sp_header = r"\multicolumn{" + str(n_sp_cols) + r"}{c|}{Self-play (test)}"
+    hr_header = r"\multicolumn{" + str(n_hr_cols) + r"}{c}{Human-replay (test)}"
+    lines.append(r" & & " + sp_header + " & " + hr_header + r" \\")
+
+    header2 = (
+        r"\makecell{Human demos \\ used} & Method & "
+        + " & ".join(m[2] for m in metrics[:n_sp_cols])
+        + " & "
+        + " & ".join(m[2] for m in metrics[n_sp_cols:])
+        + r" \\"
+    )
+    lines.append(header2)
+    lines.append(r"\midrule")
+
+    # ── Emit rows, with a midrule between the SMART and regularized blocks ──
+    prev_method = None
+    for _, row in table.iterrows():
+        if prev_method is not None and row["method"] != prev_method:
+            lines.append(r"\midrule")
+        prev_method = row["method"]
+
+        if row["method"] == "SMART":
+            data_cell = f"\\cellcolor[HTML]{{FDCFF1}} {row['human_data_label']}"
+            method_cell = r"\cellcolor[HTML]{FDCFF1} SMART"
+        else:
+            data_cell = f"\\cellcolor[HTML]{{E0E0FF}} {row['human_data_label']}"
+            method_cell = r"\cellcolor[HTML]{E0E0FF} reg. self-play"
+
+        cells = [data_cell, method_cell]
+        for mean_col, sem_col, _, _ in metrics:
+            cells.append(_fmt_cell(row[mean_col], row[sem_col], mean_col))
+        lines.append(" & ".join(cells) + r" \\")
+
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}}")
+    lines.append(r"\end{table}")
+
+    latex_str = "\n".join(lines)
+    _ensure_dir(save_path)
+    with open(save_path, "w") as f:
+        f.write(latex_str)
+    print(f"  LaTeX table written to {save_path}")
+    return latex_str
+
+
 def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatibility_tradeoff_bar.pdf"):
     """Bar chart comparing two checkpoints across four HR metrics.
 
@@ -1784,9 +2192,12 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
         print("  Saved eval_scaling_scatter.pdf")
         plot_data_requirements(df)
         print("  Saved eval_data_requirements.pdf")
+        plot_human_data_requirements(df)
+        print("  Saved eval_human_data_requirements.pdf")
         generate_scaling_latex_table(df)
         generate_hr_comparison_latex_table(df)
         plot_compatibility_tradeoff_bar(df)
+        generate_human_data_latex_table(df)
         print("  Saved eval_compatibility_tradeoff_bar.pdf")
     plot_wosac_lineplot(wosac_df)
     print("  Saved eval_wosac_lineplot.pdf")
