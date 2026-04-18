@@ -46,7 +46,7 @@ build-backend = "setuptools.build_meta"
 line-length = 120
 target-version = "py313"
 include = ["pufferlib/**/*.py"]
-exclude = ["sim/*.py", "constellation/*.py", "tests/*.py"]
+exclude = ["constellation/*.py", "tests/*.py"]
 
 [tool.ruff.lint]
 select = [

@@ -164,5 +164,6 @@ box2d*/
 drive
 
 # Data
-resources/drive/data/*
 resources/drive/binaries/*
+!resources/drive/
+!resources/drive/demo_replay_map.bin

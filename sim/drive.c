@@ -11,9 +11,11 @@ void demo() {
         .human_agent_idx = 0,
         .reward_vehicle_collision = -0.1f,
         .reward_offroad_collision = -0.1f,
-        .map_name = "resources/drive/map_010.bin",
+        .map_name = "resources/drive/demo_replay_map.bin",
     };
-    allocate(&env);
+    if (allocate(&env) != 0) {
+        return;
+    }
     c_reset(&env);
     c_render(&env);
     Weights *weights = load_weights("resources/drive/drive_weights.bin");
@@ -70,9 +72,11 @@ void performance_test() {
     Drive env = {
         .dynamics_model = CLASSIC,
         .human_agent_idx = 0,
-        .map_name = "resources/drive/map_942.bin",
+        .map_name = "resources/drive/demo_replay_map.bin",
     };
-    allocate(&env);
+    if (allocate(&env) != 0) {
+        return;
+    }
     c_reset(&env);
 
     Weights *weights = load_weights("resources/drive/drive_weights.bin");

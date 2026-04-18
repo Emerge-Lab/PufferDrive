@@ -1,4 +1,7 @@
 #include "drive.h"
+
+#include <dirent.h>
+
 #define NUM_ATNS 2
 #define ACT_SIZES {7, 13}
 #define OBS_TENSOR_T FloatTensor
@@ -8,6 +11,65 @@
 #define MY_VEC_INIT
 #define Env Drive
 #include "vecenv.h"
+
+static int has_bin_suffix(const char *name) {
+    int len = strlen(name);
+    return len >= 4 && strcmp(name + len - 4, ".bin") == 0;
+}
+
+static int compare_map_paths(const void *lhs, const void *rhs) {
+    const char *const *left = lhs;
+    const char *const *right = rhs;
+    return strcmp(*left, *right);
+}
+
+static void free_map_files(char **map_files, int num_map_files) {
+    for (int i = 0; i < num_map_files; i++) {
+        free(map_files[i]);
+    }
+    free(map_files);
+}
+
+static char **discover_map_files(int *num_map_files_out) {
+    DIR *dir = opendir(MAP_BINARY_DIR);
+    if (!dir) {
+        *num_map_files_out = 0;
+        return NULL;
+    }
+
+    int capacity = 16;
+    int count = 0;
+    char **map_files = (char **) malloc(capacity * sizeof(char *));
+    struct dirent *entry = NULL;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (!has_bin_suffix(entry->d_name)) {
+            continue;
+        }
+
+        if (count == capacity) {
+            capacity *= 2;
+            map_files = (char **) realloc(map_files, capacity * sizeof(char *));
+        }
+
+        int path_len = snprintf(NULL, 0, "%s/%s", MAP_BINARY_DIR, entry->d_name);
+        char *map_path = (char *) malloc((path_len + 1) * sizeof(char));
+        snprintf(map_path, path_len + 1, "%s/%s", MAP_BINARY_DIR, entry->d_name);
+        map_files[count++] = map_path;
+    }
+
+    closedir(dir);
+
+    if (count == 0) {
+        free(map_files);
+        *num_map_files_out = 0;
+        return NULL;
+    }
+
+    qsort(map_files, count, sizeof(char *), compare_map_paths);
+    *num_map_files_out = count;
+    return map_files;
+}
 
 Env *my_vec_init(
     int *num_envs_out,
@@ -26,37 +88,56 @@ Env *my_vec_init(
     float reward_vehicle_collision_post_respawn = dict_get(env_kwargs, "reward_vehicle_collision_post_respawn")->value;
     int human_agent_idx = (int) dict_get(env_kwargs, "human_agent_idx")->value;
 
-    // Verify that the path has valid binaries
-    char first_map[512];
-    snprintf(first_map, sizeof(first_map), "%s/map_%03d.bin", MAP_BINARY_DIR, 0);
-    FILE *test_fp = fopen(first_map, "rb");
-    if (!test_fp) {
-        printf("ERROR: Cannot find map files at %s/\n", MAP_BINARY_DIR);
+    int discovered_maps = 0;
+    char **map_files = discover_map_files(&discovered_maps);
+    if (!map_files) {
+        printf("ERROR: Cannot find .bin files at %s/\n", MAP_BINARY_DIR);
         *num_envs_out = 0;
         return NULL;
     }
-    fclose(test_fp);
+
+    int map_count = num_maps < discovered_maps ? num_maps : discovered_maps;
+    if (map_count <= 0) {
+        printf(
+            "ERROR: No map files selected from %s/ (discovered %d, num_maps %d)\n",
+            MAP_BINARY_DIR,
+            discovered_maps,
+            num_maps);
+        free_map_files(map_files, discovered_maps);
+        *num_envs_out = 0;
+        return NULL;
+    }
 
     // Scan all maps for agent counts; collect valid (>0) ones
-    int agents_per_map[num_maps];
-    int valid_map_ids[num_maps];
+    int *agents_per_map = (int *) malloc(map_count * sizeof(int));
+    int *valid_map_ids = (int *) malloc(map_count * sizeof(int));
     int num_valid_maps = 0;
-    for (int m = 0; m < num_maps; m++) {
-        char map_file[512];
-        snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", MAP_BINARY_DIR, m);
+    for (int m = 0; m < map_count; m++) {
         Env temp_env = {0};
-        temp_env.map_name = map_file;
-        init(&temp_env);
+        temp_env.map_name = map_files[m];
+        if (init(&temp_env) != 0) {
+            agents_per_map[m] = 0;
+            c_close(&temp_env);
+            continue;
+        }
         agents_per_map[m] = temp_env.active_agent_count < MAX_AGENTS ? temp_env.active_agent_count : MAX_AGENTS;
         c_close(&temp_env);
         if (agents_per_map[m] > 0) {
             valid_map_ids[num_valid_maps++] = m;
         }
     }
-    printf("Scanned %d maps from %s/, %d valid\n", num_maps, MAP_BINARY_DIR, num_valid_maps);
+    printf(
+        "Scanned %d map binaries from %s/ (%d discovered), %d valid\n",
+        map_count,
+        MAP_BINARY_DIR,
+        discovered_maps,
+        num_valid_maps);
 
     if (num_valid_maps == 0) {
         printf("ERROR: No valid maps found\n");
+        free(agents_per_map);
+        free(valid_map_ids);
+        free_map_files(map_files, discovered_maps);
         *num_envs_out = 0;
         return NULL;
     }
@@ -104,23 +185,37 @@ Env *my_vec_init(
     // Initialize all envs
     Env *envs = (Env *) calloc(total_envs, sizeof(Env));
     for (int i = 0; i < total_envs; i++) {
-        char map_file[512];
-        snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", MAP_BINARY_DIR, env_map_ids[i]);
         Env *env = &envs[i];
         memset(env, 0, sizeof(Env));
-        env->map_name = strdup(map_file);
+        env->map_name = strdup(map_files[env_map_ids[i]]);
         env->human_agent_idx = human_agent_idx;
         env->reward_vehicle_collision = reward_vehicle_collision;
         env->reward_offroad_collision = reward_offroad_collision;
         env->reward_goal_post_respawn = reward_goal_post_respawn;
         env->reward_vehicle_collision_post_respawn = reward_vehicle_collision_post_respawn;
         env->max_agents = env_max_agents[i];
-        init(env);
+        if (init(env) != 0) {
+            printf("ERROR: Failed to initialize map %s\n", map_files[env_map_ids[i]]);
+            for (int j = 0; j < i; j++) {
+                c_close(&envs[j]);
+            }
+            free(envs);
+            free(env_map_ids);
+            free(env_max_agents);
+            free(agents_per_map);
+            free(valid_map_ids);
+            free_map_files(map_files, discovered_maps);
+            *num_envs_out = 0;
+            return NULL;
+        }
         env->num_agents = env->active_agent_count;
     }
 
     free(env_map_ids);
     free(env_max_agents);
+    free(agents_per_map);
+    free(valid_map_ids);
+    free_map_files(map_files, discovered_maps);
 
     printf("Created %d envs, %d total agents (target %d)\n", total_envs, total_agents, total_agents);
 
@@ -136,12 +231,23 @@ void my_init(Env *env, Dict *kwargs) {
     env->reward_vehicle_collision_post_respawn = dict_get(kwargs, "reward_vehicle_collision_post_respawn")->value;
     int map_id = dict_get(kwargs, "map_id")->value;
     int max_agents = dict_get(kwargs, "max_agents")->value;
+    int num_maps = (int) dict_get(kwargs, "num_maps")->value;
 
-    char map_file[512];
-    snprintf(map_file, sizeof(map_file), "%s/map_%03d.bin", MAP_BINARY_DIR, map_id);
+    int discovered_maps = 0;
+    char **map_files = discover_map_files(&discovered_maps);
+    int map_count = num_maps < discovered_maps ? num_maps : discovered_maps;
+    if (!map_files || map_id < 0 || map_id >= map_count) {
+        printf("ERROR: Invalid map_id %d for %d selected .bin files in %s/\n", map_id, map_count, MAP_BINARY_DIR);
+        free_map_files(map_files, discovered_maps);
+        return;
+    }
+
     env->num_agents = max_agents;
-    env->map_name = strdup(map_file);
-    init(env);
+    env->map_name = strdup(map_files[map_id]);
+    free_map_files(map_files, discovered_maps);
+    if (init(env) != 0) {
+        printf("ERROR: Failed to initialize map_id %d\n", map_id);
+    }
 }
 
 void my_log(Log *log, Dict *out) {

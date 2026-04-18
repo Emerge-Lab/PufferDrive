@@ -184,7 +184,7 @@ void draw_agent_obs(Drive *env, int agent_index) {
         }
 
         int entity_type = (int) agent_obs[idx + 6];
-        if (entity_type + ROAD_LANE != ROAD_EDGE) {
+        if (entity_type == NORMALIZED_ROAD_NONE) {
             continue;
         }
 
@@ -267,112 +267,105 @@ void c_render(Drive *env) {
         (Vector3) {env->map_corners[2], env->map_corners[3], 0},
         PUFF_CYAN);
 
-    for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type == VEHICLE || env->entities[i].type == PEDESTRIAN) {
-            bool is_active_agent = false;
-            bool is_static_agent = false;
-            int agent_index = -1;
-            for (int j = 0; j < env->active_agent_count; j++) {
-                if (env->active_agent_indices[j] == i) {
-                    is_active_agent = true;
-                    agent_index = j;
-                    break;
-                }
+    for (int i = 0; i < env->num_total_agents; i++) {
+        bool is_active_agent = false;
+        bool is_static_agent = false;
+        int agent_index = -1;
+        for (int j = 0; j < env->active_agent_count; j++) {
+            if (env->active_agent_indices[j] == i) {
+                is_active_agent = true;
+                agent_index = j;
+                break;
             }
-            for (int j = 0; j < env->static_agent_count; j++) {
-                if (env->static_agent_indices[j] == i) {
-                    is_static_agent = true;
-                    break;
-                }
-            }
-
-            if ((!is_active_agent && !is_static_agent) || env->entities[i].respawn_timestep != -1) {
-                continue;
-            }
-
-            Vector3 position = {env->entities[i].x, env->entities[i].y, 1};
-            float heading = env->entities[i].heading;
-            Vector3 size = {env->entities[i].length, env->entities[i].width, env->entities[i].height};
-
-            rlPushMatrix();
-            rlTranslatef(position.x, position.y, position.z);
-            rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f);
-
-            Model car_model = client->cars[5];
-            if (is_active_agent) {
-                car_model = client->cars[client->car_assignments[i % MAX_AGENTS]];
-            }
-            if (is_active_agent && env->entities[i].collision_state > NO_COLLISION) {
-                car_model = client->cars[0];
-            }
-
-            if (agent_index == env->human_agent_idx && !env->entities[agent_index].reached_goal) {
-                draw_agent_obs(env, agent_index);
-            }
-
-            BoundingBox bounds = GetModelBoundingBox(car_model);
-            Vector3 model_size
-                = {bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z};
-            Vector3 scale = {size.x / model_size.x, size.y / model_size.y, size.z / model_size.z};
-            DrawModelEx(car_model, (Vector3) {0, 0, 0}, (Vector3) {1, 0, 0}, 90.0f, scale, WHITE);
-            rlPopMatrix();
-
-            float cos_h = env->entities[i].heading_x;
-            float sin_h = env->entities[i].heading_y;
-            float hl = env->entities[i].length * 0.5f;
-            float hw = env->entities[i].width * 0.5f;
-            Vector3 corners[4]
-                = {{position.x + (hl * cos_h - hw * sin_h), position.y + (hl * sin_h + hw * cos_h), position.z},
-                   {position.x + (hl * cos_h + hw * sin_h), position.y + (hl * sin_h - hw * cos_h), position.z},
-                   {position.x + (-hl * cos_h - hw * sin_h), position.y + (-hl * sin_h + hw * cos_h), position.z},
-                   {position.x + (-hl * cos_h + hw * sin_h), position.y + (-hl * sin_h - hw * cos_h), position.z}};
-            for (int j = 0; j < 4; j++) {
-                DrawLine3D(corners[j], corners[(j + 1) % 4], PURPLE);
-            }
-
-            if (IsKeyDown(KEY_SPACE) && env->human_agent_idx == agent_index) {
-                if (env->entities[agent_index].reached_goal) {
-                    env->human_agent_idx = rand_r(&env->rng) % env->active_agent_count;
-                }
-                client->camera.position = (Vector3) {position.x - 25.0f * cosf(heading),
-                                                     position.y - 25.0f * sinf(heading),
-                                                     position.z + 15};
-                client->camera.target = (Vector3) {position.x + 40.0f * cosf(heading),
-                                                   position.y + 40.0f * sinf(heading),
-                                                   position.z - 5.0f};
-                client->camera.up = (Vector3) {0, 0, 1};
-            }
-            if (IsKeyReleased(KEY_SPACE)) {
-                client->camera.position = client->default_camera_position;
-                client->camera.target = client->default_camera_target;
-                client->camera.up = (Vector3) {0, 0, 1};
-            }
-
-            if (!is_active_agent || env->entities[i].valid == 0) {
-                continue;
-            }
-            if (!IsKeyDown(KEY_LEFT_CONTROL)) {
-                DrawSphere(
-                    (Vector3) {env->entities[i].goal_position_x, env->entities[i].goal_position_y, 1},
-                    0.5f,
-                    DARKGREEN);
+        }
+        for (int j = 0; j < env->static_agent_count; j++) {
+            if (env->static_agent_indices[j] == i) {
+                is_static_agent = true;
+                break;
             }
         }
 
-        if (env->entities[i].type < ROAD_LANE || env->entities[i].type > ROAD_EDGE) {
+        if ((!is_active_agent && !is_static_agent) || env->agents[i].respawn_timestep != -1
+            || env->agents[i].sim_x == INVALID_POSITION) {
             continue;
         }
-        for (int j = 0; j < env->entities[i].array_size - 1; j++) {
-            if (env->entities[i].type != ROAD_EDGE) {
-                continue;
+
+        Vector3 position = {env->agents[i].sim_x, env->agents[i].sim_y, 1};
+        float heading = env->agents[i].sim_heading;
+        Vector3 size = {env->agents[i].sim_length, env->agents[i].sim_width, env->agents[i].sim_height};
+
+        rlPushMatrix();
+        rlTranslatef(position.x, position.y, position.z);
+        rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f);
+
+        Model car_model = client->cars[5];
+        if (is_active_agent) {
+            car_model = client->cars[client->car_assignments[i % MAX_AGENTS]];
+        }
+        if (is_active_agent && env->agents[i].collision_state > NO_COLLISION) {
+            car_model = client->cars[0];
+        }
+
+        if (agent_index == env->human_agent_idx && !env->agents[agent_index].reached_goal) {
+            draw_agent_obs(env, agent_index);
+        }
+
+        BoundingBox bounds = GetModelBoundingBox(car_model);
+        Vector3 model_size = {bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z};
+        Vector3 scale = {size.x / model_size.x, size.y / model_size.y, size.z / model_size.z};
+        DrawModelEx(car_model, (Vector3) {0, 0, 0}, (Vector3) {1, 0, 0}, 90.0f, scale, WHITE);
+        rlPopMatrix();
+
+        float cos_h = env->agents[i].cos_heading;
+        float sin_h = env->agents[i].sin_heading;
+        float hl = env->agents[i].sim_length * 0.5f;
+        float hw = env->agents[i].sim_width * 0.5f;
+        Vector3 corners[4]
+            = {{position.x + (hl * cos_h - hw * sin_h), position.y + (hl * sin_h + hw * cos_h), position.z},
+               {position.x + (hl * cos_h + hw * sin_h), position.y + (hl * sin_h - hw * cos_h), position.z},
+               {position.x + (-hl * cos_h - hw * sin_h), position.y + (-hl * sin_h + hw * cos_h), position.z},
+               {position.x + (-hl * cos_h + hw * sin_h), position.y + (-hl * sin_h - hw * cos_h), position.z}};
+        for (int j = 0; j < 4; j++) {
+            DrawLine3D(corners[j], corners[(j + 1) % 4], PURPLE);
+        }
+
+        if (IsKeyDown(KEY_SPACE) && env->human_agent_idx == agent_index) {
+            if (env->agents[agent_index].reached_goal) {
+                env->human_agent_idx = rand_r(&env->rng) % env->active_agent_count;
             }
+            client->camera.position
+                = (Vector3) {position.x - 25.0f * cosf(heading), position.y - 25.0f * sinf(heading), position.z + 15};
+            client->camera.target
+                = (Vector3) {position.x + 40.0f * cosf(heading), position.y + 40.0f * sinf(heading), position.z - 5.0f};
+            client->camera.up = (Vector3) {0, 0, 1};
+        }
+        if (IsKeyReleased(KEY_SPACE)) {
+            client->camera.position = client->default_camera_position;
+            client->camera.target = client->default_camera_target;
+            client->camera.up = (Vector3) {0, 0, 1};
+        }
+
+        if (!is_active_agent || env->agents[i].sim_valid == 0) {
+            continue;
+        }
+        if (!IsKeyDown(KEY_LEFT_CONTROL)) {
+            DrawSphere((Vector3) {env->agents[i].goal_position_x, env->agents[i].goal_position_y, 1}, 0.5f, DARKGREEN);
+        }
+    }
+
+    for (int i = 0; i < env->num_road_elements; i++) {
+        if (!is_road_edge(env->road_elements[i].type)) {
+            continue;
+        }
+
+        for (int j = 0; j < env->road_elements[i].segment_length - 1; j++) {
             if (!IsKeyDown(KEY_LEFT_CONTROL)) {
                 draw_road_edge(
                     env,
-                    env->entities[i].traj_x[j],
-                    env->entities[i].traj_y[j],
-                    env->entities[i].traj_x[j + 1],
-                    env->entities[i].traj_y[j + 1]);
+                    env->road_elements[i].x[j],
+                    env->road_elements[i].y[j],
+                    env->road_elements[i].x[j + 1],
+                    env->road_elements[i].y[j + 1]);
             }
         }
     }

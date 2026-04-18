@@ -1,21 +1,13 @@
+#ifndef SIM_DRIVE_H
+#define SIM_DRIVE_H
+
+#include "datatypes.h"
+
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-// Entity Types
-#define NONE 0
-#define VEHICLE 1
-#define PEDESTRIAN 2
-#define CYCLIST 3
-#define ROAD_LANE 4
-#define ROAD_LINE 5
-#define ROAD_EDGE 6
-#define STOP_SIGN 7
-#define CROSSWALK 8
-#define SPEED_BUMP 9
-#define DRIVEWAY 10
 
 #define INVALID_POSITION -10000.0f
 
@@ -68,7 +60,6 @@
 #define MIN_DISTANCE_TO_GOAL 5.0f
 #define COLLISION_DIST_SQ 225.0f
 #define OBS_DIST_SQ 2500.0f
-#define COLLISION_BOX_SCALE 0.7f
 
 // Action space
 #define NUM_ACCEL_BINS 7
@@ -80,14 +71,6 @@ static const float ACCELERATION_VALUES[NUM_ACCEL_BINS]
 static const float STEERING_VALUES[NUM_STEER_BINS]
     = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f, 0.833f, 1.000f};
 
-// Geometry helpers
-static const float offsets[4][2] = {
-    {-1, 1}, // top-left
-    {1, 1},  // top-right
-    {1, -1}, // bottom-right
-    {-1, -1} // bottom-left
-};
-
 static const int collision_offsets[25][2]
     = {{-2, -2}, {-1, -2}, {0, -2}, {1, -2}, {2, -2}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1},
        {2, -1},  {-2, 0},  {-1, 0}, {0, 0},  {1, 0},  {2, 0},   {-2, 1},  {-1, 1}, {0, 1},
@@ -97,7 +80,9 @@ static const int collision_offsets[25][2]
 typedef struct Drive Drive;
 typedef struct Client Client;
 typedef struct Log Log;
-typedef struct Entity Entity;
+typedef struct Agent Agent;
+typedef struct RoadMapElement RoadMapElement;
+typedef struct TrafficControlElement TrafficControlElement;
 
 struct Log {
     float episode_return;
@@ -120,22 +105,26 @@ struct Drive {
     float *terminals;
     Log log;
     Log *logs;
+    Agent *agents;
+    RoadMapElement *road_elements;
+    TrafficControlElement *traffic_elements;
+    // Entity fields
     int num_agents;
     int max_agents;
+    int num_total_agents;
+    int num_actors;
+    int num_road_elements;
+    int num_traffic_elements;
+    int num_objects;
     int active_agent_count;
     int *active_agent_indices;
-    int human_agent_idx;
-    Entity *entities;
-    int num_entities;
-    int num_actors; // Total agents (active + static)
-    int num_objects;
-    int num_roads;
     int static_agent_count;
     int *static_agent_indices;
     int expert_static_agent_count;
     int *expert_static_agent_indices;
     int timestep;
     int dynamics_model;
+    // Grid map fields
     float *map_corners;
     int *grid_cells;
     int grid_cols;
@@ -144,62 +133,21 @@ struct Drive {
     int *neighbor_offsets;
     int *neighbor_cache_entities;
     int *neighbor_cache_indices;
+    // Reward coefficients
     float reward_vehicle_collision;
     float reward_offroad_collision;
-    char *map_name;
-    float world_mean_x;
-    float world_mean_y;
     float reward_goal_post_respawn;
     float reward_vehicle_collision_post_respawn;
     unsigned int rng;
-};
+    // Metadata fields
+    char scenario_id[128];
+    char dataset_name[32];
+    char *map_name;
+    int log_length;
 
-struct Entity {
-    int type;
-    int array_size;
-    float *traj_x;
-    float *traj_y;
-    float *traj_z;
-    float *traj_vx;
-    float *traj_vy;
-    float *traj_vz;
-    float *traj_heading;
-    int *traj_valid;
-    float width;
-    float length;
-    float height;
-    float goal_position_x;
-    float goal_position_y;
-    float goal_position_z;
-    int mark_as_expert;
-    int collision_state;
-    float x;
-    float y;
-    float z;
-    float vx;
-    float vy;
-    float vz;
-    float heading;
-    float heading_x;
-    float heading_y;
-    int valid;
-    int reached_goal;
-    int respawn_timestep;
-    int collided_before_goal;
-    int reached_goal_this_episode;
-    int active_agent;
+    float log_dt;
+    int human_agent_idx;
 };
-
-void free_entity(Entity *entity) {
-    free(entity->traj_x);
-    free(entity->traj_y);
-    free(entity->traj_z);
-    free(entity->traj_vx);
-    free(entity->traj_vy);
-    free(entity->traj_vz);
-    free(entity->traj_heading);
-    free(entity->traj_valid);
-}
 
 // ========================================
 // Utility Functions
@@ -230,7 +178,6 @@ float normalize_heading(float heading) {
 // Grid Map Functions
 // ========================================
 
-// Grid Map
 int get_grid_index(Drive *env, float x1, float y1) {
     if (env->map_corners[0] >= env->map_corners[2] || env->map_corners[1] >= env->map_corners[3]) {
         return -1;
@@ -263,36 +210,36 @@ void add_entity_to_grid(Drive *env, int grid_index, int entity_idx, int geometry
 
 void init_grid_map(Drive *env) {
     float top_left_x, top_left_y, bottom_right_x, bottom_right_y;
-    int first_valid_point = 0;
-
-    for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type >= ROAD_LANE && env->entities[i].type <= ROAD_EDGE) {
-            Entity *e = &env->entities[i];
-            for (int j = 0; j < e->array_size; j++) {
-                if (e->traj_x[j] == INVALID_POSITION) {
-                    continue;
-                }
-                if (e->traj_y[j] == INVALID_POSITION) {
-                    continue;
-                }
-                if (!first_valid_point) {
-                    top_left_x = bottom_right_x = e->traj_x[j];
-                    top_left_y = bottom_right_y = e->traj_y[j];
-                    first_valid_point = 1;
-                    continue;
-                }
-                if (e->traj_x[j] < top_left_x) {
-                    top_left_x = e->traj_x[j];
-                }
-                if (e->traj_x[j] > bottom_right_x) {
-                    bottom_right_x = e->traj_x[j];
-                }
-                if (e->traj_y[j] < top_left_y) {
-                    top_left_y = e->traj_y[j];
-                }
-                if (e->traj_y[j] > bottom_right_y) {
-                    bottom_right_y = e->traj_y[j];
-                }
+    bool first_valid_point = false;
+    for (int i = 0; i < env->num_road_elements; i++) {
+        if (!is_road(env->road_elements[i].type)) {
+            continue;
+        }
+        RoadMapElement *element = &env->road_elements[i];
+        for (int j = 0; j < element->segment_length; j++) {
+            if (element->x[j] == INVALID_POSITION) {
+                continue;
+            }
+            if (element->y[j] == INVALID_POSITION) {
+                continue;
+            }
+            if (!first_valid_point) {
+                top_left_x = bottom_right_x = element->x[j];
+                top_left_y = bottom_right_y = element->y[j];
+                first_valid_point = true;
+                continue;
+            }
+            if (element->x[j] < top_left_x) {
+                top_left_x = element->x[j];
+            }
+            if (element->x[j] > bottom_right_x) {
+                bottom_right_x = element->x[j];
+            }
+            if (element->y[j] < top_left_y) {
+                top_left_y = element->y[j];
+            }
+            if (element->y[j] > bottom_right_y) {
+                bottom_right_y = element->y[j];
             }
         }
     }
@@ -310,14 +257,16 @@ void init_grid_map(Drive *env) {
     int grid_cell_count = env->grid_cols * env->grid_rows;
     env->grid_cells = (int *) calloc(grid_cell_count * SLOTS_PER_CELL, sizeof(int));
 
-    for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type >= ROAD_LANE && env->entities[i].type <= ROAD_EDGE) {
-            for (int j = 0; j < env->entities[i].array_size - 1; j++) {
-                float x_center = (env->entities[i].traj_x[j] + env->entities[i].traj_x[j + 1]) / 2;
-                float y_center = (env->entities[i].traj_y[j] + env->entities[i].traj_y[j + 1]) / 2;
-                int grid_index = get_grid_index(env, x_center, y_center);
-                add_entity_to_grid(env, grid_index, i, j);
-            }
+    for (int i = 0; i < env->num_road_elements; i++) {
+        if (!is_road(env->road_elements[i].type)) {
+            continue;
+        }
+        RoadMapElement *element = &env->road_elements[i];
+        for (int j = 0; j < element->segment_length - 1; j++) {
+            float x_center = (element->x[j] + element->x[j + 1]) / 2;
+            float y_center = (element->y[j] + element->y[j + 1]) / 2;
+            int grid_index = get_grid_index(env, x_center, y_center);
+            add_entity_to_grid(env, grid_index, i, j);
         }
     }
 }
@@ -455,74 +404,246 @@ int get_neighbors_entities(
 // Map Loading Functions
 // ========================================
 
-Entity *load_map_binary(const char *filename, Drive *env) {
+#define READ_OR_FAIL(ptr, elem_size, count)                                                                            \
+    do {                                                                                                               \
+        size_t _n = (size_t) (count);                                                                                  \
+        if (fread((ptr), (elem_size), _n, file) != _n) {                                                               \
+            fclose(file);                                                                                              \
+            return -1;                                                                                                 \
+        }                                                                                                              \
+    } while (0)
+
+int load_map_binary(const char *filename, Drive *drive) {
     FILE *file = fopen(filename, "rb");
     if (!file) {
-        return NULL;
+        return -1;
     }
 
-    fread(&env->num_objects, sizeof(int), 1, file);
-    fread(&env->num_roads, sizeof(int), 1, file);
-    env->num_entities = env->num_objects + env->num_roads;
+    int num_total_agents, num_roads, num_traffic, num_objects;
+    READ_OR_FAIL(&num_total_agents, sizeof(int), 1);
+    READ_OR_FAIL(&num_roads, sizeof(int), 1);
+    READ_OR_FAIL(&num_traffic, sizeof(int), 1);
+    READ_OR_FAIL(&num_objects, sizeof(int), 1);
 
-    Entity *entities = (Entity *) malloc(env->num_entities * sizeof(Entity));
-    for (int i = 0; i < env->num_entities; i++) {
-        // Read base entity data
-        fread(&entities[i].type, sizeof(int), 1, file);
-        fread(&entities[i].array_size, sizeof(int), 1, file);
-        // Allocate arrays based on type
-        int size = entities[i].array_size;
-        entities[i].traj_x = (float *) malloc(size * sizeof(float));
-        entities[i].traj_y = (float *) malloc(size * sizeof(float));
-        entities[i].traj_z = (float *) malloc(size * sizeof(float));
+    drive->num_total_agents = num_total_agents;
+    drive->num_road_elements = num_roads;
+    drive->num_traffic_elements = num_traffic;
+    drive->num_objects = num_objects;
 
-        int is_actor = (entities[i].type == VEHICLE || entities[i].type == PEDESTRIAN || entities[i].type == CYCLIST);
-        if (is_actor) {
-            // Allocate arrays for object-specific data
-            entities[i].traj_vx = (float *) malloc(size * sizeof(float));
-            entities[i].traj_vy = (float *) malloc(size * sizeof(float));
-            entities[i].traj_vz = (float *) malloc(size * sizeof(float));
-            entities[i].traj_heading = (float *) malloc(size * sizeof(float));
-            entities[i].traj_valid = (int *) malloc(size * sizeof(int));
+    if (num_total_agents > 0) {
+        drive->agents = (Agent *) calloc(num_total_agents, sizeof(Agent));
+    }
+    if (num_roads > 0) {
+        drive->road_elements = (RoadMapElement *) calloc(num_roads, sizeof(RoadMapElement));
+    }
+    if (num_traffic > 0) {
+        drive->traffic_elements = (TrafficControlElement *) calloc(num_traffic, sizeof(TrafficControlElement));
+    }
+
+    for (int i = 0; i < num_total_agents; i++) {
+        Agent *agent = &drive->agents[i];
+        int agent_id;
+
+        READ_OR_FAIL(&agent_id, sizeof(int), 1);
+        if (agent_id != i) {
+            printf("[ERROR] -> Agent id %d != idx %d. Binary must be reindexed (id == idx).\n", agent_id, i);
+            fclose(file);
+            return -1;
+        }
+        READ_OR_FAIL(&agent->type, sizeof(int), 1);
+        READ_OR_FAIL(&agent->trajectory_length, sizeof(int), 1);
+
+        int tlen = agent->trajectory_length;
+        agent->log_trajectory_x = (float *) malloc(tlen * sizeof(float));
+        agent->log_trajectory_y = (float *) malloc(tlen * sizeof(float));
+        agent->log_trajectory_z = (float *) malloc(tlen * sizeof(float));
+        agent->log_heading = (float *) malloc(tlen * sizeof(float));
+        agent->log_velocity_x = (float *) malloc(tlen * sizeof(float));
+        agent->log_velocity_y = (float *) malloc(tlen * sizeof(float));
+        agent->log_length = (float *) malloc(tlen * sizeof(float));
+        agent->log_width = (float *) malloc(tlen * sizeof(float));
+        agent->log_height = (float *) malloc(tlen * sizeof(float));
+        agent->log_valid = (int *) malloc(tlen * sizeof(int));
+
+        READ_OR_FAIL(agent->log_trajectory_x, sizeof(float), tlen);
+        READ_OR_FAIL(agent->log_trajectory_y, sizeof(float), tlen);
+        READ_OR_FAIL(agent->log_trajectory_z, sizeof(float), tlen);
+        READ_OR_FAIL(agent->log_heading, sizeof(float), tlen);
+        READ_OR_FAIL(agent->log_velocity_x, sizeof(float), tlen);
+        READ_OR_FAIL(agent->log_velocity_y, sizeof(float), tlen);
+        READ_OR_FAIL(agent->log_length, sizeof(float), tlen);
+        READ_OR_FAIL(agent->log_width, sizeof(float), tlen);
+        READ_OR_FAIL(agent->log_height, sizeof(float), tlen);
+        READ_OR_FAIL(agent->log_valid, sizeof(int), tlen);
+
+        int route_length;
+        READ_OR_FAIL(&route_length, sizeof(int), 1);
+
+        if (route_length > 0) {
+            fseek(file, (long) ((size_t) route_length * sizeof(int)), SEEK_CUR);
+        }
+
+        int route_gt_len;
+        READ_OR_FAIL(&route_gt_len, sizeof(int), 1);
+
+        READ_OR_FAIL(&agent->goal_position_x, sizeof(float), 1);
+        READ_OR_FAIL(&agent->goal_position_y, sizeof(float), 1);
+        READ_OR_FAIL(&agent->goal_position_z, sizeof(float), 1);
+        READ_OR_FAIL(&agent->control_state, sizeof(int), 1);
+    }
+
+    for (int i = 0; i < num_roads; i++) {
+        RoadMapElement *road = &drive->road_elements[i];
+        int road_id;
+
+        READ_OR_FAIL(&road_id, sizeof(int), 1);
+        if (road_id != i) {
+            printf("[ERROR] -> Road element id %d != idx %d. Binary must be reindexed (id == idx).\n", road_id, i);
+            fclose(file);
+            return -1;
+        }
+        READ_OR_FAIL(&road->type, sizeof(int), 1);
+        READ_OR_FAIL(&road->segment_length, sizeof(int), 1);
+
+        int slen = road->segment_length;
+
+        road->x = (float *) malloc(slen * sizeof(float));
+        road->y = (float *) malloc(slen * sizeof(float));
+        road->z = (float *) malloc(slen * sizeof(float));
+
+        READ_OR_FAIL(road->x, sizeof(float), slen);
+        READ_OR_FAIL(road->y, sizeof(float), slen);
+        READ_OR_FAIL(road->z, sizeof(float), slen);
+
+        road->headings = (float *) malloc(slen * sizeof(float));
+        READ_OR_FAIL(road->headings, sizeof(float), slen);
+
+        if (is_road_lane(road->type)) {
+            READ_OR_FAIL(&road->num_entries, sizeof(int), 1);
+            if (road->num_entries > 0) {
+                road->entry_lanes = (int *) malloc(road->num_entries * sizeof(int));
+                READ_OR_FAIL(road->entry_lanes, sizeof(int), road->num_entries);
+            } else {
+                road->entry_lanes = NULL;
+            }
+
+            READ_OR_FAIL(&road->num_exits, sizeof(int), 1);
+            if (road->num_exits > 0) {
+                road->exit_lanes = (int *) malloc(road->num_exits * sizeof(int));
+                READ_OR_FAIL(road->exit_lanes, sizeof(int), road->num_exits);
+            } else {
+                road->exit_lanes = NULL;
+            }
+
+            READ_OR_FAIL(&road->speed_limit, sizeof(float), 1);
         } else {
-            // Roads don't use these arrays
-            entities[i].traj_vx = NULL;
-            entities[i].traj_vy = NULL;
-            entities[i].traj_vz = NULL;
-            entities[i].traj_heading = NULL;
-            entities[i].traj_valid = NULL;
+            road->num_entries = 0;
+            road->num_exits = 0;
+            road->entry_lanes = NULL;
+            road->exit_lanes = NULL;
+            road->speed_limit = 0.0f;
         }
-        // Read array data
-        fread(entities[i].traj_x, sizeof(float), size, file);
-        fread(entities[i].traj_y, sizeof(float), size, file);
-        fread(entities[i].traj_z, sizeof(float), size, file);
-        if (is_actor) {
-            fread(entities[i].traj_vx, sizeof(float), size, file);
-            fread(entities[i].traj_vy, sizeof(float), size, file);
-            fread(entities[i].traj_vz, sizeof(float), size, file);
-            fread(entities[i].traj_heading, sizeof(float), size, file);
-            fread(entities[i].traj_valid, sizeof(int), size, file);
-        }
-        // Read remaining scalar fields
-        fread(&entities[i].width, sizeof(float), 1, file);
-        fread(&entities[i].length, sizeof(float), 1, file);
-        fread(&entities[i].height, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_x, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_y, sizeof(float), 1, file);
-        fread(&entities[i].goal_position_z, sizeof(float), 1, file);
-        fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
     }
+
+    for (int i = 0; i < num_traffic; i++) {
+        TrafficControlElement *traffic = &drive->traffic_elements[i];
+        int traffic_id;
+
+        READ_OR_FAIL(&traffic_id, sizeof(int), 1);
+        if (traffic_id != i) {
+            printf(
+                "[ERROR] -> Traffic element id %d != idx %d. Binary must be reindexed (id == idx).\n",
+                traffic_id,
+                i);
+            fclose(file);
+            return -1;
+        }
+        READ_OR_FAIL(&traffic->type, sizeof(int), 1);
+        READ_OR_FAIL(traffic->stop_line, sizeof(float), 6);
+        READ_OR_FAIL(&traffic->heading, sizeof(float), 1);
+        READ_OR_FAIL(&traffic->state_length, sizeof(int), 1);
+
+        int state_len = traffic->state_length;
+
+        traffic->states = (int *) malloc(state_len * sizeof(int));
+        READ_OR_FAIL(traffic->states, sizeof(int), state_len);
+
+        READ_OR_FAIL(&traffic->num_controlled_lanes, sizeof(int), 1);
+        if (traffic->num_controlled_lanes > 0) {
+            traffic->controlled_lanes = (int *) malloc(traffic->num_controlled_lanes * sizeof(int));
+            READ_OR_FAIL(traffic->controlled_lanes, sizeof(int), traffic->num_controlled_lanes);
+        } else {
+            traffic->controlled_lanes = NULL;
+        }
+    }
+
+    // Skip objects section
+    for (int i = 0; i < num_objects; i++) {
+        int obj_id, obj_type, T;
+        READ_OR_FAIL(&obj_id, sizeof(int), 1);
+        READ_OR_FAIL(&obj_type, sizeof(int), 1);
+        READ_OR_FAIL(&T, sizeof(int), 1);
+        // Skip: x,y,z,heading,vx,vy,length,width,height (9 float arrays) + valid (1 int array)
+        fseek(file, 9 * T * sizeof(float) + T * sizeof(int), SEEK_CUR);
+    }
+
+    // Lane graph section
+    int n_lanes_graph;
+    READ_OR_FAIL(&n_lanes_graph, sizeof(int), 1);
+    if (n_lanes_graph > 0) {
+        size_t lane_count = (size_t) n_lanes_graph;
+        size_t distance_count = lane_count * lane_count;
+        if (fseek(file, (long) (lane_count * sizeof(int)), SEEK_CUR) != 0) {
+            fclose(file);
+            return -1;
+        }
+        if (fseek(file, (long) (lane_count * sizeof(float)), SEEK_CUR) != 0) {
+            fclose(file);
+            return -1;
+        }
+        if (fseek(file, (long) (distance_count * sizeof(float)), SEEK_CUR) != 0) {
+            fclose(file);
+            return -1;
+        }
+    }
+
+    // Metadata
+    READ_OR_FAIL(drive->scenario_id, sizeof(char), 128);
+    READ_OR_FAIL(drive->dataset_name, sizeof(char), 32);
+    READ_OR_FAIL(&drive->log_length, sizeof(int), 1);
+    READ_OR_FAIL(&drive->log_dt, sizeof(float), 1);
+
+    int num_objects_of_interest;
+    READ_OR_FAIL(&num_objects_of_interest, sizeof(int), 1);
+    if (num_objects_of_interest > 0) {
+        if (fseek(file, (long) ((size_t) num_objects_of_interest * sizeof(int)), SEEK_CUR) != 0) {
+            fclose(file);
+            return -1;
+        }
+    }
+
+    int num_tracks_to_predict;
+    READ_OR_FAIL(&num_tracks_to_predict, sizeof(int), 1);
+    if (num_tracks_to_predict > 0) {
+        if (fseek(file, (long) ((size_t) num_tracks_to_predict * sizeof(int)), SEEK_CUR) != 0) {
+            fclose(file);
+            return -1;
+        }
+    }
+
     fclose(file);
-    return entities;
+    return 0;
 }
+
+#undef READ_OR_FAIL
 
 // ========================================
 // Metrics/Collision Functions
 // ========================================
 
 bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2]) {
-    if (fmax(p1[0], p2[0]) < fmin(q1[0], q2[0]) || fmin(p1[0], p2[0]) > fmax(q1[0], q2[0])
-        || fmax(p1[1], p2[1]) < fmin(q1[1], q2[1]) || fmin(p1[1], p2[1]) > fmax(q1[1], q2[1])) {
+    if (fmaxf(p1[0], p2[0]) < fminf(q1[0], q2[0]) || fminf(p1[0], p2[0]) > fmaxf(q1[0], q2[0])
+        || fmaxf(p1[1], p2[1]) < fminf(q1[1], q2[1]) || fminf(p1[1], p2[1]) > fmaxf(q1[1], q2[1])) {
         return false;
     }
 
@@ -542,23 +663,35 @@ bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2])
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
-int check_obb_collision(Entity *car1, Entity *car2) {
-    float cos1 = car1->heading_x, sin1 = car1->heading_y;
-    float cos2 = car2->heading_x, sin2 = car2->heading_y;
-    float hl1 = car1->length * 0.5f, hw1 = car1->width * 0.5f;
-    float hl2 = car2->length * 0.5f, hw2 = car2->width * 0.5f;
+static void compute_agent_corners(Agent *agent, float corners[4][2]) {
+    static const float offsets[4][2] = {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}};
+    float half_length = agent->sim_length / 2.0f;
+    float half_width = agent->sim_width / 2.0f;
 
-    float car1_corners[4][2]
-        = {{car1->x + (hl1 * cos1 - hw1 * sin1), car1->y + (hl1 * sin1 + hw1 * cos1)},
-           {car1->x + (hl1 * cos1 + hw1 * sin1), car1->y + (hl1 * sin1 - hw1 * cos1)},
-           {car1->x + (-hl1 * cos1 - hw1 * sin1), car1->y + (-hl1 * sin1 + hw1 * cos1)},
-           {car1->x + (-hl1 * cos1 + hw1 * sin1), car1->y + (-hl1 * sin1 - hw1 * cos1)}};
+    for (int i = 0; i < 4; i++) {
+        corners[i][0] = agent->sim_x
+            + (offsets[i][0] * half_length * agent->cos_heading - offsets[i][1] * half_width * agent->sin_heading);
+        corners[i][1] = agent->sim_y
+            + (offsets[i][0] * half_length * agent->sin_heading + offsets[i][1] * half_width * agent->cos_heading);
+    }
+}
 
-    float car2_corners[4][2]
-        = {{car2->x + (hl2 * cos2 - hw2 * sin2), car2->y + (hl2 * sin2 + hw2 * cos2)},
-           {car2->x + (hl2 * cos2 + hw2 * sin2), car2->y + (hl2 * sin2 - hw2 * cos2)},
-           {car2->x + (-hl2 * cos2 - hw2 * sin2), car2->y + (-hl2 * sin2 + hw2 * cos2)},
-           {car2->x + (-hl2 * cos2 + hw2 * sin2), car2->y + (-hl2 * sin2 - hw2 * cos2)}};
+bool check_obb_collision(Agent *car1, Agent *car2) {
+    // Early z-axis rejection
+    float car1_top = car1->sim_z + car1->sim_height;
+    float car2_top = car2->sim_z + car2->sim_height;
+    if (car1_top < car2->sim_z || car2_top < car1->sim_z) {
+        return false;
+    }
+
+    float cos1 = car1->cos_heading;
+    float sin1 = car1->sin_heading;
+    float cos2 = car2->cos_heading;
+    float sin2 = car2->sin_heading;
+    float car1_corners[4][2];
+    compute_agent_corners(car1, car1_corners);
+    float car2_corners[4][2];
+    compute_agent_corners(car2, car2_corners);
 
     float axes[4][2] = {{cos1, sin1}, {-sin1, cos1}, {cos2, sin2}, {-sin2, cos2}};
 
@@ -574,29 +707,20 @@ int check_obb_collision(Entity *car1, Entity *car2) {
             max2 = fmaxf(max2, proj2);
         }
         if (max1 < min2 || min1 > max2) {
-            return 0;
+            return false;
         }
     }
-    return 1;
+    return true;
 }
 
 int collision_check(Drive *env, int agent_idx) {
-    Entity *agent = &env->entities[agent_idx];
-    if (agent->x == INVALID_POSITION) {
+    Agent *agent = &env->agents[agent_idx];
+    if (agent->sim_x == INVALID_POSITION) {
         return -1;
     }
 
-    float half_length = agent->length / 2.0f;
-    float half_width = agent->width / 2.0f;
-    float cos_heading = cosf(agent->heading);
-    float sin_heading = sinf(agent->heading);
     float corners[4][2];
-    for (int i = 0; i < 4; i++) {
-        corners[i][0]
-            = agent->x + (offsets[i][0] * half_length * cos_heading - offsets[i][1] * half_width * sin_heading);
-        corners[i][1]
-            = agent->y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
-    }
+    compute_agent_corners(agent, corners);
 
     int collided = NO_COLLISION;
     int car_collided_with_index = -1;
@@ -605,8 +729,8 @@ int collision_check(Drive *env, int agent_idx) {
     int entity_list[MAX_ENTITIES_PER_CELL * 2 * 25];
     int list_size = get_neighbors_entities(
         env,
-        agent->x,
-        agent->y,
+        agent->sim_x,
+        agent->sim_y,
         entity_list,
         MAX_ENTITIES_PER_CELL * 2 * 25,
         collision_offsets,
@@ -615,13 +739,13 @@ int collision_check(Drive *env, int agent_idx) {
         if (entity_list[i] == -1 || entity_list[i] == agent_idx) {
             continue;
         }
-        Entity *entity = &env->entities[entity_list[i]];
-        if (entity->type != ROAD_EDGE) {
+        RoadMapElement *entity = &env->road_elements[entity_list[i]];
+        if (!is_road_edge(entity->type)) {
             continue;
         }
         int geometry_idx = entity_list[i + 1];
-        float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
-        float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
+        float start[2] = {entity->x[geometry_idx], entity->y[geometry_idx]};
+        float end[2] = {entity->x[geometry_idx + 1], entity->y[geometry_idx + 1]};
         for (int k = 0; k < 4; k++) {
             int next = (k + 1) % 4;
             if (check_line_intersection(corners[k], corners[next], start, end)) {
@@ -645,13 +769,13 @@ int collision_check(Drive *env, int agent_idx) {
         if (index == -1 || index == agent_idx) {
             continue;
         }
-        Entity *entity = &env->entities[index];
-        float dx = entity->x - agent->x;
-        float dy = entity->y - agent->y;
+        Agent *other_agent = &env->agents[index];
+        float dx = other_agent->sim_x - agent->sim_x;
+        float dy = other_agent->sim_y - agent->sim_y;
         if ((dx * dx + dy * dy) > COLLISION_DIST_SQ) {
             continue;
         }
-        if (check_obb_collision(agent, entity)) {
+        if (check_obb_collision(agent, other_agent)) {
             collided = VEHICLE_COLLISION;
             car_collided_with_index = index;
             break;
@@ -673,7 +797,7 @@ int collision_check(Drive *env, int agent_idx) {
     }
 
     // Spawn immunity: collided-with agent just respawned
-    if (env->entities[car_collided_with_index].respawn_timestep != -1) {
+    if (env->agents[car_collided_with_index].respawn_timestep != -1) {
         agent->collision_state = NO_COLLISION;
     }
 
@@ -682,7 +806,7 @@ int collision_check(Drive *env, int agent_idx) {
 
 void add_log(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
-        Entity *e = &env->entities[env->active_agent_indices[i]];
+        Agent *e = &env->agents[env->active_agent_indices[i]];
         if (e->reached_goal_this_episode) {
             env->log.completion_rate += 1.0f;
         }
@@ -710,112 +834,41 @@ void add_log(Drive *env) {
 // ========================================
 
 void set_start_position(Drive *env) {
-    for (int i = 0; i < env->num_entities; i++) {
-        int is_active = 0;
-        for (int j = 0; j < env->active_agent_count; j++) {
-            if (env->active_agent_indices[j] == i) {
-                is_active = 1;
-                break;
-            }
-        }
-        Entity *e = &env->entities[i];
-        e->x = e->traj_x[0];
-        e->y = e->traj_y[0];
-        e->z = e->traj_z[0];
-
-        if (e->type > CYCLIST || e->type == NONE) {
+    for (int i = 0; i < env->num_total_agents; i++) {
+        if (env->agents[i].log_valid[0] != 1 || env->agents[i].type > CYCLIST || env->agents[i].type == UNKNOWN) {
             continue;
         }
-        if (!is_active) {
-            e->vx = 0;
-            e->vy = 0;
-            e->vz = 0;
-            e->reached_goal = 0;
-            e->collided_before_goal = 0;
+        Agent *agent = &env->agents[i];
+        agent->sim_x = agent->log_trajectory_x[0];
+        agent->sim_y = agent->log_trajectory_y[0];
+        agent->sim_z = agent->log_trajectory_z[0];
+        agent->sim_length = agent->log_length[0];
+        agent->sim_width = agent->log_width[0];
+        agent->sim_height = agent->log_height[0];
+
+        if (agent->control_state == CONTROL_STATE_STATIC) {
+            agent->sim_vx = 0.0f;
+            agent->sim_vy = 0.0f;
         } else {
-            e->vx = e->traj_vx[0];
-            e->vy = e->traj_vy[0];
-            e->vz = e->traj_vz[0];
+            agent->sim_vx = agent->log_velocity_x[0];
+            agent->sim_vy = agent->log_velocity_y[0];
         }
-        e->heading = e->traj_heading[0];
-        e->heading_x = cosf(e->heading);
-        e->heading_y = sinf(e->heading);
-        e->valid = e->traj_valid[0];
-        e->collision_state = NO_COLLISION;
-        e->respawn_timestep = -1;
-    }
-}
 
-void set_means(Drive *env) {
-    float mean_x = 0.0f;
-    float mean_y = 0.0f;
-    int64_t point_count = 0;
-
-    for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type == VEHICLE) {
-            for (int j = 0; j < env->entities[i].array_size; j++) {
-                if (env->entities[i].traj_valid[j]) {
-                    point_count++;
-                    mean_x += (env->entities[i].traj_x[j] - mean_x) / point_count;
-                    mean_y += (env->entities[i].traj_y[j] - mean_y) / point_count;
-                }
-            }
-        } else if (env->entities[i].type >= ROAD_LANE) {
-            for (int j = 0; j < env->entities[i].array_size; j++) {
-                point_count++;
-                mean_x += (env->entities[i].traj_x[j] - mean_x) / point_count;
-                mean_y += (env->entities[i].traj_y[j] - mean_y) / point_count;
-            }
-        }
+        agent->sim_heading = agent->log_heading[0];
+        agent->cos_heading = cosf(agent->sim_heading);
+        agent->sin_heading = sinf(agent->sim_heading);
+        agent->sim_valid = agent->log_valid[0];
+        agent->collision_state = NO_COLLISION;
+        agent->respawn_timestep = -1;
+        agent->reached_goal = 0;
+        agent->collided_before_goal = 0;
     }
-    env->world_mean_x = mean_x;
-    env->world_mean_y = mean_y;
-
-    for (int i = 0; i < env->num_entities; i++) {
-        if (env->entities[i].type == VEHICLE || env->entities[i].type >= ROAD_LANE) {
-            for (int j = 0; j < env->entities[i].array_size; j++) {
-                if (env->entities[i].traj_x[j] == INVALID_POSITION) {
-                    continue;
-                }
-                env->entities[i].traj_x[j] -= mean_x;
-                env->entities[i].traj_y[j] -= mean_y;
-            }
-            env->entities[i].goal_position_x -= mean_x;
-            env->entities[i].goal_position_y -= mean_y;
-        }
-    }
-}
-
-int valid_active_agent(Drive *env, int agent_idx) {
-    if (agent_idx < 0 || agent_idx >= env->num_entities) {
-        return 0;
-    }
-    Entity *e = &env->entities[agent_idx];
-    if (e->type != VEHICLE || e->traj_valid[0] != 1) {
-        return 0;
-    }
-    float cos_heading = cosf(e->traj_heading[0]);
-    float sin_heading = sinf(e->traj_heading[0]);
-    float goal_x = e->goal_position_x - e->traj_x[0];
-    float goal_y = e->goal_position_y - e->traj_y[0];
-    float rel_goal_x = goal_x * cos_heading + goal_y * sin_heading;
-    float rel_goal_y = -goal_x * sin_heading + goal_y * cos_heading;
-    float distance_to_goal = compute_euclidean_distance(0, 0, rel_goal_x, rel_goal_y);
-
-    e->width *= COLLISION_BOX_SCALE;
-    e->length *= COLLISION_BOX_SCALE;
-
-    if (distance_to_goal >= MIN_DISTANCE_TO_GOAL && e->mark_as_expert == 0
-        && env->active_agent_count < env->max_agents) {
-        return distance_to_goal;
-    }
-    return 0;
 }
 
 void set_active_agents(Drive *env) {
     env->active_agent_count = 0;
     env->static_agent_count = 0;
-    env->num_actors = 1;
+    env->num_actors = 0;
     env->expert_static_agent_count = 0;
 
     int active_agent_indices[MAX_AGENTS];
@@ -826,42 +879,18 @@ void set_active_agents(Drive *env) {
         env->max_agents = MAX_AGENTS;
     }
 
-    // First agent: last object (SDC equivalent)
-    int first_agent_id = env->num_objects - 1;
-    float distance_to_goal = valid_active_agent(env, first_agent_id);
-    if (distance_to_goal) {
-        env->active_agent_count = 1;
-        active_agent_indices[0] = first_agent_id;
-        env->entities[first_agent_id].active_agent = 1;
-        env->num_actors = 1;
-    } else {
-        env->active_agent_count = 0;
-        env->num_actors = 0;
-    }
-
-    for (int i = 0; i < env->num_objects - 1 && env->num_actors < MAX_AGENTS; i++) {
-        if (env->entities[i].type != VEHICLE) {
-            continue;
-        }
-        if (env->entities[i].traj_valid[0] != 1) {
+    for (int i = 0; i < env->num_total_agents && env->num_actors < MAX_AGENTS; i++) {
+        if (env->agents[i].log_valid[0] != 1 || env->agents[i].type > CYCLIST || env->agents[i].type == UNKNOWN) {
             continue;
         }
         env->num_actors++;
 
-        float dist = valid_active_agent(env, i);
-        if (dist > 0) {
-            active_agent_indices[env->active_agent_count] = i;
-            env->active_agent_count++;
-            env->entities[i].active_agent = 1;
+        if (env->agents[i].control_state == CONTROL_STATE_ACTIVE && env->active_agent_count < env->max_agents) {
+            active_agent_indices[env->active_agent_count++] = i;
         } else {
-            static_agent_indices[env->static_agent_count] = i;
-            env->static_agent_count++;
-            env->entities[i].active_agent = 0;
-            if (env->entities[i].mark_as_expert == 1
-                || (dist >= MIN_DISTANCE_TO_GOAL && env->active_agent_count == env->max_agents)) {
-                expert_static_agent_indices[env->expert_static_agent_count] = i;
-                env->expert_static_agent_count++;
-                env->entities[i].mark_as_expert = 1;
+            static_agent_indices[env->static_agent_count++] = i;
+            if (env->agents[i].control_state == CONTROL_STATE_MOVING) {
+                expert_static_agent_indices[env->expert_static_agent_count++] = i;
             }
         }
     }
@@ -875,19 +904,20 @@ void set_active_agents(Drive *env) {
 }
 
 void move_expert(Drive *env, float *actions, int agent_idx) {
-    Entity *agent = &env->entities[agent_idx];
+    Agent *agent = &env->agents[agent_idx];
     int t = env->timestep;
-    if (t < 0 || t >= agent->array_size) {
-        agent->x = INVALID_POSITION;
-        agent->y = INVALID_POSITION;
+    if (t < 0 || t >= agent->trajectory_length || agent->log_valid[t] != 1) {
+        agent->sim_x = INVALID_POSITION;
+        agent->sim_y = INVALID_POSITION;
         return;
     }
-    agent->x = agent->traj_x[t];
-    agent->y = agent->traj_y[t];
-    agent->z = agent->traj_z[t];
-    agent->heading = agent->traj_heading[t];
-    agent->heading_x = cosf(agent->heading);
-    agent->heading_y = sinf(agent->heading);
+    agent->sim_x = agent->log_trajectory_x[t];
+    agent->sim_y = agent->log_trajectory_y[t];
+    agent->sim_z = agent->log_trajectory_z[t];
+    agent->sim_heading = agent->log_heading[t];
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    agent->sim_valid = agent->log_valid[t];
 }
 
 void remove_bad_trajectories(Drive *env) {
@@ -902,16 +932,16 @@ void remove_bad_trajectories(Drive *env) {
         }
         for (int i = 0; i < env->expert_static_agent_count; i++) {
             int expert_idx = env->expert_static_agent_indices[i];
-            if (env->entities[expert_idx].x == INVALID_POSITION) {
+            if (env->agents[expert_idx].sim_x == INVALID_POSITION) {
                 continue;
             }
             move_expert(env, env->actions, expert_idx);
         }
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
-            env->entities[agent_idx].collision_state = NO_COLLISION;
+            env->agents[agent_idx].collision_state = NO_COLLISION;
             int collided_with = collision_check(env, agent_idx);
-            if (env->entities[agent_idx].collision_state > NO_COLLISION && collided_agents[i] == 0) {
+            if (env->agents[agent_idx].collision_state > NO_COLLISION && collided_agents[i] == 0) {
                 collided_agents[i] = 1;
                 collided_with_indices[i] = collided_with;
             }
@@ -928,19 +958,20 @@ void remove_bad_trajectories(Drive *env) {
             if (static_idx != collided_with_indices[i]) {
                 continue;
             }
-            env->entities[static_idx].traj_x[0] = INVALID_POSITION;
-            env->entities[static_idx].traj_y[0] = INVALID_POSITION;
+            env->agents[static_idx].log_trajectory_x[0] = INVALID_POSITION;
+            env->agents[static_idx].log_trajectory_y[0] = INVALID_POSITION;
         }
     }
     env->timestep = 0;
 }
 
-void init(Drive *env) {
+int init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
-    env->entities = load_map_binary(env->map_name, env);
+    if (load_map_binary(env->map_name, env) != 0) {
+        return -1;
+    }
     env->dynamics_model = CLASSIC;
-    set_means(env);
     init_grid_map(env);
     env->vision_range = VISION_RANGE;
     init_neighbor_offsets(env);
@@ -950,30 +981,42 @@ void init(Drive *env) {
     remove_bad_trajectories(env);
     set_start_position(env);
     env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
+    return 0;
 }
 
 void c_close(Drive *env) {
-    for (int i = 0; i < env->num_entities; i++) {
-        free_entity(&env->entities[i]);
+    for (int i = 0; i < env->num_total_agents; i++) {
+        free_agent(&env->agents[i]);
     }
-    free(env->entities);
+    for (int i = 0; i < env->num_road_elements; i++) {
+        free_road_element(&env->road_elements[i]);
+    }
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        free_traffic_element(&env->traffic_elements[i]);
+    }
+    free(env->agents);
+    free(env->road_elements);
+    free(env->traffic_elements);
     free(env->active_agent_indices);
+    free(env->static_agent_indices);
+    free(env->expert_static_agent_indices);
     free(env->logs);
     free(env->map_corners);
     free(env->grid_cells);
     free(env->neighbor_offsets);
     free(env->neighbor_cache_entities);
     free(env->neighbor_cache_indices);
-    free(env->static_agent_indices);
-    free(env->expert_static_agent_indices);
 }
 
-void allocate(Drive *env) {
-    init(env);
+int allocate(Drive *env) {
+    if (init(env) != 0) {
+        return -1;
+    }
     env->observations = (float *) calloc(env->active_agent_count * OBS_SIZE, sizeof(float));
     env->actions = (float *) calloc(env->active_agent_count * 2, sizeof(float));
     env->rewards = (float *) calloc(env->active_agent_count, sizeof(float));
     env->terminals = (float *) calloc(env->active_agent_count, sizeof(float));
+    return 0;
 }
 
 void free_allocated(Drive *env) {
@@ -989,16 +1032,17 @@ void free_allocated(Drive *env) {
 // ========================================
 
 void respawn_agent(Drive *env, int agent_idx) {
-    Entity *e = &env->entities[agent_idx];
-    e->x = e->traj_x[0];
-    e->y = e->traj_y[0];
-    e->heading = e->traj_heading[0];
-    e->heading_x = cosf(e->heading);
-    e->heading_y = sinf(e->heading);
-    e->vx = e->traj_vx[0];
-    e->vy = e->traj_vy[0];
-    e->reached_goal = 0;
-    e->respawn_timestep = env->timestep;
+    Agent *agent = &env->agents[agent_idx];
+    agent->sim_x = agent->log_trajectory_x[0];
+    agent->sim_y = agent->log_trajectory_y[0];
+    agent->sim_z = agent->log_trajectory_z[0];
+    agent->sim_heading = agent->log_heading[0];
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    agent->sim_vx = agent->log_velocity_x[0];
+    agent->sim_vy = agent->log_velocity_y[0];
+    agent->reached_goal = 0;
+    agent->respawn_timestep = env->timestep;
 }
 
 void compute_observations(Drive *env) {
@@ -1007,7 +1051,7 @@ void compute_observations(Drive *env) {
 
     for (int i = 0; i < env->active_agent_count; i++) {
         float *obs = &observations[i][0];
-        Entity *ego = &env->entities[env->active_agent_indices[i]];
+        Agent *ego = &env->agents[env->active_agent_indices[i]];
         if (ego->type > CYCLIST) {
             break;
         }
@@ -1016,13 +1060,13 @@ void compute_observations(Drive *env) {
             obs[6] = 1;
         }
 
-        float cos_h = ego->heading_x;
-        float sin_h = ego->heading_y;
-        float ego_speed = sqrtf(ego->vx * ego->vx + ego->vy * ego->vy);
+        float cos_h = ego->cos_heading;
+        float sin_h = ego->sin_heading;
+        float ego_speed = sqrtf(ego->sim_vx * ego->sim_vx + ego->sim_vy * ego->sim_vy);
 
         // Goal in ego frame
-        float goal_x = ego->goal_position_x - ego->x;
-        float goal_y = ego->goal_position_y - ego->y;
+        float goal_x = ego->goal_position_x - ego->sim_x;
+        float goal_y = ego->goal_position_y - ego->sim_y;
         float rel_goal_x = goal_x * cos_h + goal_y * sin_h;
         float rel_goal_y = -goal_x * sin_h + goal_y * cos_h;
 
@@ -1030,8 +1074,8 @@ void compute_observations(Drive *env) {
         obs[0] = rel_goal_x * OBS_GOAL_SCALE;
         obs[1] = rel_goal_y * OBS_GOAL_SCALE;
         obs[2] = ego_speed * OBS_SPEED_SCALE;
-        obs[3] = ego->width / MAX_VEH_WIDTH;
-        obs[4] = ego->length / MAX_VEH_LEN;
+        obs[3] = ego->sim_width / MAX_VEH_WIDTH;
+        obs[4] = ego->sim_length / MAX_VEH_LEN;
         obs[5] = (ego->collision_state > NO_COLLISION) ? 1 : 0;
 
         // Partner observations
@@ -1047,14 +1091,11 @@ void compute_observations(Drive *env) {
             if (index == -1) {
                 continue;
             }
-            if (env->entities[index].type > CYCLIST) {
-                break;
-            }
             if (index == env->active_agent_indices[i]) {
                 continue;
             }
 
-            Entity *other = &env->entities[index];
+            Agent *other = &env->agents[index];
             if (ego->respawn_timestep != -1) {
                 continue;
             }
@@ -1062,8 +1103,8 @@ void compute_observations(Drive *env) {
                 continue;
             }
 
-            float dx = other->x - ego->x;
-            float dy = other->y - ego->y;
+            float dx = other->sim_x - ego->sim_x;
+            float dy = other->sim_y - ego->sim_y;
             if ((dx * dx + dy * dy) > OBS_DIST_SQ) {
                 continue;
             }
@@ -1073,11 +1114,11 @@ void compute_observations(Drive *env) {
 
             obs[obs_idx + 0] = rel_x * OBS_POSITION_SCALE;
             obs[obs_idx + 1] = rel_y * OBS_POSITION_SCALE;
-            obs[obs_idx + 2] = other->width / MAX_VEH_WIDTH;
-            obs[obs_idx + 3] = other->length / MAX_VEH_LEN;
-            obs[obs_idx + 4] = other->heading_x * ego->heading_x + other->heading_y * ego->heading_y;
-            obs[obs_idx + 5] = other->heading_y * ego->heading_x - other->heading_x * ego->heading_y;
-            float other_speed = sqrtf(other->vx * other->vx + other->vy * other->vy);
+            obs[obs_idx + 2] = other->sim_width / MAX_VEH_WIDTH;
+            obs[obs_idx + 3] = other->sim_length / MAX_VEH_LEN;
+            obs[obs_idx + 4] = other->cos_heading * ego->cos_heading + other->sin_heading * ego->sin_heading;
+            obs[obs_idx + 5] = other->sin_heading * ego->cos_heading - other->cos_heading * ego->sin_heading;
+            float other_speed = sqrtf(other->sim_vx * other->sim_vx + other->sim_vy * other->sim_vy);
             obs[obs_idx + 6] = other_speed / MAX_SPEED;
             cars_seen++;
             obs_idx += PARTNER_FEATURES;
@@ -1088,22 +1129,22 @@ void compute_observations(Drive *env) {
 
         // Road observations
         int entity_list[MAX_ROAD_SEGMENT_OBSERVATIONS * 2];
-        int grid_idx = get_grid_index(env, ego->x, ego->y);
+        int grid_idx = get_grid_index(env, ego->sim_x, ego->sim_y);
         int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
 
         for (int k = 0; k < list_size; k++) {
             int entity_idx = entity_list[k * 2];
             int geometry_idx = entity_list[k * 2 + 1];
-            Entity *entity = &env->entities[entity_idx];
+            RoadMapElement *entity = &env->road_elements[entity_idx];
 
-            float start_x = entity->traj_x[geometry_idx];
-            float start_y = entity->traj_y[geometry_idx];
-            float end_x = entity->traj_x[geometry_idx + 1];
-            float end_y = entity->traj_y[geometry_idx + 1];
+            float start_x = entity->x[geometry_idx];
+            float start_y = entity->y[geometry_idx];
+            float end_x = entity->x[geometry_idx + 1];
+            float end_y = entity->y[geometry_idx + 1];
             float mid_x = (start_x + end_x) / 2.0f;
             float mid_y = (start_y + end_y) / 2.0f;
-            float rel_x = mid_x - ego->x;
-            float rel_y = mid_y - ego->y;
+            float rel_x = mid_x - ego->sim_x;
+            float rel_y = mid_y - ego->sim_y;
             float x_obs = rel_x * cos_h + rel_y * sin_h;
             float y_obs = -rel_x * sin_h + rel_y * cos_h;
             float length = compute_euclidean_distance(mid_x, mid_y, end_x, end_y);
@@ -1126,7 +1167,7 @@ void compute_observations(Drive *env) {
             obs[obs_idx + 3] = 0.1f / MAX_ROAD_SCALE;
             obs[obs_idx + 4] = cos_angle;
             obs[obs_idx + 5] = sin_angle;
-            obs[obs_idx + 6] = entity->type - (float) ROAD_LANE;
+            obs[obs_idx + 6] = normalize_road_type(entity->type);
             obs_idx += ROAD_FEATURES;
         }
         int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * ROAD_FEATURES;
@@ -1139,23 +1180,23 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         return;
     }
 
-    Entity *agent = &env->entities[agent_idx];
+    Agent *agent = &env->agents[agent_idx];
     float (*action_array)[2] = (float (*)[2]) env->actions;
     int acceleration_index = action_array[action_idx][0];
     int steering_index = action_array[action_idx][1];
     float acceleration = ACCELERATION_VALUES[acceleration_index];
     float steering = STEERING_VALUES[steering_index];
 
-    float x = agent->x;
-    float y = agent->y;
-    float heading = agent->heading;
-    float speed = sqrtf(agent->vx * agent->vx + agent->vy * agent->vy);
+    float x = agent->sim_x;
+    float y = agent->sim_y;
+    float heading = agent->sim_heading;
+    float speed = sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy);
 
     speed = speed + 0.5f * acceleration * SIM_DT;
     speed = clip(speed, -MAX_SPEED, MAX_SPEED);
 
     float beta = tanh(0.5 * tanf(steering));
-    float yaw_rate = (speed * cosf(beta) * tanf(steering)) / agent->length;
+    float yaw_rate = (speed * cosf(beta) * tanf(steering)) / agent->sim_length;
     float new_vx = speed * cosf(heading + beta);
     float new_vy = speed * sinf(heading + beta);
 
@@ -1163,13 +1204,13 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     y += new_vy * SIM_DT;
     heading += yaw_rate * SIM_DT;
 
-    agent->x = x;
-    agent->y = y;
-    agent->heading = heading;
-    agent->heading_x = cosf(heading);
-    agent->heading_y = sinf(heading);
-    agent->vx = new_vx;
-    agent->vy = new_vy;
+    agent->sim_x = x;
+    agent->sim_y = y;
+    agent->sim_heading = heading;
+    agent->cos_heading = cosf(heading);
+    agent->sin_heading = sinf(heading);
+    agent->sim_vx = new_vx;
+    agent->sim_vy = new_vy;
 }
 
 void c_reset(Drive *env) {
@@ -1178,10 +1219,10 @@ void c_reset(Drive *env) {
     for (int x = 0; x < env->active_agent_count; x++) {
         env->logs[x] = (Log) {0};
         int agent_idx = env->active_agent_indices[x];
-        env->entities[agent_idx].respawn_timestep = -1;
-        env->entities[agent_idx].reached_goal = 0;
-        env->entities[agent_idx].collided_before_goal = 0;
-        env->entities[agent_idx].reached_goal_this_episode = 0;
+        env->agents[agent_idx].respawn_timestep = -1;
+        env->agents[agent_idx].reached_goal = 0;
+        env->agents[agent_idx].collided_before_goal = 0;
+        env->agents[agent_idx].reached_goal_this_episode = 0;
 
         collision_check(env, agent_idx);
     }
@@ -1202,7 +1243,7 @@ void c_step(Drive *env) {
     // Move expert static agents
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         int expert_idx = env->expert_static_agent_indices[i];
-        if (env->entities[expert_idx].x == INVALID_POSITION) {
+        if (env->agents[expert_idx].sim_x == INVALID_POSITION) {
             continue;
         }
         move_expert(env, env->actions, expert_idx);
@@ -1213,19 +1254,19 @@ void c_step(Drive *env) {
         env->logs[i].score = 0.0f;
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
-        env->entities[agent_idx].collision_state = NO_COLLISION;
+        env->agents[agent_idx].collision_state = NO_COLLISION;
         move_dynamics(env, i, agent_idx);
     }
 
     // Collision detection and rewards
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
-        env->entities[agent_idx].collision_state = NO_COLLISION;
+        env->agents[agent_idx].collision_state = NO_COLLISION;
         collision_check(env, agent_idx);
-        int collision_state = env->entities[agent_idx].collision_state;
+        int collision_state = env->agents[agent_idx].collision_state;
 
         if (collision_state > NO_COLLISION) {
-            if (collision_state == VEHICLE_COLLISION && env->entities[agent_idx].respawn_timestep == -1) {
+            if (collision_state == VEHICLE_COLLISION && env->agents[agent_idx].respawn_timestep == -1) {
                 env->rewards[i] = env->reward_vehicle_collision;
                 env->logs[i].episode_return += env->reward_vehicle_collision;
                 env->logs[i].clean_collision_rate = 1.0f;
@@ -1235,34 +1276,34 @@ void c_step(Drive *env) {
                 env->logs[i].offroad_rate = 1.0f;
                 env->logs[i].episode_return += env->reward_offroad_collision;
             }
-            if (!env->entities[agent_idx].reached_goal_this_episode) {
-                env->entities[agent_idx].collided_before_goal = 1;
+            if (!env->agents[agent_idx].reached_goal_this_episode) {
+                env->agents[agent_idx].collided_before_goal = 1;
             }
         }
 
         float distance_to_goal = compute_euclidean_distance(
-            env->entities[agent_idx].x,
-            env->entities[agent_idx].y,
-            env->entities[agent_idx].goal_position_x,
-            env->entities[agent_idx].goal_position_y);
+            env->agents[agent_idx].sim_x,
+            env->agents[agent_idx].sim_y,
+            env->agents[agent_idx].goal_position_x,
+            env->agents[agent_idx].goal_position_y);
 
         if (distance_to_goal < MIN_DISTANCE_TO_GOAL) {
-            if (env->entities[agent_idx].respawn_timestep != -1) {
+            if (env->agents[agent_idx].respawn_timestep != -1) {
                 env->rewards[i] += env->reward_goal_post_respawn;
                 env->logs[i].episode_return += env->reward_goal_post_respawn;
             } else {
                 env->rewards[i] += 1.0f;
                 env->logs[i].episode_return += 1.0f;
             }
-            env->entities[agent_idx].reached_goal = 1;
-            env->entities[agent_idx].reached_goal_this_episode = 1;
+            env->agents[agent_idx].reached_goal = 1;
+            env->agents[agent_idx].reached_goal_this_episode = 1;
         }
     }
 
     // Respawn agents that reached goal
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
-        if (env->entities[agent_idx].reached_goal) {
+        if (env->agents[agent_idx].reached_goal) {
             respawn_agent(env, agent_idx);
         }
     }
@@ -1271,3 +1312,5 @@ void c_step(Drive *env) {
 }
 
 #include "render.h"
+
+#endif // SIM_DRIVE_H
